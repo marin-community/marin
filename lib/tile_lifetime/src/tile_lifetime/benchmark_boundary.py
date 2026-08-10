@@ -294,6 +294,7 @@ def verify_benchmark_repeatability(
 ) -> BenchmarkRepeatabilityReport:
     """Reject a candidate whose pre-timing repeat evidence is inadmissible."""
     policy = report.policy
+    output_names, output_dtypes = _verify_repeatability_report_structure(report, boundary_name=boundary_name)
     if len(report.repeats) < policy.minimum_repeats:
         raise ValueError(
             f"{boundary_name} repeatability requires at least {policy.minimum_repeats} repeats, "
@@ -308,13 +309,19 @@ def verify_benchmark_repeatability(
     if policy.mode is BenchmarkRepeatabilityMode.BITWISE:
         if not report.bitwise_repeat:
             raise ValueError(f"{boundary_name} violates the declared bitwise repeatability policy")
+        for pair in report.pairwise_drift:
+            for output in pair.outputs:
+                if output.error.maximum_absolute_error != 0.0 or output.error.mean_absolute_error != 0.0:
+                    raise ValueError(
+                        f"{boundary_name} bitwise report has nonzero drift for output {output.output_name!r}"
+                    )
         return report
     if numerical_acceptance.numerical_policy is not NumericalPolicy.ALLOW_ROUNDING_REORDER:
         raise ValueError(f"{boundary_name} cannot use bounded drift for a source-ordered numerical contract")
 
     tolerance_by_dtype = {tolerance.dtype: tolerance for tolerance in policy.dtype_tolerances}
-    output_dtypes = dict(report.output_dtypes)
-    for name, dtype in output_dtypes.items():
+    for name in output_names:
+        dtype = output_dtypes[name]
         if dtype not in tolerance_by_dtype:
             raise ValueError(f"{boundary_name} has no repeatability tolerance for output {name!r} dtype {dtype!r}")
         tolerance = tolerance_by_dtype[dtype]
@@ -346,6 +353,99 @@ def verify_benchmark_repeatability(
                     f"{tolerance.mean_absolute_error}"
                 )
     return report
+
+
+def _verify_repeatability_report_structure(
+    report: BenchmarkRepeatabilityReport,
+    *,
+    boundary_name: str,
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    output_names = tuple(name for name, _dtype in report.output_dtypes)
+    if not output_names:
+        raise ValueError(f"{boundary_name} repeatability report has no outputs")
+    if len(set(output_names)) != len(output_names):
+        raise ValueError(f"{boundary_name} repeatability report repeats output names: {output_names}")
+    output_dtypes = dict(report.output_dtypes)
+    if any(not dtype for dtype in output_dtypes.values()):
+        raise ValueError(f"{boundary_name} repeatability report has an empty output dtype")
+
+    repeat_indices = tuple(repeat.repeat_index for repeat in report.repeats)
+    expected_repeat_indices = tuple(range(len(report.repeats)))
+    if repeat_indices != expected_repeat_indices:
+        raise ValueError(
+            f"{boundary_name} repeat indices {repeat_indices} do not match the complete sequence "
+            f"{expected_repeat_indices}"
+        )
+    for repeat in report.repeats:
+        _verify_sha256(repeat.combined_sha256, boundary_name=f"{boundary_name} repeat {repeat.repeat_index} combined")
+        repeat_output_names = tuple(output.output_name for output in repeat.outputs)
+        if repeat_output_names != output_names:
+            raise ValueError(
+                f"{boundary_name} repeat {repeat.repeat_index} outputs {repeat_output_names} "
+                f"do not match declared outputs {output_names}"
+            )
+        for output in repeat.outputs:
+            _verify_sha256(
+                output.sha256,
+                boundary_name=f"{boundary_name} repeat {repeat.repeat_index} output {output.output_name!r}",
+            )
+            _verify_numerical_error_structure(
+                output.semantic_error,
+                boundary_name=f"{boundary_name} repeat {repeat.repeat_index} output {output.output_name!r}",
+            )
+
+    expected_pairs = {
+        (left, right) for left in expected_repeat_indices for right in expected_repeat_indices if left < right
+    }
+    actual_pairs = tuple((pair.left_repeat_index, pair.right_repeat_index) for pair in report.pairwise_drift)
+    if len(actual_pairs) != len(set(actual_pairs)) or set(actual_pairs) != expected_pairs:
+        raise ValueError(
+            f"{boundary_name} pairwise evidence {actual_pairs} does not cover each repeat pair exactly once: "
+            f"{tuple(sorted(expected_pairs))}"
+        )
+    for pair in report.pairwise_drift:
+        pair_output_names = tuple(output.output_name for output in pair.outputs)
+        if pair_output_names != output_names:
+            raise ValueError(
+                f"{boundary_name} repeats {pair.left_repeat_index} and {pair.right_repeat_index} outputs "
+                f"{pair_output_names} do not match declared outputs {output_names}"
+            )
+        for output in pair.outputs:
+            _verify_numerical_error_structure(
+                output.error,
+                boundary_name=(
+                    f"{boundary_name} repeats {pair.left_repeat_index} and {pair.right_repeat_index} "
+                    f"output {output.output_name!r}"
+                ),
+            )
+
+    first_hashes = tuple(output.sha256 for output in report.repeats[0].outputs) if report.repeats else ()
+    bitwise_repeat = bool(report.repeats) and all(
+        tuple(output.sha256 for output in repeat.outputs) == first_hashes for repeat in report.repeats[1:]
+    )
+    if report.bitwise_repeat != bitwise_repeat:
+        raise ValueError(f"{boundary_name} bitwise summary {report.bitwise_repeat} contradicts recorded output hashes")
+    if bitwise_repeat:
+        combined_hashes = {repeat.combined_sha256 for repeat in report.repeats}
+        if len(combined_hashes) != 1:
+            raise ValueError(f"{boundary_name} bitwise output hashes contradict recorded combined hashes")
+    return output_names, output_dtypes
+
+
+def _verify_sha256(value: str, *, boundary_name: str) -> None:
+    if len(value) != 64 or value != value.lower() or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError(f"{boundary_name} has an invalid SHA-256 digest: {value!r}")
+
+
+def _verify_numerical_error_structure(error: NumericalError, *, boundary_name: str) -> None:
+    metrics = (error.maximum_absolute_error, error.mean_absolute_error)
+    if not all(np.isfinite(metric) and metric >= 0.0 for metric in metrics):
+        raise ValueError(f"{boundary_name} has invalid numerical error metrics: {metrics}")
+    if error.nonfinite_values < 0 or error.finite != (error.nonfinite_values == 0):
+        raise ValueError(
+            f"{boundary_name} has inconsistent finite evidence: finite={error.finite}, "
+            f"nonfinite_values={error.nonfinite_values}"
+        )
 
 
 def _repeat_record(
