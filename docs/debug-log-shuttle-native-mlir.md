@@ -360,7 +360,7 @@ pass.
 - [x] Build `@shuttle_mlir//:ShuttlePasses`.
 - [x] Link `@shuttle_mlir//:shuttle-opt`.
 - [x] Make `bazel build @shuttle_mlir//:mlir_tests` pass analysis.
-- [ ] Run `@shuttle_mlir//:mlir_tests`.
+- [x] Run `@shuttle_mlir//:mlir_tests`.
 - [ ] Run the four patched XLA tests.
 
 ## Hypothesis 9
@@ -393,3 +393,54 @@ first failed gate.
 - The retained evidence is under
   `lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-execution/`.
 - This run used one submission with zero retries. No relaunch occurred.
+
+## Hypothesis 10
+
+The exact native run closed the Shuttle slice: operation generation,
+`ShuttleDialect`, `ShuttlePasses`, `shuttle-opt`, the separate `mlir_tests`
+build, and all 11 lit fixtures passed. The runner then analyzed the four patched
+XLA tests and failed while compiling `stablehlo_module_transform.cc`; none of
+the XLA tests executed. Clang emitted one error:
+
+```text
+xla/pjrt/stablehlo_module_transform.cc:98:33: error:
+no member named 'getAttrs' in 'mlir::ModuleOp'
+```
+
+At exact LLVM commit `9a4faee1068`,
+`OwningOpRef<ModuleOp>::operator->` returns `ModuleOp *`. The complete
+attribute dictionary API belongs to the underlying `Operation`, available
+through `OpState::getOperation()`. Make the commit path explicit instead of
+chaining through the owning reference.
+
+The callback receives a mutable clone and can also change the module's
+location and ODS properties. `ModuleOp` stores `sym_name` and
+`sym_visibility` as properties at this pin. A transactional success must
+therefore copy properties, the complete attribute dictionary, the location,
+and the body. Copy all four only after the callback succeeds and the clone
+verifies. Exercise property removal and a location change in the success test.
+
+The same owning-reference audit found four generic attribute calls in the new
+test code. Those test translation units had not completed compilation. Route
+them through `getOperation()` as well; callback-local `ModuleOp` arrows and
+generated region helpers remain valid.
+
+## Results 10
+
+- The retained compiler log contains one diagnostic and no error-cap cascade.
+  Three XLA tests were skipped and one failed to build; zero executed.
+- Exact pinned headers confirm `Operation::getAttrDictionary`, `setAttrs`,
+  `copyProperties`, `getPropertiesStorage`, `getLoc`, and `setLoc`, plus
+  `OpState::getOperation`. `getAttrDictionary` materializes inherent
+  properties, while `copyProperties` also preserves removal of an optional
+  property.
+- The remaining custom hook calls were checked against exact pinned XLA/MLIR
+  declarations. The failing library translation unit reported no other API
+  error; the uncompiled owning-reference attribute calls in both test files
+  were corrected proactively.
+- Patch `0001` was regenerated from exact XLA commit `9b635916ecc6`. Its applied
+  files byte-match the audited source tree. Patches `0001` and `0002` apply in
+  order, pass `diff --check`, reverse in order, and leave a clean exact-pin
+  tree.
+- Native compilation and execution of the four XLA tests remain pending. No
+  remote build was launched for this source-only fix.
