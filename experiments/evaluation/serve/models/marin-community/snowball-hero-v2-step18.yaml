@@ -1,0 +1,23 @@
+name: snowball-hero-v2-step18
+location: s3://marin-us-east-02a/iris/rl-snowball-hero-v2-rno2a-rlvrmath-ctx24k-grug-67-20260807-123752/exports/global_step_18/policy/
+tokenizer: marin-community/marin-tokenizer
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 32768
+  max_num_batched_tokens: 32768
+  max_num_seqs: 32
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+generation:
+  max_gen_toks: 8192
+  extra_gen_kwargs:
+    skip_special_tokens: "false"
+    repetition_penalty: "1.1"
