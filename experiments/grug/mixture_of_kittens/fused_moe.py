@@ -420,17 +420,17 @@ def _custom_forward(
 
     def fused_fwd(
         *arguments: jax.Array,
-    ) -> tuple[tuple[jax.Array, jax.Array], tuple[jax.Array, ...]]:
-        output, dropped_assignments, _ = _fused_forward_with_context(*arguments, mesh=mesh, config=config)
-        return (output, dropped_assignments), arguments
+    ) -> tuple[tuple[jax.Array, jax.Array], tuple[tuple[jax.Array, ...], MoKForwardContext]]:
+        output, dropped_assignments, context = _fused_forward_with_context(*arguments, mesh=mesh, config=config)
+        return (output, dropped_assignments), (arguments, context)
 
     def fused_bwd(
-        arguments: tuple[jax.Array, ...],
+        residual: tuple[tuple[jax.Array, ...], MoKForwardContext],
         output_gradients: tuple[jax.Array, jax.Array],
     ) -> tuple[jax.Array | None, ...]:
         output_gradient, _ = output_gradients
+        arguments, context = residual
         x, selected_experts, combine_weights, w_gate, w_up, w_down, shared_gate, shared_up, shared_down = arguments
-        _, _, context = _fused_forward_with_context(*arguments, mesh=mesh, config=config)
         gradients = _fused_backward(
             output_gradient,
             x,
