@@ -123,6 +123,8 @@ def install_torch_free_physical_support(msa_source_root: Path) -> TorchFreePhysi
         raise ValueError(f"QuACK source root does not exist: {source_root}")
     if not msa_source_root.is_dir():
         raise ValueError(f"MSA CuTe source root does not exist: {msa_source_root}")
+    if str(msa_source_root) not in sys.path:
+        sys.path.insert(0, str(msa_source_root))
 
     module_names = (
         "quack",
