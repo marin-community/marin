@@ -9,6 +9,19 @@ from dataclasses import dataclass
 from typing import Any
 
 SUCCESS_PHASES = ("algebra_coverage", "lowered_coverage", "final_erasure")
+EVENT_FIELDS = (
+    "invocation_id",
+    "phase",
+    "policy",
+    "policy_digest",
+    "tuning_digest",
+    "region_membership",
+    "coverage_manifest",
+    "unsupported_fingerprint",
+    "normalized_module_fingerprint",
+    "no_shuttle_semantics",
+    "failure_pass",
+)
 
 
 @dataclass(frozen=True)
@@ -119,6 +132,17 @@ VJP_EXPECTATION = FixtureExpectation(
     final_normalized_fingerprint="2d557bd5d2f259a053335a6e004f9c5290d19713961e2c41787ed197ed042891",
 )
 FIXTURE_EXPECTATIONS = (FORWARD_EXPECTATION, VJP_EXPECTATION)
+
+
+def decode_native_snapshot(records: object) -> tuple[dict[str, Any], ...]:
+    """Validate and decode the immutable native observer snapshot."""
+    if type(records) is not tuple:
+        raise AssertionError("native observer snapshot must be an immutable tuple")
+    if any(type(record) is not tuple for record in records):
+        raise AssertionError("native observer records must be immutable tuples")
+    if any(len(record) != len(EVENT_FIELDS) for record in records):
+        raise AssertionError("native observer record schema changed")
+    return tuple(dict(zip(EVENT_FIELDS, record, strict=True)) for record in records)
 
 
 def validate_success_events(

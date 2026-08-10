@@ -3,7 +3,6 @@
 
 #include "shuttle/Testing/PythonObserverTestBridge.h"
 
-#include <cstddef>
 #include <vector>
 
 #include "nanobind/nanobind.h"
@@ -16,29 +15,29 @@ namespace mlir::shuttle::testing {
 namespace {
 
 nb::tuple pythonRecord(const ShuttleObserverTestEvent &event) {
-  nb::tuple record(11);
-  record[0] = nb::int_(event.invocationId);
-  record[1] = nb::str(event.phase.c_str());
-  record[2] = nb::str(event.policy.c_str());
-  record[3] = nb::str(event.policyDigest.c_str());
-  record[4] = nb::str(event.tuningDigest.c_str());
-  record[5] = nb::str(event.regionMembership.c_str());
-  record[6] = nb::str(event.coverageManifest.c_str());
-  record[7] = nb::str(event.unsupportedFingerprint.c_str());
-  record[8] = nb::str(event.normalizedModuleFingerprint.c_str());
-  record[9] = nb::bool_(event.noShuttleSemantics);
-  record[10] = nb::str(event.failurePass.c_str());
-  return record;
+  nb::list record;
+  record.append(nb::int_(event.invocationId));
+  record.append(nb::str(event.phase.c_str()));
+  record.append(nb::str(event.policy.c_str()));
+  record.append(nb::str(event.policyDigest.c_str()));
+  record.append(nb::str(event.tuningDigest.c_str()));
+  record.append(nb::str(event.regionMembership.c_str()));
+  record.append(nb::str(event.coverageManifest.c_str()));
+  record.append(nb::str(event.unsupportedFingerprint.c_str()));
+  record.append(nb::str(event.normalizedModuleFingerprint.c_str()));
+  record.append(nb::bool_(event.noShuttleSemantics));
+  record.append(nb::str(event.failurePass.c_str()));
+  return nb::tuple(record);
 }
 
 nb::tuple pythonEvents(const ShuttleObserverTestCapture &capture) {
   // snapshot() releases the native mutex before Python objects are allocated.
   std::vector<ShuttleObserverTestEvent> events = capture.snapshot();
-  nb::tuple records(events.size());
-  for (std::size_t index = 0; index < events.size(); ++index) {
-    records[index] = pythonRecord(events[index]);
+  nb::list records;
+  for (const ShuttleObserverTestEvent &event : events) {
+    records.append(pythonRecord(event));
   }
-  return records;
+  return nb::tuple(records);
 }
 
 } // namespace

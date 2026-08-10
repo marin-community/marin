@@ -3,14 +3,17 @@
 
 """Adversarial tests for the pure ordinary-JAX observer contract."""
 
+import operator
 from copy import deepcopy
 from pathlib import Path
 
 import pytest
 from acceptance_contract import (
+    EVENT_FIELDS,
     FORWARD_EXPECTATION,
     VJP_EXPECTATION,
     ObserverIdentity,
+    decode_native_snapshot,
     validate_success_events,
 )
 from verify_acceptance_fixture_oracles import EXPECTATIONS, audited_fingerprint, fixture_path, verify_oracles
@@ -128,3 +131,55 @@ def test_fixture_audit_tool_rejects_oracle_drift(tmp_path):
 
     with pytest.raises(ValueError, match="acceptance fixture fingerprint drift"):
         verify_oracles(tmp_path)
+
+
+def test_decodes_only_immutable_complete_native_records():
+    record = (
+        17,
+        "final_erasure",
+        "source_ordered",
+        "policy-digest",
+        "tuning-digest",
+        "",
+        "",
+        "",
+        "module-fingerprint",
+        True,
+        "",
+    )
+    records = (record,)
+
+    assert decode_native_snapshot(records) == (
+        {
+            "invocation_id": 17,
+            "phase": "final_erasure",
+            "policy": "source_ordered",
+            "policy_digest": "policy-digest",
+            "tuning_digest": "tuning-digest",
+            "region_membership": "",
+            "coverage_manifest": "",
+            "unsupported_fingerprint": "",
+            "normalized_module_fingerprint": "module-fingerprint",
+            "no_shuttle_semantics": True,
+            "failure_pass": "",
+        },
+    )
+    with pytest.raises(TypeError):
+        operator.setitem(records, 0, record)
+    with pytest.raises(TypeError):
+        operator.setitem(record, 0, -1)
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        [],
+        [tuple(range(len(EVENT_FIELDS)))],
+        (list(range(len(EVENT_FIELDS))),),
+        (tuple(range(len(EVENT_FIELDS) - 1)),),
+        (tuple(range(len(EVENT_FIELDS) + 1)),),
+    ],
+)
+def test_rejects_mutable_or_wrong_width_native_records(records):
+    with pytest.raises(AssertionError):
+        decode_native_snapshot(records)
