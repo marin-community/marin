@@ -116,13 +116,10 @@ def mok_source_root() -> Path:
         raise RuntimeError(f"{MOK_SRC_ENV}={root} is missing required files: {names}")
     revision = _source_revision(root)
     if revision is not None and revision != MOK_KNOWN_GOOD_COMMIT:
-        raise RuntimeError(
-            f"{MOK_SRC_ENV}={root} is at {revision}; expected {MOK_KNOWN_GOOD_COMMIT}"
-        )
+        raise RuntimeError(f"{MOK_SRC_ENV}={root} is at {revision}; expected {MOK_KNOWN_GOOD_COMMIT}")
     thunderkittens_revision = _source_revision(root / "third_party" / "ThunderKittens")
     if thunderkittens_revision is not None and thunderkittens_revision != THUNDERKITTENS_KNOWN_GOOD_COMMIT:
         raise RuntimeError(
-            "ThunderKittens is at "
-            f"{thunderkittens_revision}; expected {THUNDERKITTENS_KNOWN_GOOD_COMMIT}"
+            "ThunderKittens is at " f"{thunderkittens_revision}; expected {THUNDERKITTENS_KNOWN_GOOD_COMMIT}"
         )
     return root

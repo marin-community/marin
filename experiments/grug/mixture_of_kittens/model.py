@@ -53,7 +53,7 @@ from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
-from experiments.grug.mixture_of_kittens.fused_moe import MOK_CONTEXT_CHECKPOINT_NAME, mixture_of_kittens_mlp
+from experiments.grug.mixture_of_kittens.fused_moe import mixture_of_kittens_mlp
 
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
@@ -85,7 +85,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
-RematMode = Literal["recompute_all", "save_moe", "offload_moe"]
+RematMode = Literal["recompute_all", "save_moe"]
 
 
 def _batch_spec() -> P:
@@ -168,8 +168,7 @@ class GrugModelConfig:
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
-    backward skips re-running expert dispatch and its EP collectives; "offload_moe"
-    keeps the fused backward context in pinned host memory."""
+    backward skips re-running expert dispatch and its EP collectives."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
 
@@ -1010,13 +1009,6 @@ class Transformer(eqx.Module):
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
-        elif cfg.remat_mode == "offload_moe":
-            remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
-                names_which_can_be_saved=MOE_REMAT_SAVE_NAMES,
-                names_which_can_be_offloaded=(MOK_CONTEXT_CHECKPOINT_NAME,),
-                offload_src="device",
-                offload_dst="pinned_host",
-            )
         else:
             remat_policy = None
 
