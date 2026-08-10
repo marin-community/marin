@@ -974,9 +974,10 @@ class MoEMLP(eqx.Module):
                 full = jnp.einsum(
                     "td,dh->th", x_flat, self.w_latent_down.astype(x_flat.dtype), out_sharding=_batch_spec()
                 )
-                s = jax.nn.sigmoid(jnp.einsum("td,do->to", x_flat, self.latent_gate.astype(x_flat.dtype)))
+                # `mix`, not `s`: `s` is the sequence length in this scope (b, s, _ = x.shape).
+                mix = jax.nn.sigmoid(jnp.einsum("td,do->to", x_flat, self.latent_gate.astype(x_flat.dtype)))
                 half = self.cfg.latent_dim
-                routed_input = s * full[:, :half] + (1.0 - s) * full[:, half:]
+                routed_input = mix * full[:, :half] + (1.0 - mix) * full[:, half:]
             else:
                 routed_input = jnp.einsum(
                     "td,dl->tl", x_flat, self.w_latent_down.astype(x_flat.dtype), out_sharding=_batch_spec()
