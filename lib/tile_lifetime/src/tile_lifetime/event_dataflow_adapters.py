@@ -56,7 +56,8 @@ def sm100_routed_right_resource_descriptor(
             route_slot // lowering.selected_count for route_slot in range(lowering.relation.route_slots)
         ),
         edge_partition_count=lowering.key_value_heads,
-        edge_capacity_per_task=lowering.query_tokens_per_task,
+        edge_capacity_per_task=lowering.schedule.right_edges_per_task,
+        right_item_extent=lowering.schedule.right_block_size,
         resource_buffer_depth=lowering.schedule.right_stages,
         resource_payload_bytes=(lowering.schedule.right_block_size * feature_dimension * operand_count * element_bytes),
     )
