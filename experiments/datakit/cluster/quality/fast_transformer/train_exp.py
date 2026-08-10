@@ -12,8 +12,8 @@ arm shares the same held-out documents:
   instead of the min_count=2 remap.
 * ``--init-embed {e5,gemma}`` warm-starts the embedding table from a donor
   model's trained word embeddings, PCA-projected to ``embed_dim`` and rescaled
-  to the cold-start init std. Requires ``--full-vocab`` so donor row *i* is the
-  embedding of raw token *i*.
+  to the cold-start init std. Donor row *i* is the embedding of raw token *i*
+  and is routed through the vocab remap, so it works with either vocabulary.
 * ``--tokenizer`` swaps the tokenizer (e.g. the Gemma-3 tokenizer).
 * ``--bigram-buckets`` adds the hashed-bigram side table
   (:class:`~experiments.datakit.cluster.quality.fast_transformer.model.FastTransformer`).
@@ -118,12 +118,17 @@ def pca_project(table: np.ndarray, dim: int, target_std: float = EMBED_INIT_STD)
     return (proj * (target_std / proj.std())).astype(np.float32)
 
 
-def warm_start(model: FastTransformer, donor_rows: np.ndarray, vocab: int) -> FastTransformer:
-    """Overwrite embedding rows for raw tokens with donor rows (PAD/UNK stay random)."""
+def warm_start(model: FastTransformer, donor_rows: np.ndarray, remap: dict[int, int]) -> FastTransformer:
+    """Overwrite each remapped token's embedding row with its donor row.
+
+    PAD/UNK (and any raw token past the donor table) keep their random init.
+    """
     table = np.asarray(model.embed).copy()
-    n = min(len(donor_rows), vocab - NUM_RESERVED)
-    table[NUM_RESERVED : NUM_RESERVED + n] = donor_rows[:n]
-    logger.info("warm start: filled %d of %d embedding rows from the donor", n, vocab)
+    raw = np.fromiter(remap.keys(), dtype=np.int64, count=len(remap))
+    dense = np.fromiter(remap.values(), dtype=np.int64, count=len(remap))
+    keep = raw < len(donor_rows)
+    table[dense[keep]] = donor_rows[raw[keep]]
+    logger.info("warm start: filled %d of %d embedding rows from the donor", int(keep.sum()), len(table))
     return eqx.tree_at(lambda m: m.embed, model, jnp.asarray(table))
 
 
@@ -140,8 +145,6 @@ def main() -> None:
     args = p.parse_args()
     configure_logging(logging.INFO)
     configure_coreweave_s3()
-    if args.init_embed != "none" and not args.full_vocab:
-        raise ValueError("--init-embed requires --full-vocab (donor row i must be raw token i)")
 
     hp = TrainHParams(seed=TRAIN_SEED)
     with StoragePath(args.labels).open("rb") as fh:
@@ -180,7 +183,7 @@ def main() -> None:
     if args.init_embed != "none":
         donor = donor_embedding_table(args.init_embed)
         projected = pca_project(donor, config.embed_dim)
-        init_model = warm_start(FastTransformer(config, key=jr.PRNGKey(hp.seed)), projected, vocab)
+        init_model = warm_start(FastTransformer(config, key=jr.PRNGKey(hp.seed)), projected, remap)
 
     logger.info(
         "arm %s: %d labels (%d train / %d eval) tokenizer=%s vocab=%d init=%s bigram_buckets=%d",
