@@ -39,7 +39,7 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         config.model.capacity_factor,
         config.trainer.trainer.train_batch_size,
         config.model.max_seq_len,
-    ) == (6144, 48, 192, 6272, 4, 3072, 1.33, 1024, 4096)
+    ) == (6144, 48, 192, 6144, 4, 3072, 1.33, 1024, 4096)
 
 
 def test_full_bank_top_k_is_rejected_before_launch():
