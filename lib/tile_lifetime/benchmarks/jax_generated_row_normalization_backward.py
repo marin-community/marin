@@ -43,8 +43,20 @@ _INPUT_TARGET_NAME = "shuttle.axis_fold_reverse_input_v1"
 _FEATURE_TARGET_NAME = "shuttle.axis_fold_reverse_feature_v1"
 
 
-def _comparison_target_name(schedule: AxisFoldPipelineSchedule) -> str:
-    return f"{_TARGET_NAME}.{schedule.value}"
+def _comparison_target_name(schedule: AxisFoldPipelineSchedule, outputs_per_group: int) -> str:
+    return f"{_TARGET_NAME}.{schedule.value}.outputs_{outputs_per_group}"
+
+
+def _variant_name(
+    schedule: AxisFoldPipelineSchedule,
+    outputs_per_group: int,
+    *,
+    compare_pipeline_schedules: bool,
+    compare_column_outputs_per_group: bool,
+) -> str:
+    if compare_pipeline_schedules or compare_column_outputs_per_group:
+        return f"generated_{schedule.value}_outputs_{outputs_per_group}"
+    return "generated_ffi"
 
 
 def _cuda_profiler_range(functions: tuple[Any, ...], nvcc: Path) -> None:
@@ -167,8 +179,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     """Compile ordinary JAX AD, register generated Fold code, and benchmark it."""
     if not jax.devices() or jax.devices()[0].platform != "gpu":
         raise RuntimeError("the JAX axis-Fold benchmark requires a CUDA device")
-    if args.repeats % 2:
-        raise ValueError("counterbalanced benchmark requires an even repeat count")
+    if args.compare_column_outputs_per_group and args.profile_components:
+        raise ValueError("column-output comparison cannot be combined with component profiling")
     arguments = (
         jax.ShapeDtypeStruct((args.rows, args.hidden), jnp.bfloat16),
         jax.ShapeDtypeStruct((args.hidden,), jnp.bfloat16),
@@ -179,32 +191,51 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     graph = import_stablehlo(serialized, input_names=("matrix_a", "feature_vector", "matrix_b"))
     selected_schedule = AxisFoldPipelineSchedule(args.pipeline_schedule)
     schedules = tuple(AxisFoldPipelineSchedule) if args.compare_pipeline_schedules else (selected_schedule,)
+    output_counts = (1, 2) if args.compare_column_outputs_per_group else (args.column_outputs_per_group,)
+    variant_specs = tuple((schedule, output_count) for schedule in schedules for output_count in output_counts)
+    selected_variant = (selected_schedule, args.column_outputs_per_group)
+    if selected_variant not in variant_specs:
+        raise ValueError("selected column outputs per group must be one of the compared candidates")
+    measurement_variant_count = len(variant_specs) + 1
+    counterbalance_period = len(tuple(itertools.permutations(range(measurement_variant_count))))
+    if args.repeats % counterbalance_period:
+        raise ValueError(
+            f"counterbalanced benchmark repeats must be divisible by {counterbalance_period} "
+            f"for {measurement_variant_count} variants"
+        )
     compilations = {}
     generated_variants = {}
     libraries = {}
-    for schedule in schedules:
-        target_name = _comparison_target_name(schedule) if args.compare_pipeline_schedules else _TARGET_NAME
+    for schedule, output_count in variant_specs:
+        target_name = (
+            _comparison_target_name(schedule, output_count)
+            if args.compare_pipeline_schedules or args.compare_column_outputs_per_group
+            else _TARGET_NAME
+        )
         compilation = compile_stablehlo_row_normalization_backward_ffi(
             graph,
             target_name=target_name,
             numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
             threads=args.threads,
             feature_groups_per_block=args.column_groups_per_block,
-            feature_outputs_per_group=args.column_outputs_per_group,
+            feature_outputs_per_group=output_count,
             pipeline_schedule=schedule,
         )
         generated = compilation.generated
         artifact_directory = (
-            args.artifact_directory / schedule.value if args.compare_pipeline_schedules else args.artifact_directory
+            args.artifact_directory / f"{schedule.value}_outputs_{output_count}"
+            if args.compare_pipeline_schedules or args.compare_column_outputs_per_group
+            else args.artifact_directory
         )
         library = _compile_generated_source(generated.source, artifact_directory, args.nvcc, args.architecture)
         register_cuda_axis_fold_ffi(generated, library)
-        compilations[schedule] = compilation
-        generated_variants[schedule] = generated
-        libraries[schedule] = library
-    compilation = compilations[selected_schedule]
-    generated = generated_variants[selected_schedule]
-    library = libraries[selected_schedule]
+        variant = (schedule, output_count)
+        compilations[variant] = compilation
+        generated_variants[variant] = generated
+        libraries[variant] = library
+    compilation = compilations[selected_variant]
+    generated = generated_variants[selected_variant]
+    library = libraries[selected_variant]
 
     input_generated = None
     input_library = None
@@ -266,8 +297,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return generated_reverse
 
     generated_reverse_functions = {
-        schedule: generated_reverse_function(generated_program)
-        for schedule, generated_program in generated_variants.items()
+        variant: generated_reverse_function(generated_program)
+        for variant, generated_program in generated_variants.items()
     }
 
     @jax.jit
@@ -296,8 +327,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ) -> jax.Array:
         return jnp.sum(projected_argument * standardized_argument.astype(jnp.float32), axis=0)
 
-    def execute_generated_reverse(schedule: AxisFoldPipelineSchedule = selected_schedule) -> tuple[jax.Array, ...]:
-        return generated_reverse_functions[schedule](x, feature_scale, cotangent)
+    def execute_generated_reverse(
+        variant: tuple[AxisFoldPipelineSchedule, int] = selected_variant,
+    ) -> tuple[jax.Array, ...]:
+        return generated_reverse_functions[variant](x, feature_scale, cotangent)
 
     def execute_matched_xla_algebra() -> tuple[jax.Array, jax.Array]:
         return matched_xla_algebra(x, feature_scale, cotangent)
@@ -314,39 +347,46 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             matched_xla_feature_scale_cotangent.lower(projected, standardized).compile().as_text()
         )
 
-    generated_outputs_by_schedule = {schedule: execute_generated_reverse(schedule) for schedule in schedules}
-    generated_outputs = generated_outputs_by_schedule[selected_schedule]
+    generated_outputs_by_variant = {variant: execute_generated_reverse(variant) for variant in variant_specs}
+    generated_outputs = generated_outputs_by_variant[selected_variant]
     xla_outputs = execute_matched_xla_algebra()
     natural_outputs = jax.jit(_natural_reverse)(x, feature_scale, cotangent)
-    jax.block_until_ready((generated_outputs_by_schedule, xla_outputs, natural_outputs))
-    correctness_by_schedule = {}
-    deterministic_hashes_by_schedule = {}
-    for schedule, schedule_outputs in generated_outputs_by_schedule.items():
-        correctness_by_schedule[schedule] = {
+    jax.block_until_ready((generated_outputs_by_variant, xla_outputs, natural_outputs))
+    correctness_by_variant = {}
+    deterministic_hashes_by_variant = {}
+    for variant, variant_outputs in generated_outputs_by_variant.items():
+        correctness_by_variant[variant] = {
             "natural_jax_vjp": {
-                "input_cotangent": _error(schedule_outputs[0], xla_outputs[0]),
-                "feature_scale_cotangent": _error(schedule_outputs[1], xla_outputs[1]),
+                "input_cotangent": _error(variant_outputs[0], xla_outputs[0]),
+                "feature_scale_cotangent": _error(variant_outputs[1], xla_outputs[1]),
             },
             "independent_natural_jax_vjp": {
-                "input_cotangent": _error(schedule_outputs[0], natural_outputs[0]),
-                "feature_scale_cotangent": _error(schedule_outputs[1], natural_outputs[1]),
+                "input_cotangent": _error(variant_outputs[0], natural_outputs[0]),
+                "feature_scale_cotangent": _error(variant_outputs[1], natural_outputs[1]),
             },
         }
-        first_hashes = tuple(_hash(value) for value in schedule_outputs)
-        second_outputs = execute_generated_reverse(schedule)
+        first_hashes = tuple(_hash(value) for value in variant_outputs)
+        second_outputs = execute_generated_reverse(variant)
         jax.block_until_ready(second_outputs)
         second_hashes = tuple(_hash(value) for value in second_outputs)
         if first_hashes != second_hashes:
-            raise AssertionError(f"generated axis-Fold FFI schedule {schedule.value!r} is not deterministic")
-        deterministic_hashes_by_schedule[schedule] = first_hashes
-    correctness = correctness_by_schedule[selected_schedule]
-    first_hashes = deterministic_hashes_by_schedule[selected_schedule]
+            raise AssertionError(f"generated axis-Fold FFI variant {variant!r} is not deterministic")
+        deterministic_hashes_by_variant[variant] = first_hashes
+    if len(set(deterministic_hashes_by_variant.values())) != 1:
+        raise AssertionError("generated axis-Fold physical variants changed deterministic output values")
+    correctness = correctness_by_variant[selected_variant]
+    first_hashes = deterministic_hashes_by_variant[selected_variant]
     generated_measurement_variants = tuple(
         (
-            f"generated_{schedule.value}" if args.compare_pipeline_schedules else "generated_ffi",
-            lambda schedule=schedule: execute_generated_reverse(schedule),
+            _variant_name(
+                schedule,
+                output_count,
+                compare_pipeline_schedules=args.compare_pipeline_schedules,
+                compare_column_outputs_per_group=args.compare_column_outputs_per_group,
+            ),
+            lambda variant=(schedule, output_count): execute_generated_reverse(variant),
         )
-        for schedule in schedules
+        for schedule, output_count in variant_specs
     )
     if args.cuda_profiler_range:
         _cuda_profiler_range(
@@ -465,9 +505,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "generated_handler_executions": _handler_call_count(feature_library),
             },
         }
-    selected_measurement_name = (
-        f"generated_{selected_schedule.value}" if args.compare_pipeline_schedules else "generated_ffi"
+    selected_measurement_name = _variant_name(
+        *selected_variant,
+        compare_pipeline_schedules=args.compare_pipeline_schedules,
+        compare_column_outputs_per_group=args.compare_column_outputs_per_group,
     )
+    expected_handler_executions = 2 + args.warmups + args.repeats * args.iterations
+    handler_executions_by_variant = {
+        variant: _handler_call_count(variant_library) for variant, variant_library in libraries.items()
+    }
+    unexpected_handler_executions = {
+        variant: count
+        for variant, count in handler_executions_by_variant.items()
+        if count != expected_handler_executions
+    }
+    if unexpected_handler_executions:
+        raise AssertionError(
+            f"generated axis-Fold handler counts differ from {expected_handler_executions}: "
+            f"{unexpected_handler_executions}"
+        )
     generated_ms = measurements[selected_measurement_name]["median_ms"]
     xla_ms = measurements["matched_xla"]["median_ms"]
     telemetry = subprocess.check_output(
@@ -500,24 +556,41 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "handler_executions": _handler_call_count(library),
         },
         "generated_schedule_comparison": {
-            schedule.value: {
-                "target": generated_variants[schedule].target_name,
-                "source_sha256": generated_variants[schedule].source_sha256,
-                "semantic_fingerprints": list(generated_variants[schedule].semantic_fingerprints),
-                "handler_executions": _handler_call_count(libraries[schedule]),
-                "correctness": correctness_by_schedule[schedule],
-                "deterministic_hashes": list(deterministic_hashes_by_schedule[schedule]),
+            _variant_name(
+                schedule,
+                output_count,
+                compare_pipeline_schedules=args.compare_pipeline_schedules,
+                compare_column_outputs_per_group=args.compare_column_outputs_per_group,
+            ): {
+                "target": generated_variants[(schedule, output_count)].target_name,
+                "source_sha256": generated_variants[(schedule, output_count)].source_sha256,
+                "semantic_fingerprints": list(generated_variants[(schedule, output_count)].semantic_fingerprints),
+                "pipeline_schedule": schedule.value,
+                "feature_outputs_per_group": output_count,
+                "handler_executions": handler_executions_by_variant[(schedule, output_count)],
+                "correctness": correctness_by_variant[(schedule, output_count)],
+                "deterministic_hashes": list(deterministic_hashes_by_variant[(schedule, output_count)]),
                 "measurements": measurements[
-                    f"generated_{schedule.value}" if args.compare_pipeline_schedules else "generated_ffi"
+                    _variant_name(
+                        schedule,
+                        output_count,
+                        compare_pipeline_schedules=args.compare_pipeline_schedules,
+                        compare_column_outputs_per_group=args.compare_column_outputs_per_group,
+                    )
                 ],
                 "ratio_to_matched_xla": (
-                    measurements[f"generated_{schedule.value}" if args.compare_pipeline_schedules else "generated_ffi"][
-                        "median_ms"
-                    ]
+                    measurements[
+                        _variant_name(
+                            schedule,
+                            output_count,
+                            compare_pipeline_schedules=args.compare_pipeline_schedules,
+                            compare_column_outputs_per_group=args.compare_column_outputs_per_group,
+                        )
+                    ]["median_ms"]
                     / measurements["matched_xla"]["median_ms"]
                 ),
             }
-            for schedule in schedules
+            for schedule, output_count in variant_specs
         },
         "numerical_contract": {
             "policy": compilation.numerical_policy.value,
@@ -538,6 +611,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "repeats": args.repeats,
             "iterations_per_sample": args.iterations,
             "counterbalanced": True,
+            "counterbalance_period": counterbalance_period,
+            "expected_handler_executions_per_generated_variant": expected_handler_executions,
             "timing": "host enqueue interval followed by jax.block_until_ready",
             "cuda_profiler_range": args.cuda_profiler_range,
         },
@@ -558,6 +633,7 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=256)
     parser.add_argument("--column-groups-per-block", type=int, default=32)
     parser.add_argument("--column-outputs-per-group", type=int, default=1)
+    parser.add_argument("--compare-column-outputs-per-group", action="store_true")
     parser.add_argument("--warmups", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument("--iterations", type=int, default=10)
