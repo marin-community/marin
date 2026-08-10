@@ -5,6 +5,7 @@
 
 import json
 
+import click
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -24,9 +25,9 @@ from experiments.grug.mixture_of_kittens.fused_moe import (
 from experiments.grug.mixture_of_kittens.schedule import build_schedule
 
 WORLD_SIZE = 4
-NUM_TOKENS = 512
-HIDDEN_DIM = 256
-INTERMEDIATE_DIM = 256
+DEFAULT_NUM_TOKENS = 512
+DEFAULT_HIDDEN_DIM = 512
+DEFAULT_INTERMEDIATE_DIM = 512
 TOP_K = 4
 NUM_LOCAL_EXPERTS = 2
 BF16_ATOL = 0.5
@@ -34,36 +35,41 @@ BF16_RTOL = 0.01
 SHARED_GRADIENT_BF16_ATOL = 1.0
 
 
-def _random_inputs() -> tuple[np.ndarray, ...]:
+def _random_inputs(*, num_tokens: int, hidden_dim: int, intermediate_dim: int) -> tuple[np.ndarray, ...]:
     random = np.random.default_rng(1234)
-    x = random.normal(size=(WORLD_SIZE, NUM_TOKENS, HIDDEN_DIM)).astype(np.float32)
-    router_weights = np.ones((WORLD_SIZE, NUM_TOKENS, TOP_K), dtype=np.float32)
-    shared_gate = (random.normal(size=(INTERMEDIATE_DIM, HIDDEN_DIM)) / HIDDEN_DIM**0.5).astype(np.float32)
-    shared_up = (random.normal(size=(INTERMEDIATE_DIM, HIDDEN_DIM)) / HIDDEN_DIM**0.5).astype(np.float32)
-    shared_down = (random.normal(size=(HIDDEN_DIM, INTERMEDIATE_DIM)) / INTERMEDIATE_DIM**0.5).astype(np.float32)
+    x = random.normal(size=(WORLD_SIZE, num_tokens, hidden_dim)).astype(np.float32)
+    router_weights = np.ones((WORLD_SIZE, num_tokens, TOP_K), dtype=np.float32)
+    shared_gate = (random.normal(size=(intermediate_dim, hidden_dim)) / hidden_dim**0.5).astype(np.float32)
+    shared_up = (random.normal(size=(intermediate_dim, hidden_dim)) / hidden_dim**0.5).astype(np.float32)
+    shared_down = (random.normal(size=(hidden_dim, intermediate_dim)) / intermediate_dim**0.5).astype(np.float32)
     routed_gate = (
-        random.normal(size=(WORLD_SIZE, NUM_LOCAL_EXPERTS, INTERMEDIATE_DIM, HIDDEN_DIM)) / HIDDEN_DIM**0.5
+        random.normal(size=(WORLD_SIZE, NUM_LOCAL_EXPERTS, intermediate_dim, hidden_dim)) / hidden_dim**0.5
     ).astype(np.float32)
     routed_up = (
-        random.normal(size=(WORLD_SIZE, NUM_LOCAL_EXPERTS, INTERMEDIATE_DIM, HIDDEN_DIM)) / HIDDEN_DIM**0.5
+        random.normal(size=(WORLD_SIZE, NUM_LOCAL_EXPERTS, intermediate_dim, hidden_dim)) / hidden_dim**0.5
     ).astype(np.float32)
     routed_down = (
-        random.normal(size=(WORLD_SIZE, NUM_LOCAL_EXPERTS, HIDDEN_DIM, INTERMEDIATE_DIM)) / INTERMEDIATE_DIM**0.5
+        random.normal(size=(WORLD_SIZE, NUM_LOCAL_EXPERTS, hidden_dim, intermediate_dim)) / intermediate_dim**0.5
     ).astype(np.float32)
     return x, router_weights, shared_gate, shared_up, shared_down, routed_gate, routed_up, routed_down
 
 
-def _routes() -> np.ndarray:
+def _routes(num_tokens: int) -> np.ndarray:
     source_ranks = np.arange(WORLD_SIZE, dtype=np.int32)[:, None, None]
-    token_indices = np.arange(NUM_TOKENS, dtype=np.int32)[None, :, None]
+    token_indices = np.arange(num_tokens, dtype=np.int32)[None, :, None]
     route_indices = np.arange(TOP_K, dtype=np.int32)[None, None, :]
     destination_ranks = (source_ranks + route_indices) % WORLD_SIZE
     local_experts = ((source_ranks + token_indices) % 4 == 0).astype(np.int32)
     return destination_ranks * NUM_LOCAL_EXPERTS + local_experts
 
 
-def _schedules(top_experts: np.ndarray, config: MoKForwardConfig) -> tuple[np.ndarray, ...]:
-    capacity = schedule_capacity(NUM_TOKENS, TOP_K, NUM_LOCAL_EXPERTS, config)
+def _schedules(
+    top_experts: np.ndarray,
+    config: MoKForwardConfig,
+    *,
+    num_tokens: int,
+) -> tuple[np.ndarray, ...]:
+    capacity = schedule_capacity(num_tokens, TOP_K, NUM_LOCAL_EXPERTS, config)
     schedules = [
         build_schedule(
             jnp.asarray(top_experts),
@@ -97,18 +103,22 @@ def _reference(
     shared_hidden = jax.nn.silu(shared_gate_values) * shared_up_values
     shared_output = jnp.einsum("wti,hi->wth", shared_hidden, shared_down)
 
-    expert_ranks = top_experts // NUM_LOCAL_EXPERTS
-    local_experts = top_experts % NUM_LOCAL_EXPERTS
-    selected_gate = routed_gate[expert_ranks, local_experts]
-    selected_up = routed_up[expert_ranks, local_experts]
-    selected_down = routed_down[expert_ranks, local_experts]
-    routed_gate_values = jnp.einsum("wth,wtkih->wtki", x, selected_gate)
-    routed_up_values = jnp.einsum("wth,wtkih->wtki", x, selected_up)
-    routed_hidden = jax.nn.silu(routed_gate_values) * routed_up_values
-    routed_output = jnp.einsum("wtki,wtkhi->wtkh", routed_hidden, selected_down)
-    return (shared_output.astype(jnp.float32) + jnp.sum(routed_output * router_weights[..., None], axis=2)).astype(
-        jnp.bfloat16
-    )
+    routed_output = jnp.zeros_like(shared_output, dtype=jnp.float32)
+    intermediate_dim, hidden_dim = shared_gate.shape
+    flattened_gate = routed_gate.reshape(-1, intermediate_dim, hidden_dim)
+    flattened_up = routed_up.reshape(-1, intermediate_dim, hidden_dim)
+    flattened_down = routed_down.reshape(-1, hidden_dim, intermediate_dim)
+    for expert_index in range(WORLD_SIZE * NUM_LOCAL_EXPERTS):
+        routed_gate_values = jnp.einsum("wth,ih->wti", x, flattened_gate[expert_index])
+        routed_up_values = jnp.einsum("wth,ih->wti", x, flattened_up[expert_index])
+        routed_hidden = jax.nn.silu(routed_gate_values) * routed_up_values
+        expert_output = jnp.einsum("wti,hi->wth", routed_hidden, flattened_down[expert_index])
+        expert_weights = jnp.sum(
+            jnp.where(top_experts == expert_index, router_weights, 0.0),
+            axis=2,
+        )
+        routed_output += expert_output.astype(jnp.float32) * expert_weights[..., None]
+    return (shared_output.astype(jnp.float32) + routed_output).astype(jnp.bfloat16)
 
 
 def _error_metrics(
@@ -130,16 +140,37 @@ def _error_metrics(
     }
 
 
-def main() -> None:
+@click.command()
+@click.option("--num-tokens", type=click.IntRange(min=256), default=DEFAULT_NUM_TOKENS, show_default=True)
+@click.option("--hidden-dim", type=click.IntRange(min=256), default=DEFAULT_HIDDEN_DIM, show_default=True)
+@click.option(
+    "--intermediate-dim",
+    type=click.IntRange(min=256),
+    default=DEFAULT_INTERMEDIATE_DIM,
+    show_default=True,
+)
+def main(num_tokens: int, hidden_dim: int, intermediate_dim: int) -> None:
+    """Run the fused correctness gate at the selected model dimensions."""
+    for name, value in (
+        ("num_tokens", num_tokens),
+        ("hidden_dim", hidden_dim),
+        ("intermediate_dim", intermediate_dim),
+    ):
+        if value % 256 != 0:
+            raise click.BadParameter(f"{name} must be divisible by 256, got {value}")
     devices = jax.devices()
     if len(devices) != WORLD_SIZE:
         raise RuntimeError(f"The smoke test requires {WORLD_SIZE} visible GPUs, got {len(devices)}")
 
     config = MoKForwardConfig(minibatch_size=256, macrobatch_size=256)
-    inputs = _random_inputs()
-    top_experts = _routes()
-    peer_rank, peer_token_idx, num_scheduled_tokens, tokens_per_expert = _schedules(top_experts, config)
-    ensure_runtime(num_tokens=NUM_TOKENS, hidden_dim=HIDDEN_DIM, top_k=TOP_K)
+    inputs = _random_inputs(num_tokens=num_tokens, hidden_dim=hidden_dim, intermediate_dim=intermediate_dim)
+    top_experts = _routes(num_tokens)
+    peer_rank, peer_token_idx, num_scheduled_tokens, tokens_per_expert = _schedules(
+        top_experts,
+        config,
+        num_tokens=num_tokens,
+    )
+    ensure_runtime(num_tokens=num_tokens, hidden_dim=hidden_dim, top_k=TOP_K)
 
     mesh = Mesh(
         np.asarray(devices).reshape(1, 1, WORLD_SIZE, 1),
@@ -221,6 +252,7 @@ def main() -> None:
     )
     actual = fused_forward(*arguments)
     actual.block_until_ready()
+    print("Fused forward complete", flush=True)
 
     with jax.default_device(devices[0]):
         reference = jax.jit(_reference)(
@@ -235,28 +267,29 @@ def main() -> None:
             jnp.asarray(top_experts),
         )
         reference.block_until_ready()
+    print("Independent forward complete", flush=True)
 
     forward_metrics = _error_metrics(actual, reference)
 
     output_gradient = np.random.default_rng(4321).normal(size=x.shape).astype(np.float32)
     current_layout_arguments = (
-        jax.device_put(jnp.asarray(x.reshape(-1, HIDDEN_DIM), dtype=jnp.bfloat16), batch_sharded),
+        jax.device_put(jnp.asarray(x.reshape(-1, hidden_dim), dtype=jnp.bfloat16), batch_sharded),
         jax.device_put(jnp.asarray(router_weights.reshape(-1, TOP_K)), batch_sharded),
         jax.device_put(
             jnp.asarray(
-                np.transpose(routed_gate, (0, 1, 3, 2)).reshape(-1, HIDDEN_DIM, INTERMEDIATE_DIM), dtype=jnp.bfloat16
+                np.transpose(routed_gate, (0, 1, 3, 2)).reshape(-1, hidden_dim, intermediate_dim), dtype=jnp.bfloat16
             ),
             expert_sharded,
         ),
         jax.device_put(
             jnp.asarray(
-                np.transpose(routed_up, (0, 1, 3, 2)).reshape(-1, HIDDEN_DIM, INTERMEDIATE_DIM), dtype=jnp.bfloat16
+                np.transpose(routed_up, (0, 1, 3, 2)).reshape(-1, hidden_dim, intermediate_dim), dtype=jnp.bfloat16
             ),
             expert_sharded,
         ),
         jax.device_put(
             jnp.asarray(
-                np.transpose(routed_down, (0, 1, 3, 2)).reshape(-1, INTERMEDIATE_DIM, HIDDEN_DIM), dtype=jnp.bfloat16
+                np.transpose(routed_down, (0, 1, 3, 2)).reshape(-1, intermediate_dim, hidden_dim), dtype=jnp.bfloat16
             ),
             expert_sharded,
         ),
@@ -266,7 +299,7 @@ def main() -> None:
     )
     selected_experts = jax.device_put(jnp.asarray(top_experts.reshape(-1, TOP_K)), batch_sharded)
     sharded_output_gradient = jax.device_put(
-        jnp.asarray(output_gradient.reshape(-1, HIDDEN_DIM), dtype=jnp.bfloat16), batch_sharded
+        jnp.asarray(output_gradient.reshape(-1, hidden_dim), dtype=jnp.bfloat16), batch_sharded
     )
 
     def integrated_loss(*differentiable: jax.Array) -> jax.Array:
@@ -299,6 +332,19 @@ def main() -> None:
         *current_layout_arguments
     )
     integrated_value.block_until_ready()
+    gradient_names = (
+        "x",
+        "router_weights",
+        "routed_gate",
+        "routed_up",
+        "routed_down",
+        "shared_gate",
+        "shared_up",
+        "shared_down",
+    )
+    for name, gradient in zip(gradient_names, integrated_gradients, strict=True):
+        gradient.block_until_ready()
+        print(f"Fused gradient complete: {name}", flush=True)
 
     def fallback_loss(*differentiable: jax.Array) -> jax.Array:
         (
@@ -332,17 +378,9 @@ def main() -> None:
         *current_layout_arguments
     )
     reference_value.block_until_ready()
-
-    gradient_names = (
-        "x",
-        "router_weights",
-        "routed_gate",
-        "routed_up",
-        "routed_down",
-        "shared_gate",
-        "shared_up",
-        "shared_down",
-    )
+    for name, gradient in zip(gradient_names, reference_gradients, strict=True):
+        gradient.block_until_ready()
+        print(f"JAX gradient complete: {name}", flush=True)
     loss_absolute_error = float(
         np.abs(np.asarray(jax.device_get(integrated_value)) - np.asarray(jax.device_get(reference_value)))
     )
