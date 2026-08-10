@@ -46,7 +46,7 @@ from scipy import stats
 
 from experiments.datakit.cluster.quality.fast_transformer import content_type
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
-from experiments.datakit.cluster.quality.fast_transformer.calibrate import apply_calibration
+from experiments.datakit.cluster.quality.fast_transformer.calibrate import RESIDUAL_TYPE, apply_calibration
 from experiments.datakit.cluster.quality.fast_transformer.scorer import load_pooled_scorer, score_bme
 
 logger = logging.getLogger(__name__)
@@ -102,18 +102,26 @@ def source_signal(scores: np.ndarray, quality: np.ndarray, sources: np.ndarray) 
     return float(stats.spearmanr(predicted, oracle).statistic)
 
 
-def evaluate(*, texts, quality, sources, model_dir, calibration, type_model) -> dict:
-    """Everything one model contributes to the comparison."""
+def evaluate(*, texts, quality, sources, model_dir, calibration, type_model, true_types=None) -> dict:
+    """Everything one model contributes to the comparison.
+
+    The two per-type measurements deliberately use different types. Ranking inside a
+    type is a property of the *model*, so it is measured against the oracle's own
+    type where one exists — routing it through a classifier would blur a model
+    failure together with a classification failure. Parity is a property of what
+    *ships*, so it is measured on predicted types, which is what inference has.
+    """
     scorer = load_pooled_scorer(model_dir)
     raw = score_bme(scorer, texts)
-    types = np.array(content_type.predict(type_model, texts)) if type_model else np.array(["all"] * len(texts))
-    calibrated = apply_calibration(raw, types, calibration) if calibration else raw
+    predicted = np.array(content_type.predict(type_model, texts)) if type_model else np.array(["all"] * len(texts))
+    ranking_types = true_types if true_types is not None else predicted
+    calibrated = apply_calibration(raw, predicted, calibration) if calibration else raw
     return {
         "raw": raw,
-        "types": types,
+        "types": predicted,
         "calibrated": calibrated,
-        "within_type": within_type_ranking(raw, quality, types),
-        "top_share": top_bucket_share(calibrated, types),
+        "within_type": within_type_ranking(raw, quality, ranking_types),
+        "top_share": top_bucket_share(calibrated, predicted),
         "source_rho": source_signal(raw, quality, sources),
         "overall_rho": float(stats.spearmanr(raw, quality).statistic),
     }
@@ -135,7 +143,9 @@ def gate(candidate: dict, baseline: dict | None) -> list[Check]:
         )
     ]
 
-    shares = [v for v in candidate["top_share"].values()]
+    # ``other`` is the rubric's residual bin (junk by definition), so it is held to
+    # the quality scale but not to cross-type parity.
+    shares = [v for t, v in candidate["top_share"].items() if t != RESIDUAL_TYPE]
     if shares:
         median = float(np.median(shares))
         ratio = (max(shares) / max(min(shares), 1e-6)) if median > 0 else float("inf")
@@ -194,12 +204,16 @@ def main() -> None:
     configure_coreweave_s3()
 
     with StoragePath(args.labels).open("rb") as handle:
-        table = pq.ParquetFile(handle).read(columns=["text", "quality", "source"])
+        available = pq.ParquetFile(handle).schema_arrow.names
+    wanted = ["text", "quality", "source"] + (["content_type"] if "content_type" in available else [])
+    with StoragePath(args.labels).open("rb") as handle:
+        table = pq.ParquetFile(handle).read(columns=wanted)
     idx = holdout_indices(table.num_rows)
     rows = table.take(idx)
     texts = [t or "" for t in rows.column("text").to_pylist()]
     quality = np.array(rows.column("quality").to_pylist(), dtype=float)
     sources = np.array(rows.column("source").to_pylist())
+    true_types = np.array(rows.column("content_type").to_pylist()) if "content_type" in wanted else None
     logger.info("gate_model: %d holdout documents (of %d labels)", len(texts), table.num_rows)
 
     calibration = None
@@ -215,6 +229,7 @@ def main() -> None:
         model_dir=args.model_dir,
         calibration=calibration,
         type_model=type_model,
+        true_types=true_types,
     )
     baseline = None
     if args.baseline_model_dir:
@@ -225,6 +240,7 @@ def main() -> None:
             model_dir=args.baseline_model_dir,
             calibration=None,
             type_model=type_model,
+            true_types=true_types,
         )
 
     _report(candidate, baseline)

@@ -25,6 +25,7 @@ import numpy as np
 import optax
 import pyarrow.parquet as pq
 from rigging.filesystem import StoragePath
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.fast_transformer.data import PackedData, build_remap, encode_texts, pack
@@ -342,6 +343,9 @@ def main() -> None:
     p.add_argument("--name", default=MODEL_STEM)
     args = p.parse_args()
     configure_logging(logging.INFO)
+    # Labels and artifacts live on the CoreWeave object store, and this entry point
+    # runs both locally and as a cluster task; neither resolves those paths without it.
+    configure_coreweave_s3()
     train_from_labels(labels_path=args.labels, out_dir=args.out_dir, name=args.name)
 
 
