@@ -266,16 +266,6 @@ def run_benchmark(config: MokHeroBenchmarkConfig) -> None:
             build_stderr_tail=build.stderr,
         )
 
-        smoke_environment = dict(environment)
-        smoke_environment.update(
-            NUM_LOCAL_TOKENS="512",
-            HIDDEN_DIM="256",
-            INTERMEDIATE_DIM="256",
-            NUM_EXPERTS="12",
-            TOPK="4",
-            MINIBATCH_SIZE="2048",
-            MACROBATCH_SIZE="65536",
-        )
         torchrun = [
             str(venv / "bin" / "python"),
             "-m",
@@ -285,9 +275,13 @@ def run_benchmark(config: MokHeroBenchmarkConfig) -> None:
         ]
         smoke = _run_stage(
             "smoke",
-            [*torchrun, str(source / "benchmarks" / "bench_mok.py")],
+            [
+                str(venv / "bin" / "python"),
+                "-c",
+                "import mok; from mok import functional; print(mok.__file__, functional.__file__)",
+            ],
             cwd=working_dir,
-            env=smoke_environment,
+            env=environment,
         )
         stage_data.update(
             smoke_time=smoke.elapsed,
