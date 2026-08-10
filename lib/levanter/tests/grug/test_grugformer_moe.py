@@ -21,6 +21,7 @@ from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispat
 from levanter.grug._moe.cudnn_wgrad_cute import pad_grouped_rows
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
+from levanter.grug._moe.ep_common import _local_permute_from_counts, _zero_inactive_grouped_rows
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -56,6 +57,34 @@ def test_cudnn_wgrad_padding_preserves_groups_and_zeros_inserted_rows():
     expected[16:20] = np.asarray(values[4:8], dtype=np.float32)
     np.testing.assert_array_equal(np.asarray(padded, dtype=np.float32), expected)
     np.testing.assert_array_equal(np.asarray(offsets), np.array([8, 16, 24], dtype=np.int32))
+
+
+def test_local_permute_separates_active_groups_from_physical_receiver_capacity():
+    inputs = jnp.arange(12, dtype=jnp.float32).reshape(6, 2)
+    global_group_sizes = jnp.array([[1, 0, 2, 0], [0, 2, 0, 1]], dtype=jnp.int32)
+
+    sorted_inputs, sorted_indices, physical_group_sizes, active_group_sizes = jax.jit(
+        lambda x, sizes: _local_permute_from_counts(
+            x,
+            sizes,
+            local_expert_size=2,
+            shard_index=jnp.array(0, dtype=jnp.int32),
+        )
+    )(inputs, global_group_sizes)
+
+    np.testing.assert_array_equal(np.asarray(active_group_sizes), np.array([1, 2], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(physical_group_sizes), np.array([1, 5], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(sorted_indices), np.arange(6, dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(sorted_inputs[:3]), np.asarray(inputs[:3]))
+    np.testing.assert_array_equal(np.asarray(sorted_inputs[3:]), np.zeros((3, 2), dtype=np.float32))
+
+
+def test_inactive_grouped_rows_are_zeroed():
+    values = jnp.arange(18, dtype=jnp.float32).reshape(6, 3)
+    masked = jax.jit(_zero_inactive_grouped_rows)(values, jnp.array([0, 1, 3], dtype=jnp.int32))
+
+    np.testing.assert_array_equal(np.asarray(masked[:3]), np.asarray(values[:3]))
+    np.testing.assert_array_equal(np.asarray(masked[3:]), np.zeros((3, 3), dtype=np.float32))
 
 
 def _make_ep_mesh_or_none() -> Mesh | None:

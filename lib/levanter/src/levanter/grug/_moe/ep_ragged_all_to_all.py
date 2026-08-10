@@ -26,7 +26,7 @@ from levanter.grug._moe.ep_common import (
 from levanter.grug.sharding import _batch_axes
 
 _ExpertMlp: TypeAlias = Callable[
-    [jax.Array, jax.Array, jax.Array, jax.Array, Callable[[jax.Array], jax.Array]], jax.Array
+    [jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, Callable[[jax.Array], jax.Array]], jax.Array
 ]
 
 
@@ -34,20 +34,23 @@ def _ragged_dot_expert_mlp(
     x_dispatch: jax.Array,
     moe_w13_local: jax.Array,
     moe_w2_local: jax.Array,
-    local_group_sizes: jax.Array,
+    physical_group_sizes: jax.Array,
+    active_group_sizes: jax.Array,
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> jax.Array:
-    w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+    del active_group_sizes
+    w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
     moe_dim = moe_w2_local.shape[1]
     gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-    return ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+    return ragged_dot(activation_fn(gate) * up, moe_w2_local, physical_group_sizes)
 
 
 def _cute_expert_mlp(
     x_dispatch: jax.Array,
     moe_w13_local: jax.Array,
     moe_w2_local: jax.Array,
-    local_group_sizes: jax.Array,
+    physical_group_sizes: jax.Array,
+    active_group_sizes: jax.Array,
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> jax.Array:
     if activation_fn is not jax.nn.silu:
@@ -58,14 +61,15 @@ def _cute_expert_mlp(
 
     moe_dim = moe_w2_local.shape[1]
     w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)
+    del active_group_sizes
     cumulative_group_sizes = jnp.concatenate(
-        [jnp.zeros((1,), jnp.int32), jnp.cumsum(local_group_sizes).astype(jnp.int32)]
+        [jnp.zeros((1,), jnp.int32), jnp.cumsum(physical_group_sizes).astype(jnp.int32)]
     )
     return _expert_mlp(
         x_dispatch,
         w13_interleaved,
         moe_w2_local,
-        local_group_sizes,
+        physical_group_sizes,
         cumulative_group_sizes,
     )
 
@@ -74,7 +78,8 @@ def _cudnn_cute_expert_mlp(
     x_dispatch: jax.Array,
     moe_w13_local: jax.Array,
     moe_w2_local: jax.Array,
-    local_group_sizes: jax.Array,
+    physical_group_sizes: jax.Array,
+    active_group_sizes: jax.Array,
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> jax.Array:
     if activation_fn is not jax.nn.silu:
@@ -84,14 +89,15 @@ def _cudnn_cute_expert_mlp(
 
     moe_dim = moe_w2_local.shape[1]
     w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)
+    del physical_group_sizes
     cumulative_group_sizes = jnp.concatenate(
-        [jnp.zeros((1,), jnp.int32), jnp.cumsum(local_group_sizes).astype(jnp.int32)]
+        [jnp.zeros((1,), jnp.int32), jnp.cumsum(active_group_sizes).astype(jnp.int32)]
     )
     return _expert_mlp_cudnn(
         x_dispatch,
         w13_interleaved,
         moe_w2_local,
-        local_group_sizes,
+        active_group_sizes,
         cumulative_group_sizes,
     )
 
@@ -158,7 +164,7 @@ def _moe_mlp_ep_ragged_a2a_impl(
             recv_sizes,
             axis_name="expert",
         )
-        x_dispatch, local_sorted_indices, local_group_sizes = _local_permute_from_counts(
+        x_dispatch, local_sorted_indices, physical_group_sizes, active_group_sizes = _local_permute_from_counts(
             x_dispatched,
             clipped_group_sizes,
             local_expert_size=local_experts,
@@ -170,7 +176,8 @@ def _moe_mlp_ep_ragged_a2a_impl(
             x_dispatch,
             moe_w13_local,
             moe_w2_local,
-            local_group_sizes,
+            physical_group_sizes,
+            active_group_sizes,
             activation_fn,
         )
 

@@ -492,7 +492,7 @@ def build_small_run(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Fixed all-to-all capacity factor. Omit it for a backend that never drops assignments.",
+    help="Routed-assignment capacity factor. Omit it for a backend that never drops assignments.",
 )
 @click.option("--num-experts", type=click.IntRange(min=1), default=128, help="Routed expert count.")
 @click.option("--num-experts-per-token", type=click.IntRange(min=1), default=4, help="Routed experts per token.")

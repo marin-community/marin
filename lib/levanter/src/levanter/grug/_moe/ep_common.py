@@ -114,7 +114,12 @@ def _local_permute_from_counts(
     *,
     local_expert_size: int,
     shard_index: Int[Array, ""],
-) -> tuple[Float[Array, "C H"], Int[Array, "C"], Int[Array, "Elocal"]]:
+) -> tuple[
+    Float[Array, "C H"],
+    Int[Array, "C"],
+    Int[Array, "Elocal"],
+    Int[Array, "Elocal"],
+]:
     all_shard_local_sizes = jax.lax.dynamic_slice_in_dim(
         global_group_sizes,
         start_index=shard_index * local_expert_size,
@@ -131,8 +136,13 @@ def _local_permute_from_counts(
     sorted_indices = jnp.argsort(local_expert_ids)
     sorted_inputs = _sort_activations(inputs, sorted_indices)
     sorted_inputs = jnp.where((positions < total_valid)[:, None], sorted_inputs, 0)
-    group_sizes = local_group_sizes.at[-1].add(inputs.shape[0] - total_valid)
-    return sorted_inputs, sorted_indices, group_sizes
+    physical_group_sizes = local_group_sizes.at[-1].add(inputs.shape[0] - total_valid)
+    return sorted_inputs, sorted_indices, physical_group_sizes, local_group_sizes
+
+
+def _zero_inactive_grouped_rows(values: jax.Array, cumulative_group_sizes: jax.Array) -> jax.Array:
+    active_rows = cumulative_group_sizes[-1]
+    return jnp.where(jnp.arange(values.shape[0])[:, None] < active_rows, values, jnp.zeros((), values.dtype))
 
 
 def _clip_receiver_group_sizes(

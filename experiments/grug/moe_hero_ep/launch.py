@@ -482,7 +482,7 @@ def build_hero_run(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
-    help="Override the fixed all-to-all capacity factor.",
+    help="Override routed-assignment capacity; ragged backends pool this capacity per receiving device.",
 )
 @build_options
 def main(

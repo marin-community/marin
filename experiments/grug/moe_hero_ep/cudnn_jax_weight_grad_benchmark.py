@@ -31,7 +31,9 @@ logger = logging.getLogger(__name__)
 
 CUDNN_FRONTEND_VERSION = "1.27.0"
 ROUTED_ROWS = 348_672
-ACTIVE_GROUP_SIZES = (116_218, 116_217, 116_217)
+CAPACITY_FILL_GROUP_SIZES = (116_218, 116_217, 116_217)
+BALANCED_ROUTING_GROUP_SIZES = (87_382, 87_381, 87_381)
+GROUP_SIZE_CASES = (CAPACITY_FILL_GROUP_SIZES, BALANCED_ROUTING_GROUP_SIZES)
 WARMUP_RUNS = 2
 TIMED_RUNS = 5
 BENCHMARK_RESOURCES = ResourceConfig.with_gpu(
@@ -91,13 +93,13 @@ def _load_cudnn_frontend() -> float:
     return time.perf_counter() - start
 
 
-def _benchmark_shape(shape: WeightGradientShape) -> BenchmarkRow:
+def _benchmark_shape(shape: WeightGradientShape, active_group_sizes: tuple[int, ...]) -> BenchmarkRow:
     row_ids = jnp.arange(ROUTED_ROWS, dtype=jnp.int32)
-    group_sizes = jnp.asarray(ACTIVE_GROUP_SIZES, dtype=jnp.int32)
+    group_sizes = jnp.asarray(active_group_sizes, dtype=jnp.int32)
     active_offsets = jnp.cumsum(group_sizes)
     expert_ids = jnp.sum(row_ids[:, None] >= active_offsets[None, :], axis=1, dtype=jnp.int32)
-    safe_expert_ids = jnp.minimum(expert_ids, len(ACTIVE_GROUP_SIZES) - 1)
-    active_mask = expert_ids < len(ACTIVE_GROUP_SIZES)
+    safe_expert_ids = jnp.minimum(expert_ids, len(active_group_sizes) - 1)
+    active_mask = expert_ids < len(active_group_sizes)
     expert_factors = (safe_expert_ids + 1).astype(jnp.bfloat16)
     lhs_values = (jnp.arange(shape.m, dtype=jnp.int32) % 17 + 1).astype(jnp.bfloat16) / 1_024
     rhs_values = (jnp.arange(shape.n, dtype=jnp.int32) % 19 + 1).astype(jnp.bfloat16) / 512
@@ -122,7 +124,7 @@ def _benchmark_shape(shape: WeightGradientShape) -> BenchmarkRow:
             samples.append(time.perf_counter() - start)
         expected = (
             group_sizes[:, None, None].astype(jnp.float32)
-            * jnp.arange(1, len(ACTIVE_GROUP_SIZES) + 1, dtype=jnp.float32)[:, None, None]
+            * jnp.arange(1, len(active_group_sizes) + 1, dtype=jnp.float32)[:, None, None]
             * lhs_values[None, :, None].astype(jnp.float32)
             * rhs_values[None, None, :].astype(jnp.float32)
         ).astype(jnp.bfloat16)
@@ -132,9 +134,12 @@ def _benchmark_shape(shape: WeightGradientShape) -> BenchmarkRow:
 
     median_time = sorted(samples)[len(samples) // 2] if samples else 0.0
     mean_time = sum(samples) / len(samples) if samples else 0.0
-    logical_flops = 2 * sum(ACTIVE_GROUP_SIZES) * shape.m * shape.n
+    logical_flops = 2 * sum(active_group_sizes) * shape.m * shape.n
     return BenchmarkRow(
-        shape=f"{shape.name}:({ROUTED_ROWS},{shape.m})T@({ROUTED_ROWS},{shape.n})->(3,{shape.m},{shape.n})",
+        shape=(
+            f"{shape.name}:active={sum(active_group_sizes)}:"
+            f"({ROUTED_ROWS},{shape.m})T@({ROUTED_ROWS},{shape.n})->(3,{shape.m},{shape.n})"
+        ),
         package_version=CUDNN_FRONTEND_VERSION,
         device_type=jax.devices()[0].device_kind,
         compile_time=compile_time,
@@ -152,7 +157,7 @@ def _benchmark_shape(shape: WeightGradientShape) -> BenchmarkRow:
 
 def run_benchmark(config: CudnnJaxWeightGradBenchmarkConfig) -> None:
     install_time = _load_cudnn_frontend()
-    rows = [_benchmark_shape(shape) for shape in TARGET_SHAPES]
+    rows = [_benchmark_shape(shape, group_sizes) for group_sizes in GROUP_SIZE_CASES for shape in TARGET_SHAPES]
     logger.info(
         "cudnn_jax_weight_grad_result install_time=%s rows=%s",
         install_time,

@@ -89,7 +89,7 @@ compute-scaled optimizer values stay constant across a sweep.
 | `--intermediate-dim` | routed expert width |
 | `--num-experts-per-token` | routed top-k |
 | `--latent-dim` | routed input and output width |
-| `--capacity-factor` | fixed all-to-all capacity factor |
+| `--capacity-factor` | routed-assignment capacity; ragged pools it per receiving device |
 
 Ragged runs also accept `--ragged-all-to-all-splits-per-peer`. It is a transport-parallelism knob,
 not a model-shape sweep: increasing it preserves all routed tokens and divides each peer's contiguous

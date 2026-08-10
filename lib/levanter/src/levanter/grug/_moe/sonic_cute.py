@@ -27,6 +27,7 @@ from levanter.grug._moe.common import (
     _zero_dropped_assignments,
 )
 from levanter.grug._moe.cudnn_wgrad_cute import cudnn_grouped_wgrad
+from levanter.grug._moe.ep_common import _zero_inactive_grouped_rows
 from levanter.grug._moe.quack_moe_cute import quack_gated_grouped_gemm, quack_grouped_gemm
 
 
@@ -82,11 +83,19 @@ _expert_mlp.defvjp(_expert_mlp_fwd, _expert_mlp_bwd)
 def _expert_mlp_cudnn(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     """QuACK activation path with cuDNN grouped weight gradients."""
     _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
-    return quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    return _zero_inactive_grouped_rows(y, cu)
+
+
+def _expert_mlp_cudnn_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
+    gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
+    y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    return _zero_inactive_grouped_rows(y, cu), (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
 
 
 def _expert_mlp_cudnn_bwd(res, dy):
     x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu = res
+    dy = _zero_inactive_grouped_rows(dy, cu)
     dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k")
     dw2 = cudnn_grouped_wgrad(h, dy, group_sizes)
     gate, up = gu[:, 0::2], gu[:, 1::2]
@@ -96,13 +105,14 @@ def _expert_mlp_cudnn_bwd(res, dy):
     dup = dh * silu
     d_gu = jnp.stack([dgate, dup], axis=-1).reshape(gu.shape)
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k")
+    dx = _zero_inactive_grouped_rows(dx, cu)
     dw13_il = cudnn_grouped_wgrad(x_dispatch, d_gu, group_sizes)
     gs_ct = np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)
     cu_ct = np.zeros(cu.shape, dtype=jax.dtypes.float0)
     return dx, dw13_il, dw2, gs_ct, cu_ct
 
 
-_expert_mlp_cudnn.defvjp(_expert_mlp_fwd, _expert_mlp_cudnn_bwd)
+_expert_mlp_cudnn.defvjp(_expert_mlp_cudnn_fwd, _expert_mlp_cudnn_bwd)
 
 
 def _moe_mlp_local_sonic_cute(
