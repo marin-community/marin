@@ -127,6 +127,14 @@ def _cccl_include(package_roots: tuple[Path, ...]) -> Path | None:
     return None
 
 
+def _installed_header_include(header: str) -> Path | None:
+    for package_root in site.getsitepackages():
+        nvidia_root = Path(package_root) / "nvidia"
+        for header_path in nvidia_root.rglob(header):
+            return header_path.parent
+    return None
+
+
 def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | None, str | None, str | None]:
     """Build the pinned JAX extension against the job's CUDA 13 JAX runtime."""
     target = tempfile.mkdtemp(prefix="ra2a-transformer-engine-")
@@ -173,7 +181,21 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
     if cccl_include is None:
         error = f"nvidia-cuda-cccl=={CUDA_CCCL_VERSION} did not contain nv/target"
         return None, 0.0, setup.stdout[-INSTALL_LOG_TAIL:], setup.stderr[-INSTALL_LOG_TAIL:], error, str(cuda_home), None
-    env["CPLUS_INCLUDE_PATH"] = f"{cccl_include}:{env.get('CPLUS_INCLUDE_PATH', '')}"
+    cudnn_include = _installed_header_include("cudnn.h")
+    nccl_include = _installed_header_include("nccl.h")
+    if cudnn_include is None or nccl_include is None:
+        error = f"staged SDK headers missing: cudnn={cudnn_include}, nccl={nccl_include}"
+        return (
+            None,
+            0.0,
+            setup.stdout[-INSTALL_LOG_TAIL:],
+            setup.stderr[-INSTALL_LOG_TAIL:],
+            error,
+            str(cuda_home),
+            str(cccl_include),
+        )
+    include_paths = (cccl_include, cudnn_include, nccl_include)
+    env["CPLUS_INCLUDE_PATH"] = f"{':'.join(str(path) for path in include_paths)}:{env.get('CPLUS_INCLUDE_PATH', '')}"
 
     start = time.perf_counter()
     install = subprocess.run(
