@@ -33,6 +33,8 @@ MOK_REPOSITORY = "https://github.com/cursor/mixture-of-kittens.git"
 MOK_COMMIT = "6438bf48f88094d305972fbe0fa6deba0f7d4d1a"
 TORCH_VERSION = "2.10.0+cu130"
 TORCH_INDEX = "https://download.pytorch.org/whl/cu130"
+CUDA_NVCC_VERSION = "13.0.88"
+CUDA_CCCL_VERSION = "13.0.85"
 LOG_TAIL = 12_000
 BENCHMARK_RESOURCES = ResourceConfig.with_gpu(
     "GB200",
@@ -226,6 +228,10 @@ def run_benchmark(config: MokHeroBenchmarkConfig) -> None:
                 "--index-strategy",
                 "unsafe-best-match",
                 f"torch=={TORCH_VERSION}",
+                f"nvidia-cuda-nvcc=={CUDA_NVCC_VERSION}",
+                f"nvidia-cuda-crt=={CUDA_NVCC_VERSION}",
+                f"nvidia-nvvm=={CUDA_NVCC_VERSION}",
+                f"nvidia-cuda-cccl=={CUDA_CCCL_VERSION}",
                 "setuptools>=80",
             ],
         )
