@@ -29,15 +29,12 @@ from experiments.datakit.cluster.quality.fast_transformer.model import FastTrans
 # mean-pools them, so a shared boilerplate prefix no longer dominates the score.
 CHUNK_CHARS = 2_000
 
-MODEL_STEM = "pooled_junkgate2"  # the deployed model artifact stem
+MODEL_STEM = "pooled_junkgate2"  # default name for a newly trained model
 
 
 def artifact_names(stem: str) -> tuple[str, str, str]:
     """The (.eqx, remap.json, meta.json) artifact filenames for a model stem."""
     return f"{stem}.eqx", f"{stem}_remap.json", f"{stem}_meta.json"
-
-
-MODEL_EQX, MODEL_REMAP, MODEL_META = artifact_names(MODEL_STEM)
 
 
 @dataclass(frozen=True)

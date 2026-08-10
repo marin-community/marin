@@ -11,8 +11,13 @@ uses, take the median raw score per oracle level (1..5), place a cutpoint at eac
 adjacent-level midpoint, and map those cutpoints onto ``[0, .2, .4, .6, .8, 1]``.
 
 The remap is monotonic, so it does not change document ranking -- it only makes the
-fixed-bucket quantization quality-coherent. Writes ``{"xk": [...], "yk": [...]}``
-consumed by ``np.interp`` in ``score.py``.
+fixed-bucket quantization quality-coherent.
+
+With ``--content-type-model`` it fits one remap per content type instead, because
+the types do not share a ceiling, and writes ``{"default": {...}, "types": {...}}``.
+``apply_calibration`` consumes either shape, so ``score.py`` does not branch. A
+cutpoint whose adjacent oracle levels are too thin borrows the global one rather
+than being fitted on noise.
 
     python -m experiments.datakit.cluster.quality.fast_transformer.calibrate \\
         --labels    s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet \\
