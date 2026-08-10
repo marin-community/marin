@@ -39,6 +39,23 @@ factor 1.30 and automatic PGLE: a last-50 mean of 262,683 tokens/s at 3.9642% dr
 252,271 tokens/s, and a mean loss of 3.2417. The narrower 6144 width lowers per-expert compute and
 memory below these figures.
 
+### EP ablation ladder (4k context)
+
+The default EP configuration — histogram QB, standard init, latent MoE — trained across the
+downsized d768–d2048 ladder at 4096 sequence length and 750 tokens per active parameter. Final
+Paloma macro loss, both as trained (with capacity drops) and re-scored dropless
+(`sonic_cute` at one chunk), against issue [#8062](https://github.com/marin-community/marin/issues/8062):
+
+| size | drop % (last 50) | Paloma (with drop) | Paloma (dropless) |
+| --- | --- | --- | --- |
+| d768 | 5.50% | [3.2326](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d768) | [3.0331](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d768-dropless-eval) |
+| d1024 | 5.94% | [2.9849](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d1024) | [2.7930](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d1024-dropless-eval) |
+| d1536 | 6.61% | [2.7487](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d1536) | [2.5710](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d1536-dropless-eval) |
+| d2048 | 7.11% | [2.5858](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d2048) | [2.4106](https://wandb.ai/marin-community/marin_moe/runs/mhep-ladder-hist-noinit-20260808c-ep64-d2048-dropless-eval) |
+
+The drop-free re-eval is the fair comparison to a dropless FSDP run; the training-time drops grow
+with width and are recovered by scoring dropless.
+
 ## Sweeps
 
 Five launcher options move the shape from the hero spec. They keep the hidden dimension, so the
