@@ -56,6 +56,12 @@ class StreamingAttentionBackwardStatePolicy(StrEnum):
     SAVED_OUTPUT_AND_LOG_SUM_EXP = "saved_output_and_log_sum_exp"
 
 
+class StreamingAttentionLogSumExpEncoding(StrEnum):
+    """Physical encoding of the saved normalized-exponential Fold state."""
+
+    NATURAL_LOG = "natural_log"
+
+
 class StreamingAttentionBackwardResultPolicy(StrEnum):
     """Which natural program results cross the generated FFI boundary."""
 
@@ -155,6 +161,7 @@ class GeneratedStreamingAttentionBackwardFfi:
     aot_kernels: tuple[TritonAotKernelPlan, ...]
     handler_template: str
     semantic_fingerprint: str
+    saved_state_encoding: StreamingAttentionLogSumExpEncoding | None
 
 
 @dataclass(frozen=True)
@@ -252,6 +259,7 @@ def generate_streaming_attention_backward_ffi(
                 forward_output_strides,
                 parameters,
                 schedule,
+                natural_log_sum_exp=False,
                 num_warps=num_warps,
                 num_stages=num_stages,
             )
@@ -265,6 +273,7 @@ def generate_streaming_attention_backward_ffi(
             schedule,
             outputs=outputs,
             forward_output_strides=forward_output_strides,
+            natural_log_sum_exp=state_policy is StreamingAttentionBackwardStatePolicy.SAVED_OUTPUT_AND_LOG_SUM_EXP,
             num_warps=num_warps,
             num_stages=num_stages,
         )
@@ -288,6 +297,11 @@ def generate_streaming_attention_backward_ffi(
         aot_kernels=tuple(kernels),
         handler_template=handler_template,
         semantic_fingerprint=semantic_fingerprint,
+        saved_state_encoding=(
+            StreamingAttentionLogSumExpEncoding.NATURAL_LOG
+            if state_policy is StreamingAttentionBackwardStatePolicy.SAVED_OUTPUT_AND_LOG_SUM_EXP
+            else None
+        ),
     )
 
 
@@ -577,6 +591,7 @@ def _forward_aot_plan(
     parameters: _ScoreMapParameters,
     schedule: StreamingAttentionBackwardTileSchedule,
     *,
+    natural_log_sum_exp: bool,
     num_warps: int,
     num_stages: int,
 ) -> TritonAotKernelPlan:
@@ -626,6 +641,7 @@ def _forward_aot_plan(
         "0",
         "0",
         str(int(parameters.softcap is not None)),
+        str(int(natural_log_sum_exp)),
     )
     return TritonAotKernelPlan(
         source=FORWARD_KERNEL_SOURCE,
@@ -647,6 +663,7 @@ def _reverse_aot_plans(
     *,
     outputs: tuple[StreamingAttentionBackwardFfiBuffer, ...],
     forward_output_strides: tuple[int, ...],
+    natural_log_sum_exp: bool,
     num_warps: int,
     num_stages: int,
 ) -> tuple[TritonAotKernelPlan, TritonAotKernelPlan]:
@@ -690,6 +707,7 @@ def _reverse_aot_plans(
         str(schedule.query_heads_per_key_value_tile),
         str(int(parameters.causal)),
         str(int(parameters.softcap is not None)),
+        str(int(natural_log_sum_exp)),
     )
     dkdv_signature = (
         "*bf16:16",
@@ -713,6 +731,7 @@ def _reverse_aot_plans(
         str(schedule.query_heads_per_key_value_tile),
         str(int(parameters.causal)),
         str(int(parameters.softcap is not None)),
+        str(int(natural_log_sum_exp)),
     )
     return (
         TritonAotKernelPlan(

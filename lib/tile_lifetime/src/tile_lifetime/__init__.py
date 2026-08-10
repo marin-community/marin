@@ -158,6 +158,7 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
     StreamingAttentionBackwardFfiBuffer,
     StreamingAttentionBackwardResultPolicy,
     StreamingAttentionBackwardStatePolicy,
+    StreamingAttentionLogSumExpEncoding,
     TritonAotKernelPlan,
     call_streaming_attention_backward_ffi,
     call_streaming_attention_training_ffi,
@@ -172,6 +173,12 @@ from tile_lifetime.jax_streaming_attention_forward_ffi import (
     compile_streaming_attention_forward_ffi,
     generate_streaming_attention_forward_ffi,
     register_streaming_attention_forward_ffi,
+)
+from tile_lifetime.jax_streaming_attention_training_frontend import (
+    JaxAutomaticDifferentiationOwner,
+    JaxVjpFrontendAudit,
+    RecoveredJaxVjpStreamingAttentionTraining,
+    recover_jax_vjp_streaming_attention_training,
 )
 from tile_lifetime.kimi_delta_scan import (
     chunkwise_kimi_delta_reference,

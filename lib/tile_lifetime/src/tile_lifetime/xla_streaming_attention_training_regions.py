@@ -172,6 +172,8 @@ def plan_streaming_attention_training_regions(
         raise ValueError("forward and reverse regions implement different score Maps")
     if generated_forward.reverse_state_policy is not generated_saved_reverse.state_policy:
         raise ValueError("forward saved-state coordinate does not match the reverse state policy")
+    if generated_forward.saved_state_encoding is not generated_saved_reverse.saved_state_encoding:
+        raise ValueError("forward and reverse use different log-normalizer encodings")
     if not math.isclose(
         forward.provenance.score_scale,
         rematerialized_forward.provenance.score_scale,

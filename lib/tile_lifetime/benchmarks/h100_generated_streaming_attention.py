@@ -306,6 +306,7 @@ def _streaming_attention_forward(
     has_bias: tl.constexpr,
     has_mask: tl.constexpr,
     has_softcap: tl.constexpr,
+    natural_log_sum_exp: tl.constexpr,
 ):
     query_tile_index = tl.program_id(0)
     batch_query_head = tl.program_id(1)
@@ -480,7 +481,10 @@ def _streaming_attention_forward(
     accumulator /= row_sum[:, None]
     tl.store(output_block, accumulator.to(tl.bfloat16))
     row_offsets = batch_query_head * sequence_length + query_start + tl.arange(0, block_m)
-    tl.store(log_sum_exp + row_offsets, row_max + tl.math.log2(row_sum))
+    log_normalizer = row_max + tl.math.log2(row_sum)
+    if natural_log_sum_exp:
+        log_normalizer /= 1.4426950408889634
+    tl.store(log_sum_exp + row_offsets, log_normalizer)
 
 
 @triton.jit
@@ -647,6 +651,7 @@ def _streaming_grouped_query_forward(
     has_bias: tl.constexpr,
     has_mask: tl.constexpr,
     has_softcap: tl.constexpr,
+    natural_log_sum_exp: tl.constexpr,
 ):
     query_tile_index = tl.program_id(0)
     batch_head_group = tl.program_id(1)
@@ -821,7 +826,10 @@ def _streaming_grouped_query_forward(
     )
     tl.store(output + output_offsets, accumulator.to(tl.bfloat16), mask=query_valid[:, None])
     lse_offsets = batch_index * query_heads * sequence_length + query_head_indices * sequence_length + query_tokens
-    tl.store(log_sum_exp + lse_offsets, row_max + tl.math.log2(row_sum), mask=query_valid)
+    log_normalizer = row_max + tl.math.log2(row_sum)
+    if natural_log_sum_exp:
+        log_normalizer /= 1.4426950408889634
+    tl.store(log_sum_exp + lse_offsets, log_normalizer, mask=query_valid)
 
 
 def _aligned_score_strides(
@@ -934,12 +942,13 @@ def emit_streaming_attention(
         lowered.bias_name is not None,
         lowered.mask_name is not None,
         lowered.softcap is not None,
+        False,
     )
     if heads_per_program > 1:
         kernel[(triton.cdiv(sequence_length, block_m), grid_heads)](
-            *common_arguments[:-4],
+            *common_arguments[:-5],
             heads_per_program,
-            *common_arguments[-4:],
+            *common_arguments[-5:],
             num_warps=num_warps,
             num_stages=num_stages,
         )
