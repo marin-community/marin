@@ -215,12 +215,12 @@ class IsolatedCudaVllm:
         return command
 
     def env(self) -> dict[str, str]:
-        # CoreWeave task images do not provide nvcc. Keep sampling on native/Triton kernels and let
-        # DeepGEMM use the CUDA-runtime-matched NVRTC shipped with the selected vLLM environment.
-        # Both variants may also receive an s3:// path; CoreWeave rejects path-style S3 requests.
+        # The promoted Marin wheel provisions DeepGEMM's packaged NVCC environment in its entrypoint.
+        # Upstream vLLM remains on NVRTC because it does not use that promoted companion wheel. Both
+        # variants may also receive an s3:// path; CoreWeave rejects path-style S3 requests.
         environment = {
             _FLASHINFER_SAMPLER_ENV_VAR: "0",
-            _DEEPGEMM_NVRTC_ENV_VAR: "1",
+            _DEEPGEMM_NVRTC_ENV_VAR: "0" if self.source is VllmType.MARIN_FORK else "1",
             _AWS_CONFIG_FILE_ENV_VAR: _write_virtual_hosted_s3_config(),
         }
         return environment

@@ -16,12 +16,13 @@ import threading
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
+from unittest import mock
 
 import marin.inference.vllm_server as vllm_server
 import pytest
 from marin.external_dependencies import VLLM_GPU_RELEASE, VllmGpuWheel
 from marin.inference.vllm_release import vllm_gpu_wheel_for_architecture, vllm_gpu_wheel_provenance
-from marin.inference.vllm_wheel_entrypoint import installed_wheel_url_matches
+from marin.inference.vllm_wheel_entrypoint import deep_gemm_cuda_environment, installed_wheel_url_matches
 
 VERSION = VLLM_GPU_RELEASE.version
 H100_WHEEL = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, "x86_64")
@@ -94,7 +95,8 @@ def _run_entrypoint(
         direct_url=_uvx_direct_url(wheel.url) if direct_url is None else direct_url,
         compute_capability=compute_capability,
     )
-    command = vllm_server.IsolatedCudaVllm(source=vllm_server.VllmType.MARIN_FORK).command()
+    with mock.patch("platform.machine", return_value=wheel.architecture):
+        command = vllm_server.IsolatedCudaVllm(source=vllm_server.VllmType.MARIN_FORK).command()
     bootstrap_index = command.index("-c")
     wrapped_command = command[bootstrap_index + 2 :]
     marker = tmp_path / "cli.json"
@@ -109,7 +111,7 @@ def _run_entrypoint(
         subprocess.run(
             [
                 sys.executable,
-                *wrapped_command[1:4],
+                wrapped_command[0],
                 json.dumps(_provenance(wheel)),
                 "serve",
                 "test/model",
@@ -187,6 +189,40 @@ def test_verifier_accepts_the_record_a_real_uvx_install_writes(tmp_path):
     assert digest not in json.dumps(recorded)
     # The fake installs below stand in for this record; keep them honest about its shape.
     assert recorded == _uvx_direct_url(url)
+
+
+def test_deep_gemm_cuda_environment_uses_packaged_nvcc_and_cccl(tmp_path):
+    nvidia_root = tmp_path / "site-packages" / "nvidia"
+    compiler_root = nvidia_root / "cu13"
+    (compiler_root / "bin").mkdir(parents=True)
+    (compiler_root / "bin" / "nvcc").touch()
+    cccl_root = nvidia_root / "cuda_cccl" / "include"
+    (cccl_root / "nv").mkdir(parents=True)
+    (cccl_root / "nv" / "target").touch()
+    (cccl_root / "cuda" / "std").mkdir(parents=True)
+    (cccl_root / "cuda" / "std" / "type_traits").touch()
+
+    environment = deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime")
+
+    compatibility_include = tmp_path / "runtime" / "marin-deep-gemm-cuda" / "include"
+    assert environment == {
+        "CUDA_HOME": str(compiler_root),
+        "DG_JIT_USE_NVRTC": "0",
+        "NVCC_PREPEND_FLAGS": f"-I{compatibility_include} -I{cccl_root}",
+    }
+    assert (compatibility_include / "cccl").resolve() == cccl_root.resolve()
+
+
+def test_deep_gemm_cuda_environment_rejects_missing_compiler(tmp_path):
+    nvidia_root = tmp_path / "site-packages" / "nvidia"
+    cccl_root = nvidia_root / "cuda_cccl" / "include"
+    (cccl_root / "nv").mkdir(parents=True)
+    (cccl_root / "nv" / "target").touch()
+    (cccl_root / "cuda" / "std").mkdir(parents=True)
+    (cccl_root / "cuda" / "std" / "type_traits").touch()
+
+    with pytest.raises(RuntimeError, match="Expected one packaged CUDA compiler root"):
+        deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime")
 
 
 @pytest.mark.parametrize(

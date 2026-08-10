@@ -207,7 +207,7 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     env = launcher.env()
     assert "VLLM_USE_PRECOMPILED" not in env
     assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
-    assert env["DG_JIT_USE_NVRTC"] == "1"
+    assert env["DG_JIT_USE_NVRTC"] == "0"
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
     assert requirement in launcher.cache_identity()
     for runtime_requirement in wheel.runtime_requirements:

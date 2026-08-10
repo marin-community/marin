@@ -14,13 +14,20 @@ import dataclasses
 import importlib
 import importlib.metadata
 import json
+import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 _SELECTED_SENTINEL = "MARIN_VLLM_WHEEL_SELECTED="
 _VERIFIED_SENTINEL = "MARIN_VLLM_WHEEL_VERIFIED="
+_DEEP_GEMM_DISTRIBUTION = "deep-gemm"
+_DEEP_GEMM_NVRTC_ENV_VAR = "DG_JIT_USE_NVRTC"
+_NVCC_PREPEND_FLAGS_ENV_VAR = "NVCC_PREPEND_FLAGS"
+_CUDA_HOME_ENV_VAR = "CUDA_HOME"
+_CUDA_COMPAT_DIRECTORY = "marin-deep-gemm-cuda"
 
 
 @dataclass(frozen=True)
@@ -60,9 +67,60 @@ def installed_wheel_url_matches(direct_url: dict, expected_wheel_url: str) -> bo
     return unquote(installed_url_without_fragment) == unquote(expected_wheel_url)
 
 
+def deep_gemm_cuda_environment(nvidia_roots: tuple[Path, ...], temporary_root: Path) -> dict[str, str]:
+    """Build the CUDA compiler environment expected by DeepGEMM's runtime JIT."""
+    compiler_roots = tuple(
+        candidate
+        for nvidia_root in nvidia_roots
+        for candidate in sorted(nvidia_root.glob("cu*"))
+        if (candidate / "bin" / "nvcc").is_file()
+    )
+    cccl_roots = tuple(
+        candidate
+        for nvidia_root in nvidia_roots
+        for candidate in (nvidia_root / "cuda_cccl" / "include",)
+        if (candidate / "nv" / "target").is_file() and (candidate / "cuda" / "std" / "type_traits").is_file()
+    )
+    if len(compiler_roots) != 1:
+        raise RuntimeError(f"Expected one packaged CUDA compiler root, found {compiler_roots}")
+    if len(cccl_roots) != 1:
+        raise RuntimeError(f"Expected one packaged CUDA CCCL include root, found {cccl_roots}")
+
+    cccl_root = cccl_roots[0]
+    compatibility_include = temporary_root / _CUDA_COMPAT_DIRECTORY / "include"
+    compatibility_include.mkdir(parents=True, exist_ok=True)
+    namespaced_cccl = compatibility_include / "cccl"
+    if namespaced_cccl.is_symlink():
+        if namespaced_cccl.resolve() != cccl_root.resolve():
+            raise RuntimeError(f"Stale CUDA CCCL compatibility link: {namespaced_cccl}")
+    elif namespaced_cccl.exists():
+        raise RuntimeError(f"CUDA CCCL compatibility path is not a symlink: {namespaced_cccl}")
+    else:
+        namespaced_cccl.symlink_to(cccl_root)
+
+    return {
+        _CUDA_HOME_ENV_VAR: str(compiler_roots[0]),
+        _DEEP_GEMM_NVRTC_ENV_VAR: "0",
+        _NVCC_PREPEND_FLAGS_ENV_VAR: f"-I{compatibility_include} -I{cccl_root}",
+    }
+
+
+def _configure_deep_gemm_cuda_environment() -> None:
+    try:
+        importlib.metadata.distribution(_DEEP_GEMM_DISTRIBUTION)
+    except importlib.metadata.PackageNotFoundError:
+        return
+
+    nvidia = importlib.import_module("nvidia")
+    nvidia_roots = tuple(Path(path) for path in nvidia.__path__)
+    environment = deep_gemm_cuda_environment(nvidia_roots, Path(tempfile.gettempdir()))
+    os.environ.update(environment)
+
+
 def main() -> None:
     expected = _WheelProvenance.from_json(sys.argv.pop(1))
     print(f"{_SELECTED_SENTINEL}{json.dumps(expected.record(), sort_keys=True)}", flush=True)
+    _configure_deep_gemm_cuda_environment()
 
     # The installed version is not checked separately: promotion requires the release URL to carry the
     # declared version in its filename, so a distribution installed from that URL has that version.
