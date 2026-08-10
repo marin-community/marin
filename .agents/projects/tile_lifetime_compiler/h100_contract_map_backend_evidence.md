@@ -85,6 +85,26 @@ absolute executable paths for Git, `nvidia-smi`, NVCC, sibling `ptxas` and
 An existing artifact directory, tracked source modification, version mismatch,
 missing profiler, or different GPU rejects before worker execution.
 
+The reviewed Iris image target is `task-h100-evidence`. It inherits the current
+`task` image, including Nsight Systems 2026.1.3, and adds the hash-pinned Debian
+12 amd64 CUDA 13.2.86 compiler closure, `cuobjdump`, and Nsight Compute
+2026.1.1. The manual Docker workflow publishes only
+`iris-task-h100-evidence:<full-git-sha>` and reports the resulting OCI digest.
+A launch must use
+`ghcr.io/marin-community/iris-task-h100-evidence:<full-git-sha>@sha256:<digest>`;
+the tag alone, `latest`, and a date tag are not accepted. The launch overrides
+the task image and requests `--gpu H100x1` explicitly against
+`cw-us-west-04a`; it does not modify that cluster's shared default image.
+
+This image is necessary but not sufficient for launch. Ordinary Iris workspace
+bundles exclude `.git`, while this runner requires an exact Git HEAD and clean
+status. A reviewed source-payload wrapper must restore sanitized Git metadata,
+verify its archive and tree identities, delete the transport archive, and pass
+the clean preflight before invoking `--execute`. Until that wrapper is checked
+in, there is no accepted Iris launch command. Nsight Compute permission failure
+under the default container profile remains a fail-closed runtime result; this
+plan does not enable the privileged profile.
+
 ## Reused prototype evidence
 
 The staging schema reuses behavior that already has focused tests:
