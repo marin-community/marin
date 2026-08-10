@@ -1,0 +1,54 @@
+Remote runner proof and gate summary
+
+source=7fd635f8a90a0f8299baf6ff58dcee7722aaa2ef
+jax=619764c15117fbefc4ba13ab941871cb514c23f6
+xla=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+llvm=9a4faee1068c09efbf837cfb7b0f5693b24635f4
+xla_patch_order=0001,0002
+jax_patch_order=0001,0002
+apply_check=PASS_ALL_FOUR
+reverse_apply_check=PASS_ALL_FOUR
+combined_git_diff_check=PASS
+anchored_xla_runtime_label_count=7
+configured_cquery_verifier=PASS
+pure_acceptance_and_verifier_tests=PASS_40_OF_40
+fixture_oracle=PASS
+bundled_shuttle_source_files=82
+
+@shuttle_mlir//:shuttle_ops_inc_gen PASS elapsed=33.748s
+@shuttle_mlir//:ShuttleDialect PASS elapsed=90.766s
+@shuttle_mlir//:ShuttlePasses PASS elapsed=120.740s
+@shuttle_mlir//:ShuttleXlaRegistration PASS elapsed=8.901s
+@shuttle_mlir//:ShuttleXlaRegistryAdapter PASS elapsed=4.500s
+@shuttle_mlir//:ShuttleObserverTestBridge PASS elapsed=3.466s
+@shuttle_mlir//:shuttle-opt PASS elapsed=101.335s
+
+@shuttle_mlir//:xla_registration_test PASS_UNCACHED elapsed=65.082s tests=1/1
+@shuttle_mlir//:xla_registry_adapter_test PASS_UNCACHED elapsed=23.065s tests=1/1
+@shuttle_mlir//:pipeline_observer_test PASS_UNCACHED elapsed=9.148s tests=1/1
+@shuttle_mlir//:observer_test_bridge_test PASS_UNCACHED elapsed=6.843s tests=1/1
+
+bazel build @shuttle_mlir//:mlir_tests PASS elapsed=82.209s
+bazel test @shuttle_mlir//:mlir_tests PASS_UNCACHED elapsed=2.721s tests=17/17
+
+//xla/pjrt:stablehlo_module_transform_test PASS_UNCACHED elapsed=537.483s
+//xla/pjrt:mlir_to_hlo_test PASS_UNCACHED elapsed=25.934s
+//xla/pjrt:mlir_to_hlo_unregistered_transform_test PASS_UNCACHED elapsed=23.338s
+//xla/pjrt:pjrt_executable_test PASS_UNCACHED elapsed=22.913s
+xla_tests=PASS_4_OF_4_UNCACHED
+
+//jaxlib/tools:jaxlib_wheel PASS elapsed=2123.969s actions=25078
+wheel_path=/app/wheel-dist/jaxlib-0.10.1-cp312-cp312-manylinux_2_27_x86_64.whl
+wheel_sha256=beeae0e0cd9f7af8e80c92b9a1fc15970a4745eabb54c80be288747da5bac6c7
+isolated_install=PASS
+pip_check=PASS
+jax_version=0.10.1.dev20260518+619764c
+jaxlib_version=0.10.1
+shuttle_import=PASS
+acceptance_disabled_baseline=PASS
+acceptance_concurrency_lifetime=FAIL_CONTRACT_MATCH
+acceptance_cache_populate=NOT_RUN
+acceptance_cache_reuse=NOT_RUN
+observer_snapshot_emitted=false
+preflight_exit_code=1
+preflight_finished_utc=2026-08-10T20:50:54Z

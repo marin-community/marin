@@ -1,0 +1,7 @@
+Task: /dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance2/0
+
+TIME (UTC)                          ATTEMPT  TYPE     SOURCE           ACTION             COUNT  MESSAGE
+2026-08-10T19:52:57.306000+00:00          0  Normal   k8s/kueue        SchedulingGated        1  Scheduling is blocked due to non-empty scheduling gates; Kueue workload pod-iris-dlwh-shuttle-nativ…
+2026-08-10T20:51:14.748000+00:00          0  Normal   k8s/container    Error                  1  test_bridge_test.log
+                                                                                                 53d0ee78d52876e0868a788d0c9d5686d26b24d6b580997a0f73939701aa0740  /app/logs/ba…
+2026-08-10T20:51:26.953000+00:00          0  Warning  iris/controller  TaskTerminated         1  Backend reported FAILED; controller resolved the task as FAILED.
