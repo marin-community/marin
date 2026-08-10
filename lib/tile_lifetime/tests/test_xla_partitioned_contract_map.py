@@ -9,10 +9,35 @@ import re
 from dataclasses import replace
 from pathlib import Path
 
+import jax.numpy as jnp
 import ml_dtypes
+import numpy as np
 import pytest
 
-from tile_lifetime.cast_scalar_program import CastScalarKind, evaluate_cast_scalar_program
+from tile_lifetime.cast_scalar_program import (
+    CastScalarDType,
+    CastScalarExpression,
+    CastScalarKind,
+    CastScalarProgram,
+    ScalarIndexRelation,
+    evaluate_cast_scalar_program,
+)
+from tile_lifetime.cuda_partitioned_gemm_codegen import (
+    audit_cuda_partitioned_gemm_source,
+    generate_cuda_partitioned_gemm_ffi,
+)
+from tile_lifetime.jax_partitioned_gemm_ffi import (
+    evaluate_partitioned_gemm_jax,
+    partitioned_gemm_cuda_compile_plan,
+    partitioned_gemm_jax_ffi_spec,
+)
+from tile_lifetime.partitioned_gemm_program import (
+    AccumulatorPartition,
+    PartitionedGemmProgram,
+    PassthroughPartitionFinalization,
+    ScalarPartitionFinalization,
+)
+from tile_lifetime.partitioned_gemm_reference import evaluate_partitioned_gemm_reference
 from tile_lifetime.quack_partitioned_gemm_adapter import (
     QUACK_PARTITION_ADAPTER_BASE_REVISION,
     QuackPartitionFinalizationKind,
@@ -64,6 +89,56 @@ def _kinds(expression) -> frozenset[CastScalarKind]:
 
 def _bf16(value: float) -> float:
     return float(ml_dtypes.bfloat16(value))
+
+
+def _tiny_partitioned_program() -> PartitionedGemmProgram:
+    index = ScalarIndexRelation(row_offset=0, feature_offset=0)
+    left = CastScalarExpression(
+        CastScalarKind.INPUT,
+        CastScalarDType.BF16,
+        input_name="left",
+        input_index=index,
+    )
+    right = CastScalarExpression(
+        CastScalarKind.INPUT,
+        CastScalarDType.BF16,
+        input_name="right",
+        input_index=index,
+    )
+    return PartitionedGemmProgram(
+        shape=(2, 5, 3),
+        partitioned_operand=1,
+        operand_shapes=(
+            "bf16[2,3]{1,0}",
+            "bf16[2,3]{0,1}",
+            "bf16[2,3]{0,1}",
+            "bf16[1,3]{0,1}",
+        ),
+        partitions=(
+            AccumulatorPartition(0, 2, "bf16[2,2]{1,0}"),
+            AccumulatorPartition(2, 4, "bf16[2,2]{1,0}"),
+            AccumulatorPartition(4, 5, "bf16[2,1]{1,0}"),
+        ),
+        scalar_finalizations=(
+            ScalarPartitionFinalization(
+                source_partitions=(0, 1),
+                program=CastScalarProgram(
+                    CastScalarExpression(
+                        CastScalarKind.MULTIPLY,
+                        CastScalarDType.BF16,
+                        operands=(left, right),
+                    )
+                ),
+                output_shape="bf16[2,2]{1,0}",
+            ),
+        ),
+        passthrough_finalizations=(PassthroughPartitionFinalization(2, "bf16[2,1]{1,0}"),),
+        input_dtype="bf16",
+        accumulation_dtype="f32",
+        partition_dtype="bf16",
+        output_dtype="bf16",
+        output_rounding="round_to_nearest_even",
+    )
 
 
 def test_natural_grug_recovers_one_exclusive_partition_map_program() -> None:
@@ -238,3 +313,118 @@ def test_quack_adapter_rejects_a_partition_source_with_the_wrong_physical_extent
 
     with pytest.raises(ValueError, match="physical shape"):
         plan_quack_partitioned_gemm_adapter(invalid)
+
+
+def test_partitioned_contract_reference_preserves_ordered_bf16_partition_boundaries() -> None:
+    program = _tiny_partitioned_program()
+    operands = (
+        np.asarray([[0.5, -1.0, 0.25], [1.5, 0.75, -0.5]], dtype=ml_dtypes.bfloat16),
+        np.asarray([[1.0, 0.5, -0.25], [-0.5, 1.25, 0.75]], dtype=ml_dtypes.bfloat16),
+        np.asarray([[0.25, -0.75, 1.0], [1.5, 0.5, -1.25]], dtype=ml_dtypes.bfloat16),
+        np.asarray([[0.5, 0.25, 2.0]], dtype=ml_dtypes.bfloat16),
+    )
+
+    mapped, passthrough = evaluate_partitioned_gemm_reference(program, operands)
+
+    lhs = operands[0].astype(np.float32)
+    partitions = tuple(np.asarray(lhs @ rhs.astype(np.float32).T, dtype=ml_dtypes.bfloat16) for rhs in operands[1:])
+    expected_mapped = np.asarray(
+        partitions[0].astype(np.float32) * partitions[1].astype(np.float32),
+        dtype=ml_dtypes.bfloat16,
+    )
+    np.testing.assert_array_equal(mapped, expected_mapped)
+    np.testing.assert_array_equal(passthrough, partitions[2])
+
+    jax_outputs = evaluate_partitioned_gemm_jax(
+        program,
+        tuple(jnp.asarray(operand) for operand in operands),
+    )
+    for actual, expected in zip(jax_outputs, (mapped, passthrough), strict=True):
+        np.testing.assert_array_equal(np.asarray(actual), expected)
+
+
+def test_partitioned_contract_cuda_generation_owns_one_generic_mainloop_and_direct_stores() -> None:
+    family = plan_attached_partitioned_contract_maps(
+        _post_gated_product_grug_hlo(), target_prefix=_TARGET_PREFIX
+    ).families[0]
+    generated = generate_cuda_partitioned_gemm_ffi(
+        family.program,
+        target="shuttle.generic.partitioned_contract_map.physical.test",
+    )
+    audit = audit_cuda_partitioned_gemm_source(generated)
+
+    assert audit.kernel_count == 1
+    assert audit.segmented_rhs_count == 3
+    assert audit.direct_output_count == 2
+    assert audit.has_ordered_fp32_mainloop
+    assert audit.has_bf16_rne_partition_boundary
+    assert audit.has_command_buffer_trait
+    assert audit.command_buffer_eligible
+    assert audit.forbidden_command_buffer_operations == ()
+    assert not audit.has_atomics
+    assert audit.opaque_semantic_dependencies == ()
+    assert generated.shared_bytes == 8 * 68 * 2
+    assert "ffi::Buffer<ffi::BF16, 3> operand0_buffer" in generated.source
+    assert generated.source.count("ffi::Buffer<ffi::BF16, 2> operand") == 3
+    assert "ffi::Result<ffi::Buffer<ffi::BF16, 2>> output0_buffer" in generated.source
+    assert "ffi::Result<ffi::Buffer<ffi::BF16, 3>> output1_buffer" in generated.source
+    assert "ffi::ScratchAllocator" not in generated.source
+    assert "concatenated_output" not in generated.source
+
+
+def test_partitioned_contract_jax_ffi_spec_converts_layout_conventions_exactly() -> None:
+    family = plan_attached_partitioned_contract_maps(
+        _post_gated_product_grug_hlo(), target_prefix=_TARGET_PREFIX
+    ).families[0]
+    generated = generate_cuda_partitioned_gemm_ffi(family.program, target="shuttle.partition.layout.test")
+
+    spec = partitioned_gemm_jax_ffi_spec(generated)
+
+    assert spec.input_shapes == ((2, 4, 32), (32, 32), (32, 32), (4, 32))
+    assert spec.output_shapes == ((8, 32), (2, 4, 4))
+    assert spec.input_layouts == ((0, 1, 2), (1, 0), (1, 0), (1, 0))
+    assert spec.output_layouts == ((0, 1), (0, 1, 2))
+
+
+def test_partitioned_contract_activation_mutation_regenerates_the_same_physical_family() -> None:
+    hlo = _post_gated_product_grug_hlo()
+    original = plan_attached_partitioned_contract_maps(hlo, target_prefix=_TARGET_PREFIX).families[0]
+    mutated = plan_attached_partitioned_contract_maps(_tanh_gate_mutation(hlo), target_prefix=_TARGET_PREFIX).families[0]
+    original_generated = generate_cuda_partitioned_gemm_ffi(
+        original.program, target="shuttle.partition.mutation.original"
+    )
+    mutated_generated = generate_cuda_partitioned_gemm_ffi(mutated.program, target="shuttle.partition.mutation.changed")
+
+    assert original_generated.abi == mutated_generated.abi
+    assert original_generated.threads == mutated_generated.threads
+    assert original_generated.shared_bytes == mutated_generated.shared_bytes
+    assert original_generated.semantic_digest != mutated_generated.semantic_digest
+    assert original_generated.source_digest != mutated_generated.source_digest
+    assert "expf" in original_generated.source
+    assert "tanhf" in mutated_generated.source
+
+
+def test_partitioned_contract_compile_plan_has_no_torch_or_opaque_compute_dependency(tmp_path: Path) -> None:
+    toolkit = tmp_path / "cuda"
+    nvcc = toolkit / "bin" / "nvcc"
+    nvcc.parent.mkdir(parents=True)
+    nvcc.touch()
+    library_directory = toolkit / "lib64"
+    library_directory.mkdir()
+    (library_directory / "libcudart.so").touch()
+    include_directory = tmp_path / "jaxlib-include"
+    include_directory.mkdir()
+    generated = generate_cuda_partitioned_gemm_ffi(_tiny_partitioned_program(), target="shuttle.partition.compile.test")
+
+    plan = partitioned_gemm_cuda_compile_plan(
+        generated,
+        directory=tmp_path / "build",
+        nvcc=nvcc,
+        architecture="sm_90a",
+        jaxlib_include=include_directory,
+    )
+
+    assert "-arch=sm_90a" in plan.argv
+    assert str(library_directory / "libcudart.so") in plan.argv
+    assert all("torch" not in argument.lower() for argument in plan.argv)
+    assert all("cublas" not in argument.lower() for argument in plan.argv)
