@@ -1,0 +1,24 @@
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | ERROR: /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/external/shuttle_mlir/BUILD.bazel:108:10: Linking external/shuttle_mlir/shuttle-opt failed: (Exit 1): clang failed: error executing CppLink command (from target @@shuttle_mlir//:shuttle-opt) external/rules_ml_toolchain/cc/impls/linux_x86_64_linux_x86_64/wrappers/clang @bazel-out/k8-opt/bin/external/shuttle_mlir/shuttle-opt-2.params
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | clang: warning: argument unused during compilation: '-pthread' [-Wunused-command-line-argument]
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | ld.lld: error: undefined symbol: mlir::detail::TypeIDResolver<mlir::shuttle::ShuttleDialect, void>::id
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | >>> referenced by shuttle-opt.cc
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | >>>               bazel-out/k8-opt/bin/external/shuttle_mlir/_objs/shuttle-opt/shuttle-opt.o:(main)
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | >>> referenced by Passes.cc
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | >>>               Passes.o:(mlir::shuttle::impl::ShuttleAnnotateSourcePassBase<mlir::shuttle::(anonymous namespace)::AnnotateSourcePass>::getDependentDialects(mlir::DialectRegistry&) const) in archive bazel-out/k8-opt/bin/external/shuttle_mlir/libShuttlePasses.a
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | >>> referenced by shuttle-opt.cc
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | >>>               bazel-out/k8-opt/bin/external/shuttle_mlir/_objs/shuttle-opt/shuttle-opt.o:(std::_Function_handler<mlir::Dialect* (mlir::MLIRContext*), void mlir::DialectRegistry::insert<mlir::shuttle::ShuttleDialect>()::'lambda'(mlir::MLIRContext*)>::_M_invoke(std::_Any_data const&, mlir::MLIRContext*&&))
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | >>> referenced 1 more times
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 |
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | ld.lld: error: undefined symbol: mlir::shuttle::ShuttleDialect::ShuttleDialect(mlir::MLIRContext*)
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | >>> referenced by shuttle-opt.cc
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | >>>               bazel-out/k8-opt/bin/external/shuttle_mlir/_objs/shuttle-opt/shuttle-opt.o:(std::unique_ptr<mlir::Dialect, std::default_delete<mlir::Dialect>> llvm::function_ref<std::unique_ptr<mlir::Dialect, std::default_delete<mlir::Dialect>> ()>::callback_fn<mlir::shuttle::ShuttleDialect* mlir::MLIRContext::getOrLoadDialect<mlir::shuttle::ShuttleDialect>()::'lambda'()>(long))
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | clang: error: linker command failed with exit code 1 (use -v to see invocation)
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | Use --verbose_failures to see the command lines of failed build steps.
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | INFO: Elapsed time: 541.934s, Critical Path: 107.51s
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | INFO: 5951 processes: 1348 internal, 4603 local.
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | ERROR: Build did NOT complete successfully
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | + run_native_preflight.sh:1: finish
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | + run_native_preflight.sh:27: local status=1
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | + run_native_preflight.sh:28: set +x
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | preflight_exit_code=1
+[10:12:23] task=/dlwh/shuttle-native-mlir-preflight-20260810-arrayattr/0 | preflight_finished_utc=2026-08-10T10:12:23Z

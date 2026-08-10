@@ -183,9 +183,35 @@ indexed access at zero.
 - Native compilation remains pending. This debugging task does not claim the
   verifier compiles after this source fix.
 
+## Hypothesis 6
+
+The dialect translation unit declares generated dialect methods but does not
+compile the generated dialect definitions. This can leave the explicit
+`ShuttleDialect` library compile gate green while the first executable link
+reports undefined constructor and type-ID symbols.
+
+The exact native run compiled operation generation, `ShuttleDialect`, and
+`ShuttlePasses`. Linking `shuttle-opt` then reported undefined
+`ShuttleDialect::ShuttleDialect(MLIRContext *)` and
+`TypeIDResolver<ShuttleDialect>::id`, with references from the driver and pass
+registration code. The generated dialect-definition include contract should be
+checked against the pinned MLIR examples before another run.
+
+## Results 6
+
+- `@shuttle_mlir//:shuttle_ops_inc_gen`,
+  `@shuttle_mlir//:ShuttleDialect`, and
+  `@shuttle_mlir//:ShuttlePasses` passed against the exact XLA and LLVM pins.
+- `@shuttle_mlir//:shuttle-opt` failed only at link time on the missing dialect
+  constructor and type ID.
+- The MLIR lit suite and all four patched XLA tests did not run.
+- The native artifact is retained under
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-link/`.
+
 ## Follow-up
 
 - [x] Run `@shuttle_mlir//:shuttle_ops_inc_gen` against the exact XLA pin.
-- [ ] Build the narrower `@shuttle_mlir//:ShuttleDialect` target.
-- [ ] If the dialect compiles, build `@shuttle_mlir//:shuttle-opt`.
+- [x] Build the narrower `@shuttle_mlir//:ShuttleDialect` target.
+- [x] Build `@shuttle_mlir//:ShuttlePasses`.
+- [ ] Link `@shuttle_mlir//:shuttle-opt`.
 - [ ] If compilation succeeds, run `@shuttle_mlir//:mlir_tests`.

@@ -181,3 +181,32 @@ description: Target-1 workload-free JAX module-transform plugin and shared accep
   pin before any new native run. This checkpoint does not authorize a relaunch.
 - Artifact:
   `lib/shuttle/mlir/artifacts/native-preflight-20260810-builders/README.md`
+
+### 2026-08-10 - Native driver link after ArrayAttr correction
+
+- Hypothesis: replacing the unsupported `ArrayAttr.front()` calls lets the
+  ordered native target matrix compile both Shuttle libraries and proceed
+  through the driver, lit, and four patched XLA tests.
+- Commit Hash: `a7c10fa6941c7a53efcfb59d866fbdc827c29ff0` for
+  the tested canonical source; this entry's containing revision seals the raw
+  result.
+- Command: `launch-command.txt` in
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-link/`, requesting 24
+  CPU, 96GB memory, 250GB disk, no accelerator, and zero retries.
+- Config: Bazel `7.7.0`; XLA
+  `9b635916ecc6df6efee62d8e4b0c7ef87ef84d69`; LLVM
+  `9a4faee1068c09efbf837cfb7b0f5693b24635f4`; Debian 13; GCC 14.2.0;
+  embedded OpenJDK 21.0.5.
+- Result: `@shuttle_mlir//:shuttle_ops_inc_gen`,
+  `@shuttle_mlir//:ShuttleDialect`, and
+  `@shuttle_mlir//:ShuttlePasses` passed. The following
+  `@shuttle_mlir//:shuttle-opt` target compiled and failed at link time on the
+  undefined Shuttle dialect constructor and type ID. The MLIR lit suite and all
+  four XLA tests did not run.
+- Interpretation: the `ArrayAttr` compatibility blocker is closed. The ordered
+  run now exposes a missing generated dialect-definition boundary.
+- Next action: independently review the generated dialect-definition include
+  pattern against the exact pin before any new native run. This checkpoint does
+  not authorize a relaunch.
+- Artifact:
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-link/README.md`
