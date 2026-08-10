@@ -119,6 +119,45 @@ def per_type_knots(raw: np.ndarray, levels: np.ndarray, types: np.ndarray, *, mi
     return knots
 
 
+def _parity_ratio(buckets: np.ndarray, types: np.ndarray) -> float:
+    """Widest-to-narrowest top-bucket share across types; 1.0 is perfect parity."""
+    shares = [float((buckets[types == t] == 4).mean()) for t in sorted(set(types.tolist()))]
+    return max(shares) / max(min(shares), 1e-6)
+
+
+def _report_classifier_cost(raw: np.ndarray, levels: np.ndarray, predicted: np.ndarray, args) -> None:
+    """How much parity the *predicted* type costs against the oracle's own type.
+
+    Raw classifier accuracy is the wrong thing to gate on. What matters is whether
+    calibrating through a predicted type still delivers parity, and confusions
+    between types whose scales already agree cost nothing. Fitting both ways puts a
+    number on the gap, so a classifier can be judged by what it costs rather than by
+    a threshold chosen in advance.
+    """
+    with StoragePath(args.labels).open("rb") as fh:
+        names = pq.read_table(fh).schema.names
+    if "content_type" not in names:
+        return
+    with StoragePath(args.labels).open("rb") as fh:
+        true_types = np.array(pq.read_table(fh, columns=["content_type"]).column("content_type").to_pylist())
+
+    predicted_buckets = np.digitize(
+        apply_calibration(raw, predicted, per_type_knots(raw, levels, predicted, min_per_type=args.min_per_type)),
+        BUCKET_EDGES,
+    )
+    true_buckets = np.digitize(
+        apply_calibration(raw, true_types, per_type_knots(raw, levels, true_types, min_per_type=args.min_per_type)),
+        BUCKET_EDGES,
+    )
+    logger.info(
+        "parity ratio (lower is better): %.2fx with predicted types, %.2fx with oracle types; "
+        "classifier agrees with the oracle on %.1f%% of documents",
+        _parity_ratio(predicted_buckets, predicted),
+        _parity_ratio(true_buckets, true_types),
+        100 * float((predicted == true_types).mean()),
+    )
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--labels", default=DEFAULT_LABELS, help="labels parquet (source/text/quality/score_normalized)")
@@ -165,6 +204,7 @@ def main() -> None:
             logger.info(
                 "  %-14s n=%-5d top-share=%.1f%%", content_type_name, int(mask.sum()), 100 * (cb[mask] == 4).mean()
             )
+        _report_classifier_cost(raw, levels, predicted, args)
 
     with StoragePath(args.out).open("w") as fh:
         json.dump(knots, fh)
