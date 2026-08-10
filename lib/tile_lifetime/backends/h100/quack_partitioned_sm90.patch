@@ -1,9 +1,9 @@
 diff --git a/quack/partitioned_sm90.py b/quack/partitioned_sm90.py
 new file mode 100644
-index 0000000..745b37e
+index 0000000..8047247
 --- /dev/null
 +++ b/quack/partitioned_sm90.py
-@@ -0,0 +1,338 @@
+@@ -0,0 +1,335 @@
 +# Copyright (c) 2026, QuACK team.
 +
 +"""Generic SM90 helpers for one Contract with static RHS N segments."""
@@ -274,7 +274,6 @@ index 0000000..745b37e
 +            )
 +            ab_pipeline.producer_tail(producer_state)
 +
-+        groups = None
 +        if warp_idx < 4:
 +            cute.arch.setmaxregister_increase(224)
 +            warp_group_layout = cute.make_layout(1, stride=self.num_threads_per_warp_group)
@@ -294,26 +293,24 @@ index 0000000..745b37e
 +                ab_pipeline.consumer_release(release_state)
 +                consumer_state.advance()
 +                release_state.advance()
-+
-+        cute.arch.sync_threads()
-+        if warp_idx < 4:
 +            for tiled_mma, group, boundary, mma_n in zip(
 +                tiled_mmas, groups, boundaries, self.rhs_mma_ns
 +            ):
 +                self._store_boundary_group(
 +                    tiled_mma, group[0], boundary, (self.tile_m, mma_n), tidx
 +                )
-+        cute.arch.sync_threads()
-+        m_extent = cute.size(mA_mkl, mode=[0])
-+        self.finalizer.store(
-+            boundaries,
-+            mDs_mnl,
-+            block_m * self.tile_m,
-+            m_extent,
-+            batch_idx,
-+            tidx,
-+            self.threads_per_cta,
-+        )
++            boundary_ready = pipeline.NamedBarrier(barrier_id=1, num_threads=128)
++            boundary_ready.arrive_and_wait()
++            m_extent = cute.size(mA_mkl, mode=[0])
++            self.finalizer.store(
++                boundaries,
++                mDs_mnl,
++                block_m * self.tile_m,
++                m_extent,
++                batch_idx,
++                tidx,
++                self.num_threads_per_warp_group,
++            )
 +
 +    @cute.jit
 +    def _store_boundary_group(
