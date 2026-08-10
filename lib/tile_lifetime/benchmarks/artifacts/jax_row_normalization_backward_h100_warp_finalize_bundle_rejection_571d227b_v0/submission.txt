@@ -1,0 +1,57 @@
+I20260809 19:31:31 8418467456 iris.cluster.config Loading config from lib/iris/config/cw-us-east-02a.yaml
+I20260809 19:31:31 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260809 19:31:32 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10001 -> iris-controller-svc:10000
+I20260809 19:31:32 8418467456 iris.cli.job Submitting job: shuttle-rms-warp-finalize-h100-20260809
+I20260809 19:31:32 8418467456 iris.cli.job Command: bash -lc /app/lib/tile_lifetime/benchmarks/run_jax_row_normalization_warp_finalize_h100.sh 571d227bb89731c7068600cb63ea88d0c9f7b5a0
+I20260809 19:31:32 8418467456 iris.cli.job Resources: cpu=1, memory=16GB, disk=50GB
+I20260809 19:31:32 8418467456 iris.cli.job GPU: 1x H100
+I20260809 19:31:32 8418467456 iris.cli.job Using controller: http://127.0.0.1:10001
+I20260809 19:31:32 8418467456 iris.cli.job Priority band: batch
+I20260809 19:31:35 8418467456 iris.cluster.platforms.k8s.service k8s: LIST pods labels={'app': 'iris-controller'} field_selector=None
+W20260809 19:31:35 8418467456 iris.cluster.platforms.k8s.controller Post-mortem iris-controller-d44b4d6ff-7cwn2: phase=Running restarts=0
+I20260809 19:31:35 8418467456 iris.cluster.platforms.k8s.service k8s: logs iris-controller-d44b4d6ff-7cwn2 container=None tail=50 previous=True
+Traceback (most recent call last):
+  File "/Users/dlwh/src/marin/.venv/bin/iris", line 10, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/private/tmp/shuttle-reconcile-cs1uj9/lib/iris/src/iris/cli/main.py", line 287, in main
+    iris()
+  File "/private/tmp/shuttle-reconcile-cs1uj9/.venv/lib/python3.12/site-packages/click/core.py", line 1485, in __call__
+    return self.main(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/shuttle-reconcile-cs1uj9/.venv/lib/python3.12/site-packages/click/core.py", line 1406, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "/private/tmp/shuttle-reconcile-cs1uj9/.venv/lib/python3.12/site-packages/click/core.py", line 1873, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/shuttle-reconcile-cs1uj9/.venv/lib/python3.12/site-packages/click/core.py", line 1873, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/shuttle-reconcile-cs1uj9/.venv/lib/python3.12/site-packages/click/core.py", line 1269, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/shuttle-reconcile-cs1uj9/.venv/lib/python3.12/site-packages/click/core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/shuttle-reconcile-cs1uj9/.venv/lib/python3.12/site-packages/click/decorators.py", line 34, in new_func
+    return f(get_current_context(), *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/shuttle-reconcile-cs1uj9/lib/iris/src/iris/cli/job.py", line 1069, in run
+    exit_code = run_iris_job(
+                ^^^^^^^^^^^^^
+  File "/private/tmp/shuttle-reconcile-cs1uj9/lib/iris/src/iris/cli/job.py", line 744, in run_iris_job
+    return _submit_and_wait_job(
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/shuttle-reconcile-cs1uj9/lib/iris/src/iris/cli/job.py", line 802, in _submit_and_wait_job
+    job = client.submit(
+          ^^^^^^^^^^^^^^
+  File "/private/tmp/shuttle-reconcile-cs1uj9/lib/iris/src/iris/client/client.py", line 755, in submit
+    canonical_id = self._cluster_client.submit_job(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/shuttle-reconcile-cs1uj9/lib/iris/src/iris/cluster/client/remote_client.py", line 202, in submit_job
+    self._bundle_blob = create_workspace_zip(self._workspace, extra_includes=self._extra_bundle_includes)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/shuttle-reconcile-cs1uj9/lib/iris/src/iris/cluster/client/bundle.py", line 130, in create_workspace_zip
+    raise ValueError(
+ValueError: Bundle size 35.8MB exceeds maximum 25MB. Consider excluding large files or using .gitignore.

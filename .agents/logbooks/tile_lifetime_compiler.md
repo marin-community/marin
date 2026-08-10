@@ -3751,6 +3751,27 @@ author: dlwh
   recovery/codegen tests and targeted Pyrefly pass. H100 latency remains
   unmeasured at this checkpoint.
 
+### 2026-08-09 19:32 PDT - TLTC-XLA-077 warp-finalize bundle rejection
+
+- The first fixed-protocol H100 submission for the `warp_finalize` generic
+  AxisFold candidate was rejected by the Iris client before job creation. The
+  bundled workspace was `37,568,983` bytes (`35.828574 MiB`), above the 25 MiB
+  controller limit. No job ID, pod, GPU allocation, or benchmark process
+  existed, so latency, correctness, determinism, and handler counts remain
+  unmeasured in this attempt.
+- The requested boundary was ordinary-JAX RMS backward at rows 2,048, hidden
+  4,096, BF16, 256 threads, 32 feature groups, one output per group,
+  `allow_rounding_reorder`, 30 samples, and 100 iterations per sample. The
+  harness requested both separate and coalesced physical pipeline schedules
+  without changing semantic fingerprints.
+- Static validation passed 24 focused tests and targeted Pyrefly. Generated
+  coalesced feature code has one shared-memory synchronization and no
+  barrier-tree stride loop. The sealed barrier-tree result remains
+  `0.089681 ms`, compared with `0.061414 ms` for matched XLA.
+- Iris job-prefix, exact task-label pod, and local holder-session queries were
+  empty after rejection. The failure evidence is under
+  `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_warp_finalize_bundle_rejection_571d227b_v0/`.
+
 ### 2026-08-09 - TLTC-MOE-001 distributed training parity boundary
 
 - The ownership audit separates the accepted four-rank primary-shape forward

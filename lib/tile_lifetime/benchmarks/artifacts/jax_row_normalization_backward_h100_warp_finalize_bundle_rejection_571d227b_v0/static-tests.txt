@@ -1,0 +1,50 @@
+warning: The `extra-build-dependencies` option is experimental and may change without warning. Pass `--preview-features extra-build-dependencies` to disable this warning.
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.0.3, pluggy-1.6.0 -- /private/tmp/shuttle-rms-warp-Nu18Sl/.venv/bin/python3
+cachedir: .pytest_cache
+rootdir: /private/tmp/shuttle-rms-warp-Nu18Sl/lib/tile_lifetime
+configfile: pyproject.toml
+plugins: anyio-4.12.1, jaxtyping-0.3.5, timeout-2.4.0
+timeout: 30.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 24 items
+
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_axis_fold_evaluator_matches_independent_column_reduction PASSED [  4%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_axis_fold_semantics_are_independent_of_schedule_and_mutate_through_ast PASSED [  8%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_tiled_row_fold_can_finalize_all_feature_groups_with_one_warp PASSED [ 12%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_warp_finalized_tiled_row_fold_rejects_unsupported_physical_shapes[16-1-256] PASSED [ 16%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_warp_finalized_tiled_row_fold_rejects_unsupported_physical_shapes[32-2-256] PASSED [ 20%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_warp_finalized_tiled_row_fold_rejects_unsupported_physical_shapes[32-1-2048] PASSED [ 25%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_tiled_row_fold_multiple_outputs_preserve_tail_column_semantics PASSED [ 29%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_axis_fold_codegen_exposes_generated_scalar_body_without_workload_kernel PASSED [ 33%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_source_ordered_fold_uses_one_worker PASSED [ 37%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_axis_fold_ffi_composes_element_and_reduced_programs_without_torch PASSED [ 41%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_axis_fold_ffi_semantic_mutation_regenerates_physical_source PASSED [ 45%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_axis_fold_pipeline_uses_internal_scratch_between_generated_stages PASSED [ 50%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_axis_fold_pipeline_scalar_mutation_regenerates_same_physical_family PASSED [ 54%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_axis_fold_pipeline_coalesces_compatible_row_stages_without_changing_semantics PASSED [ 58%]
+lib/tile_lifetime/tests/test_cuda_axis_fold_codegen.py::test_axis_fold_pipeline_rejects_coalescing_when_second_reduction_uses_first_output PASSED [ 62%]
+lib/tile_lifetime/tests/test_stablehlo_row_normalization_backward.py::test_jax_vjp_recovers_generic_row_folds_and_matches_bf16_outputs[False-uncentered_second_moment-1] PASSED [ 66%]
+lib/tile_lifetime/tests/test_stablehlo_row_normalization_backward.py::test_jax_vjp_recovers_generic_row_folds_and_matches_bf16_outputs[True-centered_second_moment-2] PASSED [ 70%]
+lib/tile_lifetime/tests/test_stablehlo_row_normalization_backward.py::test_natural_uncentered_vjp_becomes_whole_entry_generated_ffi_pipeline PASSED [ 75%]
+lib/tile_lifetime/tests/test_stablehlo_row_normalization_backward.py::test_natural_uncentered_vjp_can_select_generic_same_domain_fold_coalescing PASSED [ 79%]
+lib/tile_lifetime/tests/test_stablehlo_row_normalization_backward.py::test_natural_uncentered_vjp_can_select_warp_finalized_feature_fold PASSED [ 83%]
+lib/tile_lifetime/tests/test_stablehlo_row_normalization_backward.py::test_natural_scalar_mutation_changes_generated_pipeline_without_physical_switch PASSED [ 87%]
+lib/tile_lifetime/tests/test_stablehlo_row_normalization_backward.py::test_bounded_ffi_path_fails_closed_for_source_order_and_executes_centered_statistics PASSED [ 91%]
+lib/tile_lifetime/tests/test_stablehlo_row_normalization_backward.py::test_generated_pipeline_replaces_and_audits_natural_whole_entry_hlo[False] PASSED [ 95%]
+lib/tile_lifetime/tests/test_stablehlo_row_normalization_backward.py::test_generated_pipeline_replaces_and_audits_natural_whole_entry_hlo[True] PASSED [100%]
+
+============================= slowest 10 durations =============================
+0.30s call     tests/test_stablehlo_row_normalization_backward.py::test_jax_vjp_recovers_generic_row_folds_and_matches_bf16_outputs[False-uncentered_second_moment-1]
+0.04s call     tests/test_stablehlo_row_normalization_backward.py::test_natural_uncentered_vjp_can_select_warp_finalized_feature_fold
+0.03s call     tests/test_stablehlo_row_normalization_backward.py::test_jax_vjp_recovers_generic_row_folds_and_matches_bf16_outputs[True-centered_second_moment-2]
+0.02s call     tests/test_stablehlo_row_normalization_backward.py::test_bounded_ffi_path_fails_closed_for_source_order_and_executes_centered_statistics
+0.02s call     tests/test_stablehlo_row_normalization_backward.py::test_natural_scalar_mutation_changes_generated_pipeline_without_physical_switch
+0.02s call     tests/test_stablehlo_row_normalization_backward.py::test_generated_pipeline_replaces_and_audits_natural_whole_entry_hlo[True]
+0.02s call     tests/test_stablehlo_row_normalization_backward.py::test_generated_pipeline_replaces_and_audits_natural_whole_entry_hlo[False]
+0.01s call     tests/test_stablehlo_row_normalization_backward.py::test_natural_uncentered_vjp_becomes_whole_entry_generated_ffi_pipeline
+0.01s call     tests/test_stablehlo_row_normalization_backward.py::test_natural_uncentered_vjp_can_select_generic_same_domain_fold_coalescing
+
+(1 durations < 0.005s hidden.  Use -vv to show these durations.)
+============================== 24 passed in 0.73s ==============================
