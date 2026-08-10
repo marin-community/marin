@@ -223,10 +223,30 @@ methods.
 - Native linking remains pending. This debugging task does not claim the
   unresolved dialect symbols are fixed until the exact-pin binary links.
 
+## Hypothesis 7
+
+The lit suite's tool labels are interpreted relative to the external Shuttle
+repository when XLA loads it through `local_repository`. A main-workspace label
+written as `//xla/...` therefore resolves as `@@shuttle_mlir//xla/...` during
+analysis.
+
+The exact native run built and linked `shuttle-opt`, then failed before any lit
+test ran. Bazel reported that `@@shuttle_mlir//xla` has no BUILD file and traced
+the dependency from `test/verifier-errors.mlir.test` to Shuttle's BUILD file.
+
+## Results 7
+
+- Operation generation, `ShuttleDialect`, `ShuttlePasses`, and `shuttle-opt`
+  all passed against the exact pins.
+- `@shuttle_mlir//:mlir_tests` failed during target analysis; no lit case ran.
+- The four patched XLA tests did not run.
+- The retained evidence is under
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-label/`.
+
 ## Follow-up
 
 - [x] Run `@shuttle_mlir//:shuttle_ops_inc_gen` against the exact XLA pin.
 - [x] Build the narrower `@shuttle_mlir//:ShuttleDialect` target.
 - [x] Build `@shuttle_mlir//:ShuttlePasses`.
-- [ ] Link `@shuttle_mlir//:shuttle-opt`.
+- [x] Link `@shuttle_mlir//:shuttle-opt`.
 - [ ] If compilation succeeds, run `@shuttle_mlir//:mlir_tests`.
