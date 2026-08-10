@@ -27,7 +27,7 @@ from tile_lifetime.cuda_partitioned_gemm_codegen import (
     partitioned_gemm_ffi_abi,
 )
 from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags, cuda_toolkit_shared_library_link_flags
-from tile_lifetime.partitioned_gemm_program import PartitionedGemmProgram
+from tile_lifetime.partitioned_gemm_program import AuxiliaryPartitionFold, PartitionedGemmProgram
 
 
 @dataclass(frozen=True)
@@ -94,7 +94,10 @@ def call_cuda_partitioned_gemm_ffi(
         raise ValueError(f"partitioned Contract expected {len(generated.abi.inputs)} operands, found {len(operands)}")
     for operand, buffer in zip(operands, generated.abi.inputs, strict=True):
         _validate_operand(operand, buffer)
-    result_shapes = tuple(jax.ShapeDtypeStruct(shape, jnp.bfloat16) for shape in spec.output_shapes)
+    result_shapes = tuple(
+        jax.ShapeDtypeStruct(shape, _jax_dtype(buffer.dtype))
+        for shape, buffer in zip(spec.output_shapes, generated.abi.outputs, strict=True)
+    )
     result = jax.ffi.ffi_call(
         generated.target,
         result_shapes,
@@ -141,6 +144,16 @@ def evaluate_partitioned_gemm_jax(
         )
     for finalization in program.passthrough_finalizations:
         outputs.append(boundaries[finalization.source_partition].reshape(abi.outputs[len(outputs)].shape))
+    for fold in program.auxiliary_folds:
+        output_shape = abi.outputs[len(outputs)].shape
+        source = boundaries[fold.source_partition].reshape((int(np.prod(output_shape)), -1))
+        contribution_input = fold.contribution.inputs[0]
+        assert contribution_input.input_name is not None
+        contributions = _evaluate_jax_expression(
+            fold.contribution.expression,
+            {contribution_input.input_name: source},
+        )
+        outputs.append(_reduce_jax_rows(contributions, fold).reshape(output_shape))
     return tuple(outputs)
 
 
@@ -213,6 +226,32 @@ def _validate_operand(operand: jax.Array, buffer: PartitionedGemmFfiBuffer) -> N
         )
     if np.dtype(operand.dtype) != np.dtype(jnp.bfloat16):
         raise ValueError(f"partitioned Contract input {buffer.name!r} must have dtype bfloat16, found {operand.dtype}")
+
+
+def _jax_dtype(dtype: str):
+    if dtype == "bf16":
+        return jnp.bfloat16
+    if dtype == "f32":
+        return jnp.float32
+    raise ValueError(f"unsupported partitioned Contract JAX dtype {dtype!r}")
+
+
+def _reduce_jax_rows(contributions: jax.Array, fold: AuxiliaryPartitionFold) -> jax.Array:
+    reducer_inputs = fold.reducer.inputs
+    first_name = reducer_inputs[0].input_name
+    second_name = reducer_inputs[1].input_name
+    assert first_name is not None and second_name is not None
+
+    def reduce_row(row: jax.Array) -> jax.Array:
+        def update(index: int, accumulator: jax.Array) -> jax.Array:
+            return _evaluate_jax_expression(
+                fold.reducer.expression,
+                {first_name: accumulator, second_name: row[index]},
+            )
+
+        return jax.lax.fori_loop(0, row.shape[0], update, jnp.asarray(fold.initializer, dtype=jnp.float32))
+
+    return jax.vmap(reduce_row)(contributions)
 
 
 def _evaluate_jax_expression(
