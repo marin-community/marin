@@ -20,6 +20,14 @@ import jax
 import jax.numpy as jnp
 import jaxlib
 import numpy as np
+from acceptance_contract import (
+    FIXTURE_EXPECTATIONS,
+    FORWARD_EXPECTATION,
+    VJP_EXPECTATION,
+    FixtureExpectation,
+    ObserverIdentity,
+    validate_success_events,
+)
 from jaxlib import _jax
 
 from shuttle import Materialization, Numerics, Tuning, compiler_options
@@ -40,7 +48,6 @@ EVENT_FIELDS = (
     "no_shuttle_semantics",
     "failure_pass",
 )
-SUCCESS_PHASES = ("algebra_coverage", "lowered_coverage", "final_erasure")
 WORKER_MODES = ("baseline", "concurrency", "populate", "reuse")
 
 
@@ -48,6 +55,7 @@ WORKER_MODES = ("baseline", "concurrency", "populate", "reuse")
 class Wrapper:
     label: str
     numerics: Numerics
+    fixture: FixtureExpectation
     function: Callable[..., Any]
     arguments: tuple[np.ndarray, ...]
     baseline: tuple[np.ndarray, ...]
@@ -148,57 +156,55 @@ def decoded_events(capture: Any) -> tuple[dict[str, Any], ...]:
     return tuple(dict(zip(EVENT_FIELDS, record, strict=True)) for record in records)
 
 
-def expected_digests(numerics: Numerics) -> tuple[str, str]:
+def expected_identity(numerics: Numerics) -> ObserverIdentity:
     options = compiler_options(numerics=numerics, tuning=tuning())
     canonical = options["xla_shuttle_options"]
     if not isinstance(canonical, str):
         raise AssertionError("canonical options must be a string")
     payload = json.loads(canonical)
     canonical_tuning = json.dumps(payload["tuning"], sort_keys=True, separators=(",", ":"))
-    return (
-        hashlib.sha256(canonical.encode()).hexdigest(),
-        hashlib.sha256(canonical_tuning.encode()).hexdigest(),
+    return ObserverIdentity(
+        policy=numerics.value,
+        policy_digest=hashlib.sha256(canonical.encode()).hexdigest(),
+        tuning_digest=hashlib.sha256(canonical_tuning.encode()).hexdigest(),
+        canonical_options=canonical,
+        canonical_tuning=canonical_tuning,
     )
 
 
-def validate_event_group(events: Sequence[dict[str, Any]], numerics: Numerics) -> dict[str, Any]:
-    if tuple(event["phase"] for event in events) != SUCCESS_PHASES:
-        raise AssertionError("one successful compilation must emit the three ordered observer phases")
-    if len({event["invocation_id"] for event in events}) != 1:
-        raise AssertionError("observer phases do not share one invocation ID")
-    policy_digest, tuning_digest = expected_digests(numerics)
-    for event in events:
-        if event["policy"] != numerics.value:
-            raise AssertionError("observer policy differs from compiler options")
-        if event["policy_digest"] != policy_digest or event["tuning_digest"] != tuning_digest:
-            raise AssertionError("observer digest differs from the full canonical options")
-        if event["failure_pass"]:
-            raise AssertionError("successful compilation emitted a failure pass")
-    first, final = events[0], events[-1]
-    if not first["region_membership"] or not first["coverage_manifest"]:
-        raise AssertionError("algebra coverage omitted region or manifest evidence")
-    if not final["normalized_module_fingerprint"] or not final["no_shuttle_semantics"]:
-        raise AssertionError("final observer phase did not prove Shuttle erasure")
-    return {
-        "invocation_id": first["invocation_id"],
-        "policy": first["policy"],
-        "policy_digest": policy_digest,
-        "tuning_digest": tuning_digest,
-        "region_membership": first["region_membership"],
-        "coverage_manifest": first["coverage_manifest"],
-        "unsupported_fingerprint": first["unsupported_fingerprint"],
-        "final_fingerprint": final["normalized_module_fingerprint"],
-    }
+def validate_event_group(
+    events: Sequence[dict[str, Any]],
+    numerics: Numerics,
+    fixture: FixtureExpectation,
+) -> dict[str, Any]:
+    return validate_success_events(events, expected_identity(numerics), fixture)
 
 
 def grouped_event_evidence(events: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for event in events:
         groups[event["invocation_id"]].append(event)
-    evidence = []
+    evidence: list[dict[str, Any]] = []
+    observed_contracts: set[tuple[str, str]] = set()
     for invocation_id, group in groups.items():
         del invocation_id
-        evidence.append(validate_event_group(group, Numerics(group[0]["policy"])))
+        numerics = Numerics(group[0]["policy"])
+        matches = []
+        for fixture in FIXTURE_EXPECTATIONS:
+            try:
+                matches.append(validate_event_group(group, numerics, fixture))
+            except AssertionError:
+                pass
+        if len(matches) != 1:
+            raise AssertionError("observer invocation did not match exactly one audited fixture contract")
+        contract = (matches[0]["policy"], matches[0]["fixture"])
+        if contract in observed_contracts:
+            raise AssertionError("concurrent acceptance emitted a duplicate policy/fixture contract")
+        observed_contracts.add(contract)
+        evidence.append(matches[0])
+    expected_contracts = {(numerics.value, fixture.name) for numerics in Numerics for fixture in FIXTURE_EXPECTATIONS}
+    if observed_contracts != expected_contracts:
+        raise AssertionError("concurrent acceptance omitted an audited policy/fixture contract")
     return sorted(evidence, key=lambda item: item["invocation_id"])
 
 
@@ -245,8 +251,22 @@ def make_wrappers(baseline_path: Path) -> tuple[Wrapper, ...]:
         wrapper
         for numerics in (Numerics.SOURCE_ORDERED, Numerics.FAST)
         for wrapper in (
-            Wrapper("forward_" + numerics.value, numerics, reference_function, forward_arguments, forward_baseline),
-            Wrapper("vjp_" + numerics.value, numerics, reference_vjp, vjp_arguments, vjp_baseline),
+            Wrapper(
+                "forward_" + numerics.value,
+                numerics,
+                FORWARD_EXPECTATION,
+                reference_function,
+                forward_arguments,
+                forward_baseline,
+            ),
+            Wrapper(
+                "vjp_" + numerics.value,
+                numerics,
+                VJP_EXPECTATION,
+                reference_vjp,
+                vjp_arguments,
+                vjp_baseline,
+            ),
         )
     )
 
@@ -332,7 +352,7 @@ def run_cache_worker(
                 raise AssertionError(f"{wrapper.label}: first call did not add exactly one cache file")
             key = next(iter(added))
             label_to_key[wrapper.label] = key
-            evidence = validate_event_group(events_after_first, wrapper.numerics)
+            evidence = validate_event_group(events_after_first, wrapper.numerics, wrapper.fixture)
             if events_after_second != events_after_first or hits_after_first != hits_before:
                 raise AssertionError(f"{wrapper.label}: same jitted object recompiled")
         else:
