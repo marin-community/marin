@@ -96,7 +96,9 @@ def compile_gemm_program(skeleton: GemmSkeleton) -> GemmProgram:
     mainloop_input = _terminal_values(preparation, fallback=(skeleton.input,))[-1]
     stored_values = _terminal_values(finalization, fallback=(skeleton.output,))
     preparation_conversion: tuple[TileOp, ...] = ()
-    if any(operation.primitive is TilePrimitive.SCALE_ROW for operation in preparation):
+    if any(
+        operation.primitive not in {TilePrimitive.CONVERT, TilePrimitive.VIEW} for operation in preparation
+    ) and not any(operation.primitive is TilePrimitive.CONVERT for operation in preparation):
         converted_input = f"{mainloop_input}.mainloop_bf16"
         preparation_conversion = (
             TileOp(
@@ -186,6 +188,13 @@ def _validate_composition(
     if any(operation.primitive is TilePrimitive.SCALE_ROW for operation in preparation):
         if skeleton.input_layout != "row_major_mk":
             raise TileProgramError("preparation row scaling requires row_major_mk input")
+    valid_preparation_deliveries = {"tile", "row", "feature"}
+    for operation in preparation:
+        if operation.primitive not in {TilePrimitive.ADD, TilePrimitive.SUBTRACT, TilePrimitive.MULTIPLY}:
+            continue
+        delivery = dict(operation.attributes).get("input.1_delivery", "tile")
+        if delivery not in valid_preparation_deliveries:
+            raise TileProgramError(f"unsupported preparation operand delivery {delivery!r}")
     if any(
         operation.primitive in {TilePrimitive.PARTIAL_SUM, TilePrimitive.PARTIAL_SUM_SQUARE} for operation in preparation
     ):

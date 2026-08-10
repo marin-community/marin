@@ -3664,3 +3664,32 @@ author: dlwh
   performance claim. The segmented QuACK backend must expose auxiliary Fold
   results and accept these generated operand preparations before the path is
   physically owned.
+
+### 2026-08-09 - TLTC-XLA-072 centered affine Contract preparation
+
+- The centered affine consumer preparation carries explicit generic broadcast
+  domains: row center and inverse scale are M-row operands, while gamma and
+  beta are K-feature operands. The generated sequence is ordered FP32
+  subtract, multiply, multiply, and add followed by an explicit BF16
+  round-to-nearest-even boundary before the Contract mainloop. No
+  normalization or model name participates in generation.
+- A bounded scalar CUDA generator owns the complete physical arithmetic and an
+  independent CPU reference. At the fixed test shape, natural JAX BF16
+  preparation and the complete bounded Contract both have zero maximum and
+  mean absolute error against the CPU path. A final-add-to-subtract mutation
+  reuses the same operand and loop family while changing both semantic and
+  source digests.
+- The QuACK source generator emits `colvec_ktile_fp32` and
+  `kvec_mtile_fp32` operands. The pinned patch applies to QuACK
+  `84ef91df9bec87c7e4938517234fafb07ef844dd`, but that backend has only one
+  auxiliary A-side TMA slot. Four preparation values are required, so the
+  high-throughput path explicitly reports itself non-executable and the H100
+  runtime remains fail-closed.
+- A clean tensor-core implementation requires a generic multi-auxiliary
+  A-transform tuple: multiple TMA descriptors/shared layouts, barrier-byte
+  accounting, argument-to-register-view routing, matching host/fake views,
+  and a complete cache key. The exact source lineage and hook list are recorded
+  in `lib/tile_lifetime/docs/centered_affine_contract_preparation.md`.
+- The delayed plan remains a separate real-algebra-equivalent candidate with
+  the two `gamma @ W` and `beta @ W` vector projections. It is not described
+  as source-ordered. No GPU allocation or latency claim was made.
