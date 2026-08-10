@@ -13,10 +13,18 @@ calls but are not compiled or executed on CPU.
 
 Four forced host devices execute a payload-only `jax.lax.all_to_all` round trip.
 The stored collective StableHLO contains exactly two all-to-all operations and
-the returned integer payload is exact. The generated handler StableHLO contains
-each typed-FFI target once and ordinary JAX dot/gather algebra for the router
-pullback. Forward-layout W2 and W13 operands are explicitly transposed before
-the input-adjoint Contract ABI.
+the returned integer payload is exact. A second, single shard-mapped StableHLO
+graph contains each of the five generated handlers once, three payload-only
+all-to-all operations, the post-return source Fold, one JAX router-gradient
+all-reduce, and ordinary JAX router-pullback algebra. Forward-layout W2 and W13
+operands are explicitly transposed before the input-adjoint Contract ABI.
+
+The integrated graph is lowered but not compiled on CPU because its typed-FFI
+handlers are CUDA implementations. The exact CPU numerical comparison executes
+the same fixed-capacity relation and decomposed generic stage semantics without
+those custom calls. A four-device collective test also sends unique logical-edge
+IDs through both inverse payload paths and recovers every original
+source-item/route-slot coordinate exactly.
 
 Reproduce with:
 
@@ -28,5 +36,5 @@ XLA_FLAGS=--xla_force_host_platform_device_count=4 \
   lib/tile_lifetime/benchmarks/artifacts/distributed_expert_jax_module_cpu_v0
 ```
 
-Remaining gates are an integrated shard-mapped handler/collective executable,
-CUDA compilation and numerical execution, and a matched four-rank GB200 replay.
+Remaining gates are CUDA compilation and numerical execution of the integrated
+graph, followed by a matched four-rank GB200 replay.

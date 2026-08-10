@@ -3,6 +3,7 @@
 
 import base64
 import gzip
+import json
 from functools import lru_cache
 from pathlib import Path
 
@@ -15,7 +16,9 @@ from tile_lifetime import DType, ExpertParallelConfig, NumericalPolicy, compile_
 from tile_lifetime.distributed_expert_jax_module import (
     DistributedExpertJaxModuleConfig,
     audit_handler_module_stablehlo,
+    audit_shard_mapped_handler_module_stablehlo,
     build_natural_router_relation,
+    build_relation_return_metadata,
     evaluate_decomposed_training_reference,
     evaluate_natural_jax_training,
     lower_handler_module_stablehlo,
@@ -69,7 +72,10 @@ def _values():
     return source, router, gate, up, down, cotangent
 
 
-def _module_plan(router_scale: float = 1.0):
+def _module_plan(
+    router_scale: float = 1.0,
+    target_prefix: str = "shuttle.distributed_expert_test",
+):
     source, router, *_ = _values()
     relation = build_natural_router_relation(
         source,
@@ -86,7 +92,7 @@ def _module_plan(router_scale: float = 1.0):
         input_adjoint_template=templates.recovered_input_adjoint,
         weight_gradient_templates=templates.weight_gradients,
         source_fold_template=templates.source_fold,
-        target_prefix="shuttle.distributed_expert_test",
+        target_prefix=target_prefix,
     )
 
 
@@ -151,6 +157,20 @@ def test_transformed_hlo_contains_each_generic_handler_once_and_jax_router_vjp()
     assert "torch" not in stablehlo.lower()
 
 
+def test_sealed_four_rank_shard_mapped_hlo_integrates_handlers_and_collectives() -> None:
+    artifact = _ROOT / "benchmarks/artifacts/distributed_expert_jax_module_cpu_v0"
+    stablehlo = (artifact / "integrated-stablehlo.mlir").read_text()
+    summary = json.loads((artifact / "summary.json").read_text())
+    plan = _module_plan(target_prefix="shuttle.distributed_expert_cpu")
+
+    audit = audit_shard_mapped_handler_module_stablehlo(plan, stablehlo)
+
+    assert audit == summary["integrated_graph"]
+    assert stablehlo.count("stablehlo.custom_call") == 5
+    assert audit["all_to_all_count"] == 3
+    assert audit["all_reduce_count"] == 1
+
+
 def test_fixed_relation_mutation_changes_index_plane_not_handler_programs() -> None:
     baseline = _module_plan(router_scale=1.0)
     source, router, *_ = _values()
@@ -188,6 +208,7 @@ def test_fixed_relation_mutation_changes_index_plane_not_handler_programs() -> N
 
 def test_relation_return_identity_and_payload_collective_boundaries_are_explicit() -> None:
     plan = _module_plan()
+    returned = build_relation_return_metadata(plan)
     observed_edges = []
     for rank in plan.composition.ranks:
         metadata = rank.metadata
@@ -197,6 +218,13 @@ def test_relation_return_identity_and_payload_collective_boundaries_are_explicit
             metadata.route_edge_identity[valid],
             metadata.route_source_item[valid] * plan.relation.route_slots + metadata.route_source_slot[valid],
         )
+        padded_rows = metadata.route_padded_rows[valid]
+        returned_edges = (
+            returned.source_item[metadata.rank, padded_rows] * plan.relation.route_slots
+            + returned.route_slot[metadata.rank, padded_rows]
+        )
+        np.testing.assert_array_equal(returned_edges, metadata.route_edge_identity[valid])
+        np.testing.assert_array_equal(returned.valid[metadata.rank, padded_rows], True)
 
     assert np.array_equal(np.sort(observed_edges), np.arange(plan.relation.route_count))
     assert tuple(boundary.name for boundary in plan.collectives) == (
