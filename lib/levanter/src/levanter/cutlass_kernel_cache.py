@@ -11,10 +11,10 @@ on-disk caches cannot cover it either: ``cutlass.cute.compile`` forces
 ``no_cache=True``, leaving only an in-process dict keyed on launcher identity.
 
 :func:`install` wraps ``get_or_compile_kernel`` to consult an object store first,
-keyed on the launcher's configuration and defining source, the argument
-specification, the device architecture, and the CuTeDSL and QuACK versions.
-``cutlass.jax`` derives a kernel's fingerprint from its object code by SHA-256, so
-a stored blob reconstructs a compile with nothing else.
+keyed on the launcher's configuration, the kernel source and dependency lock,
+the argument specification, and the device architecture. ``cutlass.jax`` derives
+a kernel's fingerprint from its object code by SHA-256, so a stored blob
+reconstructs a compile with nothing else.
 
 Launchers opt in through :func:`cute_launcher_factory`.
 """
@@ -22,18 +22,20 @@ Launchers opt in through :func:`cute_launcher_factory`.
 import functools
 import hashlib
 import importlib
+import inspect
 import logging
-from importlib.metadata import PackageNotFoundError, version
+import pathlib
 from typing import Any, Callable
 
 import jax
-from rigging.cache import PersistentKvCache
+from rigging.cache import PersistentKvCache, combined_content_hash, directory_content_hash, workspace_lock_hash
 
 logger = logging.getLogger(__name__)
 
 _KERNEL_IDENTITY_ATTR = "_levanter_cute_kernel_identity"
-_VERSIONED_PACKAGES = ("nvidia-cutlass-dsl", "quack-kernels", "jaxlib")
+_KERNEL_SOURCE_COVERED_ATTR = "_levanter_cute_kernel_source_covered"
 _KERNEL_CACHE_PREFIX = "cutlass-kernels"
+_KERNEL_CACHE_SCHEMA = "cutlass-object-v3"
 
 
 def cute_launcher_factory(build: Callable[..., Any]) -> Callable[..., Any]:
@@ -45,11 +47,27 @@ def cute_launcher_factory(build: Callable[..., Any]) -> Callable[..., Any]:
     sites — expert chunks, scanned layers, the repeated backward postprocess —
     onto one compile.
 
-    The stamped identity names the kernel across processes: the factory's
-    qualified name, its keyword arguments, and a digest of its defining source.
-    Keyword arguments carry the whole kernel configuration; the positional
-    argument is the CuTe module bundle, a singleton that configures nothing.
+    The stamped identity is the factory's qualified name and its keyword arguments, which
+    carry the whole kernel configuration. A factory may additionally accept one positional
+    argument named ``modules`` for the CuTe dependency bundle; other positional
+    configuration is rejected because it would be absent from the persistent identity.
     """
+    positional_parameters = [
+        parameter
+        for parameter in inspect.signature(build).parameters.values()
+        if parameter.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        )
+    ]
+    if (
+        any(parameter.kind is inspect.Parameter.VAR_POSITIONAL for parameter in positional_parameters)
+        or len(positional_parameters) > 1
+        or (positional_parameters and positional_parameters[0].name != "modules")
+    ):
+        raise TypeError("CuTe launcher factories may only accept a positional parameter named 'modules'")
 
     @functools.lru_cache(maxsize=None)
     @functools.wraps(build)
@@ -58,11 +76,11 @@ def cute_launcher_factory(build: Callable[..., Any]) -> Callable[..., Any]:
         identity = "|".join(
             [
                 f"{build.__module__}.{build.__qualname__}",
-                _source_digest(build),
                 *(f"{name}={kwargs[name]!r}" for name in sorted(kwargs)),
             ]
         )
         setattr(launcher, _KERNEL_IDENTITY_ATTR, identity)
+        setattr(launcher, _KERNEL_SOURCE_COVERED_ATTR, build.__module__.startswith("levanter.grug."))
         return launcher
 
     return memoized
@@ -81,20 +99,6 @@ def cutlass_call(launcher: Any, **kwargs: Any) -> Any:
     """
     cjax = importlib.import_module("cutlass.jax")
     return cjax.cutlass_call(launcher, **kwargs)
-
-
-@functools.lru_cache(maxsize=None)
-def _source_digest(build: Callable[..., Any]) -> str:
-    """Digest the source file that defines ``build``.
-
-    The launcher body is levanter source, so nothing else in the key would notice
-    an edit to it. Everything the body calls into is either QuACK or CuTeDSL,
-    covered by their package versions, or configuration, covered by the arguments.
-    """
-    source = importlib.import_module(build.__module__).__file__
-    assert source is not None, f"{build.__module__} has no source file to digest"
-    with open(source, "rb") as handle:
-        return hashlib.sha256(handle.read()).hexdigest()[:16]
 
 
 def cutlass_kernel_cache() -> PersistentKvCache:
@@ -128,13 +132,18 @@ def install(cache: PersistentKvCache) -> None:
     original = primitive.get_or_compile_kernel
     in_process = compile_module._CUTLASS_COMPILE_CACHE
     compile_result = compile_module.CompileResult
+    try:
+        source_revision = _kernel_cache_revision()
+    except (OSError, ValueError) as exc:
+        logger.warning("CuTeDSL persistent kernel cache disabled, source identity unavailable: %s", exc)
+        source_revision = None
 
     def get_or_compile_kernel(fn: Any, spec: Any) -> Any:
         cached = in_process.get((fn, spec))
         if cached is not None:
             return cached
 
-        key = _kernel_key(fn, spec)
+        key = _kernel_key(fn, spec, source_revision)
         if key is None:
             return original(fn, spec)
 
@@ -155,15 +164,18 @@ def install(cache: PersistentKvCache) -> None:
     logger.info("CuTeDSL kernel cache installed at %s", cache.location())
 
 
-def _kernel_key(fn: Any, spec: Any) -> str | None:
-    """Return the store key for a kernel, or ``None`` if it cannot be named stably.
+def _kernel_key(fn: Any, spec: Any, source_revision: str | None) -> str | None:
+    """Hash the kernel identity, covered source, specification, and device.
 
-    Launchers built outside :func:`cute_launcher_factory` carry no identity, and a
-    specification whose ``repr`` embeds an object address would key on the address
-    and miss forever. Both fall back to compiling.
+    ``None`` when any of those is missing or unstable, which falls back to compiling.
     """
     identity = getattr(fn, _KERNEL_IDENTITY_ATTR, None)
     if identity is None:
+        return None
+    if not getattr(fn, _KERNEL_SOURCE_COVERED_ATTR, False):
+        logger.warning("CuTeDSL kernel not cacheable, launcher source is outside levanter.grug: %s", identity)
+        return None
+    if source_revision is None:
         return None
 
     specification = repr(spec)
@@ -171,21 +183,22 @@ def _kernel_key(fn: Any, spec: Any) -> str | None:
         logger.warning("CuTeDSL kernel not cacheable, specification repr carries an address: %s", identity)
         return None
 
-    payload = "\n".join([identity, specification, _device_architecture(), _package_versions()])
+    payload = "\n".join([_KERNEL_CACHE_SCHEMA, identity, source_revision, specification, _device_architecture()])
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+@functools.lru_cache(maxsize=None)
+def _kernel_cache_revision() -> str:
+    grug_sources = pathlib.Path(__file__).resolve().parent / "grug"
+    return combined_content_hash(
+        [
+            _KERNEL_CACHE_SCHEMA,
+            f"grug={directory_content_hash(grug_sources)}",
+            f"dependencies={workspace_lock_hash(pathlib.Path(__file__))}",
+        ]
+    )
 
 
 def _device_architecture() -> str:
     device = jax.local_devices()[0]
     return f"{device.platform}-{getattr(device, 'compute_capability', device.device_kind)}"
-
-
-@functools.lru_cache(maxsize=1)
-def _package_versions() -> str:
-    def installed(package: str) -> str:
-        try:
-            return version(package)
-        except PackageNotFoundError:
-            return "absent"
-
-    return " ".join(f"{package}={installed(package)}" for package in _VERSIONED_PACKAGES)

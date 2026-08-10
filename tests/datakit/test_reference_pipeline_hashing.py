@@ -14,9 +14,17 @@ import json
 
 import pytest
 from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
+from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
 
 from experiments.datakit import reference_pipeline
-from experiments.datakit.reference_pipeline import SMOKE_SCALE, PoolConfig, StoreConfig, reference_datakit_steps
+from experiments.datakit.reference_pipeline import (
+    SMOKE_SCALE,
+    PoolConfig,
+    StoreConfig,
+    reference_datakit_steps,
+    zephyr_datakit_steps,
+)
 from experiments.datakit.zephyr_benchmark import _route_outputs
 
 
@@ -172,3 +180,35 @@ def test_centroids_version_not_path_drives_identity():
         return _steps_by_name(result)["datakit/cluster_assign/a"].hash_id
 
     assert assign_hash("gs://region-a/centroids") == assign_hash("gs://region-b/centroids")
+
+
+def test_dedup_step_builders_match_the_datakit_graph_identity():
+    """A step built by the helpers must resolve to the artifacts the DAG produced.
+
+    The two constructions hashed different key names, so a helper-built step
+    pointed at a fresh output tree and would recompute every MinHash source.
+    """
+    sources = _sources()
+    graph = zephyr_datakit_steps(sources, SMOKE_SCALE)
+    minhash = {
+        name: compute_minhash_attrs_step(
+            name=f"datakit/minhash/{name}",
+            normalize=step,
+            num_perms=SMOKE_SCALE.minhash.num_perms,
+            num_bands=SMOKE_SCALE.minhash.num_bands,
+            ngram_size=SMOKE_SCALE.minhash.ngram_size,
+            text_cap_chars=SMOKE_SCALE.minhash.text_cap_chars,
+            seed=SMOKE_SCALE.minhash.seed,
+        )
+        for name, step in sources.items()
+    }
+    dedup = compute_fuzzy_dups_attrs_step(
+        name="datakit/dedup",
+        minhash_steps=list(minhash.values()),
+        max_parallelism=SMOKE_SCALE.dedup_max_parallelism,
+    )
+
+    assert {name: step.hash_id for name, step in minhash.items()} == {
+        name: step.hash_id for name, step in graph.minhash.items()
+    }
+    assert dedup.hash_id == graph.fuzzy_dedup.hash_id

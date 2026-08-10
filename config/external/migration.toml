@@ -1,0 +1,87 @@
+# Fork migration descriptors.
+#
+# One section per fork Marin pins under config/external/. Every fork is a marin-community fork: our
+# commits on top of an upstream project. This file records *how* to migrate each — the base to rebase
+# onto, the e2e that validates it, and the constraints to respect. It holds no pins; the actual
+# SHA/version lives in the source named by `pin` (an isolated project's uv.lock, or a vllm/*.toml
+# descriptor).
+#
+# Migrating a fork means rebasing our commits onto a newer upstream base, validating, and re-pinning.
+# MarinSkyRL is marin-native (no upstream), so its refresh only advances to its own latest main.
+#
+# The `refresh-fork` skill reads a section to drive one fork's refresh. A weekly coordinator that
+# walks all sections in `depends_on` order is planned but not yet built. Keep every section consistent
+# with its pin source and with EXTERNAL_PROJECTS in config/update-external.py;
+# tests/inference/test_migration_descriptors.py checks that against the on-disk fork layout.
+#
+# A section's name is the fork; its pin source holds the fork's repository URL and pinned revision.
+# Fields:
+#   upstream         Repo we rebase onto. Omitted for marin-native forks with no upstream.
+#   group            Sections sharing a group refresh together and land in one atomic Marin PR (each
+#                    still rebases onto its own base). The vllm/tpu-inference pair must move together:
+#                    the TPU launcher installs both pins at once and vllm's base derives from the
+#                    tpu-inference release, so a split refresh could pin a mixed, unblessed stack.
+#                    Omitted for forks that refresh alone.
+#   pin              Where the resolved pin is recorded: "isolated_project" (config/external/<name>/
+#                    uv.lock, follows the fork's main branch) or "descriptor:<path>#<section>" (a SHA).
+#   base_select      Which upstream base to rebase onto: "upstream_main" (upstream default branch),
+#                    "latest_release", "derived" (with `derived_from`), or "fork_main" (marin-native:
+#                    no upstream, advance our own main).
+#   derived_from     For base_select="derived": "<fork>:<path>" giving the SHA the base is read from.
+#   depends_on       Forks resolved before this one (base/derivation order; the coordinator's DAG
+#                    edges). Within a group this orders the refresh, not a separate landing.
+#   e2e              Marin end-to-end that validates the refreshed fork (file path, optional ::symbol);
+#                    the skill's Validate section holds the concrete invocation.
+#   blocker_assignee GitHub user assigned the "can't migrate" issue on failure.
+#   nuances          Migration constraints a human must respect (torch pins, known-good ceilings, etc.).
+
+[tpu-inference]
+upstream = "https://github.com/vllm-project/tpu-inference.git"
+group = "tpu-vllm"
+pin = "descriptor:vllm/tpu-forks.toml#tpu-inference"
+base_select = "latest_release"
+e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
+blocker_assignee = "yonromai"
+nuances = [
+    "The fork's torchvision<0.27 constraint holds torch at 2.11 inside the uvx env.",
+]
+
+[vllm]
+upstream = "https://github.com/vllm-project/vllm.git"
+group = "tpu-vllm"
+pin = "descriptor:vllm/tpu-forks.toml#vllm"
+base_select = "derived"
+derived_from = "tpu-inference:.buildkite/vllm_lkg.version"
+depends_on = ["tpu-inference"]
+e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
+blocker_assignee = "yonromai"
+nuances = [
+    "Do not advance past the vLLM known-good commit the selected tpu-inference release blessed.",
+]
+
+[evalchemy]
+upstream = "https://github.com/mlfoundations/evalchemy.git"
+pin = "isolated_project"
+base_select = "upstream_main"
+e2e = "experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml"
+blocker_assignee = "yonromai"
+
+[harbor]
+upstream = "https://github.com/harbor-framework/harbor.git"
+pin = "isolated_project"
+base_select = "upstream_main"
+e2e = "experiments/evaluation/configs/harbor/aime-smoke.yaml"
+blocker_assignee = "yonromai"
+nuances = [
+    "Fork main is hundreds of commits behind upstream, so the first rebase onto upstream will be large and conflict-heavy.",
+]
+
+[MarinSkyRL]
+pin = "isolated_project"
+base_select = "fork_main"
+e2e = "experiments/post_training/iceball_micro.py"
+blocker_assignee = "yonromai"
+nuances = [
+    "Marin-native today: only the root marinskyrl distribution is tracked, not skyrl-train.",
+    "#7920 will give it an upstream (FSDP/Megatron/FlashAttention/vLLM); add upstream and switch base_select off fork_main then.",
+]

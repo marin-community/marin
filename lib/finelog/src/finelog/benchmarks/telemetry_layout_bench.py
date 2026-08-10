@@ -31,7 +31,12 @@ from finelog.benchmarks.layout_candidates import (
     run_partition_projection,
     run_rollup_candidates,
 )
-from finelog.benchmarks.query_measurement import WorkerMode, worker_measure
+from finelog.benchmarks.query_measurement import (
+    WorkerMode,
+    nonnegative_int,
+    positive_int,
+    worker_measure,
+)
 from finelog.benchmarks.telemetry_workload_corpus import (
     DEFAULT_BATCH_ROWS,
     DEFAULT_COLD_ITERATIONS,
@@ -44,45 +49,31 @@ from finelog.benchmarks.telemetry_workload_corpus import (
 )
 
 
-def _positive_int(raw: str) -> int:
-    value = int(raw)
-    if value <= 0:
-        raise argparse.ArgumentTypeError("must be positive")
-    return value
-
-
-def _nonnegative_int(raw: str) -> int:
-    value = int(raw)
-    if value < 0:
-        raise argparse.ArgumentTypeError("must be non-negative")
-    return value
-
-
 def _add_measurement_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--cold-iterations",
-        type=_positive_int,
+        type=positive_int,
         default=DEFAULT_COLD_ITERATIONS,
     )
     parser.add_argument(
         "--warm-iterations",
-        type=_positive_int,
+        type=positive_int,
         default=DEFAULT_WARM_ITERATIONS,
     )
     parser.add_argument(
         "--warmup-iterations",
-        type=_positive_int,
+        type=positive_int,
         default=DEFAULT_WARMUP_ITERATIONS,
     )
     parser.add_argument(
         "--concurrency",
-        type=_positive_int,
+        type=positive_int,
         nargs="+",
         default=[1, 4, 8],
     )
     parser.add_argument(
         "--concurrency-queries-per-worker",
-        type=_positive_int,
+        type=positive_int,
         default=2,
     )
 
@@ -92,26 +83,26 @@ def _add_dataset_arguments(
     *,
     segments_required: bool,
 ) -> None:
-    parser.add_argument("--rows", type=_positive_int, required=True)
+    parser.add_argument("--rows", type=positive_int, required=True)
     parser.add_argument(
         "--duration-days",
-        type=_positive_int,
+        type=positive_int,
         default=DEFAULT_DURATION_DAYS,
     )
     parser.add_argument(
         "--batch-rows",
-        type=_positive_int,
+        type=positive_int,
         default=DEFAULT_BATCH_ROWS,
     )
     parser.add_argument(
         "--segments",
-        type=_positive_int,
+        type=positive_int,
         required=segments_required,
         default=None if segments_required else DEFAULT_SEGMENTS,
     )
     parser.add_argument(
         "--distinct-run-ids",
-        type=_positive_int,
+        type=positive_int,
         default=100_000,
     )
 
@@ -129,7 +120,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_dataset_arguments(baseline, segments_required=False)
     _add_measurement_arguments(baseline)
-    baseline.add_argument("--decoy-namespaces", type=_nonnegative_int, default=0)
+    baseline.add_argument("--decoy-namespaces", type=nonnegative_int, default=0)
     baseline.add_argument("--work-dir", type=Path, required=True)
     baseline.add_argument("--output", type=Path, required=True)
 
@@ -138,7 +129,7 @@ def _parser() -> argparse.ArgumentParser:
         help="measure bounded prefix lookup over a generated run catalog",
     )
     _add_measurement_arguments(catalog)
-    catalog.add_argument("--run-ids", type=_positive_int, default=100_000)
+    catalog.add_argument("--run-ids", type=positive_int, default=100_000)
     catalog.add_argument("--work-dir", type=Path, required=True)
     catalog.add_argument("--output", type=Path, required=True)
 
@@ -148,7 +139,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_dataset_arguments(manifest, segments_required=True)
     _add_measurement_arguments(manifest)
-    manifest.add_argument("--decoy-namespaces", type=_nonnegative_int, default=0)
+    manifest.add_argument("--decoy-namespaces", type=nonnegative_int, default=0)
     manifest.add_argument("--source-log-dir", type=Path, required=True)
     manifest.add_argument("--work-dir", type=Path, required=True)
     manifest.add_argument("--output", type=Path, required=True)
@@ -162,7 +153,7 @@ def _parser() -> argparse.ArgumentParser:
     binding.add_argument("--source-log-dir", type=Path, required=True)
     binding.add_argument(
         "--decoy-counts",
-        type=_positive_int,
+        type=positive_int,
         nargs="+",
         default=[32, 128],
     )
@@ -176,8 +167,8 @@ def _parser() -> argparse.ArgumentParser:
     _add_dataset_arguments(layouts, segments_required=True)
     _add_measurement_arguments(layouts)
     layouts.add_argument("--source-log-dir", type=Path, required=True)
-    layouts.add_argument("--split-files-per-group", type=_positive_int, required=True)
-    layouts.add_argument("--partition-buckets", type=_positive_int, default=4)
+    layouts.add_argument("--split-files-per-group", type=positive_int, required=True)
+    layouts.add_argument("--partition-buckets", type=positive_int, default=4)
     layouts.add_argument("--work-dir", type=Path, required=True)
     layouts.add_argument("--output", type=Path, required=True)
 
@@ -189,7 +180,7 @@ def _parser() -> argparse.ArgumentParser:
     projection.add_argument("--source-log-dir", type=Path, required=True)
     projection.add_argument(
         "--bucket-counts",
-        type=_positive_int,
+        type=positive_int,
         nargs="+",
         default=[64, 128],
     )
@@ -212,7 +203,7 @@ def _parser() -> argparse.ArgumentParser:
 
     worker = subparsers.add_parser("_worker", help=argparse.SUPPRESS)
     _add_dataset_arguments(worker, segments_required=False)
-    worker.add_argument("--decoy-namespaces", type=_nonnegative_int, default=0)
+    worker.add_argument("--decoy-namespaces", type=nonnegative_int, default=0)
     worker.add_argument("--log-dir", type=Path, required=True)
     worker.add_argument("--workload", type=WorkloadName, required=True)
     worker.add_argument("--mode", type=WorkerMode, required=True)

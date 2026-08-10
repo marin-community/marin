@@ -110,6 +110,29 @@ Regenerate protos after editing `proto/logging.proto`:
 cd lib/finelog && buf generate
 ```
 
+### Benchmarks
+
+Three harnesses under `src/finelog/benchmarks/`, each driving a real
+`finelog-server` and writing a JSON result with the server build, storage
+layout, and per-query `EXPLAIN ANALYZE` metrics.
+
+- `log_query_bench` — the operator query corpus for `log`: job substring
+  scoping, task tails, first-error lookups, body search. `generate` builds a
+  corpus; `measure` runs it over a directory that already holds segments.
+- `grafana_dashboard_bench` — every query in a checked-in Grafana dashboard.
+- `telemetry_layout_bench` — the storage-layout candidates for `telemetry_v1`.
+
+Point `--log-dir` at a **disposable copy**: starting Finelog activates
+compaction, layout rewrites, and index backfill.
+
+`log_query_bench` writes to the `log` namespace the server auto-registers rather
+than registering its own, so the same corpus under two binaries measures a
+schema change. Backfill must be finished before measuring; maintenance running
+alongside the queries moves every number by 2-4x.
+
+`EXPLAIN ANALYZE` counters are decimal, `bytes_scanned` included: `1.16 B` is
+1.16 billion.
+
 ### Dashboard
 
 `npm run dev` serves the SPA with HMR and proxies RPC to a finelog on port
@@ -151,6 +174,24 @@ The deploy paths gate on the body: the VM bootstrap loop, `_wait_health_via_ssh`
 `k8s_restart` via a post-rollout `kubectl exec`. A binary that cannot register
 `telemetry_v1` fails its own deploy.
 
+## Changing a server-owned schema
+
+`log` and `telemetry_v1` are registered by the server itself, and every boot
+re-merges this binary's definition against the schema that deployment's catalog
+persisted. A merge that fails wedges the namespace for as long as the image is
+deployed, so `/health` reports it (`server/ingest_health.rs`) and `safe_deploy
+rollout` rolls back on it. To decide a schema change ahead of a deploy, boot
+the candidate over a copy of that deployment's catalog with `--mode shadow` and
+read `/health`. Register through `schema::stored_form` so what you check is the
+schema `register_table` merges.
+
+`--mode shadow` is for booting a server over a copy of a real store: it serves
+reads from `--log-dir` and refuses a `gs://`/`s3://` remote or a forwarding
+target at startup. It resolves once into the store's `ServeMode`, so no
+namespace starts a maintenance task — including one registered at runtime,
+which otherwise starts its own. Use it for any local benchmark over a copied
+store, and pass the mode down rather than re-deriving it at a call site.
+
 ## Secondary indexes
 
 A segment with any configured method gets one `.fidx` bundle. The bundle is
@@ -168,7 +209,12 @@ benchmark; there is no free-form plugin registry.
 
 A column declared with `ColumnIndex.trigram` gets a span-granular substring
 section. That index makes `contains(col, …)` and `col LIKE '%…%'` prune instead
-of full-scan. Today it is on `log.data` and `telemetry_v1.name`.
+of full-scan. Today it is on `log.key`, `log.data`, and `telemetry_v1.name`.
+
+Sorting by a column does not cover substring search of it. A log key is
+`/user/<job>-coord/<job>/<task>:<attempt>`, so the job an operator searches for
+is not a prefix and min/max statistics cannot bound it. `log.key` needs its own
+trigram section for that.
 
 A `LIKE` pattern contributes every literal run between its wildcards, all
 required: `%CUDA_ERROR%` prunes on `CUDA` and `ERROR` separately, while the

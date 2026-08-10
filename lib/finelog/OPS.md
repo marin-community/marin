@@ -75,7 +75,13 @@ depends on the pattern's literal runs: `%CUDA_ERROR%` only requires `CUDA` and
 underscores when you mean them literally. Adding one is a
 `RegisterTable` away and does not need a reset, but the index backfill runs a
 few segments per namespace per 30 s tick, so a large namespace speeds up over
-tens of minutes rather than at once.
+tens of minutes rather than at once. Enabling a column supersedes the whole
+`.fidx` policy, so every segment's bundle is rebuilt rather than extended: budget
+one core across the namespace's full segment count.
+
+An unindexed substring predicate spends its cost in the `LIKE` kernel, not in
+IO. `bytes_scanned` stays small while `pushdown_rows_pruned` reaches the
+namespace's row count. Read both.
 
 For repeated equality families, declare the hot string values in
 `ColumnIndex.exact_values`. Finelog stores exact source-row postings in the
@@ -309,6 +315,21 @@ it first failed, and how many attempts have been made since. The dashboard's
 System page shows the same under **Ingest**. `deploy up`, `deploy restart`, and
 `safe_deploy` gate on the body, so a deploy that wedges ingest fails and rolls
 back.
+
+## Serving a copy of a store
+
+Anything that boots finelog over a copy of a real store directory — the Grafana
+dashboard benchmark, a layout experiment, reproducing a query — should pass
+`--mode shadow`. The server serves reads from `--log-dir` and refuses a
+`gs://`/`s3://` remote or a forwarding target at startup, and its store starts
+no maintenance, so compaction, eviction, layout rewrites, and the boot
+reconcile's redundancy drop (which deletes archived objects) never run against
+the copy or the bucket it came from.
+
+A shadow boot over a copy of a deployment's catalog also re-runs that
+deployment's registrations, so a schema this binary can no longer merge shows
+up in `/health` as `degraded: <namespace>: registration failed: ...` with the
+per-namespace detail under `/api/server`.
 
 ## Diagnosing Kubernetes mirror readiness
 

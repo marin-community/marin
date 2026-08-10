@@ -24,6 +24,11 @@
 # while the bridge still posts.
 apiVersion: 1
 
+# File provisioning does not delete receivers merely omitted from contactPoints.
+deleteContactPoints:
+  - orgId: 1
+    uid: ops-critical-slack
+
 contactPoints:
   - orgId: 1
     name: ops-critical

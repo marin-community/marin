@@ -11,9 +11,7 @@ entry point bound into ``cutlass.jax.primitive``, the in-process
 
 import dataclasses
 import hashlib
-import importlib
 import sys
-import textwrap
 import types
 from typing import Any
 
@@ -21,6 +19,7 @@ import pytest
 
 from rigging.cache import PersistentKvCache
 
+from levanter import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import cute_launcher_factory, install
 
 
@@ -77,16 +76,28 @@ def fake_cutlass(monkeypatch) -> FakeCutlass:
     cutlass = FakeCutlass()
     monkeypatch.setitem(sys.modules, "cutlass.jax.compile", cutlass.compile_module)
     monkeypatch.setitem(sys.modules, "cutlass.jax.primitive", cutlass.primitive_module)
+    monkeypatch.setattr(cutlass_kernel_cache, "_kernel_cache_revision", lambda: "source-v1")
     return cutlass
 
 
-@cute_launcher_factory
-def build_launcher(modules, *, tile: int, dtype: str = "bf16") -> Any:
+def _build_launcher(modules, *, tile: int, dtype: str = "bf16") -> Any:
     def launcher(stream):
         raise AssertionError("a launcher is never called on the host")
 
     launcher.kernel_name = f"tile{tile}-{dtype}"
     return launcher
+
+
+_build_launcher.__module__ = "levanter.grug.testing"
+build_launcher = cute_launcher_factory(_build_launcher)
+
+
+def test_launcher_factory_rejects_positional_configuration():
+    with pytest.raises(TypeError, match="positional parameter named 'modules'"):
+
+        @cute_launcher_factory
+        def invalid_factory(tile: int) -> int:
+            return tile
 
 
 def test_a_restarted_process_loads_the_stored_object_instead_of_compiling(fake_cutlass, tmp_path):
@@ -124,40 +135,70 @@ def test_configuration_and_specification_both_discriminate_stored_kernels(fake_c
     assert served.module == b"objectcode:tile256-bf16:FakeFunctionSpec(shape=(8, 16))"
 
 
-def test_editing_the_launcher_source_invalidates_its_kernels(fake_cutlass, tmp_path, monkeypatch):
-    """A launcher body is levanter source: nothing else in the key notices an edit."""
-    source = textwrap.dedent(
-        """
-        from levanter.cutlass_kernel_cache import cute_launcher_factory
+def test_a_launch_with_no_source_revision_is_compiled_but_not_stored(fake_cutlass, tmp_path, monkeypatch):
+    def unavailable_revision() -> str:
+        raise ValueError("missing compiler file")
 
-        @cute_launcher_factory
-        def build(modules, *, tile: int):
-            def launcher(stream):
-                raise AssertionError("a launcher is never called on the host")
+    monkeypatch.setattr(cutlass_kernel_cache, "_kernel_cache_revision", unavailable_revision)
+    install(_kernel_store(tmp_path))
 
-            launcher.kernel_name = f"tile{tile}"
-            return launcher
-        """
-    )
-    module_dir = tmp_path / "src"
-    module_dir.mkdir()
-    monkeypatch.syspath_prepend(str(module_dir))
-    store = str(tmp_path / "store")
+    fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
 
-    compiled_per_revision = []
-    for revision in ("original", "edited"):
-        name = f"edited_launcher_{revision}"
-        (module_dir / f"{name}.py").write_text(f"# revision: {revision}\n{source}")
-        # The import system caches each directory's listing against its mtime, so a
-        # second file written inside one mtime tick is invisible to the finder.
-        importlib.invalidate_caches()
-        module = __import__(name)
-        fake_cutlass.forget_process_state()
-        install(_kernel_store(store))
-        fake_cutlass.compile_kernel(module.build(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
-        compiled_per_revision.append(list(fake_cutlass.compiled))
+    assert fake_cutlass.compiled == ["tile128-bf16"]
+    assert list(tmp_path.iterdir()) == []
 
-    assert compiled_per_revision == [["tile128"], ["tile128", "tile128"]]
+
+def test_a_source_revision_change_invalidates_the_stored_object(fake_cutlass, tmp_path, monkeypatch):
+    revision = ["source-v1"]
+    monkeypatch.setattr(cutlass_kernel_cache, "_kernel_cache_revision", lambda: revision[0])
+    spec = FakeFunctionSpec(shape=(8, 16))
+
+    install(_kernel_store(tmp_path))
+    fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
+
+    fake_cutlass.forget_process_state()
+    revision[0] = "source-v2"
+    install(_kernel_store(tmp_path))
+    fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
+
+    assert fake_cutlass.compiled == ["tile128-bf16", "tile128-bf16"]
+    assert len(list(tmp_path.iterdir())) == 2
+
+
+def test_cache_revision_combines_internal_source_and_dependency_lock(monkeypatch):
+    source_hash = ["source-v1"]
+    dependency_hash = ["dependencies-v1"]
+    monkeypatch.setattr(cutlass_kernel_cache, "directory_content_hash", lambda _path: source_hash[0])
+    monkeypatch.setattr(cutlass_kernel_cache, "workspace_lock_hash", lambda _path: dependency_hash[0])
+    cutlass_kernel_cache._kernel_cache_revision.cache_clear()
+    try:
+        original = cutlass_kernel_cache._kernel_cache_revision()
+        source_hash[0] = "source-v2"
+        cutlass_kernel_cache._kernel_cache_revision.cache_clear()
+        changed_source = cutlass_kernel_cache._kernel_cache_revision()
+        dependency_hash[0] = "dependencies-v2"
+        cutlass_kernel_cache._kernel_cache_revision.cache_clear()
+        changed_dependency = cutlass_kernel_cache._kernel_cache_revision()
+    finally:
+        cutlass_kernel_cache._kernel_cache_revision.cache_clear()
+
+    assert len({original, changed_source, changed_dependency}) == 3
+
+
+def test_a_launcher_outside_the_covered_source_tree_is_not_stored(fake_cutlass, tmp_path):
+    @cute_launcher_factory
+    def external_launcher(modules, *, tile: int) -> Any:
+        def launcher(_stream):
+            raise AssertionError("a launcher is never called on the host")
+
+        launcher.kernel_name = f"external-{tile}"
+        return launcher
+
+    install(_kernel_store(tmp_path))
+    fake_cutlass.compile_kernel(external_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
+
+    assert fake_cutlass.compiled == ["external-128"]
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_launcher_without_an_identity_is_compiled_but_not_stored(fake_cutlass, tmp_path):

@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use arrow::datatypes::SchemaRef;
+use clap::ValueEnum;
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ColumnType;
@@ -27,8 +28,8 @@ use crate::store::namespace::Namespace;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
-    merge_schemas, resolve_key_column, validate_index_policies, with_implicit_cluster,
-    with_implicit_seq, AlignedBatch, Column, Schema,
+    merge_schemas, resolve_key_column, stored_form, validate_index_policies, AlignedBatch, Column,
+    Schema,
 };
 use crate::store::types::NamespaceStats;
 
@@ -52,13 +53,14 @@ const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// logs a global finelog collects from many federated clusters. It is nullable
 /// because segments written before the column existed null-fill it on read,
 /// which is also why `merge_schemas` adopts any new column as nullable.
-pub(crate) fn log_registered_schema() -> Schema {
+pub fn log_registered_schema() -> Schema {
     Schema::new(
         vec![
-            Column::new("key", ColumnType::COLUMN_TYPE_STRING, false),
+            // The job and task sit mid-key, so `key LIKE '%<job>%'` is opaque to
+            // the sort's min/max statistics and needs a trigram index of its own.
+            Column::new("key", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
             Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
-            // The log message body — substring-searched via contains()/LIKE, so
-            // it carries the trigram index.
+            // Substring-searched via contains()/LIKE.
             Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
             Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false),
             Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
@@ -79,6 +81,17 @@ pub struct NamespaceSnapshot {
     pub index_cache: Arc<IndexCache>,
 }
 
+/// What a store may do to what it opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ServeMode {
+    /// A deployed server: runs per-namespace maintenance.
+    Live,
+    /// A rehearsal against a copy of a real store: runs no maintenance, so
+    /// nothing compacts, evicts, rewrites a segment layout, or redundancy-drops
+    /// a covered segment (which deletes its archived object).
+    Shadow,
+}
+
 /// Store backed by the Rust catalog plus per-namespace durability engines.
 ///
 /// The catalog owns the persistent registry + segments table; the `engines`
@@ -88,6 +101,7 @@ pub struct NamespaceSnapshot {
 pub struct Store {
     data_dir: Option<PathBuf>,
     remote_log_dir: String,
+    mode: ServeMode,
     catalog: Arc<Catalog>,
     engines: Mutex<HashMap<String, Arc<Namespace>>>,
     /// Process-wide query-visibility lock. A query / FetchLogs holds the READ
@@ -122,6 +136,7 @@ impl Store {
         data_dir: Option<PathBuf>,
         remote_log_dir: String,
         index_cache_mb: usize,
+        mode: ServeMode,
     ) -> Result<Store, StatsError> {
         let startup_started = Instant::now();
         if let Some(dir) = &data_dir {
@@ -147,6 +162,7 @@ impl Store {
         let store = Store {
             data_dir,
             remote_log_dir,
+            mode,
             catalog,
             engines: Mutex::new(HashMap::new()),
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
@@ -192,6 +208,10 @@ impl Store {
     /// archived-row catalog visibility + redundancy cleanup, never correct
     /// serving of live (local) rows.
     pub fn bootstrap_maintenance(&self) {
+        if self.mode == ServeMode::Shadow {
+            tracing::info!("shadow mode: maintenance not started");
+            return;
+        }
         let engines: Vec<Arc<Namespace>> = self.engines.lock().unwrap().values().cloned().collect();
         for engine in &engines {
             engine.spawn_maintenance(true);
@@ -268,7 +288,7 @@ impl Store {
             &self.remote_log_dir,
             policy,
         )?;
-        if spawn_maint {
+        if spawn_maint && self.mode == ServeMode::Live {
             // Runtime register: run the boot remote reconcile SYNCHRONOUSLY (so a
             // re-register over a wiped catalog adopts the bucket's segments before
             // the caller observes the namespace), then start the maintenance
@@ -319,7 +339,7 @@ impl Store {
     fn ensure_log_namespace_schema(&self) -> Result<(), StatsError> {
         let schema = log_registered_schema();
         resolve_key_column(&schema)?;
-        let stored = with_implicit_seq(schema);
+        let stored = stored_form(schema);
         let policy = self.catalog.get_policy(LOG_NAMESPACE_NAME)?;
         let stored_for_merge = stored.clone();
         self.catalog
@@ -365,7 +385,7 @@ impl Store {
         self.namespace_dir(name)?;
         validate_index_policies(&schema)?;
         resolve_key_column(&schema)?;
-        let stored = with_implicit_seq(with_implicit_cluster(schema));
+        let stored = stored_form(schema);
 
         // `merge_schemas` (pure) raises SchemaConflict on a column-type change.
         // The catalog applies the empty-policy-keeps-existing rule and persists
@@ -724,7 +744,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::schema::CoveringProjection;
+    use crate::store::schema::{with_implicit_cluster, with_implicit_seq, CoveringProjection};
 
     fn worker_schema() -> Schema {
         Schema::new(
@@ -742,6 +762,7 @@ mod tests {
             None,
             String::new(),
             crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Live,
         )
         .unwrap()
     }
@@ -1100,6 +1121,7 @@ mod tests {
             Some(dir.clone()),
             String::new(),
             crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Live,
         )
         .unwrap();
         let schema = store.get_table_schema(LOG_NAMESPACE_NAME).unwrap();
@@ -1111,11 +1133,59 @@ mod tests {
             schema.column("cluster").unwrap().nullable,
             "the evolved cluster column is nullable"
         );
+        assert!(
+            schema.column("key").unwrap().index.trigram,
+            "boot enables the key trigram index a pre-existing namespace lacks"
+        );
         assert_eq!(
             store.get_policy(LOG_NAMESPACE_NAME).unwrap(),
             seeded_policy,
             "boot evolution must not reset the persisted log policy"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_shadow_store_starts_no_maintenance_for_a_namespace_registered_at_runtime() {
+        // A shadow boot registers its own namespaces after opening the snapshot,
+        // and a runtime `register_table` normally starts that namespace's
+        // maintenance task itself. Gating only the boot path would leave a
+        // rehearsal free to compact, evict, and rewrite the copy it was handed.
+        let live_dir = crate::test_support::unique_dir("maintenance_live");
+        let shadow_dir = crate::test_support::unique_dir("maintenance_shadow");
+        let mut counts = Vec::new();
+        for (dir, mode) in [
+            (&live_dir, ServeMode::Live),
+            (&shadow_dir, ServeMode::Shadow),
+        ] {
+            let store = Store::new(
+                Some(dir.clone()),
+                String::new(),
+                crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+                mode,
+            )
+            .unwrap();
+            store.bootstrap_maintenance();
+            tokio::task::spawn_blocking(move || {
+                store
+                    .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+                    .unwrap();
+                store
+                    .require_engine("iris.worker")
+                    .unwrap()
+                    .background_task_count()
+            })
+            .await
+            .map(|count| counts.push(count))
+            .unwrap();
+        }
+        let (live, shadow) = (counts[0], counts[1]);
+        assert!(
+            shadow < live,
+            "a shadow store must run fewer background tasks than a live one \
+             (live {live}, shadow {shadow})"
+        );
+        std::fs::remove_dir_all(&live_dir).ok();
+        std::fs::remove_dir_all(&shadow_dir).ok();
     }
 }

@@ -17,7 +17,7 @@ not a uv project and the nightly update does not advance it.
 `vllm/tpu-forks.toml` records the `vllm` and `tpu-inference` fork SHAs for the
 TPU serving stack, which runs from an isolated uvx env rather than the workspace.
 It is not a uv project either; refresh it through
-`.agents/skills/refresh-tpu-vllm-forks/SKILL.md`.
+`.agents/skills/refresh-fork/SKILL.md`.
 
 The packaged pin table at
 `lib/marin/src/marin/external_dependencies.py` is generated from the locks, the
@@ -68,7 +68,14 @@ The external configurations intentionally model only what Marin needs:
 - `vllm` records the promoted GPU wheels (`gpu-release.toml`) and the TPU source
   fork pins (`tpu-forks.toml`). Neither is a workspace dependency.
 
+`migration.toml` describes how to migrate each fork toward upstream — the base to
+select, the Marin e2e that validates it, and the constraints to respect. It holds
+no pins; the `refresh-fork` skill reads a section to refresh one fork. A weekly
+coordinator that walks the sections in dependency order is planned but not yet
+built.
+
 To add another external tool, create an isolated project and register its
-directory, distribution, and generated constant in `config/update-external.py`.
-Consumers should use the generated `ExternalDependency.requirement()` rather
-than reading a lockfile or copying its commit.
+directory, distribution, and generated constant in `config/update-external.py`,
+then add a `migration.toml` section for it. Consumers should use the generated
+`ExternalDependency.requirement()` rather than reading a lockfile or copying its
+commit.
