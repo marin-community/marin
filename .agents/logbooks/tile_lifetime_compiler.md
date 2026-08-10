@@ -3778,3 +3778,17 @@ author: dlwh
   build and numerical smoke, transposed input-adjoint weight ABI, local BF16
   weight-adjoint Contracts, and small multi-process transport test remain
   required before requesting four GB200s.
+
+### 2026-08-09 - TLTC-MOE-003 reverse component bootstrap failure
+
+- The sole authorized low-resource GB200 compile/correctness smoke did not
+  reach holder submission. One obsolete CLI spelling failed validation; the
+  corrected one-GPU, batch-priority command failed because the 35.7 MB local
+  workspace bundle exceeded the controller client's 25 MB limit.
+- No GPU was allocated or accessed. Controller, pod, and local-session checks
+  found no residual holder. The fixed no-retry policy records the smoke as
+  rejected, with no compilation, numerical, determinism, or performance claim.
+- The artifact also makes the runtime boundary explicit: the scalar generator
+  and CPU reference are Torch-free, while the current SM100 physical adapter
+  uses `at::Tensor` and pybind. A future accepted path needs a Torch-free
+  adapter in addition to a clean bootstrap and payload-return execution test.
