@@ -95,10 +95,12 @@ shuttle-strip-source-provenance
 shuttle-verify-no-shuttle-ops
 ```
 
-Maximal convex connected components of supported pure operations are candidate
-regions. Unsupported, effectful, alias-sensitive, collective, or control-flow
-operations are hard boundaries. Selection depends on operation structure,
-types, indexing maps, effects, and shapes, never module or function names.
+Candidate regions come from maximal contiguous supported-pure intervals in
+each source block, followed by deterministic SSA weakly connected components
+within each interval. Unsupported, nonlocal, effectful, alias-sensitive,
+collective, or control-flow operations are lexical boundaries. Selection
+depends on operation structure, types, indexing maps, effects, and shapes,
+never module or function names.
 
 Selected supported StableHLO operations become dynamically illegal during
 partial conversion. Every selected source operation must map to one or more
