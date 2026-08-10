@@ -40,7 +40,27 @@ discarded. The targeted lock update adds 14 lines: four workspace dependency
 records and the exact three-wheel CCCL package record. `uv lock --check` with
 uv 0.8.13 accepts the result without re-resolution.
 
-The Linux header compile is pending.
+The CPU-only Iris job
+`/dlwh/shuttle-attention-cccl-preflight-20260809` installed the exact locked
+`marin-levanter:gpu` environment and succeeded with one CPU, 3 GB of memory,
+9 GB of disk, and no accelerator. The resolved toolchain contained:
+
+- `nvidia-cuda-cccl==13.3.3.4.1`;
+- `nvidia-cuda-nvcc==13.2.78`;
+- `nvidia-cuda-runtime==13.0.96`;
+- JAX and JAXLIB 0.10.1.
+
+NVCC 13.2.78 compiled `cuda_fp16.h`, `cuda_bf16.h`, and `<nv/target>` for
+`compute_90` into a 10,288-byte object without warnings or errors. The job
+completed in 6.38 seconds after scheduling. This clears the missing-CCCL
+toolchain defect that stopped the previous attention gate before correctness.
+A fresh H100 allocation is admissible; it must still rerun the unchanged
+forward-plus-backward correctness and performance gate.
+
+The dependency change does not add Torch to the default install or to the
+compiler-facing smoke. The existing Levanter GPU extra still resolves Torch
+transitively through its pre-existing FlashAttention dependency; this patch
+does not use Torch or widen that boundary.
 
 ## Future work
 
