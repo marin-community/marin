@@ -60,9 +60,6 @@ SMALL_BATCH_SIZE = 1024
 # dynamics under the fixed_all_to_all EP MoE; a sequence-length sweep holds this constant and moves only
 # the context length.
 TOKENS_PER_STEP = SMALL_BATCH_SIZE * SEQ_LEN
-# shape.num_steps carry the 60x step count at the #7856 grid's 128x8192 tokens/step; the budget formula
-# rescales that base to the actual tokens/step and tokens-per-active-param.
-_STEP_BUDGET_CALIBRATION_TOKENS = 128 * 8192
 SLIDING_WINDOW = 2048
 GLOBAL_EVERY = 4
 EVAL_BATCH_SIZE = 256
@@ -161,24 +158,17 @@ class SmallShape:
     num_heads: int
     local_kv_heads: int
     global_kv_heads: int
-    num_steps: int  # 60x token budget = round(60 * active_params / (batch * seq_len))
 
 
-# hidden/depth/head split and the 60x step count come straight from the sweep grid in #7856.
+# hidden/depth/head split from the #7856 sweep grid: heads = hidden/128, KV split local = heads//4 and
+# global = heads//8 (floored at 1), depth following the 8/12/14/16/22 progression. The step count is
+# derived from the active-param count (see `_active_params`), not carried here.
 SMALL_SHAPES: dict[str, SmallShape] = {
-    "d768": SmallShape(768, 8, 6, 1, 1, num_steps=3105),
-    "d1024": SmallShape(1024, 12, 8, 2, 1, num_steps=8325),
-    "d1280": SmallShape(1280, 14, 10, 2, 1, num_steps=15019),
-    # Extrapolated rung, not from #7856: head count stays hidden/128, depth continues 8/12/14 -> 16,
-    # and the KV split follows the rule the other three obey (local = heads//4, global = heads//8,
-    # floored at 1), which also reproduces the d6144 hero's 12/6 on 48 heads. The 60x step count is
-    # not a free choice -- active parameters scale as layers x hidden^2, and that model reproduces
-    # the three measured step counts to within 0.5%, giving 24,840 here.
-    "d1536": SmallShape(1536, 16, 12, 3, 1, num_steps=24840),
-    # Issue #8062's fourth rung. Heads stay hidden/128, the KV split follows local = heads//4 and
-    # global = heads//8, and depth continues the 8/12/14/16 progression to 22. The 60x step count
-    # comes from the same layers x hidden^2 active-parameter model that reproduces the other four.
-    "d2048": SmallShape(2048, 22, 16, 4, 2, num_steps=60640),
+    "d768": SmallShape(768, 8, 6, 1, 1),
+    "d1024": SmallShape(1024, 12, 8, 2, 1),
+    "d1280": SmallShape(1280, 14, 10, 2, 1),
+    "d1536": SmallShape(1536, 16, 12, 3, 1),
+    "d2048": SmallShape(2048, 22, 16, 4, 2),
 }
 
 
@@ -235,6 +225,20 @@ def _small_model(
     )
 
 
+def _active_params(cfg: GrugModelConfig) -> int:
+    """Active (non-embedding) parameters per token: attention, router, the top-k routed experts, the
+    LatentMoE down/up projections, and the shared experts, summed over layers."""
+    d = cfg.hidden_dim
+    expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
+    per_expert = 3 * expert_width * cfg.intermediate_dim  # gated MLP: gate + up + down
+    routed = cfg.num_experts_per_token * per_expert
+    latent_proj = 0 if cfg.latent_dim is None else 2 * d * cfg.latent_dim
+    shared = cfg.num_shared_experts * 3 * d * cfg.shared_expert_intermediate_dim
+    attn = 2 * d * cfg.num_heads * cfg.head_dim + 2 * d * cfg.num_kv_heads * cfg.head_dim  # Q,O and K,V
+    router = d * cfg.num_experts
+    return cfg.num_layers * (attn + router + routed + latent_proj + shared)
+
+
 def _root_component(component: DatasetComponent | ConcatDatasetComponent) -> DatasetComponent | ConcatDatasetComponent:
     """Root a datakit component's relative cache_dir against MARIN_PREFIX (recursing into concat
     children); absolute paths -- e.g. the paloma/uncheatable caches -- pass through unchanged."""
@@ -267,9 +271,9 @@ def build_small_run(
 ) -> ArtifactStep[HeroThroughputResult]:
     """One expert-parallel run of the downsized hero shape ``size``.
 
-    ``tokens_per_active_param`` scales the step budget. The shapes carry a 60x count; issue #8062
-    specifies 750x for the EP/FSDP ladder, which is what makes these rungs comparable to the hero.
-    ``watch_interval`` controls gradient and parameter norm logs. Zero disables these logs.
+    ``tokens_per_active_param`` (default 750) sets the step budget directly: ``num_steps`` is the steps
+    needed to train that many tokens per active parameter at the fixed tokens per step, from the model's
+    ``_active_params`` count. ``watch_interval`` controls gradient and parameter norm logs.
     The expert overrides let a rung reproduce the hero's routing geometry: cell load is
     ``tokens_per_shard * top-k / experts``, which depends on ``num_experts`` and
     ``num_experts_per_token`` but not on the model width, so a narrow rung can carry the hero's
@@ -302,16 +306,6 @@ def build_small_run(
     sharding = FLAVORS[flavor]
     # Tokens per step stay fixed, so a shorter context trains on the same data with a wider batch.
     batch_size = tokens_per_step // seq_len
-    # The 60x token budget is what the step count encodes, so a wider step needs proportionally
-    # fewer of them. A wider step also deepens each routing cell, which is what sets the drop rate:
-    # capacity is ceil(factor * tokens_per_shard * top-k / experts).
-    num_steps = max(
-        1, round(shape.num_steps * _STEP_BUDGET_CALIBRATION_TOKENS / tokens_per_step * tokens_per_active_param / 60)
-    )
-    if num_train_steps_override is not None:
-        # A shape that changes the active-param count sets its own budget to match a target compute,
-        # so the token-per-active-param formula above does not apply.
-        num_steps = num_train_steps_override
     expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
     model = _small_model(
         shape,
@@ -327,6 +321,11 @@ def build_small_run(
         qb_use_histogram,
         qb_hist_bins,
     )
+    # Train to `tokens_per_active_param` tokens per active parameter, at the fixed tokens per step.
+    if num_train_steps_override is not None:
+        num_steps = num_train_steps_override
+    else:
+        num_steps = max(1, round(tokens_per_active_param * _active_params(model) / tokens_per_step))
     optimizer = dataclasses.replace(
         MoeHeuristic().build_optimizer_config(
             num_train_steps=num_steps,

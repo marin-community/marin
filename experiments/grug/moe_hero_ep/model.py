@@ -854,7 +854,6 @@ class MoEMLP(eqx.Module):
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
                 hidden_dim=expert_width,
-                gate_up_initializer_std=None,
                 intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
