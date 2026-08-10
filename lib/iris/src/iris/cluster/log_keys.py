@@ -12,7 +12,7 @@ from finelog.rpc import logging_pb2
 from finelog.types import str_to_log_level
 from rigging.log_setup import parse_log_level
 
-from iris.cluster.log_highlights import is_progress_bar_line
+from iris.cluster.log_highlights import is_progress_bar_line, strip_rank_log_tag
 from iris.cluster.types import JobName, TaskAttempt
 
 CONTROLLER_LOG_KEY = "/system/controller"
@@ -38,17 +38,19 @@ def classify_log_level(source: str, data: str) -> int:
 
     Lines from ``INJECTED_ERROR_SOURCE`` are errors whatever they say. Otherwise
     a glog-style level prefix in ``data`` wins, so a prefixed ``INFO`` line on
-    ``stderr`` classifies as ``INFO``. An unprefixed tqdm progress bar on
-    ``stderr`` classifies as ``INFO``. Any other unprefixed line takes its
-    stream's default: ``stdout`` informational, ``stderr`` error, and an
-    unrecognized stream ``UNKNOWN``, which passes every ``min_level`` filter.
+    ``stderr`` classifies as ``INFO``; a multi-GPU rank tag ahead of that prefix
+    does not hide it. An unprefixed tqdm progress bar on ``stderr`` classifies as
+    ``INFO``. Any other unprefixed line takes its stream's default: ``stdout``
+    informational, ``stderr`` error, and an unrecognized stream ``UNKNOWN``,
+    which passes every ``min_level`` filter.
     """
     if source == INJECTED_ERROR_SOURCE:
         return logging_pb2.LOG_LEVEL_ERROR
-    parsed = str_to_log_level(parse_log_level(data))
+    body = strip_rank_log_tag(data)
+    parsed = str_to_log_level(parse_log_level(body))
     if parsed != logging_pb2.LOG_LEVEL_UNKNOWN:
         return parsed
-    if source == STDERR_SOURCE and is_progress_bar_line(data):
+    if source == STDERR_SOURCE and is_progress_bar_line(body):
         return logging_pb2.LOG_LEVEL_INFO
     return _STREAM_DEFAULT_LEVEL.get(source, logging_pb2.LOG_LEVEL_UNKNOWN)
 

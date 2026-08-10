@@ -28,8 +28,9 @@ JAX_*/framework namespace) so a job that already sets JAX rank vars never trips
 the supervised path.
 
 The supervisor owns child lifecycle: it forwards SIGINT/SIGTERM to every child,
-tears the group down and exits non-zero if any child fails, and prefixes each
-child's output with its local rank. It deliberately does not import jax — the
+tears the group down and exits non-zero if any child fails, and tags each
+child's output with its local rank, keeping stdout and stderr apart so iris
+still classifies each line by its stream. It deliberately does not import jax — the
 children initialize CUDA only after the supervisor has already spawned them, so
 no CUDA context exists in the supervisor's address space.
 """
@@ -47,6 +48,7 @@ from types import FrameType
 from rigging.timing import Deadline, Duration
 
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.log_highlights import rank_log_tag
 from iris.hooks.multigpu import (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
@@ -80,14 +82,18 @@ def _child_rank_env(
     }
 
 
-def _pump_output(local_rank: int, stream, write_lock: threading.Lock) -> None:
-    """Forward a child's merged stdout/stderr, line-prefixed with its rank."""
-    prefix = f"[rank{local_rank}] "
-    for line in iter(stream.readline, ""):
+def _pump_output(tag: str, source, sink, write_lock: threading.Lock) -> None:
+    """Forward one of a child's streams to the matching supervisor stream, rank-tagged.
+
+    stdout and stderr stay separate: iris classifies an unprefixed line by the
+    stream it arrived on, so folding a child's stderr into stdout would demote
+    its tracebacks to ``INFO``.
+    """
+    for line in iter(source.readline, ""):
         with write_lock:
-            sys.stdout.write(prefix + line)
-            sys.stdout.flush()
-    stream.close()
+            sink.write(tag + line)
+            sink.flush()
+    source.close()
 
 
 def _signal_children(children: list[subprocess.Popen], ranks, sig: int) -> None:
@@ -126,14 +132,16 @@ def _spawn_children(
                 child_argv,
                 env=child_env,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
             )
             children.append(child)
-            pump = threading.Thread(target=_pump_output, args=(local_rank, child.stdout, write_lock), daemon=True)
-            pump.start()
-            pumps.append(pump)
+            tag = rank_log_tag(local_rank)
+            for source, sink in ((child.stdout, sys.stdout), (child.stderr, sys.stderr)):
+                pump = threading.Thread(target=_pump_output, args=(tag, source, sink, write_lock), daemon=True)
+                pump.start()
+                pumps.append(pump)
     except BaseException:
         logger.error("spawn failed after starting %d/%d child(ren); killing them", len(children), nproc)
         _signal_children(children, range(len(children)), signal.SIGKILL)
