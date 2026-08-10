@@ -67,7 +67,7 @@ _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
-GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
+GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 2
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -259,6 +259,7 @@ class GrugModelConfig:
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "GrugModelConfig":
         rope = RotaryConfig(theta=float(_hf_config_attr(hf_config, ("rope_theta",), 10000.0)))
+        latent_dim = _hf_config_attr(hf_config, ("latent_dim",))
         return cls(
             vocab_size=int(_hf_config_attr(hf_config, ("vocab_size",))),
             hidden_dim=int(_hf_config_attr(hf_config, ("hidden_dim", "hidden_size"), 2048)),
@@ -275,6 +276,7 @@ class GrugModelConfig:
             num_shared_experts=int(_hf_config_attr(hf_config, ("num_shared_experts",), 1)),
             num_experts=int(_hf_config_attr(hf_config, ("num_experts", "num_local_experts"), 8)),
             num_experts_per_token=int(_hf_config_attr(hf_config, ("num_experts_per_token", "num_experts_per_tok"), 2)),
+            latent_dim=None if latent_dim is None else int(latent_dim),
             num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
             num_heads=int(_hf_config_attr(hf_config, ("num_heads", "num_attention_heads"), 16)),
             num_kv_heads=int(_hf_config_attr(hf_config, ("num_kv_heads", "num_key_value_heads"), 16)),
@@ -320,6 +322,7 @@ class GrugModelConfig:
             "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
             "num_shared_experts": self.num_shared_experts,
             # grug-specific (no public equivalent)
+            "latent_dim": self.latent_dim,
             "qk_mult": self.qk_mult,
             "local_kv_heads": self.local_kv_heads,
             "global_kv_heads": self.global_kv_heads,
@@ -1217,6 +1220,16 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
                 f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
             }
         )
+        if block.mlp.w_latent_down is not None:
+            assert block.mlp.latent_norm is not None
+            assert block.mlp.w_latent_up is not None
+            tensors.update(
+                {
+                    f"{layer_prefix}.mlp.latent_down_proj.weight": _linear_inference_tensor(block.mlp.w_latent_down),
+                    f"{layer_prefix}.mlp.latent_norm.weight": block.mlp.latent_norm.weight,
+                    f"{layer_prefix}.mlp.latent_up_proj.weight": _linear_inference_tensor(block.mlp.w_latent_up),
+                }
+            )
         # SConv weights are learned; export them per site so the checkpoint reconstructs an sconv model.
         for site_name, conv in (
             ("self_attn.sconv_k", block.attn.sconv_k),

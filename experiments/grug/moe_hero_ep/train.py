@@ -676,7 +676,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             while int(state.step) < stop_step:
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
-                step_start = time.perf_counter()
                 current_step = int(state.step)
                 watch_due = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
@@ -686,6 +685,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     jax.block_until_ready(watch_stats)
                 else:
                     watch_stats = None
+                step_start = time.perf_counter()
                 state, metrics, inline_watch_stats = train_step(state, batch)
                 if inline_watch_stats is not None and watch_due:
                     watch_stats = inline_watch_stats

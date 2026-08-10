@@ -442,6 +442,37 @@ def test_latent_moe_is_absent_by_default():
     assert built.expert_mlp.w_gate.shape[1] == cfg.hidden_dim
 
 
+def test_latent_moe_hf_config_roundtrip_preserves_the_architecture():
+    cfg = _latent_config(latent_dim=16)
+
+    hf_config = cfg.to_hf_config(cfg.vocab_size)
+    roundtripped = model.GrugModelConfig.from_hf_config(hf_config)
+
+    assert hf_config.to_dict()["latent_dim"] == 16
+    assert hf_config.to_dict()[model.GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 2
+    assert roundtripped.latent_dim == 16
+
+
+def test_latent_moe_state_dict_contains_the_projection_state():
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    cfg = _latent_config(latent_dim=16)
+    with set_mesh(mesh):
+        built = model.Transformer.init(cfg, key=jax.random.key(0))
+        state_dict = built.to_state_dict()
+    block = next(iter(built.stacked_blocks.unstacked()))
+    assert block.mlp.w_latent_down is not None
+    assert block.mlp.latent_norm is not None
+    assert block.mlp.w_latent_up is not None
+
+    expected = {
+        "model.layers.0.mlp.latent_down_proj.weight": jnp.swapaxes(block.mlp.w_latent_down, -1, -2),
+        "model.layers.0.mlp.latent_norm.weight": block.mlp.latent_norm.weight,
+        "model.layers.0.mlp.latent_up_proj.weight": jnp.swapaxes(block.mlp.w_latent_up, -1, -2),
+    }
+    for name, value in expected.items():
+        np.testing.assert_array_equal(state_dict[name], value)
+
+
 def test_latent_dim_above_hidden_is_rejected():
     # A latent wider than the hidden dim adds communication instead of removing it.
     with pytest.raises(ValueError, match="latent_dim must be in"):
