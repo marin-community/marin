@@ -51,6 +51,15 @@ goes stale on the next commit.
 - Purpose: one-rack GB200 EP64 throughput and MFU baseline.
 - Issue: https://github.com/marin-community/marin/issues/7279
 
+### moe-row-norm
+- Path: `experiments/grug/moe_row_norm/`
+- Origin: `experiments/grug/moe/` at `ca70598ad`
+- Introduced: local research branch for #8131
+- Status: active
+- Purpose: factor every linear into an unchanged direction matrix `W` and unit-initialized output scale `v`, train baseline MuonH matrices with per-output-row norm preservation, and train `v` with AdamH.
+- Issue: https://github.com/marin-community/marin/issues/8131
+- Diff: `/private/tmp/grug-moe-row-norm-8131-diff/index.html`; PR diff pending
+
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834
