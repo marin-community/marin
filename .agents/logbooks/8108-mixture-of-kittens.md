@@ -312,3 +312,43 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: The full run completed its first step at loss 11.8, then failed with a non-finite loss at state step 2. The focused gate passed the forward and all eight gradient groups with zero mismatches. Routed-weight gradient mean errors were about 0.057.
 - Interpretation: The FP32 macrobatch and local-expert output layout is correct. The remaining fault occurs after the first full-shape optimizer update and is not reproduced by the small kernel gate.
 - Next action: Log per-parameter gradient, update, and parameter norms for a two-step full-shape run. Use the first non-finite boundary to separate a kernel gradient fault from an optimizer fault.
+
+### 2026-08-10 14:36 UTC - Router-gradient storage fix made the long run stable
+
+- Hypothesis: The full-shape failure after the first update comes from memory corruption in the router-gradient partial buffer.
+- Commit Hash: `d2661ece0`.
+- Commands: A production-width four-GPU parity gate, a two-step full E8 run, and a 25-step full E8 run.
+- Config: E8, top-4, global batch 64, BF16 compute, 48 layers, and two local routed experts on each GPU.
+- Result: The CUDA kernel wrote router-gradient partials in 128-column groups, but the adapter allocated one group for each 256 columns. The corrected allocation and an FFI size check passed the production-width parity gate with zero mismatches. The 25-step run `/rav/mok-fused-routerpartial-fix-1n-25-20260810-1436` stayed finite and reduced loss from 11.8 to 6.50.
+- Interpretation: The numerical failure was a buffer overflow, not optimizer instability. The corrected fused path is stable for the required screen.
+- Next action: Profile the stable path and reduce duplicate forward work from backward rematerialization.
+
+### 2026-08-10 16:20 UTC - A 64K ring gave the best stable profile
+
+- Hypothesis: A 65,536-row ring reduces launch and barrier costs without a material memory or route-loss increase.
+- Commit Hash: `b98999e2a`.
+- Commands: Matched 12-step four-GPU GB200 profiles with 32K, 64K, and 98,304-row rings.
+- Config: The stable full E8 run with an XProf capture over steps 5 through 9.
+- Result: The 64K run `/rav/mok-fused-mb64k-1n-12-20260810-1620-coord` took 15.051896 seconds per step and reached 23.2089% MFU. It ended with finite loss 6.99 and dropped 109,812 of 50,331,648 route assignments, or 0.218%. The 98,304-row treatment took 15.396702 seconds per step and reached 22.69% MFU. Its profile assigned 4.525% of time to communication and 95.475% to compute.
+- Interpretation: The 64K ring is the best stable configuration. A larger ring increases memory pressure and does not help throughput. Communication is not the main limit in this profile.
+- Next action: Remove the second routed forward call that rematerialization starts before each native backward call.
+
+### 2026-08-10 17:35 UTC - Full-context host offload exceeded worker memory
+
+- Hypothesis: Saving the complete fused forward context in pinned host memory removes the duplicate forward call and reaches the MFU target.
+- Commit Hash: `1dcd95492` through `a6481d094`.
+- Commands: Three one-step four-GPU GB200 memory gates with 64K and 60K rings and host allocator limits from 192 GiB to 256 GiB.
+- Config: The stable production shape with all seven fused context tensors offloaded for all 48 layers.
+- Result: A 192 GiB allocator could not serve a fragmented 144 GiB request. A 256 GiB allocator and the smaller 60K treatment both ended with process exit 137 during compilation on the 850 GiB worker. The 60K compiler estimate was 344.95 GiB after rematerialization.
+- Interpretation: Each process retains about 144 GiB of full forward context. Four processes plus compilation state exceed worker memory. Full-context offload is not viable on this worker class.
+- Next action: Save only routed activations and recompute the smaller shared-expert path during backward.
+
+### 2026-08-10 17:51 UTC - Routed-context offload passed parity and memory gates
+
+- Hypothesis: Offloading only routed activations removes the duplicate routed computation and fits within host and device limits.
+- Commit Hash: `b5ea5eba6`.
+- Commands: One four-GPU production-width parity gate and one full E8 training step.
+- Config: The 64K ring, pinned-host offload for routed input, gate, up, and hidden tensors, and local recomputation of the three shared-expert activations during backward.
+- Result: `/rav/mok-routed-context-parity-20260810-1749` passed forward and all eight gradient checks with zero mismatches. `/rav/mok-fused-routed-offload-1n-1-20260810-1751-coord` completed one finite step at loss 11.8. The compiler estimate was 296.85 GiB after rematerialization, 48.10 GiB below the full-context treatment.
+- Interpretation: Selective offload preserves the verified gradient and fits the worker. It keeps routed dispatch, four routed expert paths, and combine output from the first forward call, while it pays one shared-expert recomputation and the host transfers.
+- Next action: Run the matched 12-step profile. Require one fused forward call per layer and a step time of at most 13.9735 seconds for 25% MFU.
