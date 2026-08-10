@@ -3796,3 +3796,25 @@ author: dlwh
   Full logs, environment, decoded task archive, integrity hashes, and release
   proof are under
   `lib/tile_lifetime/benchmarks/artifacts/quack_partitioned_sm90_h100_compile_gate_v0/`.
+
+### 2026-08-09 - TLTC-MOE-002 distributed reverse ABI and generated bodies
+
+- The existing generic `RelationPlan` now drives a deterministic four-rank CPU
+  reverse executor. Payload gather/inverse-gather models transport while
+  segmented W2/W13 input and weight Contracts, pair-Map VJP, route-weight
+  feature Fold, and source-slot Fold remain explicit Shuttle stages. An
+  uneven/empty-expert fixture matches a natural JAX VJP and repeats bitwise.
+- A non-allocating primary-shape audit derives all rank-local buffers for
+  8,192 global source rows, 49,152 route edges, 384 experts, and four ranks.
+  Activation and returned weight-gradient buffers are BF16; route-weight
+  cotangents and Contract accumulation are FP32. Every valid relation edge is
+  owned exactly once and transport semantics are payload permutation only.
+- A generated CUDA reverse scalar program owns pair-Map left/right VJPs,
+  output-adjoint weighting, route-feature Fold contribution/update, and source
+  input Fold update. The SM100 probe consumes these bodies in generic loop
+  skeletons for padded edge packing, pair VJP, feature reduction, and ordered
+  source reduction. No atomic or semantic communication combine is present.
+- This is a static/CPU checkpoint, not a distributed GPU result. A one-device
+  build and numerical smoke, transposed input-adjoint weight ABI, local BF16
+  weight-adjoint Contracts, and small multi-process transport test remain
+  required before requesting four GB200s.

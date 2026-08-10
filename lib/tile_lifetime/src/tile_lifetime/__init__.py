@@ -100,6 +100,15 @@ from tile_lifetime.expert_parallel_training import (
     ExpertParallelTrainingStageKind,
     derive_expert_parallel_training_plan,
 )
+from tile_lifetime.expert_parallel_training_runtime import (
+    BackwardBufferContract,
+    DistributedExpertBackwardABI,
+    DistributedExpertBackwardResult,
+    ExpertBackwardRankABI,
+    derive_distributed_expert_backward_abi,
+    execute_distributed_expert_backward_reference,
+    verify_distributed_expert_backward_abi,
+)
 from tile_lifetime.ffi_command_buffer import DirectLaunchFfiPhysicalCandidate
 from tile_lifetime.fold_placement import (
     FoldAttachment,

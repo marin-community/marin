@@ -78,14 +78,35 @@ considered.
 
 ## Current ownership and blockers
 
-Shuttle already owns the generic scalar VJP, local input-adjoint Contracts,
-deterministic source Fold, and group-batched local weight-adjoint Contract
-families. It does not yet own an executable primary-shape distributed backward
-schedule. In particular, output-cotangent transport, routed input-cotangent
-return, route-weight-cotangent return, and primary-shape segmented weight
-adjoints have not been connected in one four-rank executor.
+Shuttle now derives one four-rank backward ABI directly from `RelationPlan` and
+executes its complete routed algebra in a deterministic CPU interpreter. The
+same relation metadata drives output-cotangent dispatch, segmented W2 and W13
+input/weight Contracts, generated pair-Map VJP, route-weight feature Fold,
+inverse payload return, and the fixed source-slot input Fold. An uneven
+four-rank fixture, including empty experts, matches the natural JAX VJP and is
+bitwise stable across repeated interpreter executions.
 
-Therefore no new GB200 replay is authorized by this checkpoint. A replay is
+The primary 4×GB200 shape has also passed a non-allocating buffer audit. It
+covers all 49,152 route edges and derives rank-local BF16 activation and weight
+gradient buffers plus FP32 route-cotangent buffers. Output weight gradients are
+BF16, matching the natural JAX and MoK boundary, while their Contract
+accumulators remain FP32 physical state.
+
+The SM100 probe now contains generic CUDA loop skeletons for the remaining
+non-Contract stages: route-weighted output-cotangent packing, pair-Map VJP,
+route-weight feature Fold, and deterministic source Fold. Their scalar bodies
+are generated from the erased pair expression and generic multiply/add Fold
+algebra; changing the pair expression changes the generated program
+fingerprint without editing the loop skeleton.
+
+This is not yet a distributed GPU result. The CUDA extension still needs a
+one-device build/correctness smoke, the transposed-weight layouts for W2 and
+W13 input-adjoint Contracts need an explicit ABI check, and the BF16
+weight-adjoint Contract family must be connected to the four-rank runtime.
+External payload transport and JAX-owned router VJP then need a small
+multi-process correctness gate before a primary-shape replay.
+
+Therefore no four-rank GB200 replay is authorized by this checkpoint. A replay is
 allowed only after a source audit proves that the generated executor contains
 no semantic expert kernel, small multi-rank correctness covers every returned
 cotangent, the exact pinned MoK backward passes independently, and build/runtime
