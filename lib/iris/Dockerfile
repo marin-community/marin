@@ -4,6 +4,7 @@
 #   docker buildx build --target controller -f lib/iris/Dockerfile -t iris-controller:latest .
 #   docker buildx build --target worker     -f lib/iris/Dockerfile -t iris-worker:latest .
 #   docker buildx build --target task       -f lib/iris/Dockerfile -t iris-task:latest .
+#   docker buildx build --target task-h100-evidence -f lib/iris/Dockerfile -t iris-task-h100-evidence:dev .
 #
 # The controller and worker share all layers up to and including Python
 # dependencies. The worker adds only the Docker CLI on top.
@@ -237,3 +238,45 @@ RUN set -eux; \
     nsys --version
 
 WORKDIR /app
+
+
+# ── Stage: task-h100-evidence ─────────────────────────────────────
+# Source-only H100 evidence image. This stays separate from the default task
+# image because Nsight Compute and the CUDA compiler add more than 1 GiB. It is
+# amd64-only: the reviewed evidence target is one Hopper H100, not Grace/GB200.
+FROM task AS task-h100-evidence
+
+LABEL org.opencontainers.image.description="Iris H100 evidence task image"
+
+ARG NVIDIA_DEBIAN12_AMD64_REPOSITORY=https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64
+COPY lib/iris/images/h100-evidence-debian12-amd64.sha256 /tmp/h100-evidence-debian12-amd64.sha256
+
+RUN set -eux; \
+    test "$(dpkg --print-architecture)" = amd64; \
+    while read -r expected_sha256 filename; do \
+      case "${filename}" in \
+        ""|*[!A-Za-z0-9._+-]*) echo "invalid NVIDIA package filename: ${filename}" >&2; exit 1 ;; \
+      esac; \
+      curl -fsSL --proto '=https' --tlsv1.2 \
+        -o "/tmp/${filename}" \
+        "${NVIDIA_DEBIAN12_AMD64_REPOSITORY}/${filename}"; \
+      echo "${expected_sha256}  /tmp/${filename}" | sha256sum --check --strict; \
+      dpkg-deb --extract "/tmp/${filename}" /; \
+      rm -f "/tmp/${filename}"; \
+    done < /tmp/h100-evidence-debian12-amd64.sha256; \
+    rm -f /tmp/h100-evidence-debian12-amd64.sha256; \
+    ln -sfn /usr/local/cuda-13.2 /usr/local/cuda; \
+    ln -s /opt/nvidia/nsight-compute/2026.1.1/ncu /usr/local/bin/ncu; \
+    test -x /usr/local/cuda-13.2/bin/nvcc; \
+    test -x /usr/local/cuda-13.2/bin/ptxas; \
+    test -x /usr/local/cuda-13.2/bin/cuobjdump; \
+    test -x /usr/local/bin/ncu; \
+    test -x /usr/local/bin/nsys; \
+    /usr/local/cuda-13.2/bin/nvcc --version; \
+    /usr/local/cuda-13.2/bin/ptxas --version; \
+    /usr/local/cuda-13.2/bin/cuobjdump --version; \
+    /usr/local/bin/ncu --version; \
+    /usr/local/bin/nsys --version
+
+ENV CUDA_HOME=/usr/local/cuda-13.2
+ENV PATH="${CUDA_HOME}/bin:${PATH}"
