@@ -250,6 +250,65 @@ def build_relation_plan(
     max_padded_rows_per_rank: int | None = None,
 ) -> RelationPlan:
     """Build a stable grouped relation from source indices and weights."""
+    return _build_relation_plan(
+        destination_indices,
+        weights,
+        edge_valid=edge_valid,
+        destination_rank_by_item=destination_rank_by_item,
+        destination_local_item_by_item=destination_local_item_by_item,
+        padding_quantum=padding_quantum,
+        max_routes_per_rank=max_routes_per_rank,
+        max_padded_rows_per_rank=max_padded_rows_per_rank,
+        fixed_destination_capacity=None,
+        dense_exchange=False,
+    )
+
+
+def build_fixed_capacity_relation_plan(
+    destination_indices: np.ndarray,
+    weights: np.ndarray,
+    *,
+    edge_valid: np.ndarray | None = None,
+    destination_rank_by_item: np.ndarray,
+    destination_local_item_by_item: np.ndarray,
+    destination_capacity: int,
+) -> RelationPlan:
+    """Build a routing-independent bounded relation layout.
+
+    Every destination receives exactly ``destination_capacity`` physical rows,
+    and the exchange domain contains every source-item/destination-rank pair.
+    Runtime routing therefore changes only indices, validity, and counts; all
+    payload and handler shapes remain fixed.
+    """
+    if destination_capacity <= 0:
+        raise ValueError("fixed relation destination capacity must be positive")
+    return _build_relation_plan(
+        destination_indices,
+        weights,
+        edge_valid=edge_valid,
+        destination_rank_by_item=destination_rank_by_item,
+        destination_local_item_by_item=destination_local_item_by_item,
+        padding_quantum=1,
+        max_routes_per_rank=None,
+        max_padded_rows_per_rank=None,
+        fixed_destination_capacity=destination_capacity,
+        dense_exchange=True,
+    )
+
+
+def _build_relation_plan(
+    destination_indices: np.ndarray,
+    weights: np.ndarray,
+    *,
+    edge_valid: np.ndarray | None,
+    destination_rank_by_item: np.ndarray,
+    destination_local_item_by_item: np.ndarray,
+    padding_quantum: int,
+    max_routes_per_rank: int | None,
+    max_padded_rows_per_rank: int | None,
+    fixed_destination_capacity: int | None,
+    dense_exchange: bool,
+) -> RelationPlan:
     destination_indices = np.asarray(destination_indices)
     weights = np.asarray(weights, dtype=np.float32)
     if edge_valid is None:
@@ -290,7 +349,19 @@ def build_relation_plan(
     group_index_by_destination = np.empty(group_order.shape[0], dtype=np.int32)
     group_index_by_destination[group_order] = np.arange(group_order.shape[0], dtype=np.int32)
     np.add.at(group_count, group_index_by_destination[destination_item[valid_route_indices]], 1)
-    group_padded_count = _round_up(group_count, padding_quantum)
+    if fixed_destination_capacity is None:
+        group_padded_count = _round_up(group_count, padding_quantum)
+    else:
+        overflow = np.flatnonzero(group_count > fixed_destination_capacity)
+        if overflow.size:
+            overflowing_destinations = group_order[overflow]
+            raise RelationPlanError(
+                (
+                    "fixed destination capacity exceeded for destinations "
+                    f"{tuple(int(value) for value in overflowing_destinations)}",
+                )
+            )
+        group_padded_count = np.full(group_count.shape, fixed_destination_capacity, dtype=np.int32)
     group_offset = np.concatenate((np.zeros(1, dtype=np.int32), np.cumsum(group_padded_count[:-1], dtype=np.int32)))
 
     row_count = int(np.sum(group_padded_count, dtype=np.int64))
@@ -322,8 +393,21 @@ def build_relation_plan(
     row_destination_item[row_valid] = destination_item[valid_routes]
     row_weight[row_valid] = flat_weight[valid_routes]
 
+    rank_count = int(np.max(destination_rank_by_item)) + 1
     exchange_pairs = np.stack((destination_rank[valid_route_indices], source_item[valid_route_indices]), axis=1)
-    if exchange_pairs.shape[0]:
+    if dense_exchange:
+        unique_pairs = np.stack(
+            (
+                np.repeat(np.arange(rank_count, dtype=np.int32), source_item_count),
+                np.tile(np.arange(source_item_count, dtype=np.int32), rank_count),
+            ),
+            axis=1,
+        )
+        route_to_exchange_row = np.full(source_item.shape[0], -1, dtype=np.int32)
+        route_to_exchange_row[valid_route_indices] = (
+            destination_rank[valid_route_indices] * source_item_count + source_item[valid_route_indices]
+        )
+    elif exchange_pairs.shape[0]:
         unique_pairs, exchange_rows = np.unique(exchange_pairs, axis=0, return_inverse=True)
         route_to_exchange_row = np.full(source_item.shape[0], -1, dtype=np.int32)
         route_to_exchange_row[valid_route_indices] = exchange_rows.astype(np.int32, copy=False)
@@ -335,7 +419,7 @@ def build_relation_plan(
         destination_rank[valid_route_indices],
         row_destination_rank,
         row_valid,
-        rank_count=int(np.max(destination_rank_by_item)) + 1,
+        rank_count=rank_count,
         max_routes_per_rank=max_routes_per_rank,
         max_padded_rows_per_rank=max_padded_rows_per_rank,
     )
@@ -343,7 +427,7 @@ def build_relation_plan(
         source_item_count=source_item_count,
         route_slots=route_slots,
         destination_count=destination_rank_by_item.shape[0],
-        destination_rank_count=int(np.max(destination_rank_by_item)) + 1,
+        destination_rank_count=rank_count,
         merge_order="source_item ascending, then route_slot ascending, FP32 accumulation",
         edge_valid=edge_valid,
         source_item=source_item,

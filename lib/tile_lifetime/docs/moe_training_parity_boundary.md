@@ -109,12 +109,28 @@ CUDA source and compile plan depend only on JAX/XLA FFI and the CUDA runtime;
 the composed generic Contract handlers additionally use cuBLAS. The rejected
 `at::Tensor` probe bodies are not part of the current execution path.
 
-This is not yet a distributed GPU result. The typed-FFI handler has not been
-compiled or run on GB200, and the four-rank composition currently binds the
-existing HLO-derived handler families without instantiating one transformed
-natural-JAX distributed module. Fixed-capacity runtime RelationPlan shapes,
-transposed W2/W13 input-adjoint weight layouts, JAX collective payload return,
-and router-VJP wiring remain GPU/runtime gates.
+The static distributed module now instantiates every reverse family instead of
+only naming its generator. A fixed-capacity `RelationPlan` gives every expert
+the same physical row capacity and uses a dense source/rank exchange domain, so
+routing mutations change runtime indices and validity without changing handler
+shapes. The transformed StableHLO contains one call each for the edge Map/Fold,
+input-adjoint Contract/Map/Contract/identity-Fold, two weight Contracts, and the
+post-return source Fold. Forward-layout W2 and W13 weights are explicitly
+transposed into the input-adjoint Contract ABI. The router pullback remains
+ordinary JAX dot, gather, Map, and Fold algebra.
+
+On four forced CPU devices, JAX lowers and executes an exact payload-only
+all-to-all round trip. The natural JAX whole-program VJP and the decomposed
+generated-stage reference agree within `0.000717` maximum and `0.000134` mean
+absolute error under the BF16 policy; every decomposed output and cotangent
+repeats bitwise. The generated handler HLO has five custom calls, no Torch or
+opaque semantic target, and three JAX-owned router-VJP dots. Evidence is stored
+under `benchmarks/artifacts/distributed_expert_jax_module_cpu_v0`.
+
+This is still not a distributed GPU result. The handler calls and JAX
+collectives have been validated in the same plan but not yet compiled as one
+shard-mapped CUDA executable. CUDA compilation, multi-rank numerical execution,
+and the matched primary-shape replay remain runtime gates.
 
 Therefore no four-rank GB200 replay is authorized by this checkpoint. A replay is
 allowed only after a source audit proves that the generated executor contains
