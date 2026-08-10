@@ -252,6 +252,7 @@ cc_test(
     srcs = ["test/observer-test-bridge-test.cc"],
     deps = [
         ":ShuttleObserverTestBridge",
+        ":ShuttlePasses",
         ":ShuttleXlaRegistration",
         "@com_google_googletest//:gtest_main",
         "@llvm-project//mlir:FuncDialect",
