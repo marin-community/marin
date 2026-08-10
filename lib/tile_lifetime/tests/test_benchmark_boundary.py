@@ -399,6 +399,51 @@ def test_repeatability_verifier_recomputes_bitwise_summary_from_hashes() -> None
         )
 
 
+def test_repeatability_verifier_rejects_nonfinite_bitwise_pair_evidence() -> None:
+    output = np.array([0.0], dtype=np.float32)
+    report = benchmark_repeatability_report(
+        ("output",),
+        ((output,), (output.copy(),)),
+        (output,),
+        output_dtypes={"output": "bf16"},
+        policy=BenchmarkRepeatabilityPolicy(
+            mode=BenchmarkRepeatabilityMode.BITWISE,
+            minimum_repeats=2,
+        ),
+    )
+    pair = report.pairwise_drift[0]
+    error = replace(pair.outputs[0].error, finite=False, nonfinite_values=1)
+    pair = replace(pair, outputs=(replace(pair.outputs[0], error=error),))
+
+    with pytest.raises(ValueError, match="invalid drift"):
+        verify_benchmark_repeatability(
+            replace(report, pairwise_drift=(pair,)),
+            numerical_acceptance=_rounding_acceptance(),
+            boundary_name="generated Shuttle",
+        )
+
+
+def test_repeatability_verifier_rejects_impossible_error_summary() -> None:
+    output = np.array([0.0], dtype=np.float32)
+    report = benchmark_repeatability_report(
+        ("output",),
+        ((output,), (output.copy(),), (output.copy(),)),
+        (output,),
+        output_dtypes={"output": "bf16"},
+        policy=_bounded_bf16_policy(),
+    )
+    pair = report.pairwise_drift[0]
+    error = replace(pair.outputs[0].error, maximum_absolute_error=0.0, mean_absolute_error=0.01)
+    pair = replace(pair, outputs=(replace(pair.outputs[0], error=error),))
+
+    with pytest.raises(ValueError, match="mean absolute error greater than maximum"):
+        verify_benchmark_repeatability(
+            replace(report, pairwise_drift=(pair, *report.pairwise_drift[1:])),
+            numerical_acceptance=_rounding_acceptance(),
+            boundary_name="expert oracle",
+        )
+
+
 def test_bounded_repeatability_requires_three_repeats_and_explicit_dtype_tolerance() -> None:
     with pytest.raises(ValueError, match="at least three"):
         BenchmarkRepeatabilityPolicy(
