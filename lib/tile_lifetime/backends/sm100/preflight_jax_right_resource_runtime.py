@@ -10,7 +10,7 @@ import importlib
 import json
 import platform
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import jax
@@ -20,6 +20,7 @@ BACKEND_ROOT = Path(__file__).resolve().parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+from clean_routed_streaming_emitter import audit_static_launch_grid  # noqa: E402
 from jax_right_resource_runtime import (  # noqa: E402
     compile_and_register_partial_merge_ffi,
     compile_right_resource_physical_call,
@@ -140,6 +141,13 @@ def main() -> None:
         raise RuntimeError("the JAX/CuTe preflight imported Torch")
 
     tables = baseline.tables
+    launch_grid_audit = audit_static_launch_grid(baseline.sources.physical_source)
+    if not launch_grid_audit.clean:
+        raise RuntimeError(f"the extracted physical launch grid is not host-specialized: {launch_grid_audit}")
+    if physical_call.work_capacity != tables.work_capacity:
+        raise RuntimeError("the CUTLASS JAX call does not retain the specialized host capacity")
+    if mutation.tables.work_capacity != tables.work_capacity:
+        raise RuntimeError("the relation mutation changed the bounded physical launch capacity")
     record = {
         "status": "linux_compile_import_preflight_passed",
         "python": platform.python_version(),
@@ -152,7 +160,13 @@ def main() -> None:
         "partial_merge_source_sha256": baseline.merge_ffi.source_sha256,
         "partial_merge_handler": baseline.merge_ffi.handler_symbol,
         "partial_merge_library": str(Path(merge_library._name).resolve()),
-        "physical_call_type": type(physical_call).__qualname__,
+        "physical_call_type": type(physical_call.call).__qualname__,
+        "static_launch_grid": {
+            **asdict(launch_grid_audit),
+            "compiled_work_capacity": physical_call.work_capacity,
+            "runtime_work_count_is_device_operand": True,
+            "runtime_capacity_overflow_policy": "reject before physical launch",
+        },
         "dependency_modules": {name: str(module.__file__) for name, module in dependency_modules.items()},
         "torch_loaded": "torch" in sys.modules,
         "external_semantic_kernels": list(baseline.sources.emitter_plan.external_semantic_kernels),

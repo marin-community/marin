@@ -68,14 +68,14 @@
       "device_kernel_launched": false,
       "error_type": "TypeError",
       "error": "RoutedStreamingFoldContractSm100.__call__() takes from 23 to 24 positional arguments but 25 were given",
-      "resolution": "removed two relation-layout operands from the extracted physical call; kept them in the generic JAX/EventTensor ABI"
+      "resolution": "interim correction removed two required sequence-offset operands and was superseded; the actual mismatch was one extra optional-metadata placeholder"
     },
     {
       "shuttle_revision": "728d0dfcd4ab28cb46322863130006d5408009fc",
       "stage_reached": "extracted SM100 method body and CUTLASS LaunchConfig construction",
       "device_kernel_launched": false,
       "error_type": "cutlass.base_dsl.common.DSLRuntimeError",
-      "error": "Expected integer for grid dimension at index 0, but got cutlass MLIR BlockArgument",
+      "error": "Expected integer for grid dimension at index 0, but got cutlass MLIR BlockArgument after the interim ABI fix shifted the JAX stream into the work_capacity position",
       "source_site": "num_ctas = work_capacity; kernel(...).launch(grid=(num_ctas,))",
       "resolution": null
     }
@@ -86,6 +86,5 @@
     "latency_samples_ms": [],
     "device_execution": false
   },
-  "next_gate": "specialize maximum work capacity into the host-side physical launch and prove a constant CuTe grid in a dependency-only Linux lowering preflight before reallocating GB200"
+  "next_gate": "correct the positional ABI, specialize maximum work capacity into the host-side physical launch, and prove the constant-grid ABI in a dependency-only Linux preflight before reallocating GB200"
 }
-
