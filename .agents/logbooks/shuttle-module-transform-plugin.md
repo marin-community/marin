@@ -153,3 +153,31 @@ description: Target-1 workload-free JAX module-transform plugin and shared accep
   before any new native run. This checkpoint does not authorize a relaunch.
 - Artifact:
   `lib/shuttle/mlir/artifacts/native-preflight-20260810-denseset/README.md`
+
+### 2026-08-10 - Native dialect compile after Builders correction
+
+- Hypothesis: supplying complete MLIR builder types allows the ordered native
+  target matrix to compile both Shuttle libraries, then reach `shuttle-opt`,
+  lit, and the four patched XLA tests.
+- Commit Hash: `cce8dbc849dea7d288308cf34e5b1baa957acfa6` for
+  the tested canonical source; this entry's containing revision seals the raw
+  result.
+- Command: `launch-command.txt` in
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-builders/`, requesting
+  24 CPU, 96GB memory, 250GB disk, no accelerator, and zero retries.
+- Config: Bazel `7.7.0`; XLA
+  `9b635916ecc6df6efee62d8e4b0c7ef87ef84d69`; LLVM
+  `9a4faee1068c09efbf837cfb7b0f5693b24635f4`; Debian 13; GCC 14.2.0;
+  embedded OpenJDK 21.0.5.
+- Result: `@shuttle_mlir//:shuttle_ops_inc_gen` passed. The following
+  `@shuttle_mlir//:ShuttleDialect` target advanced past generated Builder
+  diagnostics, then failed compiling four `mlir::ArrayAttr.front()` calls in
+  `ShuttleDialect.cc`. `@shuttle_mlir//:ShuttlePasses`, `shuttle-opt`, lit, and
+  all four XLA tests did not run.
+- Interpretation: the generated Builder incomplete-type blocker is closed. The
+  ordered run now exposes a handwritten container-API mismatch with the pinned
+  MLIR revision.
+- Next action: review all handwritten ArrayAttr element access against the exact
+  pin before any new native run. This checkpoint does not authorize a relaunch.
+- Artifact:
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-builders/README.md`
