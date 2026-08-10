@@ -16,7 +16,7 @@ author: rav
 
 ## Current TL;DR
 
-The first implementation reproduces the deterministic 256-row-padded schedule. The strict XLA device kernel raised steady MFU from about 2.8% to 17.3% on one four-GPU GB200 worker. The next treatment divides each peer transfer into 32 updates to use the device kernel's full CTA limit.
+The first implementation reproduces the deterministic 256-row-padded schedule. The strict XLA device kernel and 32 updates per peer raise steady MFU from about 2.8% to 19.6% on one four-GPU GB200 worker. The profile shows that transfer tuning alone cannot reach 25%, so the next increment must fuse or overlap transfer and expert compute.
 
 Both measured arms use hash-pinned JAX `0.11.1.dev20260809` wheels. Its XLA pin includes the device kernel that is not in JAX 0.11.0. A full fused kernel can use XLA collective FFI, but jaxlib does not publish its collective context headers.
 
@@ -84,12 +84,11 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 
 ### Active
 
-- `MOK-JAX-001`: A pure JAX schedule can match the reference schedule for balanced, skewed, and padded routes.
-- `MOK-JAX-002B`: Thirty-two updates per peer raise the device kernel from 16 to its 64-CTA limit and reach at least 25% MFU.
+- `MOK-JAX-003`: A fused forward kernel can remove enough transfer, compute, and launch boundaries to reach at least 25% MFU.
 
 ### Blocked
 
-- `MOK-JAX-003`: A fused collective FFI kernel is blocked on a positive profile signal from `MOK-JAX-002`.
+- None.
 
 ### Falsified or Dead End
 
@@ -97,7 +96,9 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 
 ### Promoted
 
+- `MOK-JAX-001`: The JAX schedule matches an independent host reference for peer interleaving, rank offsets, padding, and overflow.
 - `MOK-JAX-002`: XLA's device-initiated ragged all-to-all raised steady MFU from about 2.8% to 17.3%.
+- `MOK-JAX-002B`: Thirty-two updates per peer raised steady MFU from 17.3% to 19.6%.
 
 ## Source Ledger
 
@@ -161,3 +162,13 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: The run succeeded without a retry. Steps 2 through 4 took 20.21 to 20.29 seconds and reached 17.22% to 17.29% MFU. Loss decreased from 11.81 to 6.50 over 25 steps. The XProf session is under `s3://marin-us-east-02a/tmp/ttl=30d/xprof/mok-jax-002-device-1n-25-20260810-0636`.
 - Interpretation: The XLA device kernel gives a 6.2x MFU gain over the one-shot result, but one update per peer does not use enough CTAs and remains 7.7 percentage points below the target.
 - Next action: Divide each peer transfer into 32 updates, validate unchanged layout and values, and rerun the same device arm.
+
+### 2026-08-10 07:28 UTC - Multi-update device profile set the fusion boundary
+
+- Hypothesis: Thirty-two updates per peer use the device kernel's full 64-CTA grid and reach 25% MFU.
+- Commit Hash: `bf171bb39`.
+- Commands: Shared Grug behavior tests; one four-GPU GB200 Iris run; 25 completed steps; W&B metric history; five-step XProf capture and normalized XPlane summary.
+- Config: The prior device arm with 32 updates per peer. The model shape, data, batch, runtime, and XLA revision stayed fixed.
+- Result: The run succeeded without a retry. Steps 2 through 4 took 17.82 to 17.84 seconds and reached 19.59% to 19.60% MFU. Loss decreased from 11.81 to 6.49. The device ragged all-to-all kernel fell from 4.73 to 2.14 seconds per step. All device collectives total about 2.87 seconds per step. The XProf session and normalized summary are under `s3://marin-us-east-02a/tmp/ttl=30d/xprof/mok-jax-002-device-s32-1n-25-20260810-0710`.
+- Interpretation: The split treatment improves steady MFU by 13.4%, but transfer tuning alone cannot reach the target. Subtracting all measured device-collective duration gives an optimistic arithmetic limit of about 23.4% MFU. A useful next increment must also remove launch gaps or overlap transfer with expert compute.
+- Next action: Prototype the fused forward boundary. Prefer a runtime that owns NCCL symmetric buffers over a private XLA collective-context dependency.
