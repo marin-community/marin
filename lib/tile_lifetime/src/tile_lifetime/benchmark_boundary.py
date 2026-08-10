@@ -311,9 +311,13 @@ def verify_benchmark_repeatability(
             raise ValueError(f"{boundary_name} violates the declared bitwise repeatability policy")
         for pair in report.pairwise_drift:
             for output in pair.outputs:
-                if output.error.maximum_absolute_error != 0.0 or output.error.mean_absolute_error != 0.0:
+                if (
+                    not output.error.finite
+                    or output.error.maximum_absolute_error != 0.0
+                    or output.error.mean_absolute_error != 0.0
+                ):
                     raise ValueError(
-                        f"{boundary_name} bitwise report has nonzero drift for output {output.output_name!r}"
+                        f"{boundary_name} bitwise report has invalid drift for output {output.output_name!r}"
                     )
         return report
     if numerical_acceptance.numerical_policy is not NumericalPolicy.ALLOW_ROUNDING_REORDER:
@@ -441,6 +445,8 @@ def _verify_numerical_error_structure(error: NumericalError, *, boundary_name: s
     metrics = (error.maximum_absolute_error, error.mean_absolute_error)
     if not all(np.isfinite(metric) and metric >= 0.0 for metric in metrics):
         raise ValueError(f"{boundary_name} has invalid numerical error metrics: {metrics}")
+    if error.mean_absolute_error > error.maximum_absolute_error:
+        raise ValueError(f"{boundary_name} has mean absolute error greater than maximum absolute error: {metrics}")
     if error.nonfinite_values < 0 or error.finite != (error.nonfinite_values == 0):
         raise ValueError(
             f"{boundary_name} has inconsistent finite evidence: finite={error.finite}, "
