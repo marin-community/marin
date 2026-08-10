@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import csv
 import importlib
+import json
 import sqlite3
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -174,14 +176,29 @@ def test_runner_merges_device_and_logical_timings_only_for_exact_copy_free_sched
         runner.merge_trace_timing(plan, {"raw_samples": worker_rows}, (copied, *traces[1:]))
 
 
-def test_runner_rejects_missing_ordinary_xla_ptx_and_cubin(tmp_path: Path) -> None:
-    config = _runner_config(tmp_path)
+def test_runner_retains_public_ordinary_xla_ptx_with_typed_absent_cubin(tmp_path: Path) -> None:
+    dump_directory = tmp_path / "compile_dump"
+    dump_directory.mkdir()
+    (dump_directory / "module.ptx").write_text(".version 8.0\n")
+
+    retained = runner.retain_ordinary_xla_cuda_artifacts(
+        dump_directory=dump_directory,
+        retained_directory=tmp_path / "retained",
+    )
+
+    assert Path(retained["ptx_path"]).read_text() == ".version 8.0\n"
+    assert retained["cubin"] == {
+        "availability": "unavailable",
+        "unavailable_reason": "public_xla_dump_omits_cubin",
+    }
+
+
+def test_runner_rejects_missing_public_ordinary_xla_ptx(tmp_path: Path) -> None:
     dump_directory = tmp_path / "compile_dump"
     dump_directory.mkdir()
 
-    with pytest.raises(RuntimeError, match="must dump exactly one ordinary-XLA PTX and cubin"):
+    with pytest.raises(RuntimeError, match="exactly one ordinary-XLA PTX"):
         runner.retain_ordinary_xla_cuda_artifacts(
-            config,
             dump_directory=dump_directory,
             retained_directory=tmp_path / "retained",
         )
@@ -202,6 +219,182 @@ def test_worker_environment_replaces_inherited_cache_configuration(
     assert isolated["JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS"] == "0"
 
 
+def test_compile_timing_includes_process_setup_and_overrides_worker_only_time(tmp_path: Path) -> None:
+    output = tmp_path / "compile.json"
+
+    def run(command, **kwargs):
+        output.write_text(
+            json.dumps(
+                {
+                    "worker_compile_ns": 10,
+                    "persistent_cache_identity": "cache",
+                    "final_hlo": "hlo",
+                }
+            )
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    timestamps = iter((100, 500))
+    record = runner.run_timed_compile_worker_command(
+        ("worker",),
+        environment={},
+        json_output=output,
+        run=run,
+        now=lambda: next(timestamps),
+    )
+
+    assert record["compile_ns"] == 400
+    assert record["worker_compile_ns"] == 10
+
+
+def test_cache_protocol_rejects_any_compile_cold_or_hit_root_identity_mismatch() -> None:
+    identity = "a" * 64
+    matching = tuple({"persistent_cache_identity": identity} for _ in range(3))
+
+    assert runner.validated_cache_protocol_identity(matching, matching, matching, required_processes=3) == identity
+    mismatched = (*matching[:2], {"persistent_cache_identity": "b" * 64})
+    with pytest.raises(ValueError, match="all compile, cold, and hit roots"):
+        runner.validated_cache_protocol_identity(mismatched, matching, matching, required_processes=3)
+
+
+def test_executable_hlo_rejects_mismatch_between_timing_cache_and_profile_workers() -> None:
+    records = tuple({"final_hlo": "same"} for _ in range(3))
+    protocol = {"compile": records, "cold": records, "hit": records}
+
+    assert (
+        runner.validated_executable_hlo(
+            "ordinary_xla",
+            case_worker_hlo="same",
+            cache_protocol=protocol,
+            profile_worker_hlo="same",
+        )
+        == "same"
+    )
+    with pytest.raises(ValueError, match="differs across"):
+        runner.validated_executable_hlo(
+            "ordinary_xla",
+            case_worker_hlo="borrowed",
+            cache_protocol=protocol,
+            profile_worker_hlo="same",
+        )
+
+
+def test_ordinary_xla_boundary_comes_from_numbered_final_hlo_entry_abi() -> None:
+    evidence = runner.derive_ordinary_xla_executable_evidence(
+        _ordinary_hlo_fixture(),
+        rows=3,
+        reduction=5,
+        features=7,
+        profiled_launches=("ordinary_kernel",),
+    )
+
+    assert evidence.logical_training_step_boundary["input_layouts"] == [
+        "bf16[3,5]{1,0}",
+        "bf16[5,7]{1,0}",
+        "bf16[7,5]{1,0}",
+        "bf16[3,5]{1,0}",
+    ]
+    assert evidence.logical_training_step_boundary["saved_state_names_and_bytes"] == {}
+    assert evidence.logical_training_step_boundary["recompute_operations"] == []
+    assert [value["role"] for value in evidence.manifest["logical_inputs"]] == ["x", "w0", "w1", "do"]
+    assert [value["role"] for value in evidence.manifest["logical_outputs"]] == ["y", "dx", "dw0", "dw1"]
+    assert [fusion["name"] for fusion in evidence.manifest["fusions"]] == ["y.fused"]
+    assert evidence.manifest["entry_copies"] == []
+    assert evidence.manifest["entry_transposes"] == []
+    assert evidence.manifest["entry_bitcasts"] == []
+
+
+def test_ordinary_xla_boundary_rejects_generated_or_mutated_layout_claim() -> None:
+    mutated = _ordinary_hlo_fixture().replace("%x = bf16[3,5]{1,0}", "%x = bf16[3,5]{0,1}")
+
+    with pytest.raises(ValueError, match="parameter layouts changed"):
+        runner.derive_ordinary_xla_executable_evidence(
+            mutated,
+            rows=3,
+            reduction=5,
+            features=7,
+            profiled_launches=("ordinary_kernel",),
+        )
+
+
+def test_ordinary_xla_boundary_ignores_dead_wrappers_and_rejects_reachable_unproven_adapters() -> None:
+    dead_wrapper = _ordinary_hlo_fixture().replace(
+        "  %y.fused =",
+        "  %dead = bf16[3,5]{1,0} copy(%x)\n  %y.fused =",
+    )
+
+    evidence = runner.derive_ordinary_xla_executable_evidence(
+        dead_wrapper,
+        rows=3,
+        reduction=5,
+        features=7,
+        profiled_launches=("ordinary_kernel",),
+    )
+    assert evidence.manifest["entry_copies"] == []
+
+    reachable_wrapper = _ordinary_hlo_fixture().replace(
+        "%y.fused = bf16[3,5]{1,0} fusion(%x), kind=kLoop, calls=%identity",
+        "%y.fused = bf16[3,5]{1,0} copy(%x)",
+    )
+    with pytest.raises(ValueError, match="require materialization evidence"):
+        runner.derive_ordinary_xla_executable_evidence(
+            reachable_wrapper,
+            rows=3,
+            reduction=5,
+            features=7,
+            profiled_launches=("ordinary_kernel",),
+        )
+
+
+def test_generated_kernel_identity_is_exact_and_sass_binds_loaded_shared_object(tmp_path: Path) -> None:
+    names = ("generated_first", "generated_second")
+    loaded_sass = tmp_path / "loaded.sass"
+    loaded_sass.write_text("Function : generated_first\nFunction : generated_second\n")
+    cubin_sass = tmp_path / "cubin.sass"
+    cubin_sass.write_text("Function : unrelated_cubin_body\n")
+    artifact = runner.GeneratedArtifact(
+        case_id="case",
+        backend="shuttle_fast",
+        physical_digest="a" * 64,
+        source_path="source.cu",
+        source_sha256="1" * 64,
+        shared_library_path="loaded.so",
+        shared_library_sha256="2" * 64,
+        ptx_path="generated.ptx",
+        ptx_sha256="3" * 64,
+        cubin_path="separate.cubin",
+        cubin_sha256="4" * 64,
+        cubin_sass_path=str(cubin_sass),
+        cubin_sass_sha256="5" * 64,
+        loaded_image_sass_path=str(loaded_sass),
+        loaded_image_sass_sha256="6" * 64,
+        compiler_flags=("nvcc",),
+        ptxas_resources=tuple(
+            {
+                "kernel_name": name,
+                "registers_per_thread": 32,
+                "spill_load_bytes": 0,
+                "spill_store_bytes": 0,
+                "stack_frame_bytes": 0,
+                "static_shared_bytes": 0,
+            }
+            for name in names
+        ),
+    )
+    candidate = SimpleNamespace(generated=SimpleNamespace(kernel_names=names))
+    metrics = tuple(_ncu_metric(name) for name in names)
+
+    records = runner.generated_kernel_records(candidate, artifact, metrics)
+
+    assert [record["name"] for record in records] == list(names)
+    assert all(record["sass_path"] == str(loaded_sass) for record in records)
+    assert all(record["sass_sha256"] == "6" * 64 for record in records)
+    assert all(record["cubin"]["path"] == "separate.cubin" for record in records)
+    lookalike = (_ncu_metric("generated_first_suffix"), metrics[1])
+    with pytest.raises(ValueError, match="exactly once"):
+        runner.generated_kernel_records(candidate, artifact, lookalike)
+
+
 def test_runner_never_publishes_an_invalid_or_conforming_bundle(tmp_path: Path) -> None:
     output = tmp_path / "accepted_bundle.json"
     with pytest.raises(ValueError, match="architecture-nonconforming"):
@@ -213,6 +406,38 @@ def test_runner_never_publishes_an_invalid_or_conforming_bundle(tmp_path: Path) 
             {"architecture_status": ArchitectureStatus.NONCONFORMING.value, "records": ()},
         )
     assert not output.exists()
+
+
+def _ordinary_hlo_fixture() -> str:
+    return """HloModule fixture
+
+%identity (p: bf16[3,5]) -> bf16[3,5] {
+  %p = bf16[3,5]{1,0} parameter(0)
+  ROOT %out = bf16[3,5]{1,0} bitcast(%p)
+}
+
+ENTRY %main (x: bf16[3,5], w0: bf16[5,7], w1: bf16[7,5], do: bf16[3,5]) -> (bf16[3,5], bf16[3,5], bf16[5,7], bf16[7,5]) {
+  %do = bf16[3,5]{1,0} parameter(3)
+  %w1 = bf16[7,5]{1,0} parameter(2)
+  %x = bf16[3,5]{1,0} parameter(0)
+  %w0 = bf16[5,7]{1,0} parameter(1)
+  %y.fused = bf16[3,5]{1,0} fusion(%x), kind=kLoop, calls=%identity
+  ROOT %result = (bf16[3,5]{1,0}, bf16[3,5]{1,0}, bf16[5,7]{1,0}, bf16[7,5]{1,0}) tuple(%y.fused, %do, %w0, %w1)
+}
+"""
+
+
+def _ncu_metric(name: str) -> Any:
+    return runner.NcuKernelMetrics(
+        name=name,
+        block_size=(256, 1, 1),
+        registers_per_thread=32,
+        static_shared_memory_bytes=0,
+        dynamic_shared_memory_bytes=0,
+        active_blocks_per_sm=2,
+        limiting_occupancy_resource="registers",
+        achieved_occupancy=0.5,
+    )
 
 
 def _runner_config(tmp_path: Path) -> Any:

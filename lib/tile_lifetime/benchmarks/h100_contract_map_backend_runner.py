@@ -20,6 +20,7 @@ import itertools
 import json
 import math
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -122,6 +123,18 @@ class NcuKernelMetrics:
 
 
 @dataclass(frozen=True)
+class NcuProfileEvidence:
+    """Metrics and retained profiler source/SASS export for one execution."""
+
+    metrics: tuple[NcuKernelMetrics, ...]
+    report_path: str
+    report_sha256: str
+    sass_source_path: str
+    sass_source_sha256: str
+    final_hlo: str
+
+
+@dataclass(frozen=True)
 class TraceRange:
     """CUDA activity contained by one exact steady-state NVTX range."""
 
@@ -150,10 +163,21 @@ class GeneratedArtifact:
     ptx_sha256: str
     cubin_path: str
     cubin_sha256: str
-    sass_path: str
-    sass_sha256: str
+    cubin_sass_path: str
+    cubin_sass_sha256: str
+    loaded_image_sass_path: str
+    loaded_image_sass_sha256: str
     compiler_flags: tuple[str, ...]
     ptxas_resources: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class OrdinaryXlaExecutableEvidence:
+    """Final-HLO-derived ordinary-XLA ABI and structural manifest."""
+
+    kernel_only_boundary: dict[str, Any]
+    logical_training_step_boundary: dict[str, Any]
+    manifest: dict[str, Any]
 
 
 def file_sha256(path: Path) -> str:
@@ -163,6 +187,32 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def normalize_cuda_kernel_name(name: str) -> str:
+    """Return one exact comparison identity for profiler kernel names."""
+    normalized = " ".join(name.strip().split())
+    if normalized.startswith("void "):
+        normalized = normalized.removeprefix("void ")
+    simple = re.fullmatch(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?:\(.*\))?", normalized)
+    if simple is not None:
+        return simple.group("name")
+    if not normalized:
+        raise ValueError("CUDA kernel identity must be nonempty")
+    return normalized
+
+
+def cuda_sass_kernel_names(sass: str) -> tuple[str, ...]:
+    """Return exact normalized entry names from a cuobjdump SASS artifact."""
+    names = tuple(
+        normalize_cuda_kernel_name(match.group("name"))
+        for match in re.finditer(r"^\s*Function\s*:\s*(?P<name>\S+)\s*$", sass, flags=re.MULTILINE)
+    )
+    if not names:
+        raise ValueError("cuobjdump SASS contains no function identities")
+    if len(set(names)) != len(names):
+        raise ValueError("cuobjdump SASS repeats a function identity")
+    return names
 
 
 def require_clean_h100_preflight(
@@ -265,7 +315,7 @@ def parse_ncu_metrics(path: Path) -> tuple[NcuKernelMetrics, ...]:
     grouped: dict[tuple[str, str], dict[str, str]] = {}
     order: list[tuple[str, str]] = []
     for row in rows:
-        name = _csv_field(row, "Kernel Name")
+        name = normalize_cuda_kernel_name(_csv_field(row, "Kernel Name"))
         identifier = _csv_field(row, "ID")
         key = (identifier, name)
         if key not in grouped:
@@ -391,7 +441,9 @@ def _nsys_kernels(database: sqlite3.Connection) -> tuple[tuple[int, int, str], .
         f"FROM CUPTI_ACTIVITY_KIND_KERNEL AS kernel JOIN StringIds AS strings "
         f"ON kernel.{name_column} = strings.id ORDER BY kernel.start"
     )
-    return tuple((int(start), int(end), str(name)) for start, end, name in database.execute(query))
+    return tuple(
+        (int(start), int(end), normalize_cuda_kernel_name(str(name))) for start, end, name in database.execute(query)
+    )
 
 
 def _nsys_copies(database: sqlite3.Connection) -> tuple[tuple[int, int, int, str], ...]:
@@ -453,14 +505,20 @@ def compile_generated_candidates(config: RunnerConfig) -> tuple[GeneratedArtifac
         shared = _run_retained(shared_command)
         _run_retained(plan.ptx_command)
         _run_retained(plan.cubin_command)
-        sass = _run_retained(plan.sass_command)
-        plan.sass_path.write_text(sass.stdout)
+        cubin_sass = _run_retained(plan.sass_command)
+        plan.sass_path.write_text(cubin_sass.stdout)
+        loaded_image_sass_path = plan.shared_library_path.with_suffix(".loaded.sass")
+        loaded_image_sass = _run_retained((str(config.tools.cuobjdump), "--dump-sass", str(plan.shared_library_path)))
+        if cuda_sass_kernel_names(loaded_image_sass.stdout) != tuple(candidate.generated.kernel_names):
+            raise RuntimeError("loaded shared-library SASS does not contain the exact generated kernel topology")
+        loaded_image_sass_path.write_text(loaded_image_sass.stdout)
         for path in (
             plan.source_path,
             plan.shared_library_path,
             plan.ptx_path,
             plan.cubin_path,
             plan.sass_path,
+            loaded_image_sass_path,
         ):
             if not path.is_file() or path.stat().st_size <= 0:
                 raise RuntimeError(f"CUDA compilation omitted required artifact: {path}")
@@ -482,8 +540,10 @@ def compile_generated_candidates(config: RunnerConfig) -> tuple[GeneratedArtifac
                 ptx_sha256=file_sha256(plan.ptx_path),
                 cubin_path=str(plan.cubin_path),
                 cubin_sha256=file_sha256(plan.cubin_path),
-                sass_path=str(plan.sass_path),
-                sass_sha256=file_sha256(plan.sass_path),
+                cubin_sass_path=str(plan.sass_path),
+                cubin_sass_sha256=file_sha256(plan.sass_path),
+                loaded_image_sass_path=str(loaded_image_sass_path),
+                loaded_image_sass_sha256=file_sha256(loaded_image_sass_path),
                 compiler_flags=shared_command,
                 ptxas_resources=tuple(asdict(resource) for resource in resources),
             )
@@ -613,8 +673,10 @@ def _generated_artifact_from_json(record: Mapping[str, Any]) -> GeneratedArtifac
         ptx_sha256=str(record["ptx_sha256"]),
         cubin_path=str(record["cubin_path"]),
         cubin_sha256=str(record["cubin_sha256"]),
-        sass_path=str(record["sass_path"]),
-        sass_sha256=str(record["sass_sha256"]),
+        cubin_sass_path=str(record["cubin_sass_path"]),
+        cubin_sass_sha256=str(record["cubin_sass_sha256"]),
+        loaded_image_sass_path=str(record["loaded_image_sass_path"]),
+        loaded_image_sass_sha256=str(record["loaded_image_sass_sha256"]),
         compiler_flags=tuple(str(value) for value in record["compiler_flags"]),
         ptxas_resources=tuple(dict(value) for value in record["ptxas_resources"]),
     )
@@ -672,7 +734,7 @@ def _compiled_backend(context: _WorkerCaseContext, backend: str, *, jax: Any) ->
 
 
 def _run_compile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *, jax: Any) -> dict[str, Any]:
-    compiled, compile_ns = _compiled_backend(context, args.backend, jax=jax)
+    compiled, worker_compile_ns = _compiled_backend(context, args.backend, jax=jax)
     started = time.perf_counter_ns()
     output = compiled(*context.inputs)
     jax.block_until_ready(output)
@@ -691,7 +753,7 @@ def _run_compile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *
         "case_id": args.case_id,
         "backend": args.backend,
         "cache_kind": args.cache_kind,
-        "compile_ns": compile_ns,
+        "worker_compile_ns": worker_compile_ns,
         "first_execution_ns": first_execution_ns,
         "persistent_cache_identity": identity.hexdigest(),
         "final_hlo": compiled.as_text(),
@@ -704,7 +766,12 @@ def _run_profile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *
     with _NvtxRange("contract_map.profile", args.nvcc):
         output = compiled(*context.inputs)
         jax.block_until_ready(output)
-    return {"case_id": args.case_id, "backend": args.backend, "profiled": True}
+    return {
+        "case_id": args.case_id,
+        "backend": args.backend,
+        "profiled": True,
+        "final_hlo": compiled.as_text(),
+    }
 
 
 def _run_case_worker(args: argparse.Namespace, context: _WorkerCaseContext, *, jax: Any) -> dict[str, Any]:
@@ -714,11 +781,9 @@ def _run_case_worker(args: argparse.Namespace, context: _WorkerCaseContext, *, j
     )
 
     executables = {}
-    compile_ns = {}
     for backend in BackendVariant:
-        executable, elapsed = _compiled_backend(context, backend.value, jax=jax)
+        executable, _ = _compiled_backend(context, backend.value, jax=jax)
         executables[backend.value] = executable
-        compile_ns[backend.value] = elapsed
 
     numerical = _numerical_evidence(context, executables, jax=jax)
     warmups: dict[str, list[int]] = {backend.value: [] for backend in BackendVariant}
@@ -757,7 +822,6 @@ def _run_case_worker(args: argparse.Namespace, context: _WorkerCaseContext, *, j
     final_hlo = {backend: executable.as_text() for backend, executable in executables.items()}
     return {
         "case_id": args.case_id,
-        "compile_ns": compile_ns,
         "final_hlo": final_hlo,
         "numerical": numerical,
         "warmup_samples_ns": warmups,
@@ -951,6 +1015,165 @@ def _bfloat16_ulp_distance(left: Any, right: Any) -> Any:
     return np.abs(left_ordered - right_ordered)
 
 
+def derive_ordinary_xla_executable_evidence(
+    final_hlo: str,
+    *,
+    rows: int,
+    reduction: int,
+    features: int,
+    profiled_launches: Sequence[str],
+) -> OrdinaryXlaExecutableEvidence:
+    """Derive the ordinary forward-plus-VJP boundary from final optimized HLO."""
+    from tile_lifetime.xla_hlo_recovery import parse_hlo_module_text  # noqa: PLC0415
+
+    module = parse_hlo_module_text(final_hlo)
+    entry = module.computation(module.entry)
+    instructions = {instruction.name: instruction for instruction in entry.instructions}
+    parameter_roles = ("x", "w0", "w1", "do")
+    output_roles = ("y", "dx", "dw0", "dw1")
+    expected_inputs = (
+        f"bf16[{rows},{reduction}]{{1,0}}",
+        f"bf16[{reduction},{features}]{{1,0}}",
+        f"bf16[{features},{reduction}]{{1,0}}",
+        f"bf16[{rows},{reduction}]{{1,0}}",
+    )
+    expected_outputs = (
+        f"bf16[{rows},{reduction}]{{1,0}}",
+        f"bf16[{rows},{reduction}]{{1,0}}",
+        f"bf16[{reduction},{features}]{{1,0}}",
+        f"bf16[{features},{reduction}]{{1,0}}",
+    )
+    parameters: dict[int, Any] = {}
+    for instruction in entry.instructions:
+        if instruction.opcode != "parameter":
+            continue
+        match = re.search(r"parameter\((?P<number>[0-9]+)\)", instruction.attributes)
+        if match is None:
+            raise ValueError(f"ordinary-XLA parameter %{instruction.name} has no number")
+        number = int(match.group("number"))
+        if number in parameters:
+            raise ValueError(f"ordinary-XLA entry repeats parameter({number})")
+        parameters[number] = instruction
+    if tuple(sorted(parameters)) != tuple(range(4)):
+        raise ValueError("ordinary-XLA entry must expose exactly x, w0, w1, and do as parameter(0..3)")
+    actual_inputs = tuple(parameters[index].shape for index in range(4))
+    if actual_inputs != expected_inputs:
+        raise ValueError(f"ordinary-XLA parameter layouts changed: {actual_inputs}")
+
+    root = entry.root
+    if root.opcode != "tuple" or len(root.operands) != 4:
+        raise ValueError("ordinary-XLA root must be the exact y, dx, dw0, dw1 tuple")
+    actual_outputs = tuple(instructions[operand].shape for operand in root.operands)
+    if actual_outputs != expected_outputs:
+        raise ValueError(f"ordinary-XLA root layouts changed: {actual_outputs}")
+    normalized_root_shape = "".join(root.shape.split())
+    expected_root_shape = "(" + ",".join(expected_outputs) + ")"
+    if normalized_root_shape != expected_root_shape:
+        raise ValueError("ordinary-XLA tuple result layouts disagree with root operands")
+
+    reachable = {root.name}
+    pending = list(root.operands)
+    while pending:
+        name = pending.pop()
+        if name in reachable:
+            continue
+        if name not in instructions:
+            raise ValueError(f"ordinary-XLA entry references missing instruction %{name}")
+        reachable.add(name)
+        pending.extend(instructions[name].operands)
+
+    entry_adapters = tuple(
+        instruction
+        for instruction in entry.instructions
+        if instruction.name in reachable and instruction.opcode in {"copy", "transpose", "bitcast"}
+    )
+    if entry_adapters:
+        raise ValueError(
+            "ordinary-XLA entry adapters require materialization evidence before logical-boundary publication: "
+            f"{tuple((instruction.name, instruction.opcode) for instruction in entry_adapters)}"
+        )
+    normalized_launches = tuple(normalize_cuda_kernel_name(name) for name in profiled_launches)
+    if not normalized_launches:
+        raise ValueError("ordinary-XLA executable evidence requires profiler-owned launches")
+
+    input_layouts = list(actual_inputs)
+    output_layouts = list(actual_outputs)
+    boundary = {
+        "input_layouts": input_layouts,
+        "output_layouts": output_layouts,
+        "layout_adapters": [],
+        "materialized_copies": [],
+        "transposes": [],
+        "bitcasts": [],
+        "saved_state_names_and_bytes": {},
+        "recompute_operations": [],
+    }
+    fusions = []
+    custom_calls = []
+    computation_names = {computation.name for computation in module.computations}
+    for instruction in entry.instructions:
+        if instruction.name not in reachable:
+            continue
+        if instruction.opcode == "fusion":
+            calls = re.findall(r"(?:calls|to_apply)=%?([A-Za-z0-9_.-]+)", instruction.attributes)
+            kinds = re.findall(r"(?:^|,\s*)kind=([A-Za-z0-9_.-]+)", instruction.attributes)
+            if len(calls) != 1 or calls[0] not in computation_names or len(kinds) != 1:
+                raise ValueError(f"ordinary-XLA fusion %{instruction.name} has ambiguous call or kind facts")
+            fusions.append(
+                {
+                    "name": instruction.name,
+                    "shape": instruction.shape,
+                    "operands": list(instruction.operands),
+                    "called_computation": calls[0],
+                    "kind": kinds[0],
+                }
+            )
+        elif instruction.opcode == "custom-call":
+            targets = re.findall(r'(?:^|,\s*)custom_call_target="([^"]+)"', instruction.attributes)
+            if len(targets) != 1:
+                raise ValueError(f"ordinary-XLA custom call %{instruction.name} has ambiguous target facts")
+            custom_calls.append(
+                {
+                    "name": instruction.name,
+                    "shape": instruction.shape,
+                    "operands": list(instruction.operands),
+                    "target": targets[0],
+                    "side_effect": "unproven_by_hlo",
+                }
+            )
+    manifest = {
+        "executable": "ordinary_xla",
+        "hlo_sha256": hashlib.sha256(final_hlo.encode()).hexdigest(),
+        "logical_inputs": [
+            {"role": role, "parameter_number": index, "shape_layout": shape}
+            for index, (role, shape) in enumerate(zip(parameter_roles, actual_inputs, strict=True))
+        ],
+        "logical_outputs": [
+            {"role": role, "root_operand": operand, "shape_layout": shape}
+            for role, operand, shape in zip(output_roles, root.operands, actual_outputs, strict=True)
+        ],
+        "entry_copies": [],
+        "entry_transposes": [],
+        "entry_bitcasts": [],
+        "fusions": fusions,
+        "custom_calls": custom_calls,
+        "observed_launch_facts": {
+            "source": "nsys+ncu",
+            "launch_count": len(normalized_launches),
+            "ordered_kernel_names": list(normalized_launches),
+            "hlo_to_launch_mapping": "not_claimed",
+        },
+        "saved_state_status": "no_cross_entry_state",
+        "recompute_status": "not_proven",
+        "boundary_relationship": "same_executable_no_entry_adapters",
+    }
+    return OrdinaryXlaExecutableEvidence(
+        kernel_only_boundary=dict(boundary),
+        logical_training_step_boundary=dict(boundary),
+        manifest=manifest,
+    )
+
+
 def run_coordinator(config: RunnerConfig) -> Path:
     """Execute all reviewed phases and publish the accepted bundle last."""
     if os.environ.get("XLA_FLAGS"):
@@ -1014,22 +1237,29 @@ def run_coordinator(config: RunnerConfig) -> Path:
             )
             for backend in BackendVariant
         }
+        final_hlo_by_backend = {
+            backend.value: validated_executable_hlo(
+                backend.value,
+                case_worker_hlo=case_result["final_hlo"][backend.value],
+                cache_protocol=compile_records[backend.value],
+                profile_worker_hlo=ncu_records[backend.value].final_hlo,
+            )
+            for backend in BackendVariant
+        }
         raw_samples, trace_summary = merge_trace_timing(plan, case_result, trace_records)
         retained = _retain_backend_artifacts(
-            config,
             case,
-            case_result,
             candidates_by_identity,
             artifacts_by_identity,
             ncu_records,
             trace_summary,
+            final_hlo_by_backend,
             case_directory,
             case_directory / "cache" / BackendVariant.ORDINARY_XLA.value / "compile_dump_0",
         )
         case_payloads = []
         for backend in BackendVariant:
             candidate = candidates_by_identity.get((case.case_id, backend.value))
-            logical_source = candidate or candidates_by_identity[(case.case_id, BackendVariant.SHUTTLE_SOURCE_ORDERED)]
             compiled = compile_records[backend.value]
             backend_artifacts = retained[backend.value]
             timing = {
@@ -1043,10 +1273,13 @@ def run_coordinator(config: RunnerConfig) -> Path:
                 "raw_samples": raw_samples,
             }
             for boundary in MeasurementBoundary:
-                logical = expected_contract_map_logical_boundary(
-                    logical_source.generated,
-                    kernel_only=boundary is MeasurementBoundary.KERNEL_ONLY,
-                ).to_evidence()
+                if candidate is None:
+                    logical = backend_artifacts["logical_boundaries"][boundary.value]
+                else:
+                    logical = expected_contract_map_logical_boundary(
+                        candidate.generated,
+                        kernel_only=boundary is MeasurementBoundary.KERNEL_ONLY,
+                    ).to_evidence()
                 payload = {
                     "identity": {
                         "case_id": case.case_id,
@@ -1081,7 +1314,7 @@ def run_coordinator(config: RunnerConfig) -> Path:
     if any(decision.admitted for decision in decisions):
         raise AssertionError("dense Contract/Map execution must not admit FA4 or Grug comparators")
     bundle = {
-        "schema": "shuttle.h100_contract_map_executed_bundle.v1",
+        "schema": "shuttle.h100_contract_map_executed_bundle.v2",
         "architecture_status": ArchitectureStatus.NONCONFORMING.value,
         "source_sha": config.source_sha,
         "preflight": asdict(preflight),
@@ -1188,6 +1421,73 @@ def _run_worker_command(
     return json.loads(json_output.read_text())
 
 
+def run_timed_compile_worker_command(
+    command: tuple[str, ...],
+    *,
+    environment: Mapping[str, str],
+    json_output: Path,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    now: Callable[[], int] = time.perf_counter_ns,
+) -> dict[str, Any]:
+    """Measure process spawn through compile-worker result publication."""
+    started = now()
+    completed = run(command, check=False, capture_output=True, text=True, env=environment)
+    elapsed = now() - started
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"compile worker failed with {completed.returncode}: {command}: {completed.stdout}\n{completed.stderr}"
+        )
+    if not json_output.is_file():
+        raise RuntimeError(f"compile worker succeeded without structured output: {json_output}")
+    result = json.loads(json_output.read_text())
+    if elapsed <= 0:
+        raise RuntimeError("compile worker elapsed time must be positive")
+    result["compile_ns"] = elapsed
+    return result
+
+
+def validated_cache_protocol_identity(
+    compile_records: Sequence[Mapping[str, Any]],
+    cold_records: Sequence[Mapping[str, Any]],
+    hit_records: Sequence[Mapping[str, Any]],
+    *,
+    required_processes: int,
+) -> str:
+    """Require every declared isolated root to converge to one cache identity."""
+    groups = {"compile": compile_records, "cold": cold_records, "hit": hit_records}
+    for name, records in groups.items():
+        if len(records) != required_processes:
+            raise ValueError(f"cache protocol requires {required_processes} {name} roots")
+    identities = {str(record["persistent_cache_identity"]) for records in groups.values() for record in records}
+    if (
+        len(identities) != 1
+        or len(next(iter(identities))) != 64
+        or any(character not in "0123456789abcdef" for character in next(iter(identities)))
+    ):
+        raise ValueError("all compile, cold, and hit roots must converge to one cache content identity")
+    return next(iter(identities))
+
+
+def validated_executable_hlo(
+    backend: str,
+    *,
+    case_worker_hlo: str,
+    cache_protocol: Mapping[str, Any],
+    profile_worker_hlo: str,
+) -> str:
+    """Bind timed, profiled, and cache-worker evidence to one exact executable HLO."""
+    compile_records = tuple(cache_protocol["compile"])
+    if not compile_records:
+        raise ValueError(f"{backend} executable evidence has no compile worker")
+    authoritative = str(compile_records[0]["final_hlo"])
+    observed = [case_worker_hlo, profile_worker_hlo]
+    for group in ("compile", "cold", "hit"):
+        observed.extend(str(record["final_hlo"]) for record in cache_protocol[group])
+    if not authoritative.strip() or any(value != authoritative for value in observed):
+        raise ValueError(f"{backend} final HLO differs across compile, cache, timing, or profile workers")
+    return authoritative
+
+
 def _run_profiled_case(
     config: RunnerConfig,
     case_id: str,
@@ -1270,7 +1570,7 @@ def _run_cache_protocol(
             cache_kind="compile",
         )
         compile_records.append(
-            _run_worker_command(
+            run_timed_compile_worker_command(
                 command,
                 environment=_worker_environment(directory / f"compile_dump_{index}", root),
                 json_output=result,
@@ -1290,7 +1590,7 @@ def _run_cache_protocol(
             json_output=cold_result,
             cache_kind="cold",
         )
-        cold = _run_worker_command(
+        cold = run_timed_compile_worker_command(
             cold_command,
             environment=_worker_environment(directory / f"cold_dump_{index}", root),
             json_output=cold_result,
@@ -1305,7 +1605,7 @@ def _run_cache_protocol(
             json_output=hit_result,
             cache_kind="hit",
         )
-        hit = _run_worker_command(
+        hit = run_timed_compile_worker_command(
             hit_command,
             environment=_worker_environment(directory / f"hit_dump_{index}", root),
             json_output=hit_result,
@@ -1314,14 +1614,17 @@ def _run_cache_protocol(
             raise ValueError(f"persistent cache content identity changed between cold and hit for {case_id}/{backend}")
         cold_records.append(cold)
         hit_records.append(hit)
-    identities = {record["persistent_cache_identity"] for record in (*cold_records, *hit_records)}
-    if len(identities) != 1:
-        raise ValueError("isolated persistent-cache roots must produce one stable content identity")
+    identity = validated_cache_protocol_identity(
+        compile_records,
+        cold_records,
+        hit_records,
+        required_processes=protocol.compile_processes,
+    )
     return {
         "compile": compile_records,
         "cold": cold_records,
         "hit": hit_records,
-        "persistent_cache_identity": next(iter(identities)),
+        "persistent_cache_identity": identity,
     }
 
 
@@ -1331,10 +1634,12 @@ def _run_ncu_profile(
     backend: str,
     generated_manifest: Path,
     directory: Path,
-) -> tuple[NcuKernelMetrics, ...]:
+) -> NcuProfileEvidence:
     directory.mkdir(parents=True)
     result = directory / "profile_worker.json"
     csv_path = directory / "ncu.csv"
+    report_path = directory / "profile.ncu-rep"
+    sass_source_path = directory / "ncu_sass_source.txt"
     worker = _worker_base_command(
         config,
         worker=WorkerMode.PROFILE,
@@ -1355,6 +1660,8 @@ def _run_ncu_profile(
         "--page=raw",
         "--log-file",
         str(csv_path),
+        "--export",
+        str(report_path),
         *worker,
     )
     completed = subprocess.run(
@@ -1364,9 +1671,31 @@ def _run_ncu_profile(
         text=True,
         env=_worker_environment(directory / "xla_dump"),
     )
-    if completed.returncode != 0 or not result.is_file() or not csv_path.is_file():
+    if completed.returncode != 0 or not result.is_file() or not csv_path.is_file() or not report_path.is_file():
         raise RuntimeError(f"Nsight Compute worker failed: {command}: {completed.stdout}\n{completed.stderr}")
-    return parse_ncu_metrics(csv_path)
+    source_export = (
+        str(config.tools.ncu),
+        "--import",
+        str(report_path),
+        "--page",
+        "source",
+        "--print-source",
+        "sass",
+        "--log-file",
+        str(sass_source_path),
+    )
+    _run_retained(source_export)
+    if not sass_source_path.is_file() or not sass_source_path.read_text().strip():
+        raise RuntimeError("Nsight Compute produced no public SASS/source export")
+    worker_result = json.loads(result.read_text())
+    return NcuProfileEvidence(
+        metrics=parse_ncu_metrics(csv_path),
+        report_path=str(report_path),
+        report_sha256=file_sha256(report_path),
+        sass_source_path=str(sass_source_path),
+        sass_source_sha256=file_sha256(sass_source_path),
+        final_hlo=str(worker_result["final_hlo"]),
+    )
 
 
 def merge_trace_timing(plan: Any, case_result: Mapping[str, Any], traces: tuple[TraceRange, ...]) -> tuple[Any, Any]:
@@ -1449,20 +1778,16 @@ def merge_trace_timing(plan: Any, case_result: Mapping[str, Any], traces: tuple[
 
 
 def _retain_backend_artifacts(
-    config: RunnerConfig,
     case: Any,
-    case_result: Mapping[str, Any],
     candidates: Mapping[tuple[str, str], Any],
     generated_artifacts: Mapping[tuple[str, str], GeneratedArtifact],
-    ncu_records: Mapping[str, tuple[NcuKernelMetrics, ...]],
+    ncu_records: Mapping[str, NcuProfileEvidence],
     trace_summary: Mapping[str, Mapping[str, Any]],
+    final_hlo_by_backend: Mapping[str, str],
     directory: Path,
     ordinary_dump_directory: Path,
 ) -> dict[str, Any]:
-    from tile_lifetime.command_buffer_capture import (  # noqa: PLC0415
-        CaptureSiteManifest,
-        derive_capture_site_manifest,
-    )
+    from tile_lifetime.command_buffer_capture import derive_capture_site_manifest  # noqa: PLC0415
     from tile_lifetime.h100_contract_map_benchmark import BackendVariant  # noqa: PLC0415
 
     retained: dict[str, Any] = {}
@@ -1471,15 +1796,22 @@ def _retain_backend_artifacts(
     hlo_directory.mkdir()
     manifest_directory.mkdir()
     ordinary_cuda = retain_ordinary_xla_cuda_artifacts(
-        config,
         dump_directory=ordinary_dump_directory,
         retained_directory=directory / "ordinary_xla_cuda",
     )
+    ordinary_evidence = derive_ordinary_xla_executable_evidence(
+        final_hlo_by_backend[BackendVariant.ORDINARY_XLA.value],
+        rows=case.rows,
+        reduction=case.reduction,
+        features=case.features,
+        profiled_launches=trace_summary[BackendVariant.ORDINARY_XLA.value]["ordered_kernel_names"],
+    )
     for backend in BackendVariant:
         hlo_path = hlo_directory / f"{backend.value}.txt"
-        hlo_path.write_text(case_result["final_hlo"][backend.value])
+        hlo_path.write_text(final_hlo_by_backend[backend.value])
         if backend is BackendVariant.ORDINARY_XLA:
-            capture_manifest = CaptureSiteManifest.uninstrumented(backend.value).to_json()
+            capture_manifest = ordinary_evidence.manifest
+            profile = ncu_records[backend.value]
             artifact = ordinary_cuda
             compiler_flags = [
                 "jax.jit(...).lower(...).compile()",
@@ -1487,13 +1819,13 @@ def _retain_backend_artifacts(
                 "--xla_dump_hlo_as_proto=true",
                 "--xla_gpu_dump_llvmir=true",
             ]
-            kernel_records = _ordinary_kernel_records(ncu_records[backend.value], artifact)
+            kernel_records = ordinary_kernel_records(profile, artifact)
         else:
             candidate = candidates[(case.case_id, backend.value)]
             generated = generated_artifacts[(case.case_id, backend.value)]
             capture_manifest = derive_capture_site_manifest(
                 backend.value,
-                case_result["final_hlo"][backend.value],
+                final_hlo_by_backend[backend.value],
                 {
                     candidate.generated.forward_target: candidate.generated.forward_call_count_symbol,
                     candidate.generated.reverse_target: candidate.generated.reverse_call_count_symbol,
@@ -1512,19 +1844,25 @@ def _retain_backend_artifacts(
                 "ptx_sha256": generated.ptx_sha256,
                 "cubin_path": generated.cubin_path,
                 "cubin_sha256": generated.cubin_sha256,
-                "sass_path": generated.sass_path,
-                "sass_sha256": generated.sass_sha256,
+                "cubin_sass_path": generated.cubin_sass_path,
+                "cubin_sass_sha256": generated.cubin_sass_sha256,
+                "loaded_image_sass_path": generated.loaded_image_sass_path,
+                "loaded_image_sass_sha256": generated.loaded_image_sass_sha256,
             }
             compiler_flags = list(generated.compiler_flags)
-            kernel_records = _generated_kernel_records(candidate, generated, ncu_records[backend.value])
+            kernel_records = generated_kernel_records(candidate, generated, ncu_records[backend.value].metrics)
         traced_names = tuple(trace_summary[backend.value]["ordered_kernel_names"])
         recorded_names = tuple(record["name"] for record in kernel_records)
-        if len(traced_names) != len(recorded_names) or any(
-            recorded not in traced and traced not in recorded
-            for traced, recorded in zip(traced_names, recorded_names, strict=True)
-        ):
+        if traced_names != recorded_names:
             raise ValueError(f"Nsight Systems/Nsight Compute launch topology disagrees for {backend.value}")
         capture_manifest["cuda_artifacts"] = artifact
+        profile = ncu_records[backend.value]
+        capture_manifest["profiler_artifacts"] = {
+            "ncu_report_path": profile.report_path,
+            "ncu_report_sha256": profile.report_sha256,
+            "sass_source_path": profile.sass_source_path,
+            "sass_source_sha256": profile.sass_source_sha256,
+        }
         manifest_path = manifest_directory / f"{backend.value}.json"
         manifest_path.write_text(json.dumps(capture_manifest, indent=2, sort_keys=True) + "\n")
         retained[backend.value] = {
@@ -1541,47 +1879,63 @@ def _retain_backend_artifacts(
             },
             "compiler_flags": compiler_flags,
         }
+        if backend is BackendVariant.ORDINARY_XLA:
+            retained[backend.value]["logical_boundaries"] = {
+                "kernel_only": ordinary_evidence.kernel_only_boundary,
+                "logical_training_step": ordinary_evidence.logical_training_step_boundary,
+            }
     return retained
 
 
 def retain_ordinary_xla_cuda_artifacts(
-    config: RunnerConfig,
     *,
     dump_directory: Path,
     retained_directory: Path,
-) -> dict[str, str]:
+) -> dict[str, Any]:
+    from tile_lifetime.h100_contract_map_benchmark import (  # noqa: PLC0415
+        CubinAvailability,
+        CubinUnavailableReason,
+    )
+
     ptx_files = tuple(path for path in dump_directory.rglob("*.ptx") if path.is_file() and path.stat().st_size)
     cubin_files = tuple(path for path in dump_directory.rglob("*.cubin") if path.is_file() and path.stat().st_size)
-    if len(ptx_files) != 1 or len(cubin_files) != 1:
+    if len(ptx_files) != 1 or len(cubin_files) > 1:
         raise RuntimeError(
-            "pinned jaxlib must dump exactly one ordinary-XLA PTX and cubin for the case; "
+            "pinned jaxlib must dump exactly one ordinary-XLA PTX and at most one public cubin; "
             f"found PTX={ptx_files}, cubin={cubin_files}"
         )
     retained_directory.mkdir()
     ptx_path = retained_directory / "ordinary_xla.ptx"
-    cubin_path = retained_directory / "ordinary_xla.cubin"
     shutil.copy2(ptx_files[0], ptx_path)
-    shutil.copy2(cubin_files[0], cubin_path)
-    sass_path = retained_directory / "ordinary_xla.sass"
-    completed = _run_retained((str(config.tools.cuobjdump), "--dump-sass", str(cubin_path)))
-    sass_path.write_text(completed.stdout)
-    if not sass_path.read_text().strip():
-        raise RuntimeError("cuobjdump produced no ordinary-XLA SASS")
+    if cubin_files:
+        cubin_path = retained_directory / "ordinary_xla.cubin"
+        shutil.copy2(cubin_files[0], cubin_path)
+        cubin = {
+            "availability": CubinAvailability.AVAILABLE.value,
+            "path": str(cubin_path),
+            "sha256": file_sha256(cubin_path),
+        }
+    else:
+        cubin = {
+            "availability": CubinAvailability.UNAVAILABLE.value,
+            "unavailable_reason": CubinUnavailableReason.PUBLIC_XLA_DUMP_OMITS_CUBIN.value,
+        }
     return {
         "ptx_path": str(ptx_path),
         "ptx_sha256": file_sha256(ptx_path),
-        "cubin_path": str(cubin_path),
-        "cubin_sha256": file_sha256(cubin_path),
-        "sass_path": str(sass_path),
-        "sass_sha256": file_sha256(sass_path),
+        "cubin": cubin,
     }
 
 
-def _generated_kernel_records(
+def generated_kernel_records(
     candidate: Any,
     artifact: GeneratedArtifact,
     metrics: tuple[NcuKernelMetrics, ...],
 ) -> list[dict[str, Any]]:
+    if cuda_sass_kernel_names(Path(artifact.loaded_image_sass_path).read_text()) != tuple(
+        candidate.generated.kernel_names
+    ):
+        raise ValueError("loaded shared-library SASS kernel identities changed after compilation")
     metric_by_name = _align_generated_metrics(candidate.generated.kernel_names, metrics)
     resources = {record["kernel_name"]: record for record in artifact.ptxas_resources}
     if set(resources) != set(candidate.generated.kernel_names):
@@ -1599,8 +1953,13 @@ def _generated_kernel_records(
                 name,
                 artifact.ptx_path,
                 artifact.ptx_sha256,
-                artifact.sass_path,
-                artifact.sass_sha256,
+                {
+                    "availability": "available",
+                    "path": artifact.cubin_path,
+                    "sha256": artifact.cubin_sha256,
+                },
+                artifact.loaded_image_sass_path,
+                artifact.loaded_image_sass_sha256,
                 metric,
                 spill_load_bytes=resource["spill_load_bytes"],
                 spill_store_bytes=resource["spill_store_bytes"],
@@ -1612,9 +1971,13 @@ def _generated_kernel_records(
 def _align_generated_metrics(
     expected_names: tuple[str, ...], metrics: tuple[NcuKernelMetrics, ...]
 ) -> dict[str, NcuKernelMetrics]:
+    normalized_metrics: dict[str, list[NcuKernelMetrics]] = {}
+    for metric in metrics:
+        normalized_metrics.setdefault(normalize_cuda_kernel_name(metric.name), []).append(metric)
     aligned = {}
     for expected in expected_names:
-        matches = tuple(metric for metric in metrics if expected in metric.name)
+        normalized_expected = normalize_cuda_kernel_name(expected)
+        matches = tuple(normalized_metrics.get(normalized_expected, ()))
         if len(matches) != 1:
             raise ValueError(f"Nsight Compute must report generated kernel {expected!r} exactly once")
         aligned[expected] = matches[0]
@@ -1623,22 +1986,26 @@ def _align_generated_metrics(
     return aligned
 
 
-def _ordinary_kernel_records(metrics: tuple[NcuKernelMetrics, ...], artifact: Mapping[str, str]) -> list[dict[str, Any]]:
-    sass = Path(artifact["sass_path"]).read_text()
+def ordinary_kernel_records(
+    profile: NcuProfileEvidence,
+    artifact: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    sass = Path(profile.sass_source_path).read_text()
     if any(opcode in sass for opcode in (" LDL", " STL")):
-        raise RuntimeError("ordinary-XLA SASS contains local-memory spill operations without ptxas byte evidence")
+        raise RuntimeError("ordinary-XLA profiler SASS contains local-memory spills without byte evidence")
     return [
         _kernel_record(
-            metric.name,
+            normalize_cuda_kernel_name(metric.name),
             artifact["ptx_path"],
             artifact["ptx_sha256"],
-            artifact["sass_path"],
-            artifact["sass_sha256"],
+            artifact["cubin"],
+            profile.sass_source_path,
+            profile.sass_source_sha256,
             metric,
             spill_load_bytes=0,
             spill_store_bytes=0,
         )
-        for metric in metrics
+        for metric in profile.metrics
     ]
 
 
@@ -1646,6 +2013,7 @@ def _kernel_record(
     name: str,
     ptx_path: str,
     ptx_sha256: str,
+    cubin: Mapping[str, Any],
     sass_path: str,
     sass_sha256: str,
     metric: NcuKernelMetrics,
@@ -1657,6 +2025,7 @@ def _kernel_record(
         "name": name,
         "ptx_path": ptx_path,
         "ptx_sha256": ptx_sha256,
+        "cubin": dict(cubin),
         "sass_path": sass_path,
         "sass_sha256": sass_sha256,
         "registers_per_thread": metric.registers_per_thread,
