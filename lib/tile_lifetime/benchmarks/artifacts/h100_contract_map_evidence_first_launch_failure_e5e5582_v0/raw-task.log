@@ -1,0 +1,15 @@
+[22:53:42] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 | h100_contract_map_source_payload.py: OK
+[22:53:42] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 | h100-evidence-source-manifest.json: OK
+[22:53:43] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 | Traceback (most recent call last):
+[22:53:43] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2507, in <module>
+[22:53:43] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 |     main()
+[22:53:43] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2489, in main
+[22:53:43] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 |     output = run_coordinator(
+[22:53:43] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 |              ^^^^^^^^^^^^^^^^
+[22:53:43] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1531, in run_coordinator
+[22:53:43] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 |     from tile_lifetime.contract_map_backend_resources import (  # noqa: PLC0415
+[22:53:43] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 |   File "/app/source/lib/tile_lifetime/src/tile_lifetime/__init__.py", line 6, in <module>
+[22:53:43] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 |     from tile_lifetime.attention import (
+[22:53:43] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 |   File "/app/source/lib/tile_lifetime/src/tile_lifetime/attention.py", line 8, in <module>
+[22:53:43] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 |     import numpy as np
+[22:53:43] task=/dlwh/shuttle-h100-contract-map-evidence-e5e5582/0 | ModuleNotFoundError: No module named 'numpy'
