@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+import tile_lifetime.cuda_contract_map_backend_codegen as contract_map_codegen
 from lib.tile_lifetime.benchmarks.h100_contract_map_backend_training import (
     generated_contract_map_candidates,
     natural_jax_training_step,
@@ -384,6 +385,10 @@ def test_contract_map_physical_digest_separates_codegen_variants_and_artifact_st
     assert len({variant.reverse_target for variant in variants}) == len(variants)
     assert len({variant.forward_handler_symbol for variant in variants}) == len(variants)
     assert len({variant.reverse_handler_symbol for variant in variants}) == len(variants)
+    assert len({variant.forward_implementation_symbol for variant in variants}) == len(variants)
+    assert len({variant.reverse_implementation_symbol for variant in variants}) == len(variants)
+    assert len({variant.forward_binding_symbol for variant in variants}) == len(variants)
+    assert len({variant.reverse_binding_symbol for variant in variants}) == len(variants)
     assert len({variant.forward_call_count_symbol for variant in variants}) == len(variants)
     assert len({variant.reverse_call_count_symbol for variant in variants}) == len(variants)
     assert len({variant.backend_fingerprint_symbol for variant in variants}) == len(variants)
@@ -394,9 +399,15 @@ def test_contract_map_physical_digest_separates_codegen_variants_and_artifact_st
         assert suffix in variant.reverse_target
         assert suffix in variant.forward_handler_symbol
         assert suffix in variant.reverse_handler_symbol
+        assert suffix in variant.forward_implementation_symbol
+        assert suffix in variant.reverse_implementation_symbol
+        assert suffix in variant.forward_binding_symbol
+        assert suffix in variant.reverse_binding_symbol
         assert suffix in variant.forward_call_count_symbol
         assert suffix in variant.reverse_call_count_symbol
         assert suffix in variant.backend_fingerprint_symbol
+        assert all(suffix in kernel_name for kernel_name in variant.kernel_names)
+        assert "SHUTTLE_CONTRACT_MAP_PHYSICAL_IDENTITY" not in variant.source
         assert f'return "{variant.physical_digest}";' in variant.source
         compile_plan = contract_map_compile_plan(
             variant,
@@ -409,6 +420,78 @@ def test_contract_map_physical_digest_separates_codegen_variants_and_artifact_st
         assert suffix in compile_plan.ptx_path.stem
         assert suffix in compile_plan.cubin_path.stem
         assert suffix in compile_plan.sass_path.stem
+
+
+def test_contract_map_emitted_kernel_body_changes_every_physical_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    program = build_contract_map_backend_program(
+        rows=43,
+        reduction=104,
+        features=72,
+        scalar_expression=tanh_product_expression(),
+        numerical_policy=ContractMapNumericalPolicy.FAST,
+    )
+    baseline = generate_cuda_contract_map_backend_ffi(program)
+    original_renderer = contract_map_codegen._first_forward_kernel
+
+    def render_changed_kernel(policy: ContractMapNumericalPolicy, *, name: str) -> str:
+        source = original_renderer(policy, name=name)
+        old = "float accumulator = 0.0f;"
+        assert old in source
+        return source.replace(old, "float accumulator = __fadd_rn(0.0f, 0.0f);", 1)
+
+    monkeypatch.setattr(contract_map_codegen, "_first_forward_kernel", render_changed_kernel)
+    changed = generate_cuda_contract_map_backend_ffi(program)
+    repeated_changed = generate_cuda_contract_map_backend_ffi(program)
+
+    assert repeated_changed == changed
+    assert changed.physical_digest != baseline.physical_digest
+    assert changed.source_sha256 != baseline.source_sha256
+    assert changed.forward_target != baseline.forward_target
+    assert changed.reverse_target != baseline.reverse_target
+    assert changed.physical_digest in changed.forward_target
+    assert changed.physical_digest in changed.reverse_target
+    host_symbols = (
+        "forward_handler_symbol",
+        "reverse_handler_symbol",
+        "forward_implementation_symbol",
+        "reverse_implementation_symbol",
+        "forward_binding_symbol",
+        "reverse_binding_symbol",
+        "forward_call_count_symbol",
+        "reverse_call_count_symbol",
+        "backend_fingerprint_symbol",
+    )
+    for field in host_symbols:
+        assert getattr(changed, field) != getattr(baseline, field)
+        assert changed.physical_digest in getattr(changed, field)
+        assert getattr(changed, field) in changed.source
+    assert len(baseline.kernel_names) == len(changed.kernel_names) == 6
+    for old_name, new_name in zip(baseline.kernel_names, changed.kernel_names, strict=True):
+        assert old_name != new_name
+        assert changed.physical_digest in new_name
+        assert new_name in changed.source
+    assert f'return "{changed.physical_digest}";' in changed.source
+
+    baseline_plan = contract_map_compile_plan(
+        baseline,
+        artifact_directory=tmp_path,
+        nvcc=tmp_path / "nvcc",
+        include_directory=tmp_path / "include",
+    )
+    changed_plan = contract_map_compile_plan(
+        changed,
+        artifact_directory=tmp_path,
+        nvcc=tmp_path / "nvcc",
+        include_directory=tmp_path / "include",
+    )
+    for field in ("source_path", "shared_library_path", "ptx_path", "cubin_path", "sass_path"):
+        baseline_stem = getattr(baseline_plan, field).stem
+        changed_stem = getattr(changed_plan, field).stem
+        assert changed_stem != baseline_stem
+        assert changed.physical_digest in changed_stem
 
 
 def test_contract_map_semantic_fingerprint_ignores_value_and_operation_names() -> None:
