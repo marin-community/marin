@@ -51,6 +51,14 @@ goes stale on the next commit.
 - Purpose: one-rack GB200 EP64 throughput and MFU baseline.
 - Issue: https://github.com/marin-community/marin/issues/7279
 
+### grug-mixture-of-kittens
+- Path: `experiments/grug/mixture_of_kittens/`
+- Origin: `moe_hero_ep` at commit b0183783d
+- Introduced: b0183783d
+- Status: active
+- Purpose: exact destination schedule and matched XLA private and device-kernel ragged all-to-all runs.
+- Issue: https://github.com/marin-community/marin/issues/8108
+
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834

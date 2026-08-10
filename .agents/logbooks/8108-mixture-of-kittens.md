@@ -131,3 +131,13 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: The nightly XLA pin is 457 commits after the device-kernel change. Four hash-pinned wheels can be installed only on this experiment's train tasks. Four focused dependency and flag tests passed.
 - Interpretation: A direct XLA build is not necessary for the first gate. The treatment must use targeted ragged symmetric allocation plus the device-kernel flag. The separate symmetric ragged mode is not the treatment.
 - Next action: Run the full local gate, commit the snapshot, and submit matched private and device runs.
+
+### 2026-08-10 05:51 UTC - Local implementation gate passed
+
+- Hypothesis: The schedule, launcher, train-task dependency pin, and XLA arm selection are valid before accelerator use.
+- Commit Hash: `b0183783d`.
+- Commands: `uv run pytest -n 0 tests/test_mixture_of_kittens.py -q`; `uv run pytest -n 0 tests/test_grug_variant_contracts.py -q`; `./infra/pre-commit.py --all-files --fix`; launcher plan output for a one-node private arm.
+- Config: Ten focused tests, the full Grug variant contract suite, repository lint and type checks, and a one-step dry plan.
+- Result: Ten focused tests passed. The contract suite passed 18 tests and skipped one test. The all-files check passed. The plan records all four nightly wheel URLs and hashes in its fingerprint.
+- Interpretation: The local implementation is ready for one-node GB200 correctness screens. Accelerator behavior remains untested.
+- Next action: Push the snapshot, publish the issue update, and submit the private arm before the device arm.
