@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from shuttle.ir import DType
-from shuttle.stablehlo_import import (
+from shuttle.experimental.stablehlo_import import (
     CompositeAttributes,
     GatherAttributes,
     import_stablehlo,
 )
+from shuttle.ir import DType
 from tile_lifetime import (
     ExpertParallelConfig,
     ExpertParallelStageKind,

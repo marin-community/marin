@@ -6,8 +6,7 @@
 import re
 from dataclasses import dataclass
 
-from shuttle.ir import DType
-from shuttle.stablehlo_import import (
+from shuttle.experimental.stablehlo_import import (
     BroadcastAttributes,
     CompareAttributes,
     CompositeAttributes,
@@ -18,6 +17,7 @@ from shuttle.stablehlo_import import (
     StableHLOGraph,
     StableHLOOperation,
 )
+from shuttle.ir import DType
 from tile_lifetime.ir import TensorGraph
 
 INTEGER_ATTRIBUTE = re.compile(r"^(\d+) : i64$")

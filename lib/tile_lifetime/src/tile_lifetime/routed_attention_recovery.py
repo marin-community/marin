@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from shuttle.stablehlo_import import (
+from shuttle.experimental.stablehlo_import import (
     CompareAttributes,
     CompositeAttributes,
     ConstantAttributes,

@@ -5,8 +5,8 @@
 
 from dataclasses import dataclass
 
+from shuttle.experimental.stablehlo_import import StableHLOGraph
 from shuttle.ir import DType
-from shuttle.stablehlo_import import StableHLOGraph
 from tile_lifetime.ir import TensorGraph
 from tile_lifetime.semantic_recovery import (
     SemanticRecoveryError,

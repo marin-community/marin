@@ -30,7 +30,7 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 
-from shuttle.stablehlo_import import import_stablehlo
+from shuttle.experimental.stablehlo_import import import_stablehlo
 from tile_lifetime.benchmark_boundary import (
     BenchmarkRepeatabilityMode,
     BenchmarkRepeatabilityPolicy,

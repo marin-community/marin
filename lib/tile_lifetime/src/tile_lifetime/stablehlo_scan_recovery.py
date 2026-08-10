@@ -7,7 +7,7 @@ import hashlib
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-from shuttle.stablehlo_import import (
+from shuttle.experimental.stablehlo_import import (
     BroadcastAttributes,
     CallAttributes,
     DotAttributes,

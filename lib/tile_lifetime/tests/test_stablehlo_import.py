@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from shuttle.experimental.stablehlo_import import CompareAttributes, DotAttributes, ReductionAttributes, import_stablehlo
 from shuttle.ir import DType
-from shuttle.stablehlo_import import CompareAttributes, DotAttributes, ReductionAttributes, import_stablehlo
 from tile_lifetime.pipeline import (
     FrontendSourceKind,
     compile_experimental_whole_pattern_stablehlo_streaming_attention_program,

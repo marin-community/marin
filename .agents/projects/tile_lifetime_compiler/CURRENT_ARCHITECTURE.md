@@ -2,35 +2,36 @@
 
 ## Accepted frontend boundary
 
-Current Shuttle compilation starts from an ordinary JAX program or a frozen
-StableHLO artifact exported from one. StableHLO import reconstructs structural
-tensor expressions and index relations. Accepted region providers operate on
-`Map`, `Contract`, `Fold`, `Scan`, `Relation`, `DomainRestriction`, and
-`Transport` without reconstructing a workload-named operation. Named frontend
-canonicalizers remain reference or experimental code even when they erase into
-the generic algebra before physical candidate selection.
+Production Shuttle compilation starts from an ordinary JAX program. JAX-owned
+AD produces StableHLO inside the MLIR pipeline, where Shuttle converts selected
+operations into `Map`, `Contract`, `Fold`, `Scan`, `Relation`,
+`DomainRestriction`, and `Transport` without reconstructing a workload-named
+operation. Frozen StableHLO and Python importers remain reproduction or
+experimental boundaries. Named frontend canonicalizers remain reference or
+experimental code even when they erase into generic algebra.
 
-The intended path is:
+The intended production path is:
 
 ```text
 JAX/JAXPR
   -> exported StableHLO
-  -> structural recovery
-  -> semantic-erasure validation
-  -> generic Shuttle IR
-  -> schedule and physical generation
+  -> in-pipeline Shuttle MLIR conversion
+  -> generic Shuttle algebra
+  -> task, lifetime, schedule, and physical lowering
 ```
 
-Target 1 exposes this path through one JAX/XLA module-transform plugin and one
-compiler API. The plugin imports the selected module losslessly, builds generic
-Shuttle algebra, chooses regions and schedules, and registers the generated
-calls with JAX. Per-workload `compile_stablehlo_*` functions are prototype
-fixtures, not the target API.
+Target 1 exposes this path through one MLIR compiler extension and one JAX
+compiler-options API. The extension converts selected StableHLO regions inside
+the compilation pipeline, builds generic Shuttle algebra, and lowers chosen
+schedules. Per-workload `compile_stablehlo_*` functions are prototype fixtures,
+not the target API.
 
-Frozen StableHLO is an accepted test and reproduction boundary. A hand-built
-`TensorGraph`, `StatefulScan`, task list, or callable workload kernel is not an
-accepted frontend input. PyTorch and Triton may appear in standalone benchmark
-or emitter code; neither is part of the default semantic frontend.
+Frozen StableHLO is an accepted test and reproduction boundary. The Python
+parser under `shuttle.experimental` and the `xla_*` text rewriters are not the
+production compiler path. A hand-built `TensorGraph`, `StatefulScan`, task list,
+or callable workload kernel is not an accepted frontend input. PyTorch and
+Triton may appear in standalone benchmark or emitter code; neither is part of
+the default semantic frontend.
 
 ## Current and reference surfaces
 
@@ -38,7 +39,7 @@ or emitter code; neither is part of the default semantic frontend.
 | --- | --- | --- |
 | `pipeline.compile_stablehlo_dense_transformer_region` | Experimental reference | The exact recognizer targets one bounded Llama-shaped region. It cannot satisfy the current generic-dataflow frontend gate. |
 | routed and projected routed attention recovery | Experimental prototype | StableHLO selection becomes generic Relation/RelationPlan and streaming Fold structure, but the bounded selectors are not accepted plugin frontends. |
-| `stablehlo_scan_recovery` | Current structural importer | Structured `stablehlo.while` becomes generic affine `Scan`; named GDN/KDA convenience wrappers remain cleanup work on this checkpoint. |
+| `stablehlo_scan_recovery` | Experimental structural importer | Structured `stablehlo.while` becomes generic affine `Scan`; it remains an executable specification until the MLIR conversion owns the same transform. |
 | StableHLO row-normalization recovery | Experimental prototype | Natural JAX forward/VJP HLO becomes generic Map/Fold/Contract programs before code generation. It remains an acceptance fixture until it runs through the shared module plugin. |
 | `pipeline.compile_experimental_whole_pattern_stablehlo_streaming_attention_program` and `stablehlo_streaming_attention_backward` | Experimental reference | Match attention-shaped graphs and rebuild canonical programs. These paths reproduce diagnostics but do not count as an accepted plugin frontend. |
 | `reference_pipeline` | Reference only | Retains named RMS, MoE, and attention planning, including the opaque official-FA3 comparison path. It is not re-exported from `tile_lifetime`. |
@@ -67,27 +68,29 @@ leave a `tile_lifetime` compatibility re-export facade.
 
 ### Phase 1: algebra and verification
 
-The first package slice now owns the shared `DType` vocabulary and typed
-StableHLO import in `lib/shuttle`. `tile_lifetime` depends on that package while
-the remaining algebra migrates; `shuttle` has no reverse dependency or
-compatibility re-export through `tile_lifetime`.
+The first package slice owns the shared `DType` vocabulary. The supported-subset
+Python StableHLO parser is quarantined under `shuttle.experimental` for old
+executable specifications. `tile_lifetime` depends on `shuttle` while the
+compiler migrates; `shuttle` has no reverse dependency or compatibility
+re-export through `tile_lifetime`.
 
-Move these modules first:
+Phase 1 adds the in-pipeline MLIR spine:
 
-- `tensor_program.py`
-- `tile_program.py`
-- `semantic_erasure.py`
-- the generic `DType` and value metadata currently mixed into `ir.py`
-- `plan.py` schedule contracts that do not name a workload
+- generic Shuttle MLIR operations for Map, Fold, Contract, Scan, Relation,
+  DomainRestriction, and Transport;
+- StableHLO conversion patterns selected by structure and dataflow;
+- source-ordered and fast numerical-policy attributes in compilation identity;
+- policy-gated canonicalization and legality/coverage diagnostics; and
+- JAX compiler-options plumbing into the pass pipeline.
 
-Add one lossless StableHLO importer and one module-level compilation result in
-`shuttle`. The importer must preserve unknown operations and attributes instead
-of requiring a whole-workload recognizer. JAX owns AD by default; Shuttle
-consumes the primal and transpose/VJP modules JAX supplies.
+JAX owns AD. Shuttle consumes the primal and transpose/VJP StableHLO that JAX
+places in the compilation pipeline. Unsupported operations remain StableHLO or
+make a selected region fail closed; no production pass reparses textual HLO or
+reconstructs a named workload.
 
 ### Phase 2: dataflow and scheduling
 
-Move these generic schedule modules after Phase 1:
+Port the generic parts of these schedule modules after Phase 1:
 
 - `relation.py`
 - `relation_transport.py`
@@ -102,9 +105,10 @@ Move these generic schedule modules after Phase 1:
 - `right_resource_event_schedule.py`
 - `streaming_event_schedule.py`
 
-Their imports must point only toward Phase 1 algebra and generic runtime
-contracts. Relation, Transport, and EventTensor stay independent of MoE and
-attention names.
+Their inputs must be the Phase 1 MLIR algebra and generic runtime contracts.
+Relation, Transport, and EventTensor stay independent of MoE and attention
+names. Existing Python objects remain transitional specifications until the
+MLIR path produces and consumes equivalent records.
 
 ### Phase 3: physical generators and JAX attachment
 
@@ -128,15 +132,14 @@ Move reusable generators only after their semantic inputs use the Phase 1 and
 The first `shuttle` public vertical slice should be:
 
 ```text
-register Shuttle with JAX
-  -> receive one StableHLO module
-  -> lossless generic import
-  -> recover Contract + Map + reverse Contract region
-  -> generate and register one physical candidate
-  -> return one structured compilation/audit result
+ordinary JAX primal and JAX-owned VJP
+  -> jax.jit(..., compiler_options=shuttle.compiler_options(...))
+  -> StableHLO-to-Shuttle MLIR conversion for one Contract/Map region
+  -> policy-gated source-ordered and fast lowerings
+  -> structured compilation and coverage record
 ```
 
-The same entrypoint must later accept row normalization, attention, routed
+The same pass pipeline must later accept row normalization, attention, routed
 relations, and scans. Adding a second public workload compiler fails this gate.
 
 ### Leave in `tile_lifetime`
@@ -162,16 +165,16 @@ generic portion has a real `shuttle` caller.
 
 ## Remaining cleanup, ranked
 
-1. Move the generic attention importer into the existing typed StableHLO
-   boundary after its independent cleanup lands. Then add the single
-   module-transform API and one Contract/Map forward-and-reverse vertical slice.
-2. Replace bounded whole-workload recovery with the lossless generic importer;
-   preserve named recognizers only as optional region-candidate analyses.
+1. Add the MLIR dialect/conversion spine and JAX compiler-options integration.
+   Prove one Contract/Map forward-and-reverse vertical slice without a Python
+   import or text-rewrite production path.
+2. Preserve Python importers and bounded whole-workload recovery only under
+   explicit experimental/reference namespaces.
 3. Route public GDN/KDA convenience compilation through the structured
    StableHLO scan importer and quarantine `delta_rule_update_expression` as a
    recovery-unit fixture.
 4. Rename `MSADebugConfig`, `RoutedAttentionDebugConfig`, and the streaming
    backward debug exporter around their actual role as natural JAX examples.
-5. Replace the `xla_*` HLO text/regex bridges with the shared module transform
-   recovery once the semantic normal form stabilizes. Until then, keep them
-   labeled experimental and outside frontend acceptance claims.
+5. Replace the `xla_*` HLO text/regex bridges with the MLIR conversion pipeline.
+   Until then, keep them labeled experimental and outside frontend acceptance
+   claims.

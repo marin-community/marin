@@ -8,8 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from shuttle.ir import DType
-from shuttle.stablehlo_import import (
+from shuttle.experimental.stablehlo_import import (
     CompareAttributes,
     CompositeAttributes,
     ConstantAttributes,
@@ -18,6 +17,7 @@ from shuttle.stablehlo_import import (
     StableHLOGraph,
     StableHLOOperation,
 )
+from shuttle.ir import DType
 from tile_lifetime.plan import SemanticErasureReport, SemanticLoweringStep
 from tile_lifetime.relation import RelationPlan
 from tile_lifetime.routed_attention import (

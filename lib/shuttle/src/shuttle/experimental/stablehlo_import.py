@@ -1,7 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Portable StableHLO bytecode importer."""
+"""Transitional Python importer for a supported StableHLO subset.
+
+The current compiler target is an in-pipeline MLIR conversion. This importer
+remains executable specification and reproduction infrastructure for historical
+``tile_lifetime`` prototypes.
+"""
 
 from dataclasses import dataclass
 

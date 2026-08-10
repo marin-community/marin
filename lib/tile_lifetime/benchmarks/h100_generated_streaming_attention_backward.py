@@ -22,7 +22,7 @@ import triton
 import triton.language as tl
 from h100_generated_streaming_attention import _inputs, _program, emit_streaming_attention, lower_score_map
 
-from shuttle.stablehlo_import import import_stablehlo
+from shuttle.experimental.stablehlo_import import import_stablehlo
 from tile_lifetime import (
     StreamingAttentionBackwardDomainTraversal,
     StreamingTileSchedule,

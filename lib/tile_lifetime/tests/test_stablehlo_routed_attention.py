@@ -7,7 +7,7 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
-from shuttle.stablehlo_import import CompositeAttributes, GatherAttributes, import_stablehlo
+from shuttle.experimental.stablehlo_import import CompositeAttributes, GatherAttributes, import_stablehlo
 from tile_lifetime import (
     RoutedAttentionOrientation,
     RoutedAttentionPlanConfig,

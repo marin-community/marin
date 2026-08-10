@@ -4,11 +4,11 @@
 import jax
 import jax.numpy as jnp
 
+from shuttle.experimental.stablehlo_import import DotAttributes, import_stablehlo
 from shuttle.ir import DType
-from shuttle.stablehlo_import import DotAttributes, import_stablehlo
 
 
-def test_import_stablehlo_detaches_typed_dataflow_from_mlir_context() -> None:
+def test_experimental_import_detaches_typed_dataflow_from_mlir_context() -> None:
     def linear_map(left: jax.Array, right: jax.Array) -> jax.Array:
         return (left @ right) * jnp.asarray(0.5, dtype=jnp.bfloat16)
 

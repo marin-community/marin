@@ -22,7 +22,7 @@ import jax.numpy as jnp
 import torch
 from torch.utils.cpp_extension import load
 
-from shuttle.stablehlo_import import import_stablehlo
+from shuttle.experimental.stablehlo_import import import_stablehlo
 from tile_lifetime import (
     RowNormalizationAxisFoldPrograms,
     compile_stablehlo_row_normalization_backward,

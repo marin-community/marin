@@ -6,7 +6,7 @@ import functools
 import jax.numpy as jnp
 import pytest
 
-from shuttle.stablehlo_import import import_stablehlo
+from shuttle.experimental.stablehlo_import import import_stablehlo
 from tile_lifetime.jax_streaming_attention_forward_ffi import (
     call_streaming_attention_forward_ffi,
     generate_streaming_attention_forward_ffi,

@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from shuttle.stablehlo_import import (
+from shuttle.experimental.stablehlo_import import (
     CompareAttributes,
     ConstantAttributes,
     ReductionAttributes,

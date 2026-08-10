@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from shuttle.experimental.stablehlo_import import ConcatenateAttributes, SliceAttributes, import_stablehlo
 from shuttle.ir import DType
-from shuttle.stablehlo_import import ConcatenateAttributes, SliceAttributes, import_stablehlo
 from tile_lifetime import (
     GemmSkeleton,
     NumericalPolicy,

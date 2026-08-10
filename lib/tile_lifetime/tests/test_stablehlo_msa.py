@@ -7,7 +7,7 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
-from shuttle.stablehlo_import import CompositeAttributes, import_stablehlo
+from shuttle.experimental.stablehlo_import import CompositeAttributes, import_stablehlo
 from tile_lifetime.msa_frontend import MSA_INPUT_NAMES, MSADebugConfig, export_debug_msa, msa_region
 from tile_lifetime.msa_recovery import (
     NaturalProjectedRoutedAttentionCompilation,

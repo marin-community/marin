@@ -9,8 +9,8 @@ from enum import StrEnum
 
 import numpy as np
 
+from shuttle.experimental.stablehlo_import import import_stablehlo
 from shuttle.ir import DType
-from shuttle.stablehlo_import import import_stablehlo
 from tile_lifetime.compiler import RowScalePlacement
 from tile_lifetime.dense_region import compile_dense_transformer_region
 from tile_lifetime.ir import ScaledDotProductAttentionOp

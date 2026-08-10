@@ -31,7 +31,7 @@ from benchmark_metadata import (  # pyrefly: ignore[missing-import]
     toolchain_snapshot,
 )
 
-from shuttle.stablehlo_import import import_stablehlo
+from shuttle.experimental.stablehlo_import import import_stablehlo
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     call_streaming_attention_backward_ffi,
     compile_streaming_attention_backward_ffi,

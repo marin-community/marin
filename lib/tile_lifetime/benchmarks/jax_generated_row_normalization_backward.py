@@ -24,7 +24,7 @@ import jax.numpy as jnp
 import jaxlib
 import numpy as np
 
-from shuttle.stablehlo_import import import_stablehlo
+from shuttle.experimental.stablehlo_import import import_stablehlo
 from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldPipelineSchedule,
     AxisFoldTiledReductionStrategy,

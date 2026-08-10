@@ -8,13 +8,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from shuttle.ir import DType
-from shuttle.stablehlo_import import (
+from shuttle.experimental.stablehlo_import import (
     ConstantAttributes,
     ReductionAttributes,
     StableHLOGraph,
     StableHLOOperation,
 )
+from shuttle.ir import DType
 from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldDirection,
     AxisFoldInput,

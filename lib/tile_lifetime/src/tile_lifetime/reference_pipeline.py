@@ -9,8 +9,8 @@ current Shuttle frontend because their accepted paths can select an opaque
 workload kernel.
 """
 
+from shuttle.experimental.stablehlo_import import import_stablehlo
 from shuttle.ir import DType
-from shuttle.stablehlo_import import import_stablehlo
 from tile_lifetime.attention import compile_reference_attention_region
 from tile_lifetime.compiler import RowScalePlacement, compile_reference_region
 from tile_lifetime.expert_parallel import ExpertParallelConfig, compile_expert_parallel_region
