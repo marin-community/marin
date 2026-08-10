@@ -7,6 +7,16 @@ on:
         description: "Git ref to build"
         required: true
         type: string
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to build"
+        required: true
+        type: string
+    outputs:
+      image_ref:
+        description: "Full-SHA image reference with OCI digest"
+        value: ${{ jobs.build-h100-evidence-image.outputs.image_ref }}
 
 permissions:
   contents: read

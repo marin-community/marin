@@ -1,8 +1,16 @@
 name: "Ops - Docker Images"
 
 on:
-  # enable manual trigger 
   workflow_dispatch:
+    inputs:
+      image_set:
+        description: "Image set to build"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - h100-evidence
   # Scheduled builds
   # Do not trigger too often because it can cause images that are still in use
   # to get evicted due to the "last N most recent images" retention policy.
@@ -20,7 +28,7 @@ jobs:
   # manifest merge agree (recomputing the date in each job can straddle midnight).
   iris-tags:
     if: |
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && inputs.image_set == 'all') ||
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
     outputs:
@@ -52,7 +60,7 @@ jobs:
   # Python dep tree from source, which emulation makes untenably slow.
   iris-images:
     if: |
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && inputs.image_set == 'all') ||
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     needs: iris-tags
     runs-on: ${{ matrix.platform.runner }}
@@ -101,7 +109,7 @@ jobs:
   # Merge the per-arch tags into the multi-arch tags that clusters actually pull.
   iris-manifests:
     if: |
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && inputs.image_set == 'all') ||
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     needs: [iris-tags, iris-images]
     runs-on: ubuntu-latest
@@ -129,10 +137,19 @@ jobs:
             "$IMAGE:$HASH_TAG-amd64" \
             "$IMAGE:$HASH_TAG-arm64"
 
+  h100-evidence-image:
+    if: github.event_name == 'workflow_dispatch' && inputs.image_set == 'h100-evidence'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ops-h100-evidence-image.yaml
+    with:
+      ref: ${{ github.sha }}
+
   # Finelog Image - Standalone log server (lib/finelog)
   finelog-image:
     if: |
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && inputs.image_set == 'all') ||
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
     steps:
@@ -171,7 +188,7 @@ jobs:
   marin-tpu-ci-images:
     # Run on: manual trigger OR daily schedule (03:00 UTC)
     if: |
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && inputs.image_set == 'all') ||
       (github.event_name == 'schedule' && github.event.schedule == '0 3 * * *')
     runs-on: ubuntu-latest
     steps:

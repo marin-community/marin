@@ -91,7 +91,10 @@ The reviewed Iris image target is `task-h100-evidence`. It inherits the current
 2026.1.1. The dedicated manual-only `ops-h100-evidence-image.yaml` workflow
 checks out an explicitly selected ref, resolves it to one full commit SHA,
 publishes only `iris-task-h100-evidence:<full-git-sha>`, and reports the
-resulting OCI digest.
+resulting OCI digest. Before that workflow exists on the default branch, the
+existing `ops-docker-images.yaml` dispatcher can select `image_set=h100-evidence`
+to call the dedicated workflow from the dispatch commit. Its default
+`image_set=all` retains the existing Iris, finelog, and TPU image builds.
 A launch must use
 `ghcr.io/marin-community/iris-task-h100-evidence:<full-git-sha>@sha256:<digest>`;
 the tag alone, `latest`, and a date tag are not accepted. The launch overrides
