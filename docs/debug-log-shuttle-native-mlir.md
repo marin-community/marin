@@ -129,6 +129,36 @@ dialect library and the subsequent pass library use the pinned API.
 - Native dialect compilation, the full driver build, and lit execution remain
   pending. This debugging task does not claim those gates passed.
 
+## Hypothesis 4
+
+Generated attribute definitions and operation declarations require complete
+MLIR builder types, but Shuttle's owning public headers provide only the
+forward declarations available through other IR headers.
+
+The exact-pin dialect build reached semantic C++ parsing and failed first in
+`ShuttleAttrs.cc.inc` because `mlir::Builder` was incomplete. Generated
+attribute and operation code also uses `mlir::OpBuilder` and
+`mlir::ImplicitLocOpBuilder`. At pinned LLVM commit `9a4faee1068`,
+`mlir/IR/Builders.h` defines these builder types. Representative generated
+dialect headers at the same pin include it before generated declarations.
+
+`ShuttleAttrs.h` owns the generated attribute declarations and precedes
+`ShuttleAttrs.cc.inc` in the dialect translation unit. `ShuttleOps.h` owns the
+generated operation declarations. Include `mlir/IR/Builders.h` directly from
+both headers. The existing `@llvm-project//mlir:IR` dependency already owns
+`Builders.h`, so the Bazel graph needs no additional target.
+
+## Results 4
+
+- Exact pinned header and Bazel ownership confirm `Builders.h` supplies the
+  incomplete types and is exported by `@llvm-project//mlir:IR`.
+- Generated Enums, Attrs, and Ops include sites were audited against exact-pin
+  dialect header patterns. No additional missing public prerequisite was
+  identified from the retained diagnostics or pinned declarations.
+- Repository formatting and lint gates run on the changed files.
+- Native compilation remains pending. This debugging task does not claim the
+  generated attribute or operation code compiles after this source fix.
+
 ## Follow-up
 
 - [x] Run `@shuttle_mlir//:shuttle_ops_inc_gen` against the exact XLA pin.
