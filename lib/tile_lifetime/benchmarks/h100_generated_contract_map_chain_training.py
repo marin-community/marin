@@ -10,12 +10,9 @@ import ctypes
 import gzip
 import hashlib
 import importlib.metadata
-import itertools
 import json
 import os
-import statistics
 import subprocess
-import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -25,6 +22,15 @@ import jax.numpy as jnp
 import jaxlib
 import numpy as np
 
+from tile_lifetime.command_buffer_capture import (
+    CallbackCheckpoint,
+    CaptureAcceptanceError,
+    CaptureAcceptancePolicy,
+    CounterbalancedVariant,
+    assess_command_buffer_capture,
+    measure_counterbalanced_variants,
+    serialize_then_assess_capture,
+)
 from tile_lifetime.contract_map_chain import (
     TwoContractMapTrainingProgram,
     execute_two_contract_map_forward,
@@ -196,38 +202,6 @@ def _warm_up(
             jax.block_until_ready(function())
 
 
-def _measure(
-    variants: tuple[tuple[str, Any], ...],
-    *,
-    repeats: int,
-    iterations: int,
-) -> tuple[dict[str, dict[str, Any]], list[list[str]]]:
-    samples: dict[str, list[float]] = {name: [] for name, _ in variants}
-    orders: list[list[str]] = []
-    orderings = tuple(itertools.permutations(variants))
-    for repeat in range(repeats):
-        ordering = orderings[repeat % len(orderings)]
-        orders.append([name for name, _ in ordering])
-        for name, function in ordering:
-            started = time.perf_counter()
-            result = None
-            for _ in range(iterations):
-                result = function()
-            jax.block_until_ready(result)
-            samples[name].append((time.perf_counter() - started) * 1e3 / iterations)
-    return (
-        {
-            name: {
-                "samples_ms": values,
-                "median_ms": statistics.median(values),
-                "minimum_ms": min(values),
-            }
-            for name, values in samples.items()
-        },
-        orders,
-    )
-
-
 def _installed_version(distribution: str) -> str | None:
     try:
         return importlib.metadata.version(distribution)
@@ -312,7 +286,10 @@ def _preflight(args: argparse.Namespace, program: TwoContractMapTrainingProgram)
     }
 
 
-def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -> dict[str, Any]:
+def _gpu_run(
+    args: argparse.Namespace,
+    program: TwoContractMapTrainingProgram,
+) -> tuple[dict[str, Any], tuple[int, int], tuple[CallbackCheckpoint, ...]]:
     _require_toolchain(args, require_gpu=True)
     command_buffer_flag_audit = (
         require_custom_call_command_buffers_enabled(os.environ.get("XLA_FLAGS", ""))
@@ -436,13 +413,29 @@ def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -
         deterministic_hashes.append(hashes)
     handler_counts_after_determinism = _handler_call_counts(library)
 
-    variants = (("generated_two_ffi_calls", execute_generated), ("matched_natural_jax_forward_vjp", execute_natural))
-    _warm_up(variants, warmups=args.warmups)
+    warmup_variants = (
+        ("generated_two_ffi_calls", execute_generated),
+        ("matched_natural_jax_forward_vjp", execute_natural),
+    )
+    _warm_up(warmup_variants, warmups=args.warmups)
     handler_counts_after_warmup = _handler_call_counts(library)
-    measurements, execution_order = _measure(
-        variants,
+    measurement = measure_counterbalanced_variants(
+        (
+            CounterbalancedVariant(
+                name="generated_two_ffi_calls",
+                function=execute_generated,
+                handler_calls_per_execution={"forward": 1, "reverse": 1},
+            ),
+            CounterbalancedVariant(
+                name="matched_natural_jax_forward_vjp",
+                function=execute_natural,
+                handler_calls_per_execution={},
+            ),
+        ),
         repeats=args.repeats,
         iterations=args.iterations,
+        synchronize=jax.block_until_ready,
+        read_handler_counts=lambda: dict(zip(("forward", "reverse"), _handler_call_counts(library), strict=True)),
     )
     expected_handler_count = 3 + args.warmups + args.repeats * args.iterations
     handler_counts = _handler_call_counts(library)
@@ -452,16 +445,7 @@ def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -
         "after_warmup": handler_counts_after_warmup,
         "after_measurement": handler_counts,
     }
-    if generated.command_buffer_compatible:
-        if min(handler_counts_after_warmup) < 1:
-            raise AssertionError(
-                f"capture-safe handlers did not execute during graph recording: {handler_count_checkpoints}"
-            )
-        if handler_counts != handler_counts_after_warmup:
-            raise AssertionError(
-                f"capture-only handler counts did not stabilize after warmup: {handler_count_checkpoints}"
-            )
-    elif handler_counts != (expected_handler_count, expected_handler_count):
+    if not generated.command_buffer_compatible and handler_counts != (expected_handler_count, expected_handler_count):
         raise AssertionError(
             f"generated handler counts {handler_counts} do not match "
             f"{(expected_handler_count, expected_handler_count)}"
@@ -477,8 +461,8 @@ def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -
     (args.artifact_directory / "natural-training-step-optimized-hlo.txt").write_text(
         matched_natural_step.lower(activation, first_weight, second_weight, output_cotangent).compile().as_text()
     )
-    generated_ms = measurements["generated_two_ffi_calls"]["median_ms"]
-    natural_ms = measurements["matched_natural_jax_forward_vjp"]["median_ms"]
+    generated_ms = measurement.measurements["generated_two_ffi_calls"]["median_ms"]
+    natural_ms = measurement.measurements["matched_natural_jax_forward_vjp"]["median_ms"]
     telemetry = subprocess.check_output(
         (
             "nvidia-smi",
@@ -488,7 +472,7 @@ def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -
         ),
         text=True,
     ).strip()
-    return {
+    result = {
         "schema_version": 2,
         "mode": "one_h100_contract_map_training_component",
         "shape": {
@@ -527,9 +511,8 @@ def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -
             },
             "handler_count_contract": (
                 {
-                    "kind": "capture_only",
-                    "minimum_each": 1,
-                    "stable_after_warmup": True,
+                    "kind": "bounded_capture_only",
+                    "acceptance_policy": asdict(CaptureAcceptancePolicy()),
                     "logical_execution_count_not_expected": expected_handler_count,
                 }
                 if generated.command_buffer_compatible
@@ -552,8 +535,8 @@ def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -
             "output_names": output_names,
             "output_hashes": [list(hashes) for hashes in deterministic_hashes],
         },
-        "measurements": measurements,
-        "execution_order": execution_order,
+        "measurements": measurement.measurements,
+        "execution_order": [list(order) for order in measurement.execution_order],
         "ratio_generated_to_natural_jax": generated_ms / natural_ms,
         "benchmark": {
             "warmups": args.warmups,
@@ -568,7 +551,10 @@ def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -
                 "xla_flags": os.environ.get("XLA_FLAGS", ""),
                 "uses_xla_default": command_buffer_flag_audit.uses_xla_default,
                 "selected_entries": command_buffer_flag_audit.selected_entries,
-                "evidence": "capture-only host handler counts remain fixed across timed graph replay",
+                "evidence": "host-handler counts are attributed to every timed variant and counterbalanced order",
+                "callback_checkpoints": [asdict(checkpoint) for checkpoint in measurement.callback_checkpoints],
+                "capture_acceptance_policy": asdict(CaptureAcceptancePolicy()),
+                "capture_acceptance_evaluated_after_raw_serialization": True,
                 "profiler_evidence": None,
             }
             if command_buffer_flag_audit is not None
@@ -582,6 +568,7 @@ def _gpu_run(args: argparse.Namespace, program: TwoContractMapTrainingProgram) -
         },
         "revision": args.shuttle_revision,
     }
+    return result, handler_counts_after_warmup, measurement.callback_checkpoints
 
 
 def main() -> None:
@@ -607,9 +594,30 @@ def main() -> None:
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
     program = _program(args.hlo_fixture)
-    result = _preflight(args, program) if args.preflight_only else _gpu_run(args, program)
-    args.json_output.parent.mkdir(parents=True, exist_ok=True)
-    args.json_output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    if args.preflight_only:
+        result = _preflight(args, program)
+        args.json_output.parent.mkdir(parents=True, exist_ok=True)
+        args.json_output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
+    raw_result, initial_counts_tuple, checkpoints = _gpu_run(args, program)
+    if not args.physical_candidate.command_buffer_compatible:
+        args.json_output.parent.mkdir(parents=True, exist_ok=True)
+        args.json_output.write_text(json.dumps(raw_result, indent=2, sort_keys=True) + "\n")
+        print(json.dumps(raw_result, indent=2, sort_keys=True))
+        return
+
+    initial_counts = dict(zip(("forward", "reverse"), initial_counts_tuple, strict=True))
+    try:
+        result = serialize_then_assess_capture(
+            args.json_output,
+            raw_result,
+            lambda: assess_command_buffer_capture(initial_counts, checkpoints),
+        )
+    except CaptureAcceptanceError as error:
+        print(json.dumps(error.result, indent=2, sort_keys=True))
+        raise SystemExit(str(error)) from None
     print(json.dumps(result, indent=2, sort_keys=True))
 
 
