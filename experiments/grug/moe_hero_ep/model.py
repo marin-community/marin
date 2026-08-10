@@ -8,8 +8,8 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
-import math
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Literal
 
 import equinox as eqx
@@ -127,6 +127,20 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
     return default
 
 
+class QbEstimator(StrEnum):
+    """How the QB router estimates each expert's threshold beta (the (1-K/E) upper quantile of the
+    logit margins ``score - alpha``).
+
+    ``TOPK`` takes a per-device ``top_k`` of the margins and ``pmean``s the result -- one small
+    collective per layer. ``HIST`` bins the margins into ``qb_hist_bins`` over the live global
+    ``[min, max]`` (a ``pmin``/``pmax`` this step) and reads the quantile from the summed histogram --
+    a smoother estimate at the cost of a per-expert count reduction.
+    """
+
+    TOPK = "topk"
+    HIST = "hist"
+
+
 @dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
@@ -148,6 +162,8 @@ class GrugModelConfig:
     # constant the paper scales the routed bank and top-k by the same ratio. None keeps a
     # standard MoE, in which case no projection is built and the layer is unchanged.
     latent_dim: int | None = None
+    qb_estimator: QbEstimator = QbEstimator.TOPK
+    qb_hist_bins: int = 1000  # bins for the QB histogram estimator; ignored by the top-k estimator
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -176,6 +192,9 @@ class GrugModelConfig:
     rope_fused: bool = False
 
     def __post_init__(self) -> None:
+        # Round depth up to the nearest even count so global_every scheduling and the last-layer-global
+        # rule land on a clean even depth.
+        object.__setattr__(self, "num_layers", self.num_layers + self.num_layers % 2)
         _ = self.inferred_head_dim
         if self.num_heads % self.stored_kv_heads != 0:
             raise ValueError("num_heads must be divisible by the stored KV-head count")
@@ -740,6 +759,64 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     )
 
 
+def _bincount_upper_quantile(
+    s_local: jax.Array,
+    *,
+    num_experts: int,
+    n_bins: int,
+    lo: jax.Array,
+    hi: jax.Array,
+    target_rank: float,
+) -> jax.Array:
+    """Per-expert (1-K/E) upper quantile of ``s_local`` via one fused bincount over ``[lo, hi]``.
+
+    Runs inside a ``shard_map``: a single ``jnp.bincount`` over an expert-major flat index
+    (``expert*n_bins + bin``, clip-to-edge) builds the local per-expert histogram, one integer ``psum``
+    pools it globally, and beta is read from the top-cumulative counts, interpolated in the crossing bin.
+    """
+    bin_width = (hi - lo) / n_bins
+    expert_ids = jnp.arange(num_experts, dtype=jnp.int32)[None, :]
+    idx = jnp.clip(((s_local - lo) / bin_width).astype(jnp.int32), 0, n_bins - 1)
+    flat = (expert_ids * n_bins + idx).reshape(-1)
+    local_counts = jnp.bincount(flat, length=num_experts * n_bins).reshape(num_experts, n_bins)
+    counts = jax.lax.psum(local_counts, axis_name=_BATCH_AXES).astype(jnp.float32)
+    cum_from_top = jnp.cumsum(counts[:, ::-1], axis=-1)[:, ::-1]  # #{margins in bins >= b}
+    bstar = jnp.clip(jnp.sum((cum_from_top >= target_rank).astype(jnp.int32), axis=-1) - 1, 0, n_bins - 1)
+    ct_b = jnp.take_along_axis(cum_from_top, bstar[:, None], axis=-1)[:, 0]
+    h_b = jnp.take_along_axis(counts, bstar[:, None], axis=-1)[:, 0]
+    lower_edge = lo + bstar.astype(jnp.float32) * bin_width
+    return lower_edge + bin_width * (ct_b - target_rank) / jnp.maximum(h_b, 1.0)
+
+
+def _qb_beta_hist(
+    s_ma: jax.Array,
+    mesh: jax.sharding.AbstractMesh,
+    *,
+    num_experts_per_token: int,
+    num_experts: int,
+    n_bins: int,
+) -> jax.Array:
+    """Global (1-K/E)-quantile of the logit margins over the live ``[min, max]`` grid (this step's).
+
+    A ``pmin``/``pmax`` sets the grid to the exact current range of the margins, then
+    ``_bincount_upper_quantile`` reads the per-expert threshold. Replaces the per-device ``top_k`` +
+    ``pmean`` estimate with a smoother global quantile at the cost of the per-expert count reduction.
+    """
+    target_rank = float(s_ma.shape[0]) * num_experts_per_token / num_experts  # tokens at/above beta per expert
+
+    def _fn(s_local: jax.Array) -> jax.Array:
+        # pmin/pmax have no autodiff rule and the range is a control quantity, so detach their inputs;
+        # the bincount path drops tangents at the integer bin cast, so it needs none downstream either.
+        lo = jax.lax.pmin(jax.lax.stop_gradient(jnp.min(s_local)), axis_name=_BATCH_AXES)
+        hi = jax.lax.pmax(jax.lax.stop_gradient(jnp.max(s_local)), axis_name=_BATCH_AXES)
+        hi = jnp.maximum(hi, lo + 1e-6)  # guard a degenerate all-equal range
+        return _bincount_upper_quantile(
+            s_local, num_experts=num_experts, n_bins=n_bins, lo=lo, hi=hi, target_rank=target_rank
+        )
+
+    return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=P())(s_ma)
+
+
 class MoEMLP(eqx.Module):
     """QB-routed MoE with sigmoid combine weights."""
 
@@ -782,10 +859,7 @@ class MoEMLP(eqx.Module):
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
                 hidden_dim=expert_width,
-                # The single `initializer_std` is derived from `hidden_dim`. Under LatentMoE the
-                # gate/up fan-in is `latent_dim`, so without this the routed path stays attenuated
-                # by sqrt(hidden/latent) even after the latent RMSNorm.
-                gate_up_initializer_std=(None if latent is None else cfg.initializer_std * math.sqrt(d / expert_width)),
+                gate_up_initializer_std=None,
                 intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
@@ -826,26 +900,35 @@ class MoEMLP(eqx.Module):
             num_experts=self.cfg.num_experts,
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
-        # Sharded QB: compute beta locally per device, then average.
+        # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha`.
         mesh = get_abstract_mesh()
         s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
-        num_devices = 1
-        for a in _BATCH_AXES:
-            num_devices *= mesh.shape[a]
-        local_tokens = s_minus_alpha.shape[0] // num_devices
-        qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
+        if self.cfg.qb_estimator == QbEstimator.HIST:
+            router_stats["qb_beta"] = _qb_beta_hist(
+                s_minus_alpha,
+                mesh,
+                num_experts_per_token=self.cfg.num_experts_per_token,
+                num_experts=self.cfg.num_experts,
+                n_bins=self.cfg.qb_hist_bins,
+            )
+        else:
+            num_devices = 1
+            for a in _BATCH_AXES:
+                num_devices *= mesh.shape[a]
+            local_tokens = s_minus_alpha.shape[0] // num_devices
+            qb_count = max(1, local_tokens * self.cfg.num_experts_per_token // self.cfg.num_experts)
 
-        def _local_qb_beta(s_ma):
-            topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
-            beta = topk_vals[:, -1]
-            return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
+            def _local_qb_beta(s_ma):
+                topk_vals, _ = jax.lax.top_k(s_ma.T, qb_count)
+                beta = topk_vals[:, -1]
+                return jax.lax.pmean(beta, axis_name=_BATCH_AXES)
 
-        router_stats["qb_beta"] = shard_map(
-            _local_qb_beta,
-            mesh=mesh,
-            in_specs=(P(_BATCH_AXES, None),),
-            out_specs=P(),
-        )(s_minus_alpha)
+            router_stats["qb_beta"] = shard_map(
+                _local_qb_beta,
+                mesh=mesh,
+                in_specs=(P(_BATCH_AXES, None),),
+                out_specs=P(),
+            )(s_minus_alpha)
 
         # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
         # `latent_dim`-wide rows in both directions. The router above already read the full-width
@@ -959,8 +1042,10 @@ class Block(eqx.Module):
 
 
 def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
+    # Every global_every-th layer is full-causal, and the last layer always is, so a depth that is
+    # not a multiple of global_every still ends on a global-context layer.
     layer_indices = jnp.arange(num_layers)
-    return ((layer_indices + 1) % global_every) == 0
+    return (((layer_indices + 1) % global_every) == 0) | (layer_indices == num_layers - 1)
 
 
 class Transformer(eqx.Module):
