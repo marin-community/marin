@@ -3832,3 +3832,28 @@ author: dlwh
   and CPU reference are Torch-free, while the current SM100 physical adapter
   uses `at::Tensor` and pybind. A future accepted path needs a Torch-free
   adapter in addition to a clean bootstrap and payload-return execution test.
+
+### 2026-08-09 - TLTC-MOE-004 Torch-free relation reverse boundary
+
+- Commit `e655e7149ea689b40faa8e43f107c2e0575260aa` replaces the rejected
+  `at::Tensor` reverse probe with a generated XLA typed-FFI handler for the
+  edge-weight Map and source-ordered FP32 route-feature Fold. The handler links
+  only JAX/XLA FFI and the CUDA runtime.
+- Exact per-rank `RelationPlan` metadata now preserves edge identity, padded-row
+  ownership, and source-item/route-slot return order. The composed plan binds
+  the existing generic routed-input-adjoint, group-batched weight Contract, and
+  source-indexed Fold generators. JAX retains payload collectives and the
+  normalized-selection/router VJP.
+- A one-device JAX VJP test exactly matches both BF16 padded edge cotangents and
+  FP32 post-selection route-weight cotangents. Repeated adapter executions are
+  bitwise identical. The existing uneven four-rank CPU reverse, natural JAX
+  boundary, and typed-FFI training recovery tests also remain green.
+- Command:
+  `uv run --frozen --package marin-tile-lifetime --group test pytest lib/tile_lifetime/tests/test_xla_relation_edge_reverse_ffi.py lib/tile_lifetime/tests/test_expert_parallel_training.py lib/tile_lifetime/tests/test_xla_routed_training_ffi.py`
+  Result: 27 passed in 6.38 seconds. `./infra/pre-commit.py --changed-files
+  --fix` also passed.
+- No GPU was requested. The handler still needs compilation on GB200, and the
+  HLO-derived handler families have not yet been instantiated in one
+  transformed distributed natural-JAX module. Fixed-capacity relation shapes,
+  transposed input-adjoint weight layouts, JAX collective payload return, and
+  router-VJP wiring remain gates.
