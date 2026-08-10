@@ -1,0 +1,20 @@
+name: qwen3.5-122b-a10b-fp8
+location: Qwen/Qwen3.5-122B-A10B-FP8
+revision: a099dee70ccfcd8d5dda56aaa0b60cb8ecadabc9
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  tensor_parallel_size: 8
+  max_model_len: 32768
+  max_num_batched_tokens: 32768
+  max_num_seqs: 32
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+  vllm_extra_args:
+  - --enable-prefix-caching
+generation:
+  max_gen_toks: 8192
+  extra_gen_kwargs:
+    skip_special_tokens: "false"

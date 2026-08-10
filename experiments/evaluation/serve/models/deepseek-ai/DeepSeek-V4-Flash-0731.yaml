@@ -1,0 +1,21 @@
+name: deepseek-v4-flash-0731
+location: deepseek-ai/DeepSeek-V4-Flash-0731
+revision: 7872f01b1d1fe23eabc4c98b48bffcef5a386062
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  tensor_parallel_size: 8
+  max_model_len: 32768
+  max_num_batched_tokens: 32768
+  max_num_seqs: 32
+  vllm_extra_args:
+  - --enable-prefix-caching
+  - --kv-cache-dtype
+  - fp8
+generation:
+  max_gen_toks: 8192
+  extra_gen_kwargs:
+    skip_special_tokens: "false"

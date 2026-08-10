@@ -1,0 +1,27 @@
+name: glm-5.2-awq-int4
+location: cyankiwi/GLM-5.2-AWQ-INT4
+revision: 956f4d228e36c95f66a80058fe64b69af67360ca
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  tensor_parallel_size: 8
+  max_model_len: 32768
+  max_num_batched_tokens: 16384
+  max_num_seqs: 8
+  tool_call_parser: glm47
+  reasoning_parser: glm45
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --enable-chunked-prefill
+  - --enable-prefix-caching
+  - --dtype
+  - bfloat16
+  - --kv-cache-dtype
+  - fp8
+generation:
+  max_gen_toks: 8192
+  extra_gen_kwargs:
+    skip_special_tokens: "false"
