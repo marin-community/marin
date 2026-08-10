@@ -4,7 +4,6 @@
 #ifndef SHUTTLE_TRANSFORMS_PASSES_H_
 #define SHUTTLE_TRANSFORMS_PASSES_H_
 
-#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -13,33 +12,9 @@
 #include "mlir/Pass/PassManager.h"
 #include "shuttle/IR/ShuttleAttrs.h"
 #include "shuttle/IR/ShuttleDialect.h"
+#include "shuttle/Transforms/Observer.h"
 
 namespace mlir::shuttle {
-
-enum class ShuttlePipelinePhase {
-  AlgebraCoverage,
-  LoweredCoverage,
-  FinalErasure,
-  Failure,
-};
-
-struct ShuttlePipelineEvent {
-  uint64_t invocationId;
-  ShuttlePipelinePhase phase;
-  std::string policyDigest;
-  std::string tuningDigest;
-  std::string regionMembership;
-  std::string coverageManifest;
-  std::string unsupportedFingerprint;
-  std::string normalizedModuleFingerprint;
-  bool noShuttleSemantics;
-};
-
-class ShuttlePipelineObserver {
-public:
-  virtual ~ShuttlePipelineObserver() = default;
-  virtual void observe(const ShuttlePipelineEvent &event) const = 0;
-};
 
 #define GEN_PASS_DECL
 #include "shuttle/Transforms/Passes.h.inc"
@@ -59,11 +34,6 @@ std::unique_ptr<Pass> createStripSourceProvenancePass();
 std::unique_ptr<Pass> createVerifyNoShuttleOpsPass();
 
 std::string normalizedStablehloFingerprint(ModuleOp module);
-
-struct ShuttlePipelineOptions {
-  NumericalPolicy numerics = NumericalPolicy::SourceOrdered;
-  std::string canonicalTuning = "{}";
-};
 
 void buildShuttleStablehloPipeline(
     OpPassManager &manager, const ShuttlePipelineOptions &options,

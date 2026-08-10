@@ -92,8 +92,16 @@ cc_library(
 
 cc_library(
     name = "ShuttlePasses",
-    srcs = ["lib/Transforms/Passes.cc"],
-    hdrs = ["include/shuttle/Transforms/Passes.h"],
+    srcs = [
+        "lib/Transforms/Observer.cc",
+        "lib/Transforms/ObserverInternal.h",
+        "lib/Transforms/ObserverTestInternal.h",
+        "lib/Transforms/Passes.cc",
+    ],
+    hdrs = [
+        "include/shuttle/Transforms/Observer.h",
+        "include/shuttle/Transforms/Passes.h",
+    ],
     strip_include_prefix = "include",
     deps = [
         ":ShuttleDialect",
@@ -123,6 +131,19 @@ cc_library(
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
         "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+cc_library(
+    name = "ShuttleXlaRegistration",
+    srcs = ["lib/Transforms/XlaRegistration.cc"],
+    hdrs = ["include/shuttle/Transforms/XlaRegistration.h"],
+    strip_include_prefix = "include",
+    deps = [
+        ":ShuttlePasses",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
     ],
 )
 
@@ -164,15 +185,21 @@ cc_binary(
 
 cc_test(
     name = "pipeline_observer_test",
-    srcs = ["test/pipeline-observer-test.cc"],
+    srcs = [
+        "lib/Transforms/ObserverTestInternal.h",
+        "test/pipeline-observer-test.cc",
+    ],
     deps = [
         ":ShuttleDialect",
         ":ShuttlePasses",
+        ":ShuttleXlaRegistration",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:ArithDialect",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Parser",
         "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:SCFDialect",
         "@stablehlo//:register",
     ],
 )

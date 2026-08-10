@@ -5,8 +5,8 @@ f32 Contract and scalar Map graphs. `shuttle-opt` partitions typed StableHLO,
 converts selected regions to Shuttle algebra, checks total source coverage,
 lowers from the authoritative algebra, and removes all Shuttle semantics before
 StableHLO-to-HLO conversion. It is not the ordinary-JAX integration: the XLA
-transform hook, compiler-option schema, cache protocol, and concurrent native
-observer registry remain separate reviewed work.
+transform hook, compiler-option schema, and persistent-cache protocol remain
+separate reviewed work.
 
 The native code builds inside the dependency graph of the XLA revision pinned
 by JAX/JAXlib 0.10.1:
@@ -32,6 +32,7 @@ Then run:
 bazel build @shuttle_mlir//:shuttle_ops_inc_gen
 bazel build @shuttle_mlir//:ShuttleDialect
 bazel build @shuttle_mlir//:shuttle-opt
+bazel build @shuttle_mlir//:ShuttleXlaRegistration
 bazel build @shuttle_mlir//:mlir_tests
 bazel test @shuttle_mlir//:mlir_tests
 bazel test @shuttle_mlir//:pipeline_observer_test
@@ -71,10 +72,25 @@ Current implemented behavior is deliberately narrow:
   precision, and algorithm. It does not replay source operation attributes.
 - `shuttle-verify-no-shuttle-ops` rejects all remaining Shuttle operations and
   attributes before HLO export.
-- The production pipeline accepts an optional cache-neutral observer and emits
-  successful algebra-coverage, lowered-coverage, and final-erasure snapshots.
-  Failure events, subscription lifetime, and concurrency are not claimed by
-  this compiler-unit milestone.
+- The native observer registry emits immutable algebra-coverage,
+  lowered-coverage, final-erasure, and terminal-failure records keyed by a
+  process-unique invocation ID. Records include policy and tuning digests,
+  pre-strip manifests and unsupported-island fingerprints, and the post-strip
+  StableHLO fingerprint and erasure result.
+- `subscribeShuttlePipelineObserver` returns a move-only scoped subscription.
+  Its destructor removes the observer from future invocations and waits for
+  invocations that captured it. An observer callback must not destroy or
+  replace any subscription captured by its current invocation; release builds
+  terminate with `kShuttleObserverReentrantTeardownDiagnostic` instead of
+  waiting on the current invocation. Teardown from another thread waits for
+  captured invocations to finish.
+- Observer subscriptions are separate from `ShuttlePipelineOptions` and
+  `shuttlePipelineIdentity`; installing an observer does not change the
+  compiled module or semantic cache identity.
+- `ShuttleXlaRegistration` exposes `runShuttleXlaTransform`, the composite
+  callback that runs the same pipeline and observer registry. The unapplied XLA
+  registry patch still owns transactional cloning, canonical option parsing,
+  and static registration; this target does not establish ordinary-JAX use.
 
 The export verifier keys operation rejection on the operation-name namespace,
 so it also covers opaque `shuttle.*` operations in a context where the Shuttle

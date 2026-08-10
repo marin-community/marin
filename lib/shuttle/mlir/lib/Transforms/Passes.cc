@@ -3,11 +3,11 @@
 
 #include "shuttle/Transforms/Passes.h"
 
-#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <utility>
 
+#include "ObserverInternal.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -23,6 +23,7 @@
 #include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassInstrumentation.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "shuttle/IR/ShuttleAttrs.h"
@@ -1789,18 +1790,42 @@ std::string normalizedModuleFingerprintImpl(ModuleOp module) {
   return sha256(normalized);
 }
 
+void emitObserverSnapshot(
+    const std::shared_ptr<detail::ShuttleObserverInvocation> &invocation,
+    ModuleOp module, ShuttlePipelinePhase phase,
+    llvm::StringRef failurePass = {}) {
+  std::string regionMembership;
+  std::string coverageManifest;
+  std::string unsupportedFingerprint;
+  if (auto manifest =
+          module->getAttrOfType<DictionaryAttr>(kCoverageManifestAttribute)) {
+    coverageManifest = attributeText(manifest);
+    if (ArrayAttr regions =
+            manifest.getAs<ArrayAttr>(kManifestSelectedRegions)) {
+      regionMembership = attributeText(regions);
+    }
+    if (ArrayAttr excluded = manifest.getAs<ArrayAttr>(kManifestExcluded)) {
+      unsupportedFingerprint = sha256(attributeText(excluded));
+    }
+  }
+  invocation->emit(
+      phase, std::move(regionMembership), std::move(coverageManifest),
+      std::move(unsupportedFingerprint),
+      phase == ShuttlePipelinePhase::FinalErasure
+          ? normalizedModuleFingerprintImpl(module)
+          : std::string{},
+      phase == ShuttlePipelinePhase::FinalErasure, failurePass.str());
+}
+
 class EmitObserverPass
     : public PassWrapper<EmitObserverPass, OperationPass<ModuleOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(EmitObserverPass)
 
-  EmitObserverPass(ShuttlePipelinePhase phase,
-                   std::shared_ptr<const ShuttlePipelineObserver> observer,
-                   uint64_t invocationId, std::string policyDigest,
-                   std::string tuningDigest)
-      : phase(phase), observer(std::move(observer)), invocationId(invocationId),
-        policyDigest(std::move(policyDigest)),
-        tuningDigest(std::move(tuningDigest)) {}
+  EmitObserverPass(
+      ShuttlePipelinePhase phase,
+      std::shared_ptr<detail::ShuttleObserverInvocation> invocation)
+      : phase(phase), invocation(std::move(invocation)) {}
 
   StringRef getArgument() const final { return "shuttle-observer-event"; }
   StringRef getDescription() const final {
@@ -1808,45 +1833,99 @@ public:
   }
 
   void runOnOperation() override {
-    if (!observer) {
-      return;
-    }
-    ModuleOp module = getOperation();
-    std::string regionMembership;
-    std::string coverageManifest;
-    std::string unsupportedFingerprint;
-    if (auto manifest =
-            module->getAttrOfType<DictionaryAttr>(kCoverageManifestAttribute)) {
-      coverageManifest = attributeText(manifest);
-      if (ArrayAttr regions =
-              manifest.getAs<ArrayAttr>(kManifestSelectedRegions)) {
-        regionMembership = attributeText(regions);
-      }
-      if (ArrayAttr excluded = manifest.getAs<ArrayAttr>(kManifestExcluded)) {
-        unsupportedFingerprint = sha256(attributeText(excluded));
-      }
-    }
-    observer->observe(ShuttlePipelineEvent{
-        invocationId,
-        phase,
-        policyDigest,
-        tuningDigest,
-        std::move(regionMembership),
-        std::move(coverageManifest),
-        std::move(unsupportedFingerprint),
-        phase == ShuttlePipelinePhase::FinalErasure
-            ? normalizedModuleFingerprintImpl(module)
-            : std::string{},
-        phase == ShuttlePipelinePhase::FinalErasure,
-    });
+    emitObserverSnapshot(invocation, getOperation(), phase);
   }
 
 private:
   ShuttlePipelinePhase phase;
+  std::shared_ptr<detail::ShuttleObserverInvocation> invocation;
+};
+
+struct FailureCaptureState {
+  std::string pass;
+};
+
+class FailureCaptureInstrumentation final : public PassInstrumentation {
+public:
+  explicit FailureCaptureInstrumentation(
+      std::shared_ptr<FailureCaptureState> state)
+      : state(std::move(state)) {}
+
+  void runAfterPassFailed(Pass *pass, Operation *) final {
+    llvm::StringRef argument = pass->getArgument();
+    state->pass = argument.empty() ? pass->getName().str() : argument.str();
+  }
+
+private:
+  std::shared_ptr<FailureCaptureState> state;
+};
+
+void buildShuttleStablehloCorePipeline(
+    OpPassManager &manager, const ShuttlePipelineOptions &options,
+    const std::shared_ptr<detail::ShuttleObserverInvocation> &invocation) {
+  manager.addPass(createAnnotateSourcePass());
+  manager.addPass(createFormStructuralRegionsPass(options.numerics,
+                                                  options.canonicalTuning));
+  manager.addPass(createConvertStablehloToAlgebraPass());
+  manager.addPass(createVerifySourceCoveragePass());
+  manager.addPass(std::make_unique<EmitObserverPass>(
+      ShuttlePipelinePhase::AlgebraCoverage, invocation));
+  manager.addPass(createVerifySemanticErasurePass());
+  manager.addPass(createShuttleCanonicalizePass());
+  manager.addPass(createLowerAlgebraToStablehloPass());
+  manager.addPass(createVerifySourceCoveragePass());
+  manager.addPass(std::make_unique<EmitObserverPass>(
+      ShuttlePipelinePhase::LoweredCoverage, invocation));
+  manager.addPass(createStripSourceProvenancePass());
+  manager.addPass(createVerifyNoShuttleOpsPass());
+  manager.addPass(std::make_unique<EmitObserverPass>(
+      ShuttlePipelinePhase::FinalErasure, invocation));
+}
+
+class RunShuttleStablehloPipelinePass
+    : public PassWrapper<RunShuttleStablehloPipelinePass,
+                         OperationPass<ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RunShuttleStablehloPipelinePass)
+  using Base =
+      PassWrapper<RunShuttleStablehloPipelinePass, OperationPass<ModuleOp>>;
+
+  RunShuttleStablehloPipelinePass(
+      ShuttlePipelineOptions options,
+      std::shared_ptr<const ShuttlePipelineObserver> observer)
+      : options(std::move(options)), observer(std::move(observer)) {}
+  RunShuttleStablehloPipelinePass(const RunShuttleStablehloPipelinePass &other)
+      : Base(other), options(other.options), observer(other.observer) {}
+
+  StringRef getArgument() const final { return "shuttle-stablehlo-pipeline"; }
+  StringRef getDescription() const final {
+    return "Run one observed fail-closed Shuttle StableHLO invocation";
+  }
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<arith::ArithDialect, math::MathDialect, ShuttleDialect,
+                    stablehlo::StablehloDialect>();
+  }
+
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    auto invocation = detail::beginShuttleObserverInvocation(
+        shuttlePipelineIdentity(options), observer);
+    auto failure = std::make_shared<FailureCaptureState>();
+    PassManager manager(module.getContext(), ModuleOp::getOperationName());
+    manager.addInstrumentation(
+        std::make_unique<FailureCaptureInstrumentation>(failure));
+    buildShuttleStablehloCorePipeline(manager, options, invocation);
+    if (failed(manager.run(module))) {
+      emitObserverSnapshot(invocation, module, ShuttlePipelinePhase::Failure,
+                           failure->pass);
+      signalPassFailure();
+    }
+  }
+
+private:
+  ShuttlePipelineOptions options;
   std::shared_ptr<const ShuttlePipelineObserver> observer;
-  uint64_t invocationId;
-  std::string policyDigest;
-  std::string tuningDigest;
 };
 
 } // namespace
@@ -1906,32 +1985,8 @@ std::unique_ptr<Pass> createVerifyNoShuttleOpsPass() {
 void buildShuttleStablehloPipeline(
     OpPassManager &manager, const ShuttlePipelineOptions &options,
     std::shared_ptr<const ShuttlePipelineObserver> observer) {
-  static std::atomic<uint64_t> nextInvocationId{0};
-  const uint64_t invocationId =
-      nextInvocationId.fetch_add(1, std::memory_order_relaxed);
-  std::string tuningDigest = sha256(options.canonicalTuning);
-  std::string policyDigest =
-      sha256((policyName(options.numerics) + "\n" + tuningDigest).str());
-  manager.addPass(createAnnotateSourcePass());
-  manager.addPass(createFormStructuralRegionsPass(options.numerics,
-                                                  options.canonicalTuning));
-  manager.addPass(createConvertStablehloToAlgebraPass());
-  manager.addPass(createVerifySourceCoveragePass());
-  manager.addPass(std::make_unique<EmitObserverPass>(
-      ShuttlePipelinePhase::AlgebraCoverage, observer, invocationId,
-      policyDigest, tuningDigest));
-  manager.addPass(createVerifySemanticErasurePass());
-  manager.addPass(createShuttleCanonicalizePass());
-  manager.addPass(createLowerAlgebraToStablehloPass());
-  manager.addPass(createVerifySourceCoveragePass());
-  manager.addPass(std::make_unique<EmitObserverPass>(
-      ShuttlePipelinePhase::LoweredCoverage, observer, invocationId,
-      policyDigest, tuningDigest));
-  manager.addPass(createStripSourceProvenancePass());
-  manager.addPass(createVerifyNoShuttleOpsPass());
-  manager.addPass(std::make_unique<EmitObserverPass>(
-      ShuttlePipelinePhase::FinalErasure, std::move(observer), invocationId,
-      std::move(policyDigest), std::move(tuningDigest)));
+  manager.addPass(std::make_unique<RunShuttleStablehloPipelinePass>(
+      options, std::move(observer)));
 }
 
 void registerShuttleStablehloPipelines() {
