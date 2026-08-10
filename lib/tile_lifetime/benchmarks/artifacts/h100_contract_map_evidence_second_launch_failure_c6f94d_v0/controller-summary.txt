@@ -1,0 +1,30 @@
+Job: /dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2 (/dlwh/shuttle-h100-contract-map-evidence-c6f94d-v2)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: h100_contract_map_source_payload.py: OK
+h100-evidence-source-manifest.json: OK
+Traceback (most recent call last):
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2507, in <module>
+    main()
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2489, in main
+    output = run_coordinator(
+             ^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1549, in run_coordinator
+    generated_artifacts = compile_generated_candidates(config)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 826, in compile_generated_candidates
+    cubin_sass = _run_retained(plan.sass_command)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 875, in _run_retained
+    raise RuntimeError(
+RuntimeError: CUDA artifact command failed with 1: ('/usr/local/cuda-13.2/bin/cuobjdump', '--dump-sass', '/tmp/shuttle-h100-contract-map-evidence-c6f94d-v2/generated/contract_map_9836cdbed389db24/shuttle_source_ordered/contract_map_source_ordered_d39f76659f7697304c1bca70a28095cb91e50900945077558f67d0a89b7abf01.cubin'): 
+	code for sm_90a
+
+cuobjdump fatal   : Could not find executable file 'nvdisasm'; you can try adding path to environment variables PATH or NVDISASM_PATH
+
+
+
+  TASK  STATE      EXIT  DURATION       PEAK MEM    CUR MEM    ERROR
+     0  failed        1  16.06 seconds  -           -          h100_contract_map_source_payload.py: OK
+                                                               h100-evide...
+
