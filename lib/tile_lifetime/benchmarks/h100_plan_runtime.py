@@ -555,12 +555,14 @@ def main() -> None:
     )
     artifact = export_debug_dense_region(config)
     plans = {
-        placement.value: compile_stablehlo_dense_transformer_region(
-            artifact,
-            input_names=DENSE_REGION_INPUT_NAMES,
-            gemm_accumulation_dtype=DType.FP32,
-            numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
-            rms_scale_placement=placement,
+        placement.value: (
+            compile_stablehlo_dense_transformer_region(
+                artifact,
+                input_names=DENSE_REGION_INPUT_NAMES,
+                gemm_accumulation_dtype=DType.FP32,
+                numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+                rms_scale_placement=placement,
+            ).plan
         )
         for placement in (RowScalePlacement.CONSUMER_PROLOGUE, RowScalePlacement.CONSUMER_EPILOGUE)
     }

@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
+import hashlib
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from tile_lifetime import (
     DType,
@@ -15,7 +19,14 @@ from tile_lifetime import (
 )
 from tile_lifetime.compiler import RowScalePlacement
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
+from tile_lifetime.pipeline import (
+    FrontendCompilationStatus,
+    FrontendSourceKind,
+    require_current_stablehlo_dense_compilation,
+    validate_stablehlo_dense_compilation,
+)
 from tile_lifetime.reference import DENSE_REGION_INPUT_NAMES, DenseDebugConfig, export_debug_dense_region
+from tile_lifetime.semantic_erasure import SemanticErasureError
 from tile_lifetime.semantic_recovery import recover_dense_transformer_region
 from tile_lifetime.stablehlo_import import ConcatenateAttributes, SliceAttributes, import_stablehlo
 
@@ -90,13 +101,19 @@ def test_recover_dense_fixture_builds_connected_semantic_graph() -> None:
 
 
 def test_public_dense_stablehlo_path_selects_eight_skeleton_plan() -> None:
-    plan = compile_stablehlo_dense_transformer_region(
-        _fixture_artifact(),
+    artifact = _fixture_artifact()
+    compilation = compile_stablehlo_dense_transformer_region(
+        artifact,
         input_names=DENSE_REGION_INPUT_NAMES,
         gemm_accumulation_dtype=DType.FP32,
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
     )
+    plan = compilation.plan
 
+    assert compilation.provenance.source_kind is FrontendSourceKind.STABLEHLO_ARTIFACT
+    assert compilation.status is FrontendCompilationStatus.EXPERIMENTAL_EXACT_RECOGNIZER
+    assert compilation.provenance.artifact_sha256 == hashlib.sha256(artifact).hexdigest()
+    assert compilation.provenance.source_operation_ids == tuple(range(184))
     assert [type(skeleton) for skeleton in plan.skeletons] == [
         GemmSkeleton,
         StreamingAttentionSkeleton,
@@ -113,13 +130,14 @@ def test_public_dense_stablehlo_path_selects_eight_skeleton_plan() -> None:
 
 
 def test_public_dense_stablehlo_path_exposes_delayed_rms_alternative() -> None:
-    plan = compile_stablehlo_dense_transformer_region(
+    compilation = compile_stablehlo_dense_transformer_region(
         _fixture_artifact(),
         input_names=DENSE_REGION_INPUT_NAMES,
         gemm_accumulation_dtype=DType.FP32,
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
         rms_scale_placement=RowScalePlacement.CONSUMER_EPILOGUE,
     )
+    plan = compilation.plan
 
     gate_up = plan.skeletons[4]
     next_qkv = plan.skeletons[7]
@@ -127,3 +145,29 @@ def test_public_dense_stablehlo_path_exposes_delayed_rms_alternative() -> None:
     assert isinstance(next_qkv, GemmSkeleton)
     assert gate_up.backend == GENERIC_H100_GEMM_BACKEND
     assert next_qkv.backend == GENERIC_H100_GEMM_BACKEND
+
+
+def test_public_dense_stablehlo_path_rejects_unverified_provenance_and_named_schedule_keys() -> None:
+    compilation = compile_stablehlo_dense_transformer_region(
+        _fixture_artifact(),
+        input_names=DENSE_REGION_INPUT_NAMES,
+        gemm_accumulation_dtype=DType.FP32,
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
+
+    hand_authored = replace(
+        compilation,
+        provenance=replace(compilation.provenance, source_kind=FrontendSourceKind.HAND_AUTHORED_SEMANTIC_IR),
+    )
+    with pytest.raises(SemanticErasureError, match="StableHLO artifact"):
+        validate_stablehlo_dense_compilation(hand_authored)
+
+    report = compilation.plan.semantic_erasure_report
+    assert report is not None
+    named_report = replace(report, scheduling_keys=(*report.scheduling_keys, "moe_forward"))
+    named_plan = replace(compilation.plan, semantic_erasure_report=named_report)
+    with pytest.raises(SemanticErasureError, match="named semantics"):
+        validate_stablehlo_dense_compilation(replace(compilation, plan=named_plan))
+
+    with pytest.raises(SemanticErasureError, match="exact named dense-region reconstruction"):
+        require_current_stablehlo_dense_compilation(compilation)

@@ -375,7 +375,7 @@ def main() -> None:
             gemm_accumulation_dtype=DType.FP32,
             numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
             rms_scale_placement=placement,
-        )
+        ).plan
         backend = H100DenseBackend(config)
         bindings = _bindings(plan, config, backend)
         for index in (0, 2, 4, 5, 7):

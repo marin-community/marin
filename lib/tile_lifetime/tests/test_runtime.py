@@ -72,7 +72,7 @@ def _plan(placement: RowScalePlacement = RowScalePlacement.CONSUMER_PROLOGUE) ->
         gemm_accumulation_dtype=DType.FP32,
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
         rms_scale_placement=placement,
-    )
+    ).plan
 
 
 def _inputs(plan: RegionPlan) -> dict[str, TensorBinding]:
@@ -130,7 +130,7 @@ def test_runtime_validates_primary_shape_contract_and_reduces_one_partial_per_n_
         input_names=DENSE_REGION_INPUT_NAMES,
         gemm_accumulation_dtype=DType.FP32,
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
-    )
+    ).plan
     backend = RecordingBackend()
 
     execute_region_plan(plan, _inputs(plan), backend)
