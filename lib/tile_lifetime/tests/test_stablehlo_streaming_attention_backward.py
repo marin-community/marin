@@ -15,11 +15,13 @@ from tile_lifetime import (
     StreamingTileSchedule,
     execute_streaming_attention_backward,
     execute_streaming_attention_with_state,
-    recover_stablehlo_streaming_attention_backward,
 )
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.stablehlo_import import CompareAttributes, import_stablehlo
-from tile_lifetime.stablehlo_streaming_attention_backward import StableHLOStreamingAttentionBackwardError
+from tile_lifetime.stablehlo_streaming_attention_backward import (
+    StableHLOStreamingAttentionBackwardError,
+    recover_experimental_whole_pattern_streaming_attention_backward,
+)
 from tile_lifetime.streaming_attention_backward import eliminate_normalized_exp_maximum_vjp
 from tile_lifetime.streaming_attention_backward_reference import (
     STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
@@ -43,7 +45,7 @@ def _fixture_graph():
 
 def test_frozen_jax_vjp_recovers_visible_generic_reverse_algebra() -> None:
     graph = _fixture_graph()
-    recovered = recover_stablehlo_streaming_attention_backward(graph, schedule=SCHEDULE)
+    recovered = recover_experimental_whole_pattern_streaming_attention_backward(graph, schedule=SCHEDULE)
 
     assert recovered.program.provenance is StreamingAttentionBackwardProvenance.JAX_VJP_HLO_RECOVERY
     assert recovered.program.maximum_vjp is StreamingAttentionBackwardMaximumVJP.JAX_EQUAL_SPLIT
@@ -74,7 +76,7 @@ def test_live_jax_vjp_recovery_executes_with_bf16_gradient_parity(scale: float) 
         export_debug_streaming_attention_backward(config),
         input_names=STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
     )
-    recovered = recover_stablehlo_streaming_attention_backward(graph, schedule=SCHEDULE)
+    recovered = recover_experimental_whole_pattern_streaming_attention_backward(graph, schedule=SCHEDULE)
     rng = np.random.default_rng(71)
     arguments = (
         jnp.asarray(rng.normal(size=(1, 4, 4, 4)), dtype=jnp.bfloat16),
@@ -117,7 +119,7 @@ def test_natural_training_boundary_recovers_forward_output_by_data_dependencies(
         export_debug_streaming_attention_training(config),
         input_names=STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,
     )
-    recovered = recover_stablehlo_streaming_attention_backward(graph, schedule=SCHEDULE)
+    recovered = recover_experimental_whole_pattern_streaming_attention_backward(graph, schedule=SCHEDULE)
     rng = np.random.default_rng(72)
     arguments = (
         jnp.asarray(rng.normal(size=(1, 4, 4, 4)), dtype=jnp.bfloat16),
@@ -159,7 +161,7 @@ def test_natural_training_boundary_recovers_forward_output_by_data_dependencies(
 
 
 def test_maximum_vjp_invariant_rewrite_requires_rounding_reorder_policy() -> None:
-    recovered = recover_stablehlo_streaming_attention_backward(_fixture_graph(), schedule=SCHEDULE)
+    recovered = recover_experimental_whole_pattern_streaming_attention_backward(_fixture_graph(), schedule=SCHEDULE)
 
     with pytest.raises(ValueError, match="bitwise policy"):
         eliminate_normalized_exp_maximum_vjp(
@@ -200,7 +202,7 @@ def test_recovery_rejects_noncausal_domain_predicate_before_assigning_provenance
     )
 
     with pytest.raises(StableHLOStreamingAttentionBackwardError) as error:
-        recover_stablehlo_streaming_attention_backward(
+        recover_experimental_whole_pattern_streaming_attention_backward(
             replace(graph, operations=changed_operations),
             schedule=SCHEDULE,
         )

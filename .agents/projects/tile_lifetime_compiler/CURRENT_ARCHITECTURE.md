@@ -4,10 +4,11 @@
 
 Current Shuttle compilation starts from an ordinary JAX program or a frozen
 StableHLO artifact exported from one. StableHLO import reconstructs structural
-tensor expressions and index relations. Named frontend canonicalization may
-identify RMS normalization, attention, routing, or a scan, but those names must
-erase into `Map`, `Contract`, `Fold`, `Scan`, `Relation`,
-`DomainRestriction`, and `Transport` before physical candidate selection.
+tensor expressions and index relations. Accepted region providers operate on
+`Map`, `Contract`, `Fold`, `Scan`, `Relation`, `DomainRestriction`, and
+`Transport` without reconstructing a workload-named operation. Named frontend
+canonicalizers remain reference or experimental code even when they erase into
+the generic algebra before physical candidate selection.
 
 The intended path is:
 
@@ -35,11 +36,11 @@ or emitter code; neither is part of the default semantic frontend.
 
 | Surface | Status | Boundary |
 | --- | --- | --- |
-| `pipeline.compile_stablehlo_dense_transformer_region` | Current prototype | StableHLO named canonicalization erases through `dense_flow` before scheduling; the recognizer still targets one bounded Llama-shaped region. It is module-local, not the final public compiler API. |
-| `pipeline.compile_stablehlo_streaming_attention_program` | Current prototype | StableHLO attention erases into `TensorProgram` Contract/Map/Fold/DomainRestriction and returns source provenance plus a validated erasure report. |
-| routed and projected routed attention recovery | Current prototype | StableHLO selection becomes generic Relation/RelationPlan and streaming Fold structure. |
+| `pipeline.compile_stablehlo_dense_transformer_region` | Experimental reference | The exact recognizer targets one bounded Llama-shaped region. It cannot satisfy the current generic-dataflow frontend gate. |
+| routed and projected routed attention recovery | Experimental prototype | StableHLO selection becomes generic Relation/RelationPlan and streaming Fold structure, but the bounded selectors are not accepted plugin frontends. |
 | `stablehlo_scan_recovery` | Current structural importer | Structured `stablehlo.while` becomes generic affine `Scan`; named GDN/KDA convenience wrappers remain cleanup work on this checkpoint. |
-| StableHLO row-normalization and streaming-attention backward recovery | Current prototype | Natural JAX forward/VJP HLO becomes generic Map/Fold/Contract programs before code generation. |
+| StableHLO row-normalization recovery | Experimental prototype | Natural JAX forward/VJP HLO becomes generic Map/Fold/Contract programs before code generation. It remains an acceptance fixture until it runs through the shared module plugin. |
+| `pipeline.compile_experimental_whole_pattern_stablehlo_streaming_attention_program` and `stablehlo_streaming_attention_backward` | Experimental reference | Match attention-shaped graphs and rebuild canonical programs. These paths reproduce diagnostics but do not count as an accepted plugin frontend. |
 | `reference_pipeline` | Reference only | Retains named RMS, MoE, and attention planning, including the opaque official-FA3 comparison path. It is not re-exported from `tile_lifetime`. |
 | `attention.compile_reference_attention_region` and `qkv_rope.compile_reference_qkv_rope_attention_region` | Reference only | Hand-built named `TensorGraph` planners for preserved comparisons and unit tests. |
 | `moe.compile_mok_oracle_region` | Oracle only | Builds the opaque MoK comparison skeleton. Import it explicitly from `tile_lifetime.moe`. |

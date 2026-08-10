@@ -191,14 +191,11 @@ from tile_lifetime.normalized_exp_contract_training import (
 from tile_lifetime.pipeline import (
     FrontendProvenance,
     FrontendSourceKind,
-    StableHLOStreamingAttentionCompilation,
     compile_stablehlo_dense_transformer_region,
     compile_stablehlo_projected_routed_attention_program,
     compile_stablehlo_routed_attention_program,
-    compile_stablehlo_streaming_attention_program,
     recover_stablehlo_projected_routed_attention_program,
     recover_stablehlo_routed_attention_program,
-    validate_stablehlo_streaming_attention_compilation,
 )
 from tile_lifetime.plan import (
     AttachmentSite,
@@ -331,11 +328,6 @@ from tile_lifetime.stablehlo_scan_recovery import (
     compile_stablehlo_stateful_scan,
     stateful_scan_scheduling_keys,
     validate_stateful_scan_semantic_erasure,
-)
-from tile_lifetime.stablehlo_streaming_attention_backward import (
-    RecoveredStableHLOStreamingAttentionBackward,
-    StableHLOStreamingAttentionBackwardError,
-    recover_stablehlo_streaming_attention_backward,
 )
 from tile_lifetime.stateful_scan import (
     AffineChunkSummary,
