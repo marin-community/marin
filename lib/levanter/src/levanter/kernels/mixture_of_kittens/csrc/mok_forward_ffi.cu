@@ -291,11 +291,13 @@ __global__ void ForwardEpilogueKernel(
     int num_tokens,
     int hidden_dim,
     int top_k) {
-  const int token = blockIdx.y;
-  const int hidden = blockIdx.x * blockDim.x + threadIdx.x;
-  if (token >= num_tokens || hidden >= hidden_dim) {
+  const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const size_t num_elements = static_cast<size_t>(num_tokens) * hidden_dim;
+  if (index >= num_elements) {
     return;
   }
+  const int token = static_cast<int>(index / hidden_dim);
+  const int hidden = static_cast<int>(index % hidden_dim);
   float value = __bfloat162float(y_shared[static_cast<size_t>(token) * hidden_dim + hidden]);
   for (int k = 0; k < top_k; ++k) {
     const size_t route = static_cast<size_t>(token) * top_k + k;
@@ -310,11 +312,13 @@ __global__ void BackwardEpilogueKernel(
     int num_tokens,
     int hidden_dim,
     int top_k) {
-  const int token = blockIdx.y;
-  const int hidden = blockIdx.x * blockDim.x + threadIdx.x;
-  if (token >= num_tokens || hidden >= hidden_dim) {
+  const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const size_t num_elements = static_cast<size_t>(num_tokens) * hidden_dim;
+  if (index >= num_elements) {
     return;
   }
+  const int token = static_cast<int>(index / hidden_dim);
+  const int hidden = static_cast<int>(index % hidden_dim);
   float value = __bfloat162float(d_x[static_cast<size_t>(token) * hidden_dim + hidden]);
   for (int k = 0; k < top_k; ++k) {
     const size_t route = static_cast<size_t>(token) * top_k + k;
@@ -488,7 +492,8 @@ ffi::Error ForwardBf16(
     LaunchPeerBarrier(runtime, stream);
 
     constexpr int kThreads = 256;
-    const dim3 grid((hidden_dim + kThreads - 1) / kThreads, local_tokens, 1);
+    const size_t output_elements = static_cast<size_t>(local_tokens) * hidden_dim;
+    const dim3 grid((output_elements + kThreads - 1) / kThreads, 1, 1);
     ForwardEpilogueKernel<<<grid, kThreads, 0, stream>>>(
         reinterpret_cast<const __nv_bfloat16*>(y_shared->typed_data()),
         reinterpret_cast<const __nv_bfloat16*>(runtime.combine),
@@ -724,7 +729,8 @@ ffi::Error BackwardBf16(
     LaunchPeerBarrier(runtime, stream);
 
     constexpr int kThreads = 256;
-    const dim3 epilogue_grid((hidden_dim + kThreads - 1) / kThreads, local_tokens, 1);
+    const size_t output_elements = static_cast<size_t>(local_tokens) * hidden_dim;
+    const dim3 epilogue_grid((output_elements + kThreads - 1) / kThreads, 1, 1);
     BackwardEpilogueKernel<<<epilogue_grid, kThreads, 0, stream>>>(
         reinterpret_cast<__nv_bfloat16*>(d_x->typed_data()),
         reinterpret_cast<const __nv_bfloat16*>(runtime.d_x_routed),

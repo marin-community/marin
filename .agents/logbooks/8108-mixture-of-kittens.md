@@ -262,3 +262,13 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: The terminal job `/rav/mok-ffi-ring-replay-4xgb200-20260810-1104` succeeded without a retry. Forward maximum error was 0.03125. All input, router, routed-weight, and shared-weight gradient checks passed with no mismatches.
 - Interpretation: The JAX adapter can use the source ring replay mechanism. The full gate can use a 32,768-row buffer, which is one quarter of the prior routed workspace.
 - Next action: Repeat the one-step full-model memory gate with the 32K macro-buffer.
+
+### 2026-08-10 11:18 UTC - Full-shape fused training passed the memory gate
+
+- Hypothesis: A 32,768-row macro-buffer lets the full E8 model finish one fused forward and backward step on four GB200 GPUs.
+- Commit Hash: `c258d45a2` plus the epilogue-grid change.
+- Commands: Two one-step four-GPU GB200 Iris runs with no retry; focused schedule and FFI tests; repository checks for the changed CUDA file.
+- Config: E8, top-4, global batch 64, BF16 compute, 48 layers, a 1.1-times bounded route schedule, fused forward and native backward, backward context recomputation, and a 32,768-row macro-buffer.
+- Result: The smaller ring reduced the rematerialized compiler estimate from 216.05 GiB to 209.29 GiB and removed the runtime allocation failure. The first run then found that the epilogue used 65,536 CUDA grid rows, one more than the grid-Y limit. A flat one-dimensional epilogue grid fixed the launch. The terminal run `/rav/mok-fused-ring32k-grid-1n-1-20260810-1112-coord` completed one training step without a retry. It reported loss 11.8 and 98,932 dropped route assignments.
+- Interpretation: The fused forward and native backward now run at the complete training shape. The ring-memory change and the flat grid are both required for this shape.
+- Next action: Run 25 steps with an XProf capture, measure steady MFU, and tune the fused configuration if it is below 25%.
