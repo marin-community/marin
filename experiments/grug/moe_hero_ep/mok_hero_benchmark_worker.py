@@ -12,7 +12,7 @@ import statistics
 import torch
 import torch.distributed as dist
 from mok import functional
-from tests.utils import generate_inputs
+from utils import generate_inputs
 
 NUM_LOCAL_TOKENS = 65_536
 HIDDEN_SIZE = 6_144

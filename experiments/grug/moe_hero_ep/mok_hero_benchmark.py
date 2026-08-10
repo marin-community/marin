@@ -178,7 +178,7 @@ def _cuda_environment(venv: Path, source: Path) -> dict[str, str]:
     env["PATH"] = f"{venv}/bin:{cuda_home}/bin:{env['PATH']}"
     env["LIBRARY_PATH"] = f"{cuda_home}/lib:{env.get('LIBRARY_PATH', '')}"
     env["LD_LIBRARY_PATH"] = f"{cuda_home}/lib:{torch_lib}:{env.get('LD_LIBRARY_PATH', '')}"
-    env["PYTHONPATH"] = f"{source}:{Path.cwd()}:{env.get('PYTHONPATH', '')}"
+    env["PYTHONPATH"] = f"{source / 'tests'}:{Path.cwd()}:{env.get('PYTHONPATH', '')}"
     env["OMP_NUM_THREADS"] = "1"
     return env
 
@@ -232,6 +232,7 @@ def run_benchmark(config: MokHeroBenchmarkConfig) -> None:
                 f"nvidia-cuda-crt=={CUDA_NVCC_VERSION}",
                 f"nvidia-nvvm=={CUDA_NVCC_VERSION}",
                 f"nvidia-cuda-cccl=={CUDA_CCCL_VERSION}",
+                "numpy",
                 "setuptools>=80",
             ],
         )
