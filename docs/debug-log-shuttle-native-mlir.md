@@ -469,3 +469,38 @@ generated region helpers remain valid.
   tree.
 - Native compilation and execution of the four XLA tests remain pending. No
   remote build was launched for this source-only fix.
+
+## Hypothesis 12
+
+The exact native run passed all six Shuttle gates, including 11/11 lit tests,
+and compiled the updated transform library. The four-test XLA gate then failed
+while compiling `stablehlo_module_transform_test.cc`. Clang reported 13 uses
+of undeclared `TF_ASSERT_OK` or `TF_EXPECT_OK`; zero XLA tests executed.
+
+At the pinned XLA revision, `xla/tsl/lib/core/status_test_util.h` defines those
+two macros and `//xla/tsl/lib/core:status_test_util` exports the header. The
+registry test has neither direct dependency. `mlir_to_hlo_test.cc` adds one
+`TF_ASSERT_OK` and two `TF_EXPECT_OK` uses for the hook but also relies on
+transitive exposure, so fix both targets before the next compile.
+
+`TF_ASSERT_OK_AND_ASSIGN` is a separate macro from
+`xla/tsl/platform/statusor.h`. The unregistered-transform test uses only that
+macro and already declares the corresponding include and dependency.
+`pjrt_executable_test.cc` already declares both status headers and targets.
+
+## Results 12
+
+- The retained compiler log contains exactly ten `TF_ASSERT_OK` and three
+  `TF_EXPECT_OK` failures in `stablehlo_module_transform_test.cc`. The other
+  three XLA test targets have no compile status in this run.
+- Both `stablehlo_module_transform_test.cc` and `mlir_to_hlo_test.cc` now
+  include `xla/tsl/lib/core/status_test_util.h` directly, and both Bazel targets
+  depend directly on `//xla/tsl/lib/core:status_test_util`.
+- All four patched XLA test sources were audited by macro family. The
+  unregistered-transform and executable tests require no status-macro wiring
+  change.
+- Patch `0001` was regenerated from exact XLA commit `9b635916ecc6`. Its applied
+  files byte-match the audited source. Patches `0001` and `0002` apply in order,
+  pass `diff --check`, reverse in order, and leave a clean exact-pin tree.
+- Native compilation and execution of the four XLA tests remain pending. No
+  remote build was launched for this source-only fix.

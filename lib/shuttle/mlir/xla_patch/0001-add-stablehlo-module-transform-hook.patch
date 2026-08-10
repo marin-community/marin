@@ -1,8 +1,8 @@
 diff --git a/xla/pjrt/BUILD b/xla/pjrt/BUILD
-index ef7d2a5..a5bbbb3 100644
+index ef7d2a5..2cbb6e1 100644
 --- a/xla/pjrt/BUILD
 +++ b/xla/pjrt/BUILD
-@@ -940,2 +940,35 @@ xla_cc_test(
+@@ -940,2 +940,36 @@ xla_cc_test(
 
 +cc_library(
 +    name = "stablehlo_module_transform",
@@ -26,6 +26,7 @@ index ef7d2a5..a5bbbb3 100644
 +        ":mlir_to_hlo",
 +        ":stablehlo_module_transform",
 +        "//xla/hlo/testlib:test",
++        "//xla/tsl/lib/core:status_test_util",
 +        "//xla/tsl/platform:statusor",
 +        "@com_google_absl//absl/base:core_headers",
 +        "@com_google_absl//absl/status",
@@ -38,18 +39,20 @@ index ef7d2a5..a5bbbb3 100644
 +)
 +
  cc_library(
-@@ -946,2 +979,4 @@ cc_library(
+@@ -946,2 +980,4 @@ cc_library(
      deps = [
 +        ":pjrt_executable",
 +        ":stablehlo_module_transform",
          "//xla:util",
-@@ -994,2 +1029,5 @@ xla_cc_test(
+@@ -994,3 +1030,7 @@ xla_cc_test(
          ":mlir_to_hlo",
 +        ":pjrt_executable",
 +        ":stablehlo_module_transform",
 +        "//xla/hlo/builder:xla_computation",
          "//xla/hlo/testlib:test",
-@@ -1006,2 +1044,19 @@ xla_cc_test(
++        "//xla/tsl/lib/core:status_test_util",
+         "//xla/tsl/platform:statusor",
+@@ -1006,2 +1046,19 @@ xla_cc_test(
 
 +xla_cc_test(
 +    name = "mlir_to_hlo_unregistered_transform_test",
@@ -182,21 +185,22 @@ index f21c0c2..908620d 100644
 +
  // Converts an MHLO/CHLO module string to an XLA computation.
 diff --git a/xla/pjrt/mlir_to_hlo_test.cc b/xla/pjrt/mlir_to_hlo_test.cc
-index 4a560ef..b8908a9 100644
+index 4a560ef..8947e3d 100644
 --- a/xla/pjrt/mlir_to_hlo_test.cc
 +++ b/xla/pjrt/mlir_to_hlo_test.cc
 @@ -25,2 +25,3 @@ limitations under the License.
  #include "absl/strings/string_view.h"
 +#include "mlir/IR/BuiltinAttributes.h"
  #include "mlir/IR/BuiltinOps.h"
-@@ -29,3 +30,6 @@ limitations under the License.
+@@ -29,3 +30,7 @@ limitations under the License.
  #include "stablehlo/api/PortableApi.h"
 +#include "xla/hlo/builder/xla_computation.h"
  #include "xla/hlo/testlib/test.h"
 +#include "xla/pjrt/pjrt_executable.h"
 +#include "xla/pjrt/stablehlo_module_transform.h"
++#include "xla/tsl/lib/core/status_test_util.h"
  #include "xla/tsl/platform/statusor.h"
-@@ -47,2 +51,14 @@ MATCHER_P(IsVhloArtifact, version, "") {
+@@ -47,2 +52,14 @@ MATCHER_P(IsVhloArtifact, version, "") {
 
 +const absl::Status& RegisterOptionForwardingTestTransform() {
 +  static const absl::Status status =
@@ -211,7 +215,7 @@ index 4a560ef..b8908a9 100644
 +}
 +
  TEST(MlirToHloTest, StablehloTest) {
-@@ -65,2 +81,39 @@ TEST(MlirToHloTest, StablehloTest) {
+@@ -65,2 +82,39 @@ TEST(MlirToHloTest, StablehloTest) {
 
 +TEST(MlirToHloTest, EnabledModuleTransformReceivesOptions) {
 +  constexpr absl::string_view kProgram =
@@ -571,10 +575,10 @@ index 0000000..7743931
 +#endif  // XLA_PJRT_STABLEHLO_MODULE_TRANSFORM_H_
 diff --git a/xla/pjrt/stablehlo_module_transform_test.cc b/xla/pjrt/stablehlo_module_transform_test.cc
 new file mode 100644
-index 0000000..800160e
+index 0000000..44ace8a
 --- /dev/null
 +++ b/xla/pjrt/stablehlo_module_transform_test.cc
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,244 @@
 +/* Copyright 2026 The OpenXLA Authors.
 +
 +Licensed under the Apache License, Version 2.0 (the "License");
@@ -609,6 +613,7 @@ index 0000000..800160e
 +#include "mlir/IR/Verifier.h"
 +#include "xla/hlo/testlib/test.h"
 +#include "xla/pjrt/mlir_to_hlo.h"
++#include "xla/tsl/lib/core/status_test_util.h"
 +#include "xla/tsl/platform/statusor.h"
 +
 +namespace xla {
