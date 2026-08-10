@@ -431,19 +431,19 @@ def _step_record_identity(step: StepSpec) -> StepRecordIdentity:
     )
 
 
-def _raise_if_step_cancelled() -> None:
+def _raise_if_step_cancelled(output_path: str) -> None:
     token = current_cancellation_token()
     if token is not None and token.cancelled:
         reason = token.reason
         assert reason is not None
-        raise StepLeaseLostError(reason)
+        raise StepLeaseLostError(output_path, reason)
 
 
 def _refresh_step_lease(status_file: StatusFile) -> None:
     try:
         status_file.refresh_lock()
     except LeaseLostError as error:
-        raise StepLeaseLostError(str(error)) from error
+        raise StepLeaseLostError(status_file.output_path, str(error)) from error
 
 
 def run_step(step: StepSpec) -> None:
@@ -478,7 +478,7 @@ def run_step(step: StepSpec) -> None:
                         _run_remote_step(step, output_path)
                     else:
                         result = step.fn(output_path)  # pyrefly: ignore[not-callable]
-                        _raise_if_step_cancelled()
+                        _raise_if_step_cancelled(output_path)
                         # A lazy step writes its own full record; a plain step's return is saved
                         # with its identity + lineage (name, deps, config) so the output is traceable.
                         if not step.writes_record:
@@ -486,15 +486,15 @@ def run_step(step: StepSpec) -> None:
                     elapsed = timedelta(seconds=time.monotonic() - t0)
 
                     # 4. Refresh the lease before writing terminal status.
-                    _raise_if_step_cancelled()
+                    _raise_if_step_cancelled(output_path)
                     _refresh_step_lease(status_file)
                     status_file.write_status(STATUS_SUCCESS)
                     logger.info(f"Step {step_label} succeeded in {elapsed}")
-                except StepLeaseLostError:
-                    raise
                 except Exception as error:
+                    if isinstance(error, StepLeaseLostError) and error.output_path == output_path:
+                        raise
                     try:
-                        _raise_if_step_cancelled()
+                        _raise_if_step_cancelled(output_path)
                         _refresh_step_lease(status_file)
                     except StepLeaseLostError as lease_error:
                         raise lease_error from error
@@ -504,7 +504,9 @@ def run_step(step: StepSpec) -> None:
         except StepAlreadyDone:
             logger.info(f"Step {step_label} completed by another worker")
             return
-        except StepLeaseLostError:
+        except StepLeaseLostError as error:
+            if error.output_path != output_path:
+                raise
             lease_was_lost = True
             logger.warning("Step %s lost its lease; waiting for the current owner", step_label)
 

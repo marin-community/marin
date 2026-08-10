@@ -20,6 +20,7 @@ from marin.execution.step_status import (
     STATUS_FAILED,
     STATUS_SUCCESS,
     StatusFile,
+    StepLeaseLostError,
     distributed_lock,
     get_status_path,
 )
@@ -278,6 +279,26 @@ def test_run_step_treats_nested_lease_loss_as_step_failure(tmp_path: Path):
     with pytest.raises(LeaseLostError, match="nested lock lost"):
         run_step(spec)
 
+    assert StatusFile(spec.output_path, "check").status == STATUS_FAILED
+
+
+def test_run_step_does_not_retry_nested_step_lease_loss(tmp_path: Path):
+    nested_output_path = (tmp_path / "nested").as_posix()
+    call_count = 0
+
+    def fail_nested_step_lock(_output_path: str) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count > 1:
+            raise AssertionError("run_step retried after a nested lease loss")
+        raise StepLeaseLostError(nested_output_path, "nested lock lost")
+
+    spec = StepSpec(name="nested-step-lock-loss", output_path_prefix=tmp_path.as_posix(), fn=fail_nested_step_lock)
+
+    with pytest.raises(StepLeaseLostError, match="nested lock lost"):
+        run_step(spec)
+
+    assert call_count == 1
     assert StatusFile(spec.output_path, "check").status == STATUS_FAILED
 
 

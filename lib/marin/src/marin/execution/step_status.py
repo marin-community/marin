@@ -243,6 +243,10 @@ class StepAlreadyDone(Exception):
 class StepLeaseLostError(LeaseLostError):
     """The current step lost its distributed lease."""
 
+    def __init__(self, output_path: str, reason: str):
+        super().__init__(reason)
+        self.output_path = output_path
+
 
 @contextlib.contextmanager
 def step_lock(
@@ -291,7 +295,7 @@ def step_lock(
         if cancellation_token.cancelled:
             reason = cancellation_token.reason
             assert reason is not None
-            raise StepLeaseLostError(reason)
+            raise StepLeaseLostError(output_path, reason)
         status_file.release_lock()
 
 
