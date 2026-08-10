@@ -507,13 +507,14 @@ def build_small_run(
 @click.option(
     "--tokens-per-active-param",
     type=click.IntRange(min=1),
-    default=60,
-    help="Token budget per active parameter. The shapes carry 60; issue #8062 specifies 750.",
+    default=750,
+    show_default=True,
+    help="Token budget per active parameter, sizing the step count (issue #8062 specifies 750).",
 )
 @click.option(
     "--watch-interval",
     type=click.IntRange(min=0),
-    default=0,
+    default=10,
     show_default=True,
     help="Steps between gradient and parameter norm logs. Zero disables norm logs.",
 )

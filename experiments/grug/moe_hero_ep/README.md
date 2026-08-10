@@ -78,6 +78,8 @@ contains the size and capacity searches.
 
 ## Launch
 
+### Hero
+
 Print the plan without a GPU run:
 
 ```bash
@@ -113,6 +115,40 @@ W&B uses the `WANDB_PROJECT` environment variable, or project `marin_moe` when i
 group `moe-hero-ep` and the supplied run ID. The run output includes the durable W&B metrics
 artifact. Give each concurrent gang its own `IRIS_PORT_JAX`: rank 0 binds and registers that port
 for the JAX coordinator, and the default 8476 is shared by every run on the cluster.
+
+### Small-scale ablations
+
+`small_scale_abl_launch.py` runs a downsized hero shape (`--size` in `d768`…`d2048`) on one GB200
+rack. It fixes the batch at ~4M tokens per step to hold the fixed-all-to-all drop dynamics, and
+sizes the step count from the model's active-parameter count: `num_steps` trains
+`--tokens-per-active-param` (default 750) tokens per active parameter. `--flavor ep` keeps the
+64-way expert axis; `--flavor fsdp` runs the same shape dropless. Print the plan without a GPU run:
+
+```bash
+python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
+  --run-id mhep-abl-d1024-ep \
+  --size d1024 \
+  --flavor ep \
+  --version 2026.08.10
+```
+
+Submit one rung through the Marin Iris controller:
+
+```bash
+run_id="mhep-abl-d1024-ep"
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
+  --target-cluster cw-us-east-08a --priority interactive \
+  --cpu 2 --memory 8GB --disk 32GB --timeout 21600 \
+  --job-name "${run_id}-coord" \
+  -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
+  -e IRIS_PORT_JAX 32576 \
+  -- python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
+    --run-id "$run_id" --size d1024 --flavor ep --version 2026.08.10 --run
+```
+
+The wider rungs need more than one rack to hold their batch: `--dp-racks N` replicates the run
+across `N` racks, and the launcher sizes the fleet request accordingly. Ablation runs report to W&B
+group `moe-hero-ep-small-abl` and carry Paloma and uncheatable evaluation at `--steps-per-eval`.
 
 ## Result Record
 
