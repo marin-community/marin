@@ -33,6 +33,7 @@ from rigging.provenance import launch_provenance
 logger = logging.getLogger(__name__)
 
 TRANSFORMER_ENGINE_VERSION = "2.17.1"
+CUDA_CCCL_VERSION = "13.0.85"
 ROUTED_ROWS = 348_672
 ACTIVE_GROUP_SIZES = (116_218, 116_217, 116_217)
 PADDED_GROUP_SIZE = 116_224
@@ -119,34 +120,25 @@ def _pip_cuda_home() -> Path | None:
     return None
 
 
-def _pip_cccl_include() -> Path | None:
-    for package_root in site.getsitepackages():
-        candidates = (
-            Path(package_root) / "nvidia" / "cu13" / "include" / "cccl",
-            Path(package_root) / "nvidia" / "cuda_cccl" / "include",
-        )
-        for include_path in candidates:
-            if (include_path / "nv" / "target").is_file():
-                return include_path
+def _cccl_include(package_roots: tuple[Path, ...]) -> Path | None:
+    for package_root in package_roots:
+        for target_header in package_root.rglob("nv/target"):
+            return target_header.parent.parent
     return None
 
 
-def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | None, str | None]:
+def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | None, str | None, str | None]:
     """Build the pinned JAX extension against the job's CUDA 13 JAX runtime."""
     target = tempfile.mkdtemp(prefix="ra2a-transformer-engine-")
     env = dict(os.environ)
     env["UV_CACHE_DIR"] = "/tmp/ra2a-transformer-engine-uv-cache"
     cuda_home = _pip_cuda_home()
     if cuda_home is None:
-        return None, 0.0, "", "", "CUDA 13 pip toolkit headers were not found", None
-    cccl_include = _pip_cccl_include()
-    if cccl_include is None:
-        return None, 0.0, "", "", "CUDA 13 CCCL headers were not found", str(cuda_home)
+        return None, 0.0, "", "", "CUDA 13 pip toolkit headers were not found", None, None
     env["CUDA_HOME"] = str(cuda_home)
     env["PATH"] = f"{target}/bin:{cuda_home}/bin:{env['PATH']}"
     env["PYTHONPATH"] = f"{target}:{env.get('PYTHONPATH', '')}"
     env["LIBRARY_PATH"] = f"{cuda_home}/lib:{env.get('LIBRARY_PATH', '')}"
-    env["CPLUS_INCLUDE_PATH"] = f"{cccl_include}:{env.get('CPLUS_INCLUDE_PATH', '')}"
 
     setup = subprocess.run(
         [
@@ -159,6 +151,7 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
             "cmake>=3.21",
             "ninja",
             "pybind11>=3",
+            f"nvidia-cuda-cccl=={CUDA_CCCL_VERSION}",
         ],
         check=False,
         capture_output=True,
@@ -174,7 +167,13 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
             setup.stderr[-INSTALL_LOG_TAIL:],
             error,
             str(cuda_home),
+            None,
         )
+    cccl_include = _cccl_include((Path(target),))
+    if cccl_include is None:
+        error = f"nvidia-cuda-cccl=={CUDA_CCCL_VERSION} did not contain nv/target"
+        return None, 0.0, setup.stdout[-INSTALL_LOG_TAIL:], setup.stderr[-INSTALL_LOG_TAIL:], error, str(cuda_home), None
+    env["CPLUS_INCLUDE_PATH"] = f"{cccl_include}:{env.get('CPLUS_INCLUDE_PATH', '')}"
 
     start = time.perf_counter()
     install = subprocess.run(
@@ -200,7 +199,7 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
     stderr = install.stderr[-INSTALL_LOG_TAIL:]
     if install.returncode != 0:
         error = f"Transformer Engine installation exited {install.returncode}"
-        return None, install_time, stdout, stderr, error, str(cuda_home)
+        return None, install_time, stdout, stderr, error, str(cuda_home), str(cccl_include)
 
     site.addsitedir(target)
     try:
@@ -208,8 +207,8 @@ def _install_transformer_engine() -> tuple[Any | None, float, str, str, str | No
         importlib.import_module("transformer_engine.jax")
     except (ImportError, OSError, RuntimeError) as exc:
         error = f"{type(exc).__name__}: {exc}"
-        return None, install_time, stdout, stderr, error, str(cuda_home)
-    return transformer_engine_jax, install_time, stdout, stderr, None, str(cuda_home)
+        return None, install_time, stdout, stderr, error, str(cuda_home), str(cccl_include)
+    return transformer_engine_jax, install_time, stdout, stderr, None, str(cuda_home), str(cccl_include)
 
 
 def _benchmark_shape(shape: WeightGradientShape) -> BenchmarkRow:
@@ -313,8 +312,9 @@ def _benchmark_shape(shape: WeightGradientShape) -> BenchmarkRow:
 
 
 def run_benchmark(config: TransformerEngineWeightGradBenchmarkConfig) -> None:
-    te_jax, install_time, install_stdout, install_stderr, install_error, cuda_home = _install_transformer_engine()
-    cccl_include = _pip_cccl_include()
+    te_jax, install_time, install_stdout, install_stderr, install_error, cuda_home, cccl_include = (
+        _install_transformer_engine()
+    )
     cuda_version = None
     cublas_lt_version = None
     grouped_gemm_workspace_size = None
@@ -337,7 +337,7 @@ def run_benchmark(config: TransformerEngineWeightGradBenchmarkConfig) -> None:
         install_stderr_tail=install_stderr,
         platform_machine=os.uname().machine,
         cuda_home=cuda_home,
-        cccl_include=str(cccl_include) if cccl_include is not None else None,
+        cccl_include=cccl_include,
         cuda_version=cuda_version,
         cublas_lt_version=cublas_lt_version,
         grouped_gemm_workspace_size=grouped_gemm_workspace_size,
