@@ -102,9 +102,10 @@ interface through `@llvm-project//mlir:BytecodeOpInterface`.
   declarations and the Bazel target supplies the public header plus generated
   interface implementation.
 - Repository formatting and lint gates run on the changed files.
-- Native `@shuttle_mlir//:ShuttleDialect` compilation passed the generated
-  operation declarations and failed next at the handwritten include
-  `llvm/ADT/SmallDenseSet.h`. No bytecode-interface diagnostic recurred.
+- Native `@shuttle_mlir//:ShuttleDialect` preprocessing reached the next
+  handwritten include failure at `llvm/ADT/SmallDenseSet.h`. Compilation
+  stopped before semantic parsing, so bytecode-interface compile validation
+  remains pending.
 
 ## Hypothesis 3
 
