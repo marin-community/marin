@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import importlib.util
 import json
+import subprocess
 import sys
 import time
 from dataclasses import replace
@@ -40,6 +42,20 @@ from tile_lifetime.sm100_routed_lowering import (  # noqa: E402
 from tile_lifetime.streaming_attention import derive_streaming_attention, scaled_score_map  # noqa: E402
 
 RIGHT_ITEM_WIDTH = 128
+EXPECTED_DEVICE_KIND = "NVIDIA GB200"
+CORRECTNESS_MAXIMUM_ABSOLUTE_ERROR = 0.125
+CORRECTNESS_MEAN_ABSOLUTE_ERROR = 0.01
+RECORDED_DISTRIBUTIONS = (
+    "cuda-python",
+    "jax",
+    "jax-cuda13-pjrt",
+    "jax-cuda13-plugin",
+    "jaxlib",
+    "nvidia-cuda-cccl",
+    "nvidia-cuda-nvcc",
+    "nvidia-cutlass-dsl",
+    "quack-kernels",
+)
 
 
 def _arguments() -> argparse.Namespace:
@@ -152,6 +168,73 @@ def _output_hash(value: jax.Array) -> str:
     return hashlib.sha256(np.asarray(value).tobytes()).hexdigest()
 
 
+def _command_output(*argv: str) -> str:
+    return subprocess.run(argv, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _event_schedule_audit(plan) -> dict[str, object]:
+    event = plan.sources.emitter_plan.event_schedule
+    runtime_by_name = {
+        event.program.event_plans[0].name: event.resource_runtime_inputs,
+        event.program.event_plans[1].name: event.fold_runtime_inputs,
+        **{
+            event_plan.name: runtime
+            for event_plan, runtime in zip(
+                event.program.event_plans[2:],
+                event.reuse_runtime_inputs,
+                strict=True,
+            )
+        },
+    }
+    return {
+        "task_families": [
+            {
+                "name": family.name,
+                "axes": [[axis.name, axis.extent] for axis in family.axes],
+                "placement": family.placement,
+            }
+            for family in event.program.task_families
+        ],
+        "event_plans": [
+            {
+                "name": event_plan.name,
+                "domain_axes": [[axis.name, axis.extent] for axis in event_plan.domain.axes],
+                "notify_edge_count": len(event_plan.notify_relation.pairs),
+                "trigger_edge_count": len(event_plan.trigger_relation.pairs),
+                "initial_counts": list(runtime_by_name[event_plan.name].event_initial_counts),
+                "storage_slots": list(runtime_by_name[event_plan.name].event_storage_slots),
+                "generations": list(runtime_by_name[event_plan.name].event_generations),
+                "memory_scope": event_plan.memory_scope.value,
+                "generation_policy": event_plan.generation_policy.value,
+            }
+            for event_plan in event.program.event_plans
+        ],
+        "buffer": {
+            "name": event.resource_buffer.name,
+            "capacity": event.resource_buffer.capacity,
+            "slots": list(event.resource_buffer.slots),
+            "generations": list(event.resource_buffer.generations),
+            "reuse_dependence_count": len(event.resource_buffer.reuse_dependences),
+        },
+        "grouping": {
+            "task_count": event.grouping.task_count,
+            "edge_count": event.grouping.edge_count,
+            "resource_partitions": list(event.grouping.resource_partition),
+            "resource_items": list(event.grouping.resource_item),
+            "resource_edge_offsets": list(event.grouping.resource_edge_offsets),
+        },
+        "realizations": [
+            {
+                "plan": entry.plan_name,
+                "kind": entry.kind.value,
+                "mechanism": entry.mechanism,
+                "reason": entry.reason,
+            }
+            for entry in event.realization.entries
+        ],
+    }
+
+
 def _execute(
     compiled,
     plan,
@@ -167,6 +250,9 @@ def main() -> None:
         raise RuntimeError("the JAX linkage smoke must run without Torch")
     if jax.default_backend() != "gpu":
         raise RuntimeError(f"expected a JAX GPU backend, found {jax.default_backend()}")
+    devices = jax.devices()
+    if len(devices) != 1 or devices[0].device_kind != EXPECTED_DEVICE_KIND:
+        raise RuntimeError(f"expected exactly one {EXPECTED_DEVICE_KIND}, found {devices}")
     if arguments.key_length % RIGHT_ITEM_WIDTH:
         raise ValueError("key length must be divisible by the right-item width")
     if arguments.query_heads % arguments.key_value_heads:
@@ -234,6 +320,7 @@ def main() -> None:
 
     cases = (("baseline", baseline, selected), ("relation_mutation", mutated, mutation))
     case_records = {}
+    validation_failures = []
     for name, plan, selected_items in cases:
         output = _execute(compiled, plan, inputs)
         output.block_until_ready()
@@ -249,25 +336,52 @@ def main() -> None:
             repeated.block_until_ready()
             samples.append((time.perf_counter() - start) * 1000.0)
             hashes.append(_output_hash(repeated))
+        maximum_absolute_error = float(jnp.max(difference))
+        mean_absolute_error = float(jnp.mean(difference))
+        output_hash = _output_hash(output)
+        deterministic = len(set(hashes)) == 1 and hashes[0] == output_hash
+        if maximum_absolute_error > CORRECTNESS_MAXIMUM_ABSOLUTE_ERROR:
+            validation_failures.append(f"{name} maximum absolute error {maximum_absolute_error}")
+        if mean_absolute_error > CORRECTNESS_MEAN_ABSOLUTE_ERROR:
+            validation_failures.append(f"{name} mean absolute error {mean_absolute_error}")
+        if not deterministic:
+            validation_failures.append(f"{name} output was not bitwise deterministic")
         case_records[name] = {
-            "maximum_absolute_error": float(jnp.max(difference)),
-            "mean_absolute_error": float(jnp.mean(difference)),
-            "output_hash": _output_hash(output),
+            "maximum_absolute_error": maximum_absolute_error,
+            "mean_absolute_error": mean_absolute_error,
+            "correctness_limits": {
+                "maximum_absolute_error": CORRECTNESS_MAXIMUM_ABSOLUTE_ERROR,
+                "mean_absolute_error": CORRECTNESS_MEAN_ABSOLUTE_ERROR,
+            },
+            "output_hash": output_hash,
             "repeated_output_hashes": hashes,
-            "deterministic": len(set(hashes)) == 1,
+            "deterministic": deterministic,
             "samples_ms": samples,
             "median_ms": float(np.median(samples)),
             "event_runtime_fingerprint": plan.sources.emitter_plan.event_schedule.runtime_fingerprint,
             "work_count": int(np.asarray(plan.tables.work_count)[0]),
+            "work_capacity": plan.tables.work_capacity,
         }
 
     if "torch" in sys.modules:
         raise RuntimeError("the JAX linkage smoke imported Torch")
     event = baseline.sources.emitter_plan.event_schedule
     record = {
-        "status": "gb200_jax_right_resource_linkage_executed",
-        "device": str(jax.devices()[0]),
+        "status": "passed" if not validation_failures else "failed_validation",
+        "claim_scope": "bounded linkage only; no overlap or performance acceptance",
+        "device": str(devices[0]),
+        "device_kind": devices[0].device_kind,
         "jax": jax.__version__,
+        "toolchain_packages": {name: importlib.metadata.version(name) for name in RECORDED_DISTRIBUTIONS},
+        "shuttle_revision": _command_output("git", "rev-parse", "HEAD"),
+        "shuttle_dirty": bool(_command_output("git", "status", "--porcelain")),
+        "msa_revision": _command_output("git", "-C", str(arguments.msa_root), "rev-parse", "HEAD"),
+        "nvcc": _command_output(str(arguments.nvcc), "--version"),
+        "nvidia_smi": _command_output(
+            "nvidia-smi",
+            "--query-gpu=name,uuid,driver_version,pstate,clocks.current.sm,clocks.max.sm,power.limit",
+            "--format=csv,noheader",
+        ),
         "query_length": arguments.query_length,
         "key_length": arguments.key_length,
         "query_heads": arguments.query_heads,
@@ -276,19 +390,27 @@ def main() -> None:
         "empty_right_resource": empty_right,
         "empty_right_resource_edge_count": int(np.count_nonzero(selected == empty_right)),
         "event_program_fingerprint": event.program_fingerprint,
-        "resource_task_count": event.grouping.task_count,
-        "resource_buffer_capacity": event.resource_buffer.capacity,
-        "event_realizations": [
-            [entry.plan_name, entry.kind.value, entry.mechanism] for entry in event.realization.entries
-        ],
+        "event_runtime_fingerprints": {name: case["event_runtime_fingerprint"] for name, case in case_records.items()},
+        "event_schedule_audit": _event_schedule_audit(baseline),
         "physical_call_type": type(compiled.call).__qualname__,
+        "compiled_work_capacity": compiled.work_capacity,
         "physical_source_sha256": baseline.sources.generated_source_sha256["physical"],
-        "partial_merge_source_sha256": baseline.merge_ffi.source_sha256,
-        "partial_merge_handler": baseline.merge_ffi.handler_symbol,
+        "generated_handlers": {
+            "physical_class": baseline.sources.emitter_plan.physical_class,
+            "baseline_fold_target": baseline.merge_ffi.target,
+            "baseline_fold_handler": baseline.merge_ffi.handler_symbol,
+            "mutated_fold_target": mutated.merge_ffi.target,
+            "mutated_fold_handler": mutated.merge_ffi.handler_symbol,
+        },
+        "partial_merge_source_sha256": {
+            "baseline": baseline.merge_ffi.source_sha256,
+            "relation_mutation": mutated.merge_ffi.source_sha256,
+        },
         "external_semantic_kernels": list(baseline.sources.emitter_plan.external_semantic_kernels),
         "internal_synchronization_boundary": "primitive-owned mbarrier sites",
         "torch_installed": importlib.util.find_spec("torch") is not None,
         "torch_loaded": "torch" in sys.modules,
+        "validation_failures": validation_failures,
         "cases": case_records,
     }
     rendered = json.dumps(record, indent=2, sort_keys=True)
@@ -296,6 +418,8 @@ def main() -> None:
         arguments.output.parent.mkdir(parents=True, exist_ok=True)
         arguments.output.write_text(rendered + "\n")
     print(rendered)
+    if validation_failures:
+        raise RuntimeError("; ".join(validation_failures))
 
 
 if __name__ == "__main__":
