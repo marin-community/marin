@@ -9,6 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from tile_lifetime.ffi_command_buffer import DirectLaunchFfiPhysicalCandidate, audit_ffi_command_buffer_eligibility
 from tile_lifetime.xla_contract_relation_fold_ffi import (
     audit_contract_relation_fold_replacement,
     evaluate_contract_relation_fold_plan,
@@ -167,6 +168,27 @@ def test_bounded_contract_relation_fold_candidate_erases_payload_materialization
     assert "slice.35" in audit.dead_instructions
     assert "cublas" not in generated.source
     assert "atomicAdd(" not in generated.source
+
+
+def test_bounded_contract_relation_fold_capture_safe_variant_passes_static_audit() -> None:
+    plan = plan_weighted_relation_reverse_typed_ffi(_hlo())
+    launch_checked = generate_cuda_contract_relation_fold_ffi(
+        plan.payload_contract,
+        plan.edge_fold,
+        target="shuttle.contract_relation_fold.checked",
+    )
+    capture_safe = generate_cuda_contract_relation_fold_ffi(
+        plan.payload_contract,
+        plan.edge_fold,
+        target="shuttle.contract_relation_fold.capture_safe",
+        physical_candidate=DirectLaunchFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE,
+    )
+
+    assert not launch_checked.command_buffer_compatible
+    assert not audit_ffi_command_buffer_eligibility(launch_checked.source).eligible
+    assert capture_safe.command_buffer_compatible
+    assert audit_ffi_command_buffer_eligibility(capture_safe.source).eligible
+    assert "cudaPeekAtLastError(" not in capture_safe.source
 
 
 def test_weighted_reverse_composes_after_existing_generated_routed_regions() -> None:

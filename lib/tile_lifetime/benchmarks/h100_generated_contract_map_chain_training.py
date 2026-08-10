@@ -42,13 +42,15 @@ from tile_lifetime.contract_map_chain import (
     form_two_contract_map_training_program,
 )
 from tile_lifetime.cuda_contract_map_chain_codegen import (
-    ContractMapChainFfiPhysicalCandidate,
     GeneratedCudaContractMapChainFfi,
     audit_cuda_contract_map_chain_source,
     generate_cuda_contract_map_chain_ffi,
 )
 from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags, cuda_toolkit_shared_library_link_flags
-from tile_lifetime.ffi_command_buffer import require_custom_call_command_buffers_enabled
+from tile_lifetime.ffi_command_buffer import (
+    DirectLaunchFfiPhysicalCandidate,
+    require_custom_call_command_buffers_enabled,
+)
 from tile_lifetime.jax_contract_map_chain_ffi import (
     call_cuda_contract_map_chain_forward_ffi,
     call_cuda_contract_map_chain_reverse_ffi,
@@ -613,9 +615,9 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=256)
     parser.add_argument(
         "--physical-candidate",
-        type=ContractMapChainFfiPhysicalCandidate,
-        choices=tuple(ContractMapChainFfiPhysicalCandidate),
-        default=ContractMapChainFfiPhysicalCandidate.LAUNCH_CHECKED,
+        type=DirectLaunchFfiPhysicalCandidate,
+        choices=tuple(DirectLaunchFfiPhysicalCandidate),
+        default=DirectLaunchFfiPhysicalCandidate.LAUNCH_CHECKED,
     )
     parser.add_argument("--seed", type=int, default=20260809)
     parser.add_argument("--warmups", type=int, default=10)

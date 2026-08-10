@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import shlex
 from dataclasses import dataclass
+from enum import StrEnum
 
 _HANDLER_TRAITS_PLACEHOLDER = "__SHUTTLE_FFI_HANDLER_TRAITS__"
 _CUSTOM_CALL_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer"
@@ -42,6 +43,30 @@ _FORBIDDEN_SOURCE_OPERATIONS = {
         "cudaStreamSynchronize(",
     ),
 }
+
+
+class DirectLaunchFfiPhysicalCandidate(StrEnum):
+    """Host-side error checking or capture-safe replay for a direct launch."""
+
+    LAUNCH_CHECKED = "launch_checked"
+    COMMAND_BUFFER_CAPTURE_SAFE = "command_buffer_capture_safe"
+
+    @property
+    def command_buffer_compatible(self) -> bool:
+        """Whether the handler may carry XLA's command-buffer trait."""
+        return self is DirectLaunchFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE
+
+
+def direct_launch_status_check(candidate: DirectLaunchFfiPhysicalCandidate, *, operation: str) -> str:
+    """Render a launch-status check only for the launch-checked candidate."""
+    if candidate is DirectLaunchFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE:
+        return ""
+    if candidate is DirectLaunchFfiPhysicalCandidate.LAUNCH_CHECKED:
+        return f"""  const cudaError_t status = cudaPeekAtLastError();
+  if (status != cudaSuccess) {{
+    return ffi::Error::Internal("{operation} launch failed: " + std::string(cudaGetErrorString(status)));
+  }}"""
+    raise ValueError(f"unsupported direct-launch FFI physical candidate: {candidate}")
 
 
 @dataclass(frozen=True)

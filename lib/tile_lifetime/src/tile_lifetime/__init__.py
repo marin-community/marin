@@ -35,7 +35,6 @@ from tile_lifetime.contract_map_chain import (
     form_two_contract_map_training_program,
 )
 from tile_lifetime.cuda_contract_map_chain_codegen import (
-    ContractMapChainFfiPhysicalCandidate,
     ContractMapChainSourceAudit,
     GeneratedCudaContractMapChainFfi,
     audit_cuda_contract_map_chain_source,
@@ -85,6 +84,7 @@ from tile_lifetime.expert_parallel_plan import (
     TransportSelection,
     TransportSemantics,
 )
+from tile_lifetime.ffi_command_buffer import DirectLaunchFfiPhysicalCandidate
 from tile_lifetime.fold_placement import (
     FoldAttachment,
     FoldAttachmentSite,

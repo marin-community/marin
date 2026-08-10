@@ -3571,3 +3571,21 @@ author: dlwh
   including rejection of a weakened policy.
   No GPU replay was run, and TLTC-XLA-068 remains rejected under the policy
   committed before that measurement.
+
+### 2026-08-09 - TLTC-XLA-071 generic direct-launch capture set
+
+- The full 23-call Grug harness now has an explicit generic direct-launch
+  candidate covering normalized-exp forward/reverse, the six forward and four
+  reverse low-rank Contract/Map sites, source-indexed Fold, and fused
+  Contract/relation Fold. Launch-checked generation remains the default.
+- Contract/Map, source-indexed Fold, and Contract/relation Fold share one
+  physical-candidate policy. Capture-safe generation removes host launch-status
+  queries, adds the XLA FFI trait, and succeeds only if the complete generated
+  source passes the generic static eligibility audit.
+- The harness derives a capture-site manifest from the compiled executable's
+  final HLO and requires exact selected-site multiplicities of `1+1+6+4+1+1`.
+  It preserves the final optimized HLO and manifest in future benchmark
+  evidence. A CPU fixture validates these 14 selected sites inside a 23-call
+  final-HLO topology and rejects a repeated-site mismatch.
+- AxisFold and handlers with scratch allocation, lazy cuBLAS handles, or the
+  Triton attention wrapper remain excluded. No GPU replay was run.

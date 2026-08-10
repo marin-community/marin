@@ -19,6 +19,11 @@ from tile_lifetime.cast_scalar_program import (
     GeneratedCudaScalarBody,
     evaluate_cast_scalar_program,
 )
+from tile_lifetime.ffi_command_buffer import (
+    DirectLaunchFfiPhysicalCandidate,
+    direct_launch_status_check,
+    finalize_ffi_handler_source,
+)
 from tile_lifetime.xla_hlo_recovery import EntryRegionValue, HloComputation, HloInstruction, parse_hlo_module_text
 from tile_lifetime.xla_relation_program_recovery import (
     RoutedForwardContractStage,
@@ -72,6 +77,12 @@ class GeneratedSourceIndexedFoldFfi:
     source: str
     semantic_digest: str
     source_digest: str
+    physical_candidate: DirectLaunchFfiPhysicalCandidate
+
+    @property
+    def command_buffer_compatible(self) -> bool:
+        """Whether the generated direct launch can be replayed."""
+        return self.physical_candidate.command_buffer_compatible
 
 
 @dataclass(frozen=True)
@@ -151,6 +162,7 @@ def generate_cuda_source_indexed_fold_ffi(
     plan: SourceIndexedFoldTypedFfiPlan,
     *,
     target: str,
+    physical_candidate: DirectLaunchFfiPhysicalCandidate = DirectLaunchFfiPhysicalCandidate.LAUNCH_CHECKED,
 ) -> GeneratedSourceIndexedFoldFfi:
     """Generate one-thread-per-output source-ordered Fold without atomics."""
     dimensions = _validated_dimensions(plan)
@@ -174,7 +186,11 @@ def generate_cuda_source_indexed_fold_ffi(
         json.dumps(semantic_record, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     target_symbol = _target_symbol(target)
-    source = f"""// Generated from a generic source-indexed Fold; do not edit.
+    launch_status_check = direct_launch_status_check(
+        physical_candidate,
+        operation="source-indexed Fold",
+    )
+    source_template = f"""// Generated from a generic source-indexed Fold; do not edit.
 #include <atomic>
 #include <cstdint>
 #include <string>
@@ -247,11 +263,7 @@ ffi::Error ShuttleSourceIndexedFold(
   constexpr int kBlocks = (kItems + kThreads - 1) / kThreads;
   ShuttleSourceIndexedFoldKernel<<<kBlocks, kThreads, 0, stream>>>(
       initial, source_indices, contributions, output);
-  const cudaError_t status = cudaGetLastError();
-  if (status != cudaSuccess) {{
-    return ffi::Error::Internal(
-        std::string("ShuttleSourceIndexedFoldKernel: ") + cudaGetErrorString(status));
-  }}
+{launch_status_check}
   call_count.fetch_add(1, std::memory_order_relaxed);
   return ffi::Error::Success();
 }}
@@ -269,12 +281,16 @@ auto ShuttleSourceIndexedFoldBinding() {{
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     {target_symbol},
     ShuttleSourceIndexedFold,
-    ShuttleSourceIndexedFoldBinding());
+    ShuttleSourceIndexedFoldBinding()__SHUTTLE_FFI_HANDLER_TRAITS__);
 
 extern "C" int shuttle_source_indexed_fold_call_count() {{
   return call_count.load(std::memory_order_relaxed);
 }}
 """
+    source = finalize_ffi_handler_source(
+        source_template,
+        command_buffer_compatible=physical_candidate.command_buffer_compatible,
+    )
     if "atomicAdd(" in source:
         raise ValueError("source-indexed Fold generation introduced atomic accumulation")
     return GeneratedSourceIndexedFoldFfi(
@@ -282,6 +298,7 @@ extern "C" int shuttle_source_indexed_fold_call_count() {{
         source=source,
         semantic_digest=semantic_digest,
         source_digest=hashlib.sha256(source.encode()).hexdigest(),
+        physical_candidate=physical_candidate,
     )
 
 

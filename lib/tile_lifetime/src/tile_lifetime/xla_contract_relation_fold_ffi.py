@@ -13,6 +13,11 @@ from dataclasses import dataclass
 import numpy as np
 
 from tile_lifetime.cast_scalar_program import CastScalarNumericalPolicy
+from tile_lifetime.ffi_command_buffer import (
+    DirectLaunchFfiPhysicalCandidate,
+    direct_launch_status_check,
+    finalize_ffi_handler_source,
+)
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.xla_hlo_recovery import HloComputation, HloInstruction, parse_hlo_module_text
 from tile_lifetime.xla_rank_two_contract_ffi import (
@@ -50,6 +55,12 @@ class GeneratedContractRelationFoldFfi:
     semantic_digest: str
     source_digest: str
     cost: ContractRelationFoldPhysicalCost
+    physical_candidate: DirectLaunchFfiPhysicalCandidate
+
+    @property
+    def command_buffer_compatible(self) -> bool:
+        """Whether the generated direct launch can be replayed."""
+        return self.physical_candidate.command_buffer_compatible
 
 
 @dataclass(frozen=True)
@@ -71,6 +82,7 @@ def generate_cuda_contract_relation_fold_ffi(
     fold: RelationEdgeFoldTypedFfiPlan,
     *,
     target: str,
+    physical_candidate: DirectLaunchFfiPhysicalCandidate = DirectLaunchFfiPhysicalCandidate.LAUNCH_CHECKED,
 ) -> GeneratedContractRelationFoldFfi:
     """Generate one bounded CTA for Contract -> scalar Map -> two ordered Folds.
 
@@ -133,7 +145,11 @@ def generate_cuda_contract_relation_fold_ffi(
     semantic_digest = hashlib.sha256(
         json.dumps(semantic_record, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    source = f"""// Generated from generic Contract/Map/Fold structure; do not edit.
+    launch_status_check = direct_launch_status_check(
+        physical_candidate,
+        operation="Contract/relation Fold",
+    )
+    source_template = f"""// Generated from generic Contract/Map/Fold structure; do not edit.
 #include <atomic>
 #include <cstdint>
 #include <string>
@@ -238,11 +254,7 @@ ffi::Error ShuttleContractRelationFold(
   auto* output = reinterpret_cast<std::uint16_t*>(output_buffer->typed_data());
   ShuttleContractRelationFoldKernel<<<1, kThreads, 0, stream>>>(
       lhs, rhs, initial, source_indices, edge_cotangent, output);
-  const cudaError_t status = cudaGetLastError();
-  if (status != cudaSuccess) {{
-    return ffi::Error::Internal(
-        std::string("ShuttleContractRelationFoldKernel: ") + cudaGetErrorString(status));
-  }}
+{launch_status_check}
   call_count.fetch_add(1, std::memory_order_relaxed);
   return ffi::Error::Success();
 }}
@@ -262,12 +274,16 @@ auto ShuttleContractRelationFoldBinding() {{
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     {target_symbol},
     ShuttleContractRelationFold,
-    ShuttleContractRelationFoldBinding());
+    ShuttleContractRelationFoldBinding()__SHUTTLE_FFI_HANDLER_TRAITS__);
 
 extern "C" int shuttle_contract_relation_fold_call_count() {{
   return call_count.load(std::memory_order_relaxed);
 }}
 """
+    source = finalize_ffi_handler_source(
+        source_template,
+        command_buffer_compatible=physical_candidate.command_buffer_compatible,
+    )
     if "atomicAdd(" in source:
         raise ValueError("Contract/relation-Fold generation introduced atomic accumulation")
     return GeneratedContractRelationFoldFfi(
@@ -276,6 +292,7 @@ extern "C" int shuttle_contract_relation_fold_call_count() {{
         semantic_digest=semantic_digest,
         source_digest=hashlib.sha256(source.encode()).hexdigest(),
         cost=cost,
+        physical_candidate=physical_candidate,
     )
 
 

@@ -39,6 +39,7 @@ from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
     _compile_cuda_ffi_handler,
     write_gzip_text,
 )
+from tile_lifetime.command_buffer_capture import CaptureSiteManifest, derive_capture_site_manifest
 from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
 from tile_lifetime.cuda_contract_map_chain_codegen import (
     GeneratedCudaContractMapChainFfi,
@@ -52,7 +53,10 @@ from tile_lifetime.cuda_normalized_exp_contract_reverse_codegen import (
     GeneratedCudaNormalizedExpContractReverseFfi,
     generate_cuda_normalized_exp_contract_reverse_ffi,
 )
-from tile_lifetime.ffi_command_buffer import require_custom_call_command_buffers_enabled
+from tile_lifetime.ffi_command_buffer import (
+    DirectLaunchFfiPhysicalCandidate,
+    require_custom_call_command_buffers_enabled,
+)
 from tile_lifetime.jax_contract_map_chain_ffi import register_cuda_contract_map_chain_ffi
 from tile_lifetime.jax_hlo_rewrite_runtime import audit_hlo_rewrite_runtime, require_hlo_rewrite_runtime
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
@@ -259,14 +263,27 @@ class CommandBufferCandidateMode(StrEnum):
 
     DISABLED = "disabled"
     NORMALIZED_EXP_PAIR = "normalized_exp_pair"
+    GENERIC_DIRECT_LAUNCH_SET = "generic_direct_launch_set"
 
-    @property
-    def compatible_targets(self) -> tuple[str, ...]:
+    def compatible_targets(self, composition_mode: RoutedTrainingCompositionMode) -> tuple[str, ...]:
         """Return handlers whose host callbacks are capture-only instrumentation."""
         if self is CommandBufferCandidateMode.NORMALIZED_EXP_PAIR:
+            if not composition_mode.generates_normalized_exp_pair:
+                raise ValueError("the normalized-exp command-buffer candidate requires the generated pair")
             return (
                 _NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
                 _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
+            )
+        if self is CommandBufferCandidateMode.GENERIC_DIRECT_LAUNCH_SET:
+            if not composition_mode.generates_low_rank_gated_products:
+                raise ValueError("the generic direct-launch set requires the complete 23-call composition")
+            return (
+                _SHARED_ROUTED_TARGETS.source_fold,
+                _WEIGHTED_RELATION_FUSED_TARGET,
+                _NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
+                _NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
+                _LOW_RANK_CONTRACT_MAP_FORWARD_TARGET,
+                _LOW_RANK_CONTRACT_MAP_REVERSE_TARGET,
             )
         return ()
 
@@ -331,6 +348,29 @@ def _target_occurrence(hlo_text: str, target: str) -> int:
         instruction.opcode == "custom-call" and _CUSTOM_CALL_TARGET_ATTRIBUTE.findall(instruction.attributes) == [target]
         for computation in module.computations
         for instruction in computation.instructions
+    )
+
+
+def _final_hlo_capture_site_manifest(
+    final_hlo: str,
+    *,
+    executable: str,
+    composition_mode: RoutedTrainingCompositionMode,
+    command_buffer_candidate: CommandBufferCandidateMode,
+) -> CaptureSiteManifest:
+    """Derive and validate the selected capture topology from compiled HLO."""
+    targets = command_buffer_candidate.compatible_targets(composition_mode)
+    if not targets:
+        return CaptureSiteManifest.uninstrumented(executable)
+    expected = dict.fromkeys(targets, 1)
+    if _LOW_RANK_CONTRACT_MAP_FORWARD_TARGET in expected:
+        expected[_LOW_RANK_CONTRACT_MAP_FORWARD_TARGET] = 6
+        expected[_LOW_RANK_CONTRACT_MAP_REVERSE_TARGET] = 4
+    return derive_capture_site_manifest(
+        executable,
+        final_hlo,
+        {target: target for target in targets},
+        expected_target_occurrences=expected,
     )
 
 
@@ -636,11 +676,7 @@ def run_smoke(
     repeats: int = 30,
 ) -> dict[str, Any]:
     """Compile, execute, and time the combined routed-plus-attention transform."""
-    if (
-        command_buffer_candidate is CommandBufferCandidateMode.NORMALIZED_EXP_PAIR
-        and not composition_mode.generates_normalized_exp_pair
-    ):
-        raise ValueError("the normalized-exp command-buffer candidate requires the generated forward/reverse pair")
+    compatible_targets = command_buffer_candidate.compatible_targets(composition_mode)
     command_buffer_flag_audit = (
         require_custom_call_command_buffers_enabled(os.environ.get("XLA_FLAGS", ""))
         if command_buffer_candidate is not CommandBufferCandidateMode.DISABLED
@@ -727,6 +763,7 @@ def run_smoke(
         expected_target_occurrences[_LOW_RANK_CONTRACT_MAP_FORWARD_TARGET] = 6
         expected_target_occurrences[_LOW_RANK_CONTRACT_MAP_REVERSE_TARGET] = 4
     exact_target_occurrences: dict[str, int] | None = None
+    final_capture_site_manifest: CaptureSiteManifest | None = None
     try:
         with set_mesh(_mesh()):
             train_step, state, batch = _natural_train_step()
@@ -832,12 +869,22 @@ def run_smoke(
                     source_fold = generate_cuda_source_indexed_fold_ffi(
                         routed_plan.source_fold,
                         target=_SHARED_ROUTED_TARGETS.source_fold,
+                        physical_candidate=(
+                            DirectLaunchFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE
+                            if _SHARED_ROUTED_TARGETS.source_fold in compatible_targets
+                            else DirectLaunchFfiPhysicalCandidate.LAUNCH_CHECKED
+                        ),
                     )
                     if composition_mode.fuses_weighted_reverse:
                         weighted_relation_fused = generate_cuda_contract_relation_fold_ffi(
                             plan.weighted_relation_reverse.payload_contract,
                             plan.weighted_relation_reverse.edge_fold,
                             target=_WEIGHTED_RELATION_FUSED_TARGET,
+                            physical_candidate=(
+                                DirectLaunchFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE
+                                if _WEIGHTED_RELATION_FUSED_TARGET in compatible_targets
+                                else DirectLaunchFfiPhysicalCandidate.LAUNCH_CHECKED
+                            ),
                         )
                     else:
                         weighted_relation_contract = generate_cuda_rank_two_contract_ffi(
@@ -852,16 +899,12 @@ def run_smoke(
                         normalized_exp_contract_forward = generate_cuda_normalized_exp_contract_forward_ffi(
                             plan.normalized_exp_contract_forward,
                             target=_NORMALIZED_EXP_CONTRACT_FORWARD_TARGET,
-                            command_buffer_compatible=(
-                                command_buffer_candidate is CommandBufferCandidateMode.NORMALIZED_EXP_PAIR
-                            ),
+                            command_buffer_compatible=(_NORMALIZED_EXP_CONTRACT_FORWARD_TARGET in compatible_targets),
                         )
                         normalized_exp_contract_reverse = generate_cuda_normalized_exp_contract_reverse_ffi(
                             plan.normalized_exp_contract_reverse,
                             target=_NORMALIZED_EXP_CONTRACT_REVERSE_TARGET,
-                            command_buffer_compatible=(
-                                command_buffer_candidate is CommandBufferCandidateMode.NORMALIZED_EXP_PAIR
-                            ),
+                            command_buffer_compatible=(_NORMALIZED_EXP_CONTRACT_REVERSE_TARGET in compatible_targets),
                         )
                     routed_weight_targets = _SHARED_ROUTED_TARGETS.weight_gradients
                 weights = tuple(
@@ -999,6 +1042,12 @@ def run_smoke(
                             family.program,
                             forward_target=family.forward_target,
                             reverse_target=family.reverse_target,
+                            physical_candidate=(
+                                DirectLaunchFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE
+                                if family.forward_target in compatible_targets
+                                and family.reverse_target in compatible_targets
+                                else DirectLaunchFfiPhysicalCandidate.LAUNCH_CHECKED
+                            ),
                         )
                         for family in low_rank_plan.families
                     )
@@ -1116,6 +1165,15 @@ def run_smoke(
                 transformed_modules[0],
                 expected_target_occurrences,
             )
+            final_hlo = transformed.as_text()
+            final_capture_site_manifest = _final_hlo_capture_site_manifest(
+                final_hlo,
+                executable="transformed",
+                composition_mode=composition_mode,
+                command_buffer_candidate=command_buffer_candidate,
+            )
+            if artifact_directory is not None:
+                write_gzip_text(directory / "transformed-final-optimized-hlo.txt.gz", final_hlo)
             actual = transformed(transformed_state, transformed_batch)
             jax.block_until_ready(actual)
             comparison = _compare_under_ordered_fp(expected, actual)
@@ -1389,6 +1447,8 @@ def run_smoke(
             raise RuntimeError("shared-Map composition did not retain generated normalized-exp forward/reverse")
     if exact_target_occurrences is None:
         raise RuntimeError("exact custom-call target validation did not run before execution")
+    if final_capture_site_manifest is None:
+        raise RuntimeError("final-HLO capture-site manifest was not derived before execution")
     target_occurrences: dict[str, Any] = {
         "forward": exact_target_occurrences[routed_targets.forward],
         mode_target_key: exact_target_occurrences[mode_target],
@@ -1445,43 +1505,46 @@ def run_smoke(
         call_counts["attention_backward"],
         *call_counts["axis_folds"],
     ]
+    capture_only_calls: list[int] = []
     if composition_mode.uses_shared_map:
-        observed_calls.extend(
-            (
-                *call_counts["input_contracts"],
-                call_counts["source_fold"],
-                *(
-                    (call_counts["weighted_relation_contract_fold"],)
-                    if composition_mode.fuses_weighted_reverse
-                    else (
-                        call_counts["weighted_relation_contract"],
-                        call_counts["weighted_relation_fold"],
-                    )
-                ),
-            )
-        )
-        if composition_mode.generates_normalized_exp_pair:
-            if command_buffer_candidate is CommandBufferCandidateMode.DISABLED:
-                observed_calls.extend(
-                    (
-                        call_counts["normalized_exp_contract_forward"],
-                        call_counts["normalized_exp_contract_reverse"],
-                    )
-                )
-        if composition_mode.generates_low_rank_gated_products:
+        observed_calls.extend(call_counts["input_contracts"])
+        source_fold_calls = call_counts["source_fold"]
+        if _SHARED_ROUTED_TARGETS.source_fold in compatible_targets:
+            capture_only_calls.append(source_fold_calls)
+        else:
+            observed_calls.append(source_fold_calls)
+        if composition_mode.fuses_weighted_reverse:
+            weighted_calls = call_counts["weighted_relation_contract_fold"]
+            if _WEIGHTED_RELATION_FUSED_TARGET in compatible_targets:
+                capture_only_calls.append(weighted_calls)
+            else:
+                observed_calls.append(weighted_calls)
+        else:
             observed_calls.extend(
+                (
+                    call_counts["weighted_relation_contract"],
+                    call_counts["weighted_relation_fold"],
+                )
+            )
+        if composition_mode.generates_normalized_exp_pair:
+            normalized_calls = (
+                call_counts["normalized_exp_contract_forward"],
+                call_counts["normalized_exp_contract_reverse"],
+            )
+            if _NORMALIZED_EXP_CONTRACT_FORWARD_TARGET in compatible_targets:
+                capture_only_calls.extend(normalized_calls)
+            else:
+                observed_calls.extend(normalized_calls)
+        if composition_mode.generates_low_rank_gated_products:
+            low_rank_calls = [
                 count
                 for family_counts in call_counts["low_rank_contract_map_families"]
                 for count in (family_counts["forward"], family_counts["reverse"])
-            )
-    capture_only_calls = (
-        (
-            call_counts["normalized_exp_contract_forward"],
-            call_counts["normalized_exp_contract_reverse"],
-        )
-        if command_buffer_candidate is CommandBufferCandidateMode.NORMALIZED_EXP_PAIR
-        else ()
-    )
+            ]
+            if _LOW_RANK_CONTRACT_MAP_FORWARD_TARGET in compatible_targets:
+                capture_only_calls.extend(low_rank_calls)
+            else:
+                observed_calls.extend(low_rank_calls)
 
     def write_execution_evidence(status: str, reason: str | None) -> None:
         if artifact_directory is None:
@@ -1574,7 +1637,7 @@ def run_smoke(
             "status": status,
             "reason": reason,
             "command_buffer_candidate": command_buffer_candidate.value,
-            "command_buffer_compatible_targets": command_buffer_candidate.compatible_targets,
+            "command_buffer_compatible_targets": compatible_targets,
             "xla_command_buffer_startup_selection": (
                 {
                     "uses_xla_default": command_buffer_flag_audit.uses_xla_default,
@@ -1585,7 +1648,8 @@ def run_smoke(
             ),
             "minimum_custom_call_handler_executions": minimum_calls,
             "capture_only_handler_minimum_executions": 1 if capture_only_calls else None,
-            "capture_only_handler_targets": command_buffer_candidate.compatible_targets,
+            "capture_only_handler_targets": compatible_targets,
+            "final_hlo_capture_site_manifest": final_capture_site_manifest.to_json(),
             "custom_call_occurrences_in_transformed_hlo": target_occurrences,
             "custom_call_handler_executions": call_counts,
             "generated_runtime_dependencies": runtime_dependencies,
@@ -1967,10 +2031,11 @@ def run_smoke(
             **low_rank_contract_map_targets,
         },
         "custom_call_occurrences_in_transformed_hlo": target_occurrences,
+        "final_hlo_capture_site_manifest": final_capture_site_manifest.to_json(),
         "custom_call_handler_executions": call_counts,
         "custom_call_handler_count_contract": {
             "logical_execution_minimum": minimum_calls,
-            "capture_only_targets": command_buffer_candidate.compatible_targets,
+            "capture_only_targets": compatible_targets,
             "capture_only_minimum": 1 if capture_only_calls else None,
             "note": (
                 "Command-buffer-compatible host handlers run while XLA records a graph; graph replay does not "
@@ -2042,7 +2107,7 @@ def run_smoke(
         "generated_minus_baseline_ms": transformed_median - baseline_median,
         "independent_custom_call_count": composition_mode.independent_custom_call_count,
         "command_buffer_candidate": command_buffer_candidate.value,
-        "command_buffer_compatible_targets": command_buffer_candidate.compatible_targets,
+        "command_buffer_compatible_targets": compatible_targets,
         "xla_command_buffer_startup_selection": (
             {
                 "uses_xla_default": command_buffer_flag_audit.uses_xla_default,
