@@ -28,7 +28,7 @@ NUM_TOKENS = 512
 HIDDEN_DIM = 256
 INTERMEDIATE_DIM = 256
 TOP_K = 4
-NUM_LOCAL_EXPERTS = 1
+NUM_LOCAL_EXPERTS = 2
 BF16_ATOL = 0.5
 BF16_RTOL = 0.01
 SHARED_GRADIENT_BF16_ATOL = 1.0
@@ -57,7 +57,9 @@ def _routes() -> np.ndarray:
     source_ranks = np.arange(WORLD_SIZE, dtype=np.int32)[:, None, None]
     token_indices = np.arange(NUM_TOKENS, dtype=np.int32)[None, :, None]
     route_indices = np.arange(TOP_K, dtype=np.int32)[None, None, :]
-    return (source_ranks + token_indices + route_indices) % WORLD_SIZE
+    destination_ranks = (source_ranks + route_indices) % WORLD_SIZE
+    local_experts = ((source_ranks + token_indices) % 4 == 0).astype(np.int32)
+    return destination_ranks * NUM_LOCAL_EXPERTS + local_experts
 
 
 def _schedules(top_experts: np.ndarray, config: MoKForwardConfig) -> tuple[np.ndarray, ...]:
@@ -95,9 +97,11 @@ def _reference(
     shared_hidden = jax.nn.silu(shared_gate_values) * shared_up_values
     shared_output = jnp.einsum("wti,hi->wth", shared_hidden, shared_down)
 
-    selected_gate = routed_gate[top_experts, 0]
-    selected_up = routed_up[top_experts, 0]
-    selected_down = routed_down[top_experts, 0]
+    expert_ranks = top_experts // NUM_LOCAL_EXPERTS
+    local_experts = top_experts % NUM_LOCAL_EXPERTS
+    selected_gate = routed_gate[expert_ranks, local_experts]
+    selected_up = routed_up[expert_ranks, local_experts]
+    selected_down = routed_down[expert_ranks, local_experts]
     routed_gate_values = jnp.einsum("wth,wtkih->wtki", x, selected_gate)
     routed_up_values = jnp.einsum("wth,wtkih->wtki", x, selected_up)
     routed_hidden = jax.nn.silu(routed_gate_values) * routed_up_values
