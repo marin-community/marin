@@ -26,12 +26,16 @@ from marin.execution.step_spec import StepSpec
 # extractor output.
 _FOCUS_CRAWL_EXTRACTION = "data/datakit/normalized/common_crawl_focus_2026_22_ed4b8bc9"
 _EXTRACTION_SHARDS = "outputs/main"
+# One shard per WARC. An interrupted copy leaves fewer, and normalizing that
+# publishes a valid-looking source built from part of the crawl.
+_EXTRACTION_SHARD_COUNT = 4573
 
 
 def _validate_focus_crawl_extraction(output_path: str) -> None:
     shard_glob = prefix_join(output_path, f"{_EXTRACTION_SHARDS}/*.parquet")
-    if next(iter(StoragePath(shard_glob).glob()), None) is None:
-        raise FileNotFoundError(f"No Parquet shards found under {shard_glob}")
+    found = sum(1 for _ in StoragePath(shard_glob).glob())
+    if found != _EXTRACTION_SHARD_COUNT:
+        raise FileNotFoundError(f"Expected {_EXTRACTION_SHARD_COUNT} Parquet shards under {shard_glob}, found {found}")
 
 
 def common_crawl_focus_normalize_steps() -> tuple[StepSpec, ...]:
@@ -47,8 +51,7 @@ def common_crawl_focus_normalize_steps() -> tuple[StepSpec, ...]:
             "justext_model": "sklearn",
             "justext_stoplist": "English",
             "format": "parquet",
-            "warc_files": 4573,
-            "shards": 4573,
+            "shards": _EXTRACTION_SHARD_COUNT,
             "documents": 36_327_068,
         },
     )
