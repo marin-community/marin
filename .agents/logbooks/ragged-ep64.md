@@ -17,7 +17,7 @@ author: rjpower
 
 ## Current TL;DR
 
-The process-per-GPU, four-node exact proxy now trains with finite loss and zero routing drops. The original ragged transfer launched only one block per peer and reached 11.28% MFU. Splitting each peer slice into 32 logical updates raises the grid from 16 to 512 blocks and reaches 18.08% MFU. Reusing the existing QuACK/CuTe SM100 grouped GEMMs for activation-path expert compute reaches the best stable result, 19.63% mean MFU. XProf, exact weight-gradient tile sweeps, and the final command-buffer treatment did not expose another bounded change capable of crossing 20%.
+The process-per-GPU, four-node exact proxy now trains with finite loss and zero routing drops. The original ragged transfer launched only one block per peer and reached 11.28% MFU. Splitting each peer slice into 32 logical updates raises the grid from 16 to 512 blocks and reaches 18.08% MFU. Reusing the existing QuACK/CuTe SM100 grouped GEMMs for activation-path expert compute reaches the best stable result, 19.63% mean MFU. XProf and bounded XLA/NCCL/Pallas changes did not cross 20%; the active campaign now screens alternative grouped-Wgrad backends and a persistent MoE schedule against the measured 17.3% kernel target.
 
 ## Current Baseline
 
@@ -30,7 +30,10 @@ The process-per-GPU, four-node exact proxy now trains with finite loss and zero 
 
 ### Active
 
-- None. The bounded runtime, conventional NCCL, packaged grouped-matmul, transfer-splitting, and exact Pallas tile arms are exhausted.
+- `RA2A-TE`: Transformer Engine JAX BF16 grouped GEMM supports the exact `dw13` and `dw2` weight-gradient layouts and reduces their combined time by at least 17.3%. Next test: exact one-GB200 harness.
+- `RA2A-CUDNN`: cuDNN Frontend grouped Wgrad supports the exact layouts and clears the same target when Transformer Engine is unavailable or insufficient. Next test: API probe, then exact one-GB200 harness.
+- `RA2A-MOK`: Mixture-of-Kittens' persistent forward/backward schedule retains a material advantage at the exact hero-layer geometry. Next test: four-GB200 process-per-GPU oracle before JAX integration.
+- `RA2A-OFFLOAD`: step-boundary optimizer-state staging can hide at least 0.3606 seconds/step without exceeding HBM. Next test: semantic host/device trace or Nsight Systems after compute screening.
 
 ### Blocked
 
@@ -57,6 +60,7 @@ The process-per-GPU, four-node exact proxy now trains with finite loss and zero 
 - 2026-08-08: Stop the default one-shot baseline after its first synchronized illegal-address failure rather than consume ten automatic retries. Treat reachability as the baseline result and test NCCL send/recv next.
 - 2026-08-08: Reduce the send/recv peer FIFO before changing the XLA memory fraction. The failing executable already exceeds XLA's rematerialization target, while `NCCL_BUFFSIZE` directly controls the late allocation that failed.
 - 2026-08-08: Do not reduce the FIFO below 1 MiB after `RA2A-003`: allocation already succeeded, and a smaller FIFO cannot explain or repair the new low-power collective spin. Test grouped NCCL launch next.
+- 2026-08-10: Reopen #8077 for alternative grouped-MoE implementations outside the sealed flag sweep. Require a 17.3% combined exact-shape Wgrad reduction before a four-node training arm; run Transformer Engine, cuDNN Frontend, and Mixture-of-Kittens screens serially and retain process-per-GPU for distributed tests.
 
 ## Negative Results Index
 
@@ -1015,3 +1019,16 @@ The process-per-GPU, four-node exact proxy now trains with finite loss and zero 
 - Decision: keep command buffers disabled. The investigation has exhausted the obvious EP runtime, conventional NCCL, transport-parallelism, packaged grouped-matmul, existing CuTe, and bounded Pallas tile changes. Preserve S33 as the selected configuration and require a full-rack EP64 validation before production adoption.
 - W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s37-exact-ep16-e48-split32-cute-command-buffers-20260810
 - Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5237216568
+
+### 2026-08-10 17:06 UTC - Alternative grouped-MoE campaign opened
+
+- Hypothesis: a grouped-Wgrad or persistent MoE implementation outside JAX's packaged ragged contractions can remove at least 0.3606 seconds/step and raise the exact proxy above 20% MFU.
+- Commit Hash: `b5ecce804e` before the new harness work.
+- Control: S33 at 19.4428557 seconds/step, 53,939.6848 tokens/s, and 19.6290902% mean MFU over steps 5-24. The two S34 Pallas weight-gradient contractions consume 2.0837 seconds/step, so the target is a 17.3% combined reduction.
+- XPlane idle analysis: merging all physical GPU compute/copy intervals across the three-step S34 trace gives 58.8417 seconds of wall span, 57.3471 seconds busy, and 1.4946 seconds idle. That is 0.4982 seconds idle per traced step and 97.46% physical GPU utilization. The largest 85-163 millisecond gaps cluster around step-boundary D2H/H2D copies, consistent with offloaded optimizer-state staging but not yet semantically attributed. Removing 72% of all observed idle time would be required to cross 20%; this is an upper bound, not an expected gain.
+- Internal prior work: commit `0dd141a03e` contains a four-GB200 Mixture-of-Kittens/DeepEP prototype. At its different T2048/rank, E384/96-local, top-6, H7168, I3072 shape, the MoK oracle measured 3.613 milliseconds forward and 9.077 milliseconds backward; the generated DeepEP plus standalone-MoK path measured 4.478 milliseconds sequential and 4.268 milliseconds with shared-expert overlap. These numbers establish feasibility but do not predict the hero shape.
+- External candidates: Transformer Engine releases include JAX BF16 grouped GEMM with device-side group sizes; cuDNN Frontend exposes Blackwell grouped GEMM plus Wgrad operations; Mixture-of-Kittens supplies a deterministic SM100 forward/backward megakernel; CUTLASS is the custom-kernel fallback. MegaBlocks is retained as an algorithmic reference, not the first JAX/GB200 port.
+- Transport boundary: checked-in DeepEP changes dispatch/combine but retains the same `ragged_dot` expert compute, so DeepEP alone cannot remove the S34 Wgrad hotspot. Compose it with a winning compute backend only after the kernel gate.
+- Serialized queue: Transformer Engine API/exact-shape screen; cuDNN API/exact-shape screen; four-GPU exact-shape MoK oracle; winning four-node same-rack S33 integration; one semantic optimizer-offload profile and targeted overlap treatment.
+- Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5243442771
+- Next action: probe the installed GPU image and dependency lock for Transformer Engine/cuDNN APIs, then extend the one-GB200 harness with the smallest viable backend adapter.
