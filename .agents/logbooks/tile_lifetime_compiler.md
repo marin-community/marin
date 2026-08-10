@@ -3618,3 +3618,24 @@ author: dlwh
   single-RHS or split-GEMM fallback cannot be mistaken for this result.
 - No GPU was requested. This checkpoint narrows the clean backend extension;
   it does not establish physical correctness or performance.
+
+### 2026-08-09 - TLTC-XLA-070 topology-matched capture stabilization
+
+- Capture acceptance now derives a static site manifest from exact custom-call
+  target occurrences in final optimized HLO. Multiple target families may map
+  to one instrumented handler, so the same representation covers the two-call
+  component and a full multi-family Grug composition. Uninstrumented references
+  carry an explicit empty manifest.
+- The future replay policy runs at most eight untimed topology-matched rounds
+  and requires two consecutive complete rounds with zero callback deltas. Each
+  round traverses every counterbalanced order with the timed iteration burst and
+  synchronization boundaries. Timed acceptance then requires zero callbacks at
+  every checkpoint.
+- Classification distinguishes a finite setup that reaches a plateau, failure
+  to stabilize, repeated per-logical-call fallback, callbacks from a zero-site
+  variant, manifest target mismatch, and callback recurrence after the plateau.
+  Raw timing distributions remain serialized before rejection.
+- Ten CPU/static behavioral tests cover the manifest and all acceptance paths,
+  including rejection of a weakened policy. No GPU replay was run, and
+  TLTC-XLA-068 remains rejected under the policy committed before that
+  measurement.

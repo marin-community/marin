@@ -10,43 +10,108 @@ from pathlib import Path
 import pytest
 
 from tile_lifetime.command_buffer_capture import (
-    CallbackCheckpoint,
     CaptureAcceptanceError,
+    CaptureAcceptancePolicy,
     CaptureBehavior,
+    CaptureSite,
+    CaptureSiteManifest,
     CounterbalancedVariant,
     assess_command_buffer_capture,
+    derive_capture_site_manifest,
     measure_counterbalanced_variants,
     serialize_then_assess_capture,
+    stabilize_counterbalanced_variants,
 )
 
 
-def _checkpoint(
-    *,
-    sample_index: int,
-    order: tuple[str, ...],
-    variant: str,
-    before: int,
-    after: int,
-    logical_calls: int,
-) -> CallbackCheckpoint:
-    return CallbackCheckpoint(
-        sample_index=sample_index,
-        order=order,
-        variant=variant,
-        before={"handler": before},
-        after={"handler": after},
-        delta={"handler": after - before},
-        logical_handler_calls={"handler": logical_calls},
+def _manifest(executable: str, *, occurrences: int = 1) -> CaptureSiteManifest:
+    return CaptureSiteManifest(
+        executable=executable,
+        hlo_sha256=f"{executable}-hlo",
+        sites=(CaptureSite(handler="handler", target="shuttle.test.handler", occurrences=occurrences),),
     )
 
 
-def test_counterbalanced_measurement_attributes_counts_to_sample_order() -> None:
-    handler_counts = {"forward": 0, "reverse": 0}
+def _variants(generated, reference=lambda: None, *, occurrences: int = 1):
+    return (
+        CounterbalancedVariant(
+            name="generated",
+            function=generated,
+            capture_sites=_manifest("generated", occurrences=occurrences),
+        ),
+        CounterbalancedVariant(
+            name="reference",
+            function=reference,
+            capture_sites=CaptureSiteManifest.uninstrumented("reference"),
+        ),
+    )
+
+
+def _stabilize_and_measure(variants, handler_counts, *, iterations: int = 2):
+    stabilization = stabilize_counterbalanced_variants(
+        variants,
+        iterations=iterations,
+        synchronize=lambda _: None,
+        read_handler_counts=lambda: handler_counts,
+    )
+    measurement = measure_counterbalanced_variants(
+        variants,
+        repeats=2,
+        iterations=iterations,
+        synchronize=lambda _: None,
+        read_handler_counts=lambda: handler_counts,
+    )
+    return stabilization, measurement
+
+
+def test_capture_acceptance_policy_cannot_be_weakened() -> None:
+    with pytest.raises(ValueError, match="zero timed callbacks"):
+        CaptureAcceptancePolicy(require_zero_timed_callbacks=False)
+
+
+def test_capture_site_manifest_counts_final_hlo_targets() -> None:
+    hlo = """HloModule capture_sites
+
+ENTRY main {
+  parameter = f32[] parameter(0)
+  first = f32[] custom-call(parameter), custom_call_target="shuttle.forward.0"
+  second = f32[] custom-call(first), custom_call_target="shuttle.forward.1"
+  ROOT result = f32[] copy(second)
+}
+"""
+
+    manifest = derive_capture_site_manifest(
+        "generated",
+        hlo,
+        {"shuttle.forward.0": "handler", "shuttle.forward.1": "handler"},
+    )
+
+    assert manifest.handler_calls_per_execution == {"handler": 2}
+    assert manifest.sites == (
+        CaptureSite(handler="handler", target="shuttle.forward.0", occurrences=1),
+        CaptureSite(handler="handler", target="shuttle.forward.1", occurrences=1),
+    )
+
+
+def test_capture_site_manifest_rejects_registered_target_absent_from_final_hlo() -> None:
+    hlo = """HloModule capture_sites
+
+ENTRY main {
+  parameter = f32[] parameter(0)
+  ROOT result = f32[] custom-call(parameter), custom_call_target="shuttle.actual"
+}
+"""
+
+    with pytest.raises(ValueError, match="missing registered capture targets"):
+        derive_capture_site_manifest("generated", hlo, {"shuttle.expected": "handler"})
+
+
+def test_counterbalanced_measurement_uses_manifest_occurrences_for_logical_calls() -> None:
+    handler_counts = {"handler": 0}
     clock_value = 0.0
 
     def generated() -> None:
-        handler_counts["forward"] += 1
-        handler_counts["reverse"] += 1
+        handler_counts["handler"] += 2
 
     def clock() -> float:
         nonlocal clock_value
@@ -54,14 +119,7 @@ def test_counterbalanced_measurement_attributes_counts_to_sample_order() -> None
         return clock_value
 
     measurement = measure_counterbalanced_variants(
-        (
-            CounterbalancedVariant(
-                name="generated",
-                function=generated,
-                handler_calls_per_execution={"forward": 1, "reverse": 1},
-            ),
-            CounterbalancedVariant(name="reference", function=lambda: None, handler_calls_per_execution={}),
-        ),
+        _variants(generated, occurrences=2),
         repeats=2,
         iterations=3,
         synchronize=lambda _: None,
@@ -69,136 +127,165 @@ def test_counterbalanced_measurement_attributes_counts_to_sample_order() -> None
         clock=clock,
     )
 
+    generated_checkpoints = tuple(
+        checkpoint for checkpoint in measurement.callback_checkpoints if checkpoint.variant == "generated"
+    )
+    assert [checkpoint.delta for checkpoint in generated_checkpoints] == [{"handler": 6}, {"handler": 6}]
+    assert [checkpoint.logical_handler_calls for checkpoint in generated_checkpoints] == [
+        {"handler": 6},
+        {"handler": 6},
+    ]
     assert measurement.execution_order == (("generated", "reference"), ("reference", "generated"))
-    assert [checkpoint.variant for checkpoint in measurement.callback_checkpoints] == [
-        "generated",
-        "reference",
-        "reference",
-        "generated",
-    ]
-    assert [checkpoint.delta for checkpoint in measurement.callback_checkpoints] == [
-        {"forward": 3, "reverse": 3},
-        {"forward": 0, "reverse": 0},
-        {"forward": 0, "reverse": 0},
-        {"forward": 3, "reverse": 3},
-    ]
-    assert all(len(summary["samples_ms"]) == 2 for summary in measurement.measurements.values())
 
 
-def test_capture_assessment_accepts_only_first_sample_recapture_for_each_order() -> None:
-    first_order = ("generated", "reference")
-    second_order = ("reference", "generated")
-    checkpoints = (
-        _checkpoint(
-            sample_index=0,
-            order=first_order,
-            variant="generated",
-            before=1,
-            after=2,
-            logical_calls=1000,
-        ),
-        _checkpoint(
-            sample_index=0,
-            order=first_order,
-            variant="reference",
-            before=2,
-            after=2,
-            logical_calls=0,
-        ),
-        _checkpoint(
-            sample_index=1,
-            order=second_order,
-            variant="reference",
-            before=2,
-            after=2,
-            logical_calls=0,
-        ),
-        _checkpoint(
-            sample_index=1,
-            order=second_order,
-            variant="generated",
-            before=2,
-            after=3,
-            logical_calls=1000,
-        ),
-        _checkpoint(
-            sample_index=2,
-            order=first_order,
-            variant="generated",
-            before=3,
-            after=3,
-            logical_calls=1000,
-        ),
-        _checkpoint(
-            sample_index=2,
-            order=first_order,
-            variant="reference",
-            before=3,
-            after=3,
-            logical_calls=0,
-        ),
-    )
+def test_finite_multi_stream_capture_stabilizes_before_timing() -> None:
+    handler_counts = {"handler": 0}
+    remaining_recordings = 3
 
-    assessment = assess_command_buffer_capture({"handler": 1}, checkpoints)
+    def generated() -> None:
+        nonlocal remaining_recordings
+        if remaining_recordings:
+            handler_counts["handler"] += 1
+            remaining_recordings -= 1
 
+    stabilization, measurement = _stabilize_and_measure(_variants(generated), handler_counts)
+    assessment = assess_command_buffer_capture(stabilization, measurement.callback_checkpoints)
+
+    assert stabilization.stabilized
+    assert [round_result.quiescent for round_result in stabilization.rounds] == [False, True, True]
     assert assessment.accepted
-    assert assessment.behavior is CaptureBehavior.BOUNDED_ORDER_SPECIFIC_RECAPTURE
-    assert [(summary.order, summary.handler_deltas) for summary in assessment.order_summaries] == [
-        (first_order, {"handler": 1}),
-        (second_order, {"handler": 1}),
-    ]
+    assert assessment.behavior is CaptureBehavior.CAPTURED_REPLAY
+    assert assessment.total_timed_deltas == {"handler": 0}
 
 
-def test_capture_assessment_rejects_recapture_after_order_is_established() -> None:
-    order = ("generated", "reference")
-    checkpoints = (
-        _checkpoint(
-            sample_index=0,
-            order=order,
-            variant="generated",
-            before=1,
-            after=2,
-            logical_calls=1000,
-        ),
-        _checkpoint(
-            sample_index=1,
-            order=order,
-            variant="generated",
-            before=2,
-            after=3,
-            logical_calls=1000,
-        ),
-    )
+def test_nonquiescent_sublogical_callbacks_fail_stabilization() -> None:
+    handler_counts = {"handler": 0}
+    invocation = 0
 
-    assessment = assess_command_buffer_capture({"handler": 1}, checkpoints)
+    def generated() -> None:
+        nonlocal invocation
+        invocation += 1
+        if invocation % 2 == 0:
+            handler_counts["handler"] += 1
+
+    stabilization, measurement = _stabilize_and_measure(_variants(generated), handler_counts, iterations=4)
+    assessment = assess_command_buffer_capture(stabilization, measurement.callback_checkpoints)
+
+    assert len(stabilization.rounds) == 8
+    assert not stabilization.stabilized
+    assert not assessment.accepted
+    assert assessment.behavior is CaptureBehavior.FAILED_TO_STABILIZE
+
+
+def test_per_logical_call_fallback_requires_two_nonquiescent_rounds() -> None:
+    handler_counts = {"handler": 0}
+
+    def generated() -> None:
+        handler_counts["handler"] += 1
+
+    stabilization, measurement = _stabilize_and_measure(_variants(generated), handler_counts, iterations=3)
+    assessment = assess_command_buffer_capture(stabilization, measurement.callback_checkpoints)
 
     assert not assessment.accepted
-    assert assessment.behavior is CaptureBehavior.UNBOUNDED_RECAPTURE
+    assert assessment.behavior is CaptureBehavior.PER_LOGICAL_CALL_FALLBACK
 
 
-def test_rejected_capture_serializes_raw_timings_before_assessment(tmp_path: Path) -> None:
+def test_callback_from_uninstrumented_variant_is_rejected() -> None:
+    handler_counts = {"handler": 0}
+    generated_recorded = False
+    reference_recorded = False
+
+    def generated() -> None:
+        nonlocal generated_recorded
+        if not generated_recorded:
+            handler_counts["handler"] += 1
+            generated_recorded = True
+
+    def reference() -> None:
+        nonlocal reference_recorded
+        if not reference_recorded:
+            handler_counts["handler"] += 1
+            reference_recorded = True
+
+    stabilization, measurement = _stabilize_and_measure(_variants(generated, reference), handler_counts)
+    assessment = assess_command_buffer_capture(stabilization, measurement.callback_checkpoints)
+
+    assert stabilization.stabilized
+    assert not assessment.accepted
+    assert assessment.behavior is CaptureBehavior.UNATTRIBUTED_CALLBACK
+
+
+def test_callback_after_quiescent_plateau_rejects_timed_measurement() -> None:
+    handler_counts = {"handler": 0}
+    remaining_recordings = 1
+
+    def generated() -> None:
+        nonlocal remaining_recordings
+        if remaining_recordings:
+            handler_counts["handler"] += 1
+            remaining_recordings -= 1
+
+    variants = _variants(generated)
+    stabilization = stabilize_counterbalanced_variants(
+        variants,
+        iterations=2,
+        synchronize=lambda _: None,
+        read_handler_counts=lambda: handler_counts,
+    )
+    remaining_recordings = 1
+    measurement = measure_counterbalanced_variants(
+        variants,
+        repeats=2,
+        iterations=2,
+        synchronize=lambda _: None,
+        read_handler_counts=lambda: handler_counts,
+    )
+    assessment = assess_command_buffer_capture(stabilization, measurement.callback_checkpoints)
+
+    assert stabilization.stabilized
+    assert not assessment.accepted
+    assert assessment.behavior is CaptureBehavior.STEADY_STATE_RECAPTURE
+    assert assessment.total_timed_deltas == {"handler": 1}
+
+
+def test_rejected_steady_state_recapture_preserves_raw_timings(tmp_path: Path) -> None:
+    handler_counts = {"handler": 0}
+    remaining_recordings = 1
+
+    def generated() -> None:
+        nonlocal remaining_recordings
+        if remaining_recordings:
+            handler_counts["handler"] += 1
+            remaining_recordings -= 1
+
+    variants = _variants(generated)
+    stabilization = stabilize_counterbalanced_variants(
+        variants,
+        iterations=2,
+        synchronize=lambda _: None,
+        read_handler_counts=lambda: handler_counts,
+    )
+    remaining_recordings = 1
+    measurement = measure_counterbalanced_variants(
+        variants,
+        repeats=2,
+        iterations=2,
+        synchronize=lambda _: None,
+        read_handler_counts=lambda: handler_counts,
+    )
     output = tmp_path / "result.json"
-    raw_samples = [0.031, 0.029, 0.030]
+    raw_samples = [0.031, 0.029]
     raw_result: Mapping[str, object] = {
         "measurements": {"generated": {"samples_ms": raw_samples, "median_ms": 0.030}},
-        "execution_order": [["generated"]] * len(raw_samples),
+        "execution_order": [list(order) for order in measurement.execution_order],
+        "capture_stabilization": stabilization.to_json(),
     }
-    checkpoints = (
-        _checkpoint(
-            sample_index=0,
-            order=("generated",),
-            variant="generated",
-            before=1,
-            after=1001,
-            logical_calls=1000,
-        ),
-    )
 
     def assess_after_raw_write():
         pending = json.loads(output.read_text())
         assert pending["measurements"]["generated"]["samples_ms"] == raw_samples
         assert pending["capture_acceptance"] == {"status": "pending"}
-        return assess_command_buffer_capture({"handler": 1}, checkpoints)
+        return assess_command_buffer_capture(stabilization, measurement.callback_checkpoints)
 
     with pytest.raises(CaptureAcceptanceError) as error:
         serialize_then_assess_capture(output, raw_result, assess_after_raw_write)
@@ -207,5 +294,5 @@ def test_rejected_capture_serializes_raw_timings_before_assessment(tmp_path: Pat
     assert serialized["measurements"]["generated"]["samples_ms"] == raw_samples
     assert serialized["execution_order"] == raw_result["execution_order"]
     assert serialized["capture_acceptance"]["status"] == "rejected"
-    assert serialized["capture_acceptance"]["behavior"] == "per_logical_call_fallback"
+    assert serialized["capture_acceptance"]["behavior"] == "steady_state_recapture"
     assert error.value.result["measurements"] == serialized["measurements"]

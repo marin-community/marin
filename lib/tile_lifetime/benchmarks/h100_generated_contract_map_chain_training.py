@@ -26,10 +26,14 @@ from tile_lifetime.command_buffer_capture import (
     CallbackCheckpoint,
     CaptureAcceptanceError,
     CaptureAcceptancePolicy,
+    CaptureSiteManifest,
+    CaptureStabilization,
     CounterbalancedVariant,
     assess_command_buffer_capture,
+    derive_capture_site_manifest,
     measure_counterbalanced_variants,
     serialize_then_assess_capture,
+    stabilize_counterbalanced_variants,
 )
 from tile_lifetime.contract_map_chain import (
     TwoContractMapTrainingProgram,
@@ -289,7 +293,7 @@ def _preflight(args: argparse.Namespace, program: TwoContractMapTrainingProgram)
 def _gpu_run(
     args: argparse.Namespace,
     program: TwoContractMapTrainingProgram,
-) -> tuple[dict[str, Any], tuple[int, int], tuple[CallbackCheckpoint, ...]]:
+) -> tuple[dict[str, Any], CaptureStabilization | None, tuple[CallbackCheckpoint, ...]]:
     _require_toolchain(args, require_gpu=True)
     command_buffer_flag_audit = (
         require_custom_call_command_buffers_enabled(os.environ.get("XLA_FLAGS", ""))
@@ -347,9 +351,18 @@ def _gpu_run(
         return output, input_adjoint, first_weight_adjoint, second_weight_adjoint
 
     matched_natural_step = jax.jit(_natural_training_step)
+    compiled_generated_step = generated_step.lower().compile()
+    capture_sites = derive_capture_site_manifest(
+        "generated_two_ffi_calls",
+        compiled_generated_step.as_text(),
+        {
+            generated.forward_target: "forward",
+            generated.reverse_target: "reverse",
+        },
+    )
 
     def execute_generated() -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-        return generated_step()
+        return compiled_generated_step()
 
     def execute_natural() -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
         return matched_natural_step(activation, first_weight, second_weight, output_cotangent)
@@ -413,25 +426,33 @@ def _gpu_run(
         deterministic_hashes.append(hashes)
     handler_counts_after_determinism = _handler_call_counts(library)
 
-    warmup_variants = (
-        ("generated_two_ffi_calls", execute_generated),
-        ("matched_natural_jax_forward_vjp", execute_natural),
+    variants = (
+        CounterbalancedVariant(
+            name="generated_two_ffi_calls",
+            function=execute_generated,
+            capture_sites=capture_sites,
+        ),
+        CounterbalancedVariant(
+            name="matched_natural_jax_forward_vjp",
+            function=execute_natural,
+            capture_sites=CaptureSiteManifest.uninstrumented("matched_natural_jax_forward_vjp"),
+        ),
     )
+    warmup_variants = tuple((variant.name, variant.function) for variant in variants)
     _warm_up(warmup_variants, warmups=args.warmups)
     handler_counts_after_warmup = _handler_call_counts(library)
+    stabilization = (
+        stabilize_counterbalanced_variants(
+            variants,
+            iterations=args.iterations,
+            synchronize=jax.block_until_ready,
+            read_handler_counts=lambda: dict(zip(("forward", "reverse"), _handler_call_counts(library), strict=True)),
+        )
+        if generated.command_buffer_compatible
+        else None
+    )
     measurement = measure_counterbalanced_variants(
-        (
-            CounterbalancedVariant(
-                name="generated_two_ffi_calls",
-                function=execute_generated,
-                handler_calls_per_execution={"forward": 1, "reverse": 1},
-            ),
-            CounterbalancedVariant(
-                name="matched_natural_jax_forward_vjp",
-                function=execute_natural,
-                handler_calls_per_execution={},
-            ),
-        ),
+        variants,
         repeats=args.repeats,
         iterations=args.iterations,
         synchronize=jax.block_until_ready,
@@ -445,6 +466,11 @@ def _gpu_run(
         "after_warmup": handler_counts_after_warmup,
         "after_measurement": handler_counts,
     }
+    if stabilization is not None:
+        handler_count_checkpoints["after_stabilization"] = tuple(
+            stabilization.final_counts[name] for name in ("forward", "reverse")
+        )
+    stabilization_json = stabilization.to_json() if stabilization is not None else None
     if not generated.command_buffer_compatible and handler_counts != (expected_handler_count, expected_handler_count):
         raise AssertionError(
             f"generated handler counts {handler_counts} do not match "
@@ -473,7 +499,7 @@ def _gpu_run(
         text=True,
     ).strip()
     result = {
-        "schema_version": 2,
+        "schema_version": 3,
         "mode": "one_h100_contract_map_training_component",
         "shape": {
             "rows": generated.rows,
@@ -511,8 +537,9 @@ def _gpu_run(
             },
             "handler_count_contract": (
                 {
-                    "kind": "bounded_capture_only",
+                    "kind": "topology_matched_steady_state",
                     "acceptance_policy": asdict(CaptureAcceptancePolicy()),
+                    "capture_sites": capture_sites.to_json(),
                     "logical_execution_count_not_expected": expected_handler_count,
                 }
                 if generated.command_buffer_compatible
@@ -544,6 +571,7 @@ def _gpu_run(
             "iterations_per_sample": args.iterations,
             "counterbalanced": True,
             "generated_kernel_launches_per_step": 2,
+            "stabilization": "up to eight untimed topology-matched rounds; two consecutive quiescent rounds required",
             "timing": "host enqueue interval followed by jax.block_until_ready; compilation excluded",
         },
         "command_buffer": (
@@ -554,6 +582,8 @@ def _gpu_run(
                 "evidence": "host-handler counts are attributed to every timed variant and counterbalanced order",
                 "callback_checkpoints": [asdict(checkpoint) for checkpoint in measurement.callback_checkpoints],
                 "capture_acceptance_policy": asdict(CaptureAcceptancePolicy()),
+                "capture_sites": capture_sites.to_json(),
+                "stabilization": stabilization_json,
                 "capture_acceptance_evaluated_after_raw_serialization": True,
                 "profiler_evidence": None,
             }
@@ -568,7 +598,7 @@ def _gpu_run(
         },
         "revision": args.shuttle_revision,
     }
-    return result, handler_counts_after_warmup, measurement.callback_checkpoints
+    return result, stabilization, measurement.callback_checkpoints
 
 
 def main() -> None:
@@ -601,19 +631,20 @@ def main() -> None:
         print(json.dumps(result, indent=2, sort_keys=True))
         return
 
-    raw_result, initial_counts_tuple, checkpoints = _gpu_run(args, program)
+    raw_result, stabilization, checkpoints = _gpu_run(args, program)
     if not args.physical_candidate.command_buffer_compatible:
         args.json_output.parent.mkdir(parents=True, exist_ok=True)
         args.json_output.write_text(json.dumps(raw_result, indent=2, sort_keys=True) + "\n")
         print(json.dumps(raw_result, indent=2, sort_keys=True))
         return
+    if stabilization is None:
+        raise AssertionError("command-buffer-compatible execution did not produce stabilization evidence")
 
-    initial_counts = dict(zip(("forward", "reverse"), initial_counts_tuple, strict=True))
     try:
         result = serialize_then_assess_capture(
             args.json_output,
             raw_result,
-            lambda: assess_command_buffer_capture(initial_counts, checkpoints),
+            lambda: assess_command_buffer_capture(stabilization, checkpoints),
         )
     except CaptureAcceptanceError as error:
         print(json.dumps(error.result, indent=2, sort_keys=True))
