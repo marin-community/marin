@@ -61,6 +61,7 @@ def test_h100_evidence_workflow_dispatch_builds_one_exact_source_image():
     assert set(workflow["jobs"]) == {"build-h100-evidence-image"}
 
     job = workflow["jobs"]["build-h100-evidence-image"]
+    assert "strategy" not in job
     checkout = next(step for step in job["steps"] if step.get("uses") == "actions/checkout@v5")
     source = next(step for step in job["steps"] if step.get("id") == "source")
     build = next(step for step in job["steps"] if step.get("id") == "build")
