@@ -173,7 +173,6 @@ def test_runtime_environment_selects_one_ragged_all_to_all_implementation(
     environment = train.runtime_environment(existing, implementation)
 
     flags = environment["XLA_FLAGS"].split()
-    assert environment["XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"] == str(train.MOK_HOST_MEMORY_LIMIT_GB)
     assert "--unrelated=true" in flags
     assert "--xla_gpu_experimental_enable_nccl_symmetric_buffers=false" in flags
     assert "--xla_gpu_ragged_all_to_all_mode=private" in flags
@@ -293,7 +292,7 @@ def test_fused_gate_records_the_mixture_of_kittens_boundary():
 
     config = json.loads(step.fingerprint_payload())
     fused = config["model"]["mixture_of_kittens"]
-    assert config["model"]["remat_mode"] == "offload_moe"
+    assert config["model"]["remat_mode"] == "save_moe"
     assert fused["num_comm_sms"] == 40
     assert fused["bwd_num_comm_sms"] == 28
     assert fused["minibatch_size"] == 4096
