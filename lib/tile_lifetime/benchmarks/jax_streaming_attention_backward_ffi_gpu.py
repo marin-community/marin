@@ -22,15 +22,17 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from tile_lifetime.benchmark_boundary import (
+    BenchmarkRepeatabilityMode,
+    BenchmarkRepeatabilityPolicy,
+    BenchmarkRepeatabilityReport,
     DenseBufferContract,
+    DTypeRepeatabilityTolerance,
     NumericalAcceptanceContract,
-    NumericalError,
-    numerical_error,
+    benchmark_repeatability_report,
+    verify_benchmark_repeatability,
     verify_dense_buffer_boundary,
-    verify_numerical_acceptance,
 )
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     StreamingAttentionBackwardResultPolicy,
@@ -99,20 +101,6 @@ def _samples(
         "variants": summaries,
         "execution_order": orders,
         "ratio_generated_to_oracle": summaries["generated"]["median_ms"] / summaries["oracle"]["median_ms"],
-    }
-
-
-def _hash(tensors) -> str:
-    digest = hashlib.sha256()
-    for tensor in tensors:
-        digest.update(np.asarray(tensor).tobytes())
-    return digest.hexdigest()
-
-
-def _errors(names, actual, expected) -> dict[str, NumericalError]:
-    return {
-        name: numerical_error(actual_value, expected_value)
-        for name, actual_value, expected_value in zip(names, actual, expected, strict=True)
     }
 
 
@@ -235,6 +223,50 @@ def main() -> None:
         maximum_absolute_error=args.max_absolute_error_threshold,
         mean_absolute_error=args.mean_absolute_error_threshold,
     )
+    generated_repeatability_policy = BenchmarkRepeatabilityPolicy(
+        mode=BenchmarkRepeatabilityMode.BITWISE,
+        minimum_repeats=2,
+    )
+    oracle_repeatability_policy = BenchmarkRepeatabilityPolicy(
+        mode=BenchmarkRepeatabilityMode.BOUNDED_DRIFT,
+        minimum_repeats=3,
+        dtype_tolerances=(
+            DTypeRepeatabilityTolerance(
+                dtype="bf16",
+                maximum_absolute_error=args.max_absolute_error_threshold,
+                mean_absolute_error=args.mean_absolute_error_threshold,
+            ),
+        ),
+    )
+    pre_timing_audit_path = args.json_output.with_suffix(".pre-timing.json")
+    pre_timing_audit: dict[str, object] = {
+        "schema_version": 1,
+        "status": "collecting",
+        "note": "Oracle admissibility is independent of generated implementation correctness.",
+    }
+
+    def persist_pre_timing_audit() -> None:
+        pre_timing_audit_path.parent.mkdir(parents=True, exist_ok=True)
+        pre_timing_audit_path.write_text(json.dumps(pre_timing_audit, allow_nan=False, indent=2, sort_keys=True) + "\n")
+
+    def verify_and_persist_repeatability(report: BenchmarkRepeatabilityReport, *, boundary_name: str) -> None:
+        audit_key = "generated" if boundary_name == "generated Shuttle" else "benchmark_oracle"
+        pre_timing_audit[audit_key] = asdict(report)
+        persist_pre_timing_audit()
+        try:
+            verify_benchmark_repeatability(
+                report,
+                numerical_acceptance=numerical_acceptance,
+                boundary_name=boundary_name,
+            )
+        except ValueError as error:
+            pre_timing_audit["status"] = "failed"
+            pre_timing_audit["failure"] = str(error)
+            persist_pre_timing_audit()
+            raise
+        pre_timing_audit[f"{audit_key}_admissible"] = True
+        persist_pre_timing_audit()
+
     scale = args.scale if args.scale is not None else args.head_dimension**-0.5
     config = StreamingAttentionBackwardDebugConfig(
         batch=1,
@@ -339,15 +371,20 @@ def main() -> None:
     jax.block_until_ready((generated_outputs, semantic_oracle_outputs))
     second_generated_outputs = generated_bound()
     jax.block_until_ready(second_generated_outputs)
-    generated_first_hash = _hash(generated_outputs)
-    generated_deterministic = generated_first_hash == _hash(second_generated_outputs)
-    generated_errors = _errors(output_names, generated_outputs, semantic_oracle_outputs)
-    verify_numerical_acceptance(
-        generated_errors,
-        deterministic=generated_deterministic,
-        contract=numerical_acceptance,
-        boundary_name="generated Shuttle",
+    output_dtypes = {specification.name: specification.dtype.value for specification in generated.outputs}
+    generated_repeatability = benchmark_repeatability_report(
+        output_names,
+        (generated_outputs, second_generated_outputs),
+        semantic_oracle_outputs,
+        output_dtypes=output_dtypes,
+        policy=generated_repeatability_policy,
     )
+    verify_and_persist_repeatability(generated_repeatability, boundary_name="generated Shuttle")
+    generated_first_hash = generated_repeatability.repeats[0].combined_sha256
+    generated_deterministic = generated_repeatability.bitwise_repeat
+    generated_errors = {
+        output.output_name: output.semantic_error for output in generated_repeatability.repeats[0].outputs
+    }
     runtime_imports_before_expert_oracle = {
         "torch": "torch" in sys.modules,
         "triton": "triton" in sys.modules,
@@ -368,10 +405,10 @@ def main() -> None:
             observed_input_contracts,
             boundary_name="Flash-SDPA logical inputs",
         )
-        expert_outputs = oracle_bound()
-        oracle_block(expert_outputs)
-        second_expert_outputs = oracle_bound()
-        oracle_block(second_expert_outputs)
+        expert_output_repeats = tuple(oracle_bound() for _ in range(oracle_repeatability_policy.minimum_repeats))
+        for outputs in expert_output_repeats:
+            oracle_block(outputs)
+        expert_outputs = expert_output_repeats[0]
         expected_output_contracts = _generated_buffer_contracts(generated.outputs)
         observed_output_contracts = _torch_buffer_contracts(output_names, expert_outputs)
         verify_dense_buffer_boundary(
@@ -379,39 +416,47 @@ def main() -> None:
             observed_output_contracts,
             boundary_name="Flash-SDPA logical results",
         )
-        expert_numpy_outputs = oracle_numpy_outputs(expert_outputs)
-        second_expert_numpy_outputs = oracle_numpy_outputs(second_expert_outputs)
-        oracle_first_hash = _hash(expert_numpy_outputs)
-        oracle_deterministic = oracle_first_hash == _hash(second_expert_numpy_outputs)
-        expert_errors = _errors(output_names, expert_numpy_outputs, semantic_oracle_outputs)
-        verify_numerical_acceptance(
-            expert_errors,
-            deterministic=oracle_deterministic,
-            contract=numerical_acceptance,
-            boundary_name="Flash-SDPA oracle",
+        expert_numpy_repeats = tuple(oracle_numpy_outputs(outputs) for outputs in expert_output_repeats)
+        oracle_repeatability = benchmark_repeatability_report(
+            output_names,
+            expert_numpy_repeats,
+            semantic_oracle_outputs,
+            output_dtypes=output_dtypes,
+            policy=oracle_repeatability_policy,
         )
+        pre_timing_audit["input_boundary_bshd"] = [asdict(contract) for contract in observed_input_contracts]
+        pre_timing_audit["result_boundary_bshd"] = [asdict(contract) for contract in observed_output_contracts]
+        verify_and_persist_repeatability(oracle_repeatability, boundary_name="Flash-SDPA oracle")
         oracle_metadata["input_boundary_bshd"] = [asdict(contract) for contract in observed_input_contracts]
         oracle_metadata["result_boundary_bshd"] = [asdict(contract) for contract in observed_output_contracts]
     else:
         oracle_bound = semantic_oracle_bound
         oracle_block = jax.block_until_ready
-        expert_outputs = semantic_oracle_outputs
-        second_expert_outputs = semantic_oracle_bound()
-        jax.block_until_ready(second_expert_outputs)
-        oracle_first_hash = _hash(expert_outputs)
-        oracle_deterministic = oracle_first_hash == _hash(second_expert_outputs)
-        expert_errors = _errors(output_names, expert_outputs, semantic_oracle_outputs)
-        verify_numerical_acceptance(
-            expert_errors,
-            deterministic=oracle_deterministic,
-            contract=numerical_acceptance,
-            boundary_name="natural JAX oracle",
+        expert_output_repeats = (
+            semantic_oracle_outputs,
+            *(semantic_oracle_bound() for _ in range(oracle_repeatability_policy.minimum_repeats - 1)),
         )
+        jax.block_until_ready(expert_output_repeats)
+        expert_outputs = expert_output_repeats[0]
+        oracle_repeatability = benchmark_repeatability_report(
+            output_names,
+            expert_output_repeats,
+            semantic_oracle_outputs,
+            output_dtypes=output_dtypes,
+            policy=oracle_repeatability_policy,
+        )
+        verify_and_persist_repeatability(oracle_repeatability, boundary_name="natural JAX oracle")
         oracle_metadata = {
             "name": "natural_jax_vjp",
             "saved_forward_state": "owned by natural JAX boundary",
             "returns_forward_output": training_boundary,
         }
+
+    oracle_first_hash = oracle_repeatability.repeats[0].combined_sha256
+    oracle_deterministic = oracle_repeatability.bitwise_repeat
+    expert_errors = {output.output_name: output.semantic_error for output in oracle_repeatability.repeats[0].outputs}
+    pre_timing_audit["status"] = "passed"
+    persist_pre_timing_audit()
 
     correctness: dict[str, object] = {name: asdict(error) for name, error in generated_errors.items()}
     correctness["deterministic"] = generated_deterministic
@@ -419,6 +464,8 @@ def main() -> None:
         name: asdict(error) for name, error in expert_errors.items()
     }
     correctness["benchmark_oracle_deterministic"] = oracle_deterministic
+    correctness["generated_repeatability"] = asdict(generated_repeatability)
+    correctness["benchmark_oracle_repeatability"] = asdict(oracle_repeatability)
     measurements = _samples(
         generated_bound,
         oracle_bound,
