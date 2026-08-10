@@ -14,7 +14,10 @@ namespace mlir::shuttle {
 
 struct ShuttlePipelineOptions {
   NumericalPolicy numerics = NumericalPolicy::SourceOrdered;
-  std::string canonicalTuning = "{}";
+  std::string canonicalOptions =
+      R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+  std::string canonicalTuning =
+      R"json({"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]})json";
 };
 
 struct ShuttlePipelineIdentity {

@@ -217,7 +217,7 @@ ShuttlePipelineIdentity
 shuttlePipelineIdentity(const ShuttlePipelineOptions &options) {
   std::string tuningDigest = sha256(options.canonicalTuning);
   std::string policy = policyName(options.numerics).str();
-  return ShuttlePipelineIdentity{policy, sha256(policy + "\n" + tuningDigest),
+  return ShuttlePipelineIdentity{policy, sha256(options.canonicalOptions),
                                  std::move(tuningDigest)};
 }
 

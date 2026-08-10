@@ -408,8 +408,13 @@ bool checkSuccessAndCacheNeutrality() {
   mlir::shuttle::ShuttlePipelineOptions sourceOrdered;
   mlir::shuttle::ShuttlePipelineOptions fast;
   fast.numerics = mlir::shuttle::NumericalPolicy::Fast;
+  fast.canonicalOptions =
+      R"json({"numerics":"fast","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
   mlir::shuttle::ShuttlePipelineOptions tuned = fast;
-  tuned.canonicalTuning = R"json({"tile":2})json";
+  tuned.canonicalOptions =
+      R"json({"numerics":"fast","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[2]}})json";
+  tuned.canonicalTuning =
+      R"json({"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[2]})json";
   const auto sourceIdentity =
       mlir::shuttle::shuttlePipelineIdentity(sourceOrdered);
   const auto fastIdentity = mlir::shuttle::shuttlePipelineIdentity(fast);
@@ -536,6 +541,10 @@ bool checkConcurrentInvocations() {
       options.numerics = index % 2 == 0
                              ? mlir::shuttle::NumericalPolicy::SourceOrdered
                              : mlir::shuttle::NumericalPolicy::Fast;
+      if (options.numerics == mlir::shuttle::NumericalPolicy::Fast) {
+        options.canonicalOptions =
+            R"json({"numerics":"fast","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+      }
       if (!runPipeline(kProgram, options).succeeded) {
         failures.fetch_add(1, std::memory_order_relaxed);
       }

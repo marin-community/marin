@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 SCHEMA_VERSION = 1
+# Bump when unchanged JSON fields acquire new compiler semantics. This forces a
+# distinct JAX/XLA cache identity even when the wire schema itself is stable.
+PIPELINE_ABI_VERSION = 1
 ENABLE_OPTION = "xla_shuttle_enable"
 OPTIONS_OPTION = "xla_shuttle_options"
 MAXIMUM_TENSOR_RANK = 8
@@ -80,6 +83,7 @@ def canonical_options_json(options: Options) -> str:
     """Serialize options into the closed cache-identity wire format."""
     payload = {
         "numerics": options.numerics.value,
+        "pipeline_abi_version": PIPELINE_ABI_VERSION,
         "schema_version": SCHEMA_VERSION,
         "tuning": {
             "cluster_shape": list(options.tuning.cluster_shape),

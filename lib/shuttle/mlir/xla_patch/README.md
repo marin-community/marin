@@ -28,14 +28,17 @@ Shuttle-enabled jaxlib must link a registration translation unit that calls:
 
 ```cpp
 xla::StablehloModuleTransformRegistry::Global().Register(
-    "shuttle", RunShuttleStablehloPipeline);
+    "shuttle", [](mlir::ModuleOp module, absl::string_view options) {
+      return mlir::shuttle::runShuttleXlaTransform(module, options);
+    });
 ```
 
-The registration library must be strongly linked, for example with an
-`alwayslink = True` Bazel target when registration occurs during static
-initialization. `RunShuttleStablehloPipeline` owns option-schema validation,
-source-coverage checks, semantic-erasure checks, and verification that no
-Shuttle operation or attribute reaches XLA's StableHLO-to-HLO conversion.
+The registration library must be strongly linked. The external
+`@shuttle_mlir//:ShuttleXlaRegistryAdapter` target is `alwayslink = True`, owns
+canonical option-schema validation, and calls the exact shared Shuttle
+pipeline. The pinned JAX composition patch in `../jax_patch` links that adapter
+into the final CPU `_jax` extension without adding a Shuttle dependency to
+XLA's generic registry or `mlir_to_hlo` targets.
 
 Apply and test the patch from an exact XLA checkout:
 

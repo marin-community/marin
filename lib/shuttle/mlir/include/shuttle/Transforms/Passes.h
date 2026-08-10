@@ -21,9 +21,9 @@ namespace mlir::shuttle {
 
 std::unique_ptr<Pass> createAnnotateSourcePass();
 std::unique_ptr<Pass> createFormStructuralRegionsPass();
-std::unique_ptr<Pass> createFormStructuralRegionsPass(NumericalPolicy numerics);
 std::unique_ptr<Pass>
 createFormStructuralRegionsPass(NumericalPolicy numerics,
+                                std::string canonicalOptions,
                                 std::string canonicalTuning);
 std::unique_ptr<Pass> createConvertStablehloToAlgebraPass();
 std::unique_ptr<Pass> createVerifySourceCoveragePass();
