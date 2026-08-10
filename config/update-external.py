@@ -75,6 +75,7 @@ class VllmGpuWheel:
     sm_targets: tuple[str, ...]
     url: str
     sha256: str
+    runtime_requirements: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,7 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
                 sm_targets=tuple(wheel["sm_targets"]),
                 url=wheel["url"],
                 sha256=wheel["sha256"],
+                runtime_requirements=tuple(wheel["runtime_requirements"]),
             )
             for wheel in config["wheels"]
         ),
@@ -198,6 +200,21 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
             raise ValueError(f"{path}: {wheel.architecture} wheel URL does not match vLLM version {release.version}")
         if SHA256_PATTERN.fullmatch(wheel.sha256) is None:
             raise ValueError(f"{path}: {wheel.architecture} wheel has invalid SHA-256 {wheel.sha256!r}")
+        for requirement in wheel.runtime_requirements:
+            _distribution, separator, direct_url = requirement.partition(" @ ")
+            parsed_url = urlsplit(direct_url)
+            requirement_hashes = parse_qs(parsed_url.fragment).get("sha256", [])
+            if (
+                not separator
+                or not direct_url.startswith(release_url_prefix)
+                or not parsed_url.path.endswith(".whl")
+                or len(requirement_hashes) != 1
+                or SHA256_PATTERN.fullmatch(requirement_hashes[0]) is None
+            ):
+                raise ValueError(
+                    f"{path}: {wheel.architecture} runtime requirement must be a digest-pinned "
+                    f"wheel asset from {release.release_tag}, found {requirement!r}"
+                )
     return release
 
 
@@ -218,6 +235,12 @@ def render_pins(
         if not values:
             return "()"
         return f'("{values[0]}",)' if len(values) == 1 else f"({quoted})"
+
+    def multiline_tuple_literal(values: tuple[str, ...], *, indent: str) -> str:
+        if not values:
+            return "()"
+        entries = "\n".join(f"{indent}{json.dumps(value)}," for value in values)
+        return f"(\n{entries}\n{indent[:-4]})"
 
     def wrapped_string_literal(value: str, *, indent: str) -> str:
         chunks = []
@@ -254,6 +277,8 @@ def render_pins(
         f"            sm_targets={tuple_literal(wheel.sm_targets)},\n"
         f"            url={wrapped_string_literal(wheel.url, indent='                ')},\n"
         f'            sha256="{wheel.sha256}",\n'
+        f"            runtime_requirements="
+        f"{multiline_tuple_literal(wheel.runtime_requirements, indent='                ')},\n"
         "        ),"
         for wheel in vllm_gpu_release.wheels
     )
@@ -298,6 +323,7 @@ class VllmGpuWheel:
     sm_targets: tuple[str, ...]
     url: str
     sha256: str
+    runtime_requirements: tuple[str, ...]
 
 
 @dataclass(frozen=True)

@@ -142,6 +142,7 @@ class VllmType(StrEnum):
 @dataclass(frozen=True)
 class _CudaVllmInstall:
     requirement: str
+    runtime_requirements: tuple[str, ...]
     torch_backend: str
     executable: str
     executable_args: tuple[str, ...] = ()
@@ -173,6 +174,7 @@ class IsolatedCudaVllm:
             )
             return _CudaVllmInstall(
                 requirement=vllm_gpu_wheel_requirement(wheel),
+                runtime_requirements=wheel.runtime_requirements,
                 torch_backend=VLLM_GPU_RELEASE.torch_backend,
                 executable="python",
                 executable_args=(
@@ -184,6 +186,7 @@ class IsolatedCudaVllm:
             )
         return _CudaVllmInstall(
             requirement=f"vllm[runai]=={self.version}",
+            runtime_requirements=(),
             torch_backend=_UPSTREAM_CUDA_TORCH_BACKEND,
             executable="vllm",
         )
@@ -197,6 +200,8 @@ class IsolatedCudaVllm:
             "--with",
             _RUNAI_STREAMER_REQUIREMENT,
         ]
+        for requirement in install.runtime_requirements:
+            command.extend(("--with", requirement))
         command.extend(
             (
                 "--python",
@@ -224,6 +229,7 @@ class IsolatedCudaVllm:
         install = self._install()
         return (
             f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:"
+            f"{install.runtime_requirements}:"
             f"{_FLASHINFER_SAMPLER_ENV_VAR}=0:{_DEEPGEMM_NVRTC_ENV_VAR}=1"
         )
 

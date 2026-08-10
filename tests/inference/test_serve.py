@@ -191,12 +191,14 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     cmd = launcher.command()
     requirement = cmd[cmd.index("--from") + 1]
     wheel = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, machine)
+    runtime_requirements = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--with"]
     distribution, separator, direct_url = requirement.partition(" @ ")
     parsed_url = urlsplit(direct_url)
     assert distribution == "vllm"
     assert separator
     assert urlunsplit(parsed_url._replace(fragment="")) == wheel.url
     assert parse_qs(parsed_url.fragment) == {"sha256": [wheel.sha256]}
+    assert runtime_requirements == ["runai-model-streamer[s3]==0.16.1", *wheel.runtime_requirements]
     assert cmd[cmd.index("--torch-backend") + 1] == VLLM_GPU_RELEASE.torch_backend
     bootstrap_index = cmd.index("-c")
     assert Path(cmd[bootstrap_index + 2]).name == "vllm_wheel_entrypoint.py"
@@ -208,6 +210,8 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert env["DG_JIT_USE_NVRTC"] == "1"
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
     assert requirement in launcher.cache_identity()
+    for runtime_requirement in wheel.runtime_requirements:
+        assert runtime_requirement in launcher.cache_identity()
 
 
 def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypatch):

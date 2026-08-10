@@ -39,6 +39,7 @@ class VllmGpuWheel:
     sm_targets: tuple[str, ...]
     url: str
     sha256: str
+    runtime_requirements: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,9 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
                 "cp38-abi3-manylinux_2_28_x86_64.whl"
             ),
             sha256="d4e5d6e19da49c0f1dd030bd14d3ab795a10b8f1185c55162ae5daf6745c98eb",
+            runtime_requirements=(
+                "deep-gemm @ https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260805-fa50698a9a30/deep_gemm-2.5.0%2B891d57b-cp312-cp312-linux_x86_64.whl#sha256=2a98b8eed0a79267533c6302aa0e72dcd598d7bb857fa2b49e8a207171109e15",
+            ),
         ),
         VllmGpuWheel(
             architecture="aarch64",
@@ -104,6 +108,7 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
                 "cp38-abi3-manylinux_2_28_aarch64.whl"
             ),
             sha256="a248408d444425906a0e878513c8f31a43582ddf6e82e32a1573b6c714b677f9",
+            runtime_requirements=(),
         ),
     ),
 )
