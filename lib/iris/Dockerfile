@@ -240,13 +240,47 @@ RUN set -eux; \
 WORKDIR /app
 
 
-# ── Stage: task-h100-evidence ─────────────────────────────────────
-# Source-only H100 evidence image. This stays separate from the default task
+# ── Stage: h100-evidence-runtime ─────────────────────────────────────
+# Build the frozen Python runtime separately so the final task image receives
+# only an installed environment. The tile_lifetime sources arrive later in the
+# reviewed source capsule; Shuttle is a runtime dependency and is installed as
+# a non-editable wheel rather than copied as a repository tree.
+FROM task AS h100-evidence-runtime
+
+WORKDIR /build/runtime
+ENV UV_PROJECT_ENVIRONMENT=/opt/h100-evidence-runtime
+
+COPY uv.lock pyproject.toml ./
+COPY lib/iris/pyproject.toml ./lib/iris/pyproject.toml
+COPY lib/fray/pyproject.toml ./lib/fray/pyproject.toml
+COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
+COPY lib/dupekit/pyproject.toml ./lib/dupekit/pyproject.toml
+COPY lib/ducky/pyproject.toml ./lib/ducky/pyproject.toml
+COPY lib/shuttle/pyproject.toml lib/shuttle/README.md ./lib/shuttle/
+COPY lib/tile_lifetime/pyproject.toml ./lib/tile_lifetime/pyproject.toml
+COPY lib/haliax/pyproject.toml ./lib/haliax/pyproject.toml
+COPY lib/levanter/pyproject.toml ./lib/levanter/pyproject.toml
+COPY lib/marin/pyproject.toml ./lib/marin/pyproject.toml
+COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
+COPY lib/zephyr/pyproject.toml ./lib/zephyr/pyproject.toml
+COPY infra/pulumi/pyproject.toml ./infra/pulumi/pyproject.toml
+COPY lib/shuttle/src/ ./lib/shuttle/src/
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --package marin-tile-lifetime --extra cuda13 \
+      --no-default-groups --no-editable --no-install-project
+
+
+# ── Stage: task-h100-evidence
+# H100 evidence image. This stays separate from the default task
 # image because Nsight Compute and the CUDA compiler add more than 1 GiB. It is
 # amd64-only: the reviewed evidence target is one Hopper H100, not Grace/GB200.
 FROM task AS task-h100-evidence
 
 LABEL org.opencontainers.image.description="Iris H100 evidence task image"
+
+COPY --from=h100-evidence-runtime /opt/h100-evidence-runtime /opt/h100-evidence-runtime
+ENV PATH="/opt/h100-evidence-runtime/bin:${PATH}"
 
 ARG NVIDIA_DEBIAN12_AMD64_REPOSITORY=https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64
 COPY lib/iris/images/h100-evidence-debian12-amd64.sha256 /tmp/h100-evidence-debian12-amd64.sha256
@@ -280,3 +314,32 @@ RUN set -eux; \
 
 ENV CUDA_HOME=/usr/local/cuda-13.2
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
+
+# Import and version validation is forced onto the CPU backend. It proves the
+# installed runtime is internally coherent without enumerating or initializing
+# a GPU during the image build.
+RUN JAX_PLATFORMS=cpu python - <<'PY'
+from importlib.metadata import version
+
+import jax
+import jaxlib
+import numpy
+import scipy
+from shuttle.ir import DType
+
+expected = {
+    "jax": "0.10.1",
+    "jax-cuda13-pjrt": "0.10.1",
+    "jax-cuda13-plugin": "0.10.1",
+    "jaxlib": "0.10.1",
+    "marin-shuttle": "0.1.0",
+}
+actual = {distribution: version(distribution) for distribution in expected}
+if actual != expected:
+    raise SystemExit(f"H100 evidence runtime version mismatch: {actual!r}")
+
+if jax.__version__ != expected["jax"] or jaxlib.__version__ != expected["jaxlib"]:
+    raise SystemExit("imported JAX versions disagree with installed distribution metadata")
+if not numpy.__version__ or not scipy.__version__ or DType.BF16.value != "bf16":
+    raise SystemExit("H100 evidence runtime import smoke failed")
+PY
