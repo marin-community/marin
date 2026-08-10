@@ -44,6 +44,7 @@ import subprocess
 import sys
 import threading
 from types import FrameType
+from typing import IO
 
 from rigging.timing import Deadline, Duration
 
@@ -82,7 +83,7 @@ def _child_rank_env(
     }
 
 
-def _pump_output(tag: str, source, sink, write_lock: threading.Lock) -> None:
+def _pump_output(tag: str, source: IO[str], sink: IO[str], write_lock: threading.Lock) -> None:
     """Forward one of a child's streams to the matching supervisor stream, rank-tagged.
 
     stdout and stderr stay separate: iris classifies an unprefixed line by the
