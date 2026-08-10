@@ -73,7 +73,9 @@ base_select = "upstream_main"
 e2e = "experiments/evaluation/configs/harbor/aime-smoke.yaml"
 blocker_assignee = "yonromai"
 nuances = [
-    "Fork main is hundreds of commits behind upstream, so the first rebase onto upstream will be large and conflict-heavy.",
+    "Harbor carries no Marin commits: config/external/harbor pins harbor-framework/harbor main directly, so a refresh is a lock bump via `uv run config/update-external.py harbor`, not a rebase.",
+    "Upstream Harbor writes trials to a local jobs_dir (local-filesystem Path I/O), so the runner stages trials in pod-local scratch and syncs them to the remote output_dir; it cannot be handed a gs://-/s3://-backed jobs_dir.",
+    "The isolated driver imports config models from harbor.models.* and calls agent callbacks by keyword; preflight validates agent-callback signatures, so an upstream model-shape or signature change fails there before a model is served.",
 ]
 
 [MarinSkyRL]
