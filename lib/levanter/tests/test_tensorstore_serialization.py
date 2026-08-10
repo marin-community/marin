@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import subprocess
+import sys
+import textwrap
 from tempfile import TemporaryDirectory
 from typing import Any
 
@@ -19,6 +22,8 @@ from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.models.gpt2 import Gpt2Mlp
 from levanter.tensorstore_serialization import (
+    TensorStoreWriteConfig,
+    _capped_chunk_shape,
     _transfer_shard_to_pageable_host,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
@@ -209,3 +214,182 @@ def test_tensorstore_ok_with_missing():
             m3 = tree_deserialize_leaves_tensorstore(tmpdir, m2, allow_missing=True)
             assert hax.all(m3.a == hax.full(A, 4))
             assert hax.all(m3.b == hax.zeros(A))
+
+
+def test_a_staging_budget_smaller_than_one_shard_still_completes():
+    """The gate must always admit the first snapshot, or a save deadlocks on an array it
+    can never fit."""
+    with use_test_mesh():
+        A = hax.Axis("A", 1024)
+        state = {"w": hax.full(A, 3.0)}
+
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(
+                tmpdir, state, write_config=TensorStoreWriteConfig(max_staged_host_bytes=1)
+            )
+            restored = tree_deserialize_leaves_tensorstore(tmpdir, {"w": hax.zeros(A)})
+
+        assert hax.all(restored["w"] == state["w"])
+
+
+@pytest.mark.parametrize(
+    "local_shape, itemsize, max_bytes, expected",
+    [
+        ((8, 16), 4, 4096, (8, 16)),  # already under the cap
+        ((64, 16), 4, 1024, (16, 16)),  # halve the largest even axis until it fits
+        ((3, 5), 4, 1, (3, 5)),  # nothing divides: one chunk, cap exceeded
+        ((), 4, 1024, ()),  # scalar
+    ],
+)
+def test_capped_chunk_shape_stays_a_divisor(local_shape, itemsize, max_bytes, expected):
+    chunk = _capped_chunk_shape(local_shape, itemsize, max_bytes)
+    assert chunk == expected
+    assert all(dim % size == 0 for dim, size in zip(local_shape, chunk)), "chunks must tile the writer's slice"
+
+
+# Eight devices are needed to give an array more than one replica, and the XLA device count is
+# process-global, so these run in a fresh interpreter (same pattern as test_snowball.py).
+_EIGHT_DEVICE_PREAMBLE = """
+import os
+os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+os.environ["JAX_PLATFORMS"] = "cpu"
+import tempfile
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
+from levanter.tensorstore_serialization import (
+    TensorStoreWriteConfig,
+    _shard_write_region,
+    plan_array_write,
+    tree_deserialize_leaves_tensorstore,
+    tree_serialize_leaves_tensorstore,
+)
+
+assert jax.device_count() == 8
+# Small enough that every array is worth splitting, so the test exercises the split path.
+CONFIG = TensorStoreWriteConfig(min_replica_slice_bytes=1, max_chunk_bytes=4096)
+MESH = Mesh(np.array(jax.devices()).reshape(2, 4), ("replica", "expert"))
+"""
+
+
+def _run_eight_device_script(body: str) -> str:
+    result = subprocess.run(
+        [sys.executable, "-c", _EIGHT_DEVICE_PREAMBLE + textwrap.dedent(body)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    return result.stdout
+
+
+def test_every_replica_writes_a_disjoint_slice_covering_the_array():
+    """The contract replica-parallel writes rest on: no idle replicas, no byte written twice.
+
+    Without it a replicated array is written entirely by whichever process holds replica 0,
+    which is what makes large replicated parameters a host-memory problem for that process.
+    """
+    _run_eight_device_script(
+        """
+        cases = {
+            # spec -> how many of the 8 devices should write part of the array
+            "replicated": (P(None, None), 8),
+            "sharded_over_expert": (P("expert", None), 8),
+            "fully_sharded": (P(("replica", "expert"), None), 8),
+        }
+        for name, (spec, expected_writers) in cases.items():
+            arr = jax.device_put(
+                jnp.arange(64 * 16, dtype=jnp.float32).reshape(64, 16), NamedSharding(MESH, spec)
+            )
+            plan = plan_array_write(arr, CONFIG)
+            times_written = np.zeros((64, 16), dtype=int)
+            writers = 0
+            for shard in arr.addressable_shards:
+                region = _shard_write_region(shard, plan)
+                if region is None:
+                    continue
+                writers += 1
+                times_written[region.index] += 1
+            assert writers == expected_writers, (name, writers)
+            assert (times_written == 1).all(), (name, "every byte written exactly once")
+        print("OK")
+        """
+    )
+
+
+def test_replicated_arrays_survive_a_replica_parallel_roundtrip():
+    _run_eight_device_script(
+        """
+        with jax.set_mesh(MESH):
+            source = {
+                "replicated": jax.device_put(
+                    jax.random.normal(jax.random.PRNGKey(0), (64, 16)), NamedSharding(MESH, P(None, None))
+                ),
+                "sharded": jax.device_put(
+                    jax.random.normal(jax.random.PRNGKey(1), (64, 16)), NamedSharding(MESH, P("expert", None))
+                ),
+                "scalar": jnp.array(7),
+            }
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tree_serialize_leaves_tensorstore(tmpdir, source, write_config=CONFIG)
+                restored = tree_deserialize_leaves_tensorstore(
+                    tmpdir, {k: jnp.zeros_like(v) for k, v in source.items()}
+                )
+            for key, value in source.items():
+                assert jnp.array_equal(restored[key], value), key
+        print("OK")
+        """
+    )
+
+
+def test_checkpoint_written_on_one_mesh_loads_on_another():
+    """Content must not depend on the mesh that wrote it, so writer layout can keep changing."""
+    _run_eight_device_script(
+        """
+        read_mesh = Mesh(np.array(jax.devices()).reshape(1, 8), ("replica", "expert"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with jax.set_mesh(MESH):
+                written = jax.device_put(
+                    jax.random.normal(jax.random.PRNGKey(0), (64, 16)), NamedSharding(MESH, P(None, None))
+                )
+                tree_serialize_leaves_tensorstore(tmpdir, {"embed": written}, write_config=CONFIG)
+                expected = np.asarray(written)
+            with jax.set_mesh(read_mesh):
+                target = {"embed": jax.device_put(jnp.zeros((64, 16)), NamedSharding(read_mesh, P("expert", None)))}
+                restored = tree_deserialize_leaves_tensorstore(tmpdir, target)
+                assert np.array_equal(np.asarray(restored["embed"]), expected)
+                assert restored["embed"].sharding.spec == P("expert", None)
+        print("OK")
+        """
+    )
+
+
+def test_small_arrays_are_not_split_into_tiny_objects():
+    _run_eight_device_script(
+        """
+        arr = jax.device_put(jnp.arange(64 * 16, dtype=jnp.float32).reshape(64, 16), NamedSharding(MESH, P(None, None)))
+        # 4 KiB array, 8 replicas: a 1 MiB floor means splitting is not worth it.
+        plan = plan_array_write(arr, TensorStoreWriteConfig(min_replica_slice_bytes=1024**2))
+        assert plan.split_axis is None, plan
+        assert plan.write_replicas == 1, plan
+        writers = sum(1 for shard in arr.addressable_shards if _shard_write_region(shard, plan) is not None)
+        assert writers == 1, writers
+
+        # max_write_replicas caps the fan-out without disabling the split.
+        capped = plan_array_write(arr, TensorStoreWriteConfig(min_replica_slice_bytes=1, max_write_replicas=2))
+        assert capped.write_replicas == 2, capped
+        assert sum(1 for s in arr.addressable_shards if _shard_write_region(s, capped) is not None) == 2
+        print("OK")
+        """
+    )
+
+
+def test_host_arrays_without_a_sharding_roundtrip():
+    """Numpy leaves reach the serializer through ``is_jax_array_like`` and have no shards."""
+    source = {"w": np.arange(10, dtype=np.float32)}
+
+    with TemporaryDirectory() as tmpdir:
+        tree_serialize_leaves_tensorstore(tmpdir, source)
+        restored = tree_deserialize_leaves_tensorstore(tmpdir, {"w": jnp.zeros(10, dtype=jnp.float32)})
+
+    np.testing.assert_array_equal(np.asarray(restored["w"]), source["w"])
