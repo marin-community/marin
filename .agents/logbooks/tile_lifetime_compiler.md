@@ -3367,3 +3367,30 @@ author: dlwh
   absent, and the local session state is absent. Raw samples, generated source,
   StableHLO, optimized HLO, environment, invocation, and release proof are under
   `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_fixed_layout_239372d3_v0/`.
+
+### 2026-08-09 - TLTC-XLA-063 capture-safe Contract/Map recapture gate
+
+- Revision `870ce22524` adds an explicit capture-safe physical candidate to the
+  standalone Contract/Map harness. The launch-checked baseline retains exact
+  logical handler-count accounting; the capture-safe path requires XLA
+  `CUSTOM_CALL` command buffers and records host callbacks only as graph-capture
+  evidence.
+- One fixed-protocol batch-priority H100 replay used four warmups and 30
+  counterbalanced samples with 1,000 iterations each. JAX, JAXLIB, CUDA plugin,
+  and PJRT were all 0.11.0; NVCC was 13.3.73. The environment was Torch-free.
+  Compile/link/load preflight passed, both fresh counts were zero, and the
+  generated source passed the capture-safety audit.
+- Forward/reverse callback counts were `(1,1)` after correctness, `(3,3)` after
+  determinism, `(4,4)` after warmup, and `(6,6)` after measurement. Six host
+  callbacks across 30,007 logical generated executions show command-buffer
+  capture and replay. Two recaptures occurred after the warmup checkpoint, so
+  the strict post-warmup plateau gate failed.
+- The natural-JAX, ordered-CPU, layout, and deterministic-hash guards completed
+  before the final count assertion. The process also completed all timed loops,
+  but it serializes results only after count validation. Raw timing
+  distributions, numeric correctness details, and a performance ratio are
+  unavailable. The run remains unaccepted and was not retried.
+- The holder was explicitly terminated after evidence copy. Iris reports
+  `JOB_STATE_KILLED` and no active matching job; local session state and the
+  exact task-label pod are absent. Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_capture_safe_870ce225_unaccepted_v0/`.
