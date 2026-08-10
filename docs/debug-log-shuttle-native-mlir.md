@@ -256,9 +256,31 @@ Keep the macro implementation and Shuttle's fixture wiring unchanged.
 - Repository formatting and lint gates run on the changed files.
 - Native lit analysis and fixture execution remain pending. This debugging task
   does not claim any lit test passed.
-- Default-config, GPU, CUDA/NCCL, and Google-only string labels remain relative
-  inside the pinned macro. They require the same audit before Shuttle uses
-  those modes.
+
+## Hypothesis 8
+
+The first label patch fixed the unconditional runner datum, but the pinned
+macro evaluates CUDA-configured `_tools_on_path` dependencies even for this lit
+suite. Its raw `//xla/tsl/cuda` strings again resolve inside `@shuttle_mlir`.
+
+The exact build advanced past the runner label and failed at
+`@@shuttle_mlir//xla/tsl/cuda`. Audit every raw runtime label in `xla/lit.bzl`
+and wrap each XLA-owned label with `Label(...)`: default config, GPU specs,
+runner data, CUDA runtime and NVSHMEM, NCCL, and Google config. Do not change
+load statements or labels supplied by a macro caller.
+
+## Results 8
+
+- The expanded patch applies cleanly after patch 0001 at exact XLA commit
+  `9b635916ecc6`.
+- All XLA-owned raw runtime `//` labels found in the pinned macro are anchored
+  with `Label(...)`. Load labels and caller inputs are unchanged.
+- The internal `//third_party/py/lit:lit` string is intentionally unchanged:
+  exact OSS execution overwrites it with the local `lit_custom_*` target before
+  constructing a rule.
+- Repository formatting and lint gates run on the changed files.
+- Native lit analysis and fixture execution remain pending. This debugging task
+  does not claim any lit test passed.
 
 ## Hypothesis 8
 

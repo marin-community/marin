@@ -52,16 +52,16 @@ bazel test \
   //xla/pjrt:pjrt_executable_test
 ```
 
-The second patch makes XLA's OSS CPU lit runner data label safe for calls from
-an external repository. String labels created inside a macro resolve in the
-caller's repository. Constructing the runner label with `Label(...)` in
-`lit.bzl` anchors it to XLA, so Shuttle retains XLA's runner and tool staging
-without resolving `//xla` inside `@shuttle_mlir`.
+The second patch makes XLA's lit macros safe for calls from an external
+repository. String labels created inside a macro resolve in the caller's
+repository. Constructing XLA-owned runtime labels with `Label(...)` in
+`lit.bzl` anchors them to XLA. The patch covers the runner data, default config,
+GPU specifications, CUDA/NCCL dependencies, and Google config while leaving
+load statements and caller-supplied labels unchanged.
 
-The macro has additional string labels in its default-config, GPU, CUDA/NCCL,
-and Google-only branches. Shuttle's current lit target supplies its own config
-and exercises the OSS CPU branch, so those paths are outside this checkpoint.
-They need the same anchoring before Shuttle uses those macro modes.
+The internal `//third_party/py/lit:lit` string remains unchanged. In the exact
+OSS source path it is overwritten by the `lit_custom_*` target before any rule
+consumes it; it is not an XLA-owned runtime label in that execution mode.
 
 The artifact is source-level integration work. Marin does not vendor XLA, and
 the patch has not been compiled in this repository. End-to-end acceptance

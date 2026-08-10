@@ -1,6 +1,22 @@
 diff --git a/xla/lit.bzl b/xla/lit.bzl
 --- a/xla/lit.bzl
 +++ b/xla/lit.bzl
+@@ -222,6 +222,6 @@ def lit_test_suite_for_gpus(
+         ]
+         gpu_data = data + [
+-            "//xla/backends/gpu/target_config:all_gpu_specs",
++            Label("//xla/backends/gpu/target_config:all_gpu_specs"),
+         ]
+         lit_test_suite(
+             "%s_%s" % (name, gpu),
+@@ -253,6 +253,6 @@ def lit_device_test(
+         args = [],
+         data = [],
+-        cfg = "//xla:lit.cfg.py",
++        cfg = Label("//xla:lit.cfg.py"),
+         tools = None,
+         visibility = None,
+         env = {},
 @@ -416,5 +416,5 @@ def lit_test(
      """
      args = args or []
@@ -8,3 +24,24 @@ diff --git a/xla/lit.bzl b/xla/lit.bzl
 +    data = (data or []) + [Label("//xla:sh_test_with_runfiles.py")]
      tools = tools or []
      env = env or {}
+@@ -448,9 +448,9 @@ def lit_test(
+         lib_dir = lib_dir,
+         deps = if_cuda_is_configured([
+-            "//xla/stream_executor/cuda:all_runtime",
+-            "//xla/tsl/cuda:nvshmem_stub",
++            Label("//xla/stream_executor/cuda:all_runtime"),
++            Label("//xla/tsl/cuda:nvshmem_stub"),
+         ]) + if_nccl([
+-            "//xla/tsl/cuda:nccl",
++            Label("//xla/tsl/cuda:nccl"),
+         ]),
+         visibility = ["//visibility:private"],
+         **kwargs
+@@ -507,6 +507,6 @@ def lit_test(
+                ] + data + if_oss(["@pypi//lit"]) +
+                if_google([
+-                   "//xla:lit_google_cfg.py",
++                   Label("//xla:lit_google_cfg.py"),
+                ]),
+         visibility = visibility,
+         env = env,
