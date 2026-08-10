@@ -1091,3 +1091,12 @@ The process-per-GPU, four-node exact proxy now trains with finite loss and zero 
 - Controlled change: relative to S33, disable optimizer-state offload while retaining the CuTe/Pallas expert backend, exact d6144/L48/E48 shape, capacity 1.33, split-32 ragged transport, safe XLA flags, process-per-GPU topology, and disabled periodic work.
 - Result: `jit_train_step` failed before step zero on every sampled rank while attempting a 120,573,717,720-byte (112.29 GiB) allocation. The CUDA async allocator reported `CUDA_ERROR_OUT_OF_MEMORY`; the later coordination failures were consequences of rank zero exiting.
 - Decision: keep optimizer state in pinned host memory. The approximately 0.5-second step-boundary host-copy bubble cannot be removed by placing the full state in HBM at this model shape.
+
+## 2026-08-10: S45 active-length cuDNN gate passes
+
+- Run: `ra2a-s45-active-row-cudnn-bench-20260810-coord`; child `/power/ra2a-s45-active-row-cudnn-bench-20260810-coord/cudnn-jax-ragged-weight-grad-gb200`. Both tasks succeeded on one GB200 without retry or preemption.
+- Contract: hold the physical receiver tensor at 348,672 rows and compare capacity-filled group sizes totaling 348,652 rows with balanced active group sizes totaling 262,144 rows. This tests the exact capacity-1.33 inactive tail without changing its static buffer shape.
+- Correctness: all four grouped-Wgrad calls completed. Maximum analytical-reference deviations were 1.0 BF16 unit for the capacity-filled case and 0.25 for the balanced-active case.
+- Timing: capacity-filled `dw13` and `dw2` medians were 19.8947 and 10.2816 milliseconds. Balanced-active medians were 15.3026 and 8.4369 milliseconds. Their combined time fell from 30.1763 to 23.7395 milliseconds, a 21.334% reduction.
+- Artifact: `s3://marin-us-east-02a/marin/benchmarks/cudnn-jax-ragged-weight-grad-gb200/2026.08.10.62`.
+- Decision: promote true active group lengths to the short four-node value/gradient screen before the exact performance arm.
