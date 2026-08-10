@@ -1100,3 +1100,12 @@ The process-per-GPU, four-node exact proxy now trains with finite loss and zero 
 - Timing: capacity-filled `dw13` and `dw2` medians were 19.8947 and 10.2816 milliseconds. Balanced-active medians were 15.3026 and 8.4369 milliseconds. Their combined time fell from 30.1763 to 23.7395 milliseconds, a 21.334% reduction.
 - Artifact: `s3://marin-us-east-02a/marin/benchmarks/cudnn-jax-ragged-weight-grad-gb200/2026.08.10.62`.
 - Decision: promote true active group lengths to the short four-node value/gradient screen before the exact performance arm.
+
+## 2026-08-10: S46 active-row backend passes the four-node execution screen
+
+- Run: `ra2a-s46-ep16-e48-active-row-cudnn-correctness-20260810`; child `/power/ra2a-s46-active-row-cudnn-correctness-20260810-coord/grug-train-ra2a-s46-ep16-e48-active-row-cudnn-correctness-20260810`. The coordinator and all four workers succeeded on their first attempts with exit 0.
+- Geometry: d768/L8, E48, top-4, capacity 1.33, EP16, 1,048,576 tokens per step, split-32 ragged transport, and 16 one-device processes. This is a forward/backward stability screen for partially filled QuACK and cuDNN groups, not a hero performance comparison.
+- Placement: workers `s2srxs64`, `s3qrxs64`, `s4btxs64`, and `sf6txs64` all shared rack and NVLink domain `DH1-393-US-EAST-08A`, fabric `US-EAST-08A-FAB27`, and IB leaf `400.2-DH1`.
+- Correctness: all 52 optimizer steps completed with finite loss, decreasing from 11.8066559 to 5.5894032. The narrow model dropped as much as 24.066% at capacity 1.33, so its timing and drop rate are not promoted; the exact E48 model has already shown zero drops at the same capacity.
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s46-ep16-e48-active-row-cudnn-correctness-20260810
+- Decision: promote the active-row backend to the exact d6144/L48/E48 zero-drop performance arm.
