@@ -1,0 +1,7 @@
+{
+  "jax": "0.11.0",
+  "jax-cuda13-pjrt": "0.11.0",
+  "jax-cuda13-plugin": "0.11.0",
+  "jaxlib": "0.11.0",
+  "torch_present": false
+}

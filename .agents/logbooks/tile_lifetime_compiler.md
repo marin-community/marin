@@ -3525,3 +3525,28 @@ author: dlwh
   toolchain, exact invocation, bundle/archive hashes, and release proof are
   under
   `lib/tile_lifetime/benchmarks/artifacts/jax_row_normalization_backward_h100_outputs2_e01a4638_v0/`.
+
+### 2026-08-09 - TLTC-XLA-068 order-attributed capture accounting replay
+
+- Canonical revision `9ddaabd942` was replayed exactly once on one
+  batch-priority H100 after frozen dependency, Torch-free toolchain, compile,
+  link, source-audit, and fresh-counter preflight. JAX, JAXLIB, CUDA plugin,
+  and PJRT were 0.11.0; NVCC was 13.3.73; the target was `sm_90a`.
+- The four-warmup, 30-sample, 1,000-iteration counterbalanced result measured
+  0.0591248865 ms for the generated two-FFI-call Contract/Map chain and
+  0.0570275875 ms for matched natural-JAX forward plus VJP, or 1.03677692x.
+  Correctness and three-trial deterministic hashes passed.
+- The harness serialized both 30-sample distributions and every callback
+  checkpoint before applying the precommitted gate. Handler counts changed
+  from `(4,4)` after warmup to `(6,6)` after measurement. All `+2/+2` callbacks
+  occurred in sample 0 of the generated-first order; every later checkpoint
+  and the complete natural-first order had zero callbacks.
+- The committed policy allows at most one callback per handler per complete
+  order, restricted to that order's first sample. The observed `+2/+2` exceeds
+  this bound, so it is classified `unbounded_recapture` and rejected. The
+  1.0368x ratio is descriptive timing evidence, not a performance acceptance
+  claim. The run was not retried and the policy was not changed.
+- The copied result checksum matched the remote artifact before release. Iris
+  reports the holder killed by user; the exact pod, namespace pod-name search,
+  local cache session, and holder process are absent. Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_capture_accounting_9ddaabd942_unaccepted_v0/`.
