@@ -35,12 +35,12 @@ from tile_lifetime.cuda_toolchain import (
     cuda_toolkit_shared_library,
     cuda_toolkit_shared_library_link_flags,
 )
+from tile_lifetime.experimental_stablehlo_row_normalization_backward import (
+    compile_experimental_stablehlo_row_normalization_backward,
+    compile_experimental_stablehlo_row_normalization_backward_ffi,
+)
 from tile_lifetime.jax_axis_fold_ffi import call_cuda_axis_fold_ffi, register_cuda_axis_fold_ffi
 from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_row_normalization_backward import (
-    compile_stablehlo_row_normalization_backward,
-    compile_stablehlo_row_normalization_backward_ffi,
-)
 
 _TARGET_NAME = "shuttle.axis_fold_reverse_v1"
 _INPUT_TARGET_NAME = "shuttle.axis_fold_reverse_input_v1"
@@ -217,7 +217,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if args.compare_pipeline_schedules or args.compare_column_outputs_per_group
             else _TARGET_NAME
         )
-        compilation = compile_stablehlo_row_normalization_backward_ffi(
+        compilation = compile_experimental_stablehlo_row_normalization_backward_ffi(
             graph,
             target_name=target_name,
             numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
@@ -248,7 +248,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     feature_generated = None
     feature_library = None
     if args.profile_components:
-        component_compilation = compile_stablehlo_row_normalization_backward(graph, threads=args.threads)
+        component_compilation = compile_experimental_stablehlo_row_normalization_backward(graph, threads=args.threads)
         programs = (
             component_compilation.programs.input_cotangent,
             replace(

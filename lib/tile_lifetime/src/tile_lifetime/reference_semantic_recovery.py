@@ -7,8 +7,7 @@ from dataclasses import dataclass
 
 from shuttle.experimental.stablehlo_import import StableHLOGraph
 from shuttle.ir import DType
-from tile_lifetime.ir import TensorGraph
-from tile_lifetime.semantic_recovery import (
+from tile_lifetime.experimental_semantic_recovery import (
     SemanticRecoveryError,
     _graph_input,
     _graph_parameter,
@@ -21,6 +20,7 @@ from tile_lifetime.semantic_recovery import (
     _reduction_attributes,
     _validate_matrix_dot,
 )
+from tile_lifetime.ir import TensorGraph
 
 
 @dataclass(frozen=True)

@@ -14,9 +14,9 @@ from tile_lifetime import (
     NumericalPolicy,
     ReductionSkeleton,
     StreamingAttentionSkeleton,
-    compile_stablehlo_dense_transformer_region,
 )
 from tile_lifetime.compiler import RowScalePlacement
+from tile_lifetime.experimental_pipeline import compile_experimental_stablehlo_dense_transformer_region
 from tile_lifetime.plan import RegionPlan
 from tile_lifetime.reference import (
     DENSE_REGION_INPUT_NAMES,
@@ -66,7 +66,7 @@ class RecordingBackend:
 
 def _plan(placement: RowScalePlacement = RowScalePlacement.CONSUMER_PROLOGUE) -> RegionPlan:
     artifact = base64.b64decode(FIXTURE.read_text())
-    return compile_stablehlo_dense_transformer_region(
+    return compile_experimental_stablehlo_dense_transformer_region(
         artifact,
         input_names=DENSE_REGION_INPUT_NAMES,
         gemm_accumulation_dtype=DType.FP32,
@@ -125,7 +125,7 @@ def test_runtime_validates_primary_shape_contract_and_reduces_one_partial_per_n_
         key_value_heads=8,
         head_dimension=128,
     )
-    plan = compile_stablehlo_dense_transformer_region(
+    plan = compile_experimental_stablehlo_dense_transformer_region(
         export_debug_dense_region(config),
         input_names=DENSE_REGION_INPUT_NAMES,
         gemm_accumulation_dtype=DType.FP32,

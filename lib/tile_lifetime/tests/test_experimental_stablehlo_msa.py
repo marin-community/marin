@@ -8,15 +8,15 @@ import jax.numpy as jnp
 import numpy as np
 
 from shuttle.experimental.stablehlo_import import CompositeAttributes, import_stablehlo
-from tile_lifetime.msa_frontend import MSA_INPUT_NAMES, MSADebugConfig, export_debug_msa, msa_region
-from tile_lifetime.msa_recovery import (
+from tile_lifetime.experimental_msa_recovery import (
     NaturalProjectedRoutedAttentionCompilation,
     recover_projected_routed_attention_program,
 )
-from tile_lifetime.pipeline import (
-    compile_stablehlo_projected_routed_attention_program,
-    recover_stablehlo_projected_routed_attention_program,
+from tile_lifetime.experimental_pipeline import (
+    compile_experimental_stablehlo_projected_routed_attention_program,
+    recover_experimental_stablehlo_projected_routed_attention_program,
 )
+from tile_lifetime.msa_frontend import MSA_INPUT_NAMES, MSADebugConfig, export_debug_msa, msa_region
 from tile_lifetime.routed_attention import (
     IndexDomainRestriction,
     ProjectedBlockSelectionProgram,
@@ -174,7 +174,7 @@ def test_frozen_projected_relation_fixture_matches_current_jax_structure() -> No
 
 
 def test_projected_relation_names_erase_before_schedule_synthesis() -> None:
-    recovered = recover_stablehlo_projected_routed_attention_program(
+    recovered = recover_experimental_stablehlo_projected_routed_attention_program(
         _fixture_artifact(),
         input_names=MSA_INPUT_NAMES,
     )
@@ -329,7 +329,7 @@ def test_projected_runtime_selection_builds_grouped_dual_orientation_relation() 
     query_hidden, key_value_hidden, _, _, _, left_weight, right_weight = _inputs(config, seed=71)
     query_hidden_bf16 = np.asarray(jnp.asarray(query_hidden, dtype=jnp.bfloat16), dtype=np.float32)
     key_value_hidden_bf16 = np.asarray(jnp.asarray(key_value_hidden, dtype=jnp.bfloat16), dtype=np.float32)
-    compilation = compile_stablehlo_projected_routed_attention_program(
+    compilation = compile_experimental_stablehlo_projected_routed_attention_program(
         _fixture_artifact(),
         input_names=MSA_INPUT_NAMES,
         runtime_inputs={
@@ -371,7 +371,7 @@ def test_symmetric_projected_relation_is_a_semantic_shape_mutation() -> None:
     query_hidden, key_value_hidden, query_weight, key_weight, value_weight, left_weight, right_weight = _inputs(
         config, seed=83
     )
-    recovered = recover_stablehlo_projected_routed_attention_program(artifact, input_names=MSA_INPUT_NAMES)
+    recovered = recover_experimental_stablehlo_projected_routed_attention_program(artifact, input_names=MSA_INPUT_NAMES)
     query_hidden_bf16 = np.asarray(jnp.asarray(query_hidden, dtype=jnp.bfloat16), dtype=np.float32)
     key_value_hidden_bf16 = np.asarray(jnp.asarray(key_value_hidden, dtype=jnp.bfloat16), dtype=np.float32)
     selection = execute_projected_block_selection(
@@ -412,7 +412,7 @@ def test_symmetric_projected_relation_is_a_semantic_shape_mutation() -> None:
     assert recovered.relation_selection.resolved_right_count == recovered.relation_selection.source_count
     assert (
         recovered.generic_operation_kinds
-        == recover_stablehlo_projected_routed_attention_program(
+        == recover_experimental_stablehlo_projected_routed_attention_program(
             _fixture_artifact(), input_names=MSA_INPUT_NAMES
         ).generic_operation_kinds
     )
@@ -434,7 +434,7 @@ def test_primary_asymmetric_prefill_shape_recovers_without_a_workload_node() -> 
         block_size=128,
         selected_blocks=16,
     )
-    recovered = recover_stablehlo_projected_routed_attention_program(
+    recovered = recover_experimental_stablehlo_projected_routed_attention_program(
         export_debug_msa(config),
         input_names=MSA_INPUT_NAMES,
     )
@@ -463,7 +463,7 @@ def test_primary_asymmetric_prefill_enumerates_joint_sm100_candidates() -> None:
         block_size=128,
         selected_blocks=16,
     )
-    recovered = recover_stablehlo_projected_routed_attention_program(
+    recovered = recover_experimental_stablehlo_projected_routed_attention_program(
         export_debug_msa(config),
         input_names=MSA_INPUT_NAMES,
     )

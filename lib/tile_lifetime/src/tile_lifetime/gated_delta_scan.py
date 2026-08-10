@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Natural Gated DeltaNet frontend plus NumPy/reference scan utilities."""
+"""Gated DeltaNet reference utilities and experimental Python recovery."""
 
 from dataclasses import dataclass
 
@@ -12,13 +12,13 @@ from tile_lifetime.delta_rule_reference import (
     delta_rule_update_expression,
     prepare_delta_rule_inputs,
 )
+from tile_lifetime.experimental_stablehlo_scan_recovery import (
+    ExperimentalStableHLOStatefulScanCompilation,
+    compile_experimental_natural_affine_scan,
+)
 from tile_lifetime.plan import (
     ScanNumericalContract,
     StatefulScanSkeleton,
-)
-from tile_lifetime.stablehlo_scan_recovery import (
-    StableHLOStatefulScanCompilation,
-    compile_natural_affine_scan,
 )
 from tile_lifetime.stateful_scan import (
     AffineChunkSummary,
@@ -45,7 +45,7 @@ class GatedDeltaReferencePlan:
     candidates: tuple[StatefulScanSkeleton, ...]
 
 
-def compile_gated_delta_scan(
+def compile_experimental_gated_delta_scan(
     *,
     batch_size: int,
     sequence_length: int,
@@ -55,8 +55,8 @@ def compile_gated_delta_scan(
     input_dtype: DType = DType.BF16,
     state_dtype: DType = DType.FP32,
     chunk_sizes: tuple[int, ...] = (32, 64),
-) -> StableHLOStatefulScanCompilation:
-    """Compile natural scalar-decay JAX recurrence through StableHLO recovery."""
+) -> ExperimentalStableHLOStatefulScanCompilation:
+    """Run the scalar-decay JAX recurrence through Python recovery."""
     if input_dtype is not DType.BF16:
         raise ValueError("the natural StatefulScan frontend currently requires BF16 inputs")
     if state_dtype is not DType.FP32:
@@ -69,7 +69,7 @@ def compile_gated_delta_scan(
         value_dimension=value_dimension,
         decay_axes=ScanDecayAxes.SCALAR,
     )
-    return compile_natural_affine_scan(config, chunk_sizes=chunk_sizes)
+    return compile_experimental_natural_affine_scan(config, chunk_sizes=chunk_sizes)
 
 
 def build_gated_delta_reference_plan(

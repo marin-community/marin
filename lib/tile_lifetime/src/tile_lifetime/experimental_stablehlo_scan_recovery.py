@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Recover a generic affine ``StatefulScan`` from exported StableHLO ``while``."""
+"""Experimental Python recovery of an affine scan from StableHLO ``while``."""
 
 import hashlib
 from dataclasses import dataclass, replace
@@ -54,8 +54,8 @@ class StableHLOScanRecoveryError(ValueError):
     """Raised when structured StableHLO is not a supported ordered affine scan."""
 
 
-class StatefulScanSourceKind(StrEnum):
-    """Verified source boundary for an accepted StatefulScan compilation."""
+class ExperimentalStatefulScanSourceKind(StrEnum):
+    """Source boundary retained by an experimental scan recovery."""
 
     JAX_EXPORT_STABLEHLO_WHILE = "jax_export_stablehlo_while"
     STABLEHLO_WHILE = "stablehlo_while"
@@ -63,24 +63,24 @@ class StatefulScanSourceKind(StrEnum):
 
 
 @dataclass(frozen=True)
-class StatefulScanProvenance:
-    """Immutable evidence that candidate generation began at structured StableHLO."""
+class ExperimentalStatefulScanProvenance:
+    """Evidence retained by the experimental structured-while importer."""
 
-    source_kind: StatefulScanSourceKind
+    source_kind: ExperimentalStatefulScanSourceKind
     artifact_sha256: str
     structured_while_count: int
 
 
 @dataclass(frozen=True)
-class StableHLOStatefulScanCompilation:
-    """Natural StableHLO scan, recovered affine structure, and physical candidates."""
+class ExperimentalStableHLOStatefulScanCompilation:
+    """Experimental Python scan recovery and its physical candidates."""
 
     program: StatefulScan
     recovered_update: RecoveredAffineStateUpdate
     candidates: tuple[StatefulScanSkeleton, ...]
     source_operation_count: int
     semantic_erasure_report: SemanticErasureReport
-    provenance: StatefulScanProvenance
+    provenance: ExperimentalStatefulScanProvenance
 
 
 @dataclass(frozen=True)
@@ -96,13 +96,13 @@ class _ScanStep:
     sequence_length: int
 
 
-def compile_stablehlo_stateful_scan(
+def compile_experimental_stablehlo_stateful_scan(
     artifact: bytes,
     *,
     input_names: tuple[str, ...] | None = None,
     chunk_sizes: tuple[int, ...] = (32, 64),
-) -> StableHLOStatefulScanCompilation:
-    """Compile one natural ``jax.lax.scan`` export without matching a model name."""
+) -> ExperimentalStableHLOStatefulScanCompilation:
+    """Recover one ``jax.lax.scan`` export through the Python prototype."""
     source = import_stablehlo_program(artifact, input_names=input_names)
     step = _recover_scan_step(source)
     axes = _infer_logical_axes(step.step_graph)
@@ -127,29 +127,29 @@ def compile_stablehlo_stateful_scan(
         state_layout="logical_axes_" + "_".join(str(axis.id) for axis in recovered.state_axes),
         chunk_sizes=chunk_sizes,
     )
-    compilation = StableHLOStatefulScanCompilation(
+    compilation = ExperimentalStableHLOStatefulScanCompilation(
         program=program,
         recovered_update=recovered,
         candidates=candidates,
         source_operation_count=len(step.step_graph.operations),
         semantic_erasure_report=report,
-        provenance=StatefulScanProvenance(
-            source_kind=StatefulScanSourceKind.STABLEHLO_WHILE,
+        provenance=ExperimentalStatefulScanProvenance(
+            source_kind=ExperimentalStatefulScanSourceKind.STABLEHLO_WHILE,
             artifact_sha256=hashlib.sha256(artifact).hexdigest(),
             structured_while_count=1,
         ),
     )
-    validate_stateful_scan_semantic_erasure(compilation)
+    validate_experimental_stateful_scan_semantic_erasure(compilation)
     return compilation
 
 
-def compile_natural_affine_scan(
+def compile_experimental_natural_affine_scan(
     config: NaturalAffineScanConfig,
     *,
     chunk_sizes: tuple[int, ...] = (32, 64),
-) -> StableHLOStatefulScanCompilation:
-    """Compile ordinary JAX ``lax.scan`` math through exported StableHLO."""
-    compilation = compile_stablehlo_stateful_scan(
+) -> ExperimentalStableHLOStatefulScanCompilation:
+    """Export JAX ``lax.scan`` and run the experimental Python recovery."""
+    compilation = compile_experimental_stablehlo_stateful_scan(
         export_natural_affine_scan(config),
         input_names=NATURAL_AFFINE_SCAN_INPUT_NAMES,
         chunk_sizes=chunk_sizes,
@@ -158,10 +158,10 @@ def compile_natural_affine_scan(
         compilation,
         provenance=replace(
             compilation.provenance,
-            source_kind=StatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE,
+            source_kind=ExperimentalStatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE,
         ),
     )
-    validate_stateful_scan_semantic_erasure(natural)
+    validate_experimental_stateful_scan_semantic_erasure(natural)
     return natural
 
 
@@ -190,17 +190,17 @@ def stateful_scan_scheduling_keys(
     )
 
 
-def validate_stateful_scan_semantic_erasure(
-    compilation: StableHLOStatefulScanCompilation,
+def validate_experimental_stateful_scan_semantic_erasure(
+    compilation: ExperimentalStableHLOStatefulScanCompilation,
 ) -> None:
-    """Reject a stale or named scheduling report before scan candidates execute."""
+    """Validate only the internal consistency of an experimental recovery."""
     if compilation.provenance.source_kind not in (
-        StatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE,
-        StatefulScanSourceKind.STABLEHLO_WHILE,
+        ExperimentalStatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE,
+        ExperimentalStatefulScanSourceKind.STABLEHLO_WHILE,
     ):
-        raise SemanticErasureError("accepted StatefulScan candidates must originate from structured StableHLO while")
+        raise SemanticErasureError("experimental scan candidates must originate from structured StableHLO while")
     if compilation.provenance.structured_while_count != 1:
-        raise SemanticErasureError("accepted StatefulScan candidates require exactly one structured StableHLO while")
+        raise SemanticErasureError("experimental scan candidates require exactly one structured StableHLO while")
     _validate_stateful_scan_report(
         compilation.program,
         compilation.recovered_update,

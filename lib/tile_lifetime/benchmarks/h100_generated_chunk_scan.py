@@ -20,7 +20,7 @@ from triton_factored_chunk_scan import (
     prepare_factored_affine_chunks,
 )
 
-from tile_lifetime.stablehlo_scan_recovery import compile_natural_affine_scan
+from tile_lifetime.experimental_stablehlo_scan_recovery import compile_experimental_natural_affine_scan
 from tile_lifetime.stateful_scan_recovery import RecoveredAffineStateUpdate
 from tile_lifetime.stateful_scan_reference import NaturalAffineScanConfig, ScanDecayAxes
 
@@ -191,7 +191,7 @@ def _environment() -> dict[str, Any]:
 def main() -> None:
     args = _arguments()
     torch.set_float32_matmul_precision("high")
-    compilation = compile_natural_affine_scan(
+    compilation = compile_experimental_natural_affine_scan(
         NaturalAffineScanConfig(
             batch=args.batch_size,
             sequence=args.sequence_length,

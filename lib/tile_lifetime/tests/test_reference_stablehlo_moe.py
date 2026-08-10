@@ -27,13 +27,13 @@ from tile_lifetime.ir import (
     TopKRouterOp,
     WeightedExpertCombineOp,
 )
-from tile_lifetime.moe_recovery import MoESemanticRecoveryError, recover_moe_region
 from tile_lifetime.moe_reference import (
     MOE_REGION_INPUT_NAMES,
     MOE_UNIMPORTED_PRIVATE_OPERATIONS,
     MoEDebugConfig,
     export_debug_moe_region,
 )
+from tile_lifetime.reference_moe_recovery import MoESemanticRecoveryError, recover_moe_region
 from tile_lifetime.reference_pipeline import (
     compile_reference_stablehlo_expert_parallel_region,
     recover_reference_stablehlo_moe_region,

@@ -15,7 +15,7 @@ from typing import Any
 import torch
 from triton_affine_scan import execute_recurrent_affine_scan
 
-from tile_lifetime.stablehlo_scan_recovery import compile_natural_affine_scan
+from tile_lifetime.experimental_stablehlo_scan_recovery import compile_experimental_natural_affine_scan
 from tile_lifetime.stateful_scan_reference import (
     NaturalAffineScanConfig,
     ScanDecayAxes,
@@ -211,7 +211,7 @@ def _environment() -> dict[str, Any]:
 
 def main() -> None:
     args = _arguments()
-    compilation = compile_natural_affine_scan(
+    compilation = compile_experimental_natural_affine_scan(
         NaturalAffineScanConfig(
             batch=args.batch_size,
             sequence=args.sequence_length,

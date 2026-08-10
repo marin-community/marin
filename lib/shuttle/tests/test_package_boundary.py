@@ -42,5 +42,14 @@ def test_current_shuttle_surface_does_not_import_experimental_modules() -> None:
         if isinstance(node, ast.Import)
         for alias in node.names
     )
+    relative_experimental_imports = {
+        node.module
+        for source in current_sources
+        for node in ast.walk(ast.parse(source.read_text()))
+        if isinstance(node, ast.ImportFrom)
+        and node.level > 0
+        and (node.module or "").split(".", maxsplit=1)[0] == "experimental"
+    }
 
     assert all(module is None or not module.startswith("shuttle.experimental") for module in imported_modules)
+    assert not relative_experimental_imports

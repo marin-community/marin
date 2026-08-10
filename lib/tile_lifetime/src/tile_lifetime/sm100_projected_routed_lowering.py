@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 from itertools import product
 
-from tile_lifetime.msa_recovery import NaturalProjectedRoutedAttentionCompilation
+from tile_lifetime.experimental_msa_recovery import NaturalProjectedRoutedAttentionCompilation
 from tile_lifetime.sm100_routed_lowering import (
     SM100RoutedStreamingLowering,
     default_sm100_routed_schedules,

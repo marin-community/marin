@@ -20,15 +20,15 @@ from lib.tile_lifetime.benchmarks.xla_grug_routed_combined_gpu_custom_call impor
 )
 from shuttle.experimental.stablehlo_import import import_stablehlo
 from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
+from tile_lifetime.experimental_stablehlo_streaming_attention_backward import (
+    recover_experimental_whole_pattern_streaming_attention_backward,
+)
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     StreamingAttentionBackwardFfiBufferLayout,
     StreamingAttentionBackwardStatePolicy,
     generate_streaming_attention_backward_ffi,
 )
 from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_streaming_attention_backward import (
-    recover_experimental_whole_pattern_streaming_attention_backward,
-)
 from tile_lifetime.streaming_attention import StreamingTileSchedule
 from tile_lifetime.streaming_attention_backward import (
     StreamingAttentionBackwardDomainTraversal,

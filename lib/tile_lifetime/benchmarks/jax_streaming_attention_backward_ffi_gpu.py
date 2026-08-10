@@ -42,6 +42,9 @@ from tile_lifetime.benchmark_boundary import (
     verify_benchmark_repeatability,
     verify_dense_buffer_boundary,
 )
+from tile_lifetime.experimental_stablehlo_streaming_attention_backward import (
+    recover_experimental_whole_pattern_streaming_attention_backward,
+)
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     StreamingAttentionBackwardResultPolicy,
     StreamingAttentionBackwardStatePolicy,
@@ -52,9 +55,6 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
     register_streaming_attention_backward_ffi,
 )
 from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_streaming_attention_backward import (
-    recover_experimental_whole_pattern_streaming_attention_backward,
-)
 from tile_lifetime.streaming_attention import StreamingTileSchedule
 from tile_lifetime.streaming_attention_backward import (
     StreamingAttentionBackwardDomainTraversal,

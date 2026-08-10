@@ -8,7 +8,7 @@ module-name = "shuttle"
 [project]
 name = "marin-shuttle"
 version = "0.1.0"
-description = "Whole-program synthesis infrastructure for JAX programs"
+description = "MLIR compiler extension for JAX and XLA programs"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

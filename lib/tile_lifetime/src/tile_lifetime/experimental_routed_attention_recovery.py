@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Recover natural routed selected-attention StableHLO into generic algebra."""
+"""Experimental whole-pattern routed-attention recovery."""
 
 import re
 from dataclasses import dataclass

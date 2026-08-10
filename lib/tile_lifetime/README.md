@@ -1,6 +1,13 @@
 # Tile-Lifetime Compiler
 
-This package is a research prototype for compiling complete Transformer regions into compositions of expert tiled execution skeletons. The current compiler imports a frozen portable StableHLO export of one Llama block through the following QKV/RoPE boundary and recovers:
+This package preserves research prototypes, reference planners, attachment
+bridges, benchmarks, and artifacts from Shuttle's early development. The
+current compiler package is `lib/shuttle` and targets an in-pipeline MLIR
+extension. Python StableHLO recovery and textual HLO rewriting in this package
+are experimental evidence only.
+
+One preserved dense prototype imports a frozen portable StableHLO export of a
+Llama block through the following QKV/RoPE boundary and recovers:
 
 - packed QKV projections with pairwise RoPE and an FA3-compatible strided BSHD segment layout;
 - ordinary causal GQA algebra as an official-FA3 streaming skeleton with online maximum, normalizer, and output state;

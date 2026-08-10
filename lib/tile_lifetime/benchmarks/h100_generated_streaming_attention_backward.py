@@ -31,10 +31,10 @@ from tile_lifetime import (
     estimate_streaming_attention_backward_work,
     verify_owner_preparation_fold_attachment,
 )
-from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_streaming_attention_backward import (
+from tile_lifetime.experimental_stablehlo_streaming_attention_backward import (
     recover_experimental_whole_pattern_streaming_attention_backward,
 )
+from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.streaming_attention_backward import (
     StreamingAttentionBackwardMaximumVJP,
     StreamingAttentionBackwardProgram,

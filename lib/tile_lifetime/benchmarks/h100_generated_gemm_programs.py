@@ -28,9 +28,9 @@ from tile_lifetime import (
     MaterializationDisposition,
     NumericalPolicy,
     ReductionSkeleton,
-    compile_stablehlo_dense_transformer_region,
 )
 from tile_lifetime.compiler import RowScalePlacement
+from tile_lifetime.experimental_pipeline import compile_experimental_stablehlo_dense_transformer_region
 from tile_lifetime.reference import DENSE_REGION_INPUT_NAMES, DenseDebugConfig, export_debug_dense_region
 from tile_lifetime.runtime import RuntimeBufferSpec, TensorBinding
 
@@ -369,7 +369,7 @@ def main() -> None:
     correctness: dict[str, object] = {}
     generated_sources: dict[str, str] = {}
     for placement in (RowScalePlacement.CONSUMER_PROLOGUE, RowScalePlacement.CONSUMER_EPILOGUE):
-        plan = compile_stablehlo_dense_transformer_region(
+        plan = compile_experimental_stablehlo_dense_transformer_region(
             artifact,
             input_names=DENSE_REGION_INPUT_NAMES,
             gemm_accumulation_dtype=DType.FP32,

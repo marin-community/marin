@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end compiler entry points."""
+"""Experimental Python StableHLO recovery pipelines."""
 
 import hashlib
 from dataclasses import dataclass
@@ -13,31 +13,31 @@ from shuttle.experimental.stablehlo_import import import_stablehlo
 from shuttle.ir import DType
 from tile_lifetime.compiler import RowScalePlacement
 from tile_lifetime.dense_region import compile_dense_transformer_region
-from tile_lifetime.ir import ScaledDotProductAttentionOp
-from tile_lifetime.msa_recovery import (
+from tile_lifetime.experimental_msa_recovery import (
     NaturalProjectedRoutedAttentionCompilation,
     RecoveredProjectedRoutedAttentionProgram,
     compile_natural_projected_routed_attention,
     recover_projected_routed_attention_program,
 )
-from tile_lifetime.plan import NumericalPolicy, RegionPlan, SemanticErasureReport, SemanticLoweringStep
-from tile_lifetime.routed_attention_plan import RoutedAttentionPlanConfig
-from tile_lifetime.routed_attention_recovery import (
+from tile_lifetime.experimental_routed_attention_recovery import (
     NaturalRoutedAttentionCompilation,
     RecoveredRoutedAttentionProgram,
     compile_natural_routed_attention,
     recover_routed_attention_program,
 )
+from tile_lifetime.experimental_semantic_recovery import (
+    recover_attention_region,
+    recover_dense_transformer_region,
+)
+from tile_lifetime.ir import ScaledDotProductAttentionOp
+from tile_lifetime.plan import NumericalPolicy, RegionPlan, SemanticErasureReport, SemanticLoweringStep
+from tile_lifetime.routed_attention_plan import RoutedAttentionPlanConfig
 from tile_lifetime.semantic_erasure import (
     ErasedTensorProgram,
     SemanticErasureError,
     build_tensor_erasure_report,
     validate_erased_tensor_program,
     validate_plan_semantic_erasure,
-)
-from tile_lifetime.semantic_recovery import (
-    recover_attention_region,
-    recover_dense_transformer_region,
 )
 from tile_lifetime.streaming_attention import (
     StreamingAttentionProgram,
@@ -47,17 +47,16 @@ from tile_lifetime.streaming_attention import (
 
 
 class FrontendSourceKind(StrEnum):
-    """Verified source boundary for a current Shuttle compilation."""
+    """Source boundary retained by an experimental recovery result."""
 
     STABLEHLO_ARTIFACT = "stablehlo_artifact"
     HAND_AUTHORED_SEMANTIC_IR = "hand_authored_semantic_ir"
 
 
 class FrontendCompilationStatus(StrEnum):
-    """Whether frontend recovery is eligible for a clean-synthesis claim."""
+    """Architecture status of an experimental frontend result."""
 
     EXPERIMENTAL_EXACT_RECOGNIZER = "experimental_exact_recognizer"
-    GENERIC_HLO_DATAFLOW = "generic_hlo_dataflow"
 
 
 @dataclass(frozen=True)
@@ -80,7 +79,7 @@ class ExperimentalWholePatternStreamingAttentionCompilation:
 
 @dataclass(frozen=True)
 class StableHLODenseCompilation:
-    """Dense plan with source evidence and an explicit acceptance status."""
+    """Dense plan with source evidence and an experimental classification."""
 
     plan: RegionPlan
     provenance: FrontendProvenance
@@ -134,12 +133,12 @@ def validate_experimental_whole_pattern_streaming_attention_compilation(
 ) -> None:
     """Reject hand-authored inputs even on the historical comparison path."""
     if compilation.provenance.source_kind is not FrontendSourceKind.STABLEHLO_ARTIFACT:
-        raise SemanticErasureError("current frontend candidates must originate from a StableHLO artifact")
+        raise SemanticErasureError("experimental StableHLO candidates must originate from a StableHLO artifact")
     erased = ErasedTensorProgram(compilation.program.source, compilation.semantic_erasure_report)
     validate_erased_tensor_program(erased)
 
 
-def recover_stablehlo_routed_attention_program(
+def recover_experimental_stablehlo_routed_attention_program(
     artifact: bytes,
     *,
     input_names: tuple[str, ...],
@@ -149,7 +148,7 @@ def recover_stablehlo_routed_attention_program(
     return recover_routed_attention_program(stablehlo_graph)
 
 
-def compile_stablehlo_routed_attention_program(
+def compile_experimental_stablehlo_routed_attention_program(
     artifact: bytes,
     *,
     input_names: tuple[str, ...],
@@ -158,8 +157,8 @@ def compile_stablehlo_routed_attention_program(
     config: RoutedAttentionPlanConfig,
     padding_quantum: int = 1,
 ) -> NaturalRoutedAttentionCompilation:
-    """Compile ordinary StableHLO through runtime RelationPlan and streaming skeletons."""
-    recovered = recover_stablehlo_routed_attention_program(artifact, input_names=input_names)
+    """Recover a routed-attention prototype through Python dataflow objects."""
+    recovered = recover_experimental_stablehlo_routed_attention_program(artifact, input_names=input_names)
     return compile_natural_routed_attention(
         recovered,
         runtime_inputs=runtime_inputs,
@@ -169,7 +168,7 @@ def compile_stablehlo_routed_attention_program(
     )
 
 
-def recover_stablehlo_projected_routed_attention_program(
+def recover_experimental_stablehlo_projected_routed_attention_program(
     artifact: bytes,
     *,
     input_names: tuple[str, ...],
@@ -179,7 +178,7 @@ def recover_stablehlo_projected_routed_attention_program(
     return recover_projected_routed_attention_program(graph)
 
 
-def compile_stablehlo_projected_routed_attention_program(
+def compile_experimental_stablehlo_projected_routed_attention_program(
     artifact: bytes,
     *,
     input_names: tuple[str, ...],
@@ -188,8 +187,8 @@ def compile_stablehlo_projected_routed_attention_program(
     config: RoutedAttentionPlanConfig,
     padding_quantum: int = 1,
 ) -> NaturalProjectedRoutedAttentionCompilation:
-    """Compile projected Selection through RelationPlan and schedule synthesis."""
-    recovered = recover_stablehlo_projected_routed_attention_program(artifact, input_names=input_names)
+    """Recover a projected-selection prototype through Python dataflow objects."""
+    recovered = recover_experimental_stablehlo_projected_routed_attention_program(artifact, input_names=input_names)
     return compile_natural_projected_routed_attention(
         recovered,
         runtime_inputs=runtime_inputs,
@@ -199,7 +198,7 @@ def compile_stablehlo_projected_routed_attention_program(
     )
 
 
-def compile_stablehlo_dense_transformer_region(
+def compile_experimental_stablehlo_dense_transformer_region(
     artifact: bytes,
     *,
     input_names: tuple[str, ...],
@@ -207,7 +206,7 @@ def compile_stablehlo_dense_transformer_region(
     numerical_policy: NumericalPolicy,
     rms_scale_placement: RowScalePlacement = RowScalePlacement.CONSUMER_PROLOGUE,
 ) -> StableHLODenseCompilation:
-    """Recover, erase, and compile the connected dense StableHLO region."""
+    """Recover a bounded dense prototype with an exact Python recognizer."""
     stablehlo_graph = import_stablehlo(artifact, input_names=input_names)
     recovered = recover_dense_transformer_region(
         stablehlo_graph,
@@ -227,23 +226,22 @@ def compile_stablehlo_dense_transformer_region(
         ),
         status=FrontendCompilationStatus.EXPERIMENTAL_EXACT_RECOGNIZER,
     )
-    validate_stablehlo_dense_compilation(compilation)
+    validate_experimental_stablehlo_dense_compilation(compilation)
     return compilation
 
 
-def validate_stablehlo_dense_compilation(compilation: StableHLODenseCompilation) -> None:
+def validate_experimental_stablehlo_dense_compilation(compilation: StableHLODenseCompilation) -> None:
     """Validate evidence for the bounded experimental dense recognizer."""
     if compilation.provenance.source_kind is not FrontendSourceKind.STABLEHLO_ARTIFACT:
-        raise SemanticErasureError("current frontend candidates must originate from a StableHLO artifact")
+        raise SemanticErasureError("experimental StableHLO candidates must originate from a StableHLO artifact")
     if not compilation.provenance.source_operation_ids:
-        raise SemanticErasureError("current frontend candidates must retain source-operation provenance")
+        raise SemanticErasureError("experimental StableHLO candidates must retain source-operation provenance")
     validate_plan_semantic_erasure(compilation.plan)
 
 
-def require_current_stablehlo_dense_compilation(compilation: StableHLODenseCompilation) -> None:
-    """Fail closed until dense recovery uses the shared generic HLO importer."""
-    validate_stablehlo_dense_compilation(compilation)
-    if compilation.status is not FrontendCompilationStatus.GENERIC_HLO_DATAFLOW:
-        raise SemanticErasureError(
-            "exact named dense-region reconstruction is experimental; current acceptance requires generic HLO dataflow"
-        )
+def require_architecturally_conforming_dense_compilation(compilation: StableHLODenseCompilation) -> None:
+    """Reject the Python recovery path at the architecture-acceptance gate."""
+    validate_experimental_stablehlo_dense_compilation(compilation)
+    raise SemanticErasureError(
+        "Python StableHLO recovery is experimental; current acceptance requires in-pipeline Shuttle MLIR provenance"
+    )

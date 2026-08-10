@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Narrow semantic recovery for the ordinary JAX shared-plus-routed MoE graph."""
+"""Reference-only whole-pattern recovery for a shared-plus-routed MoE graph."""
 
 import re
 from dataclasses import dataclass

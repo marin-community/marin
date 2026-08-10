@@ -113,9 +113,6 @@ from tile_lifetime.fold_placement import (
     attach_fold_to_owner_preparation,
     verify_owner_preparation_fold_attachment,
 )
-from tile_lifetime.gated_delta_scan import (
-    compile_gated_delta_scan,
-)
 from tile_lifetime.gemm_program import (
     GENERIC_H100_GEMM_BACKEND,
     GemmProgram,
@@ -160,9 +157,6 @@ from tile_lifetime.jax_streaming_attention_forward_ffi import (
     generate_streaming_attention_forward_ffi,
     register_streaming_attention_forward_ffi,
 )
-from tile_lifetime.kimi_delta_scan import (
-    compile_kimi_delta_scan,
-)
 from tile_lifetime.linear_pair_map import (
     LinearPairMapTrainingProgram,
     PairMapSavePolicy,
@@ -172,13 +166,6 @@ from tile_lifetime.linear_pair_map import (
     pair_silu_product_expression,
     pair_tanh_product_expression,
 )
-from tile_lifetime.msa_recovery import (
-    NaturalProjectedRoutedAttentionCompilation,
-    ProjectedRoutedAttentionRecoveryError,
-    RecoveredProjectedRoutedAttentionProgram,
-    compile_natural_projected_routed_attention,
-    recover_projected_routed_attention_program,
-)
 from tile_lifetime.normalized_exp_contract_training import (
     IndexedFoldSelection,
     NormalizedExpContractTrainingExecution,
@@ -186,15 +173,6 @@ from tile_lifetime.normalized_exp_contract_training import (
     build_normalized_exp_contract_training_program,
     execute_normalized_exp_contract_training,
     tanh_soft_cap_score_expression,
-)
-from tile_lifetime.pipeline import (
-    FrontendProvenance,
-    FrontendSourceKind,
-    compile_stablehlo_dense_transformer_region,
-    compile_stablehlo_projected_routed_attention_program,
-    compile_stablehlo_routed_attention_program,
-    recover_stablehlo_projected_routed_attention_program,
-    recover_stablehlo_routed_attention_program,
 )
 from tile_lifetime.plan import (
     AttachmentSite,
@@ -252,13 +230,6 @@ from tile_lifetime.routed_attention_plan import (
     compile_routed_streaming_attention_candidates,
     query_major_block_index_plan,
 )
-from tile_lifetime.routed_attention_recovery import (
-    NaturalRoutedAttentionCompilation,
-    RecoveredRoutedAttentionProgram,
-    RoutedAttentionRecoveryError,
-    compile_natural_routed_attention,
-    recover_routed_attention_program,
-)
 from tile_lifetime.row_normalization_training import (
     GeneratedContractSkeleton,
     GeneratedFoldSkeleton,
@@ -289,12 +260,6 @@ from tile_lifetime.shared_reverse_fusion import (
     SharedReverseFusionPlan,
     plan_shared_producer_reverse_fusion,
 )
-from tile_lifetime.sm100_projected_routed_lowering import (
-    LoweredAffineIndexDomain,
-    SM100ProjectedRoutedCandidate,
-    SM100ProjectedRoutedCandidateSet,
-    lower_sm100_projected_routed_candidates,
-)
 from tile_lifetime.sm100_routed_lowering import (
     SM100RelationOrientation,
     SM100RoutedSchedule,
@@ -308,25 +273,6 @@ from tile_lifetime.sm100_selection_lowering import (
     SM100SelectionStrategy,
     default_sm100_selection_schedules,
     lower_sm100_projected_selection,
-)
-from tile_lifetime.stablehlo_row_normalization_backward import (
-    RecoveredStableHLORowNormalizationBackward,
-    StableHLORowNormalizationBackwardCompilation,
-    StableHLORowNormalizationBackwardError,
-    StableHLORowNormalizationBackwardFfiCompilation,
-    compile_stablehlo_row_normalization_backward,
-    compile_stablehlo_row_normalization_backward_ffi,
-    recover_stablehlo_row_normalization_backward,
-)
-from tile_lifetime.stablehlo_scan_recovery import (
-    StableHLOScanRecoveryError,
-    StableHLOStatefulScanCompilation,
-    StatefulScanProvenance,
-    StatefulScanSourceKind,
-    compile_natural_affine_scan,
-    compile_stablehlo_stateful_scan,
-    stateful_scan_scheduling_keys,
-    validate_stateful_scan_semantic_erasure,
 )
 from tile_lifetime.stateful_scan import (
     AffineChunkSummary,
@@ -438,81 +384,4 @@ from tile_lifetime.tiled_fold_finalize import (
     deterministic_weighted_sum_fold_program,
     evaluate_tiled_fold_finalize,
     normalized_exponential_fold_program,
-)
-from tile_lifetime.xla_axis_fold_pipeline_ffi import (
-    AxisFoldPipelineHloInput,
-    AxisFoldPipelineHloReplacementAudit,
-    AxisFoldPipelineHloReplacementPlan,
-    audit_axis_fold_pipeline_hlo_replacement,
-    plan_axis_fold_pipeline_hlo_replacement,
-    replace_axis_fold_pipeline_hlo_with_custom_call,
-)
-from tile_lifetime.xla_low_rank_gated_product import (
-    LowRankGatedProductForwardPlan,
-    LowRankGatedProductReversePlan,
-    LowRankGatedProductTrainingReport,
-    RankTwoContractPlan,
-    recover_low_rank_gated_product_training,
-)
-from tile_lifetime.xla_low_rank_gated_product_ffi import (
-    GeneratedLowRankContractMapCallAudit,
-    GeneratedLowRankContractMapFamily,
-    GeneratedLowRankContractMapTrainingAudit,
-    GeneratedLowRankContractMapTrainingPlan,
-    LowRankContractMapCallAudit,
-    LowRankContractMapForwardHloReplacementPlan,
-    LowRankContractMapReverseHloReplacementPlan,
-    LowRankContractMapTrainingHloReplacementAudit,
-    LowRankContractMapTrainingHloReplacementPlan,
-    audit_generated_low_rank_contract_map_training,
-    audit_low_rank_contract_map_training_hlo_replacement,
-    mutate_forward_hidden_scalar_program,
-    plan_generated_low_rank_contract_map_training,
-    plan_low_rank_contract_map_training_hlo_replacements,
-    replace_generated_low_rank_contract_map_training,
-    replace_low_rank_contract_map_training_hlo_regions_with_custom_calls,
-)
-from tile_lifetime.xla_normalized_exp_contract_forward import (
-    NormalizedExpContractForwardHloRegion,
-    NormalizedExpContractForwardHloReplacementAudit,
-    NormalizedExpContractForwardHloReplacementPlan,
-    audit_normalized_exp_contract_forward_hlo_replacement,
-    plan_normalized_exp_contract_forward_hlo_replacement,
-    recover_normalized_exp_contract_forward_hlo_region,
-    replace_normalized_exp_contract_forward_hlo_region_with_custom_call,
-)
-from tile_lifetime.xla_normalized_exp_contract_reverse import (
-    NormalizedExpContractReverseHloRegion,
-    NormalizedExpContractReverseHloReplacementAudit,
-    NormalizedExpContractReverseHloReplacementPlan,
-    NormalizedExpContractReverseRecoveryReport,
-    NormalizedExpReverseContract,
-    audit_normalized_exp_contract_reverse_hlo_replacement,
-    plan_normalized_exp_contract_reverse_hlo_replacement,
-    recover_normalized_exp_contract_reverse_hlo_regions,
-    replace_normalized_exp_contract_reverse_hlo_region_with_custom_call,
-)
-from tile_lifetime.xla_streaming_attention_backward_ffi import (
-    StreamingReverseHloProvenance,
-    StreamingReverseHloRegionReplacementAudit,
-    StreamingReverseHloRegionReplacementPlan,
-    StreamingReverseHloReplacementPlan,
-    StreamingReverseHloRole,
-    StreamingReverseHloValue,
-    audit_streaming_attention_backward_region_replacement,
-    plan_streaming_attention_backward_hlo_region_replacement,
-    plan_streaming_attention_backward_hlo_replacement,
-    replace_streaming_attention_backward_entry_with_custom_call,
-    replace_streaming_attention_backward_region_with_custom_call,
-)
-from tile_lifetime.xla_streaming_attention_training_regions import (
-    StreamingAttentionTrainingRegionAudit,
-    StreamingAttentionTrainingRegionPlan,
-    StreamingForwardHloProvenance,
-    StreamingForwardHloRegionReplacementPlan,
-    StreamingForwardHloRole,
-    StreamingForwardHloValue,
-    audit_streaming_attention_training_region_replacement,
-    plan_streaming_attention_training_regions,
-    replace_streaming_attention_training_regions_with_custom_calls,
 )

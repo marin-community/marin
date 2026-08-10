@@ -23,8 +23,8 @@ from tile_lifetime import (
     RoutedAttentionOrientation,
     RoutedAttentionPlanConfig,
     StreamingTileSchedule,
-    compile_stablehlo_routed_attention_program,
 )
+from tile_lifetime.experimental_pipeline import compile_experimental_stablehlo_routed_attention_program
 from tile_lifetime.routed_attention_frontend import (
     ROUTED_ATTENTION_INPUT_NAMES,
     RoutedAttentionDebugConfig,
@@ -420,7 +420,7 @@ def main() -> None:
         matrix_workers=2,
         reduction_workers=1,
     )
-    natural = compile_stablehlo_routed_attention_program(
+    natural = compile_experimental_stablehlo_routed_attention_program(
         artifact,
         input_names=ROUTED_ATTENTION_INPUT_NAMES,
         runtime_inputs={

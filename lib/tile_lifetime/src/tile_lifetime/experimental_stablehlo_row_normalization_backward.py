@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Recover generic row-statistic reverse algebra emitted by JAX AD."""
+"""Experimental Python recovery of row-statistic reverse algebra."""
 
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ class StableHLORowNormalizationBackwardFfiCompilation:
     replaced_operation_ids: tuple[int, ...]
 
 
-def recover_stablehlo_row_normalization_backward(
+def recover_experimental_stablehlo_row_normalization_backward(
     graph: StableHLOGraph,
 ) -> RecoveredStableHLORowNormalizationBackward:
     """Recover row-statistic reverse structure without using source names.
@@ -177,13 +177,13 @@ def recover_stablehlo_row_normalization_backward(
     )
 
 
-def compile_stablehlo_row_normalization_backward(
+def compile_experimental_stablehlo_row_normalization_backward(
     graph: StableHLOGraph,
     *,
     threads: int = 256,
 ) -> StableHLORowNormalizationBackwardCompilation:
     """Lower a JAX-differentiated row program into generic axis Folds."""
-    recovered = recover_stablehlo_row_normalization_backward(graph)
+    recovered = recover_experimental_stablehlo_row_normalization_backward(graph)
     programs = build_row_normalization_axis_fold_programs(
         rows=recovered.rows,
         hidden=recovered.hidden,
@@ -194,7 +194,7 @@ def compile_stablehlo_row_normalization_backward(
     return StableHLORowNormalizationBackwardCompilation(recovered=recovered, programs=programs)
 
 
-def compile_stablehlo_row_normalization_backward_ffi(
+def compile_experimental_stablehlo_row_normalization_backward_ffi(
     graph: StableHLOGraph,
     *,
     target_name: str,
@@ -212,7 +212,7 @@ def compile_stablehlo_row_normalization_backward_ffi(
     statistics add a row-mean Fold before the variance Fold; they do not select
     a different workload kernel.
     """
-    recovered = recover_stablehlo_row_normalization_backward(graph)
+    recovered = recover_experimental_stablehlo_row_normalization_backward(graph)
     if numerical_policy is NumericalPolicy.BITWISE_EXACT:
         raise StableHLORowNormalizationBackwardError(
             "parallel axis-Fold replacement changes source reduction association; " "ALLOW_ROUNDING_REORDER is required"

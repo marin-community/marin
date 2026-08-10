@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Frontend canonicalization from normalized StableHLO.
+"""Experimental whole-pattern canonicalization from normalized StableHLO.
 
 The named ``TensorGraph`` operations returned here are transitional frontend
-objects. Current scheduling must erase them into generic Flow or TensorProgram
-algebra first. Named RMS recovery lives in ``reference_semantic_recovery``;
+objects, not the production Shuttle frontend. Named RMS recovery lives in
+``reference_semantic_recovery``;
 ``reference_pipeline`` contains the historical callers that schedule names
 directly for comparison artifacts.
 """

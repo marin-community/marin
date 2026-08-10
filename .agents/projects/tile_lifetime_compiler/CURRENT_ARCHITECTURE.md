@@ -1,6 +1,6 @@
 # Shuttle current architecture and legacy ledger
 
-## Accepted frontend boundary
+## Required frontend boundary
 
 Production Shuttle compilation starts from an ordinary JAX program. JAX-owned
 AD produces StableHLO inside the MLIR pipeline, where Shuttle converts selected
@@ -14,7 +14,7 @@ The intended production path is:
 
 ```text
 JAX/JAXPR
-  -> exported StableHLO
+  -> StableHLO in the XLA MLIR pipeline
   -> in-pipeline Shuttle MLIR conversion
   -> generic Shuttle algebra
   -> task, lifetime, schedule, and physical lowering
@@ -26,7 +26,7 @@ the compilation pipeline, builds generic Shuttle algebra, and lowers chosen
 schedules. Per-workload `compile_stablehlo_*` functions are prototype fixtures,
 not the target API.
 
-Frozen StableHLO is an accepted test and reproduction boundary. The Python
+Frozen StableHLO is a test and reproduction boundary. The Python
 parser under `shuttle.experimental` and the `xla_*` text rewriters are not the
 production compiler path. A hand-built `TensorGraph`, `StatefulScan`, task list,
 or callable workload kernel is not an accepted frontend input. PyTorch and
@@ -37,24 +37,21 @@ the default semantic frontend.
 
 | Surface | Status | Boundary |
 | --- | --- | --- |
-| `pipeline.compile_stablehlo_dense_transformer_region` | Experimental reference | The exact recognizer targets one bounded Llama-shaped region. It cannot satisfy the current generic-dataflow frontend gate. |
+| `experimental_pipeline.compile_experimental_stablehlo_dense_transformer_region` | Experimental reference | The exact recognizer targets one bounded Llama-shaped region. It cannot satisfy the in-pipeline MLIR frontend gate. |
 | routed and projected routed attention recovery | Experimental prototype | StableHLO selection becomes generic Relation/RelationPlan and streaming Fold structure, but the bounded selectors are not accepted plugin frontends. |
-| `stablehlo_scan_recovery` | Experimental structural importer | Structured `stablehlo.while` becomes generic affine `Scan`; it remains an executable specification until the MLIR conversion owns the same transform. |
-| StableHLO row-normalization recovery | Experimental prototype | Natural JAX forward/VJP HLO becomes generic Map/Fold/Contract programs before code generation. It remains an acceptance fixture until it runs through the shared module plugin. |
-| `pipeline.compile_experimental_whole_pattern_stablehlo_streaming_attention_program` and `stablehlo_streaming_attention_backward` | Experimental reference | Match attention-shaped graphs and rebuild canonical programs. These paths reproduce diagnostics but do not count as an accepted plugin frontend. |
+| `experimental_stablehlo_scan_recovery` | Experimental structural importer | Structured `stablehlo.while` becomes generic affine `Scan`; it remains an executable specification until the MLIR conversion owns the same transform. |
+| `experimental_stablehlo_row_normalization_backward` | Experimental prototype | Natural JAX forward/VJP HLO becomes generic Map/Fold/Contract programs before code generation. It remains a fixture until the shared MLIR conversion owns the same transform. |
+| `experimental_pipeline.compile_experimental_whole_pattern_stablehlo_streaming_attention_program` and `experimental_stablehlo_streaming_attention_backward` | Experimental reference | Match attention-shaped graphs and rebuild canonical programs. These paths reproduce diagnostics but do not count as an accepted plugin frontend. |
 | `reference_pipeline` | Reference only | Retains named RMS, MoE, and attention planning, including the opaque official-FA3 comparison path. It is not re-exported from `tile_lifetime`. |
 | `attention.compile_reference_attention_region` and `qkv_rope.compile_reference_qkv_rope_attention_region` | Reference only | Hand-built named `TensorGraph` planners for preserved comparisons and unit tests. |
 | `moe.compile_mok_oracle_region` | Oracle only | Builds the opaque MoK comparison skeleton. Import it explicitly from `tile_lifetime.moe`. |
 | `*_reference.py`, `*_frontend.py` debug exporters, and `delta_rule_reference.py` | Test/benchmark inputs | Natural JAX examples and independent numerical references. They are not package-root compiler APIs. |
 | `xla_*` HLO text/regex rewriters | Experimental attachment bridge | Finds bounded HLO regions and inserts custom calls. It is not the semantic recovery layer or the intended final frontend. |
 
-An AST audit of all 450 package-root exports found six direct imports outside
-tests and benchmarks. Four came from the historical RMS example. The other two
-API families were generic streaming-attention types used by SM100 smoke tools.
-After this cleanup, 418 root exports remain and only `DType`,
-`StreamingTileSchedule`, and `build_attention_tensor_program` have direct
-non-test/non-benchmark callers. The large remaining root is a prototype
-convenience barrel. It must not become the `shuttle` API.
+The remaining `tile_lifetime` root is a prototype convenience barrel. It must
+not become the `shuttle` API. Experimental recovery and textual-HLO attachment
+bridges are absent from that root even when preserved modules still import them
+explicitly.
 
 The package root no longer exports `TensorGraph`, direct named dense/MoE/SwiGLU
 planners, RegionPlan runtime helpers, named MoE recovery, reference scan
@@ -150,11 +147,13 @@ compiler APIs:
 - `reference_pipeline.py`, `reference_semantic_recovery.py`, `reference.py`
 - `attention.py`, `qkv_rope.py`, `swiglu.py`, and
   `compiler.py::compile_reference_region`
-- `moe.py`, `moe_recovery.py`, `moe_reference.py`, `moe_training_reference.py`
+- `moe.py`, `reference_moe_recovery.py`, `moe_reference.py`, and
+  `moe_training_reference.py`
 - `stateful_scan_reference.py`, `delta_rule_reference.py`, and all other
   `*_reference.py` modules
-- `msa_frontend.py`, `routed_attention_frontend.py`, and debug exporters
-- `pipeline.py`, `dense_region.py`, `expert_parallel.py`, and other bounded
+- `experimental_msa_recovery.py`, `experimental_routed_attention_recovery.py`,
+  `experimental_semantic_recovery.py`, frontend examples, and debug exporters
+- `experimental_pipeline.py`, `dense_region.py`, `expert_parallel.py`, and other bounded
   per-workload prototype compilers
 - current `xla_*` HLO-text/regex attachment bridges
 - `benchmarks/` and preserved `benchmarks/artifacts/`
@@ -170,9 +169,8 @@ generic portion has a real `shuttle` caller.
    import or text-rewrite production path.
 2. Preserve Python importers and bounded whole-workload recovery only under
    explicit experimental/reference namespaces.
-3. Route public GDN/KDA convenience compilation through the structured
-   StableHLO scan importer and quarantine `delta_rule_update_expression` as a
-   recovery-unit fixture.
+3. Retain GDN/KDA Python compilation only as experimental scan fixtures and
+   quarantine `delta_rule_update_expression` as a recovery-unit fixture.
 4. Rename `MSADebugConfig`, `RoutedAttentionDebugConfig`, and the streaming
    backward debug exporter around their actual role as natural JAX examples.
 5. Replace the `xla_*` HLO text/regex bridges with the MLIR conversion pipeline.

@@ -54,6 +54,9 @@ from tile_lifetime.cuda_normalized_exp_contract_reverse_codegen import (
     GeneratedCudaNormalizedExpContractReverseFfi,
     generate_cuda_normalized_exp_contract_reverse_ffi,
 )
+from tile_lifetime.experimental_stablehlo_streaming_attention_backward import (
+    recover_experimental_whole_pattern_streaming_attention_backward,
+)
 from tile_lifetime.ffi_command_buffer import (
     DirectLaunchFfiPhysicalCandidate,
     require_custom_call_command_buffers_enabled,
@@ -66,9 +69,6 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
     register_streaming_attention_backward_ffi,
 )
 from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_streaming_attention_backward import (
-    recover_experimental_whole_pattern_streaming_attention_backward,
-)
 from tile_lifetime.streaming_attention import StreamingTileSchedule
 from tile_lifetime.streaming_attention_backward import (
     StreamingAttentionBackwardDomainTraversal,

@@ -12,11 +12,13 @@ from tile_lifetime import (
     RoutedAttentionOrientation,
     RoutedAttentionPlanConfig,
     StreamingTileSchedule,
-    compile_stablehlo_routed_attention_program,
     execute_query_major_attention,
     execute_relation_selection,
-    recover_stablehlo_routed_attention_program,
     semantic_erasure_errors,
+)
+from tile_lifetime.experimental_pipeline import (
+    compile_experimental_stablehlo_routed_attention_program,
+    recover_experimental_stablehlo_routed_attention_program,
 )
 from tile_lifetime.routed_attention_frontend import (
     ROUTED_ATTENTION_INPUT_NAMES,
@@ -92,8 +94,8 @@ def test_frozen_fixture_matches_current_natural_jax_export_structure() -> None:
     ]
 
 
-def test_public_frontend_erases_names_before_relation_scheduling() -> None:
-    recovered = recover_stablehlo_routed_attention_program(
+def test_experimental_frontend_erases_names_before_relation_scheduling() -> None:
+    recovered = recover_experimental_stablehlo_routed_attention_program(
         _fixture_artifact(),
         input_names=ROUTED_ATTENTION_INPUT_NAMES,
     )
@@ -125,7 +127,7 @@ def test_public_frontend_erases_names_before_relation_scheduling() -> None:
 
 def test_runtime_relation_mutation_changes_edges_without_changing_generated_body() -> None:
     config = RoutedAttentionDebugConfig()
-    recovered = recover_stablehlo_routed_attention_program(
+    recovered = recover_experimental_stablehlo_routed_attention_program(
         _fixture_artifact(),
         input_names=ROUTED_ATTENTION_INPUT_NAMES,
     )
@@ -137,14 +139,14 @@ def test_runtime_relation_mutation_changes_edges_without_changing_generated_body
         pipeline_depth=2,
     )
 
-    compiled_a = compile_stablehlo_routed_attention_program(
+    compiled_a = compile_experimental_stablehlo_routed_attention_program(
         _fixture_artifact(),
         input_names=ROUTED_ATTENTION_INPUT_NAMES,
         runtime_inputs={"query_metadata": left_a, "key_value_metadata": right_a},
         schedule=schedule,
         config=_physical_config(config),
     )
-    compiled_b = compile_stablehlo_routed_attention_program(
+    compiled_b = compile_experimental_stablehlo_routed_attention_program(
         _fixture_artifact(),
         input_names=ROUTED_ATTENTION_INPUT_NAMES,
         runtime_inputs={"query_metadata": left_b, "key_value_metadata": right_b},
@@ -169,7 +171,7 @@ def test_runtime_relation_mutation_changes_edges_without_changing_generated_body
 def test_natural_jax_output_matches_relation_driven_online_fold() -> None:
     config = RoutedAttentionDebugConfig()
     query, key, value, query_metadata, key_value_metadata = _semantic_inputs(config, 41)
-    recovered = recover_stablehlo_routed_attention_program(
+    recovered = recover_experimental_stablehlo_routed_attention_program(
         _fixture_artifact(),
         input_names=ROUTED_ATTENTION_INPUT_NAMES,
     )

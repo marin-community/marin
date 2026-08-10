@@ -7,10 +7,7 @@ import numpy as np
 import pytest
 
 from shuttle.experimental.stablehlo_import import import_stablehlo
-from tile_lifetime import (
-    RowStatisticKind,
-    compile_stablehlo_row_normalization_backward,
-)
+from tile_lifetime import RowStatisticKind
 from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldPipelineSchedule,
     AxisFoldTiledReductionStrategy,
@@ -18,11 +15,12 @@ from tile_lifetime.cuda_axis_fold_codegen import (
     evaluate_axis_fold_program,
     generate_cuda_axis_fold,
 )
-from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_row_normalization_backward import (
+from tile_lifetime.experimental_stablehlo_row_normalization_backward import (
     StableHLORowNormalizationBackwardError,
-    compile_stablehlo_row_normalization_backward_ffi,
+    compile_experimental_stablehlo_row_normalization_backward,
+    compile_experimental_stablehlo_row_normalization_backward_ffi,
 )
+from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.xla_axis_fold_pipeline_ffi import (
     audit_axis_fold_pipeline_hlo_replacement,
     plan_axis_fold_pipeline_hlo_replacement,
@@ -69,7 +67,7 @@ def test_jax_vjp_recovers_generic_row_folds_and_matches_bf16_outputs(
     input_reduction_count: int,
 ) -> None:
     reverse, graph = _natural_jax_vjp(centered=centered)
-    compilation = compile_stablehlo_row_normalization_backward(graph, threads=8)
+    compilation = compile_experimental_stablehlo_row_normalization_backward(graph, threads=8)
     recovered = compilation.recovered
     programs = compilation.programs
 
@@ -124,7 +122,7 @@ def test_jax_vjp_recovers_generic_row_folds_and_matches_bf16_outputs(
 def test_natural_uncentered_vjp_becomes_whole_entry_generated_ffi_pipeline() -> None:
     reverse, graph = _natural_jax_vjp(centered=False)
 
-    compilation = compile_stablehlo_row_normalization_backward_ffi(
+    compilation = compile_experimental_stablehlo_row_normalization_backward_ffi(
         graph,
         target_name="shuttle.row_statistic_backward_v1",
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
@@ -183,7 +181,7 @@ def test_natural_uncentered_vjp_becomes_whole_entry_generated_ffi_pipeline() -> 
 def test_natural_uncentered_vjp_can_select_generic_same_domain_fold_coalescing() -> None:
     _, graph = _natural_jax_vjp(centered=False)
 
-    compilation = compile_stablehlo_row_normalization_backward_ffi(
+    compilation = compile_experimental_stablehlo_row_normalization_backward_ffi(
         graph,
         target_name="shuttle.row_statistic_backward_coalesced_v1",
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
@@ -200,14 +198,14 @@ def test_natural_uncentered_vjp_can_select_generic_same_domain_fold_coalescing()
 def test_natural_uncentered_vjp_can_select_warp_finalized_feature_fold() -> None:
     _, graph = _natural_jax_vjp(centered=False, rows=64, hidden=64)
 
-    barrier_tree = compile_stablehlo_row_normalization_backward_ffi(
+    barrier_tree = compile_experimental_stablehlo_row_normalization_backward_ffi(
         graph,
         target_name="shuttle.row_statistic_backward_barrier_tree_v1",
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
         threads=256,
         feature_groups_per_block=32,
     )
-    warp_finalize = compile_stablehlo_row_normalization_backward_ffi(
+    warp_finalize = compile_experimental_stablehlo_row_normalization_backward_ffi(
         graph,
         target_name="shuttle.row_statistic_backward_warp_finalize_v1",
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
@@ -231,13 +229,13 @@ def test_natural_scalar_mutation_changes_generated_pipeline_without_physical_swi
     _, original_graph = _natural_jax_vjp(centered=False, epsilon=1e-5)
     _, mutated_graph = _natural_jax_vjp(centered=False, epsilon=2e-4)
 
-    original = compile_stablehlo_row_normalization_backward_ffi(
+    original = compile_experimental_stablehlo_row_normalization_backward_ffi(
         original_graph,
         target_name="shuttle.row_statistic_backward_mutation_v1",
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
         threads=8,
     )
-    mutated = compile_stablehlo_row_normalization_backward_ffi(
+    mutated = compile_experimental_stablehlo_row_normalization_backward_ffi(
         mutated_graph,
         target_name="shuttle.row_statistic_backward_mutation_v1",
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
@@ -257,13 +255,13 @@ def test_bounded_ffi_path_fails_closed_for_source_order_and_executes_centered_st
     _, uncentered_graph = _natural_jax_vjp(centered=False)
 
     with pytest.raises(StableHLORowNormalizationBackwardError, match="ALLOW_ROUNDING_REORDER"):
-        compile_stablehlo_row_normalization_backward_ffi(
+        compile_experimental_stablehlo_row_normalization_backward_ffi(
             uncentered_graph,
             target_name="shuttle.row_statistic_source_order_v1",
             numerical_policy=NumericalPolicy.BITWISE_EXACT,
             threads=8,
         )
-    centered = compile_stablehlo_row_normalization_backward_ffi(
+    centered = compile_experimental_stablehlo_row_normalization_backward_ffi(
         centered_graph,
         target_name="shuttle.row_statistic_centered_v1",
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
@@ -305,7 +303,7 @@ def test_bounded_ffi_path_fails_closed_for_source_order_and_executes_centered_st
     np.testing.assert_allclose(actual_scale_bf16, np.asarray(expected_scale, dtype=np.float32), rtol=0, atol=0.03125)
 
     with pytest.raises(StableHLORowNormalizationBackwardError, match="separate-stage"):
-        compile_stablehlo_row_normalization_backward_ffi(
+        compile_experimental_stablehlo_row_normalization_backward_ffi(
             centered_graph,
             target_name="shuttle.row_statistic_centered_coalesced_v1",
             numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
@@ -324,7 +322,7 @@ def test_generated_pipeline_replaces_and_audits_natural_whole_entry_hlo(centered
         jnp.zeros((4, 8), dtype=jnp.bfloat16),
     )
     hlo = jax.jit(reverse).lower(*arguments).compiler_ir("hlo").as_hlo_text()
-    compilation = compile_stablehlo_row_normalization_backward_ffi(
+    compilation = compile_experimental_stablehlo_row_normalization_backward_ffi(
         graph,
         target_name=target,
         numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,

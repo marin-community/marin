@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Recover projected-token sparse attention into generic Shuttle algebra."""
+"""Experimental whole-pattern projected-attention recovery."""
 
 import re
 from dataclasses import dataclass

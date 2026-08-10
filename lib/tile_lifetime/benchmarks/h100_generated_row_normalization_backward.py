@@ -23,11 +23,11 @@ import torch
 from torch.utils.cpp_extension import load
 
 from shuttle.experimental.stablehlo_import import import_stablehlo
-from tile_lifetime import (
-    RowNormalizationAxisFoldPrograms,
-    compile_stablehlo_row_normalization_backward,
-)
+from tile_lifetime import RowNormalizationAxisFoldPrograms
 from tile_lifetime.cuda_axis_fold_codegen import GeneratedCudaAxisFold, generate_cuda_axis_fold
+from tile_lifetime.experimental_stablehlo_row_normalization_backward import (
+    compile_experimental_stablehlo_row_normalization_backward,
+)
 
 
 class BenchmarkVariantRecord(TypedDict):
@@ -69,7 +69,7 @@ def _compile_natural_jax_vjp(
         serialized,
         input_names=("matrix_a", "feature_vector", "matrix_b"),
     )
-    compilation = compile_stablehlo_row_normalization_backward(graph, threads=threads)
+    compilation = compile_experimental_stablehlo_row_normalization_backward(graph, threads=threads)
     provenance: dict[str, object] = {
         "source": "ordinary_jax_vjp_stablehlo",
         "jax_owns_ad": True,

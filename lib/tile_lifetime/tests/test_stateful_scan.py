@@ -16,30 +16,38 @@ from tile_lifetime import (
     LogicalAxis,
     SemanticErasureError,
     StatefulScanExecutionForm,
-    StatefulScanSourceKind,
     StateTransitionStructure,
     TensorExpressionKind,
     apply_affine_transform,
     apply_factored_affine_chunk,
     binary_expression,
     compile_affine_scan_candidates,
-    compile_gated_delta_scan,
-    compile_kimi_delta_scan,
-    compile_natural_affine_scan,
     compose_affine_transforms,
     execute_recurrent_factored_affine,
     explain_stateful_scan,
     input_expression,
     recover_affine_state_update,
     solve_factored_affine_chunk,
-    stateful_scan_scheduling_keys,
     summarize_factored_affine_chunk,
-    validate_stateful_scan_semantic_erasure,
 )
 from tile_lifetime.delta_rule_reference import delta_rule_update_expression
-from tile_lifetime.gated_delta_scan import chunkwise_gated_delta_reference, recurrent_gated_delta_reference
-from tile_lifetime.kimi_delta_scan import chunkwise_kimi_delta_reference, recurrent_kimi_delta_reference
-from tile_lifetime.stablehlo_scan_recovery import compile_stablehlo_stateful_scan
+from tile_lifetime.experimental_stablehlo_scan_recovery import (
+    ExperimentalStatefulScanSourceKind,
+    compile_experimental_natural_affine_scan,
+    compile_experimental_stablehlo_stateful_scan,
+    stateful_scan_scheduling_keys,
+    validate_experimental_stateful_scan_semantic_erasure,
+)
+from tile_lifetime.gated_delta_scan import (
+    chunkwise_gated_delta_reference,
+    compile_experimental_gated_delta_scan,
+    recurrent_gated_delta_reference,
+)
+from tile_lifetime.kimi_delta_scan import (
+    chunkwise_kimi_delta_reference,
+    compile_experimental_kimi_delta_scan,
+    recurrent_kimi_delta_reference,
+)
 from tile_lifetime.stateful_scan_reference import (
     NATURAL_AFFINE_SCAN_INPUT_NAMES,
     NaturalAffineScanConfig,
@@ -50,7 +58,7 @@ from tile_lifetime.stateful_scan_reference import (
 )
 
 STABLEHLO_SCAN_FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "stateful_scan_v1_14_1.mlir.bc.b64"
-ACCEPTED_STATEFUL_SCAN_HARNESSES = (
+EXPERIMENTAL_STATEFUL_SCAN_HARNESSES = (
     Path(__file__).parents[1] / "benchmarks" / "h100_generated_affine_scan.py",
     Path(__file__).parents[1] / "benchmarks" / "h100_generated_chunk_scan.py",
     Path(__file__).parents[1] / "benchmarks" / "h100_affine_chunk_pipeline.py",
@@ -141,7 +149,7 @@ def test_affine_transform_composition_matches_sequential_application():
 
 
 def test_gated_delta_scan_recovers_generic_update_and_bounded_candidates():
-    compilation = compile_gated_delta_scan(
+    compilation = compile_experimental_gated_delta_scan(
         batch_size=1,
         sequence_length=256,
         heads=32,
@@ -172,7 +180,7 @@ def test_gated_delta_scan_recovers_generic_update_and_bounded_candidates():
         StateTransitionStructure.DIAGONAL_PLUS_LOW_RANK
     }
     assert {candidate.maximum_update_rank for candidate in compilation.candidates} == {1}
-    assert compilation.provenance.source_kind is StatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE
+    assert compilation.provenance.source_kind is ExperimentalStatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE
     assert compilation.semantic_erasure_report.source_semantics == (
         "stablehlo.while",
         "stablehlo.tensor_expression_body",
@@ -235,7 +243,7 @@ def test_gated_delta_persistent_state_continuation_matches_one_pass():
 
 def test_gated_delta_rejects_incompatible_state_and_precision():
     with pytest.raises(ValueError, match="requires FP32 persistent state"):
-        compile_gated_delta_scan(
+        compile_experimental_gated_delta_scan(
             batch_size=1,
             sequence_length=8,
             heads=2,
@@ -250,7 +258,7 @@ def test_gated_delta_rejects_incompatible_state_and_precision():
 
 
 def test_kimi_delta_uses_the_same_stateful_scan_abstraction():
-    compilation = compile_kimi_delta_scan(
+    compilation = compile_experimental_kimi_delta_scan(
         batch_size=1,
         sequence_length=64,
         heads=4,
@@ -265,7 +273,7 @@ def test_kimi_delta_uses_the_same_stateful_scan_abstraction():
         StatefulScanExecutionForm.CHUNKWISE,
         StatefulScanExecutionForm.CHUNKWISE,
     )
-    assert compilation.provenance.source_kind is StatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE
+    assert compilation.provenance.source_kind is ExperimentalStatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE
     assert tuple(axis.extent for axis in compilation.recovered_update.diagonal_scale_axes) == (1, 4, 128)
     assert {candidate.backend for candidate in compilation.candidates} == {
         "shuttle_affine_scan_recurrent_template",
@@ -347,7 +355,7 @@ def test_natural_stablehlo_while_recovers_one_generic_affine_scan_family(
         diagonal_operation=diagonal_operation,
     )
 
-    compilation = compile_stablehlo_stateful_scan(
+    compilation = compile_experimental_stablehlo_stateful_scan(
         export_natural_affine_scan(config),
         input_names=NATURAL_AFFINE_SCAN_INPUT_NAMES,
         chunk_sizes=(2, 4),
@@ -385,7 +393,7 @@ def test_natural_stablehlo_while_recovers_one_generic_affine_scan_family(
         for key in compilation.semantic_erasure_report.scheduling_keys
         for token in ("gated_deltanet", "gdn", "kimi", "mamba")
     )
-    validate_stateful_scan_semantic_erasure(compilation)
+    validate_experimental_stateful_scan_semantic_erasure(compilation)
 
 
 def test_natural_jax_mutations_reuse_one_generator_family_and_change_provenance() -> None:
@@ -398,11 +406,11 @@ def test_natural_jax_mutations_reuse_one_generator_family_and_change_provenance(
             diagonal_operation=ScanDiagonalOperation.EXP_SQUARED,
         ),
     )
-    compilations = tuple(compile_natural_affine_scan(config, chunk_sizes=(2,)) for config in configurations)
+    compilations = tuple(compile_experimental_natural_affine_scan(config, chunk_sizes=(2,)) for config in configurations)
 
     assert len({compilation.provenance.artifact_sha256 for compilation in compilations}) == len(compilations)
     assert all(
-        compilation.provenance.source_kind is StatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE
+        compilation.provenance.source_kind is ExperimentalStatefulScanSourceKind.JAX_EXPORT_STABLEHLO_WHILE
         for compilation in compilations
     )
     assert {tuple(candidate.backend for candidate in compilation.candidates) for compilation in compilations} == {
@@ -415,29 +423,29 @@ def test_natural_jax_mutations_reuse_one_generator_family_and_change_provenance(
     assert tuple(compilation.source_operation_count for compilation in compilations) == (19, 19, 20)
 
 
-def test_accepted_stateful_scan_provenance_rejects_hand_authored_expression_bypass() -> None:
-    compilation = compile_natural_affine_scan(NaturalAffineScanConfig(), chunk_sizes=(2,))
+def test_experimental_stateful_scan_provenance_rejects_hand_authored_expression_bypass() -> None:
+    compilation = compile_experimental_natural_affine_scan(NaturalAffineScanConfig(), chunk_sizes=(2,))
     bypass = replace(
         compilation,
         provenance=replace(
             compilation.provenance,
-            source_kind=StatefulScanSourceKind.REFERENCE_TENSOR_EXPRESSION,
+            source_kind=ExperimentalStatefulScanSourceKind.REFERENCE_TENSOR_EXPRESSION,
         ),
     )
 
     with pytest.raises(SemanticErasureError, match="must originate from structured StableHLO while"):
-        validate_stateful_scan_semantic_erasure(bypass)
+        validate_experimental_stateful_scan_semantic_erasure(bypass)
 
 
-def test_accepted_stateful_scan_harnesses_do_not_import_reference_expression_fixture() -> None:
-    for harness in ACCEPTED_STATEFUL_SCAN_HARNESSES:
+def test_experimental_stateful_scan_harnesses_do_not_import_reference_expression_fixture() -> None:
+    for harness in EXPERIMENTAL_STATEFUL_SCAN_HARNESSES:
         source = harness.read_text()
         assert "delta_rule_update_expression" not in source
         assert "tile_lifetime.delta_rule_reference" not in source
 
 
 def test_stateful_scan_erasure_validator_rejects_named_or_stale_scheduling_keys() -> None:
-    compilation = compile_stablehlo_stateful_scan(
+    compilation = compile_experimental_stablehlo_stateful_scan(
         base64.b64decode(STABLEHLO_SCAN_FIXTURE.read_text()),
         input_names=NATURAL_AFFINE_SCAN_INPUT_NAMES,
         chunk_sizes=(2,),
@@ -451,15 +459,15 @@ def test_stateful_scan_erasure_validator_rejects_named_or_stale_scheduling_keys(
         ),
     )
     with pytest.raises(SemanticErasureError, match="retains named semantics"):
-        validate_stateful_scan_semantic_erasure(replace(compilation, semantic_erasure_report=named_report))
+        validate_experimental_stateful_scan_semantic_erasure(replace(compilation, semantic_erasure_report=named_report))
 
     stale_report = replace(compilation.semantic_erasure_report, scheduling_keys=("scan:stale",))
     with pytest.raises(SemanticErasureError, match="do not match"):
-        validate_stateful_scan_semantic_erasure(replace(compilation, semantic_erasure_report=stale_report))
+        validate_experimental_stateful_scan_semantic_erasure(replace(compilation, semantic_erasure_report=stale_report))
 
 
 def test_frozen_stablehlo_while_fixture_recovers_without_invoking_jax_export() -> None:
-    compilation = compile_stablehlo_stateful_scan(
+    compilation = compile_experimental_stablehlo_stateful_scan(
         base64.b64decode(STABLEHLO_SCAN_FIXTURE.read_text()),
         input_names=NATURAL_AFFINE_SCAN_INPUT_NAMES,
         chunk_sizes=(2,),
@@ -472,7 +480,7 @@ def test_frozen_stablehlo_while_fixture_recovers_without_invoking_jax_export() -
 
 def test_natural_stablehlo_scan_factors_execute_the_exported_recurrence() -> None:
     config = NaturalAffineScanConfig(sequence=5, key_dimension=4, value_dimension=6, update_rank=2)
-    compilation = compile_stablehlo_stateful_scan(
+    compilation = compile_experimental_stablehlo_stateful_scan(
         export_natural_affine_scan(config),
         input_names=NATURAL_AFFINE_SCAN_INPUT_NAMES,
         chunk_sizes=(2,),

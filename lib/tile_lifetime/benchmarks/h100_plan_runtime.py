@@ -38,9 +38,9 @@ from tile_lifetime import (
     NumericalPolicy,
     ReductionSkeleton,
     StreamingAttentionSkeleton,
-    compile_stablehlo_dense_transformer_region,
 )
 from tile_lifetime.compiler import RowScalePlacement
+from tile_lifetime.experimental_pipeline import compile_experimental_stablehlo_dense_transformer_region
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND, compile_gemm_program
 from tile_lifetime.quack_gemm_codegen import (
     GeneratedQuackGemm,
@@ -556,7 +556,7 @@ def main() -> None:
     artifact = export_debug_dense_region(config)
     plans = {
         placement.value: (
-            compile_stablehlo_dense_transformer_region(
+            compile_experimental_stablehlo_dense_transformer_region(
                 artifact,
                 input_names=DENSE_REGION_INPUT_NAMES,
                 gemm_accumulation_dtype=DType.FP32,

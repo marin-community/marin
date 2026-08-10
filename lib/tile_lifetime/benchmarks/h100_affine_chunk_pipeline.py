@@ -29,7 +29,7 @@ from triton_affine_chunk_pipeline import (
 )
 from triton_affine_scan import execute_recurrent_affine_scan
 
-from tile_lifetime.stablehlo_scan_recovery import compile_stablehlo_stateful_scan
+from tile_lifetime.experimental_stablehlo_scan_recovery import compile_experimental_stablehlo_stateful_scan
 from tile_lifetime.stateful_scan_recovery import RecoveredAffineStateUpdate
 from tile_lifetime.stateful_scan_reference import (
     NATURAL_AFFINE_SCAN_INPUT_NAMES,
@@ -241,7 +241,7 @@ def _recovery(
         decay_axes=ScanDecayAxes(decay_axes),
     )
     stablehlo = export_natural_affine_scan(config)
-    compilation = compile_stablehlo_stateful_scan(
+    compilation = compile_experimental_stablehlo_stateful_scan(
         stablehlo,
         input_names=NATURAL_AFFINE_SCAN_INPUT_NAMES,
         chunk_sizes=(16, 32),
@@ -635,7 +635,7 @@ def main() -> None:
         benchmark_directory / "h100_affine_chunk_pipeline.py",
         benchmark_directory / "triton_affine_chunk_pipeline.py",
         benchmark_directory / "triton_affine_scan.py",
-        benchmark_directory.parent / "src/tile_lifetime/stablehlo_scan_recovery.py",
+        benchmark_directory.parent / "src/tile_lifetime/experimental_stablehlo_scan_recovery.py",
         benchmark_directory.parent / "src/tile_lifetime/stateful_scan_recovery.py",
     )
     result = {

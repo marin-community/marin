@@ -17,11 +17,11 @@ from tile_lifetime import (
     execute_streaming_attention_backward,
     execute_streaming_attention_with_state,
 )
-from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_streaming_attention_backward import (
+from tile_lifetime.experimental_stablehlo_streaming_attention_backward import (
     StableHLOStreamingAttentionBackwardError,
     recover_experimental_whole_pattern_streaming_attention_backward,
 )
+from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.streaming_attention_backward import eliminate_normalized_exp_maximum_vjp
 from tile_lifetime.streaming_attention_backward_reference import (
     STREAMING_ATTENTION_BACKWARD_INPUT_NAMES,

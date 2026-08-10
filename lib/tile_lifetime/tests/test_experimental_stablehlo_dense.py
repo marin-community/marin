@@ -16,19 +16,19 @@ from tile_lifetime import (
     ReductionSkeleton,
     StreamingAttentionSkeleton,
     TransformSkeleton,
-    compile_stablehlo_dense_transformer_region,
 )
 from tile_lifetime.compiler import RowScalePlacement
-from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
-from tile_lifetime.pipeline import (
+from tile_lifetime.experimental_pipeline import (
     FrontendCompilationStatus,
     FrontendSourceKind,
-    require_current_stablehlo_dense_compilation,
-    validate_stablehlo_dense_compilation,
+    compile_experimental_stablehlo_dense_transformer_region,
+    require_architecturally_conforming_dense_compilation,
+    validate_experimental_stablehlo_dense_compilation,
 )
+from tile_lifetime.experimental_semantic_recovery import recover_dense_transformer_region
+from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
 from tile_lifetime.reference import DENSE_REGION_INPUT_NAMES, DenseDebugConfig, export_debug_dense_region
 from tile_lifetime.semantic_erasure import SemanticErasureError
-from tile_lifetime.semantic_recovery import recover_dense_transformer_region
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "dense_region_v1_14_1.mlir.bc.b64"
 
@@ -100,9 +100,9 @@ def test_recover_dense_fixture_builds_connected_semantic_graph() -> None:
     assert all(operation.source_location is not None for operation in recovered.graph.operations)
 
 
-def test_public_dense_stablehlo_path_selects_eight_skeleton_plan() -> None:
+def test_experimental_dense_stablehlo_path_selects_eight_skeleton_plan() -> None:
     artifact = _fixture_artifact()
-    compilation = compile_stablehlo_dense_transformer_region(
+    compilation = compile_experimental_stablehlo_dense_transformer_region(
         artifact,
         input_names=DENSE_REGION_INPUT_NAMES,
         gemm_accumulation_dtype=DType.FP32,
@@ -129,8 +129,8 @@ def test_public_dense_stablehlo_path_selects_eight_skeleton_plan() -> None:
     assert all(rewrite.applied for rewrite in plan.rewrites)
 
 
-def test_public_dense_stablehlo_path_exposes_delayed_rms_alternative() -> None:
-    compilation = compile_stablehlo_dense_transformer_region(
+def test_experimental_dense_stablehlo_path_exposes_delayed_rms_alternative() -> None:
+    compilation = compile_experimental_stablehlo_dense_transformer_region(
         _fixture_artifact(),
         input_names=DENSE_REGION_INPUT_NAMES,
         gemm_accumulation_dtype=DType.FP32,
@@ -147,8 +147,8 @@ def test_public_dense_stablehlo_path_exposes_delayed_rms_alternative() -> None:
     assert next_qkv.backend == GENERIC_H100_GEMM_BACKEND
 
 
-def test_public_dense_stablehlo_path_rejects_unverified_provenance_and_named_schedule_keys() -> None:
-    compilation = compile_stablehlo_dense_transformer_region(
+def test_experimental_dense_stablehlo_path_rejects_unverified_provenance_and_named_schedule_keys() -> None:
+    compilation = compile_experimental_stablehlo_dense_transformer_region(
         _fixture_artifact(),
         input_names=DENSE_REGION_INPUT_NAMES,
         gemm_accumulation_dtype=DType.FP32,
@@ -160,14 +160,14 @@ def test_public_dense_stablehlo_path_rejects_unverified_provenance_and_named_sch
         provenance=replace(compilation.provenance, source_kind=FrontendSourceKind.HAND_AUTHORED_SEMANTIC_IR),
     )
     with pytest.raises(SemanticErasureError, match="StableHLO artifact"):
-        validate_stablehlo_dense_compilation(hand_authored)
+        validate_experimental_stablehlo_dense_compilation(hand_authored)
 
     report = compilation.plan.semantic_erasure_report
     assert report is not None
     named_report = replace(report, scheduling_keys=(*report.scheduling_keys, "moe_forward"))
     named_plan = replace(compilation.plan, semantic_erasure_report=named_report)
     with pytest.raises(SemanticErasureError, match="named semantics"):
-        validate_stablehlo_dense_compilation(replace(compilation, plan=named_plan))
+        validate_experimental_stablehlo_dense_compilation(replace(compilation, plan=named_plan))
 
-    with pytest.raises(SemanticErasureError, match="exact named dense-region reconstruction"):
-        require_current_stablehlo_dense_compilation(compilation)
+    with pytest.raises(SemanticErasureError, match="requires in-pipeline Shuttle MLIR provenance"):
+        require_architecturally_conforming_dense_compilation(compilation)
