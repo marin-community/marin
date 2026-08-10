@@ -504,7 +504,7 @@ class Autoscaler:
         # each outcome into state serially.
         outcomes = _run_io_batch(
             to_issue,
-            lambda req: self._issue_scale_up(req, timestamp),
+            self._issue_scale_up,
             max_workers=_CLOUD_OP_MAX_WORKERS,
             thread_name_prefix="scale-up",
         )
@@ -540,7 +540,7 @@ class Autoscaler:
                 reason=summary,
             )
 
-    def _issue_scale_up(self, request: _ScaleUpRequest, ts: Timestamp) -> _ScaleUpOutcome:
+    def _issue_scale_up(self, request: _ScaleUpRequest) -> _ScaleUpOutcome:
         """Submit one create and return the handle-or-error as data. Pure I/O.
 
         Runs inside the bounded issue fan-out, so it must not touch shared
@@ -554,7 +554,7 @@ class Autoscaler:
         try:
             logger.info("Scaling up %s: %s", group.name, request.reason)
             wc = self._per_group_worker_config(group)
-            handle = group.scale_up(worker_config=wc, timestamp=ts)
+            handle = group.scale_up(worker_config=wc)
             return _ScaleUpOutcome(request=request, handle=handle)
         except Exception as e:
             # Captured as data (not swallowed): _fold_scale_up classifies it,
@@ -575,7 +575,7 @@ class Autoscaler:
         if outcome.error is None:
             handle = outcome.handle
             assert handle is not None, "a successful scale-up must carry a slice handle"
-            group.complete_scale_up(handle, ts)
+            group.complete_scale_up(handle)
             logger.info("Created slice %s for group %s", handle.slice_id, group.name)
             action.slice_id = handle.slice_id
             action.status = "completed"

@@ -418,7 +418,6 @@ class K8sControllerProvider:
             )
         self._poll_interval = poll_interval
         self._shutdown_event = threading.Event()
-        self._s3_enabled = False
         self.signing_key_spec: tuple[str, ...] = ()
         self._prepared_controller_env: dict[str, str] | None = None
 
@@ -433,10 +432,6 @@ class K8sControllerProvider:
     @property
     def iris_labels(self) -> Labels:
         return self._iris_labels
-
-    @property
-    def s3_enabled(self) -> bool:
-        return self._s3_enabled
 
     # -- ControllerProvider protocol methods -----------------------------------
 
@@ -480,9 +475,8 @@ class K8sControllerProvider:
         # every task via the iris-task-env Secret + envFrom. Resolution happens
         # here, in the operator's shell -- the controller never has these secrets.
         # S3 storage auth and operator-injected vars share one flow.
-        self._s3_enabled = self.uses_s3_storage(config)
         default_env: dict[str, str] = {}
-        if self._s3_enabled:
+        if self.uses_s3_storage(config):
             default_env.update(self._s3_task_env())
         default_env.update(collect_inject_env(config.defaults.inject_env))
         if default_env:

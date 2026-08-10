@@ -1028,7 +1028,6 @@ class Controller:
             now=now,
             run_schedule=run_schedule,
             run_reconcile=run_reconcile,
-            run_autoscale=run_autoscale,
             scan_timeouts=scan_timeouts,
         )
 
@@ -1122,7 +1121,6 @@ class Controller:
         now: Timestamp,
         run_schedule: bool,
         run_reconcile: bool,
-        run_autoscale: bool,
         scan_timeouts: bool,
     ) -> _TickInputs:
         """Assemble the due phases' controller-owned inputs.

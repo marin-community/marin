@@ -71,13 +71,11 @@ def _with_resources(config: ScaleGroupConfig, *, num_vms: int = 1) -> ScaleGroup
     return ScaleGroupConfig.model_validate(config.model_dump(exclude_none=True))
 
 
-def _mark_discovered_ready(
-    group: ScalingGroup, handles: list[FakeSliceHandle], timestamp: Timestamp | None = None
-) -> None:
+def _mark_discovered_ready(group: ScalingGroup, handles: list[FakeSliceHandle]) -> None:
     """Mark discovered slices as READY with their worker IDs."""
     for handle in handles:
         worker_ids = [vm.worker_id for vm in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, worker_ids, timestamp=timestamp)
+        group.mark_slice_ready(handle.slice_id, worker_ids)
 
 
 def _mark_discovered_failed(group: ScalingGroup, handles: list[FakeSliceHandle]) -> None:
@@ -99,8 +97,8 @@ def _tracked_scale_up(group: ScalingGroup, timestamp: Timestamp | None = None, *
     """
     timestamp = timestamp or Timestamp.from_ms(1000000)
     group.begin_scale_up(timestamp=timestamp)
-    handle = group.scale_up(timestamp=timestamp, **kwargs)
-    group.complete_scale_up(handle, timestamp)
+    handle = group.scale_up(**kwargs)
+    group.complete_scale_up(handle)
     return handle
 
 
@@ -510,8 +508,7 @@ class TestScalingGroupIdleTracking:
         platform = make_mock_platform(slices_to_discover=discovered)
         group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(1000))
         group.reconcile()
-        ready_ts = Timestamp.from_ms(1000)
-        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
+        _mark_discovered_ready(group, discovered)
 
         wid_001 = _get_worker_id(group.get_slice("slice-001"))
         wid_002 = _get_worker_id(group.get_slice("slice-002"))
@@ -545,7 +542,7 @@ class TestScalingGroupIdleTracking:
         group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(60_000))
         group.reconcile()
         ready_ts = Timestamp.from_ms(1_000_000)
-        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
+        _mark_discovered_ready(group, discovered)
 
         wid = _get_worker_id(group.get_slice("slice-001"))
         active_map = {wid: WorkerStatus(worker_id=wid, running_task_ids=frozenset({"task-1"}))}
@@ -834,7 +831,7 @@ class TestScalingGroupAvailability:
         ts = Timestamp.from_ms(1000)
         group.begin_scale_up(timestamp=ts)
         with pytest.raises(QuotaExhaustedError):
-            group.scale_up(timestamp=ts)
+            group.scale_up()
         group.cancel_scale_up()
         group.record_quota_exceeded("quota exceeded", ts)
 
@@ -860,7 +857,7 @@ class TestScalingGroupAvailability:
         ts1 = Timestamp.from_ms(1000)
         group.begin_scale_up(timestamp=ts1)
         with pytest.raises(QuotaExhaustedError):
-            group.scale_up(timestamp=ts1)
+            group.scale_up()
         group.cancel_scale_up()
         group.record_quota_exceeded("quota exceeded", ts1)
         assert not group.can_accept_demand(timestamp=Timestamp.from_ms(2000))
@@ -868,8 +865,8 @@ class TestScalingGroupAvailability:
         # Second attempt succeeds via complete_scale_up, which clears quota state
         ts2 = Timestamp.from_ms(3000)
         group.begin_scale_up(timestamp=ts2)
-        handle = group.scale_up(timestamp=ts2)
-        group.complete_scale_up(handle, ts2)
+        handle = group.scale_up()
+        group.complete_scale_up(handle)
         assert group.can_accept_demand(timestamp=Timestamp.from_ms(4000))
 
     def test_quota_exceeded_takes_precedence_over_churn_backoff(self, unbounded_config: ScaleGroupConfig):
@@ -902,8 +899,8 @@ class TestScalingGroupAvailability:
 
         ts = Timestamp.from_ms(1_000_000)
         group.begin_scale_up(timestamp=ts)
-        handle = group.scale_up(timestamp=ts)
-        group.complete_scale_up(handle, ts)
+        handle = group.scale_up()
+        group.complete_scale_up(handle)
 
         state = group.availability(Timestamp.from_ms(1_001_000))
         assert state.status == GroupAvailability.AVAILABLE
@@ -924,8 +921,8 @@ class TestScalingGroupAvailability:
 
         ts = Timestamp.from_ms(1_000_000)
         group.begin_scale_up(timestamp=ts)
-        handle = group.scale_up(timestamp=ts)
-        group.complete_scale_up(handle, ts)
+        handle = group.scale_up()
+        group.complete_scale_up(handle)
 
         # Slice is at max_slices but still BOOTING — accepts demand.
         state = group.availability(Timestamp.from_ms(1_003_000))
@@ -993,7 +990,7 @@ class TestCanScaleUpQuotaExhausted:
         ts = Timestamp.from_ms(1000000)
         group.begin_scale_up(timestamp=ts)
         with pytest.raises(QuotaExhaustedError):
-            group.scale_up(timestamp=ts)
+            group.scale_up()
         group.cancel_scale_up()
         group.record_quota_exceeded("quota exceeded", ts)
 
@@ -1245,7 +1242,7 @@ class TestMultiVmSliceIdleScaleDown:
         platform = make_mock_platform(slices_to_discover=discovered)
         group = ScalingGroup(config, platform, idle_threshold=Duration.from_ms(60_000))
         group.reconcile()
-        _mark_discovered_ready(group, discovered, timestamp=Timestamp.from_ms(1000))
+        _mark_discovered_ready(group, discovered)
 
         handle = group.get_slice("slice-001")
         workers = handle.describe().workers

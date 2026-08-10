@@ -287,7 +287,6 @@ def _apply_job_filters(
     *,
     depth_filter: int | None,
     parent_filter: str | None,
-    state_ids: tuple[int, ...],
     name_filter: str,
     job_id_prefix: str,
     backend_id_filter: str = "",
@@ -296,7 +295,9 @@ def _apply_job_filters(
     """Apply the standard set of job WHERE predicates to ``stmt``.
 
     Works for both the main SELECT and the COUNT SELECT because neither
-    requires knowledge of which columns are projected.
+    requires knowledge of which columns are projected. The state filter is an
+    expanding ``job_state_ids`` bind so one param dict drives both statements;
+    the caller supplies it at execute time.
     """
     if depth_filter is not None:
         stmt = stmt.where(jobs_table.c.depth == depth_filter)
@@ -368,7 +369,6 @@ def list_jobs(
         stmt,
         depth_filter=depth_filter,
         parent_filter=parent_filter,
-        state_ids=state_ids,
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
         backend_id_filter=query.backend_id,
@@ -384,7 +384,6 @@ def list_jobs(
         select(func.count()).select_from(jobs_table),
         depth_filter=depth_filter,
         parent_filter=parent_filter,
-        state_ids=state_ids,
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
         backend_id_filter=query.backend_id,

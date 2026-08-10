@@ -64,7 +64,7 @@ def _group(
         group.reconcile()
         for handle in discovered:
             worker_ids = [vm.worker_id for vm in handle.describe().workers]
-            group.mark_slice_ready(handle.slice_id, worker_ids, timestamp=TS)
+            group.mark_slice_ready(handle.slice_id, worker_ids)
     return group
 
 

@@ -498,10 +498,13 @@ class ScalingGroup:
             self._pending_scale_ups += 1
         self._last_scale_up = timestamp
 
-    def complete_scale_up(self, handle: SliceHandle, timestamp: Timestamp | None = None) -> None:
+    def complete_scale_up(self, handle: SliceHandle) -> None:
         """Record a successful scale-up: track the slice, register it with the detector,
-        and clear any active quota block."""
-        timestamp = timestamp or Timestamp.now()
+        and clear any active quota block.
+
+        The slice's creation time comes from ``handle.created_at``; ``begin_scale_up``
+        already stamped ``_last_scale_up``.
+        """
         with self._slices_lock:
             self._pending_scale_ups = max(0, self._pending_scale_ups - 1)
             state = SliceState(handle=handle)
@@ -519,7 +522,6 @@ class ScalingGroup:
         slice_id: str,
         worker_ids: list[str],
         worker_urls: dict[str, str] | None = None,
-        timestamp: Timestamp | None = None,
     ) -> None:
         """Mark a slice READY with its worker IDs. ``quiet_since`` is left None so the next
         autoscaler tick decides idle/active afresh.
@@ -529,7 +531,6 @@ class ScalingGroup:
         first tick. Optional: tests that don't exercise the probe path can omit
         it, and the probe will lazy-fetch from the handle.
         """
-        del timestamp
         with self._slices_lock:
             state = self._slices.get(slice_id)
             if state is not None:
@@ -606,7 +607,6 @@ class ScalingGroup:
     def scale_up(
         self,
         tags: dict[str, str] | None = None,
-        timestamp: Timestamp | None = None,
         worker_config: WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a new slice via the platform.
@@ -616,7 +616,6 @@ class ScalingGroup:
 
         Args:
             tags: Optional extra labels/tags for the slice (merged with managed labels)
-            timestamp: Optional timestamp (for testing)
             worker_config: Worker settings passed to platform.create_slice()
 
         Returns:

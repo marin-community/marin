@@ -254,7 +254,6 @@ class TestAutoscalerScaleDown:
 
     def test_scales_down_idle_slice_via_run_once(self, scale_group_config: ScaleGroupConfig):
         """run_once() scales down idle slices via ScalingGroup.scale_down_if_idle()."""
-        ready_ts = Timestamp.from_ms(1_000)
         discovered = [
             make_mock_slice_handle("slice-001", all_ready=True, created_at_ms=100000),
             make_mock_slice_handle("slice-002", all_ready=True, created_at_ms=200000),
@@ -266,7 +265,7 @@ class TestAutoscalerScaleDown:
             idle_threshold=Duration.from_ms(1000),
         )
         group.reconcile()
-        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
+        _mark_discovered_ready(group, discovered)
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -364,7 +363,6 @@ class TestAutoscalerScaleDown:
 
     def test_scale_down_rate_limited_by_token_bucket(self, scale_group_config: ScaleGroupConfig):
         """Scale-down is rate-limited by the token bucket (only 1 per minute with rate_limit=1)."""
-        ready_ts = Timestamp.from_ms(1_000)
         discovered = [
             make_mock_slice_handle("slice-001", all_ready=True, created_at_ms=100000),
             make_mock_slice_handle("slice-002", all_ready=True, created_at_ms=200000),
@@ -378,7 +376,7 @@ class TestAutoscalerScaleDown:
             scale_down_rate_limit=1,
         )
         group.reconcile()
-        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
+        _mark_discovered_ready(group, discovered)
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -400,7 +398,6 @@ class TestAutoscalerScaleDown:
 
     def test_scale_down_multiple_idle_slices_in_one_cycle(self, scale_group_config: ScaleGroupConfig):
         """With enough rate-limit tokens, multiple idle slices are scaled down in one cycle."""
-        ready_ts = Timestamp.from_ms(1_000)
         discovered = [
             make_mock_slice_handle("slice-001", all_ready=True, created_at_ms=100000),
             make_mock_slice_handle("slice-002", all_ready=True, created_at_ms=200000),
@@ -414,7 +411,7 @@ class TestAutoscalerScaleDown:
             scale_down_rate_limit=5,
         )
         group.reconcile()
-        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
+        _mark_discovered_ready(group, discovered)
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = make_demand_entries(0, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -777,7 +774,7 @@ class TestAutoscalerQuotaHandling:
         ts = Timestamp.from_ms(1000)
         group.begin_scale_up(timestamp=ts)
         with pytest.raises(QuotaExhaustedError):
-            group.scale_up(timestamp=ts)
+            group.scale_up()
         group.cancel_scale_up()
         group.record_quota_exceeded("quota exceeded", ts)
 
@@ -933,7 +930,7 @@ class TestScalingGroupRequestingState:
         assert group.availability(ts).status == GroupAvailability.REQUESTING
 
         handle = make_mock_slice_handle("new-slice-1", all_ready=True)
-        group.complete_scale_up(handle, ts)
+        group.complete_scale_up(handle)
 
         assert group.availability(ts).status == GroupAvailability.AVAILABLE
         assert group.slice_count() == 1
@@ -1457,7 +1454,6 @@ class TestMultiSliceScaleUp:
 
     def test_scale_down_target_uses_packed_demand(self):
         """Scale-down uses packed required_slices, not entry count."""
-        ready_ts = Timestamp.from_ms(1_000)
         config = make_scale_group_config(
             name="test-group",
             max_slices=5,
@@ -1474,7 +1470,7 @@ class TestMultiSliceScaleUp:
             idle_threshold=Duration.from_ms(1000),
         )
         group.reconcile()
-        _mark_discovered_ready(group, discovered, timestamp=ready_ts)
+        _mark_discovered_ready(group, discovered)
         autoscaler = make_autoscaler({"test-group": group})
 
         # 4 entries at 32GiB each -> 1 VM -> ceil(1/4) = 1 slice. But we have 2 slices.
