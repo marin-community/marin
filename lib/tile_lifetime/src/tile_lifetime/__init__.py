@@ -209,8 +209,10 @@ from tile_lifetime.normalized_exp_contract_training import (
     tanh_soft_cap_score_expression,
 )
 from tile_lifetime.pipeline import (
+    FrontendCompilationStatus,
     FrontendProvenance,
     FrontendSourceKind,
+    StableHLODenseCompilation,
     StableHLOStreamingAttentionCompilation,
     compile_stablehlo_dense_transformer_region,
     compile_stablehlo_expert_parallel_region,
@@ -220,6 +222,8 @@ from tile_lifetime.pipeline import (
     recover_stablehlo_moe_region,
     recover_stablehlo_projected_routed_attention_program,
     recover_stablehlo_routed_attention_program,
+    require_current_stablehlo_dense_compilation,
+    validate_stablehlo_dense_compilation,
     validate_stablehlo_streaming_attention_compilation,
 )
 from tile_lifetime.plan import (

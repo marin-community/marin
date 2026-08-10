@@ -34,6 +34,7 @@ from tile_lifetime.semantic_erasure import (
     SemanticErasureError,
     build_tensor_erasure_report,
     validate_erased_tensor_program,
+    validate_plan_semantic_erasure,
 )
 from tile_lifetime.semantic_recovery import (
     recover_attention_region,
@@ -54,6 +55,13 @@ class FrontendSourceKind(StrEnum):
     HAND_AUTHORED_SEMANTIC_IR = "hand_authored_semantic_ir"
 
 
+class FrontendCompilationStatus(StrEnum):
+    """Whether frontend recovery is eligible for a clean-synthesis claim."""
+
+    EXPERIMENTAL_EXACT_RECOGNIZER = "experimental_exact_recognizer"
+    GENERIC_HLO_DATAFLOW = "generic_hlo_dataflow"
+
+
 @dataclass(frozen=True)
 class FrontendProvenance:
     """Source evidence carried across semantic erasure."""
@@ -70,6 +78,15 @@ class StableHLOStreamingAttentionCompilation:
     program: StreamingAttentionProgram
     provenance: FrontendProvenance
     semantic_erasure_report: SemanticErasureReport
+
+
+@dataclass(frozen=True)
+class StableHLODenseCompilation:
+    """Dense plan with source evidence and an explicit acceptance status."""
+
+    plan: RegionPlan
+    provenance: FrontendProvenance
+    status: FrontendCompilationStatus
 
 
 def recover_stablehlo_moe_region(
@@ -218,15 +235,44 @@ def compile_stablehlo_dense_transformer_region(
     gemm_accumulation_dtype: DType,
     numerical_policy: NumericalPolicy,
     rms_scale_placement: RMSScalePlacement = RMSScalePlacement.CONSUMER_PROLOGUE,
-) -> RegionPlan:
-    """Recover and compile the connected dense debug region."""
+) -> StableHLODenseCompilation:
+    """Recover, erase, and compile the connected dense StableHLO region."""
     stablehlo_graph = import_stablehlo(artifact, input_names=input_names)
     recovered = recover_dense_transformer_region(
         stablehlo_graph,
         gemm_accumulation_dtype=gemm_accumulation_dtype,
     )
-    return compile_dense_transformer_region(
+    plan = compile_dense_transformer_region(
         recovered.graph,
         numerical_policy=numerical_policy,
         rms_scale_placement=rms_scale_placement,
     )
+    compilation = StableHLODenseCompilation(
+        plan=plan,
+        provenance=FrontendProvenance(
+            source_kind=FrontendSourceKind.STABLEHLO_ARTIFACT,
+            artifact_sha256=hashlib.sha256(artifact).hexdigest(),
+            source_operation_ids=recovered.source_operation_ids,
+        ),
+        status=FrontendCompilationStatus.EXPERIMENTAL_EXACT_RECOGNIZER,
+    )
+    validate_stablehlo_dense_compilation(compilation)
+    return compilation
+
+
+def validate_stablehlo_dense_compilation(compilation: StableHLODenseCompilation) -> None:
+    """Validate evidence for the bounded experimental dense recognizer."""
+    if compilation.provenance.source_kind is not FrontendSourceKind.STABLEHLO_ARTIFACT:
+        raise SemanticErasureError("current frontend candidates must originate from a StableHLO artifact")
+    if not compilation.provenance.source_operation_ids:
+        raise SemanticErasureError("current frontend candidates must retain source-operation provenance")
+    validate_plan_semantic_erasure(compilation.plan)
+
+
+def require_current_stablehlo_dense_compilation(compilation: StableHLODenseCompilation) -> None:
+    """Fail closed until dense recovery uses the shared generic HLO importer."""
+    validate_stablehlo_dense_compilation(compilation)
+    if compilation.status is not FrontendCompilationStatus.GENERIC_HLO_DATAFLOW:
+        raise SemanticErasureError(
+            "exact named dense-region reconstruction is experimental; current acceptance requires generic HLO dataflow"
+        )
