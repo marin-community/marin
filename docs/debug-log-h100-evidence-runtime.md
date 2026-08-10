@@ -19,6 +19,14 @@ import JAX, NumPy, or `shuttle.ir`.
   NVIDIA runtime wheel closure through the canonical `jax[cuda13]` extra.
 - `contract_map_backend.py` imports `shuttle.ir`, while the reviewed capsule
   allowlist intentionally excludes `lib/shuttle`.
+- The runner's mandatory profile path loads `libnvToolsExt.so` from the selected
+  NVCC toolkit. CUDA 13 ships the compatible range API in the separately
+  packaged `libnvtx3interop.so`, which was absent from the original closed deb
+  manifest.
+- NVIDIA's Debian 12 amd64 package index records
+  `cuda-nvtx-13-2_13.2.86-1_amd64.deb` with SHA-256
+  `2382d2286eeac980b190b6036dce287ee7ec806b7c2f7b95b0f28a96c1d793e2`;
+  the downloaded 100,938-byte package matched that digest.
 
 ## Fix
 
@@ -33,6 +41,11 @@ The final image runs an import and exact-version smoke with
 `shuttle.ir` without enumerating a device. Parsed policy tests bind the Docker
 stage to the workspace manifests, Dockerfile-specific context allowlist, lock
 versions, non-editable install, source boundary, and CPU-only smoke.
+
+The closed NVIDIA manifest also includes the exact CUDA 13.2 NVTX package. The
+image exposes its ABI-compatible interop library under the legacy name used by
+the runner and loads the required CUDA runtime and NVTX symbols at build time
+without calling a device API.
 
 ## Validation boundary
 
