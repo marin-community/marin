@@ -35,6 +35,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    splits_per_peer: int,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -72,7 +73,9 @@ def _moe_mlp_ep_ragged_a2a_local(
         sorted_x = _compact_by_keep_mask(sorted_x, keep_mask)
 
         all_shard_counts = jnp.sum(clipped_group_sizes.reshape(ep_size, ep_size, local_experts), axis=2)
-        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(all_shard_counts, shard_id)
+        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(
+            all_shard_counts, shard_id, splits_per_peer
+        )
         dispatch_out_shape = jnp.zeros((recv_capacity, x_local.shape[1]), dtype=x_local.dtype)
         x_dispatched = jax.lax.ragged_all_to_all(
             sorted_x,
@@ -100,7 +103,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         local_output = _sort_activations(out_dispatch, jnp.argsort(local_sorted_indices))
         return_out_shape = jnp.zeros((assignments_per_shard, x_local.shape[1]), dtype=local_output.dtype)
         return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
-            all_shard_counts.T, shard_id
+            all_shard_counts.T, shard_id, splits_per_peer
         )
         returned = jax.lax.ragged_all_to_all(
             local_output,

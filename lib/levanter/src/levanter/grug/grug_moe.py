@@ -71,6 +71,7 @@ class MoEExpertMlp(eqx.Module):
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
     expert_chunks: int = eqx.field(static=True, default=1)
+    ragged_all_to_all_splits_per_peer: int = eqx.field(static=True, default=1)
 
     @staticmethod
     def init(
@@ -84,6 +85,7 @@ class MoEExpertMlp(eqx.Module):
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
         expert_chunks: int = 1,
+        ragged_all_to_all_splits_per_peer: int = 1,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -102,6 +104,7 @@ class MoEExpertMlp(eqx.Module):
             activation=activation,
             capacity_factor=capacity_factor,
             expert_chunks=expert_chunks,
+            ragged_all_to_all_splits_per_peer=ragged_all_to_all_splits_per_peer,
         )
 
     @named_call
@@ -127,6 +130,7 @@ class MoEExpertMlp(eqx.Module):
             capacity_factor=self.capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
+            ragged_all_to_all_splits_per_peer=self.ragged_all_to_all_splits_per_peer,
         )
 
 
@@ -144,6 +148,7 @@ def moe_mlp(
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
+    ragged_all_to_all_splits_per_peer: int = 1,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -156,8 +161,20 @@ def moe_mlp(
 
     `expert_chunks` applies only to the local `sonic_cute` FSDP path. Values
     greater than one split the expert bank into equal, statically sized chunks.
+
+    `ragged_all_to_all_splits_per_peer` divides each peer transfer into more
+    device-kernel updates without a change to its logical layout.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
+    if ragged_all_to_all_splits_per_peer <= 0:
+        raise ValueError(
+            "ragged_all_to_all_splits_per_peer must be positive, " f"got {ragged_all_to_all_splits_per_peer}"
+        )
+    if ragged_all_to_all_splits_per_peer != 1 and resolved_implementation != "ragged_all_to_all":
+        raise ValueError(
+            "ragged_all_to_all_splits_per_peer only applies to the ragged_all_to_all implementation, "
+            f"got {resolved_implementation!r}"
+        )
 
     if mesh is None:
         mesh = _current_mesh()
@@ -241,13 +258,15 @@ def moe_mlp(
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
+        shard_local_kwargs = {
+            "activation_fn": activation_fn,
+            "num_experts": num_experts,
+            "capacity_factor": capacity_factor,
+        }
+        if resolved_implementation == "ragged_all_to_all":
+            shard_local_kwargs["splits_per_peer"] = ragged_all_to_all_splits_per_peer
         shard_fn = shard_map(
-            partial(
-                shard_local_fn,
-                activation_fn=activation_fn,
-                num_experts=num_experts,
-                capacity_factor=capacity_factor,
-            ),
+            partial(shard_local_fn, **shard_local_kwargs),
             mesh=mesh,
             in_specs=(
                 batch_spec,

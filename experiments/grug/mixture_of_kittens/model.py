@@ -159,6 +159,7 @@ class GrugModelConfig:
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
+    ragged_all_to_all_splits_per_peer: int = 1
     report_capacity_overflow: bool = False
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
@@ -200,6 +201,8 @@ class GrugModelConfig:
             raise ValueError("capacity_factor must be positive")
         if self.expert_chunks <= 0:
             raise ValueError("expert_chunks must be positive")
+        if self.ragged_all_to_all_splits_per_peer <= 0:
+            raise ValueError("ragged_all_to_all_splits_per_peer must be positive")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
         resolve_moe_implementation(self.moe_implementation)
@@ -740,6 +743,7 @@ class MoEMLP(eqx.Module):
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=cfg.capacity_factor,
                 expert_chunks=cfg.expert_chunks,
+                ragged_all_to_all_splits_per_peer=cfg.ragged_all_to_all_splits_per_peer,
             ),
             cfg=cfg,
         )

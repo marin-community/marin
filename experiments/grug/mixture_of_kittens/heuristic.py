@@ -101,6 +101,7 @@ MOK_MODEL = GrugModelConfig(
     attention_implementation="gpu_fa4_cute",
     moe_implementation="ragged_all_to_all",
     expert_chunks=1,
+    ragged_all_to_all_splits_per_peer=32,
     report_capacity_overflow=True,
     rope_fused=True,
 )

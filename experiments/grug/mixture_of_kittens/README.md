@@ -7,7 +7,7 @@ This variant measures XLA's device-initiated ragged all-to-all kernel in the Gru
 - Model: d6144, 48 layers, top-4 routing, and two shared experts of width 3072.
 - Mesh: One to 16 workers with four GB200 GPUs each. The default expert count is two per GPU.
 - Batch: 16 sequences per GPU. The global batch scales from 64 on one worker to 1,024 on 16 workers.
-- MoE backend: `ragged_all_to_all` with a receiver capacity factor of 1.0.
+- MoE backend: `ragged_all_to_all` with a receiver capacity factor of 1.0 and 32 updates per peer.
 - Precision: BF16 compute with float32 parameters.
 - Output: W&B and Finelog metrics plus a five-step XProf capture. The run writes no checkpoint.
 

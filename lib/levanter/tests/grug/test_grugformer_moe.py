@@ -696,7 +696,28 @@ def test_shard_a2a_params_uses_sender_side_output_offsets():
     np.testing.assert_array_equal(np.asarray(output_offsets), np.array([1, 7, 2], dtype=np.int32))
 
 
-def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
+def test_shard_a2a_params_splits_each_peer_slice_without_changing_layout():
+    shard_counts = jnp.array(
+        [
+            [1, 7, 2],
+            [3, 5, 4],
+            [6, 8, 9],
+        ],
+        dtype=jnp.int32,
+    )
+
+    input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(
+        shard_counts, jnp.array(1, dtype=jnp.int32), splits_per_peer=2
+    )
+
+    np.testing.assert_array_equal(np.asarray(send_sizes), np.array([2, 1, 3, 2, 2, 2], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(input_offsets), np.array([0, 2, 3, 6, 8, 10], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(recv_sizes), np.array([4, 3, 3, 2, 4, 4], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(output_offsets), np.array([1, 3, 7, 10, 2, 4], dtype=np.int32))
+
+
+@pytest.mark.parametrize("ragged_splits_per_peer", [1, 2])
+def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available(ragged_splits_per_peer: int):
     mesh = _make_ep_mesh_or_none()
     if mesh is None:
         pytest.skip("requires an even number of >=2 devices")
@@ -737,6 +758,7 @@ def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
             mesh=None,
             report_capacity_overflow=True,
             capacity_factor=1.0,
+            ragged_all_to_all_splits_per_peer=ragged_splits_per_peer,
         )
         ragged_out, ragged_dropped = moe_mlp(
             x,

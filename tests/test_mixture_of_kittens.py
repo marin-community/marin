@@ -241,6 +241,7 @@ def test_grug_dispatch_adds_requested_pip_packages():
 
 def test_experiment_model_uses_ragged_all_to_all():
     assert heuristic.MOK_MODEL.moe_implementation == "ragged_all_to_all"
+    assert heuristic.MOK_MODEL.ragged_all_to_all_splits_per_peer == 32
 
 
 @pytest.mark.parametrize(("num_nodes", "expected_batch_size"), [(1, 64), (2, 128)])

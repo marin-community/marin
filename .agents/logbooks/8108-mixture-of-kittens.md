@@ -16,9 +16,9 @@ author: rav
 
 ## Current TL;DR
 
-The first implementation reproduces the deterministic 256-row-padded schedule. The first GPU gate compares XLA's one-shot NCCL-barrier kernel with its device-initiated NCCL LSA kernel on one four-GPU GB200 worker.
+The first implementation reproduces the deterministic 256-row-padded schedule. The strict XLA device kernel raised steady MFU from about 2.8% to 17.3% on one four-GPU GB200 worker. The next treatment divides each peer transfer into 32 updates to use the device kernel's full CTA limit.
 
-Both arms use hash-pinned JAX `0.11.1.dev20260809` wheels. Its XLA pin includes the device kernel that is not in JAX 0.11.0. A full fused kernel can use XLA collective FFI, but jaxlib does not publish its collective context headers.
+Both measured arms use hash-pinned JAX `0.11.1.dev20260809` wheels. Its XLA pin includes the device kernel that is not in JAX 0.11.0. A full fused kernel can use XLA collective FFI, but jaxlib does not publish its collective context headers.
 
 ## Baseline
 
@@ -85,7 +85,7 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 ### Active
 
 - `MOK-JAX-001`: A pure JAX schedule can match the reference schedule for balanced, skewed, and padded routes.
-- `MOK-JAX-002`: XLA's device-initiated ragged all-to-all reduces dispatch and combine cost on one four-GPU GB200 worker.
+- `MOK-JAX-002B`: Thirty-two updates per peer raise the device kernel from 16 to its 64-CTA limit and reach at least 25% MFU.
 
 ### Blocked
 
@@ -97,7 +97,7 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 
 ### Promoted
 
-- None.
+- `MOK-JAX-002`: XLA's device-initiated ragged all-to-all raised steady MFU from about 2.8% to 17.3%.
 
 ## Source Ledger
 
@@ -151,3 +151,13 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: Loss decreased from 11.8 at step 2 to 7.44 at step 10. Steps 3 through 5 took 119 to 123 seconds, or about 2.8% MFU. The trace shows that XLA selected `RaggedAllToAllWithSymmetricMemoryKernelImpl`, its one-shot copy kernel with the NCCL device barrier. The copy kernel used 74% of XLA device time, and the barrier used 14%. The XProf session and normalized summary are under `s3://marin-us-east-02a/tmp/ttl=30d/xprof/mok-jax-002-private-1n-25-20260810-0600`.
 - Interpretation: The path name `private` was not correct for the current nightly. The device-kernel comparison remains valid, but both paths must be selected explicitly and NCCL fallback must be off.
 - Next action: Run the device kernel with the one-shot path and fallback disabled. Require its distinct device-kernel trace before performance acceptance.
+
+### 2026-08-10 06:55 UTC - Device kernel passed but stayed below the target
+
+- Hypothesis: The strict device-initiated XLA kernel reduces the transfer boundary enough to reach 25% MFU.
+- Commit Hash: `683c4211f`.
+- Commands: One four-GPU GB200 Iris run; 25 completed steps; W&B metric history; five-step XProf capture.
+- Config: JAX `0.11.1.dev20260809`, XLA `7c3dd1936addd297d7c6fa46f6183986fc4160c3`, NCCL 2.30.7, E8, top-4, global batch 64, BF16 compute, one update per peer, device kernel on, one-shot and NCCL fallback off.
+- Result: The run succeeded without a retry. Steps 2 through 4 took 20.21 to 20.29 seconds and reached 17.22% to 17.29% MFU. Loss decreased from 11.81 to 6.50 over 25 steps. The XProf session is under `s3://marin-us-east-02a/tmp/ttl=30d/xprof/mok-jax-002-device-1n-25-20260810-0636`.
+- Interpretation: The XLA device kernel gives a 6.2x MFU gain over the one-shot result, but one update per peer does not use enough CTAs and remains 7.7 percentage points below the target.
+- Next action: Divide each peer transfer into 32 updates, validate unchanged layout and values, and rerun the same device arm.
