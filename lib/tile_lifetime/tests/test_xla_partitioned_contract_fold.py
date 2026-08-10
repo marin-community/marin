@@ -76,6 +76,22 @@ def _negated_self_product_mutation(hlo: str) -> str:
     return "".join(lines)
 
 
+def _ambiguous_second_partition_fold(hlo: str) -> str:
+    marker = "  %reduce_sum.632 = f32[2,4,1]{2,1,0} reduce(%square.13, %constant.266),"
+    lines: list[str] = []
+    replaced = False
+    for line in hlo.splitlines(keepends=True):
+        lines.append(line)
+        if line.startswith(marker):
+            lines.append(
+                "  %partition_fold_ambiguous = f32[2,4,1]{2,1,0} "
+                "reduce(%square.13, %constant.266), dimensions={3}, to_apply=%region_0.1\n"
+            )
+            replaced = True
+    assert replaced
+    return "".join(lines)
+
+
 def _self_product_program() -> CastScalarProgram:
     source = CastScalarExpression(
         CastScalarKind.INPUT,
@@ -193,6 +209,15 @@ def test_natural_hlo_recovers_two_generic_auxiliary_folds_and_retains_raw_partit
     assert all(
         value.reassociation is PartitionFoldReassociation.ALLOW_ROUNDING_REORDER for value in program.auxiliary_folds
     )
+
+
+def test_recovery_does_not_require_a_workload_specific_fold_count() -> None:
+    hlo = _ambiguous_second_partition_fold(_post_gated_product_grug_hlo())
+
+    plan = plan_attached_partition_folds(hlo, target_prefix=_TARGET_PREFIX)
+
+    assert len(plan.families) == 1
+    assert tuple(fold.source_partition for fold in plan.families[0].program.auxiliary_folds) == (0,)
 
 
 def test_replacement_preserves_raw_users_fold_users_and_collectives() -> None:

@@ -281,7 +281,7 @@ def _candidate(
         )
         if candidate is not None and candidate.fold.contribution.expression.kind is CastScalarKind.MULTIPLY:
             recovered.append(candidate)
-    if len(recovered) != 2 or len({fold.fold.source_partition for fold in recovered}) != 2:
+    if not recovered or len({fold.fold.source_partition for fold in recovered}) != len(recovered):
         return None
     program = _physical_program(call, tuple(recovered))
     concatenation = instructions[
