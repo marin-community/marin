@@ -200,6 +200,7 @@ def compile_stablehlo_row_normalization_backward_ffi(
     numerical_policy: NumericalPolicy,
     threads: int = 256,
     feature_groups_per_block: int = 1,
+    feature_outputs_per_group: int = 1,
     pipeline_schedule: AxisFoldPipelineSchedule = AxisFoldPipelineSchedule.SEPARATE_STAGES,
 ) -> StableHLORowNormalizationBackwardFfiCompilation:
     """Replace one natural row-statistic VJP with generated Folds.
@@ -223,12 +224,14 @@ def compile_stablehlo_row_normalization_backward_ffi(
             recovered,
             threads=threads,
             feature_groups_per_block=feature_groups_per_block,
+            feature_outputs_per_group=feature_outputs_per_group,
         )
     else:
         pipeline = _uncentered_second_moment_backward_pipeline(
             recovered,
             threads=threads,
             feature_groups_per_block=feature_groups_per_block,
+            feature_outputs_per_group=feature_outputs_per_group,
         )
     generated = generate_cuda_axis_fold_pipeline_ffi(
         pipeline,
@@ -258,6 +261,7 @@ def _uncentered_second_moment_backward_pipeline(
     *,
     threads: int,
     feature_groups_per_block: int,
+    feature_outputs_per_group: int,
 ) -> AxisFoldPipeline:
     source_dtype = recovered.source_dtype
     output_dtype = recovered.graph.value(recovered.input_cotangent).dtype
@@ -345,6 +349,7 @@ def _uncentered_second_moment_backward_pipeline(
         output_dtype=scale_output_dtype,
         threads=threads,
         groups_per_block=feature_groups_per_block,
+        outputs_per_group=feature_outputs_per_group,
         reassociation=AxisFoldReassociation.DETERMINISTIC_TREE,
     )
     return AxisFoldPipeline(
@@ -365,6 +370,7 @@ def _centered_second_moment_backward_pipeline(
     *,
     threads: int,
     feature_groups_per_block: int,
+    feature_outputs_per_group: int,
 ) -> AxisFoldPipeline:
     source_dtype = recovered.source_dtype
     output_dtype = recovered.graph.value(recovered.input_cotangent).dtype
@@ -475,6 +481,7 @@ def _centered_second_moment_backward_pipeline(
         output_dtype=scale_output_dtype,
         threads=threads,
         groups_per_block=feature_groups_per_block,
+        outputs_per_group=feature_outputs_per_group,
         reassociation=AxisFoldReassociation.DETERMINISTIC_TREE,
     )
     return AxisFoldPipeline(
