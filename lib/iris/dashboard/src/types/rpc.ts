@@ -226,6 +226,20 @@ export interface WorkerTaskAttempt {
   resources?: ResourceSpecProto
 }
 
+export interface VmInfo {
+  vmId: string
+  sliceId?: string
+  scaleGroup?: string
+  state: string
+  address?: string
+  zone?: string
+  createdAt?: ProtoTimestamp
+  workerId?: string
+  workerHealthy?: boolean
+  usability?: string
+  runningTaskCount?: number
+}
+
 export interface GetWorkerStatusResponse {
   vm?: VmInfo
   scaleGroup?: string
@@ -249,184 +263,6 @@ export interface EndpointInfo {
 
 export interface ListEndpointsResponse {
   endpoints: EndpointInfo[]
-}
-
-// -- Autoscaler --
-
-export interface VmInfo {
-  vmId: string
-  sliceId?: string
-  scaleGroup?: string
-  state: string
-  address?: string
-  zone?: string
-  createdAt?: ProtoTimestamp
-  stateChangedAt?: ProtoTimestamp
-  workerId?: string
-  workerHealthy?: boolean
-  /** WorkerUsability: "healthy" | "degraded" | "dead"; empty if not in the roster. */
-  usability?: string
-  initPhase?: string
-  initLogTail?: string
-  initError?: string
-  /** Number of tasks currently assigned to this VM by the scheduler. */
-  runningTaskCount?: number
-  labels?: Record<string, string>
-}
-
-export interface SliceInfo {
-  sliceId: string
-  scaleGroup?: string
-  createdAt?: ProtoTimestamp
-  vms?: VmInfo[]
-  errorMessage?: string
-  lastActive?: ProtoTimestamp
-  idle?: boolean
-  /**
-   * Authoritative slice lifecycle state from the autoscaler:
-   * "requesting" | "booting" | "initializing" | "ready" | "failed".
-   * Render this directly (via sliceLifecycle()); do NOT infer state from `vms`,
-   * which is empty until a slice's workers register — a booting slice has none.
-   */
-  state?: string
-  /** Count of DEGRADED (reachable-but-failing) hosts among `vms`, for detail display. */
-  degradedSlotCount?: number
-  /**
-   * Server-derived placement status of a ready slice: "available" | "in_use" |
-   * "idle" | "degraded". Empty for non-ready slices.
-   */
-  capacityStatus?: string
-}
-
-export interface ScaleGroupStatus {
-  name: string
-  backendId?: string
-  deviceType?: string
-  deviceVariant?: string
-  quotaPool?: string
-  allocationTier?: number
-  currentDemand?: number
-  peakDemand?: number
-  backoffUntil?: ProtoTimestamp
-  consecutiveFailures?: number
-  lastScaleUp?: ProtoTimestamp
-  lastScaleDown?: ProtoTimestamp
-  slices?: SliceInfo[]
-  sliceStateCounts?: Record<string, number>
-  availabilityStatus?: string
-  availabilityReason?: string
-  blockedUntil?: ProtoTimestamp
-  scaleUpCooldownUntil?: ProtoTimestamp
-  idleThresholdMs?: string
-}
-
-export interface AutoscalerAction {
-  timestamp?: ProtoTimestamp
-  actionType?: string
-  scaleGroup?: string
-  sliceId?: string
-  reason?: string
-  status?: string
-}
-
-export interface GroupRoutingStatus {
-  group: string
-  priority?: number
-  assigned?: number
-  launch?: number
-  decision?: string
-  reason?: string
-}
-
-export interface RoutingDecision {
-  groupToLaunch?: Record<string, number>
-  groupReasons?: Record<string, string>
-  unmetEntries?: UnmetDemand[]
-  groupStatuses?: GroupRoutingStatus[]
-}
-
-export interface UnmetDemand {
-  entry?: DemandEntryStatus
-  reason?: string
-}
-
-export interface DemandEntryStatus {
-  taskIds?: string[]
-  coscheduleGroupId?: string
-  deviceType?: string
-  deviceVariant?: string
-  preemptible?: boolean
-}
-
-export interface AutoscalerStatus {
-  groups?: ScaleGroupStatus[]
-  currentDemand?: Record<string, number>
-  lastEvaluation?: ProtoTimestamp
-  recentActions?: AutoscalerAction[]
-  lastRoutingDecision?: RoutingDecision
-}
-
-export interface GetAutoscalerStatusResponse {
-  status: AutoscalerStatus
-}
-
-// -- Kubernetes Cluster Status --
-
-export interface KubernetesPodStatus {
-  podName: string
-  taskId: string
-  phase: string
-  reason: string
-  message: string
-  lastTransition?: ProtoTimestamp
-  nodeName?: string
-}
-
-export interface NodePoolStatus {
-  name: string
-  instanceType: string
-  scaleGroup: string
-  targetNodes: number
-  currentNodes: number
-  queuedNodes: number
-  inProgressNodes: number
-  autoscaling: boolean
-  minNodes: number
-  maxNodes: number
-  capacity: string
-  quota: string
-}
-
-/**
- * One physical Kubernetes node. Identity, liveness, and allocatable capacity
- * come from the kubectl node sync. int64 fields serialize as strings.
- */
-export interface NodeStatus {
-  name: string
-  ready?: boolean
-  schedulable?: boolean
-  statusSummary?: string
-  instanceType?: string
-  region?: string
-  gpuCount?: number
-  gpuModel?: string
-  cpuMillicores?: string
-  memoryBytes?: string
-  diskBytes?: string
-  runningPods?: number
-  created?: string
-}
-
-export interface GetKubernetesClusterStatusResponse {
-  namespace?: string
-  totalNodes?: number
-  schedulableNodes?: number
-  allocatableCpu?: string
-  allocatableMemory?: string
-  podStatuses?: KubernetesPodStatus[]
-  providerVersion?: string
-  nodePools?: NodePoolStatus[]
-  nodes?: NodeStatus[]
 }
 
 // -- Users --
@@ -496,44 +332,6 @@ export interface GetCurrentUserResponse {
   displayName?: string
 }
 
-// -- Scheduler State --
-
-/** Aggregated pending-task count keyed by (band, user, job). */
-export interface PendingTaskBucket {
-  band: string
-  userId: string
-  jobId: string
-  count: number
-  backendId?: string
-}
-
-/** Aggregated running-task count keyed by (band, user, worker, job). */
-export interface RunningTaskBucket {
-  band: string
-  userId: string
-  workerId: string
-  jobId: string
-  count: number
-  backendId?: string
-}
-
-export interface SchedulerUserBudget {
-  userId: string
-  budgetLimit: string
-  budgetSpent: string
-  maxBand: string
-  effectiveBand: string
-  utilizationPercent: number
-}
-
-export interface GetSchedulerStateResponse {
-  userBudgets: SchedulerUserBudget[]
-  totalPending: number
-  totalRunning: number
-  pendingBuckets: PendingTaskBucket[]
-  runningBuckets: RunningTaskBucket[]
-}
-
 // -- Multi-backend --
 
 /** Lightweight backend descriptor from /auth/config `backends` array. */
@@ -541,88 +339,6 @@ export interface BackendInfo {
   id: string
   name: string
   capabilities: string[]
-}
-
-/** Worker-daemon fleet detail: the backend's autoscaler view plus DB-derived health counts. */
-export interface WorkerFleetDetail {
-  autoscaler?: AutoscalerStatus
-  healthyWorkerCount?: number
-  totalWorkerCount?: number
-}
-
-/** Backend-authored expanded status; exactly one variant is set per the backend's capability. */
-export interface BackendStatus {
-  kubernetes?: GetKubernetesClusterStatusResponse
-  worker?: WorkerFleetDetail
-}
-
-/** Free vs. total consumable capacity per resource token (lowercased
- *  device-variant → chips). map<string,int64> values JSON-encode as strings. */
-export interface ResourceAvailability {
-  version?: number
-  /** When the serving cluster computed the amounts, ms since epoch. int64 → string. */
-  observationEpochMs?: string
-  /** Free chips per variant, e.g. { h100: "24" }. */
-  amounts?: Record<string, string>
-  /** Total chips per variant over the same capacity; absent on a peer that
-   *  predates the field. */
-  totalAmounts?: Record<string, string>
-}
-
-/** Per-backend summary returned by the ListBackends RPC. */
-export interface BackendSummary {
-  backendId: string
-  name: string
-  kind: string
-  capabilities: string[]
-  /** Map of attribute key → list of string values. */
-  advertisedAttributes: Record<string, { values: string[] }>
-  scaleGroups: string[]
-  workerCount: number
-  pendingTaskCount: number
-  runningTaskCount: number
-  hasAutoscaler: boolean
-  /** availability_status string → pool count. */
-  capacityHealth: Record<string, number>
-  /** Expanded per-backend status rendered in the Backends tab detail panel. */
-  detail?: BackendStatus
-  /** Free/total capacity metric; unset when the backend does not supply it. */
-  availability?: ResourceAvailability
-}
-
-export interface UnroutableJob {
-  jobId: string
-  reason: string
-}
-
-export interface ListBackendsResponse {
-  backends: BackendSummary[]
-  unroutableJobCount: number
-  unroutableSample: UnroutableJob[]
-}
-
-// -- Federation peers --
-
-/** A federation peer returned by the ListPeers RPC: a remote Iris controller
- *  this cluster may hand whole jobs to, plus its forwarded backend topology. */
-export interface PeerSummary {
-  peerId: string
-  // proto3 JSON omits default-valued fields, so string/bool/repeated fields are
-  // absent on the wire when empty — hence optional here.
-  controllerAddress?: string
-  /** Last capability heartbeat succeeded. */
-  reachable?: boolean
-  /** Last successful contact, ms since epoch (0/absent if never contacted). int64 → string. */
-  lastContactMs?: string
-  activeFederatedJobs?: number
-  /** Aggregate spend across this peer's federated jobs, micros. int64 → string. */
-  aggregateSpendMicros?: string
-  /** The peer's own backends, forwarded from its ListBackends. */
-  backends?: BackendSummary[]
-}
-
-export interface ListPeersResponse {
-  peers: PeerSummary[]
 }
 
 // -- Typed ResourceService --
@@ -856,6 +572,12 @@ export interface ResourceSliceSummary {
   observedMemberCount: number
   observedAt?: ProtoTimestamp
   errorMessage?: string
+  createdAt?: ProtoTimestamp
+  lastActiveAt?: ProtoTimestamp
+  capacityState?: string
+  healthyMemberCount?: number
+  degradedMemberCount?: number
+  runningTaskCount?: number
 }
 
 export interface ResourceListSlicesResponse {
@@ -867,6 +589,11 @@ export interface ResourceSliceMember {
   providerNodeId: string
   node?: ResourceNodeIdentity
   observedAt?: ProtoTimestamp
+  workerId?: string
+  healthy?: boolean
+  usability?: string
+  runningTaskCount?: number
+  zone?: string
 }
 
 export interface ResourceSliceDetail {
@@ -877,6 +604,168 @@ export interface ResourceSliceDetail {
 
 export interface ResourceDescribeSliceResponse {
   slice?: ResourceSliceDetail
+}
+
+export interface ResourceCapacityAvailability {
+  version?: number
+  observedAt?: ProtoTimestamp
+  amounts?: Record<string, string>
+  totalAmounts?: Record<string, string>
+}
+
+export interface ResourceCapacitySlice {
+  summary: ResourceSliceSummary
+  members?: ResourceSliceMember[]
+}
+
+export interface ResourceCapacityScalingGroup {
+  name: string
+  backendId: string
+  deviceType?: string
+  deviceVariant?: string
+  quotaPool?: string
+  allocationTier?: number
+  region?: string
+  currentDemand?: number
+  peakDemand?: number
+  backoffUntil?: ProtoTimestamp
+  consecutiveFailures?: number
+  lastScaleUp?: ProtoTimestamp
+  lastScaleDown?: ProtoTimestamp
+  slices?: ResourceCapacitySlice[]
+  sliceStateCounts?: Record<string, number>
+  availabilityStatus?: string
+  availabilityReason?: string
+  blockedUntil?: ProtoTimestamp
+  scaleUpCooldownUntil?: ProtoTimestamp
+  idleThresholdMs?: string
+}
+
+export interface ResourceCapacityAction {
+  timestamp?: ProtoTimestamp
+  actionType?: string
+  scalingGroupId?: string
+  sliceId?: string
+  reason?: string
+  status?: string
+}
+
+export interface ResourceCapacityDemandEntry {
+  taskIds?: string[]
+  coscheduleGroupId?: string
+  deviceType?: string
+  deviceVariant?: string
+  preemptible?: boolean
+}
+
+export interface ResourceCapacityUnmetDemand {
+  entry?: ResourceCapacityDemandEntry
+  reason?: string
+}
+
+export interface ResourceCapacityGroupRouting {
+  scalingGroupId: string
+  priority?: number
+  assigned?: number
+  launch?: number
+  decision?: string
+  reason?: string
+}
+
+export interface ResourceCapacityRouting {
+  unmet?: ResourceCapacityUnmetDemand[]
+  groups?: ResourceCapacityGroupRouting[]
+}
+
+export interface ResourceCapacityKubernetesPool {
+  name: string
+  instanceType?: string
+  scalingGroupId?: string
+  targetNodes?: number
+  currentNodes?: number
+  queuedNodes?: number
+  inProgressNodes?: number
+  autoscaling?: boolean
+  minNodes?: number
+  maxNodes?: number
+  capacity?: string
+  quota?: string
+}
+
+export interface ResourceCapacityKubernetesStatus {
+  namespace?: string
+  totalNodes?: number
+  schedulableNodes?: number
+  allocatableCpu?: string
+  allocatableMemory?: string
+  providerVersion?: string
+  pools?: ResourceCapacityKubernetesPool[]
+}
+
+export interface ResourceCapacityBackend {
+  backendId: string
+  name: string
+  kind: string
+  capabilities?: string[]
+  advertisedAttributes?: Record<string, { values?: string[] }>
+  workerCount?: number
+  pendingTaskCount?: number
+  runningTaskCount?: number
+  hasAutoscaler?: boolean
+  capacityHealth?: Record<string, number>
+  availability?: ResourceCapacityAvailability
+  scalingGroups?: ResourceCapacityScalingGroup[]
+  recentActions?: ResourceCapacityAction[]
+  routing?: ResourceCapacityRouting
+  lastEvaluation?: ProtoTimestamp
+  healthyWorkerCount?: number
+  kubernetes?: ResourceCapacityKubernetesStatus
+}
+
+export interface ResourceCapacityPeerBackend {
+  backendId: string
+  name: string
+  kind: string
+  capabilities?: string[]
+  advertisedAttributes?: Record<string, { values?: string[] }>
+  scalingGroups?: string[]
+  workerCount?: number
+  pendingTaskCount?: number
+  runningTaskCount?: number
+  hasAutoscaler?: boolean
+  capacityHealth?: Record<string, number>
+  availability?: ResourceCapacityAvailability
+}
+
+export interface ResourceCapacityPeer {
+  peerId: string
+  controllerAddress?: string
+  reachable?: boolean
+  lastContactMs?: string
+  activeFederatedJobs?: number
+  backends?: ResourceCapacityPeerBackend[]
+}
+
+export interface ResourceCapacityPlacement {
+  backendId: string
+  workerId: string
+  jobId: string
+  userId: string
+  taskCount: number
+}
+
+export interface ResourceCapacityUnroutableJob {
+  jobId: string
+  reason: string
+}
+
+export interface ResourceGetCapacityStatusResponse {
+  backends?: ResourceCapacityBackend[]
+  peers?: ResourceCapacityPeer[]
+  runningPlacements?: ResourceCapacityPlacement[]
+  unroutableJobCount?: number
+  unroutableJobs?: ResourceCapacityUnroutableJob[]
+  sourceStatuses?: ResourceSourceStatus[]
 }
 
 export interface ResourceEndpointSummary {

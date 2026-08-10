@@ -45,6 +45,7 @@ from iris.resources.node import (
 )
 from iris.resources.slice import (
     MembershipState,
+    SliceCapacityState,
     SliceDetail,
     SliceLifecycle,
     SliceMember,
@@ -93,6 +94,13 @@ _SLICE_LIFECYCLE_FROM_PROTO = {
 _MEMBERSHIP_STATE_FROM_PROTO = {
     resource_pb2.MEMBERSHIP_STATE_UNKNOWN: MembershipState.UNKNOWN,
     resource_pb2.MEMBERSHIP_STATE_OBSERVED: MembershipState.OBSERVED,
+}
+_SLICE_CAPACITY_STATE_FROM_PROTO = {
+    resource_pb2.SLICE_CAPACITY_STATE_UNKNOWN: SliceCapacityState.UNKNOWN,
+    resource_pb2.SLICE_CAPACITY_STATE_AVAILABLE: SliceCapacityState.AVAILABLE,
+    resource_pb2.SLICE_CAPACITY_STATE_IN_USE: SliceCapacityState.IN_USE,
+    resource_pb2.SLICE_CAPACITY_STATE_IDLE: SliceCapacityState.IDLE,
+    resource_pb2.SLICE_CAPACITY_STATE_DEGRADED: SliceCapacityState.DEGRADED,
 }
 _ENDPOINT_ACCESS_FROM_PROTO = {
     resource_pb2.ENDPOINT_ACCESS_PRIVATE: EndpointAccess.PRIVATE,
@@ -425,6 +433,7 @@ def _slice_summary_from_proto(value: resource_pb2.SliceSummary) -> SliceSummary:
     try:
         lifecycle = _SLICE_LIFECYCLE_FROM_PROTO[value.lifecycle]
         membership = _MEMBERSHIP_STATE_FROM_PROTO[value.membership_state]
+        capacity_state = _SLICE_CAPACITY_STATE_FROM_PROTO[value.capacity_state]
     except KeyError as exc:
         raise ValueError("slice response contains an unspecified state") from exc
     return SliceSummary(
@@ -435,6 +444,12 @@ def _slice_summary_from_proto(value: resource_pb2.SliceSummary) -> SliceSummary:
         observed_member_count=value.observed_member_count,
         observed_at=timestamp_from_proto(value.observed_at) if value.HasField("observed_at") else None,
         error_message=value.error_message,
+        created_at=timestamp_from_proto(value.created_at) if value.HasField("created_at") else None,
+        last_active_at=timestamp_from_proto(value.last_active_at) if value.HasField("last_active_at") else None,
+        capacity_state=capacity_state,
+        healthy_member_count=value.healthy_member_count,
+        degraded_member_count=value.degraded_member_count,
+        running_task_count=value.running_task_count,
     )
 
 
@@ -450,6 +465,11 @@ def slice_detail_from_proto(value: resource_pb2.SliceDetail) -> SliceDetail:
                 provider_node_id=item.provider_node_id,
                 node=_node_identity_from_proto(item.node) if item.HasField("node") else None,
                 observed_at=timestamp_from_proto(item.observed_at),
+                worker_id=item.worker_id,
+                healthy=item.healthy,
+                usability=item.usability,
+                running_task_count=item.running_task_count,
+                zone=item.zone,
             )
             for item in value.members
         ),

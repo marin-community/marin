@@ -56,6 +56,9 @@ class ResourceService(Protocol):
     async def describe_slice(self, request: resource__pb2.DescribeSliceRequest, ctx: RequestContext) -> resource__pb2.DescribeSliceResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def get_capacity_status(self, request: resource__pb2.GetCapacityStatusRequest, ctx: RequestContext) -> resource__pb2.GetCapacityStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def list_endpoints(self, request: resource__pb2.ListEndpointsRequest, ctx: RequestContext) -> resource__pb2.ListEndpointsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -227,6 +230,16 @@ class ResourceServiceASGIApplication(ConnectASGIApplication[ResourceService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.describe_slice,
+                ),
+                "/iris.resource.ResourceService/GetCapacityStatus": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetCapacityStatus",
+                        service_name="iris.resource.ResourceService",
+                        input=resource__pb2.GetCapacityStatusRequest,
+                        output=resource__pb2.GetCapacityStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_capacity_status,
                 ),
                 "/iris.resource.ResourceService/ListEndpoints": Endpoint.unary(
                     method=MethodInfo(
@@ -621,6 +634,26 @@ class ResourceServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def get_capacity_status(
+        self,
+        request: resource__pb2.GetCapacityStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> resource__pb2.GetCapacityStatusResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetCapacityStatus",
+                service_name="iris.resource.ResourceService",
+                input=resource__pb2.GetCapacityStatusRequest,
+                output=resource__pb2.GetCapacityStatusResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
     async def list_endpoints(
         self,
         request: resource__pb2.ListEndpointsRequest,
@@ -889,6 +922,8 @@ class ResourceServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def describe_slice(self, request: resource__pb2.DescribeSliceRequest, ctx: RequestContext) -> resource__pb2.DescribeSliceResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_capacity_status(self, request: resource__pb2.GetCapacityStatusRequest, ctx: RequestContext) -> resource__pb2.GetCapacityStatusResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_endpoints(self, request: resource__pb2.ListEndpointsRequest, ctx: RequestContext) -> resource__pb2.ListEndpointsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def describe_endpoint(self, request: resource__pb2.DescribeEndpointRequest, ctx: RequestContext) -> resource__pb2.DescribeEndpointResponse:
@@ -1048,6 +1083,16 @@ class ResourceServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.describe_slice,
+                ),
+                "/iris.resource.ResourceService/GetCapacityStatus": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetCapacityStatus",
+                        service_name="iris.resource.ResourceService",
+                        input=resource__pb2.GetCapacityStatusRequest,
+                        output=resource__pb2.GetCapacityStatusResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_capacity_status,
                 ),
                 "/iris.resource.ResourceService/ListEndpoints": EndpointSync.unary(
                     method=MethodInfo(
@@ -1436,6 +1481,26 @@ class ResourceServiceClientSync(ConnectClientSync):
                 service_name="iris.resource.ResourceService",
                 input=resource__pb2.DescribeSliceRequest,
                 output=resource__pb2.DescribeSliceResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_capacity_status(
+        self,
+        request: resource__pb2.GetCapacityStatusRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> resource__pb2.GetCapacityStatusResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetCapacityStatus",
+                service_name="iris.resource.ResourceService",
+                input=resource__pb2.GetCapacityStatusRequest,
+                output=resource__pb2.GetCapacityStatusResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

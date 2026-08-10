@@ -4,9 +4,18 @@
  * Proto enums serialize as strings like "JOB_STATE_RUNNING" or "TASK_STATE_PENDING".
  * The dashboard normalizes these to lowercase names ("running", "pending") via stateToName().
  */
-import type { SliceStatus } from '@/utils/slices'
-
 // -- Normalized state values (lowercase, prefix-stripped) --
+
+export type SliceStatus =
+  | 'requesting'
+  | 'booting'
+  | 'initializing'
+  | 'ready'
+  | 'failed'
+  | 'available'
+  | 'in_use'
+  | 'idle'
+  | 'degraded'
 
 export type JobState =
   | 'unspecified'

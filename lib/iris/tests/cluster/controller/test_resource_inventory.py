@@ -9,8 +9,10 @@ from iris.backends.protocol import BackendCapability
 from iris.backends.status import (
     AutoscalerStatus,
     BackendStatus,
+    GroupRoutingStatus,
     KubernetesStatus,
     NodeStatus,
+    RoutingStatus,
     ScaleGroupStatus,
     SliceStatus,
     VmStatus,
@@ -32,8 +34,10 @@ from iris.resources.endpoint import EndpointQuery
 from iris.resources.errors import ResourceNotFound
 from iris.resources.identity import NodeLocator, ResourceKind, SliceLocator
 from iris.resources.node import NodeHealth, NodeQuery
-from iris.resources.slice import SliceLifecycle, SliceQuery
+from iris.resources.slice import SliceCapacityState, SliceLifecycle, SliceQuery
 from iris.resources.source import SourceState
+from iris.rpc import resource_pb2
+from iris.rpc.resource_service import ResourceServiceImpl
 from rigging.timing import Timestamp
 from sqlalchemy import event
 
@@ -42,7 +46,11 @@ NOW = Timestamp.from_ms(1_000)
 
 def _kubernetes_backend() -> Mock:
     backend = Mock()
+    backend.name = "kubernetes"
+    backend.autoscaler = None
     backend.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
+    backend.advertised_attributes.return_value = {"region": {"us-central1"}}
+    backend.resource_capacity.return_value = None
     backend.status.return_value = BackendStatus(
         kubernetes=KubernetesStatus(
             nodes=(
@@ -76,20 +84,39 @@ def _kubernetes_backend() -> Mock:
 
 def _autoscaling_backend() -> Mock:
     backend = Mock()
+    backend.name = "worker fleet"
+    backend.autoscaler = Mock()
     backend.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-    backend.status.return_value = BackendStatus(worker=WorkerFleetStatus())
-    backend.autoscaler_status.return_value = AutoscalerStatus(
+    backend.advertised_attributes.return_value = {"device_variant": {"h100"}, "region": {"us-central1"}}
+    backend.resource_capacity.return_value = None
+    autoscaler = AutoscalerStatus(
         last_evaluation=NOW,
         groups=(
             ScaleGroupStatus(
                 name="pool-a",
+                device_type="gpu",
+                device_variant="h100",
+                region="us-central1",
+                current_demand=3,
                 slices=(
                     SliceStatus(
                         slice_id="slice-a",
                         scale_group="pool-a",
                         state="ready",
                         created_at=Timestamp.from_ms(10),
-                        vms=(VmStatus(vm_id="vm-a", worker_id="node-a"),),
+                        last_active=Timestamp.from_ms(900),
+                        capacity_status="in_use",
+                        degraded_slot_count=1,
+                        vms=(
+                            VmStatus(
+                                vm_id="vm-a",
+                                worker_id="node-a",
+                                worker_healthy=True,
+                                usability="healthy",
+                                running_task_count=2,
+                                zone="us-central1-a",
+                            ),
+                        ),
                     ),
                     SliceStatus(
                         slice_id="slice-b",
@@ -112,13 +139,32 @@ def _autoscaling_backend() -> Mock:
                 ),
             ),
         ),
+        last_routing_decision=RoutingStatus(
+            group_statuses=(
+                GroupRoutingStatus(
+                    group="pool-a",
+                    assigned=2,
+                    launch=1,
+                    decision="launch",
+                    reason="one more slice required",
+                ),
+            )
+        ),
     )
+    backend.status.return_value = BackendStatus(
+        worker=WorkerFleetStatus(autoscaler=autoscaler, healthy_worker_count=1, total_worker_count=1)
+    )
+    backend.autoscaler_status.return_value = autoscaler
     return backend
 
 
 def _unavailable_backend() -> Mock:
     backend = Mock()
+    backend.name = "unavailable"
+    backend.autoscaler = Mock()
     backend.capabilities = frozenset({BackendCapability.CLUSTER_VIEW, BackendCapability.IRIS_AUTOSCALER})
+    backend.advertised_attributes.return_value = {}
+    backend.resource_capacity.return_value = None
     backend.status.side_effect = ConnectionError("provider offline")
     backend.autoscaler_status.side_effect = ConnectionError("provider offline")
     return backend
@@ -129,6 +175,9 @@ def resources(tmp_path: Path):
     db = ControllerDB(tmp_path / "db")
     runtime = Mock()
     runtime.all_liveness.return_value = {}
+    runtime.backend_id_for_scale_group.return_value = "rpc"
+    runtime.federation.peer_observations.return_value = ()
+    runtime.last_unroutable_jobs = {}
     facade = Controller(
         cluster_id="cluster-a",
         db=db,
@@ -367,9 +416,14 @@ def test_slices_filter_page_and_describe_observed_membership(resources: Controll
     identity = first.items[0].identity
     detail = resources.describe_slice(SliceLocator(identity.key, identity.backend_id, identity.slice_uid))
     assert detail.summary.identity == identity
+    assert detail.summary.capacity_state is SliceCapacityState.IN_USE
+    assert detail.summary.last_active_at == Timestamp.from_ms(900)
+    assert (detail.summary.healthy_member_count, detail.summary.degraded_member_count) == (1, 1)
+    assert detail.summary.running_task_count == 2
     assert [
         (member.provider_node_id, member.node.key.resource_id if member.node else None) for member in detail.members
-    ] == [("vm-a", None)]
+    ] == [("vm-a", "node-a")]
+    assert (detail.members[0].worker_id, detail.members[0].zone) == ("node-a", "us-central1-a")
 
     with pytest.raises(ResourceNotFound):
         resources.describe_slice(SliceLocator(identity.key, identity.backend_id, "replacement-slice-uid"))
@@ -380,3 +434,21 @@ def test_slices_filter_page_and_describe_observed_membership(resources: Controll
         "backend:k8s": SourceState.UNSUPPORTED,
         "backend:rpc": SourceState.AVAILABLE,
     }
+
+
+def test_capacity_resource_carries_backend_authored_fleet_and_routing_facts(resources: Controller) -> None:
+    capacity = ResourceServiceImpl(resources).get_capacity_status(resource_pb2.GetCapacityStatusRequest(), None)
+    backend = next(item for item in capacity.backends if item.backend_id == "rpc")
+    group = next(item for item in backend.scaling_groups if item.name == "pool-a")
+    capacity_slice = next(item for item in group.slices if item.summary.identity.key.resource_id == "slice-a")
+
+    assert (backend.kind, backend.healthy_worker_count, group.device_variant, group.region) == (
+        "worker-daemon",
+        1,
+        "h100",
+        "us-central1",
+    )
+    assert (group.current_demand, backend.routing.groups[0].launch) == (3, 1)
+    assert capacity_slice.summary.running_task_count == 2
+    assert capacity_slice.summary.capacity_state == resource_pb2.SLICE_CAPACITY_STATE_IN_USE
+    assert capacity_slice.members[0].node.key.resource_id == "node-a"

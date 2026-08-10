@@ -47,7 +47,15 @@ def _manager(*, keypair: Ed25519Keypair | None = None) -> JwtTokenManager:
 
 @pytest.mark.parametrize(
     "method",
-    ["ListJobs", "GetJobStatus", "BatchDescribeTasks", "BatchDescribeEndpoints", "ListWorkers", "ListPeers"],
+    [
+        "ListJobs",
+        "GetJobStatus",
+        "BatchDescribeTasks",
+        "BatchDescribeEndpoints",
+        "ListWorkers",
+        "ListPeers",
+        "GetCapacityStatus",
+    ],
 )
 def test_authorize_method_allows_dashboard_reads(method):
     # Does not raise: read methods are the dashboard role's contract.

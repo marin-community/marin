@@ -29,12 +29,10 @@ const IAP_REAUTH_RELOAD_WINDOW_MS = 15_000
 // Set once we schedule a reload so concurrent polls cannot trigger several reloads.
 let reloadingForAuth = false
 
-// The Backends tab subsumes provider-specific cluster views.
 const TABS: Tab[] = [
   { key: 'jobs', label: 'Jobs', to: '/' },
   { key: 'nodes', label: 'Nodes', to: '/nodes' },
-  { key: 'capacity', label: 'Capacity & Scheduling', to: '/capacity' },
-  { key: 'backends', label: 'Backends', to: '/backends' },
+  { key: 'capacity', label: 'Capacity', to: '/capacity' },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
   { key: 'logs', label: 'Logs', to: '/logs' },
   { key: 'account', label: 'Account', to: '/account' },

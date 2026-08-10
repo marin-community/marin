@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from rigging.timing import Timestamp
 
 from iris.backends.protocol import BackendCapability, ProviderError, TaskBackend
+from iris.backends.status import SliceStatus
 from iris.cluster.controller.dependencies import ResourceDependencies
 from iris.cluster.controller.pagination import (
     _decode_page_token,
@@ -27,6 +28,7 @@ from iris.resources.errors import (
     ResourceNotFound,
 )
 from iris.resources.identity import (
+    NodeIdentity,
     ResourceKey,
     ResourceKind,
     SliceIdentity,
@@ -34,6 +36,7 @@ from iris.resources.identity import (
 )
 from iris.resources.slice import (
     MembershipState,
+    SliceCapacityState,
     SliceDetail,
     SliceLifecycle,
     SliceMember,
@@ -62,8 +65,21 @@ class _ProviderSliceObservation:
     scaling_group_id: str
     lifecycle_state: str
     created_at: Timestamp | None
-    provider_node_ids: tuple[str, ...]
+    members: tuple["_ProviderMemberObservation", ...]
     error_message: str
+    last_active_at: Timestamp | None
+    capacity_state: str
+    degraded_member_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderMemberObservation:
+    provider_node_id: str
+    worker_id: str
+    healthy: bool
+    usability: str
+    running_task_count: int
+    zone: str
 
 
 def _provider_slice_observations(
@@ -76,8 +92,21 @@ def _provider_slice_observations(
             scaling_group_id=group.name,
             lifecycle_state=item.state,
             created_at=item.created_at,
-            provider_node_ids=tuple(vm.vm_id for vm in item.vms),
+            members=tuple(
+                _ProviderMemberObservation(
+                    provider_node_id=vm.vm_id,
+                    worker_id=vm.worker_id,
+                    healthy=vm.worker_healthy,
+                    usability=vm.usability,
+                    running_task_count=vm.running_task_count,
+                    zone=vm.zone,
+                )
+                for vm in item.vms
+            ),
             error_message=item.error_message,
+            last_active_at=item.last_active,
+            capacity_state=item.capacity_status,
+            degraded_member_count=item.degraded_slot_count,
         )
         for group in status.groups
         for item in group.slices
@@ -201,18 +230,43 @@ class SliceResources:
                         scaling_group_id=item.scaling_group_id,
                         lifecycle=lifecycle,
                         membership_state=membership_state,
-                        observed_member_count=len(item.provider_node_ids),
+                        observed_member_count=len(item.members),
                         observed_at=observed_at,
                         error_message=item.error_message,
+                        created_at=item.created_at,
+                        last_active_at=item.last_active_at,
+                        capacity_state=_slice_capacity_state(item.capacity_state),
+                        healthy_member_count=sum(
+                            member.usability == "healthy" or member.healthy for member in item.members
+                        ),
+                        degraded_member_count=item.degraded_member_count,
+                        running_task_count=sum(member.running_task_count for member in item.members),
                     )
                 )
                 members[(backend_id, slice_uid)] = tuple(
                     SliceMember(
-                        provider_node_id=provider_node_id,
-                        node=None,
+                        provider_node_id=member.provider_node_id,
+                        node=(
+                            NodeIdentity(
+                                ResourceKey(
+                                    self._dependencies.cluster_id,
+                                    ResourceKind.NODE,
+                                    member.worker_id,
+                                ),
+                                backend_id,
+                                member.worker_id,
+                            )
+                            if member.worker_id
+                            else None
+                        ),
                         observed_at=observed_at,
+                        worker_id=member.worker_id,
+                        healthy=member.healthy,
+                        usability=member.usability,
+                        running_task_count=member.running_task_count,
+                        zone=member.zone,
                     )
-                    for provider_node_id in item.provider_node_ids
+                    for member in item.members
                 )
         return _SliceSnapshot(tuple(slices), members, tuple(statuses))
 
@@ -225,3 +279,71 @@ def _slice_lifecycle(value: str) -> SliceLifecycle:
     if value in {"deleting", "stopping", "terminated"}:
         return SliceLifecycle.DELETING
     return SliceLifecycle.CREATING
+
+
+def _slice_capacity_state(value: str) -> SliceCapacityState:
+    try:
+        return SliceCapacityState(value)
+    except ValueError:
+        return SliceCapacityState.UNKNOWN
+
+
+def slice_detail_from_status(
+    *,
+    cluster_id: str,
+    backend_id: str,
+    scaling_group_id: str,
+    value: SliceStatus,
+    observed_at: Timestamp,
+) -> SliceDetail:
+    """Convert one backend-authored Slice observation into its resource form."""
+    slice_uid = _opaque_uid(
+        f"rpc:{backend_id}:{value.slice_id}:{value.created_at.epoch_ms() if value.created_at else 0}"
+    )
+    lifecycle = _slice_lifecycle(value.state)
+    members = tuple(
+        SliceMember(
+            provider_node_id=vm.vm_id,
+            node=(
+                NodeIdentity(
+                    ResourceKey(cluster_id, ResourceKind.NODE, vm.worker_id),
+                    backend_id,
+                    vm.worker_id,
+                )
+                if vm.worker_id
+                else None
+            ),
+            observed_at=observed_at,
+            worker_id=vm.worker_id,
+            healthy=vm.worker_healthy,
+            usability=vm.usability,
+            running_task_count=vm.running_task_count,
+            zone=vm.zone,
+        )
+        for vm in value.vms
+    )
+    return SliceDetail(
+        summary=SliceSummary(
+            identity=SliceIdentity(
+                ResourceKey(cluster_id, ResourceKind.SLICE, value.slice_id),
+                backend_id,
+                slice_uid,
+            ),
+            scaling_group_id=scaling_group_id,
+            lifecycle=lifecycle,
+            membership_state=(
+                MembershipState.OBSERVED if lifecycle is SliceLifecycle.READY else MembershipState.UNKNOWN
+            ),
+            observed_member_count=len(members),
+            observed_at=observed_at,
+            error_message=value.error_message,
+            created_at=value.created_at,
+            last_active_at=value.last_active,
+            capacity_state=_slice_capacity_state(value.capacity_status),
+            healthy_member_count=sum(member.usability == "healthy" or member.healthy for member in members),
+            degraded_member_count=value.degraded_slot_count,
+            running_task_count=sum(member.running_task_count for member in members),
+        ),
+        members=members,
+        source_statuses=(),
+    )

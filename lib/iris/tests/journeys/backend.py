@@ -81,6 +81,7 @@ class ScriptedTaskBackend:
         self._status_failures = 0
         self.closed = False
         self.advertised: dict[str, set[str]] = {"region": {"us-central1"}}
+        self._reported_status = BackendStatus(kubernetes=KubernetesStatus())
 
     @property
     def has_pending_observations(self) -> bool:
@@ -117,9 +118,11 @@ class ScriptedTaskBackend:
         if self._status_failures:
             self._status_failures -= 1
             raise ConnectionError(f"backend {self.backend_id} resource source is unavailable")
-        return BackendStatus(kubernetes=KubernetesStatus())
+        return self._reported_status
 
     def autoscaler_status(self) -> AutoscalerStatus:
+        if self._reported_status.worker is not None:
+            return self._reported_status.worker.autoscaler
         return AutoscalerStatus()
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:

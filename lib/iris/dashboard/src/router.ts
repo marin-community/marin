@@ -7,7 +7,7 @@ const routes = [
   },
   {
     path: '/backends',
-    component: () => import('./components/controller/BackendsTab.vue'),
+    redirect: '/capacity',
   },
   {
     path: '/nodes',

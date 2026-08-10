@@ -98,6 +98,7 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         "DescribeNode",
         "ListSlices",
         "DescribeSlice",
+        "GetCapacityStatus",
         "DescribeEndpoint",
         "BatchDescribeEndpoints",
         # Federation (read-only peer observation)

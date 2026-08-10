@@ -45,6 +45,9 @@ class ResourceRuntime(Protocol):
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
+    @property
+    def last_unroutable_jobs(self) -> dict[str, str]: ...
+
 
 class EndpointRegistry(Protocol):
     """Native endpoint registry capabilities consumed by resource operations."""

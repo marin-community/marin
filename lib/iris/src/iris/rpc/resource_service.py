@@ -13,6 +13,14 @@ from iris.cluster.federation.protocol import PeerCallError
 from iris.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
 from iris.resources.activity import ActivityEntry, ActivityQuery
 from iris.resources.attempt import AttemptSummary
+from iris.resources.capacity import (
+    CapacityBackend,
+    CapacityKubernetesStatus,
+    CapacityPeerBackend,
+    CapacityRouting,
+    CapacityScalingGroup,
+    ResourceAvailability,
+)
 from iris.resources.endpoint import EndpointAccess, EndpointDetail, EndpointQuery, EndpointSummary
 from iris.resources.errors import (
     ActionIdempotencyConflict,
@@ -44,7 +52,14 @@ from iris.resources.job import JobQuery, JobSummary
 from iris.resources.log import LogEntry, LogLevel, LogQuery
 from iris.resources.names import JobName
 from iris.resources.node import NodeAttribute, NodeAttributeKind, NodeHealth, NodeQuery, NodeSummary
-from iris.resources.slice import MembershipState, SliceLifecycle, SliceMember, SliceQuery, SliceSummary
+from iris.resources.slice import (
+    MembershipState,
+    SliceCapacityState,
+    SliceLifecycle,
+    SliceMember,
+    SliceQuery,
+    SliceSummary,
+)
 from iris.resources.source import Freshness, ResourceSourceStatus, SourceState
 from iris.resources.state import JobState, TaskState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
@@ -117,6 +132,13 @@ _SLICE_LIFECYCLE_TO_PROTO = {
 _MEMBERSHIP_STATE_TO_PROTO = {
     MembershipState.UNKNOWN: resource_pb2.MEMBERSHIP_STATE_UNKNOWN,
     MembershipState.OBSERVED: resource_pb2.MEMBERSHIP_STATE_OBSERVED,
+}
+_SLICE_CAPACITY_STATE_TO_PROTO = {
+    SliceCapacityState.UNKNOWN: resource_pb2.SLICE_CAPACITY_STATE_UNKNOWN,
+    SliceCapacityState.AVAILABLE: resource_pb2.SLICE_CAPACITY_STATE_AVAILABLE,
+    SliceCapacityState.IN_USE: resource_pb2.SLICE_CAPACITY_STATE_IN_USE,
+    SliceCapacityState.IDLE: resource_pb2.SLICE_CAPACITY_STATE_IDLE,
+    SliceCapacityState.DEGRADED: resource_pb2.SLICE_CAPACITY_STATE_DEGRADED,
 }
 _DEFAULT_JOB_PAGE_SIZE = 50
 _DEFAULT_RESOURCE_PAGE_SIZE = 100
@@ -229,9 +251,17 @@ def _slice_summary_to_proto(value: SliceSummary) -> resource_pb2.SliceSummary:
         membership_state=_MEMBERSHIP_STATE_TO_PROTO[value.membership_state],
         observed_member_count=value.observed_member_count,
         error_message=value.error_message,
+        capacity_state=_SLICE_CAPACITY_STATE_TO_PROTO[value.capacity_state],
+        healthy_member_count=value.healthy_member_count,
+        degraded_member_count=value.degraded_member_count,
+        running_task_count=value.running_task_count,
     )
     if value.observed_at is not None:
         result.observed_at.CopyFrom(timestamp_to_proto(value.observed_at))
+    if value.created_at is not None:
+        result.created_at.CopyFrom(timestamp_to_proto(value.created_at))
+    if value.last_active_at is not None:
+        result.last_active_at.CopyFrom(timestamp_to_proto(value.last_active_at))
     return result
 
 
@@ -239,9 +269,204 @@ def _slice_member_to_proto(value: SliceMember) -> resource_pb2.SliceMember:
     result = resource_pb2.SliceMember(
         provider_node_id=value.provider_node_id,
         observed_at=timestamp_to_proto(value.observed_at),
+        worker_id=value.worker_id,
+        healthy=value.healthy,
+        usability=value.usability,
+        running_task_count=value.running_task_count,
+        zone=value.zone,
     )
     if value.node is not None:
         result.node.CopyFrom(_node_identity_to_proto(value.node))
+    return result
+
+
+def _capacity_availability_to_proto(value: ResourceAvailability) -> resource_pb2.CapacityResourceAvailability:
+    return resource_pb2.CapacityResourceAvailability(
+        version=value.version,
+        observed_at=timestamp_to_proto(value.observed_at),
+        amounts=value.amounts,
+        total_amounts=value.total_amounts,
+    )
+
+
+def _capacity_scaling_group_to_proto(value: CapacityScalingGroup) -> resource_pb2.CapacityScalingGroup:
+    result = resource_pb2.CapacityScalingGroup(
+        name=value.name,
+        backend_id=value.backend_id,
+        device_type=value.device_type,
+        device_variant=value.device_variant,
+        quota_pool=value.quota_pool,
+        allocation_tier=value.allocation_tier,
+        region=value.region,
+        current_demand=value.current_demand,
+        peak_demand=value.peak_demand,
+        consecutive_failures=value.consecutive_failures,
+        slices=[
+            resource_pb2.CapacitySlice(
+                summary=_slice_summary_to_proto(item.summary),
+                members=[_slice_member_to_proto(member) for member in item.members],
+            )
+            for item in value.slices
+        ],
+        slice_state_counts=value.slice_state_counts,
+        availability_status=value.availability_status,
+        availability_reason=value.availability_reason,
+        idle_threshold_ms=value.idle_threshold_ms,
+    )
+    for field, timestamp in (
+        (result.backoff_until, value.backoff_until),
+        (result.last_scale_up, value.last_scale_up),
+        (result.last_scale_down, value.last_scale_down),
+        (result.blocked_until, value.blocked_until),
+        (result.scale_up_cooldown_until, value.scale_up_cooldown_until),
+    ):
+        if timestamp is not None:
+            field.CopyFrom(timestamp_to_proto(timestamp))
+    return result
+
+
+def _capacity_routing_to_proto(value: CapacityRouting) -> resource_pb2.CapacityRouting:
+    return resource_pb2.CapacityRouting(
+        unmet=[
+            resource_pb2.CapacityUnmetDemand(
+                entry=resource_pb2.CapacityDemandEntry(
+                    task_ids=item.entry.task_ids,
+                    coschedule_group_id=item.entry.coschedule_group_id,
+                    device_type=item.entry.device_type,
+                    device_variant=item.entry.device_variant,
+                    preemptible=item.entry.preemptible,
+                ),
+                reason=item.reason,
+            )
+            for item in value.unmet
+        ],
+        groups=[
+            resource_pb2.CapacityGroupRouting(
+                scaling_group_id=item.scaling_group_id,
+                priority=item.priority,
+                assigned=item.assigned,
+                launch=item.launch,
+                decision=item.decision,
+                reason=item.reason,
+            )
+            for item in value.groups
+        ],
+    )
+
+
+def _capacity_kubernetes_to_proto(value: CapacityKubernetesStatus) -> resource_pb2.CapacityKubernetesStatus:
+    return resource_pb2.CapacityKubernetesStatus(
+        namespace=value.namespace,
+        total_nodes=value.total_nodes,
+        schedulable_nodes=value.schedulable_nodes,
+        allocatable_cpu=value.allocatable_cpu,
+        allocatable_memory=value.allocatable_memory,
+        pods=[
+            resource_pb2.CapacityKubernetesPod(
+                pod_name=item.pod_name,
+                task_id=item.task_id,
+                phase=item.phase,
+                reason=item.reason,
+                message=item.message,
+                last_transition=(timestamp_to_proto(item.last_transition) if item.last_transition is not None else None),
+                node_name=item.node_name,
+            )
+            for item in value.pods
+        ],
+        provider_version=value.provider_version,
+        pools=[
+            resource_pb2.CapacityKubernetesPool(
+                name=item.name,
+                instance_type=item.instance_type,
+                scaling_group_id=item.scaling_group_id,
+                target_nodes=item.target_nodes,
+                current_nodes=item.current_nodes,
+                queued_nodes=item.queued_nodes,
+                in_progress_nodes=item.in_progress_nodes,
+                autoscaling=item.autoscaling,
+                min_nodes=item.min_nodes,
+                max_nodes=item.max_nodes,
+                capacity=item.capacity,
+                quota=item.quota,
+            )
+            for item in value.pools
+        ],
+        nodes=[
+            resource_pb2.CapacityKubernetesNode(
+                name=item.name,
+                ready=item.ready,
+                schedulable=item.schedulable,
+                status_summary=item.status_summary,
+                instance_type=item.instance_type,
+                region=item.region,
+                accelerator_count=item.accelerator_count,
+                accelerator_variant=item.accelerator_variant,
+                cpu_millicores=item.cpu_millicores,
+                memory_bytes=item.memory_bytes,
+                disk_bytes=item.disk_bytes,
+                running_pods=item.running_pods,
+                created=item.created,
+            )
+            for item in value.nodes
+        ],
+    )
+
+
+def _capacity_backend_to_proto(value: CapacityBackend) -> resource_pb2.CapacityBackend:
+    result = resource_pb2.CapacityBackend(
+        backend_id=value.backend_id,
+        name=value.name,
+        kind=value.kind,
+        capabilities=value.capabilities,
+        worker_count=value.worker_count,
+        pending_task_count=value.pending_task_count,
+        running_task_count=value.running_task_count,
+        has_autoscaler=value.has_autoscaler,
+        capacity_health=value.capacity_health,
+        scaling_groups=[_capacity_scaling_group_to_proto(item) for item in value.scaling_groups],
+        recent_actions=[
+            resource_pb2.CapacityAction(
+                timestamp=(timestamp_to_proto(item.timestamp) if item.timestamp is not None else None),
+                action_type=item.action_type,
+                scaling_group_id=item.scaling_group_id,
+                slice_id=item.slice_id,
+                reason=item.reason,
+                status=item.status,
+            )
+            for item in value.recent_actions
+        ],
+        healthy_worker_count=value.healthy_worker_count,
+    )
+    for key, values in value.advertised_attributes.items():
+        result.advertised_attributes[key].values.extend(values)
+    if value.availability is not None:
+        result.availability.CopyFrom(_capacity_availability_to_proto(value.availability))
+    if value.routing is not None:
+        result.routing.CopyFrom(_capacity_routing_to_proto(value.routing))
+    if value.last_evaluation is not None:
+        result.last_evaluation.CopyFrom(timestamp_to_proto(value.last_evaluation))
+    if value.kubernetes is not None:
+        result.kubernetes.CopyFrom(_capacity_kubernetes_to_proto(value.kubernetes))
+    return result
+
+
+def _capacity_peer_backend_to_proto(value: CapacityPeerBackend) -> resource_pb2.CapacityPeerBackend:
+    result = resource_pb2.CapacityPeerBackend(
+        backend_id=value.backend_id,
+        name=value.name,
+        kind=value.kind,
+        capabilities=value.capabilities,
+        scaling_groups=value.scale_groups,
+        worker_count=value.worker_count,
+        pending_task_count=value.pending_task_count,
+        running_task_count=value.running_task_count,
+        has_autoscaler=value.has_autoscaler,
+        capacity_health=value.capacity_health,
+    )
+    for key, values in value.advertised_attributes.items():
+        result.advertised_attributes[key].values.extend(values)
+    if value.availability is not None:
+        result.availability.CopyFrom(_capacity_availability_to_proto(value.availability))
     return result
 
 
@@ -734,6 +959,41 @@ class ResourceServiceImpl:
                 members=[_slice_member_to_proto(item) for item in detail.members],
                 source_statuses=[_source_status_to_proto(status) for status in detail.source_statuses],
             )
+        )
+
+    def get_capacity_status(
+        self, _request: resource_pb2.GetCapacityStatusRequest, _ctx: RequestContext
+    ) -> resource_pb2.GetCapacityStatusResponse:
+        status = self._resources.capacity_status()
+        return resource_pb2.GetCapacityStatusResponse(
+            backends=[_capacity_backend_to_proto(item) for item in status.backends],
+            peers=[
+                resource_pb2.CapacityPeer(
+                    peer_id=peer.peer_id,
+                    controller_address=peer.controller_address,
+                    reachable=peer.reachable,
+                    last_contact_ms=peer.last_contact_ms,
+                    active_federated_jobs=peer.active_federated_jobs,
+                    backends=[_capacity_peer_backend_to_proto(item) for item in peer.backends],
+                )
+                for peer in status.peers
+            ],
+            running_placements=[
+                resource_pb2.CapacityRunningPlacement(
+                    backend_id=item.backend_id,
+                    worker_id=item.worker_id,
+                    job_id=item.job_id,
+                    user_id=item.user_id,
+                    task_count=item.task_count,
+                )
+                for item in status.running_placements
+            ],
+            unroutable_job_count=status.unroutable_job_count,
+            unroutable_jobs=[
+                resource_pb2.CapacityUnroutableJob(job_id=item.job_id, reason=item.reason)
+                for item in status.unroutable_jobs
+            ],
+            source_statuses=[_source_status_to_proto(item) for item in status.source_statuses],
         )
 
     def list_endpoints(

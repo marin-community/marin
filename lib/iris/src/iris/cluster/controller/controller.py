@@ -15,6 +15,7 @@ from iris.cluster.controller.attempt import AttemptResources
 from iris.cluster.controller.auth import (
     ControllerAuth,
 )
+from iris.cluster.controller.capacity import CapacityResources
 from iris.cluster.controller.dependencies import (
     CapabilityUrlConfig,
     EndpointRegistry,
@@ -36,6 +37,7 @@ from iris.cluster.types import (
 from iris.resources.action import ActionReceipt
 from iris.resources.activity import ActivityEntry, ActivityQuery
 from iris.resources.attempt import AttemptDetail
+from iris.resources.capacity import CapacityStatus
 from iris.resources.endpoint import (
     EndpointDetail,
     EndpointQuery,
@@ -122,6 +124,7 @@ class Controller:
         self._tasks = TaskResources(dependencies)
         self._attempts = AttemptResources(dependencies, self._tasks)
         self._profiles = ProfileResources(dependencies, self._attempts)
+        self._capacity = CapacityResources(dependencies)
         self._endpoints = EndpointResources(dependencies)
         self._nodes = NodeResources(dependencies)
         self._slices = SliceResources(dependencies)
@@ -252,3 +255,6 @@ class Controller:
 
     def describe_slice(self, locator: SliceLocator) -> SliceDetail:
         return self._slices.describe_slice(locator)
+
+    def capacity_status(self) -> CapacityStatus:
+        return self._capacity.status()

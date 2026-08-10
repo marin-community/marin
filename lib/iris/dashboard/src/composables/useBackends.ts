@@ -7,8 +7,13 @@
  */
 import { ref, computed } from 'vue'
 import type { LocationQueryValue, RouteLocationNormalizedLoaded } from 'vue-router'
-import { controllerRpcCall } from '@/composables/useRpc'
-import { LOCAL_CLUSTER, type BackendInfo, type ListBackendsResponse, type ListPeersResponse, type PeerSummary } from '@/types/rpc'
+import { resourceRpcCall } from '@/composables/useRpc'
+import {
+  LOCAL_CLUSTER,
+  type BackendInfo,
+  type ResourceCapacityPeer,
+  type ResourceGetCapacityStatusResponse,
+} from '@/types/rpc'
 
 /** First string value of a route query param (``?k=a&k=b`` → ``a``), or ``''``. */
 export function firstQueryValue(raw: LocationQueryValue | LocationQueryValue[]): string {
@@ -33,10 +38,10 @@ function resolveScopeId(
 // Module-level state — shared across all callers.
 const backends = ref<BackendInfo[]>([])
 const capabilities = ref<string[]>([])
-// Federation peers this cluster can hand jobs off to. Populated from ListPeers
-// (the /auth/config payload carries backends but not peers). Empty on a
+// Federation peers this cluster can hand jobs off to. Populated from the
+// capacity resource (/auth/config carries backends but not peers). Empty on a
 // single-cluster deployment, so every peer-derived affordance stays inert.
-const peers = ref<PeerSummary[]>([])
+const peers = ref<ResourceCapacityPeer[]>([])
 let _configFetched = false
 let _peersFetched = false
 // In-flight ensurePeers() request, shared so concurrent callers issue one RPC.
@@ -97,17 +102,11 @@ export function useBackends() {
     return resolveScopeId(route.query.backend, backends.value.map(b => b.id))
   }
 
-  /** One-shot call to the ListBackends RPC. */
-  async function listBackends(): Promise<ListBackendsResponse> {
-    return controllerRpcCall<ListBackendsResponse>('ListBackends', {})
-  }
-
-  /** One-shot call to the ListPeers RPC; also refreshes the shared roster. */
-  async function listPeers(): Promise<ListPeersResponse> {
-    const resp = await controllerRpcCall<ListPeersResponse>('ListPeers', {})
+  /** Load the peer roster from the canonical capacity resource. */
+  async function fetchPeers(): Promise<void> {
+    const resp = await resourceRpcCall<ResourceGetCapacityStatusResponse>('GetCapacityStatus')
     peers.value = resp.peers ?? []
     _peersFetched = true
-    return resp
   }
 
   /**
@@ -119,8 +118,7 @@ export function useBackends() {
   function ensurePeers(): Promise<void> {
     if (_peersFetched) return Promise.resolve()
     if (_peersPromise) return _peersPromise
-    _peersPromise = listPeers()
-      .then(() => undefined)
+    _peersPromise = fetchPeers()
       .catch(() => {
         _peersPromise = null
       })
@@ -146,8 +144,6 @@ export function useBackends() {
     fetchConfig,
     currentBackend,
     currentCluster,
-    listBackends,
-    listPeers,
     ensurePeers,
   }
 }

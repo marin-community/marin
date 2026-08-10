@@ -67,6 +67,15 @@ enum MembershipState {
   MEMBERSHIP_STATE_OBSERVED = 2;
 }
 
+enum SliceCapacityState {
+  SLICE_CAPACITY_STATE_UNSPECIFIED = 0;
+  SLICE_CAPACITY_STATE_UNKNOWN = 1;
+  SLICE_CAPACITY_STATE_AVAILABLE = 2;
+  SLICE_CAPACITY_STATE_IN_USE = 3;
+  SLICE_CAPACITY_STATE_IDLE = 4;
+  SLICE_CAPACITY_STATE_DEGRADED = 5;
+}
+
 enum ActionKind {
   ACTION_KIND_UNSPECIFIED = 0;
   ACTION_KIND_CANCEL_JOB = 1;
@@ -630,12 +639,23 @@ message SliceSummary {
   int32 observed_member_count = 5;
   iris.time.Timestamp observed_at = 6;
   string error_message = 7;
+  iris.time.Timestamp created_at = 8;
+  iris.time.Timestamp last_active_at = 9;
+  SliceCapacityState capacity_state = 10;
+  int32 healthy_member_count = 11;
+  int32 degraded_member_count = 12;
+  int32 running_task_count = 13;
 }
 
 message SliceMember {
   string provider_node_id = 1;
   NodeIdentity node = 2;
   iris.time.Timestamp observed_at = 3;
+  string worker_id = 4;
+  bool healthy = 5;
+  string usability = 6;
+  int32 running_task_count = 7;
+  string zone = 8;
 }
 
 message SliceDetail {
@@ -659,6 +679,202 @@ message DescribeSliceRequest {
 
 message DescribeSliceResponse {
   SliceDetail slice = 1;
+}
+
+message StringValues {
+  repeated string values = 1;
+}
+
+message CapacityResourceAvailability {
+  uint32 version = 1;
+  iris.time.Timestamp observed_at = 2;
+  map<string, int64> amounts = 3;
+  map<string, int64> total_amounts = 4;
+}
+
+message CapacitySlice {
+  SliceSummary summary = 1;
+  repeated SliceMember members = 2;
+}
+
+message CapacityScalingGroup {
+  string name = 1;
+  string backend_id = 2;
+  string device_type = 3;
+  string device_variant = 4;
+  string quota_pool = 5;
+  int32 allocation_tier = 6;
+  string region = 7;
+  int32 current_demand = 8;
+  int32 peak_demand = 9;
+  iris.time.Timestamp backoff_until = 10;
+  int32 consecutive_failures = 11;
+  iris.time.Timestamp last_scale_up = 12;
+  iris.time.Timestamp last_scale_down = 13;
+  repeated CapacitySlice slices = 14;
+  map<string, int32> slice_state_counts = 15;
+  string availability_status = 16;
+  string availability_reason = 17;
+  iris.time.Timestamp blocked_until = 18;
+  iris.time.Timestamp scale_up_cooldown_until = 19;
+  int64 idle_threshold_ms = 20;
+}
+
+message CapacityAction {
+  iris.time.Timestamp timestamp = 1;
+  string action_type = 2;
+  string scaling_group_id = 3;
+  string slice_id = 4;
+  string reason = 5;
+  string status = 6;
+}
+
+message CapacityDemandEntry {
+  repeated string task_ids = 1;
+  string coschedule_group_id = 2;
+  string device_type = 3;
+  string device_variant = 4;
+  bool preemptible = 5;
+}
+
+message CapacityUnmetDemand {
+  CapacityDemandEntry entry = 1;
+  string reason = 2;
+}
+
+message CapacityGroupRouting {
+  string scaling_group_id = 1;
+  int32 priority = 2;
+  int32 assigned = 3;
+  int32 launch = 4;
+  string decision = 5;
+  string reason = 6;
+}
+
+message CapacityRouting {
+  repeated CapacityUnmetDemand unmet = 1;
+  repeated CapacityGroupRouting groups = 2;
+}
+
+message CapacityKubernetesPod {
+  string pod_name = 1;
+  string task_id = 2;
+  string phase = 3;
+  string reason = 4;
+  string message = 5;
+  iris.time.Timestamp last_transition = 6;
+  string node_name = 7;
+}
+
+message CapacityKubernetesPool {
+  string name = 1;
+  string instance_type = 2;
+  string scaling_group_id = 3;
+  int32 target_nodes = 4;
+  int32 current_nodes = 5;
+  int32 queued_nodes = 6;
+  int32 in_progress_nodes = 7;
+  bool autoscaling = 8;
+  int32 min_nodes = 9;
+  int32 max_nodes = 10;
+  string capacity = 11;
+  string quota = 12;
+}
+
+message CapacityKubernetesNode {
+  string name = 1;
+  bool ready = 2;
+  bool schedulable = 3;
+  string status_summary = 4;
+  string instance_type = 5;
+  string region = 6;
+  int32 accelerator_count = 7;
+  string accelerator_variant = 8;
+  int64 cpu_millicores = 9;
+  int64 memory_bytes = 10;
+  int64 disk_bytes = 11;
+  int32 running_pods = 12;
+  string created = 13;
+}
+
+message CapacityKubernetesStatus {
+  string namespace = 1;
+  int32 total_nodes = 2;
+  int32 schedulable_nodes = 3;
+  string allocatable_cpu = 4;
+  string allocatable_memory = 5;
+  repeated CapacityKubernetesPod pods = 6;
+  string provider_version = 7;
+  repeated CapacityKubernetesPool pools = 8;
+  repeated CapacityKubernetesNode nodes = 9;
+}
+
+message CapacityBackend {
+  string backend_id = 1;
+  string name = 2;
+  string kind = 3;
+  repeated string capabilities = 4;
+  map<string, StringValues> advertised_attributes = 5;
+  int32 worker_count = 6;
+  int32 pending_task_count = 7;
+  int32 running_task_count = 8;
+  bool has_autoscaler = 9;
+  map<string, int32> capacity_health = 10;
+  CapacityResourceAvailability availability = 11;
+  repeated CapacityScalingGroup scaling_groups = 12;
+  repeated CapacityAction recent_actions = 13;
+  CapacityRouting routing = 14;
+  iris.time.Timestamp last_evaluation = 15;
+  int32 healthy_worker_count = 16;
+  CapacityKubernetesStatus kubernetes = 17;
+}
+
+message CapacityPeerBackend {
+  string backend_id = 1;
+  string name = 2;
+  string kind = 3;
+  repeated string capabilities = 4;
+  map<string, StringValues> advertised_attributes = 5;
+  repeated string scaling_groups = 6;
+  int32 worker_count = 7;
+  int32 pending_task_count = 8;
+  int32 running_task_count = 9;
+  bool has_autoscaler = 10;
+  map<string, int32> capacity_health = 11;
+  CapacityResourceAvailability availability = 12;
+}
+
+message CapacityPeer {
+  string peer_id = 1;
+  string controller_address = 2;
+  bool reachable = 3;
+  int64 last_contact_ms = 4;
+  int32 active_federated_jobs = 5;
+  repeated CapacityPeerBackend backends = 6;
+}
+
+message CapacityRunningPlacement {
+  string backend_id = 1;
+  string worker_id = 2;
+  string job_id = 3;
+  string user_id = 4;
+  int32 task_count = 5;
+}
+
+message CapacityUnroutableJob {
+  string job_id = 1;
+  string reason = 2;
+}
+
+message GetCapacityStatusRequest {}
+
+message GetCapacityStatusResponse {
+  repeated CapacityBackend backends = 1;
+  repeated CapacityPeer peers = 2;
+  repeated CapacityRunningPlacement running_placements = 3;
+  int32 unroutable_job_count = 4;
+  repeated CapacityUnroutableJob unroutable_jobs = 5;
+  repeated ResourceSourceStatus source_statuses = 6;
 }
 
 message EndpointQuery {
@@ -852,6 +1068,7 @@ service ResourceService {
   rpc DescribeNode(DescribeNodeRequest) returns (DescribeNodeResponse);
   rpc ListSlices(ListSlicesRequest) returns (ListSlicesResponse);
   rpc DescribeSlice(DescribeSliceRequest) returns (DescribeSliceResponse);
+  rpc GetCapacityStatus(GetCapacityStatusRequest) returns (GetCapacityStatusResponse);
   rpc ListEndpoints(ListEndpointsRequest) returns (ListEndpointsResponse);
   rpc DescribeEndpoint(DescribeEndpointRequest) returns (DescribeEndpointResponse);
   rpc BatchDescribeEndpoints(BatchDescribeEndpointsRequest) returns (BatchDescribeEndpointsResponse);

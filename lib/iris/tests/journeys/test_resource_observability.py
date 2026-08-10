@@ -84,6 +84,18 @@ def test_state_only_rpc_tracks_one_exact_job_incarnation(journey) -> None:
     assert exc_info.value.code is Code.FAILED_PRECONDITION
 
 
+def test_capacity_keeps_an_unavailable_backend_visible_with_source_status(journey) -> None:
+    journey.backend.fail_status(times=1)
+
+    response = ResourceServiceImpl(journey.controller.controller).get_capacity_status(
+        resource_pb2.GetCapacityStatusRequest(), None
+    )
+
+    assert [backend.backend_id for backend in response.backends] == ["default"]
+    assert response.source_statuses[0].source_id == "backend:default"
+    assert response.source_statuses[0].state == resource_pb2.SOURCE_STATE_UNAVAILABLE
+
+
 def test_logs_are_scoped_to_exact_job_task_and_attempt_identities(journey) -> None:
     selected = journey.submit("logs-selected", tasks=2, preemption_retries=1)
     other = journey.submit("logs-other")
