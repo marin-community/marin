@@ -7,17 +7,16 @@ Time-series measurements live in these namespaces rather than the controller
 SQLite DB (see AGENTS.md "Decisions vs measurements"). This module is the single
 home for the wire contract — namespace names, row dataclasses, storage policies —
 that dashboards, Grafana alert rules, and the federation hub key on. Producers
-live next to their mechanism (the worker daemon, the k8s backend's collectors,
+live next to their mechanism (the worker daemon, the k8s backend's task collectors,
 the autoscaler, the controller's task-state emitter) and import their row types
 from here; ``LogStack`` resolves every table from this catalog.
 
 - ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt resource
-  rows. On Kubernetes clusters, which have no per-node worker daemon, the cluster
-  backend emits one ``iris.worker`` row per node (host utilization + GPU
-  hardware), so nodes surface as workers in the same dashboards.
+  rows. Kubernetes task rows come from metrics-server; physical-node hardware
+  readings use the normalized telemetry stream.
 - ``iris.task_status`` — markdown status text pushed from inside a running task
   via ``RemoteClusterClient.report_task_status_text``.
-- ``iris.task_event`` — scheduling/admission events per task attempt.
+- ``iris.task_event`` — backend events and controller actions per task attempt.
 - ``iris.profile`` — per-capture profile blobs (capture machinery:
   ``iris.cluster.runtime.profile``).
 - ``iris.provisioning`` — one row per slice provisioning outcome (producer:
@@ -44,6 +43,12 @@ PROFILE_NAMESPACE = "iris.profile"
 PROVISIONING_NAMESPACE = "iris.provisioning"
 TASK_STATE_NAMESPACE = "iris.task_state"
 
+
+class TaskEventSeverity(StrEnum):
+    NORMAL = "Normal"
+    WARNING = "Warning"
+
+
 # Task status rows are only useful while a task is still running — once
 # the job ends the data is dead weight on the finelog server. Cap the
 # namespace at ~1 hour of history or 100 MiB, whichever fires first.
@@ -54,13 +59,13 @@ TASK_STATUS_STORAGE_POLICY = StoragePolicy(
     max_age_seconds=3600,
 )
 
-# Scheduling/admission events are a diagnostic history read only while a job is
-# alive (and briefly after, to explain a failure). The producer already
-# deduplicates on the verdict so the row count per attempt is small; a short
-# retention keeps the timeline cheap on the finelog server.
+# Backend events and controller actions are a compact diagnostic history. The
+# producers only append when a verdict or controller decision changes, so seven
+# days gives operators time to investigate without retaining high-volume pod
+# telemetry.
 TASK_EVENT_STORAGE_POLICY = StoragePolicy(
-    max_bytes=100 * 1024 * 1024,
-    max_age_seconds=3600,
+    max_bytes=1024 * 1024 * 1024,
+    max_age_seconds=7 * 24 * 60 * 60,
 )
 
 
@@ -126,14 +131,15 @@ class IrisWorkerStat:
     # (HBM, power) or reduced (mean utilization, hottest temperature) across the
     # devices. None on a host with no accelerator or whose device exporter did
     # not answer. Populated for k8s nodes from the cluster's dcgm-exporter (a
-    # worker daemon leaves these unset — its accelerators report per-process
-    # usage through the in-task telltale exporter instead).
+    # worker daemon leaves these unset — its accelerators are reported through
+    # process telemetry instead).
     gpu_count: int | None = None
     hbm_used_bytes: int | None = None
     hbm_total_bytes: int | None = None
     gpu_util_pct: float | None = None
     gpu_temp_c: float | None = None
     gpu_power_w: float | None = None
+    gpu_power_limit_w: float | None = None
 
 
 @dataclass
@@ -178,12 +184,12 @@ class TaskStatusRow:
 
 @dataclass
 class TaskEventRow:
-    """One scheduling/admission event observed for a task attempt.
+    """One backend event or controller action for a task attempt.
 
-    The "event log for every job": a backend appends a row each time the
-    diagnostic verdict for a not-yet-running attempt changes (Kueue admission
-    denial, image-pull failure, unschedulable), so the dashboard can render the
-    sequence of reasons behind a wait. Read newest-first, filtered by attempt.
+    The "event log for every job": producers append a row each time a backend
+    diagnostic verdict changes or the controller makes a state-changing decision
+    (retry, gang bounce, finalization), so operators can reconstruct the task's
+    lifecycle after ephemeral Kubernetes objects are gone.
 
     Fields mirror a Kubernetes event so a future producer can relay real events
     unchanged: ``type`` is the severity (``Warning``/``Normal``), ``reason`` the
@@ -195,6 +201,7 @@ class TaskEventRow:
 
     task_id: str
     attempt_id: int
+    attempt_uid: str | None
     ts: datetime
     type: str
     reason: str

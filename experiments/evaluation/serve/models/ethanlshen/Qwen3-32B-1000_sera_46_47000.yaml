@@ -1,0 +1,18 @@
+name: qwen3-32b-1000_sera_46_47000
+location: ethanlshen/Qwen3-32B-1000_sera_46_47000
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 2
+serve:
+  tensor_parallel_size: 2
+  max_model_len: 32768
+  tool_call_parser: hermes
+  vllm_extra_args:
+  - --enforce-eager
+  - --disable-cascade-attn
+  - --seed
+  - '42'
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

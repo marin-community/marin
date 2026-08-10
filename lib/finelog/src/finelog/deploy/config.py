@@ -232,6 +232,17 @@ class FinelogConfig:
     auth: tuple[AuthLayer, ...] = ()
     # Cross-cluster log shipping to a hub finelog. Unset forwards nothing.
     forwarding: ForwardingConfig | None = None
+    # DataFusion's process-wide Parquet metadata cache limit. Unset preserves
+    # DataFusion's default.
+    query_metadata_cache_mb: int | None = None
+    # Decoded `.fidx` section cache limit. Unset keeps the server default.
+    query_index_cache_mb: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.query_metadata_cache_mb is not None and self.query_metadata_cache_mb <= 0:
+            raise ValueError("query_metadata_cache_mb must be > 0")
+        if self.query_index_cache_mb is not None and self.query_index_cache_mb <= 0:
+            raise ValueError("query_index_cache_mb must be > 0")
 
 
 def _config_search_paths(name_or_path: str) -> list[Path]:
@@ -360,6 +371,10 @@ def _load_from_path(path: Path) -> FinelogConfig:
         client_url=raw.get("client_url"),
         auth=auth,
         forwarding=forwarding,
+        query_index_cache_mb=(None if raw.get("query_index_cache_mb") is None else int(raw["query_index_cache_mb"])),
+        query_metadata_cache_mb=(
+            None if raw.get("query_metadata_cache_mb") is None else int(raw["query_metadata_cache_mb"])
+        ),
     )
 
 

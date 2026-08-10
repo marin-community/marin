@@ -5,24 +5,32 @@
 
 import dataclasses
 import json
+import os
 import re
 import socket
+import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import click
 import pytest
 import requests
 from click.testing import CliRunner
-from fray.types import ANY_REGION
+from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
+from marin.external_dependencies import VLLM_GPU_RELEASE
+from marin.inference.backend import ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    IrisConfig,
     LevanterEngineConfig,
+    ServedModelConfig,
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
@@ -34,6 +42,7 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
+from marin.inference.iris import _resolved_model
 from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
@@ -46,18 +55,18 @@ from marin.inference.levanter_backend import (
     levanter_max_seq_len,
     validate_levanter_dtype,
 )
-from marin.inference.model_preparation import (
-    resolve_model_path,
-    select_tensor_parallel_size,
-)
+from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
 from marin.inference.serve_cli import main as serve_main
-from marin.inference.tpu_vllm_pins import vllm_fork_ref
-from marin.inference.vllm_backend import vllm_launcher
+from marin.inference.vllm_backend import VllmBackend, vllm_launcher
+from marin.inference.vllm_release import (
+    vllm_gpu_wheel_for_architecture,
+    vllm_gpu_wheel_provenance,
+)
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
+    PreinstalledVllm,
     VllmType,
-    WorkspaceVllm,
 )
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
@@ -100,6 +109,73 @@ def test_resolve_model_path_passthrough(model, ttl_days):
     assert resolve_model_path(model, ttl_days) == model
 
 
+def test_resolve_model_path_includes_revision_in_cache_key(monkeypatch):
+    observed: list[tuple[str, int, str]] = []
+
+    def resolve(model: str, *, cache_ttl_days: int, cache_prefix: str) -> str:
+        observed.append((model, cache_ttl_days, cache_prefix))
+        return "gs://cache/pinned-model"
+
+    monkeypatch.setattr("marin.inference.model_preparation.resolve_cached_model_path", resolve)
+
+    assert resolve_model_path("Qwen/Qwen3-0.6B", 14, "abc123") == "gs://cache/pinned-model"
+    assert observed == [("Qwen/Qwen3-0.6B@abc123", 14, "quick-serve-models")]
+
+
+def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
+    observed: dict[str, object] = {}
+
+    @contextmanager
+    def environment(**kwargs):
+        observed.update(kwargs)
+        yield SimpleNamespace(
+            model_id="public-model",
+            server_url="http://127.0.0.1:8000/v1",
+            wait_until_ready=lambda: None,
+        )
+
+    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda config: object())
+    spec = ModelSpec(
+        weights="org/model",
+        revision="abc123",
+        api_model="public-model",
+        num_chips=1,
+        tensor_parallel_size=1,
+        dtype="bfloat16",
+        max_model_len=1024,
+        chat_template_content=None,
+    )
+
+    with VllmBackend(VllmEngineConfig()).serve(spec):
+        pass
+
+    extra_args = observed["extra_args"]
+    assert isinstance(extra_args, list)
+    assert extra_args[extra_args.index("--revision") + 1] == "abc123"
+
+
+def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
+    """Resolving weights to a cache path must not change the served id.
+
+    vLLM advertises `--served-model-name` from `model_id`; if resolution leaks the
+    cache path into it, clients addressing the model by the requested id get a 404.
+    """
+    monkeypatch.setattr(
+        "marin.inference.model_preparation.resolve_model_path",
+        lambda model, cache_ttl_days, revision=None: "gs://cache/quick-serve/qwen3-0.6b",
+    )
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-4"),
+        worker_environment=create_environment(extras=["tpu"]),
+    )
+
+    resolved, _num_chips = _resolved_model(ServedModelConfig(weights="Qwen/Qwen3-0.6B", tensor_parallel_size=1), iris)
+
+    assert resolved.weights == "gs://cache/quick-serve/qwen3-0.6b"
+    assert resolved.model_id == "Qwen/Qwen3-0.6B"
+
+
 def test_checkout_free_setup_script_pins_marin_core_with_extras():
     # The worker install folds the requested extras and the launching CLI's exact version
     # (for cloudpickle compat) into the pip spec; vLLM stays out — it comes from uvx.
@@ -108,23 +184,97 @@ def test_checkout_free_setup_script_pins_marin_core_with_extras():
     assert "vllm" not in script
 
 
-def test_isolated_cuda_vllm_upstream_disables_flashinfer_sampler():
-    launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
-    env = launcher.env()
-    assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
-    assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
-
-
-def test_isolated_cuda_vllm_marin_fork_command_and_env():
+@pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
+def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine):
+    # uvx is the external install boundary. The direct wheel, digest-bearing URL, CUDA ABI,
+    # entrypoint, and provenance payload are its immutable contract; entrypoint behavior is
+    # exercised separately in test_vllm_wheel_entrypoint.py.
+    monkeypatch.setattr("platform.machine", lambda: machine)
     launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK)
     cmd = launcher.command()
-    assert cmd[:3] == ["uvx", "--from", vllm_fork_ref()]
-    assert "--torch-backend" in cmd and cmd[cmd.index("--torch-backend") + 1] == "cu130"
-    assert "runai-model-streamer[s3]==0.16.0" in cmd
+    requirement = cmd[cmd.index("--from") + 1]
+    wheel = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, machine)
+    distribution, separator, direct_url = requirement.partition(" @ ")
+    parsed_url = urlsplit(direct_url)
+    assert distribution == "vllm"
+    assert separator
+    assert urlunsplit(parsed_url._replace(fragment="")) == wheel.url
+    assert parse_qs(parsed_url.fragment) == {"sha256": [wheel.sha256]}
+    assert cmd[cmd.index("--torch-backend") + 1] == VLLM_GPU_RELEASE.torch_backend
+    bootstrap_index = cmd.index("-c")
+    wrapped_command = cmd[bootstrap_index + 2 :]
+    assert wrapped_command[0] == "python"
+    assert wrapped_command[1] == "-c"
+    assert Path(wrapped_command[3]).name == "vllm_wheel_entrypoint.py"
+    expected_provenance = json.loads(json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel))))
+    assert json.loads(wrapped_command[4]) == expected_provenance
     env = launcher.env()
-    assert env["VLLM_USE_PRECOMPILED"] == "1"
-    assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
+    assert "VLLM_USE_PRECOMPILED" not in env
+    assert "VLLM_USE_FLASHINFER_SAMPLER" not in env
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
+    assert requirement in launcher.cache_identity()
+
+
+def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypatch):
+    monkeypatch.setattr("platform.machine", lambda: "ppc64le")
+
+    with pytest.raises(ValueError):
+        IsolatedCudaVllm(source=VllmType.MARIN_FORK).command()
+
+
+def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
+    site_packages = tmp_path / "site-packages"
+    nvcc = site_packages / "nvidia" / "cu13" / "bin" / "nvcc"
+    nvcc.parent.mkdir(parents=True)
+    nvcc.write_text("#!/bin/sh\n")
+    nvcc.chmod(0o755)
+    cuda_lib = nvcc.parent.parent / "lib"
+    cuda_lib.mkdir()
+    cudart = cuda_lib / "libcudart.so.13"
+    cudart.touch()
+    dist_info = site_packages / "nvidia_cuda_nvcc-13.0.88.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text("Metadata-Version: 2.4\nName: nvidia-cuda-nvcc\nVersion: 13.0.88\n")
+    (dist_info / "RECORD").write_text("nvidia/cu13/bin/nvcc,,\n")
+
+    tool_bin = tmp_path / "tool-bin"
+    tool_bin.mkdir()
+    capture = tmp_path / "capture.json"
+    vllm = tool_bin / "vllm"
+    vllm.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        "pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({"
+        "'args': sys.argv[1:], 'cuda_home': os.environ['CUDA_HOME'], 'path': os.environ['PATH']}))\n"
+    )
+    vllm.chmod(0o755)
+
+    launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
+    command = launcher.command()
+    requirements = [command[index + 1] for index, value in enumerate(command) if value == "--with"]
+    assert set(requirements) >= {
+        "nvidia-cuda-nvcc==13.0.88",
+        "nvidia-cuda-crt==13.0.88",
+        "nvidia-nvvm==13.0.88",
+    }
+    assert "addressing_style = virtual" in Path(launcher.env()["AWS_CONFIG_FILE"]).read_text()
+    bootstrap_index = command.index("-c")
+    bootstrap = command[bootstrap_index + 1]
+    wrapped_command = command[bootstrap_index + 2 :]
+    environment = {
+        **os.environ,
+        "CAPTURE": str(capture),
+        "PATH": os.pathsep.join((str(tool_bin), os.environ["PATH"])),
+        "PYTHONPATH": str(site_packages),
+    }
+    subprocess.run([sys.executable, "-c", bootstrap, *wrapped_command, "serve", "model"], env=environment, check=True)
+
+    observed = json.loads(capture.read_text())
+    assert observed["args"] == ["serve", "model"]
+    assert observed["cuda_home"] == str(nvcc.parent.parent.resolve())
+    assert observed["path"].split(os.pathsep)[0] == str(nvcc.parent.resolve())
+    assert (nvcc.parent.parent / "lib64").resolve() == cuda_lib.resolve()
+    assert (cuda_lib / "libcudart.so").resolve() == cudart.resolve()
 
 
 def test_isolated_cuda_vllm_upstream_requires_version():
@@ -132,10 +282,10 @@ def test_isolated_cuda_vllm_upstream_requires_version():
         IsolatedCudaVllm(source=VllmType.UPSTREAM)
 
 
-def test_vllm_backend_falls_back_to_workspace_without_version():
+def test_vllm_backend_falls_back_to_preinstalled_without_version():
     # No launcher (the TPU path, or a --task-image GPU path whose image ships its own vLLM) serves
     # from the vLLM already on PATH.
-    assert vllm_launcher(VllmEngineConfig()) == WorkspaceVllm()
+    assert vllm_launcher(VllmEngineConfig()) == PreinstalledVllm()
 
 
 def test_vllm_backend_returns_its_composed_launcher():
@@ -227,7 +377,6 @@ def _plan(**overrides):
         "tpu": "v6e-8",
         "gpu": None,
         "in_checkout": True,
-        "isolated_vllm": False,
         "task_image": None,
         "cuda_vllm_version": DEFAULT_CUDA_VLLM_VERSION,
         "vllm_source": VllmSource.UPSTREAM,
@@ -241,11 +390,10 @@ def _plan(**overrides):
 @pytest.mark.parametrize(
     ("overrides", "backend_type", "worker_extras"),
     [
-        # vLLM in a checkout builds from the workspace lock, so the venv needs both TPU extras.
-        ({}, VllmEngineConfig, ("tpu", "vllm")),
-        # Outside a checkout (or with --isolated-vllm) vLLM comes from uvx: no `vllm` extra.
+        # The forked TPU vLLM always comes from an isolated uvx env, so the worker venv needs only
+        # the `tpu` extra for the serving glue's JAX/libtpu, in a checkout or not.
+        ({}, VllmEngineConfig, ("tpu",)),
         ({"in_checkout": False}, VllmEngineConfig, ("tpu",)),
-        ({"isolated_vllm": True}, VllmEngineConfig, ("tpu",)),
         # CUDA vLLM is provisioned by uvx, so the GPU worker venv needs no accelerator extra.
         ({"gpu": "H100x8"}, VllmEngineConfig, ()),
         # Levanter computes in the worker venv, so that venv carries the accelerator's JAX itself.
@@ -274,16 +422,16 @@ def test_gpu_plan_marin_fork_selects_fork_launcher():
     assert plan.engine.source is VllmSource.MARIN_FORK
 
 
-def test_gpu_plan_task_image_serves_workspace_vllm():
+def test_gpu_plan_task_image_serves_preinstalled_vllm():
     # A prebuilt --task-image ships its own vLLM on PATH, so no launcher is provisioned.
-    assert _plan(gpu="H100x8", task_image="img").engine.launcher is VllmLauncherType.WORKSPACE
+    assert _plan(gpu="H100x8", task_image="img").engine.launcher is VllmLauncherType.PREINSTALLED
 
 
-def test_tpu_plan_isolates_vllm_outside_a_checkout():
-    # No checkout to build the TPU-vLLM fork from, so it comes from a pinned uvx env; in a checkout
-    # it serves the workspace vLLM instead.
+def test_tpu_plan_always_isolates_vllm():
+    # The forked TPU vLLM always runs from a pinned uvx env (it is not in the workspace lock),
+    # in a checkout or not.
     assert _plan(in_checkout=False).engine.launcher is VllmLauncherType.TPU
-    assert _plan().engine.launcher is VllmLauncherType.WORKSPACE
+    assert _plan().engine.launcher is VllmLauncherType.TPU
 
 
 def test_marin_fork_requires_gpu():
@@ -304,7 +452,7 @@ def _mint_response(token: str, ttl_hours: float) -> controller_pb2.Controller.Mi
 def test_mint_and_print_capability_url_prints_off_cluster_url(capsys):
     """LINK serve prints the OpenAI base_url with the scoped token in the URL path."""
     client = MagicMock()
-    client._cluster_client.mint_endpoint_token.return_value = _mint_response("ep-token-xyz", 24.0)
+    client.mint_endpoint_token.return_value = _mint_response("ep-token-xyz", 24.0)
 
     _mint_and_print_capability_url(client, "/serve/foo", "https://iris.oa.dev", 24.0)
 
@@ -347,13 +495,12 @@ def _invoke_iris_serve(monkeypatch, *args: str):
     return result, client, services, mint
 
 
-def test_iris_serve_always_registers_link_access_and_mints_capability(monkeypatch):
-    result, _client, services, mint = _invoke_iris_serve(monkeypatch)
+def test_iris_serve_mints_capability(monkeypatch):
+    result, client, _services, mint = _invoke_iris_serve(monkeypatch)
 
     assert result.exit_code == 0, result.output
-    assert services[0].access == controller_pb2.Controller.ENDPOINT_ACCESS_LINK
     mint.assert_called_once_with(
-        _client,
+        client,
         "/serve/serve-test",
         "https://iris.oa.dev",
         24.0,
@@ -361,10 +508,9 @@ def test_iris_serve_always_registers_link_access_and_mints_capability(monkeypatc
 
 
 def test_iris_serve_no_wait_is_an_explicit_opt_out_of_minting(monkeypatch):
-    result, _client, services, mint = _invoke_iris_serve(monkeypatch, "--no-wait")
+    result, _client, _services, mint = _invoke_iris_serve(monkeypatch, "--no-wait")
 
     assert result.exit_code == 0, result.output
-    assert services[0].access == controller_pb2.Controller.ENDPOINT_ACCESS_LINK
     mint.assert_not_called()
     assert "Submitted" in result.output
 

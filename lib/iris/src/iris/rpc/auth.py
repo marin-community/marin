@@ -95,8 +95,6 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         "ListUsers",
         "GetUserBudget",
         "ListUserBudgets",
-        # RPC stats panel
-        "GetRpcStats",
     }
 )
 

@@ -32,7 +32,6 @@ storage:
 
 kubernetes_provider:
   namespace: iris-gang-smoke
-  default_image: ghcr.io/marin-community/iris-task:latest  # branch-agnostic; gang code is in the controller
   host_network: true                                        # NCCL/IB + flat-network endpoints
   cache_dir: /mnt/local/iris-cache
   controller_address: http://iris-gang-controller-svc.iris-gang-smoke.svc.cluster.local:10000

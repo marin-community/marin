@@ -2,8 +2,8 @@ config:
   xprof:cluster: marin
   xprof:user: ops
   xprof:region: us-east5
-  xprof:cpu: "2"
-  xprof:memory: 12GB
+  xprof:cpu: "16"
+  xprof:memory: 64GB
   xprof:disk: 80GB
   xprof:deploy_generation: "0"
   xprof:env:

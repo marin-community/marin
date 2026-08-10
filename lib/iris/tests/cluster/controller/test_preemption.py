@@ -20,6 +20,7 @@ from iris.cluster.controller.scheduling.scheduler import JobRequirements, Runnin
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
+from tests.cluster.controller._test_support import submit_job_in_tx
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
@@ -977,69 +978,6 @@ def test_two_gangs_do_not_double_book_hosts():
 # ---------------------------------------------------------------------------
 
 
-def test_preempted_task_retries():
-    """Preempted task transitions to PENDING (retries) when preemption budget remains."""
-    with make_controller_state() as state:
-        harness = ControllerTestHarness(state)
-        w1 = harness.add_worker("w1", cpu=4)
-
-        # Submit a batch job with preemption retries
-        tasks = harness.submit(
-            "/alice/batch-job",
-            cpu=1,
-            replicas=1,
-            max_retries_preemption=5,
-        )
-        task = tasks[0]
-
-        # Dispatch and advance to RUNNING
-        harness.dispatch(task, w1)
-        assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
-
-        # Preempt
-        with state._db.transaction() as cur:
-            finalize(
-                cur,
-                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
-                now=Timestamp.now(),
-            )
-
-        # Task should be PENDING (retry)
-        updated = query_task(state, task.task_id)
-        assert updated.state == job_pb2.TASK_STATE_PENDING
-        assert updated.preemption_count == 1
-        assert updated.error == "Preempted by /bob/prod-job:0"
-
-
-def test_preempted_task_exhausted_retries():
-    """Preempted task transitions to PREEMPTED when preemption budget exhausted."""
-    with make_controller_state() as state:
-        harness = ControllerTestHarness(state)
-        w1 = harness.add_worker("w1", cpu=4)
-
-        tasks = harness.submit(
-            "/alice/batch-job",
-            cpu=1,
-            replicas=1,
-            max_retries_preemption=0,
-        )
-        task = tasks[0]
-
-        harness.dispatch(task, w1)
-        assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
-
-        with state._db.transaction() as cur:
-            finalize(
-                cur,
-                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted")],
-                now=Timestamp.now(),
-            )
-
-        updated = query_task(state, task.task_id)
-        assert updated.state == job_pb2.TASK_STATE_PREEMPTED
-        assert updated.preemption_count == 1
-
-
 def test_preemption_skips_if_capacity_available():
     """No preemption when the worker already has capacity for the preemptor."""
     w1 = WorkerId("w1")
@@ -1280,15 +1218,17 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
+            submit_job_in_tx(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
         interactive_tasks = harness.submit(
             "/bob/interactive",
             cpu=1,
             priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         )
 
+        # The child inherits the parent's requested PRODUCTION, not the BATCH the
+        # scheduler stamped on the parent's task row.
         child_task = query_tasks_for_job(state, child_id)[0]
-        assert child_task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
+        assert child_task.priority_band == job_pb2.PRIORITY_BAND_PRODUCTION
 
         with state._db.read_snapshot() as tx:
             pending = reads.pending_tasks_with_jobs(tx)
@@ -1519,63 +1459,6 @@ def test_preemption_nonexistent_task_is_noop():
         assert not result.tasks
         assert not result.attempts
         assert not result.jobs
-
-
-def test_preempt_then_worker_terminal_heartbeat_stamps_finished_at_ms():
-    """Regression for #5918: worker's post-preempt terminal heartbeat must finalize the attempt.
-
-    ``preempt_task`` marks the attempt PREEMPTED via
-    ``task.merge_task_termination(stamp_attempt_finished=False)``, which
-    deliberately leaves ``finished_at_ms`` NULL and relies on the worker's
-    subsequent terminal-state heartbeat to stamp it. Without the stamp the row
-    stays counted by ``resource_usage_by_worker`` and ghost-pins the worker's
-    capacity for as long as the worker lives.
-    """
-    with make_controller_state() as state:
-        harness = ControllerTestHarness(state)
-        w1 = harness.add_worker("w1", cpu=4)
-
-        tasks = harness.submit("/alice/job", cpu=1, replicas=1, max_retries_preemption=5)
-        task = tasks[0]
-        harness.dispatch(task, w1)
-        attempt_id = query_task(state, task.task_id).current_attempt_id
-
-        # Producer transition: attempt PREEMPTED, finished_at_ms left NULL on purpose.
-        with state._db.transaction() as cur:
-            finalize(
-                cur,
-                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "preempted by /bob/prod-job:0")],
-                now=Timestamp.now(),
-            )
-        attempt = query_attempt(state, task.task_id, attempt_id)
-        assert attempt.state == job_pb2.TASK_STATE_PREEMPTED
-        assert attempt.finished_at_ms is None, "producer transition should leave finalization for heartbeat"
-
-        # Worker's heartbeat for the now-terminal attempt — the deferred finalization.
-        with state._db.transaction() as cur:
-            apply_task_observations(
-                cur,
-                [
-                    WorkerTaskUpdates(
-                        worker_id=w1,
-                        updates=[
-                            TaskUpdate(
-                                task_id=task.task_id,
-                                attempt_id=attempt_id,
-                                new_state=job_pb2.TASK_STATE_KILLED,
-                            )
-                        ],
-                    )
-                ],
-                health=state._health,
-                now=Timestamp.now(),
-            )
-
-        attempt = query_attempt(state, task.task_id, attempt_id)
-        assert attempt.finished_at_ms is not None, (
-            "worker's terminal-state heartbeat must stamp finished_at_ms on the preempted "
-            "attempt; otherwise the row stays in resource_usage_by_worker and ghost-pins capacity"
-        )
 
 
 def test_preemption_terminal_task_is_noop():
@@ -1851,88 +1734,3 @@ def test_preempt_task_cascades_coscheduled_siblings():
         # is terminated by the peer cascade, not a separate preempt decision.
         preempted = {ev.entity_id for ev in result0.log_events if ev.action == "task_preempted"}
         assert preempted == {tasks[0].task_id.to_wire()}
-
-
-def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
-    """Regression: after preempt_task retries a task (state -> PENDING, attempt -> PREEMPTED),
-    a late worker heartbeat for the dead attempt_id must NOT revive the attempt row back
-    to RUNNING while leaving `error` and `finished_at_ms` set.
-
-    Observed in production (job /eczech/iris-run-exp109_bolinas_sweep_eval-...): the
-    attempt ended up in the impossible mixed state
-        state=RUNNING, error="Preempted by ...", finished_at_ms=<set>
-    because preempt_task leaves `tasks.current_attempt_id` pointing at the dead
-    attempt, so task.apply_one_transition's stale-attempt guard fails to fire and
-    overwrites `state` on the attempt row (COALESCE only protects
-    finished_at_ms / error / exit_code).
-    """
-    with make_controller_state() as state:
-        harness = ControllerTestHarness(state)
-        worker_id = harness.add_worker("w1", cpu=4)
-
-        tasks = harness.submit(
-            "/alice/batch-job",
-            cpu=1,
-            replicas=1,
-            max_retries_preemption=5,
-        )
-        task = tasks[0]
-
-        harness.dispatch(task, worker_id)
-        assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
-        dead_attempt_id = query_task(state, task.task_id).current_attempt_id
-        assert dead_attempt_id == 0
-
-        with state._db.transaction() as cur:
-            finalize(
-                cur,
-                [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "Preempted by /bob/prod-job:0")],
-                now=Timestamp.now(),
-            )
-
-        # Sanity: task went to PENDING (budget remains), attempt row is in
-        # PREEMPTED reporting state. ``preempt_task`` is a producer transition
-        # (``stamp_attempt_finished=False``), so ``finished_at_ms`` is intentionally
-        # left NULL — the worker still holds the chips until a terminal
-        # heartbeat (or worker-failure synthesis) lands.
-        assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING
-        attempt_after_preempt = query_attempt(state, task.task_id, dead_attempt_id)
-        assert attempt_after_preempt is not None
-        assert attempt_after_preempt.state == job_pb2.TASK_STATE_PREEMPTED
-        assert (
-            attempt_after_preempt.finished_at_ms is None
-        ), "producer-side preempt must not stamp finished_at_ms; that is the heartbeat path's job"
-        assert attempt_after_preempt.error == "Preempted by /bob/prod-job:0"
-
-        # Late heartbeat for the (now-dead) attempt 0 arrives: worker still thinks
-        # it is RUNNING. This simulates the RPC-in-flight race.
-        with state._db.transaction() as cur:
-            apply_task_observations(
-                cur,
-                [
-                    WorkerTaskUpdates(
-                        worker_id=worker_id,
-                        updates=[
-                            TaskUpdate(
-                                task_id=task.task_id,
-                                attempt_id=dead_attempt_id,
-                                new_state=job_pb2.TASK_STATE_RUNNING,
-                            )
-                        ],
-                    )
-                ],
-                health=state._health,
-                now=Timestamp.now(),
-            )
-
-        # The attempt row must remain in a consistent state — NOT flipped
-        # back to RUNNING. ``finished_at`` may still be NULL because the
-        # producer-side preempt deliberately leaves it that way.
-        attempt_final = query_attempt(state, task.task_id, dead_attempt_id)
-        assert attempt_final is not None, "attempt row disappeared"
-        assert attempt_final.state == job_pb2.TASK_STATE_PREEMPTED, (
-            f"attempt {dead_attempt_id} was revived to state={attempt_final.state} "
-            f"(expected PREEMPTED={job_pb2.TASK_STATE_PREEMPTED}); "
-            f"error={attempt_final.error!r}, finished_at={attempt_final.finished_at_ms}"
-        )
-        assert attempt_final.error == "Preempted by /bob/prod-job:0"

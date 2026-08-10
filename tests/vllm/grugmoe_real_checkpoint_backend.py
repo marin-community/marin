@@ -534,11 +534,12 @@ def _vllm_backend(args: argparse.Namespace) -> None:
     os.environ.setdefault("VLLM_XLA_CACHE_PATH", args.cache_dir)
     os.environ.setdefault("PYTHONUNBUFFERED", "1")
 
-    from marin.evaluation.evaluators.evaluator import ModelConfig  # noqa: PLC0415
+    from marin.inference.config import InferenceModelConfig, VllmEngineConfig, VllmLauncherType  # noqa: PLC0415
+    from marin.inference.vllm_backend import vllm_launcher  # noqa: PLC0415
     from marin.inference.vllm_server import VllmEnvironment  # noqa: PLC0415
 
     staged_artifact = _stage_artifact_for_vllm(args.artifact_dir)
-    model = ModelConfig(
+    model = InferenceModelConfig(
         name=SERVED_MODEL_NAME,
         path=staged_artifact.vllm_model_path,
         engine_kwargs={
@@ -560,7 +561,10 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "1",
     ]
     started = time.time()
-    with VllmEnvironment(model=model, timeout_seconds=SERVER_TIMEOUT_SECONDS, extra_args=extra_args) as env:
+    launcher = vllm_launcher(VllmEngineConfig(launcher=VllmLauncherType.TPU))
+    with VllmEnvironment(
+        model=model, timeout_seconds=SERVER_TIMEOUT_SECONDS, extra_args=extra_args, launcher=launcher
+    ) as env:
         print("vllm_server_initialized=True", flush=True)
         print("vllm_server_url=" + env.server_url, flush=True)
         print("vllm_model_path=" + staged_artifact.vllm_model_path, flush=True)

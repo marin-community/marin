@@ -11,6 +11,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { useSamplePager, type SampleFilter } from '@/composables/useSamplePager'
 import type { SampleRow, SampleTasksResponse } from '@/types/api'
+import { sampleFilters, sampleHint, sampleOutcome, outcomeChipClass } from '@/utils/samples'
 import McqSample from '@/components/samples/McqSample.vue'
 import GenerativeSample from '@/components/samples/GenerativeSample.vue'
 import AgenticSample from '@/components/samples/AgenticSample.vue'
@@ -21,23 +22,26 @@ const props = defineProps<{ runId: string }>()
 const route = useRoute()
 const router = useRouter()
 
-const FILTERS: SampleFilter[] = ['all', 'correct', 'incorrect']
-
 function queryTask(): string {
   return typeof route.query.task === 'string' ? route.query.task : ''
 }
 function queryFilter(): SampleFilter {
   const f = route.query.filter
-  return f === 'correct' || f === 'incorrect' ? f : 'all'
+  return f === 'correct' || f === 'incorrect' || f === 'ungraded' ? f : 'all'
 }
 function queryIndex(): number {
   const i = Number(route.query.i)
   return Number.isFinite(i) && i >= 0 ? Math.floor(i) : 0
 }
+function queryExtraction(): string | null {
+  return typeof route.query.extraction === 'string' && route.query.extraction ? route.query.extraction : null
+}
 
 const task = ref(queryTask())
 const filter = ref<SampleFilter>(queryFilter())
 const index = ref(queryIndex())
+// Null means "whichever filter the server ranks first"; the resolved name comes back with the page.
+const extractionFilter = ref<string | null>(queryExtraction())
 
 const { data: tasksData, error: tasksError, refresh: refreshTasks } = useApi<SampleTasksResponse>(
   () => `api/runs/${props.runId}/samples/tasks`,
@@ -49,24 +53,58 @@ watch(tasksData, (tasks) => {
   if (!task.value && tasks?.tasks.length) task.value = tasks.tasks[0].task
 })
 
-const { total, counts, primaryMetric, loading, error, sample: sampleAt, ensure } = useSamplePager(
-  props.runId,
-  task,
-  filter,
-)
+const {
+  total,
+  counts,
+  primaryMetric,
+  extractionFilters,
+  resolvedExtractionFilter,
+  loading,
+  error,
+  sample: sampleAt,
+  ensure,
+} = useSamplePager(props.runId, task, filter, extractionFilter)
 
-watch([task, filter], () => {
+const FILTERS = computed(() => sampleFilters(counts.value?.ungraded))
+
+// A task scored under one filter needs no control; only offer the selector when there is a choice.
+const showExtractionFilters = computed(() => extractionFilters.value.length > 1)
+
+// Until the reader pins one, the control shows the filter the server actually served.
+const selectedExtractionFilter = computed<string | null>({
+  get: () => extractionFilter.value ?? resolvedExtractionFilter.value,
+  set: (value) => {
+    extractionFilter.value = value
+  },
+})
+
+// Switching task can land on a task that never had the previously selected filter, so fall back to
+// the server's ranked default rather than showing an empty page.
+watch(task, () => {
+  extractionFilter.value = null
+})
+
+watch([task, filter, extractionFilter], () => {
   index.value = 0
 })
 
 // Fetch (and keep the URL pointed at) whichever row is current; runs once immediately for deep
-// links, then again on every task/filter/index change.
+// links, then again on every task/filter/index change. The selected extraction filter is a
+// dependency as well as the resolved one: picking a filter while on row 0 changes neither the index
+// nor the filter the last response reported, so nothing else here would notice.
 watch(
-  [task, filter, index],
+  [task, filter, index, extractionFilter, resolvedExtractionFilter],
   () => {
     ensure(index.value)
     if (!task.value) return
-    router.replace({ query: { task: task.value, filter: filter.value, i: String(index.value) } })
+    const query: Record<string, string> = {
+      task: task.value,
+      filter: filter.value,
+      i: String(index.value),
+    }
+    // Pin the resolved name so a shared link reopens the same rows even if the ranking changes.
+    if (resolvedExtractionFilter.value) query.extraction = resolvedExtractionFilter.value
+    router.replace({ query })
   },
   { immediate: true },
 )
@@ -115,6 +153,17 @@ function metricEntries(row: SampleRow): [string, number][] {
         <option v-for="t in tasksData?.tasks ?? []" :key="t.task" :value="t.task">{{ t.task }}</option>
       </select>
 
+      <label v-if="showExtractionFilters" class="flex items-center gap-1.5 whitespace-nowrap">
+        <span class="text-xs text-text-muted">filter</span>
+        <select
+          v-model="selectedExtractionFilter"
+          class="rounded border border-surface-border bg-surface px-2 py-1 text-sm"
+          title="Extraction filter this task was scored under"
+        >
+          <option v-for="name in extractionFilters" :key="name" :value="name">{{ name }}</option>
+        </select>
+      </label>
+
       <div class="flex gap-1">
         <button
           v-for="f in FILTERS"
@@ -138,21 +187,19 @@ function metricEntries(row: SampleRow): [string, number][] {
       <span class="text-xs text-text-muted ml-auto whitespace-nowrap">← → navigate · r random · esc back</span>
     </div>
 
-    <div class="max-w-4xl mx-auto px-6 py-6">
+    <div class="max-w-4xl mx-auto px-6 py-5">
       <p v-if="tasksError" class="text-sm text-status-danger">{{ tasksError }}</p>
       <p v-else-if="error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">{{ error }}</p>
       <p v-else-if="loading && !row" class="text-sm text-text-muted py-12 text-center">Loading samples…</p>
       <EmptyState v-else-if="!task" message="No task selected." icon="○" />
       <EmptyState v-else-if="total === 0" message="No samples for this task and filter." icon="○" />
       <template v-else-if="row">
-        <div class="flex items-center gap-2 flex-wrap mb-6">
+        <div class="flex items-center gap-2 flex-wrap mb-2">
           <span class="font-mono text-sm text-text-secondary">doc {{ row.doc_id }}</span>
           <span
-            class="inline-block rounded px-1.5 py-0.5 text-xs border font-medium"
-            :class="row.correct
-              ? 'bg-status-success-bg text-status-success border-status-success-border'
-              : 'bg-status-danger-bg text-status-danger border-status-danger-border'"
-          >{{ row.correct ? 'correct' : 'incorrect' }}</span>
+            class="inline-block rounded px-1.5 py-0.5 text-xs border font-medium capitalize"
+            :class="outcomeChipClass(sampleOutcome(row))"
+          >{{ sampleOutcome(row) }}</span>
           <span
             v-for="[name, value] in metricEntries(row)"
             :key="name"
@@ -162,8 +209,9 @@ function metricEntries(row: SampleRow): [string, number][] {
               : 'border-surface-border text-text-secondary'"
           >{{ name }} {{ value ?? '—' }}</span>
         </div>
+        <p class="text-sm text-text-secondary font-mono mb-4">{{ sampleHint(row) }}</p>
 
-        <div class="space-y-6">
+        <div class="space-y-5">
           <GradingPanel :grading="row.grading" />
           <McqSample v-if="row.kind === 'multiple_choice'" :sample="row" />
           <GenerativeSample v-else-if="row.kind === 'generation'" :sample="row" />

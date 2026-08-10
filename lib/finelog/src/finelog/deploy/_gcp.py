@@ -16,7 +16,7 @@ import time
 
 import click
 
-from finelog.deploy.bootstrap import CONTAINER_NAME, render_bootstrap
+from finelog.deploy.bootstrap import CONTAINER_NAME, HEALTH_OK, health_probe_command, render_bootstrap
 from finelog.deploy.config import FinelogConfig, auth_policy_json
 from finelog.deploy.image import resolve_image_digest
 
@@ -74,16 +74,21 @@ def _ssh_args(cfg: FinelogConfig, command: str) -> list[str]:
     return args
 
 
-def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 90) -> bool:
-    """Poll ``/health`` from inside the VM over SSH.
+def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 90) -> str:
+    """Poll ``/health`` from inside the VM over SSH until it reports ``HEALTH_OK``.
 
-    Used by both ``gcp_up`` (where the first attempts may fail while
-    OS Login propagates the SSH key on the fresh VM) and ``gcp_restart``.
-    A direct probe is unambiguous: serial-console marker scraping was
-    fragile because ``gcp_restart`` re-runs the bootstrap over SSH and
-    that path never reaches the console.
+    Returns the last body seen, which callers report verbatim: ``HEALTH_OK``,
+    the server's account of what is degraded, or ``"unreachable"`` if the probe
+    never answered. ``/health`` answers 200 whenever the server is listening, so
+    the body is the signal — a binary whose schema the catalog rejects listens
+    and accepts no rows.
+
+    Used by ``gcp_up`` (where early attempts fail while OS Login propagates the
+    SSH key) and ``gcp_restart``, which re-runs the bootstrap over SSH and so
+    never reaches the serial console.
     """
-    probe = f"curl -sf -m 5 http://localhost:{port}/health"
+    probe = health_probe_command(port)
+    body = "unreachable"
     for _ in range(max_attempts):
         result = subprocess.run(
             _ssh_args(cfg, probe),
@@ -91,9 +96,11 @@ def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 90) 
             text=True,
         )
         if result.returncode == 0:
-            return True
+            body = result.stdout.strip()
+            if body == HEALTH_OK:
+                return body
         time.sleep(2)
-    return False
+    return body
 
 
 def render_bootstrap_for(cfg: FinelogConfig, image: str) -> str:
@@ -122,6 +129,8 @@ def render_bootstrap_for(cfg: FinelogConfig, image: str) -> str:
         # access, and every layer is inline-safe: a jwt layer carries only Ed25519
         # public keys, a cidr layer only network prefixes.
         auth_policy=auth_policy_json(cfg.auth) if cfg.auth else "",
+        query_metadata_cache_mb=cfg.query_metadata_cache_mb,
+        query_index_cache_mb=cfg.query_index_cache_mb,
     )
 
 
@@ -177,8 +186,9 @@ def gcp_up(cfg: FinelogConfig) -> None:
     click.echo("Instance created. Startup script will install Docker and launch finelog.")
 
     click.echo("Waiting for finelog /health (up to ~3 minutes)...")
-    if not _wait_health_via_ssh(cfg, cfg.port):
-        raise click.ClickException("finelog did not become healthy; inspect via `finelog deploy logs`")
+    health = _wait_health_via_ssh(cfg, cfg.port)
+    if health != HEALTH_OK:
+        raise click.ClickException(f"finelog did not become healthy ({health}); inspect via `finelog deploy logs`")
     click.echo("finelog is healthy.")
 
 
@@ -246,8 +256,9 @@ def gcp_restart(cfg: FinelogConfig) -> None:
     if not apply_bootstrap(cfg, bootstrap):
         raise click.ClickException("Bootstrap re-run failed; see SSH output above")
     click.echo("Bootstrap re-applied. Verifying health...")
-    if not _wait_health_via_ssh(cfg, cfg.port):
-        raise click.ClickException("finelog did not become healthy after restart")
+    health = _wait_health_via_ssh(cfg, cfg.port)
+    if health != HEALTH_OK:
+        raise click.ClickException(f"finelog did not become healthy after restart ({health})")
     click.echo("finelog is healthy.")
 
 

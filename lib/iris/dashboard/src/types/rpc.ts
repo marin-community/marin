@@ -96,6 +96,15 @@ export interface TaskAttempt {
   finishedAt?: ProtoTimestamp
   isWorkerFailure?: boolean
   attemptUid?: string
+  // Bounded terminal cause, set only on a failed attempt.
+  terminalReason?: string
+}
+
+/** Why a failed attempt ended, empty when it did not fail. `terminalReason`
+ *  wins because an init-container failure sends `error` as an empty string,
+ *  which `??` would keep. */
+export function attemptFailureReason(attempt: TaskAttempt): string {
+  return attempt.terminalReason || attempt.error || ''
 }
 
 export interface TaskStatus {
@@ -482,9 +491,8 @@ export interface NodePoolStatus {
 }
 
 /**
- * One physical node surfaced as a worker-like fleet member. Identity/liveness/
- * allocatable come from the kubectl node sync; the live host + GPU readings from
- * the controller's exporter scrape. int64 fields serialize as strings.
+ * One physical Kubernetes node. Identity, liveness, and allocatable capacity
+ * come from the kubectl node sync. int64 fields serialize as strings.
  */
 export interface NodeStatus {
   name: string
@@ -500,20 +508,6 @@ export interface NodeStatus {
   diskBytes?: string
   runningPods?: number
   created?: string
-  // Live scrape readings (metricsTs is epoch ms; '0'/absent = never scraped).
-  metricsTs?: string
-  cpuPct?: number
-  memUsedBytes?: string
-  memTotalBytes?: string
-  diskUsedBytes?: string
-  diskTotalBytes?: string
-  netRecvBytes?: string
-  netSentBytes?: string
-  hbmUsedBytes?: string
-  hbmTotalBytes?: string
-  gpuUtilPct?: number
-  gpuTempC?: number
-  gpuPowerW?: number
 }
 
 export interface GetKubernetesClusterStatusResponse {
@@ -631,41 +625,6 @@ export interface GetSchedulerStateResponse {
   totalRunning: number
   pendingBuckets: PendingTaskBucket[]
   runningBuckets: RunningTaskBucket[]
-}
-
-// -- RPC Statistics (iris.stats.StatsService) --
-
-export interface RpcMethodStats {
-  method: string
-  count?: string
-  errorCount?: string
-  totalDurationMs?: number
-  maxDurationMs?: number
-  p50Ms?: number
-  p95Ms?: number
-  p99Ms?: number
-  bucketUpperBoundsMs?: string[]
-  bucketCounts?: string[]
-  lastCall?: ProtoTimestamp
-}
-
-export interface RpcCallSample {
-  method: string
-  timestamp?: ProtoTimestamp
-  durationMs?: number
-  peer?: string
-  userAgent?: string
-  caller?: string
-  errorCode?: string
-  errorMessage?: string
-  requestPreview?: string
-}
-
-export interface GetRpcStatsResponse {
-  methods?: RpcMethodStats[]
-  slowSamples?: RpcCallSample[]
-  discoverySamples?: RpcCallSample[]
-  collectorStartedAt?: ProtoTimestamp
 }
 
 // -- Multi-backend --

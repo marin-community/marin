@@ -1,16 +1,17 @@
 # Loom production deployment
 
-The `marin-loom` Pulumi stack manages `loom.oa.dev`: its GCE host, persistent
-data disk, Artifact Registry repository, Secret Manager access, Cloudflare DNS,
-and scheduled disk snapshots. The runtime is built from the operator's local
-Loom worktree and runs as a Docker Compose application on the GCE host.
+The `marin-loom` Pulumi stack manages `loom.oa.dev`: its GCE host with a
+persistent root disk, Artifact Registry repository, Secret Manager access,
+Cloudflare DNS, and scheduled root-disk snapshots. The runtime is built from
+the operator's local Loom worktree and runs as a Docker Compose application on
+the GCE host.
 
 ## Prerequisites
 
-Use the shared Marin state backend and KMS provider:
+`Pulumi.yaml` selects the shared Marin state backend. Select the production
+stack before deploying:
 
 ```sh
-pulumi login gs://marin-iac-state
 pulumi stack select marin-loom --cwd /path/to/marin/infra/loom
 ```
 
@@ -31,10 +32,11 @@ The local Docker builder must support `linux/amd64`.
 
 ## Deploy
 
-By default, Pulumi builds the HEAD of Loom's default branch during preview to
-catch image failures without pushing it. `pulumi up` rebuilds and pushes the
-image, places the provider-produced digest in VM metadata, and waits for
-`https://loom.oa.dev/api/ready` after activation.
+By default, Pulumi resolves the HEAD of Loom's default branch to its full commit
+SHA and uses that immutable Git context as the image input. When the resolved
+commit changes, preview reports an image update. `pulumi up` builds and pushes
+the changed image, places the provider-produced digest in VM metadata, and waits
+for `https://loom.oa.dev/api/ready` after activation.
 
 ```sh
 pulumi preview --cwd /path/to/marin/infra/loom --stack marin-loom --diff
@@ -54,10 +56,10 @@ pulumi config rm --cwd /path/to/marin/infra/loom --stack marin-loom buildContext
 ```
 
 Pulumi renders the Compose and Caddy configuration into VM metadata. The GCE
-startup unit mounts the persistent disk, reads one numbered `LOOM_DOTENV`
-version, pulls the digest-pinned image, runs `docker compose up -d`, applies the
-configured Loom deployment policy, and checks readiness. It does not clone a
-repository or build images on the VM.
+startup unit stores Docker state on the persistent root disk, reads one numbered
+`LOOM_DOTENV` version, pulls the digest-pinned image, runs
+`docker compose up -d`, applies the configured Loom deployment policy, and
+checks readiness. It does not clone a repository or build images on the VM.
 
 ## Update secrets
 
@@ -79,10 +81,18 @@ so uploading another secret version does not change the running service.
 
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
-activation. The `grafana_alert` profile is restricted to the Google identity of
-the existing `marin-grafana` Cloud Run service account. Pulumi resolves that
-account's email and immutable numeric subject; it does not create or copy a Loom
-token.
+activation. The `grafana-alerts` federation mapping authorizes the Google
+identity of the existing `marin-grafana` Cloud Run service account to select
+only the `ops` profile. Pulumi resolves that account's email and immutable
+numeric subject; it does not create or copy a Loom token.
+
+The Pulumi declaration is authoritative at activation time. An unchanged
+profile keeps its database revision; a changed declaration overwrites the
+current row and advances the revision. UI or API edits persist only until the
+next activation. Deployment pruning is enabled, so a profile or federation
+removed from `Pulumi.marin-loom.yaml` is removed from new selection on the next
+activation. Weaver's stock `default`, `github_comment`, and `watch` profiles are
+not deployment-managed and are not pruned.
 
 At runtime, the Grafana bridge gets a Google-signed ID token from the Cloud Run
 metadata server, exchanges it at `/api/auth/federate`, and uses the resulting
@@ -97,6 +107,32 @@ account already exists in the production Grafana stack. In a new environment,
 deploy Grafana once with `marin-grafana:loom_alerts` set to `false`, deploy Loom
 to bind the new service account, then enable Loom alerts and redeploy Grafana.
 
+## VM permissions
+
+The Loom VM service account runs interactive agent sessions. Keep its ambient GCP
+permissions in `Pulumi.marin-loom.yaml` instead of adding one-off project bindings:
+
+- `vmProjectRoles` grants named predefined or project-custom IAM roles on the
+  configured GCP project.
+- `vmPulumiKmsKeys` grants encrypt/decrypt access only on the listed crypto keys. This
+  lets the VM read and update Pulumi stacks that use those keys as secrets providers.
+
+These lists are additive and reviewed as code. They do not register Cloud SQL database
+users or grant PostgreSQL table privileges; the owning service stack must do both.
+Echo owns the `loom-vm` Cloud SQL principal, login roles, and table grants in
+`infra/echo`.
+
+A stack cannot bootstrap access to its own secrets-provider key. An identity that
+already has key access must apply any new `vmPulumiKmsKeys` grant.
+
+Previewing Echo requires read access to its resources, Pulumi state objects, and
+secrets-provider key. Deploying Echo also requires mutation access for Cloud Run,
+Cloud Scheduler, Cloud SQL, Artifact Registry, service accounts, project IAM, Secret
+Manager IAM, and IAP IAM, plus payload access to
+`cloudsql-pulumi-admin-password`. Prefer the existing project custom IAP IAM role and
+secret-level access over project-wide `roles/iap.admin` or
+`roles/secretmanager.admin`.
+
 ## Restart and rollback
 
 Each Loom session supervisor runs in a separately labeled Docker container.
@@ -106,5 +142,5 @@ sessions are live because it removes their shared network.
 
 To roll back, check out the prior Loom tree, restore its numbered
 `dotenvSecretVersion` when necessary, and run the normal preview and update.
-The persistent data disk and its scheduled snapshots are protected Pulumi
-resources.
+The separately managed persistent root disk is protected, is not auto-deleted
+with the VM, and has scheduled snapshots.

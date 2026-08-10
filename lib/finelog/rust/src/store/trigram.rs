@@ -1,29 +1,40 @@
-//! Per-row-group trigram (3-gram) presence index over a string column, stored as
-//! a sidecar file next to its parquet segment (`seg_L*_*.parquet.tgm`).
+//! Span-granular trigram (3-gram) presence index over a string column.
+//!
+//! The active writer stores each column as an independently checksummed
+//! `TrigramBloom` section in the segment's `.fidx` bundle. The historical
+//! `.tgm` container codec remains here only for migration cleanup and focused
+//! format tests; the Bloom payload encoding is shared by `.fidx`.
+//!
+//! A span is a fixed [`SIDECAR_SPAN_ROWS`] rows, deliberately independent of the
+//! segment's parquet row groups — those are sized to a byte target, so tying the
+//! index to them would make its granularity depend on how wide a namespace's rows
+//! happen to be.
 //!
 //! ## What it is
 //!
 //! `contains(col, needle)` / `LIKE '%needle%'` is opaque to parquet statistics —
 //! min/max and bloom filters key on whole values, so a substring match forces a
 //! decode of the column for every row in the scanned band. This index makes the
-//! match sub-linear: for each parquet row group it records the set of byte
-//! 3-grams present in `col`, as a Bloom filter. A query decomposes the needle
-//! into its 3-grams; a row group is **skipped unless it contains ALL of them**.
+//! match sub-linear: for each fixed-size span of rows (see the Spans section
+//! below) it records the set of byte 3-grams present in `col`, as a Bloom
+//! filter. A query decomposes the needle into its 3-grams; a span is **skipped
+//! unless it contains ALL of them**.
 //!
 //! The contract is **conservative — never a false negative**. A Bloom filter can
-//! only report "definitely absent" or "maybe present", so a kept row group might
-//! not actually match (the scan re-checks `contains()` exactly), but a row group
-//! that truly contains the needle is never skipped. Needles shorter than 3 bytes
+//! only report "definitely absent" or "maybe present", so a kept span might not
+//! actually match (the scan re-checks `contains()` exactly), but a span that
+//! truly contains the needle is never skipped. Needles shorter than 3 bytes
 //! have no trigrams and fall back to a full scan.
 //!
-//! ## File layout (v1)
+//! ## File layout (v2)
 //!
 //! The sidecar is **directory-first and multi-column**, so a reader can map the
-//! cheap header (a few hundred bytes) without paging in the per-row-group blooms,
+//! cheap header (a few hundred bytes) without paging in the per-span blooms,
 //! and load only the column(s) a query needs:
 //!
 //! ```text
-//! magic "FLTG" | version u8 | flags u8 | header_len u32 | rg_count u32
+//! magic "FLTG" | version u8 | flags u8 | header_len u32 | span_count u32
+//! span_rows u32                        (rows each bloom covers)
 //! key_column   : u16 len + bytes        (the segment's ordering-key column)
 //! key_min      : opt(u32 len + bytes)   (segment key band, UTF-8 bytes; absent
 //! key_max      : opt(u32 len + bytes)    for non-string keys)
@@ -31,10 +42,10 @@
 //!   per column: name u16 len + bytes | payload_offset u64 | payload_len u64
 //! -- header_len marks the end of the directory; payloads follow --
 //! per column @ payload_offset:
-//!   per row group: k u8 | m_words u32 | words (m_words × u64)
+//!   per span: k u8 | m_words u32 | words (m_words × u64)
 //! ```
 //!
-//! `header_len` lets the [`crate::query::sidecar::SidecarManager`] read the
+//! `header_len` lets the historical sidecar reader read the
 //! header with a single bounded `pread`, check the key band, and only then read a
 //! column's payload slice. `key_min`/`key_max` carry the segment's key range so a
 //! `key`-constrained `contains` query can skip out-of-band segments without
@@ -49,63 +60,65 @@
 //! lazily, only for substring queries. It is a pure, optional, derivable function
 //! of the column: a missing or stale sidecar is never *wrong*, only unpruned.
 //!
-//! ## Row-group alignment
+//! ## Spans
 //!
-//! `ArrowWriter` flushes a row group strictly every `ROW_GROUP_SIZE` rows (no
-//! byte cap is set), so the index — built by chunking the written `data` values
-//! at the same stride — aligns 1:1 with the parquet row groups by global row
-//! index. The prune path re-checks `index.len() == parquet.num_row_groups` and
-//! falls back to scan-all on any mismatch.
+//! A bloom covers a fixed [`SIDECAR_SPAN_ROWS`] span of the segment's rows, which
+//! is deliberately NOT the parquet row-group size: row groups are sized by bytes
+//! so the footer stays small (see
+//! [`crate::store::segment::segment_writer_properties`]), while pruning wants the
+//! finest
+//! granularity its blooms can afford. The prune path maps the span mask onto the
+//! parquet row groups, emitting a row selection when a row group is only
+//! partly covered. It re-checks that the spans account for exactly the segment's
+//! rows and falls back to scan-all on any mismatch.
 
 use std::path::{Path, PathBuf};
 
-use arrow::array::{Array, LargeStringArray, RecordBatch, StringArray};
+use arrow::array::RecordBatch;
 
-use crate::store::segment::ROW_GROUP_SIZE;
+use crate::store::string_column::StringColumn;
 
 /// Sidecar file magic + version.
 const TGM_MAGIC: &[u8; 4] = b"FLTG";
-const TGM_VERSION: u8 = 1;
+const TGM_VERSION: u8 = 2;
+
+/// Rows covered by one bloom. Finer spans prune more precisely at a larger
+/// sidecar; 16,384 rows is roughly 2 KiB of bloom per span per column.
+pub const SIDECAR_SPAN_ROWS: usize = 16_384;
 
 /// Minimum needle length that decomposes into at least one trigram. Shorter
 /// needles index nothing and must fall back to a scan.
 pub const MIN_TRIGRAM_LEN: usize = 3;
 
-/// The single string column indexed for substring (`contains`) pruning in v1.
-/// `key` is already range-prunable, so it is not indexed; revisit if a
-/// `contains(key, …)` workload appears. The format itself is multi-column, so
-/// adding a second indexed column is an additive change.
-pub const INDEXED_COLUMN: &str = "data";
-
-/// Target Bloom false-positive rate per row group. A false positive only keeps a
-/// row group that doesn't match (a wasted decode the scan filters out); it never
+/// Target Bloom false-positive rate per span. A false positive only keeps a
+/// span that doesn't match (a wasted decode the scan filters out); it never
 /// drops a match. 1% trades a small over-scan for a ~2x smaller sidecar than an
 /// exact trigram set.
 const DEFAULT_FPR: f64 = 0.01;
 
 const LN2: f64 = std::f64::consts::LN_2;
 
-/// A row group's trigram-presence Bloom filter.
+/// A span's trigram-presence Bloom filter.
 ///
-/// Sized per row group from its distinct-trigram count: a uniform size would
-/// waste space on sparse groups and overflow dense ones (measured distinct
-/// trigrams/row-group on real log text span ~1.3k–11k).
+/// Sized per span from its distinct-trigram count: a uniform size would waste
+/// space on sparse spans and overflow dense ones (measured distinct trigrams per
+/// span on real log text span ~1.3k–11k).
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct RowGroupBloom {
+struct SpanBloom {
     /// Bit storage; `m_bits == words.len() * 64`.
     words: Vec<u64>,
     /// Number of hash probes per element.
     k: u8,
 }
 
-impl RowGroupBloom {
+impl SpanBloom {
     /// Allocate a Bloom filter sized for `n` distinct elements at `fpr`.
     ///
-    /// `n == 0` yields a one-word, never-set filter so an empty row group is
-    /// pruned for every needle (it can contain no substring).
-    fn with_capacity(n: usize, fpr: f64) -> RowGroupBloom {
+    /// `n == 0` yields a one-word, never-set filter so an empty span is pruned
+    /// for every needle (it can contain no substring).
+    fn with_capacity(n: usize, fpr: f64) -> SpanBloom {
         if n == 0 {
-            return RowGroupBloom {
+            return SpanBloom {
                 words: vec![0u64],
                 k: 1,
             };
@@ -115,7 +128,7 @@ impl RowGroupBloom {
         let words = ((m / 64.0).ceil() as usize).clamp(1, 1 << 16);
         let m_bits = (words * 64) as f64;
         let k = ((m_bits / n as f64) * LN2).round().clamp(1.0, 16.0) as u8;
-        RowGroupBloom {
+        SpanBloom {
             words: vec![0u64; words],
             k,
         }
@@ -170,9 +183,9 @@ fn splitmix64(x: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Per-row-group keep mask for already-tokenized `trigrams`: `keep[i]` is `true`
-/// unless row group `i`'s Bloom proves it lacks at least one trigram.
-fn keep_mask_over(groups: &[RowGroupBloom], trigrams: &[[u8; 3]]) -> Vec<bool> {
+/// Per-span keep mask for already-tokenized `trigrams`: `keep[i]` is `true`
+/// unless span `i`'s Bloom proves it lacks at least one trigram.
+fn keep_mask_over(groups: &[SpanBloom], trigrams: &[[u8; 3]]) -> Vec<bool> {
     groups
         .iter()
         .map(|bloom| trigrams.iter().all(|&t| bloom.contains(t)))
@@ -180,16 +193,16 @@ fn keep_mask_over(groups: &[RowGroupBloom], trigrams: &[[u8; 3]]) -> Vec<bool> {
 }
 
 /// A built trigram index for one column: its name plus one Bloom filter per
-/// parquet row group, in row-group order. The write-side representation produced
-/// by [`TrigramIndex::build`] and handed to [`serialize_sidecar`].
+/// [`SIDECAR_SPAN_ROWS`] span, in row order. The write-side representation
+/// produced by [`TrigramIndex::build`] and handed to [`serialize_sidecar`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrigramIndex {
     column: String,
-    groups: Vec<RowGroupBloom>,
+    groups: Vec<SpanBloom>,
 }
 
 impl TrigramIndex {
-    /// Number of indexed row groups.
+    /// Number of indexed spans.
     pub fn len(&self) -> usize {
         self.groups.len()
     }
@@ -202,8 +215,8 @@ impl TrigramIndex {
         &self.column
     }
 
-    /// Build an index over `column` across `batches` in row order, chunking at
-    /// `ROW_GROUP_SIZE` to mirror the parquet writer's row-group boundaries.
+    /// Build an index over `column` across `batches` in row order, one bloom per
+    /// [`SIDECAR_SPAN_ROWS`] rows.
     ///
     /// Returns `None` if `column` is absent or is not a UTF-8 string column (no
     /// index ⇒ no prune, which is safe).
@@ -214,7 +227,7 @@ impl TrigramIndex {
                 groups: Vec::new(),
             });
         }
-        let mut groups: Vec<RowGroupBloom> = Vec::new();
+        let mut groups: Vec<SpanBloom> = Vec::new();
         let mut current: TrigramSet = TrigramSet::default();
         let mut rows_in_group = 0usize;
 
@@ -229,7 +242,7 @@ impl TrigramIndex {
                     }
                 }
                 rows_in_group += 1;
-                if rows_in_group == ROW_GROUP_SIZE {
+                if rows_in_group == SIDECAR_SPAN_ROWS {
                     groups.push(current.into_bloom(DEFAULT_FPR));
                     current = TrigramSet::default();
                     rows_in_group = 0;
@@ -247,7 +260,7 @@ impl TrigramIndex {
 }
 
 /// One column directory entry in a parsed [`SidecarHeader`]: where that column's
-/// per-row-group bloom payload lives in the file.
+/// per-span bloom payload lives in the file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColumnDir {
     pub name: String,
@@ -264,8 +277,10 @@ pub struct ColumnDir {
 /// and slice without paging in any blooms.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidecarHeader {
-    /// Parquet row groups covered (shared by every column).
-    pub rg_count: u32,
+    /// Blooms per column.
+    pub span_count: u32,
+    /// Rows each bloom covers. The last span may hold fewer.
+    pub span_rows: u32,
     /// The segment's ordering-key column name (empty if the namespace is keyless).
     pub key_column: String,
     /// Segment key band as raw UTF-8 bytes, present only for string key columns.
@@ -279,6 +294,23 @@ impl SidecarHeader {
     /// Directory entry for `name`, or `None` if the column is not indexed.
     pub fn column(&self, name: &str) -> Option<&ColumnDir> {
         self.columns.iter().find(|c| c.name == name)
+    }
+
+    /// Whether every column in `wanted` is present in this sidecar.
+    ///
+    /// A sidecar written before a column gained its index covers fewer columns
+    /// than the schema now asks for. It stays *correct* — an absent column just
+    /// scans unpruned — but the backfill uses this to notice that the file needs
+    /// rewriting, which file existence alone cannot tell it.
+    pub fn covers_columns(&self, wanted: &[&str]) -> bool {
+        wanted
+            .iter()
+            .all(|w| self.columns.iter().any(|c| c.name == *w))
+    }
+
+    /// Names of the columns this sidecar indexes, in directory order.
+    pub fn column_names(&self) -> impl Iterator<Item = &str> {
+        self.columns.iter().map(|c| c.name.as_str())
     }
 
     /// Whether the segment's key band can satisfy the inclusive query range
@@ -309,16 +341,16 @@ impl SidecarHeader {
     }
 }
 
-/// One column's parsed per-row-group blooms — the read-side counterpart of a
+/// One column's parsed per-span blooms — the read-side counterpart of a
 /// [`TrigramIndex`], shared via `Arc` and cached by the
-/// [`crate::query::sidecar::SidecarManager`].
+/// process-wide index cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColumnIndex {
-    groups: Vec<RowGroupBloom>,
+    groups: Vec<SpanBloom>,
 }
 
 impl ColumnIndex {
-    /// Number of indexed row groups.
+    /// Number of indexed spans.
     pub fn len(&self) -> usize {
         self.groups.len()
     }
@@ -327,38 +359,35 @@ impl ColumnIndex {
         self.groups.is_empty()
     }
 
-    /// Per-row-group keep mask for `needle`: `keep[i]` is `true` unless row group
+    /// Per-span keep mask for `needle`: `keep[i]` is `true` unless span
     /// `i`'s Bloom proves it cannot contain the needle. `None` for a needle with
     /// no trigrams (`< MIN_TRIGRAM_LEN`), meaning "cannot prune — scan all".
     pub fn keep_mask(&self, needle: &str) -> Option<Vec<bool>> {
         Some(self.keep_mask_for(&needle_trigrams(needle)?))
     }
 
-    /// Per-row-group keep mask for a needle's already-tokenized `trigrams` (see
+    /// Per-span keep mask for a needle's already-tokenized `trigrams` (see
     /// [`needle_trigrams`]). Splitting tokenization from masking lets a caller
     /// decompose the needle once and reuse it across many segments.
     pub fn keep_mask_for(&self, trigrams: &[[u8; 3]]) -> Vec<bool> {
         keep_mask_over(&self.groups, trigrams)
     }
 
-    /// Heap bytes backing the blooms — what the sidecar cache charges to its
+    /// Heap bytes backing the blooms — what the index cache charges to its
     /// byte budget for this entry.
     pub fn heap_bytes(&self) -> usize {
-        self.groups
-            .iter()
-            .map(RowGroupBloom::heap_bytes)
-            .sum::<usize>()
-            + self.groups.len() * std::mem::size_of::<RowGroupBloom>()
+        self.groups.iter().map(SpanBloom::heap_bytes).sum::<usize>()
+            + self.groups.len() * std::mem::size_of::<SpanBloom>()
     }
 }
 
 /// Serialize a segment's trigram index to the on-disk sidecar byte format.
 ///
-/// `rg_count` is the shared parquet row-group count; `key_min`/`key_max` are the
-/// segment's key band as raw bytes (string keys only); `columns` are the per-
-/// column blooms (one entry today, `INDEXED_COLUMN`).
+/// `span_count` is the shared bloom count; `key_min`/`key_max` are the segment's
+/// key band as raw bytes (string keys only); `columns` are the per-column blooms,
+/// one per column the namespace's schema flags.
 pub fn serialize_sidecar(
-    rg_count: u32,
+    span_count: u32,
     key_column: &str,
     key_min: Option<&[u8]>,
     key_max: Option<&[u8]>,
@@ -371,7 +400,8 @@ pub fn serialize_sidecar(
 
     // Directory size is fully determined by the column names and the optional
     // key band, so we can compute payload offsets before writing a byte.
-    let mut header_len = 4 + 1 + 1 + 4 + 4; // magic + version + flags + header_len + rg_count
+    // magic + version + flags + header_len + span_count + span_rows
+    let mut header_len = 4 + 1 + 1 + 4 + 4 + 4;
     header_len += 2 + key_column.len(); // key_column (u16 len + bytes)
     header_len += opt_bytes_len(key_min);
     header_len += opt_bytes_len(key_max);
@@ -392,7 +422,8 @@ pub fn serialize_sidecar(
     out.push(TGM_VERSION);
     out.push(0); // flags (reserved)
     out.extend_from_slice(&(header_len as u32).to_le_bytes());
-    out.extend_from_slice(&rg_count.to_le_bytes());
+    out.extend_from_slice(&span_count.to_le_bytes());
+    out.extend_from_slice(&(SIDECAR_SPAN_ROWS as u32).to_le_bytes());
     put_varbytes_u16(&mut out, key_column.as_bytes());
     put_opt_bytes_u32(&mut out, key_min);
     put_opt_bytes_u32(&mut out, key_max);
@@ -409,8 +440,8 @@ pub fn serialize_sidecar(
     out
 }
 
-/// Serialize one column's per-row-group blooms (the payload body).
-fn serialize_column(groups: &[RowGroupBloom]) -> Vec<u8> {
+/// Serialize one column's per-span blooms (the payload body).
+fn serialize_column(groups: &[SpanBloom]) -> Vec<u8> {
     let mut out = Vec::new();
     for g in groups {
         out.push(g.k);
@@ -420,6 +451,11 @@ fn serialize_column(groups: &[RowGroupBloom]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// Serialize one built column for storage in a typed index-bundle section.
+pub(crate) fn serialize_index(index: &TrigramIndex) -> Vec<u8> {
+    serialize_column(&index.groups)
 }
 
 /// The declared header length of a sidecar prefix (bytes `[0, header_len)` hold
@@ -453,7 +489,8 @@ pub fn parse_header(bytes: &[u8]) -> Option<SidecarHeader> {
     if bytes.len() < header_len {
         return None;
     }
-    let rg_count = r.u32()?;
+    let span_count = r.u32()?;
+    let span_rows = r.u32()?;
     let key_column = r.string_u16()?;
     let key_min = r.opt_bytes_u32()?;
     let key_max = r.opt_bytes_u32()?;
@@ -466,7 +503,8 @@ pub fn parse_header(bytes: &[u8]) -> Option<SidecarHeader> {
         columns.push(ColumnDir { name, offset, len });
     }
     Some(SidecarHeader {
-        rg_count,
+        span_count,
+        span_rows,
         key_column,
         key_min,
         key_max,
@@ -474,16 +512,16 @@ pub fn parse_header(bytes: &[u8]) -> Option<SidecarHeader> {
     })
 }
 
-/// Parse one column's payload (`rg_count` per-row-group blooms) from its slice.
-/// Returns `None` on truncation or a row-group-count mismatch.
-pub fn parse_column(bytes: &[u8], rg_count: u32) -> Option<ColumnIndex> {
+/// Parse one column's payload (`span_count` per-span blooms) from its slice.
+/// Returns `None` on truncation or a span-count mismatch.
+pub fn parse_column(bytes: &[u8], span_count: u32) -> Option<ColumnIndex> {
     let mut r = ByteReader::new(bytes);
-    let mut groups = Vec::with_capacity(rg_count as usize);
-    for _ in 0..rg_count {
+    let mut groups = Vec::with_capacity(span_count as usize);
+    for _ in 0..span_count {
         let k = r.u8()?;
         let words_len = r.u32()? as usize;
         // A well-formed bloom always has `k >= 1` and at least one word (see
-        // `RowGroupBloom::with_capacity`). Reject a corrupt zero here: an empty
+        // `SpanBloom::with_capacity`). Reject a corrupt zero here: an empty
         // word array makes `m_bits == 0`, so a later `probes`/`contains` would
         // panic on `% 0` instead of degrading to "absent" as the format promises.
         if k == 0 || words_len == 0 {
@@ -498,22 +536,22 @@ pub fn parse_column(bytes: &[u8], rg_count: u32) -> Option<ColumnIndex> {
         for _ in 0..words_len {
             words.push(r.u64()?);
         }
-        groups.push(RowGroupBloom { words, k });
+        groups.push(SpanBloom { words, k });
     }
     Some(ColumnIndex { groups })
 }
 
 /// Read a single column's index from a full in-memory sidecar buffer (header +
 /// payloads). Convenience over [`parse_header`] + [`parse_column`] for callers
-/// that already hold the whole file; the [`crate::query::sidecar::SidecarManager`]
-/// uses positioned slice reads instead. `None` if the column is absent or the
+/// that already hold the whole file; the `.fidx` reader uses positioned section
+/// reads instead. `None` if the column is absent or the
 /// buffer is malformed/truncated.
 pub fn read_column_from_bytes(bytes: &[u8], column: &str) -> Option<ColumnIndex> {
     let header = parse_header(bytes)?;
     let dir = header.column(column)?;
     let start = dir.offset as usize;
     let end = start.checked_add(dir.len as usize)?;
-    parse_column(bytes.get(start..end)?, header.rg_count)
+    parse_column(bytes.get(start..end)?, header.span_count)
 }
 
 /// The sidecar path for a parquet segment: `<segment>.tgm`.
@@ -531,8 +569,8 @@ pub fn sidecar_path(parquet_path: &Path) -> PathBuf {
 /// Columns that are absent or not UTF-8 string-typed are skipped (each yields no
 /// index, which is safe). Returns `Ok(true)` when a non-empty sidecar was
 /// written, `Ok(false)` when nothing was indexable (no such columns, or zero row
-/// groups). All surviving column indexes share the same row-group count — they
-/// chunk the same `batches` at the same `ROW_GROUP_SIZE` stride.
+/// spans). All surviving column indexes share the same span count — they chunk
+/// the same `batches` at the same [`SIDECAR_SPAN_ROWS`] stride.
 ///
 /// The index is optional — a write failure is non-fatal to the caller (the
 /// segment just scans unpruned), so callers log rather than propagate.
@@ -554,14 +592,14 @@ pub fn write_sidecar(
     }
     debug_assert!(
         indexes.iter().all(|i| i.len() == indexes[0].len()),
-        "all indexed columns chunk the same batches into the same row-group count"
+        "all indexed columns chunk the same batches into the same span count"
     );
-    let rg_count = indexes[0].len() as u32;
+    let span_count = indexes[0].len() as u32;
     let (key_min, key_max) = key_column
         .map(|kc| string_key_bounds(batches, kc))
         .unwrap_or((None, None));
     let bytes = serialize_sidecar(
-        rg_count,
+        span_count,
         key_column.unwrap_or(""),
         key_min.as_deref(),
         key_max.as_deref(),
@@ -586,7 +624,7 @@ pub fn write_sidecar(
 /// matches both the parquet string statistics and the lexicographic order used by
 /// the query-time key-range bounds, so the comparison in
 /// [`SidecarHeader::key_band_overlaps`] is sound.
-fn string_key_bounds(
+pub(crate) fn string_key_bounds(
     batches: &[RecordBatch],
     key_column: &str,
 ) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
@@ -647,7 +685,7 @@ const TRIGRAM_BITSET_WORDS: usize = (1 << 24) / 64;
 
 /// Dedup set over the 24-bit trigram universe, backed by a fixed 2 MiB bitset.
 ///
-/// A log row group yields millions of trigram windows that are mostly
+/// A log span yields millions of trigram windows that are mostly
 /// duplicates; a `HashSet<u32>` pays a hash + probe (and periodic rehash growth)
 /// on every one. The bitset makes `insert` a single shift-and-or against a
 /// direct bit index, with no hashing and no allocation after construction, and
@@ -701,36 +739,10 @@ impl TrigramSet {
         out
     }
 
-    fn into_bloom(self, fpr: f64) -> RowGroupBloom {
-        let mut bloom = RowGroupBloom::with_capacity(self.len(), fpr);
+    fn into_bloom(self, fpr: f64) -> SpanBloom {
+        let mut bloom = SpanBloom::with_capacity(self.len(), fpr);
         self.for_each(|t| bloom.insert(t));
         bloom
-    }
-}
-
-/// A read-only view over a string column as either `Utf8` or `LargeUtf8`.
-enum StringColumn<'a> {
-    Utf8(&'a StringArray),
-    Large(&'a LargeStringArray),
-}
-
-impl<'a> StringColumn<'a> {
-    fn new(col: &'a dyn Array) -> Option<StringColumn<'a>> {
-        if let Some(a) = col.as_any().downcast_ref::<StringArray>() {
-            Some(StringColumn::Utf8(a))
-        } else {
-            col.as_any()
-                .downcast_ref::<LargeStringArray>()
-                .map(StringColumn::Large)
-        }
-    }
-
-    #[inline]
-    fn value(&self, row: usize) -> Option<&str> {
-        match self {
-            StringColumn::Utf8(a) => (!a.is_null(row)).then(|| a.value(row)),
-            StringColumn::Large(a) => (!a.is_null(row)).then(|| a.value(row)),
-        }
     }
 }
 
@@ -759,40 +771,48 @@ fn opt_bytes_len(bytes: Option<&[u8]>) -> usize {
 }
 
 /// Minimal little-endian byte reader for sidecar parsing.
-struct ByteReader<'a> {
+pub(crate) struct ByteReader<'a> {
     bytes: &'a [u8],
     pos: usize,
 }
 
 impl<'a> ByteReader<'a> {
-    fn new(bytes: &'a [u8]) -> ByteReader<'a> {
+    pub(crate) fn new(bytes: &'a [u8]) -> ByteReader<'a> {
         ByteReader { bytes, pos: 0 }
     }
 
-    fn remaining(&self) -> usize {
+    pub(crate) fn remaining(&self) -> usize {
         self.bytes.len().saturating_sub(self.pos)
     }
 
-    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.remaining() == 0
+    }
+
+    pub(crate) fn take(&mut self, n: usize) -> Option<&'a [u8]> {
         let end = self.pos.checked_add(n)?;
         let slice = self.bytes.get(self.pos..end)?;
         self.pos = end;
         Some(slice)
     }
 
-    fn u8(&mut self) -> Option<u8> {
+    pub(crate) fn array<const N: usize>(&mut self) -> Option<[u8; N]> {
+        self.take(N)?.try_into().ok()
+    }
+
+    pub(crate) fn u8(&mut self) -> Option<u8> {
         Some(self.take(1)?[0])
     }
 
-    fn u16(&mut self) -> Option<u16> {
+    pub(crate) fn u16(&mut self) -> Option<u16> {
         Some(u16::from_le_bytes(self.take(2)?.try_into().ok()?))
     }
 
-    fn u32(&mut self) -> Option<u32> {
+    pub(crate) fn u32(&mut self) -> Option<u32> {
         Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
     }
 
-    fn u64(&mut self) -> Option<u64> {
+    pub(crate) fn u64(&mut self) -> Option<u64> {
         Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
     }
 
@@ -892,7 +912,7 @@ mod tests {
             set.insert(t);
         }
         let tris: Vec<[u8; 3]> = set.into_vec();
-        let mut bloom = RowGroupBloom::with_capacity(tris.len(), 0.01);
+        let mut bloom = SpanBloom::with_capacity(tris.len(), 0.01);
         for &t in &tris {
             bloom.insert(t);
         }
@@ -927,10 +947,10 @@ mod tests {
     }
 
     #[test]
-    fn keep_mask_no_false_negative_per_row_group() {
-        // Row group 0 contains the needle; row group 1 does not. The needle's
-        // group must be kept; short needles return None (scan all).
-        let rg0: Vec<Option<&str>> = (0..ROW_GROUP_SIZE)
+    fn keep_mask_no_false_negative_per_span() {
+        // Span 0 contains the needle; span 1 does not. The needle's span must be
+        // kept; short needles return None (scan all).
+        let rg0: Vec<Option<&str>> = (0..SIDECAR_SPAN_ROWS)
             .map(|i| {
                 if i == 7 {
                     Some("Bootstrap completed for TPU v6e-4")
@@ -943,7 +963,7 @@ mod tests {
         let b0 = data_batch(rg0);
         let b1 = data_batch(rg1);
         let idx = TrigramIndex::build(&[b0, b1], "data").unwrap();
-        assert_eq!(idx.len(), 2, "two row groups (16384 + 100 rows)");
+        assert_eq!(idx.len(), 2, "two spans (16384 + 100 rows)");
 
         // Round-trip through the on-disk format to a read-side ColumnIndex.
         let bytes = serialize_data(&idx, None, None);
@@ -951,17 +971,17 @@ mod tests {
 
         let mask = col.keep_mask("Bootstrap completed for TPU").unwrap();
         assert_eq!(mask.len(), 2);
-        assert!(mask[0], "row group with the needle must be kept");
-        assert!(!mask[1], "row group without the needle is pruned");
+        assert!(mask[0], "span with the needle must be kept");
+        assert!(!mask[1], "span without the needle is pruned");
 
         // Sub-trigram needle cannot prune.
         assert!(col.keep_mask("ab").is_none());
     }
 
     #[test]
-    fn build_aligns_row_group_boundaries() {
-        // 16384*2 + 5 rows -> 3 row groups, matching ArrowWriter's stride.
-        let n = ROW_GROUP_SIZE * 2 + 5;
+    fn build_chunks_at_the_span_stride() {
+        // 16384*2 + 5 rows -> 3 spans, independent of how the rows are batched.
+        let n = SIDECAR_SPAN_ROWS * 2 + 5;
         let vals: Vec<Option<&str>> = (0..n).map(|_| Some("payload line content")).collect();
         let idx = TrigramIndex::build(&[data_batch(vals)], "data").unwrap();
         assert_eq!(idx.len(), 3);
@@ -974,17 +994,33 @@ mod tests {
         let bytes = serialize_data(&idx, Some("/a/b"), Some("/a/c"));
 
         let header = parse_header(&bytes).unwrap();
-        assert_eq!(header.rg_count, 1);
+        assert_eq!(header.span_count, 1);
+        assert_eq!(header.span_rows, SIDECAR_SPAN_ROWS as u32);
         assert_eq!(header.key_column, "key");
         assert_eq!(header.key_min.as_deref(), Some(b"/a/b".as_slice()));
         assert_eq!(header.key_max.as_deref(), Some(b"/a/c".as_slice()));
 
         let col = read_column_from_bytes(&bytes, "data").unwrap();
         assert_eq!(col.len(), 1);
-        // A real needle present in the data keeps the (single) row group.
+        // A real needle present in the data keeps the (single) span.
         assert_eq!(col.keep_mask("beta gamma").unwrap(), vec![true]);
         // An unindexed column is absent from the directory.
         assert!(read_column_from_bytes(&bytes, "nope").is_none());
+    }
+
+    #[test]
+    fn covers_columns_detects_a_sidecar_predating_a_new_index() {
+        // A sidecar written when only `data` was indexed. Enabling a second
+        // column later must be detectable from the header alone, since the file
+        // still exists and its span count is still correct.
+        let batch = log_batch(vec!["/m/a"], vec![Some("one two three")]);
+        let idx = TrigramIndex::build(std::slice::from_ref(&batch), "data").unwrap();
+        let header = parse_header(&serialize_data(&idx, None, None)).unwrap();
+
+        assert!(header.covers_columns(&["data"]));
+        assert!(header.covers_columns(&[]));
+        assert!(!header.covers_columns(&["data", "key"]));
+        assert!(!header.covers_columns(&["key"]));
     }
 
     #[test]
@@ -1079,7 +1115,7 @@ mod tests {
 
     #[test]
     fn parse_column_rejects_degenerate_blooms() {
-        // A row group is `k u8 | words_len u32 | words[words_len] u64`. A corrupt
+        // A span is `k u8 | words_len u32 | words[words_len] u64`. A corrupt
         // `words_len == 0` would make `m_bits == 0` and panic on `% 0` at query
         // time; it must be rejected (treated as absent), never panic. Likewise
         // `k == 0` (a real bloom always probes at least one bit).

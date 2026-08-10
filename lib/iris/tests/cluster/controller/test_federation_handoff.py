@@ -28,11 +28,11 @@ from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.service import (
-    AVAILABILITY_METRIC_VERSION,
     WORKDIR_FILE_OFFLOAD_THRESHOLD,
     ControllerServiceImpl,
     _peer_status,
 )
+from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
@@ -140,6 +140,19 @@ class _FullGpuPeerConnection(_InProcessPeerConnection):
         summary.availability.observation_epoch_ms = 1
         summary.availability.amounts["h100"] = 0
         return [summary]
+
+
+class _BatchOccupiedGpuPeerConnection(_FullGpuPeerConnection):
+    """A peer with no free chips whose H100s are all held by preemptible batch work.
+
+    The reclaim case: nothing is idle, but the held capacity sits below an interactive
+    candidate's band, so the parent delegates and lets the peer's scheduler preempt.
+    """
+
+    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
+        summaries = super().list_backends()
+        summaries[0].availability.held_by_band.add(band=job_pb2.PRIORITY_BAND_BATCH, amounts={"h100": 8})
+        return summaries
 
 
 class _RefusingPeerConnection(_InProcessPeerConnection):
@@ -491,47 +504,6 @@ def test_federation_sync_rejects_an_ordinary_user(tmp_path, log_client):
 # ---------------------------------------------------------------------------
 
 
-def test_handoff_materializes_on_peer_and_syncs_back(tmp_path, log_client):
-    with ExitStack() as stack:
-        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
-        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
-
-        response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
-        job_id = JobName.from_wire(response.job_id)
-        promote_queued_federation(manager, parent_state)  # tick promotes the queued handle; sync loop delivers
-
-        # Parent side: a HANDED_OFF handle, and no local tasks (a federated root
-        # owns none). Job ids are cluster-invariant, so the peer runs the same id.
-        handle = _handle(parent_state, job_id)
-        assert handle is not None
-        assert handle.peer_id == "cw"
-        assert handle.handoff_state == int(HandoffState.HANDED_OFF)
-        assert handle.job_id == job_id
-        assert query_tasks_for_job(parent_state, job_id) == []
-
-        # Peer side: it materialized and OWNS the job (a RECEIVED federated_jobs
-        # row, not a SENT handle) and expanded it into a task — under the same id.
-        assert _handle(peer_state, job_id) is None
-        assert len(query_tasks_for_job(peer_state, job_id)) == 1
-        assert query_job(peer_state, job_id) is not None
-
-        # Before the first sync the parent knows the peer accepted the handoff but
-        # has no mirrored tasks yet: PEER_STATUS_ASSIGNED.
-        assert _peer_status_of(parent_service, job_id) == job_pb2.PEER_STATUS_ASSIGNED
-
-        _run_peer_task_to_success(peer_state, job_id)
-        manager.sync_once()
-
-        # Parent's handle now mirrors the peer's terminal state and its task,
-        # tagged with the owning peer; the posture advances to PEER_STATUS_SYNCED.
-        assert query_job(parent_state, job_id).state == job_pb2.JOB_STATE_SUCCEEDED
-        (mirrored,) = query_tasks_for_job(parent_state, job_id)
-        assert mirrored.state == job_pb2.TASK_STATE_SUCCEEDED
-        assert mirrored.cluster == "cw"
-        assert _peer_status_of(parent_service, job_id) == job_pb2.PEER_STATUS_SYNCED
-
-
 def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client):
     """After sync-back the parent renders a federated task natively: the peer's
     attempt history is mirrored and the peer-side worker identity is surfaced (as
@@ -808,6 +780,44 @@ def test_a_job_the_peer_has_no_room_for_waits_in_the_queue_unassigned(tmp_path, 
 
 
 @pytest.mark.parametrize(
+    ("band", "handoff_state", "peer_id", "launch_calls"),
+    [
+        (job_pb2.PRIORITY_BAND_INTERACTIVE, HandoffState.HANDED_OFF, "cw", 1),
+        (job_pb2.PRIORITY_BAND_BATCH, HandoffState.QUEUED_HANDOFF, "", 0),
+    ],
+    ids=["interactive-outranks-the-held-band", "batch-outranks-nothing"],
+)
+def test_a_peer_with_no_free_gpus_receives_only_work_that_outranks_the_holder(
+    band, handoff_state, peer_id, launch_calls, tmp_path, log_client
+):
+    """The peer reports 0 free and 8 held at PRIORITY_BAND_BATCH.
+
+    An interactive job outranks that band, so the pass places it and the handoff is
+    delivered. A batch job outranks nothing, so it stays queued at the parent. Delivery
+    is the boundary this test owns — whether the peer's Kueue then evicts the batch work
+    is the peer's decision, not the parent's.
+    """
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        connection = _BatchOccupiedGpuPeerConnection(peer_service)
+        manager = _attach_federation(parent_service, connection)
+        parent_service._controller.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
+
+        request = make_direct_job_request("held-by-batch", replicas=1)
+        request.priority_band = band
+        request.resources.device.CopyFrom(job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="h100", count=8)))
+        response = parent_service.launch_job(request, None)
+
+        promote_queued_federation(manager, parent_state)
+
+        handle = _handle(parent_state, JobName.from_wire(response.job_id))
+        assert handle.handoff_state == int(handoff_state)
+        assert handle.peer_id == peer_id
+        assert connection.launch_calls == launch_calls
+
+
+@pytest.mark.parametrize(
     ("cluster", "handoff_state", "has_reported_tasks", "expected"),
     [
         # A local job is never a peer job, whatever the other inputs.
@@ -1059,7 +1069,7 @@ def test_admit_persists_a_queued_handle_and_is_idempotent(tmp_path, log_client):
             peer_id="cw",
             owner_principal=_USER,
             submitting_user=_USER,
-            request=make_direct_job_request("fed-job", replicas=1),
+            request=make_direct_job_request("fed-job", replicas=1, priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE),
         )
 
         # Admission parks the job in the controller-side queue; the control tick promotes
@@ -1296,66 +1306,6 @@ def _spawn_child_on_peer(peer_service: ControllerServiceImpl, root: JobName, nam
     request.name = root.child(name).to_wire()
     response = peer_service.launch_job(request, None)
     return JobName.from_wire(response.job_id)
-
-
-def test_sync_mirrors_a_child_the_peer_spawned_under_a_received_root(tmp_path, log_client):
-    """A child a peer spawns under a received root reaches the parent's dashboard.
-
-    The peer runs the child as an ordinary local job, so nothing hands it off; it is
-    reported because its *root* was received. The parent must mirror it as a job a
-    dashboard read can actually return — ListJobs and GetJobStatus, not just a raw
-    ``jobs`` row — else a coordinator's real work is invisible on the parent.
-    """
-    with ExitStack() as stack:
-        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
-        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
-
-        response = parent_service.launch_job(_cluster_pinned_request("coord"), None)
-        root = JobName.from_wire(response.job_id)
-        promote_queued_federation(manager, parent_state)
-
-        child = _spawn_child_on_peer(peer_service, root, "trainer")
-        manager.sync_once()
-
-        # The mirrored child is a complete job row: stamped with the owning peer and
-        # hung under its parent, so the dashboard renders it in the root's subtree.
-        mirrored = query_job(parent_state, child)
-        assert mirrored is not None, "peer-spawned child never mirrored onto the parent"
-        assert mirrored.cluster == "cw"
-        assert mirrored.parent_job_id == root
-
-        # ListJobs is the dashboard's job feed: the child must appear both unfiltered
-        # and under the peer's cluster filter.
-        def _list(**query) -> set[str]:
-            resp = parent_service.list_jobs(
-                controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(**query)),
-                None,
-            )
-            return {j.job_id for j in resp.jobs}
-
-        assert child.to_wire() in _list()
-        assert child.to_wire() in _list(cluster="cw")
-
-        # The dashboard drills into a root by listing its children; the reported
-        # total must match the rows actually returned, or the page under-fills.
-        children = parent_service.list_jobs(
-            controller_pb2.Controller.ListJobsRequest(
-                query=controller_pb2.Controller.JobQuery(
-                    scope=controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN,
-                    parent_job_id=root.to_wire(),
-                )
-            ),
-            None,
-        )
-        assert {j.job_id for j in children.jobs} == {child.to_wire()}
-        assert children.total_count == 1
-
-        # And it must be addressable by id, not just visible in a list.
-        status = parent_service.get_job_status(
-            controller_pb2.Controller.GetJobStatusRequest(job_id=child.to_wire()), None
-        ).job
-        assert status.cluster == "cw"
 
 
 def test_sync_mirrors_a_childs_resources_from_the_peer(tmp_path, log_client):

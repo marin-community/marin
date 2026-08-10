@@ -10,6 +10,7 @@ from pathlib import Path
 
 import click
 
+from marin.external_dependencies import VLLM_FORK_REQUIREMENT
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     LevanterEngineConfig,
@@ -21,7 +22,6 @@ from marin.inference.config import (
 from marin.inference.iris_cli import main as iris
 from marin.inference.iris_cli import reject_backend_options
 from marin.inference.serve import local_inference
-from marin.inference.tpu_vllm_pins import vllm_fork_ref
 
 _LOCAL_VLLM_OPTIONS = {
     "launcher": "--launcher",
@@ -46,7 +46,11 @@ def main() -> None:
 @main.command("local")
 @click.argument("model")
 @click.option("--backend", type=click.Choice(["vllm", "levanter"]), default="vllm")
-@click.option("--launcher", type=click.Choice([item.value for item in VllmLauncherType]), default="workspace")
+@click.option(
+    "--launcher",
+    type=click.Choice([item.value for item in VllmLauncherType]),
+    default=VllmLauncherType.PREINSTALLED.value,
+)
 @click.option("--vllm-source", type=click.Choice(["upstream", "marin-fork"]), default="upstream")
 @click.option("--vllm-version", default=DEFAULT_CUDA_VLLM_VERSION)
 @click.option("--tokenizer", default=None)
@@ -102,7 +106,7 @@ def local(
         raise click.ClickException("--vllm-source marin-fork requires --launcher cuda")
 
     model_config = ServedModelConfig(
-        model=model,
+        weights=model,
         tokenizer=tokenizer,
         dtype=dtype,
         max_model_len=max_model_len,
@@ -125,7 +129,7 @@ def local(
             hbm_utilization=hbm_utilization,
         )
     if backend == "vllm" and launcher_type is VllmLauncherType.TPU:
-        click.echo(f"Using pinned TPU vLLM {vllm_fork_ref()}")
+        click.echo(f"Using pinned TPU vLLM {VLLM_FORK_REQUIREMENT}")
     with local_inference(model_config, engine, host=host, port=port) as session:
         click.echo(f"OpenAI endpoint: {session.model.endpoint.base_url}")
         click.echo("Press Ctrl-C to stop.")

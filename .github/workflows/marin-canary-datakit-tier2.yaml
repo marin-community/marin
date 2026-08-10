@@ -101,6 +101,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
       - name: Wait for datakit tier2 ferry
+        id: wait
         shell: bash -l {0}
         run: |
           uv run python scripts/ci/iris_monitor.py wait \
@@ -108,10 +109,11 @@ jobs:
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
             --timeout 14400 \
+            --resource-exhaustion-policy shutdown \
             --github-output
 
       - name: Capture perf report
-        if: success()
+        if: success() && steps.wait.outputs.resource_exhausted != 'true'
         shell: bash -l {0}
         run: |
           uv run python scripts/ci/collect_perf_metrics.py \
@@ -123,7 +125,7 @@ jobs:
             --gcs-prefix gs://marin-us-central1/infra/datakit/ferry_perf
 
       - name: Upload perf report
-        if: success()
+        if: success() && steps.wait.outputs.resource_exhausted != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: datakit-tier2-perf-report

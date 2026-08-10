@@ -58,7 +58,7 @@ from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -143,6 +143,7 @@ class Worker:
         port_allocator: PortAllocator | None = None,
         threads: ThreadContainer | None = None,
         worker_metadata: job_pb2.WorkerMetadata | None = None,
+        log_client: LogClient | None = None,
         profile_interval: Duration = Duration.from_seconds(600),
         profile_duration_seconds: int = 10,
     ):
@@ -196,23 +197,21 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        # LogClient and RemoteLogHandler are created in start() before container
-        # adoption and registration. Building before adoption ensures adopted
-        # attempts capture a live client (regression #5261). Building before
-        # registration ensures pre-register failures (container bring-up,
-        # disk/health probes, registration rejection) leave remote logs.
+        # When no client is injected, start() creates one before container
+        # adoption and registration. This gives adopted attempts a live client
+        # and preserves logs for failures that happen before registration.
         # Attachment relies on ``self._worker_id`` having been resolved locally
         # (IRIS_WORKER_ID, slice_id + TPU index, or GCE instance name); the rare
         # case where the controller assigns the id is handled by re-attaching
         # post-register.
-        self._log_client: LogClient | None = None
+        self._log_client: LogClient | None = log_client
         self._log_handler: RemoteLogHandler | None = None
-        # Stats Tables for the iris.worker / iris.task / iris.profile namespaces.
-        # Set in start() after the controller client is built so the LogClient
-        # resolver works.
+        # Stats tables are registered as soon as a LogClient is available.
         self._worker_stats_table: Table | None = None
         self._task_stats_table: Table | None = None
         self._profile_table: Table | None = None
+        if log_client is not None:
+            self._register_stats_tables(log_client)
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -234,6 +233,9 @@ class Worker:
             worker_id = infer_worker_id(hardware)
         self._worker_id: str | None = worker_id
         self._controller_client: ControllerServiceClientSync | None = None
+        # Endpoint registry (register/list) is a separate service; the worker
+        # only reads it (log-server resolution), sharing the controller address.
+        self._endpoint_client: EndpointServiceClientSync | None = None
 
         # Heartbeat tracking for timeout detection
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
@@ -246,9 +248,9 @@ class Worker:
         #   2. iris.worker / iris.task tables must be registered before adoption
         #      runs. TaskAttempt.__init__ eagerly calls log_client.get_table,
         #      which goes through the resolver (_resolve_log_service) — and the
-        #      resolver requires self._controller_client to be set. After the
-        #      controller_client is built and the tables are registered once,
-        #      the per-attempt get_table inside adoption is a cache hit.
+        #      resolver requires self._endpoint_client to be set. After the
+        #      clients are built and the tables are registered once, the
+        #      per-attempt get_table inside adoption is a cache hit.
         #   3. The uvicorn server must be up before we register with the
         #      controller, so the controller's first ping lands on a ready
         #      worker. Lifecycle thread is spawned last for that reason.
@@ -257,12 +259,20 @@ class Worker:
             interceptors = (BearerTokenInjector(StaticTokenProvider(self._config.auth_token), "authorization"),)
 
         if self._config.controller_address:
-            self._log_client = LogClient.connect(
-                LOG_SERVER_ENDPOINT_NAME,
-                interceptors=interceptors,
-                resolver=self._resolve_log_service,
-            )
+            if self._log_client is None:
+                self._log_client = LogClient.connect(
+                    LOG_SERVER_ENDPOINT_NAME,
+                    interceptors=interceptors,
+                    resolver=self._resolve_log_service,
+                )
             self._controller_client = ControllerServiceClientSync(
+                address=self._config.controller_address,
+                timeout_ms=10_000,
+                interceptors=interceptors,
+                accept_compression=IRIS_RPC_COMPRESSIONS,
+                send_compression=None,
+            )
+            self._endpoint_client = EndpointServiceClientSync(
                 address=self._config.controller_address,
                 timeout_ms=10_000,
                 interceptors=interceptors,
@@ -272,9 +282,8 @@ class Worker:
             # Register stats namespaces eagerly. Schema bugs surface here at
             # startup rather than silently producing empty namespaces.
             assert self._log_client is not None
-            self._worker_stats_table = self._log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
-            self._task_stats_table = self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
-            self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
+            if self._worker_stats_table is None:
+                self._register_stats_tables(self._log_client)
 
         # Try to adopt running containers from a previous worker process.
         # If adoption succeeds, skip the destructive cleanup that would kill them.
@@ -315,6 +324,11 @@ class Worker:
         removed = self._runtime.remove_all_iris_containers()
         if removed > 0:
             logger.info("Startup cleanup: removed %d iris containers", removed)
+
+    def _register_stats_tables(self, log_client: LogClient) -> None:
+        self._worker_stats_table = log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
+        self._task_stats_table = log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
+        self._profile_table = log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
     def adopt_running_containers(self) -> int:
         """Discover and adopt running containers from a previous worker process.
@@ -424,6 +438,8 @@ class Worker:
         self._threads.stop()
         if self._controller_client:
             self._controller_client.close()
+        if self._endpoint_client:
+            self._endpoint_client.close()
         self._detach_log_handler()
         if self._log_client is not None:
             self._log_client.close()
@@ -512,9 +528,9 @@ class Worker:
 
     def _resolve_log_service(self, server_url: str) -> str:
         """Look up ``server_url`` on the controller's endpoint registry."""
-        if self._controller_client is None:
-            raise ConnectionError("worker controller client not yet initialized")
-        resp = self._controller_client.list_endpoints(
+        if self._endpoint_client is None:
+            raise ConnectionError("worker endpoint client not yet initialized")
+        resp = self._endpoint_client.list_endpoints(
             controller_pb2.Controller.ListEndpointsRequest(prefix=server_url, exact=True),
         )
         if not resp.endpoints:

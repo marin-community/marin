@@ -10,11 +10,12 @@ from cheroot import wsgi
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.platforms.types import find_free_port
+from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from xprof import server as xprof_server
 from xprof.convert import _pywrap_profiler_plugin
 
-from infra.xprof.config import ENDPOINT_NAME, PORT_NAME, PUBLIC_PATH
+from infra.xprof.config import ENDPOINT_NAME, PORT_NAME, PROXY_TIMEOUT_SECONDS, PUBLIC_PATH
 from infra.xprof.gateway import ProfileCache, ProfileStageManager, XprofGateway
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,11 @@ def main() -> None:
     if port == 0:
         port = find_free_port()
     address = f"http://{job_info.advertise_host}:{port}"
-    endpoint_id = ctx.registry.register(ENDPOINT_NAME, address, {"job_id": ctx.job_id.to_wire()})
+    endpoint_id = ctx.registry.register(
+        ENDPOINT_NAME,
+        address,
+        {"job_id": ctx.job_id.to_wire(), PROXY_TIMEOUT_METADATA_KEY: str(PROXY_TIMEOUT_SECONDS)},
+    )
     http_server = wsgi.Server((os.environ["IRIS_BIND_HOST"], port), app)
 
     def stop_server(_signum, _frame) -> None:

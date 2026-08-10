@@ -6,9 +6,10 @@ export const plugin = new PanelPlugin<InfraPanelOptions>(InfraPanel).setPanelOpt
   return builder.addRadio({
     path: 'view',
     name: 'View',
-    defaultValue: 'nightlies',
+    defaultValue: 'status',
     settings: {
       options: [
+        { value: 'status', label: 'Status page' },
         { value: 'nightlies', label: 'Nightly matrix' },
         { value: 'commits', label: 'Commit strip' },
         { value: 'wandb', label: 'W&B chart' },

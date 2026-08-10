@@ -83,9 +83,6 @@ override-dependencies = [
     "multipart>=1.3.1",
     "nltk>=3.9.4",
     "notebook>=7.5.6",
-    # Work around https://github.com/NVIDIA/cutlass/issues/3259, fixed in
-    # CUTLASS DSL 4.6.0; remove this override when upgrading to >=4.6.0.
-    "nvidia-cutlass-dsl-libs-base==4.5.2 ; sys_platform == 'never'",
     "orjson>=3.11.9",
     "pillow>=12.2.0",
     "pyasn1>=0.6.3",
@@ -98,8 +95,8 @@ override-dependencies = [
 ]
 conflicts = [
     # GPU extras still carry CUDA/Linux-only solver constraints. Keep them out
-    # of non-GPU cross-package splits while allowing TPU and vLLM stacks to
-    # resolve together.
+    # of non-GPU cross-package splits while allowing the TPU stack to resolve
+    # together.
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-core", extra = "cpu" },
@@ -107,10 +104,6 @@ conflicts = [
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-core", extra = "tpu" },
-    ],
-    [
-        { package = "marin-levanter", extra = "gpu" },
-        { package = "marin-core", extra = "vllm" },
     ],
     [
         { package = "marin-core", extra = "gpu" },
@@ -138,6 +131,7 @@ members = [
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
+    "lib/finestore",
     "infra/pulumi",
 ]
 # Native maturin packages are excluded from uv workspace discovery because each
@@ -147,17 +141,7 @@ members = [
 #   - lib/finelog/rust  -> marin-finelog-server (module `finelog_server`)
 #   - lib/dupekit/rust  -> marin-dupekit-native  (module `dupekit_native`)
 #   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
-exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust"]
-
-[tool.uv.extra-build-variables]
-vllm = { VLLM_TARGET_DEVICE = "tpu" }
-
-[tool.uv.extra-build-dependencies]
-vllm = [
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'aarch64'",
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-win_amd64.whl ; python_version == '3.12' and sys_platform == 'win32' and platform_machine == 'AMD64'",
-]
+exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*"]
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
@@ -170,21 +154,10 @@ marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
+marin-finestore = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
-# NOTE: harbor is a pinned git dependency (not a workspace member).
-# harbor lives in marin-community/harbor as a pinned git dependency.
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "0d0dbe8904ed984137a0dfa764583f1508cf3274" }
-# Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
-# release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
-# if this is a fixed-base overlay PR, then follow
-# .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
-# temporary and must be replaced by the landed fork main SHA.
-# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...afb26719464d5957e695bde478ae93a160b11d14
-vllm = { git = "https://github.com/marin-community/vllm.git", rev = "afb26719464d5957e695bde478ae93a160b11d14" }
-# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...e8809d492d5d6c7008369919a00384eb1c4de969
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "e8809d492d5d6c7008369919a00384eb1c4de969" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -283,6 +256,7 @@ project-includes = [
     "lib/ducky/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
+    "lib/finestore/src/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
 ]
@@ -296,6 +270,7 @@ search-path = [
     "lib/haliax/src",
     "lib/rigging/src",
     "lib/zephyr/src",
+    "lib/finestore/src",
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
@@ -327,11 +302,9 @@ ignore-missing-imports = [
     # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
     "google.cloud.secretmanager",
     "google.cloud.secretmanager.*",
-    "harbor",
-    "harbor.*",
-    # Ships with the harbor extra (universal-pathlib); marin.harbor imports it.
-    "upath",
-    "upath.*",
+    # QuACK and CUTLASS are Linux/CUDA-only optional dependencies.
+    "cutlass",
+    "cutlass.*",
     "jax_triton",
     "jax_triton.*",
     "jaxlib",
@@ -342,14 +315,12 @@ ignore-missing-imports = [
     "librosa.*",
     "lm_eval",
     "lm_eval.*",
-    "math_verify",
-    "math_verify.*",
     "memray",
     "memray.*",
     "prompt_toolkit",
     "prompt_toolkit.*",
-    "pylatexenc",
-    "pylatexenc.*",
+    "quack",
+    "quack.*",
     "resiliparse",
     "resiliparse.*",
     "sympy",
@@ -364,8 +335,6 @@ ignore-missing-imports = [
     "trackio.*",
     "triton",
     "triton.*",
-    "verifiers",
-    "verifiers.*",
     "vllm",
     "vllm.*",
     "xprof",
@@ -473,4 +442,4 @@ pythonpath = ["."]
 # All but manual are run from dedicated CI workflows. Tests that need a TPU carry
 # @skip_if_no_tpu (tests/test_utils.py) and skip themselves when none is present;
 # the Iris markers also apply when lib/iris test paths are passed from the root.
-addopts = "--session-timeout=600 -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"
+addopts = "--session-timeout=600 -n auto --dist=worksteal -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"

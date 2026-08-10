@@ -54,14 +54,14 @@ from iris.client import IrisClient
 from iris.cluster.config import CoreweavePlatformConfig, IrisClusterConfig, load_config
 from iris.cluster.platforms.k8s.controller import K8sControllerProvider, _build_controller_deployment
 from iris.cluster.platforms.k8s.coreweave_topology import (
-    CW_FLAVOR_INFINIBAND,
     CW_LABEL_FABRIC,
-    CW_LABEL_FLAVOR,
     CW_LABEL_LEAFGROUP,
     CW_LABEL_NVLINK_DOMAIN,
     CW_LABEL_SUPERPOD,
 )
 from iris.cluster.platforms.k8s.nodepool_manifests import (
+    CPU_TOPOLOGY_NODE_LABELS,
+    KUEUE_NODE_LABEL,
     compute_target_racks,
     nodepool_manifest,
     nodepool_name,
@@ -97,12 +97,12 @@ _GROUP_BY = "leafgroup"
 # Hard (required) topology: one GB200 NVLink domain. Exercised on kind only,
 # where the nodes are mock-labeled with an nvlink.domain (H100 IB has none).
 _NVLINK_GROUP_BY = "nvlink.domain"
-# CoreWeave topology/flavor labels stamped on kind workers so the cw-ib ResourceFlavor
-# selects them (flavor=infiniband) and TAS can place the podset. kind mocks a single
+# CoreWeave topology labels stamped on kind workers so the cw-tas ResourceFlavor
+# selects them and TAS can place the podset. kind mocks a single
 # IB fabric AND a single NVLink domain, so both leafgroup (soft) and nvlink.domain
 # (hard) placements resolve against the multinode-nvlink-ib Topology.
 _KIND_NODE_LABELS = {
-    CW_LABEL_FLAVOR: CW_FLAVOR_INFINIBAND,
+    KUEUE_NODE_LABEL: "true",
     CW_LABEL_FABRIC: "fabric-0",
     CW_LABEL_SUPERPOD: "superpod-0",
     CW_LABEL_LEAFGROUP: "leafgroup-0",
@@ -433,7 +433,16 @@ class CoreweaveTarget(ControllerTarget):
                 nodepool_manifest(
                     pool_name,
                     cw.instance_type,
-                    node_labels=nodepool_node_labels(self.label_prefix, name, min_nodes=min_nodes),
+                    node_labels=nodepool_node_labels(
+                        self.label_prefix,
+                        name,
+                        min_nodes=min_nodes,
+                        topology_node_labels=(
+                            CPU_TOPOLOGY_NODE_LABELS
+                            if sg.resources is not None and sg.resources.device_type == AcceleratorType.CPU
+                            else ()
+                        ),
+                    ),
                     min_nodes=min_nodes,
                     max_nodes=max_nodes,
                     # Seeded to 0 (or min_nodes); _set_target_nodes patches the real desired

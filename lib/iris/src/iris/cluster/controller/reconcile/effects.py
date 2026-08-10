@@ -20,9 +20,11 @@ I/O sink that drains a :class:`ControllerEffects` to SQL lives in
 """
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from rigging.timing import Timestamp
 
+from iris.cluster.stats.tables import TaskEventSeverity
 from iris.cluster.types import JobName, WorkerId
 
 # ---------------------------------------------------------------------------
@@ -112,6 +114,28 @@ class LogEvent:
     details: tuple[tuple[str, object], ...] = ()
 
 
+class TaskActionReason(StrEnum):
+    """Stable reason codes for controller-authored task events."""
+
+    RETRY_SCHEDULED = "TaskRetryScheduled"
+    TERMINATED = "TaskTerminated"
+    COSCHEDULED_SIBLING_TERMINATED = "CoscheduledSiblingTerminated"
+    COSCHEDULED_SIBLING_REQUEUED = "CoscheduledSiblingRequeued"
+    JOB_FINALIZED_TASK_KILLED = "JobFinalizedTaskKilled"
+
+
+@dataclass(frozen=True, slots=True)
+class TaskActionEvent:
+    """A durable controller decision affecting one task attempt."""
+
+    task_id: JobName
+    attempt_id: int
+    ts: Timestamp
+    reason: TaskActionReason
+    message: str
+    severity: TaskEventSeverity = TaskEventSeverity.NORMAL
+
+
 # ---------------------------------------------------------------------------
 # ControllerEffects
 # ---------------------------------------------------------------------------
@@ -133,6 +157,7 @@ class ControllerEffects:
 
     health: WorkerHealthEffect = field(default_factory=WorkerHealthEffect)
     log_events: list[LogEvent] = field(default_factory=list)
+    task_events: list[TaskActionEvent] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -141,4 +166,4 @@ class ControllerEffects:
         ``health.build_failed`` is excluded: it is folded into the liveness
         tracker by the backend, never persisted by ``commit_effects``.
         """
-        return not (self.tasks or self.attempts or self.jobs or self.log_events)
+        return not (self.tasks or self.attempts or self.jobs or self.log_events or self.task_events)

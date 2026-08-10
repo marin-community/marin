@@ -130,6 +130,18 @@ def test_from_git_dirty_changes_tree_not_base(tmp_path):
     assert dirty.tree_hash != clean.tree_hash
 
 
+def test_git_provenance_untracked_file_is_dirty(tmp_path):
+    repo = _init_repo(tmp_path)
+    clean = Provenance.from_git(repo)
+    (repo / "untracked.txt").write_text("new\n")
+    strict = Provenance.from_git(repo)
+    captured = Provenance.capture(repo)
+    assert strict.dirty is True
+    assert captured.dirty is True
+    assert strict.tree_hash == clean.tree_hash
+    assert captured.tree_hash == clean.tree_hash
+
+
 def test_capture_is_best_effort_outside_a_repo(tmp_path):
     # from_git is strict (the tree hash is the point); capture degrades instead of raising,
     # still recording the launch context that has nothing to do with git.

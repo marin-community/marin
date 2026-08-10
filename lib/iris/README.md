@@ -234,7 +234,7 @@ When a job requests TPU resources (`device=tpu_device("v5litepod-16")`), workers
 
 **Docker flags:**
 - `--device /dev/vfio:/dev/vfio` - VFIO device for TPU passthrough
-- `--shm-size=100g` - Large shared memory for TPU operations
+- `--shm-size=<task memory>` - Shared-memory capacity; `/dev/shm` usage and direct memory share the task memory limit. TPU requests without a memory limit retain a 100 GiB fallback.
 - `--cap-add=SYS_RESOURCE` - Resource management capabilities
 - `--ulimit memlock=68719476736:68719476736` - Unlocked memory limits
 
@@ -334,6 +334,9 @@ iris --config cluster.yaml job run --zone us-central2-b -- python train.py
 iris --config cluster.yaml job logs /my-job
 iris --config cluster.yaml job logs /my-job --follow
 iris --config cluster.yaml job logs /my-job --since-seconds 300
+
+# Wait for an existing job; prints its terminal state and exits nonzero unless it succeeded
+iris --config cluster.yaml job wait /my-job
 
 # Stop one or more jobs
 iris --config cluster.yaml job stop /my-job

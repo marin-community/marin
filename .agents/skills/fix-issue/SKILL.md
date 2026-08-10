@@ -71,7 +71,7 @@ There are 2 cases:
   > Fix: unwrap the tuple in `RolloutWorker._step()` before passing to `foo()`.
 
 * **Design change**: The design doc replaces the `# Proposed Fix` section.
-  Write it per `.agents/skills/write-design-doc/` directly in the issue comment
+  Write it per `.agents/skills/write-design-doc/SKILL.md` directly in the issue comment
   (agents cannot commit files before the PR). The 3-4 sentence prose cap
   applies to `# Research`; the design doc follows its own length guidelines.
   Keep everything in one comment.
@@ -103,13 +103,12 @@ When all tests pass, upload your branch and open a PR following
 specifies (no markdown headers, bullet lists, or `## Summary` sections;
 violations are rejected). Attach a comment to the Github issue summarizing the fix.
 
-## Verify CI Status
+## Monitor the PR
 
-After opening the PR, verify CI checks pass:
-
-* Monitor with `gh pr view <number> --json statusCheckRollup`.
-* Wait for unit tests; if they fail, investigate and push fixes.
-* Do not consider the PR complete until all relevant checks pass.
+After opening the PR, follow step 9 of `.agents/skills/commit/SKILL.md`
+exactly. Its `wait_for.py` loop owns CI, review feedback, and lifecycle events.
+Do not start a separate `gh pr view` or `gh pr checks` polling loop. Investigate
+failures, push fixes, and re-arm the wait as that skill specifies.
 
 Key checks: **unit tests** (must pass), **lint-and-format** (must pass),
 **build-docs** (should pass if you modified documentation).
@@ -128,7 +127,7 @@ The tasks for this skill:
 - [ ] Run `./infra/pre-commit.py --all-files --fix` and resolve all issues
 - [ ] Upload branch to github
 - [ ] Open pull request
-- [ ] Verify CI checks pass and address any failures (by polling gh pr view)
+- [ ] Monitor CI, feedback, and PR lifecycle with `wait_for.py` through an exit condition
 - [ ] Update comment with final status
 
 If at any point you are unable to proceed, you must add a comment to the Github

@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 import httpx
-from config import BUILD_HISTORY, FERRY_GROUPS, FERRY_RUN_LIMIT, GITHUB_API_BASE, GITHUB_REPO
+from config import BUILD_HISTORY, FERRY_GROUPS, FERRY_RUN_LIMIT, GITHUB_API_BASE, GITHUB_REPO, GITHUB_USER_AGENT
 from errors import UpstreamError
 from graphql_source import graphql_data
 from nightly import NightlyLaneSnapshot, NightlyRun, project_nightlies
@@ -98,7 +98,7 @@ class GithubSource:
         headers = {
             "accept": "application/vnd.github+json",
             "x-github-api-version": "2022-11-28",
-            "user-agent": "marin-grafana-bridge",
+            "user-agent": GITHUB_USER_AGENT,
         }
         # auth attaches a cached GitHub App installation token, refreshed near expiry
         # (see github_app.GithubAppAuth). None leaves requests unauthenticated: the

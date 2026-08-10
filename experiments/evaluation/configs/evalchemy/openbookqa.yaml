@@ -1,0 +1,6 @@
+tasks: [openbookqa]
+task_options:
+  openbookqa:
+    num_fewshot: 0
+    task_alias: openbookqa_0shot
+max_tokens: 256

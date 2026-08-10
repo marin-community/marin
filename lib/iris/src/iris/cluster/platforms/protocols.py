@@ -33,6 +33,14 @@ class ControllerProvider(Protocol):
         """
         ...
 
+    def preflight_controller(self, config: IrisClusterConfig) -> None:
+        """Resolve operator-side inputs without mutating cluster resources.
+
+        Providers may cache the resolved inputs for the subsequent start or
+        restart.
+        """
+        ...
+
     def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start or discover existing controller. Returns address (host:port).
 

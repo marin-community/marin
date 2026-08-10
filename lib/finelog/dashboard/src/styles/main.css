@@ -32,6 +32,19 @@
   --c-status-danger:         #D31E3C;
   --c-status-danger-bg:      #FDE8EC;
   --c-status-danger-border:  #F9B3BF;
+
+  /* Categorical chart series. Eight well-separated hues, held to a similar
+     lightness so no single series reads as emphasized, and restated under
+     `.dark` at the lightness that surface needs. Charts reference these rather
+     than literal hex so a series keeps its identity across both themes. */
+  --c-series-1: #1877F2;
+  --c-series-2: #D31E3C;
+  --c-series-3: #2A9142;
+  --c-series-4: #EB630E;
+  --c-series-5: #7C3AED;
+  --c-series-6: #0891B2;
+  --c-series-7: #BE185D;
+  --c-series-8: #A16207;
 }
 
 .dark {
@@ -60,4 +73,13 @@
   --c-status-danger:         #F87171;
   --c-status-danger-bg:      #450a0a;
   --c-status-danger-border:  #991b1b;
+
+  --c-series-1: #76B6FF;
+  --c-series-2: #F87171;
+  --c-series-3: #4ADE80;
+  --c-series-4: #FFB973;
+  --c-series-5: #A78BFA;
+  --c-series-6: #22D3EE;
+  --c-series-7: #F472B6;
+  --c-series-8: #FCD34D;
 }

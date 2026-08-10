@@ -2,8 +2,7 @@
 
 How the Iris source tree is organized and the rule that keeps it navigable.
 For the controller's reconcile kernel specifically, see
-[`reconcile_rpc.md`](reconcile_rpc.md) and the design notes in
-`.agents/projects/reconcile-final-design.md`.
+[`reconcile_rpc.md`](reconcile_rpc.md).
 
 ## The one rule: five layers, imports go down
 
@@ -79,7 +78,9 @@ shared concerns (`redaction`, `service_mode`, `log_keys`,
   lifecycle Protocols get/stop machines.
 
 `runtime/` abstracts *task execution* behind `ContainerRuntime` (Docker /
-subprocess). `worker/` is the agent daemon that runs on each machine.
+subprocess). `worker/` is the task agent daemon. The Iris node-agent entrypoint
+runs beside it on GCP and as a Kubernetes DaemonSet, publishing physical host
+and accelerator evidence independently of task and application telemetry.
 
 The `TaskBackend` contract type lives in the controller layer
 (`controller/backend.py`), and the two implementations in `backends/` import it

@@ -5,7 +5,7 @@
 
 Artifact-only: :class:`ClusteredStoreData` already carries every bucket's doc
 and token counts, so the page needs no parquet reads. Shows the corpus-level
-funnel (records in vs contaminated / dedup-dropped from the join counters),
+funnel (records in vs contaminated / exact-dedup / fuzzy-dedup drops),
 the cluster x quality token heatmap, and per-quality / per-cluster totals.
 """
 
@@ -35,6 +35,7 @@ def store_report(output_path: str, store: ClusteredStoreData) -> StageReport:
         "n_sources": len(store.source_names),
         "records_in": store.counters.get("datakit_store/records_in", 0),
         "contaminated_dropped": store.counters.get("datakit_store/contaminated_dropped", 0),
+        "exact_duplicate_dropped": store.counters.get("datakit_store/exact_duplicate_dropped", 0),
         "dedup_noncanonical_dropped": store.counters.get("datakit_store/dedup_noncanonical_dropped", 0),
         "records_out": store.counters.get("datakit_store/records_out", 0),
     }

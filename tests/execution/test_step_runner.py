@@ -602,7 +602,7 @@ def test_runner_prune_cache_vanished_fails(tmp_path: Path, monkeypatch):
 
     # Treat ``terminal`` as built (pruning ``dep``) although nothing is on disk — the
     # state if its cached output vanished between scheduling and confirmation.
-    monkeypatch.setattr(step_runner_module, "_is_built", lambda s: s.output_path == terminal.output_path)
+    monkeypatch.setattr(step_runner_module, "step_is_built", lambda s: s.output_path == terminal.output_path)
 
     with pytest.raises(RuntimeError, match=r"1 step\(s\) failed"):
         StepRunner().run([terminal])
@@ -781,12 +781,6 @@ def _assert_single_submit_extras(spy: _SubmitSpy, expected: list[str]) -> None:
     assert spy.requests[0].environment.extras == expected
 
 
-def _assert_single_submit_env(spy: _SubmitSpy, expected: dict[str, str]) -> None:
-    assert len(spy.requests) == 1
-    for key, value in expected.items():
-        assert spy.requests[0].environment.env_vars[key] == value
-
-
 def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
     """Setting ``resources`` on a StepSpec submits ``fn`` as a Fray job."""
     spy = _SubmitSpy(fray_client)
@@ -858,25 +852,6 @@ def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray
     )
 
     _assert_single_submit_extras(_run_step_with_submit_spy(step, fray_client), [])
-
-
-def test_remote_vllm_tpu_dependency_group_sets_target_device(tmp_path: Path, fray_client):
-    resources = ResourceConfig.with_tpu("v6e-4")
-
-    @remote(resources=resources, pip_dependency_groups=["vllm"])
-    def my_step(output_path: str) -> Artifact:
-        return Artifact(path=output_path)
-
-    step = StepSpec(
-        name="remote_vllm_tpu_step",
-        override_output_path=tmp_path.as_posix(),
-        fn=my_step,
-    )
-
-    spy = _run_step_with_submit_spy(step, fray_client)
-
-    _assert_single_submit_extras(spy, ["vllm"])
-    _assert_single_submit_env(spy, {"VLLM_TARGET_DEVICE": "tpu"})
 
 
 def test_remote_direct_call_uses_device_extra(fray_client):

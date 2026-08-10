@@ -119,16 +119,28 @@ function clearHistory() {
           >
             {{ tab }}
           </button>
+          <label class="ml-auto flex items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary">
+            Max tokens
+            <input
+              v-model.number="params.maxTokens"
+              type="number"
+              min="1"
+              step="1"
+              aria-label="Maximum output tokens"
+              title="Maximum output tokens generated for each response"
+              class="w-20 rounded-lg border border-surface-border bg-surface px-2 py-1 text-sm text-text outline-none transition-colors focus:border-accent"
+            />
+          </label>
           <button
-            class="ml-auto flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
+            class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
             :class="showParams ? 'bg-surface-sunken text-text' : 'text-text-muted hover:text-text-secondary'"
-            title="Sampling parameters"
+            title="More sampling parameters"
             @click="showParams = !showParams"
           >
             <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6m2-6h6m2 8h6" />
             </svg>
-            {{ params.temperature }} · {{ params.maxTokens }}
+            <span class="hidden sm:inline">Temperature {{ params.temperature }}</span>
           </button>
         </div>
         <SamplingControls v-if="showParams" :params="params" v-model:system="active.system" :show-system="mode === 'chat'" />

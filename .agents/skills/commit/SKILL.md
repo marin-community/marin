@@ -25,16 +25,17 @@ commit. The review is read-only: it never edits, commits, or pushes for you.
 Work top to bottom. For a quick work-in-progress checkpoint, do **1, 2, 4, 5,
 7** (clean up, lint, stage, commit, push) and stop. The changed-test cleanup in
 step 1 is a PR-readiness gate, not required for disposable WIP checkpoints. Run
-the whole list before you open or update a PR.
+the whole list for PR-ready work.
 
 1. Clean up your own diff (self-review).
 2. Mechanical lint & format — `./infra/pre-commit.py --changed-files --fix`.
 3. Tests & docs checks, when relevant.
 4. Stage the specific files for this work.
 5. Commit. ← natural checkpoint; the working tree is now clean.
-6. Lint-catalog review — `./infra/pre-commit.py --review`; fix or answer every finding.
+6. Lint-catalog review — run `./infra/pre-commit.py --review` once; fix or answer every finding.
 7. Push (maybe).
 8. Open or update the PR.
+9. Monitor the PR with `wait_for.py` until an exit condition.
 
 ## 1. Clean up your own diff
 
@@ -122,6 +123,12 @@ the `infra/lint` files for the rule behind each `ml-...` code. Treat findings as
 guidelines — apply them when they make the code *better*; the goal is
 high-quality code, not blind adherence.
 
+Do not recursively rerun `--review` after small, targeted touch-ups made in
+response to its findings. Validate those edits with the normal mechanical checks
+and relevant tests, then continue the workflow. Rerun the advisory review only
+when the follow-up materially changes the branch's design or scope, or when the
+user asks for another pass.
+
 Each run writes the raw per-arm prompts and outputs, the combined findings, and a
 summary under `/tmp/marin-linter/<branch>/<timestamp>-<uniq>/` (the path is printed at the end) —
 read it when a lane is slow or a run looks wrong.
@@ -181,72 +188,89 @@ gh pr create --title "<title>" --body-file "<body-file>" --label agent-generated
 - Include `Fixes #NNNN` when addressing a pre-existing issue.
 - If you have a specific github tool, you may use it.
 
-## 9. Monitor the PR — mandatory, in a loop
+## 9. Monitor the PR
 
-Opening the PR does not end your turn. You MUST monitor until the PR is merged or
-closed, or the user tells you to stop. A summary message to the user is NOT a
-substitute for monitoring and is NOT an exit condition.
+Opening the PR starts the integration phase. Green CI is not an exit condition:
+reviews and comments can arrive after checks pass. Monitor every PR until it
+merges or closes, the user tells you to stop, or a 12-hour wait times out.
 
-Drive the loop with `scripts/ci/wait_for.py`, which blocks on **all** the things
-that matter at once (CI finishing, a new comment or review, the PR closing) and
-returns as soon as the first one fires — so you no longer hand-roll a
-`gh pr checks --watch` then `ScheduleWakeup` backoff. Run it **in the background**
-and you are re-invoked when an event fires; it handles the exponential backoff
-internally.
+Before the first wait, read every current issue comment, inline review comment,
+and submitted review once, then address anything actionable. This is a one-time
+inspection, not a monitoring loop. The comment and review arms establish a
+baseline when they start and wake only for later new or edited feedback.
+
+Set one honest status immediately before waiting, for example:
+
+```bash
+weaver status ok "waiting for PR #<N> events"
+```
+
+Do not refresh that status while nothing changes. Invoke `wait_for.py` as a
+foreground, genuinely blocking call:
 
 ```bash
 uv run scripts/ci/wait_for.py --timeout 12h \
-  "github.ci <N>" "github.pr_comment <N>" "github.review <N>" \
-  'poll test "$(gh pr view <N> --json state --jq .state)" != OPEN'
+  "github.ci <N>" "github.pr <N>" \
+  "github.pr_comment <N>" "github.review <N>"
 ```
 
-The `poll '<shell command>'` arm is the escape hatch for anything without a
-built-in: it fires when the command exits `0`, so the command itself is the
-predicate. Here it detects the PR closing/merging (the loop's stop condition);
-use the same pattern to wait on a specific check, a downstream job, or a deploy —
-compose with the shell (`| grep -q`, `| jq -e`, `test`).
+`github.pr` covers terminal merged/closed state, merge conflicts,
+ready-for-review transitions, and review-decision changes. It does not inspect
+comment or review bodies, so it does not replace `github.pr_comment` or
+`github.review`. Keep all three arms. Monitoring must not use a raw `poll` shell
+expression, `gh pr checks --watch`, or repeated `gh pr view` calls.
 
-It prints one JSON object naming the arm that fired and its payload, then exits
-(`0` fired, `2` the 12h timeout elapsed, `1` an error). **Firing is not a verdict:**
-`github.ci` fires when CI *finishes*, pass or fail — read `result.conclusion`.
-On `result.status == "timeout"` — 12h with no event — you may **stand down**: report
-where the PR stands and stop. The long timeout exists precisely so an idle PR
-(green CI, awaiting human review with nothing actionable) lets you end the turn
-rather than re-arm forever.
+The wait owns its exponential backoff. While it is running:
 
-When an arm fires, act on it, then re-arm `wait_for.py` for the next event:
+- remain silent until it returns an event, timeout, or error;
+- do not poll GitHub manually;
+- do not launch another `wait_for.py`;
+- do not narrate unchanged CI, review, or merge state;
+- do not repeatedly poll a yielded process handle. Give it back to the runtime's
+  blocking wait/resume facility.
 
-1. **`github.ci`** — if `result.conclusion` is `failure`, read the failing job
-   log and fix it. A failure in a file you did not touch is NOT automatically
-   pre-existing: first check whether the same job fails on `main` without your
-   change (or whether your change altered an API, config, or behavior that breaks
-   that caller/test). If your change caused it — even in an untouched file — it is
-   your regression; fix it. Only call it pre-existing once you have confirmed it
-   fails on `main` independently, then handle per the unrelated-changes rule.
-   Never silently absorb a failure. Once CI has finished, **drop the `github.ci`
-   arm** from later re-arms — CI stays terminal, so it would fire immediately on
-   every poll. Re-add it only when you push a new commit (which restarts CI).
-2. **`github.pr_comment` / `github.review`** — respond to it (see below). CI being
-   green does NOT mean there is nothing to do — review bots and humans comment
-   after CI passes. Never declare the PR done on CI status alone. `wait_for.py`
-   ignores your own comments by default, so it wakes you only on others' activity.
-3. **`poll` (PR closed)** — the PR merged or closed; this is an exit condition.
+The command prints one JSON object and exits: `0` means an arm fired, `2` means
+the overall timeout elapsed, and `1` means the wait failed. An event is not
+always a successful verdict. Read `result.conclusion` for `github.ci` and
+`result.reasons` for `github.pr`.
 
-Respond to every human and agent comment: address obvious ones directly (commit
-the fix, then reply, prefixing agent replies with `🤖`) and resolve them. For
-comments you are unsure about, report your analysis and proposed action to the
-user — but keep monitoring while you wait.
+Act on the event, read any feedback that arrived concurrently, then re-arm:
 
-Exit conditions (the ways to stop the loop): the PR is merged or closed, the user
-explicitly tells you to stop, or `wait_for.py` hits its 12h timeout with nothing
-left to act on (stand down with a status report). Blocking on a user question
-pauses for the answer; it does not end monitoring.
+1. **`github.ci`** — on failure, read the failing job log and fix the
+   regression. A failure in an untouched file is not automatically
+   pre-existing: confirm the same job fails on `main` independently before
+   treating it as unrelated. Once CI finishes, omit `github.ci` from the next
+   wait because its terminal result would fire immediately. Add it back after a
+   push starts a new run.
+2. **`github.pr`** — `merged` and `closed` are terminal. Resolve `conflicted`
+   before re-arming; an unchanged conflict is intentionally reported again by a
+   fresh wait. `ready_for_review` and `review_decision` describe review-state
+   changes in the attached snapshots. When `review_decision` fires, inspect the
+   submitted review because the lifecycle payload does not include its body.
+3. **`github.pr_comment` / `github.review`** — address every actionable human
+   and agent comment. Prefix agent-authored replies with `🤖` and resolve the
+   thread. The default significant-comment filter ignores the authenticated
+   user's comments, review-bot progress placeholders, clean verdicts, wrappers,
+   and Loom's exact
+   `Working on this in loom: <session URL>` acknowledgement.
+4. **Timeout** — report the last statuses in the timeout payload and hand off.
+   Do not replace the completed 12-hour block with manual polling.
+
+Re-arm after every non-terminal event. Once CI finishes, omit `github.ci` so its
+terminal result does not fire immediately; keep `github.pr`,
+`github.pr_comment`, and `github.review` armed for later feedback. Read current
+feedback once before each re-arm so simultaneous events are not absorbed into a
+new baseline without being handled.
+
+A question requiring user input pauses monitoring: raise `attention`, ask the
+question, and resume after the answer. Otherwise the only exit conditions are a
+merged or closed PR, an explicit request to stop, or a 12-hour timeout.
 
 ## Rules
 
 - `./infra/pre-commit.py` is the only pre-commit entry point.
-- Commit before you run `--review`; the review never commits, pushes, or edits.
+- Commit before the initial `--review`; do not rerun it for minor findings-only touch-ups.
 - Never amend a commit unless the user explicitly asks.
 - If there are no changes to commit, say so and stop.
-- `.agents/skills/fix-issue/` — end-to-end issue-fix workflow.
+- `.agents/skills/fix-issue/SKILL.md` — end-to-end issue-fix workflow.
 - `AGENTS.md` — coding guidelines.

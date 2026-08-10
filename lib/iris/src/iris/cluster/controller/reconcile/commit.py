@@ -18,6 +18,7 @@ folded through a single ``apply`` site, so this sink never touches it.
 from sqlalchemy import bindparam, func
 from sqlalchemy import update as sa_update
 
+from iris.cluster.controller import reads
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
@@ -30,7 +31,10 @@ from iris.cluster.controller.reconcile.effects import (
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.writes import record_federation_change
+from iris.cluster.stats.tables import TaskEventRow
 from iris.rpc import job_pb2
+
+_CONTROLLER_EVENT_SOURCE = "iris/controller"
 
 
 def _flush_tasks(cur: Tx, deltas: list[TaskRowDelta]) -> None:
@@ -232,11 +236,12 @@ def commit_effects(
     """Record a batch's ``effects`` within the caller's write transaction.
 
     Row deltas flush via bulk ``executemany`` statements (one per entity group).
-    Endpoint deletions write within the Tx. Audit log lines are deferred to
-    ``cur``'s post-commit hooks so a rolled-back transaction leaves no observable
-    trace. Health is NOT mutated here: ``effects.health.build_failed`` rides back
-    to the controller, which folds it (with the backend's transport-observed
-    events) through the single ``WorkerHealthTracker.apply`` site.
+    Endpoint deletions write within the Tx. Audit log lines and finelog task
+    actions are deferred to ``cur``'s post-commit hooks so a rolled-back
+    transaction leaves no observable trace. Health is NOT mutated here:
+    ``effects.health.build_failed`` rides back to the controller, which folds it
+    (with the backend's transport-observed events) through the single
+    ``WorkerHealthTracker.apply`` site.
 
     Attempt writes invalidate the derived-count cache through the cursor
     (``cur.caches[AttemptCountsProjection]``) — no cache reference is threaded here.
@@ -244,6 +249,28 @@ def commit_effects(
     _flush_tasks(cur, list(effects.tasks.values()))
     _flush_attempts(cur, list(effects.attempts.values()))
     _flush_jobs(cur, list(effects.jobs.values()))
+
+    task_events = tuple(effects.task_events)
+    task_event_table = cur.task_event_table
+    if task_events and task_event_table is not None:
+        attempt_uids = reads.attempt_uids_for(cur, [(event.task_id, event.attempt_id) for event in task_events])
+        rows = [
+            TaskEventRow(
+                task_id=event.task_id.to_wire(),
+                attempt_id=event.attempt_id,
+                attempt_uid=str(attempt_uid),
+                ts=event.ts.as_naive_utc(),
+                type=event.severity,
+                reason=event.reason,
+                message=event.message,
+                source=_CONTROLLER_EVENT_SOURCE,
+                count=1,
+            )
+            for event in task_events
+            if (attempt_uid := attempt_uids.get((event.task_id, event.attempt_id))) is not None
+        ]
+        if rows:
+            cur.register(lambda: task_event_table.write(rows))
 
     log_events = effects.log_events
     if log_events:

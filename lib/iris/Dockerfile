@@ -12,7 +12,7 @@
 # Build the Vue SPA. Output is consumed by the deps stage at
 # /app/lib/iris/dashboard/dist; the controller/worker ASGI apps serve it
 # (see lib/iris/src/iris/cluster/dashboard_common.py).
-FROM node:22-slim AS dashboard
+FROM --platform=$BUILDPLATFORM node:22-slim AS dashboard
 
 WORKDIR /build/dashboard
 
@@ -27,17 +27,61 @@ RUN npm run build
 # ── Stage: iris-native-wheel ────────────────────────────────────────
 # Build the PyO3 companion once per target architecture without carrying a Rust
 # toolchain into the controller or worker images.
-FROM rust:1-bookworm AS iris-native-wheel
+FROM --platform=$BUILDPLATFORM ghcr.io/astral-sh/uv:0.10.3 AS iris-native-uv
+FROM --platform=$BUILDPLATFORM rust:1-bookworm AS iris-native-wheel
 
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
+COPY --from=iris-native-uv /uv /uvx /bin/
 
 WORKDIR /build/iris-native
-COPY lib/iris/rust/ ./
+
+ARG BUILDARCH
+ARG TARGETARCH
 # Direct Docker builds use release. Iris CLI builds default to fast, which
 # keeps optimized parallel codegen but skips LTO.
 ARG CARGO_PROFILE=release
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+
+# Keep rustc native to the builder. The extension uses PyO3's abi3-py312 ABI,
+# so a target-architecture Python interpreter is not needed for cross builds.
+RUN case "${TARGETARCH}" in \
+        amd64) rust_target=x86_64-unknown-linux-gnu; cross_cc=x86_64-linux-gnu-gcc; cross_package=gcc-x86-64-linux-gnu; cross_libc=libc6-dev-amd64-cross ;; \
+        arm64) rust_target=aarch64-unknown-linux-gnu; cross_cc=aarch64-linux-gnu-gcc; cross_package=gcc-aarch64-linux-gnu; cross_libc=libc6-dev-arm64-cross ;; \
+        *) echo "Unsupported Iris native target architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    printf '%s\n' "${rust_target}" > /usr/local/lib/iris-rust-target && \
+    rustup target add "${rust_target}" && \
+    if [ "${BUILDARCH}" = "${TARGETARCH}" ]; then \
+        ln -sf "$(command -v gcc)" "/usr/local/bin/${cross_cc}"; \
+    else \
+        apt-get update && \
+        apt-get install -y --no-install-recommends "${cross_package}" "${cross_libc}" && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc
+
+# Compile third-party dependencies from manifests before copying Iris source.
+# The target cache is shared by the dependency and wheel builds, while its ID
+# keeps target triples and optimization profiles isolated.
+COPY lib/iris/rust/Cargo.toml lib/iris/rust/Cargo.lock ./
+COPY lib/iris/rust/pyext/Cargo.toml ./pyext/Cargo.toml
+RUN mkdir -p src pyext/src && \
+    printf 'pub fn placeholder() {}\n' > src/lib.rs && \
+    printf 'pub fn placeholder() {}\n' > pyext/src/lib.rs
+RUN --mount=type=cache,id=iris-native-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=iris-native-target-linux-gnu-${TARGETARCH}-${CARGO_PROFILE},target=/build/iris-native/target,sharing=locked \
+    rust_target="$(cat /usr/local/lib/iris-rust-target)" && \
+    cargo build --locked --workspace --profile "${CARGO_PROFILE}" --target "${rust_target}"
+
+COPY lib/iris/rust/pyproject.toml lib/iris/rust/iris_native.pyi ./
+COPY lib/iris/rust/src/ ./src/
+COPY lib/iris/rust/pyext/src/ ./pyext/src/
+RUN --mount=type=cache,id=iris-native-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    --mount=type=cache,id=iris-native-target-linux-gnu-${TARGETARCH}-${CARGO_PROFILE},target=/build/iris-native/target,sharing=locked \
+    rust_target="$(cat /usr/local/lib/iris-rust-target)" && \
+    find src pyext/src -type f -exec touch {} + && \
     uvx --python 3.12 --from 'maturin>=1.5,<2.0' maturin build \
+        --target "${rust_target}" \
         --profile "${CARGO_PROFILE}" \
         --out /wheels
 

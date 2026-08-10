@@ -69,6 +69,31 @@ class Column:
     # ``contains(col, …)`` / ``col LIKE '%…%'`` queries prune row groups instead
     # of full-scanning. Only meaningful for STRING columns; ignored otherwise.
     trigram_index: bool = False
+    # Exact string values covered by source-row postings for equality and
+    # IN-list queries. Named covering projections are configured separately.
+    exact_values: tuple[str, ...] = ()
+    # Persist exact per-value counts for GROUP BY + COUNT queries.
+    value_counts: bool = False
+
+
+@dataclass(frozen=True)
+class CoveringProjection:
+    """Named filtered projection used only when its predicate and columns cover a query."""
+
+    name: str
+    predicate_column: str
+    predicate_values: tuple[str, ...]
+    columns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GroupedExtrema:
+    """Bounded per-segment rollup over a filtered JSON-derived dimension."""
+
+    filter_column: str
+    group_json_column: str
+    group_json_key: str
+    extrema_column: str
 
 
 @dataclass(frozen=True)
@@ -85,6 +110,8 @@ class Schema:
 
     columns: tuple[Column, ...]
     key_column: str = ""
+    projections: tuple[CoveringProjection, ...] = ()
+    grouped_extrema: tuple[GroupedExtrema, ...] = ()
 
     def column(self, name: str) -> Column | None:
         for c in self.columns:
@@ -100,10 +127,11 @@ class Schema:
 # the implicit ``seq`` column on top.
 LOG_REGISTERED_SCHEMA = Schema(
     columns=(
-        Column(name="key", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+        # The job and task sit mid-key, so `key LIKE '%<job>%'` is opaque to the
+        # sort's min/max statistics and needs a trigram index of its own.
+        Column(name="key", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False, trigram_index=True),
         Column(name="source", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
-        # The log message body is substring-searched via contains()/LIKE, so it
-        # carries the trigram index (matches the server's log schema).
+        # Substring-searched via contains()/LIKE.
         Column(name="data", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False, trigram_index=True),
         Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         Column(name="level", type=stats_pb2.COLUMN_TYPE_INT32, nullable=False),
@@ -133,8 +161,40 @@ def schema_from_proto(msg: stats_pb2.Schema) -> Schema:
             raise SchemaValidationError(f"column {c.name!r}: unknown column type {c.type!r}")
         if c.name == IMPLICIT_SEQ_COLUMN:
             raise SchemaValidationError(f"column {IMPLICIT_SEQ_COLUMN!r} is reserved (server-assigned implicit column)")
-        cols.append(Column(name=c.name, type=c.type, nullable=c.nullable, trigram_index=c.index.trigram))
-    return Schema(columns=tuple(cols), key_column=msg.key_column)
+        cols.append(
+            Column(
+                name=c.name,
+                type=c.type,
+                nullable=c.nullable,
+                trigram_index=c.index.trigram,
+                exact_values=tuple(c.index.exact_values),
+                value_counts=c.index.value_counts,
+            )
+        )
+    projections = tuple(
+        CoveringProjection(
+            name=projection.name,
+            predicate_column=projection.predicate_column,
+            predicate_values=tuple(projection.predicate_values),
+            columns=tuple(projection.columns),
+        )
+        for projection in msg.projections
+    )
+    grouped_extrema = tuple(
+        GroupedExtrema(
+            filter_column=config.filter_column,
+            group_json_column=config.group_json_column,
+            group_json_key=config.group_json_key,
+            extrema_column=config.extrema_column,
+        )
+        for config in msg.grouped_extrema
+    )
+    return Schema(
+        columns=tuple(cols),
+        key_column=msg.key_column,
+        projections=projections,
+        grouped_extrema=grouped_extrema,
+    )
 
 
 def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
@@ -153,7 +213,29 @@ def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
                 name=c.name,
                 type=c.type,
                 nullable=c.nullable,
-                index=stats_pb2.ColumnIndex(trigram=c.trigram_index),
+                index=stats_pb2.ColumnIndex(
+                    trigram=c.trigram_index,
+                    exact_values=c.exact_values,
+                    value_counts=c.value_counts,
+                ),
+            )
+        )
+    for projection in schema.projections:
+        msg.projections.append(
+            stats_pb2.CoveringProjection(
+                name=projection.name,
+                predicate_column=projection.predicate_column,
+                predicate_values=projection.predicate_values,
+                columns=projection.columns,
+            )
+        )
+    for config in schema.grouped_extrema:
+        msg.grouped_extrema.append(
+            stats_pb2.GroupedExtrema(
+                filter_column=config.filter_column,
+                group_json_column=config.group_json_column,
+                group_json_key=config.group_json_key,
+                extrema_column=config.extrema_column,
             )
         )
     return msg

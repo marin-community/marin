@@ -24,7 +24,8 @@ wire exactly once per pipeline execution and reuses it for every shard
 -- with none of the 880 MB ever traveling through cloudpickle or sitting
 in coordinator RAM.
 
-Counters emitted: ``embed/docs_in``, ``embed/bytes_in``, ``embed/shards_in``.
+Counters emitted: ``embed/docs_in``, ``embed/bytes_in``, ``embed/bytes_embedded``,
+``embed/docs_truncated``, ``embed/shards_in``.
 """
 
 import logging
@@ -39,17 +40,19 @@ import pyarrow as pa
 from fray.types import ResourceConfig
 from huggingface_hub import hf_hub_download
 from marin.datakit.normalize import NormalizedData
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import write_artifact
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, marin_temp_bucket
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
-from zephyr.readers import InputFileSpec, load_file
+from zephyr.readers import InputFileSpec, load_parquet_batch
 from zephyr.runners import InlineRunner
 from zephyr.worker_context import zephyr_worker_ctx
 
 logger = logging.getLogger(__name__)
+EMBEDDING_ATTR_DATA_VERSION = 2
 
 LUXICAL_REPO = "DatologyAI/luxical-one"
 LUXICAL_WEIGHTS_FILE = "luxical_one_rc4.npz"
@@ -93,7 +96,7 @@ class EmbeddingAttrData(BaseModel):
 
     Attributes:
         output_dir: Directory containing the per-shard parquet outputs.
-        source_main_dir: ``NormalizedData.main_output_dir`` this mirrors.
+        source_key: Prefix-relative identity of the ``NormalizedData.main_output_dir`` this mirrors.
             Co-partitioning means consumers can join ``(basename, row_idx)``
             without an id index.
         model_name: HuggingFace model id.
@@ -105,15 +108,16 @@ class EmbeddingAttrData(BaseModel):
         counters: Aggregated zephyr counters from the embed pipeline.
     """
 
-    version: str = "v1"
-    output_dir: str
-    source_main_dir: str
+    version: str = f"v{EMBEDDING_ATTR_DATA_VERSION}"
+    output_dir: DatakitArtifactPath
+    source_key: str
     model_name: str
     model_revision: str = ""
     embedding_dim: int
     quantization_scale: float
     quantization_range: float
     batch_size: int
+    doc_sample_chars: int = 0
     counters: dict[str, int | float] = {}
 
     def shard_paths(self) -> list[str]:
@@ -186,6 +190,91 @@ def _l2_normalize(arr: np.ndarray) -> np.ndarray:
     return arr / norms
 
 
+# Longest document text handed to the embedder. Code sources carry individual documents
+# of many megabytes (stack-v3 shards reach 944 MB compressed), and one document that
+# large defeats any batch-level bound: it must be embedded in a single call whatever the
+# window size is. Truncating caps the per-document cost, so embed memory stops scaling
+# with the largest document in the corpus -- and with each document bounded, a whole
+# ``batch_size`` window is bounded for free.
+#
+# Head truncation matches the Harrier embedding pipeline (#7998), which truncates
+# documents at 8,192 tokens -- roughly this many characters of code. Keeping both
+# pipelines on the same rule means a document's embedded prefix does not depend on which
+# embedder read it. 32 KiB is also far more text than a 192-dim lexical embedding can
+# distinguish, so a truncated document's vector stays representative.
+EMBED_DOC_SAMPLE_CHARS = 32 * 1024
+
+
+def sample_document(text: str, max_chars: int = EMBED_DOC_SAMPLE_CHARS) -> str:
+    """Return at most *max_chars* of *text*, taken from its beginning.
+
+    A document at or below the cap is returned unchanged, which is the overwhelming
+    majority of web text.
+    """
+    return text[:max_chars]
+
+
+# Target Python-object bytes per read chunk. ``zephyr.readers.load_parquet`` does
+# ``yield from batch.to_pylist()``, converting an ENTIRE Parquet row group into Python
+# dicts before yielding the first record -- roughly 3-4x the Arrow size. Truncation
+# happens after the read, so it cannot bound this: a 944 MB row group still materializes
+# in full. Slice the batch first; ``RecordBatch.slice`` is zero-copy, so only the slice
+# becomes Python objects.
+_READ_CHUNK_TARGET_BYTES = 64 * 1024 * 1024
+
+
+def rows_per_chunk(num_rows: int, nbytes: int, target_bytes: int = _READ_CHUNK_TARGET_BYTES) -> int:
+    """Rows to materialize at once, from a batch's own average row size.
+
+    Megabyte-document sources get small chunks and small-document sources get large
+    ones, without either needing to know the other's shape.
+    """
+    if num_rows <= 0:
+        return 1
+    avg_row_bytes = max(1, nbytes // num_rows)
+    return max(1, target_bytes // avg_row_bytes)
+
+
+def _load_records_bounded(
+    source: InputFileSpec | str,
+    doc_sample_chars: int = EMBED_DOC_SAMPLE_CHARS,
+) -> Iterator[dict]:
+    """Yield Parquet records, truncated, without materializing a whole row group.
+
+    Truncation happens **here** rather than in the map: the map runs downstream of
+    ``window``, so truncating there would still let a window retain ``batch_size``
+    untruncated documents and scale with raw document size. Truncating at read time
+    bounds the reader, the window, and the embedder call at once.
+
+    Same records and order as ``zephyr.readers.load_parquet``, with ``text`` truncated.
+    """
+    n_bytes_in = 0
+    n_bytes_embedded = 0
+    n_truncated = 0
+
+    def prepare(records: list[dict]) -> Iterator[dict]:
+        nonlocal n_bytes_in, n_bytes_embedded, n_truncated
+        for record in records:
+            raw = record.get("text") or ""
+            kept = sample_document(raw, doc_sample_chars)
+            n_bytes_in += len(raw)
+            n_bytes_embedded += len(kept)
+            n_truncated += len(kept) < len(raw)
+            record["text"] = kept
+            yield record
+
+    for batch in load_parquet_batch(source):
+        if batch.num_rows == 0:
+            continue
+        per_chunk = rows_per_chunk(batch.num_rows, batch.nbytes, _READ_CHUNK_TARGET_BYTES)
+        for offset in range(0, batch.num_rows, per_chunk):
+            yield from prepare(batch.slice(offset, per_chunk).to_pylist())
+
+    counters.pipeline.update_counter("embed/bytes_in", n_bytes_in)
+    counters.pipeline.update_counter("embed/bytes_embedded", n_bytes_embedded)
+    counters.pipeline.update_counter("embed/docs_truncated", n_truncated)
+
+
 def _embed_shard(
     batches: Iterator[list[dict]],
     shard: ShardInfo,
@@ -193,31 +282,23 @@ def _embed_shard(
     """Per-shard map: each ``batches`` window is one ``embedder(texts)`` call.
 
     Yields ``{id, embedding}`` records preserving input order. Emits zephyr
-    counters with the totals for the shard.
+    counters with the totals for the shard. ``text`` arrives already truncated from
+    :func:`_load_records_bounded`, so a window cannot retain oversized documents.
     """
     embedder = _load_embedder_from_shared()
     n_docs = 0
-    n_bytes = 0
     for batch in batches:
         ids = [r["id"] for r in batch]
         texts = [r["text"] for r in batch]
         n_docs += len(ids)
-        n_bytes += sum(len(t) for t in texts)
         raw = np.asarray(embedder(texts, progress_bars=False), dtype=np.float32)
         raw = _l2_normalize(raw)
         q = quantize_to_int8(raw)
         for i, did in enumerate(ids):
             yield {"id": did, "embedding": q[i].tolist()}
     counters.pipeline.update_counter("embed/docs_in", n_docs)
-    counters.pipeline.update_counter("embed/bytes_in", n_bytes)
     counters.pipeline.update_counter("embed/shards_in", 1)
-    logger.info(
-        "shard %d/%d: %d docs (%.1f MB) encoded",
-        shard.shard_idx,
-        shard.total_shards,
-        n_docs,
-        n_bytes / 1024 / 1024,
-    )
+    logger.info("shard %d/%d: %d docs encoded", shard.shard_idx, shard.total_shards, n_docs)
 
 
 def embed_source(
@@ -228,6 +309,7 @@ def embed_source(
     weights_filename: str = LUXICAL_WEIGHTS_FILE,
     revision: str = LUXICAL_REVISION,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    doc_sample_chars: int = EMBED_DOC_SAMPLE_CHARS,
     max_shards: int | None = None,
     worker_resources: ResourceConfig | None = None,
     max_workers: int = 128,
@@ -271,7 +353,7 @@ def embed_source(
 
     ds = (
         Dataset.from_list(source_specs)
-        .flat_map(load_file)
+        .flat_map(lambda spec, dsc=doc_sample_chars: _load_records_bounded(spec, dsc))
         .window(batch_size)
         .map_shard(_embed_shard)
         .write_parquet(_output_path, schema=_EMBEDDING_SCHEMA, skip_existing=True)
@@ -293,13 +375,14 @@ def embed_source(
 
     artifact = EmbeddingAttrData(
         output_dir=output_path,
-        source_main_dir=normalized.main_output_dir,
+        source_key=datakit_source_key(normalized.main_output_dir),
         model_name=f"{repo_id}/{weights_filename}",
         model_revision=revision,
         embedding_dim=LUXICAL_DIM,
         quantization_scale=QUANT_SCALE,
         quantization_range=QUANT_RANGE,
         batch_size=batch_size,
+        doc_sample_chars=doc_sample_chars,
         counters=dict(outcome.counters),
     )
     write_artifact(artifact, output_path)

@@ -28,6 +28,10 @@ FINELOG_SLOW_THRESHOLD_MS = 5_000
 GITHUB_API_BASE = "https://api.github.com"
 # The GitHub repository the ferry and build panels read.
 GITHUB_REPO = "marin-community/marin"
+# GitHub rejects any REST/GraphQL request without a User-Agent (403 "Request
+# forbidden by administrative rules"); the REST client and the App-auth flow both
+# stamp this one.
+GITHUB_USER_AGENT = "marin-grafana-bridge"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -166,13 +170,29 @@ FERRY_GROUPS: tuple[FerryGroup, ...] = (
 
 
 @dataclasses.dataclass(frozen=True)
+class SlackAlertConfig:
+    """Where the bridge announces critical alerts.
+
+    A bot token rather than an incoming webhook because only `chat.postMessage`
+    returns the message timestamp, and that timestamp is the thread Loom routes
+    to the triage session.
+    """
+
+    bot_token: str
+    # A Slack channel id (`C…`), not a `#name`: Loom validates the id it is given.
+    channel: str
+
+
+@dataclasses.dataclass(frozen=True)
 class LoomAlertConfig:
-    """Identity-federated Loom destination for critical alerts."""
+    """The identity-federated Loom destination for critical alerts, and the Slack
+    channel every alert is announced in."""
 
     url: str
     profile: str
     repository: str
     http_timeout: float
+    slack: SlackAlertConfig
 
 
 @dataclasses.dataclass(frozen=True)
@@ -211,11 +231,24 @@ class BridgeConfig:
             repository = os.environ.get("LOOM_ALERT_REPOSITORY")
             if not profile or not repository:
                 raise ValueError("LOOM_ALERT_PROFILE and LOOM_ALERT_REPOSITORY are required when LOOM_ALERT_URL is set")
+            # The bridge is the only thing that announces critical alerts now that
+            # Grafana's own Slack receiver is gone, so a missing token would take
+            # alerting down silently. Fail the boot instead.
+            # Both are stripped: a secret payload created from a shell pipeline
+            # usually carries a trailing newline, and it would otherwise reach an
+            # Authorization header and a request body verbatim.
+            bot_token = (os.environ.get("SLACK_ALERTS_BOT_TOKEN") or "").strip()
+            channel = (os.environ.get("SLACK_ALERTS_CHANNEL") or "").strip()
+            if not bot_token or not channel:
+                raise ValueError(
+                    "SLACK_ALERTS_BOT_TOKEN and SLACK_ALERTS_CHANNEL are required when LOOM_ALERT_URL is set"
+                )
             loom_alerts = LoomAlertConfig(
                 url=loom_url.rstrip("/"),
                 profile=profile,
                 repository=repository,
                 http_timeout=http_timeout,
+                slack=SlackAlertConfig(bot_token=bot_token, channel=channel),
             )
         return BridgeConfig(
             max_rows=int(os.environ.get("GRAFANA_BRIDGE_MAX_ROWS", "200000")),
@@ -226,7 +259,7 @@ class BridgeConfig:
             k8s_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_K8S_CACHE_TTL", "30")),
             http_timeout=http_timeout,
             github_app_credentials=_github_app_credentials(),
-            cw_read_token=os.environ.get("CW_READ_TOKEN") or None,
+            cw_read_token=(os.environ.get("CW_READ_TOKEN") or "").strip() or None,
             loom_alerts=loom_alerts,
         )
 

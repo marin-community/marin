@@ -81,6 +81,7 @@ class K8sResource(Enum):
 
     # Apps v1
     DEPLOYMENTS = ("apps", "v1", True, "deployments", "Deployment")
+    DAEMONSETS = ("apps", "v1", True, "daemonsets", "DaemonSet")
     STATEFULSETS = ("apps", "v1", True, "statefulsets", "StatefulSet")
 
     # Networking v1

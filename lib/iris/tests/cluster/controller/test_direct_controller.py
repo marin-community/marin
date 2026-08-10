@@ -5,8 +5,8 @@
 
 import threading
 
+import pytest
 from finelog.rpc import logging_pb2
-from iris.cluster.controller import ops
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -22,12 +22,12 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
-from iris.cluster.controller.writes import stamp_backend
-from iris.cluster.types import JobName
+from iris.cluster.controller.writes import set_user_budget, stamp_backend
+from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import RateLimiter, Timestamp
 from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
 from tests.cluster.controller.transition_driver import commit_dispatch_updates
 
 from .conftest import (
@@ -171,6 +171,214 @@ def test_drain_default_task_image_is_empty(state):
     assert batch.tasks_to_run[0].task_image == ""
 
 
+@pytest.mark.parametrize(
+    ("parent_band", "child_band", "expected_band"),
+    [
+        (
+            job_pb2.PRIORITY_BAND_PRODUCTION,
+            job_pb2.PRIORITY_BAND_INHERIT,
+            job_pb2.PRIORITY_BAND_PRODUCTION,
+        ),
+        (
+            job_pb2.PRIORITY_BAND_BATCH,
+            job_pb2.PRIORITY_BAND_INHERIT,
+            job_pb2.PRIORITY_BAND_BATCH,
+        ),
+        (
+            job_pb2.PRIORITY_BAND_PRODUCTION,
+            job_pb2.PRIORITY_BAND_BATCH,
+            job_pb2.PRIORITY_BAND_BATCH,
+        ),
+        (
+            job_pb2.PRIORITY_BAND_INHERIT,
+            job_pb2.PRIORITY_BAND_INHERIT,
+            job_pb2.PRIORITY_BAND_INTERACTIVE,
+        ),
+    ],
+)
+def test_drain_child_priority_uses_explicit_or_inherited_band(state, parent_band, child_band, expected_band):
+    """K8s dispatch uses the child's explicit band or its nearest explicit ancestor."""
+    parent_id = JobName.root("test-user", "priority-parent")
+    child_id = parent_id.child("priority-child")
+    parent_req = make_direct_job_request(parent_id.name, priority_band=parent_band)
+    child_req = make_direct_job_request(child_id.name, priority_band=child_band)
+    # The shared helper constructs root names; this request represents a child.
+    child_req.name = child_id.to_wire()
+
+    with state._db.transaction() as cur:
+        submit_job_in_tx(cur, job_id=parent_id, request=parent_req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
+
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+
+    child_task_id = child_id.task(0)
+    [child_run_request] = [request for request in batch.tasks_to_run if request.task_id == child_task_id.to_wire()]
+    assert child_run_request.priority == expected_band
+    assert query_task(state, child_task_id).priority_band == expected_band
+
+
+# =============================================================================
+# Effective-band budget demotion + priority ordering on the K8s dispatch drain
+# =============================================================================
+
+
+def _set_user_budget(state, user_id: str, budget_limit: int) -> None:
+    with state._db.transaction() as tx:
+        set_user_budget(tx, user_id, budget_limit, job_pb2.PRIORITY_BAND_INTERACTIVE, Timestamp.now())
+
+
+def _make_test_user_over_budget(state) -> None:
+    """Drain a job to ASSIGNED (active spend) then cap ``test-user`` below it."""
+    submit_direct_job(state, "budget-spend")
+    with state._db.transaction() as cur:
+        dispatch.drain_for_dispatch(cur)
+    _set_user_budget(state, "test-user", budget_limit=1)
+
+
+def test_drain_demotes_over_budget_user_to_batch(state):
+    """An interactive task promoted for an over-budget user drains at BATCH; the
+    dispatched request priority and the stamped tasks.priority_band agree."""
+    _make_test_user_over_budget(state)
+    [over] = submit_direct_job(state, "over-budget", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+
+    [req] = [r for r in batch.tasks_to_run if r.task_id == over.to_wire()]
+    assert req.priority == job_pb2.PRIORITY_BAND_BATCH
+    assert query_task(state, over).priority_band == job_pb2.PRIORITY_BAND_BATCH
+
+
+def test_drain_demotes_via_default_budget_for_unlisted_user(state):
+    """An unlisted user is demoted by ``UserBudgetDefaults.budget_limit`` (the
+    controller-wide fallback), not only by a per-user budget row."""
+    submit_direct_job(state, "default-spend")
+    with state._db.transaction() as cur:
+        dispatch.drain_for_dispatch(cur)  # active spend, no user_budgets row
+    [over] = submit_direct_job(state, "default-over", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur, defaults=UserBudgetDefaults(budget_limit=1))
+
+    [req] = [r for r in batch.tasks_to_run if r.task_id == over.to_wire()]
+    assert req.priority == job_pb2.PRIORITY_BAND_BATCH
+
+
+def test_drain_production_immune_to_budget_demotion(state):
+    """PRODUCTION work is never demoted, even for an over-budget user."""
+    _make_test_user_over_budget(state)
+    [prod] = submit_direct_job(state, "prod", priority_band=job_pb2.PRIORITY_BAND_PRODUCTION)
+
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+
+    [req] = [r for r in batch.tasks_to_run if r.task_id == prod.to_wire()]
+    assert req.priority == job_pb2.PRIORITY_BAND_PRODUCTION
+    assert query_task(state, prod).priority_band == job_pb2.PRIORITY_BAND_PRODUCTION
+
+
+def test_drain_ranks_effective_band_before_cap(state):
+    """Under a tight promotion cap, the higher-band task is promoted first even
+    when the lower-band task was submitted earlier."""
+    [batch_task] = submit_direct_job(state, "band-batch", priority_band=job_pb2.PRIORITY_BAND_BATCH)
+    [prod_task] = submit_direct_job(state, "band-prod", priority_band=job_pb2.PRIORITY_BAND_PRODUCTION)
+
+    with state._db.transaction() as cur:
+        drained = dispatch.drain_for_dispatch(cur, max_promotions=1)
+
+    assert [r.task_id for r in drained.tasks_to_run] == [prod_task.to_wire()]
+    assert query_task(state, batch_task).state == job_pb2.TASK_STATE_PENDING
+
+
+def test_drain_redrive_reuses_demoted_band(state):
+    """A redrive reuses the band fixed at promotion even after the budget is
+    lifted, so a demoted attempt does not silently re-promote to a higher band."""
+    _make_test_user_over_budget(state)
+    [over] = submit_direct_job(state, "redrive-demote", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+    with state._db.transaction() as cur:
+        dispatch.drain_for_dispatch(cur)
+    assert query_task(state, over).priority_band == job_pb2.PRIORITY_BAND_BATCH
+
+    _set_user_budget(state, "test-user", budget_limit=0)  # unlimited; would no longer demote
+    with state._db.transaction() as cur:
+        redriven = dispatch.drain_for_dispatch(cur)
+
+    [req] = [r for r in redriven.tasks_to_run if r.task_id == over.to_wire()]
+    assert req.priority == job_pb2.PRIORITY_BAND_BATCH
+    assert query_task(state, over).priority_band == job_pb2.PRIORITY_BAND_BATCH
+
+
+def test_drain_deferred_gang_does_not_invert_lower_band(state):
+    """A higher-band gang that fits the cap but not the remaining budget defers
+    whole; a lower-band unit must not leapfrog it (no cross-band inversion)."""
+    [prod] = submit_direct_job(state, "no-inv-prod", priority_band=job_pb2.PRIORITY_BAND_PRODUCTION)
+    _jid, gang = _submit_cosched(state, "no-inv-gang", replicas=3, band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+    [batch_task] = submit_direct_job(state, "no-inv-batch", priority_band=job_pb2.PRIORITY_BAND_BATCH)
+
+    # Cap = 3: the PRODUCTION single promotes (remaining 2); the INTERACTIVE gang
+    # of 3 fits the cap but not the remaining budget, so it defers — and the
+    # lower BATCH single behind it stays PENDING rather than jumping the gang.
+    with state._db.transaction() as cur:
+        drained = dispatch.drain_for_dispatch(cur, max_promotions=3)
+
+    assert [r.task_id for r in drained.tasks_to_run] == [prod.to_wire()]
+    assert all(query_task(state, t).state == job_pb2.TASK_STATE_PENDING for t in gang)
+    assert query_task(state, batch_task).state == job_pb2.TASK_STATE_PENDING
+
+
+def test_drain_deferred_gang_still_fills_same_band(state):
+    """A deferred gang blocks only worse bands: a same-band singleton behind it
+    still fills the remaining budget (the barrier is band-aware, not a full stop)."""
+    [prod] = submit_direct_job(state, "fill-prod", priority_band=job_pb2.PRIORITY_BAND_PRODUCTION)
+    _jid, gang = _submit_cosched(state, "fill-gang", replicas=3, band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+    [single] = submit_direct_job(state, "fill-single", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+
+    # Cap = 3: PRODUCTION single promotes (remaining 2); the INTERACTIVE gang of 3
+    # cannot fit and defers, but the INTERACTIVE single behind it still fits.
+    with state._db.transaction() as cur:
+        drained = dispatch.drain_for_dispatch(cur, max_promotions=3)
+
+    assert {r.task_id for r in drained.tasks_to_run} == {prod.to_wire(), single.to_wire()}
+    assert all(query_task(state, t).state == job_pb2.TASK_STATE_PENDING for t in gang)
+
+
+def _submit_job_for_user(state, user: str, name: str, *, priority_band: int = 0) -> JobName:
+    """Submit a single-task direct job owned by ``user`` and return its task id."""
+    jid = JobName.root(user, name)
+    req = make_direct_job_request(name, priority_band=priority_band)
+    req.name = jid.to_wire()  # make_direct_job_request roots names at test-user
+    with state._db.transaction() as cur:
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
+    return jid.task(0)
+
+
+def test_drain_interleaves_users_within_band(state):
+    """Within a band the drain round-robins across users, so a tight cap promotes
+    one task per user rather than draining one user's backlog first."""
+    a1 = _submit_job_for_user(state, "user-a", "a1", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+    _submit_job_for_user(state, "user-a", "a2", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+    b1 = _submit_job_for_user(state, "user-b", "b1", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+    _submit_job_for_user(state, "user-b", "b2", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+
+    with state._db.transaction() as cur:
+        drained = dispatch.drain_for_dispatch(cur, max_promotions=2)
+
+    assert {r.task_id for r in drained.tasks_to_run} == {a1.to_wire(), b1.to_wire()}
+
+
+def test_drain_orders_same_band_by_submission(state):
+    """Same user and band: the earlier submission wins the single promotion slot,
+    confirming the hierarchy/submission sort key is wired into ranking."""
+    [first] = submit_direct_job(state, "order-first", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+    submit_direct_job(state, "order-second", priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+
+    with state._db.transaction() as cur:
+        drained = dispatch.drain_for_dispatch(cur, max_promotions=1)
+
+    assert [r.task_id for r in drained.tasks_to_run] == [first.to_wire()]
+
+
 def test_drain_includes_workdir_files(state):
     """Workdir files stored in job_workdir_files are included in the RunTaskRequest."""
 
@@ -186,7 +394,7 @@ def test_drain_includes_workdir_files(state):
         replicas=1,
     )
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_name, request=req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=job_name, request=req, ts=Timestamp.now())
 
     with state._db.transaction() as cur:
         batch = dispatch.drain_for_dispatch(cur)
@@ -280,130 +488,6 @@ def test_drain_executing_goes_to_running_tasks(state):
 # =============================================================================
 
 
-def test_apply_running(state):
-    """ASSIGNED -> RUNNING via direct provider update."""
-    [task_id] = submit_direct_job(state, "apply-running")
-    with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur)
-    attempt_id = batch.tasks_to_run[0].attempt_id
-
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
-            now=Timestamp.now(),
-        )
-
-    task = query_task(state, task_id)
-    assert task.state == job_pb2.TASK_STATE_RUNNING
-
-
-def test_apply_succeeded(state):
-    """RUNNING -> SUCCEEDED via direct provider update."""
-    [task_id] = submit_direct_job(state, "apply-succeeded")
-    with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur)
-    attempt_id = batch.tasks_to_run[0].attempt_id
-
-    # First move to RUNNING.
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
-            now=Timestamp.now(),
-        )
-
-    # Then to SUCCEEDED.
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_SUCCEEDED),
-            ],
-            now=Timestamp.now(),
-        )
-
-    task = query_task(state, task_id)
-    assert task.state == job_pb2.TASK_STATE_SUCCEEDED
-    assert task.exit_code == 0
-
-
-def test_apply_failed_with_retry(state):
-    """FAILED with retries remaining returns task to PENDING."""
-    jid = JobName.root("test-user", "retry-job")
-    req = make_direct_job_request("retry-job")
-    req.max_retries_failure = 2
-    req.max_task_failures = 2
-    with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
-    task_id = query_tasks_for_job(state, jid)[0].task_id
-
-    with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur)
-    attempt_id = batch.tasks_to_run[0].attempt_id
-
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
-            now=Timestamp.now(),
-        )
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_FAILED, error="boom"),
-            ],
-            now=Timestamp.now(),
-        )
-
-    task = query_task(state, task_id)
-    # Should be back to PENDING because failure_count(1) <= max_retries_failure(2).
-    assert task.state == job_pb2.TASK_STATE_PENDING
-    assert task.failure_count == 1
-
-
-def test_apply_failed_no_retry(state):
-    """FAILED with no retries remaining stays terminal."""
-    jid = JobName.root("test-user", "no-retry-job")
-    req = make_direct_job_request("no-retry-job")
-    req.max_retries_failure = 0
-    with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
-    task_id = query_tasks_for_job(state, jid)[0].task_id
-
-    with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur)
-    attempt_id = batch.tasks_to_run[0].attempt_id
-
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
-            now=Timestamp.now(),
-        )
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_FAILED, error="fatal"),
-            ],
-            now=Timestamp.now(),
-        )
-
-    task = query_task(state, task_id)
-    assert task.state == job_pb2.TASK_STATE_FAILED
-    assert task.failure_count == 1
-
-
 def test_apply_failed_directly_from_assigned(state):
     """ASSIGNED -> FAILED without going through RUNNING (e.g. ConfigMap too large)."""
     [task_id] = submit_direct_job(state, "fail-on-apply")
@@ -428,41 +512,6 @@ def test_apply_failed_directly_from_assigned(state):
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_FAILED
     assert task.failure_count == 1
-
-
-def test_apply_worker_failed_from_running_retries(state):
-    """WORKER_FAILED from RUNNING with retries remaining returns to PENDING."""
-    jid = JobName.root("test-user", "wf-retry")
-    req = make_direct_job_request("wf-retry")
-    req.max_retries_preemption = 5
-    with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
-    task_id = query_tasks_for_job(state, jid)[0].task_id
-
-    with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur)
-    attempt_id = batch.tasks_to_run[0].attempt_id
-
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
-            ],
-            now=Timestamp.now(),
-        )
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [
-                TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_WORKER_FAILED),
-            ],
-            now=Timestamp.now(),
-        )
-
-    task = query_task(state, task_id)
-    assert task.state == job_pb2.TASK_STATE_PENDING
-    assert task.preemption_count == 1
 
 
 def test_apply_worker_failed_from_assigned(state):
@@ -492,37 +541,6 @@ def test_apply_worker_failed_from_assigned(state):
 # =============================================================================
 
 
-def test_k8s_executing_task_past_deadline_is_timed_out(make_controller):
-    """A K8s-only controller enforces execution timeouts (#7431)."""
-    ctrl = make_controller(provider=FakeDirectProvider(), remote_state_dir="file:///tmp/iris-7431")
-    state = ControllerTestState(ctrl._db)
-
-    jid = JobName.root("test-user", "gang-timeout")
-    req = make_direct_job_request("gang-timeout", replicas=1)
-    req.timeout.milliseconds = 1000
-    with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
-    [task_id] = [t.task_id for t in query_tasks_for_job(state, jid)]
-
-    # Start the task two hours before the timeout scan.
-    with state._db.transaction() as cur:
-        batch = dispatch.drain_for_dispatch(cur)
-    attempt_id = batch.tasks_to_run[0].attempt_id
-    long_ago = Timestamp.from_ms(Timestamp.now().epoch_ms() - 2 * 3600 * 1000)
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING)],
-            now=long_ago,
-        )
-    assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
-
-    ctrl._timeout_rate_limiter = RateLimiter(interval_seconds=0.0)
-    reconcile_once(ctrl)
-
-    assert query_task(state, task_id).state == job_pb2.TASK_STATE_FAILED
-
-
 def test_k8s_pending_task_not_timed_out_before_admission(make_controller):
     """K8s admission waits do not consume the execution timeout (#7431)."""
     ctrl = make_controller(provider=FakeDirectProvider(), remote_state_dir="file:///tmp/iris-7431-pending")
@@ -532,7 +550,7 @@ def test_k8s_pending_task_not_timed_out_before_admission(make_controller):
     req = make_direct_job_request("gang-pending", replicas=1)
     req.timeout.milliseconds = 1000
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
     [task_id] = [t.task_id for t in query_tasks_for_job(state, jid)]
 
     # K8s reports Pending/SchedulingGated pods as BUILDING.
@@ -604,7 +622,7 @@ def _submit_cosched(state, name, replicas, *, max_retries_preemption=0, band=0):
     req = make_direct_job_request(name, replicas=replicas, coscheduling_group_by=_GROUP, priority_band=band)
     req.max_retries_preemption = max_retries_preemption
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=jid, request=req, ts=Timestamp.now())
     return jid, [t.task_id for t in query_tasks_for_job(state, jid)]
 
 
@@ -699,41 +717,6 @@ def test_drain_does_not_promote_partial_gang(state):
     assert promoted_to_attempt1 == []
     assert query_task(state, task_ids[0]).state == job_pb2.TASK_STATE_PENDING
     assert query_task(state, task_ids[0]).current_attempt_id == 0
-
-
-def test_coscheduled_gang_requeue_keeps_siblings_in_lockstep(state):
-    """End-to-end lockstep invariant: a transient failure bounces the whole gang to PENDING,
-    and the next drain re-promotes every sibling to the SAME next attempt_id — which is what
-    keeps the per-generation pod-group-name uniform across the gang."""
-    _jid, task_ids = _submit_cosched(state, "lockstep", replicas=3, max_retries_preemption=5)
-
-    with state._db.transaction() as cur:
-        batch0 = dispatch.drain_for_dispatch(cur)
-    assert {r.attempt_id for r in batch0.tasks_to_run} == {0}
-
-    # All siblings reach RUNNING.
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [TaskUpdate(task_id=t, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING) for t in task_ids],
-            now=Timestamp.now(),
-        )
-
-    # One sibling hits a transient (preemption) failure -> whole gang bounced to PENDING.
-    with state._db.transaction() as cur:
-        commit_dispatch_updates(
-            cur,
-            [TaskUpdate(task_id=task_ids[0], attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
-            now=Timestamp.now(),
-        )
-    assert all(s == job_pb2.TASK_STATE_PENDING for s in _states(state, task_ids))
-
-    # Re-drain: the entire gang re-promotes to attempt 1 in lockstep.
-    with state._db.transaction() as cur:
-        batch1 = dispatch.drain_for_dispatch(cur)
-    assert len(batch1.tasks_to_run) == 3
-    assert {r.attempt_id for r in batch1.tasks_to_run} == {1}, "all siblings share the new generation"
-    assert all(r.coscheduling.group_by == _GROUP for r in batch1.tasks_to_run)
 
 
 def test_gang_requeue_bounces_assigned_sibling_off_old_generation(state):

@@ -105,7 +105,7 @@ jobs:
         run: |
           cd lib/iris && uv run --group dev --extra controller iris -v \
             --config=config/cw-us-west-04a.yaml \
-            cluster start --fresh
+            cluster start --fresh --image-platform linux/amd64
 
       - name: Connect to iris-ci controller
         run: |
