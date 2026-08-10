@@ -40,6 +40,12 @@ FINAL_POOLS = ("mean", "attn")
 NEG_INF = -1e30
 COMPUTE_DTYPE = jnp.bfloat16
 
+# Knuth-style multiplicative mixing constants for the hashed-bigram side table.
+# They are part of the serialized model contract: a checkpoint hashed with these
+# constants must be scored with them, so do not change them without retraining.
+BIGRAM_MIX_A = 2654435761
+BIGRAM_MIX_B = 40503
+
 
 @dataclass(frozen=True)
 class FastTransformerConfig:
@@ -54,6 +60,12 @@ class FastTransformerConfig:
     mlp_ratio: int = 4
     dropout: float = 0.1
     final_pool: str = "mean"
+    # Hashed-bigram side table: adjacent token-id pairs hash into this many buckets
+    # of embed_dim vectors, summed into the token embedding before pooling. 0
+    # disables it. The seed and bucket count are serialized with the config so a
+    # checkpoint is always scored with the hash it was trained with.
+    bigram_buckets: int = 0
+    bigram_seed: int = 0
 
     def __post_init__(self) -> None:
         if self.max_tokens % self.pool_window != 0:
@@ -172,6 +184,7 @@ class TransformerLayer(eqx.Module):
 class FastTransformer(eqx.Module):
     config: FastTransformerConfig = eqx.field(static=True)
     embed: Array  # [vocab, E]
+    bigram_embed: Array | None  # [bigram_buckets, E], or None when disabled
     pool_query: Array  # [E]
     proj_w: Array  # [pool_out_dim, D]
     proj_b: Array  # [D]
@@ -186,6 +199,9 @@ class FastTransformer(eqx.Module):
         ke, kpq, kpr, kpos, klayers, kfq, khead = jax.random.split(key, 7)
         self.config = config
         self.embed = jax.random.normal(ke, (config.vocab_size, config.embed_dim)) * 0.02
+        # Zero init keeps the side table a no-op at the start of training; each
+        # bucket then learns a residual on top of the unigram embedding.
+        self.bigram_embed = jnp.zeros((config.bigram_buckets, config.embed_dim)) if config.bigram_buckets else None
         self.pool_query = jax.random.normal(kpq, (config.embed_dim,)) * 0.02
         self.proj_w = _glorot(kpr, (config.pool_out_dim, config.hidden_dim))
         self.proj_b = jnp.zeros(config.hidden_dim)
@@ -230,10 +246,28 @@ class FastTransformer(eqx.Module):
             pooled = jnp.where(valid[..., None] > 0, pooled, 0.0)
         return pooled, valid
 
+    def _bigram_side(self, ids: Array) -> Array:
+        """Hashed adjacent-token-pair embeddings, added at each pair's left token.
+
+        The bucket of pair ``(a, b)`` is a fixed seeded multiplicative hash, so the
+        mapping is reproducible from the config alone. Pairs touching PAD get no
+        side vector, and the final position (which has no right neighbour) is zero.
+        """
+        cfg = self.config
+        a = ids[:, :-1].astype(jnp.uint32)
+        b = ids[:, 1:].astype(jnp.uint32)
+        h = a * jnp.uint32(BIGRAM_MIX_A) + b * jnp.uint32(BIGRAM_MIX_B) + jnp.uint32(cfg.bigram_seed)
+        bucket = (h % jnp.uint32(cfg.bigram_buckets)).astype(jnp.int32)
+        pair_valid = ((ids[:, :-1] != PAD_ID) & (ids[:, 1:] != PAD_ID)).astype(jnp.float32)
+        side = jnp.take(self.bigram_embed, bucket, axis=0) * pair_valid[..., None]
+        return jnp.pad(side, ((0, 0), (0, 1), (0, 0)))
+
     def __call__(self, ids: Array, *, key: PRNGKeyArray | None = None, inference: bool = True) -> Array:
         cfg = self.config
         mask = (ids != PAD_ID).astype(jnp.float32)  # [b, t]
         emb = jnp.take(self.embed, ids, axis=0)  # [b, t, e]
+        if self.bigram_embed is not None:
+            emb = emb + self._bigram_side(ids)
 
         pooled, valid = self._pool_windows(emb, mask)  # [b, s, pool_out], [b, s]
         h = _matmul(pooled, self.proj_w) + self.proj_b + self.pos_embed  # [b, s, d]
