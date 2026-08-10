@@ -827,8 +827,6 @@ class MoEMLP(eqx.Module):
                 fused_shared.w_down,
                 mesh=get_abstract_mesh(),
                 config=self.cfg.mixture_of_kittens,
-                fallback_implementation=self.expert_mlp.implementation,
-                ragged_all_to_all_splits_per_peer=self.expert_mlp.ragged_all_to_all_splits_per_peer,
             )
         else:
             moe_out = self.expert_mlp(

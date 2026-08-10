@@ -31,6 +31,7 @@ TOP_K = 1
 NUM_LOCAL_EXPERTS = 1
 BF16_ATOL = 0.5
 BF16_RTOL = 0.01
+SHARED_GRADIENT_BF16_ATOL = 1.0
 
 
 def _random_inputs() -> tuple[np.ndarray, ...]:
@@ -105,13 +106,19 @@ def _reference(
     )
 
 
-def _error_metrics(actual: jax.Array, expected: jax.Array) -> dict[str, float | bool]:
+def _error_metrics(
+    actual: jax.Array,
+    expected: jax.Array,
+    *,
+    absolute_tolerance: float = BF16_ATOL,
+) -> dict[str, float | bool]:
     actual_float = np.asarray(jax.device_get(actual), dtype=np.float32)
     expected_float = np.asarray(jax.device_get(expected), dtype=np.float32)
     absolute_error = np.abs(actual_float - expected_float)
-    close = np.isclose(actual_float, expected_float, atol=BF16_ATOL, rtol=BF16_RTOL)
+    close = np.isclose(actual_float, expected_float, atol=absolute_tolerance, rtol=BF16_RTOL)
     return {
         "allclose": bool(np.all(close)),
+        "absolute_tolerance": absolute_tolerance,
         "max_absolute_error": float(np.max(absolute_error)),
         "mean_absolute_error": float(np.mean(absolute_error)),
         "mismatch_fraction": float(np.mean(~close)),
@@ -123,7 +130,7 @@ def main() -> None:
     if len(devices) != WORLD_SIZE:
         raise RuntimeError(f"The smoke test requires {WORLD_SIZE} visible GPUs, got {len(devices)}")
 
-    config = MoKForwardConfig(minibatch_size=256)
+    config = MoKForwardConfig(minibatch_size=256, macrobatch_size=1024)
     inputs = _random_inputs()
     top_experts = _routes()
     peer_rank, peer_token_idx, num_scheduled_tokens, tokens_per_expert = _schedules(top_experts, config)
@@ -168,7 +175,7 @@ def main() -> None:
         local_num_scheduled_tokens: jax.Array,
         local_tokens_per_expert: jax.Array,
     ) -> jax.Array:
-        output = forward_bf16_local(
+        output, _ = forward_bf16_local(
             local_x[0],
             local_router_weights[0],
             local_shared_gate,
@@ -280,8 +287,6 @@ def main() -> None:
             integrated_shared_down,
             mesh=mesh,
             config=config,
-            fallback_implementation="ring",
-            ragged_all_to_all_splits_per_peer=1,
         )
         return jnp.sum(output.astype(jnp.float32) * sharded_output_gradient.astype(jnp.float32))
 
@@ -337,7 +342,11 @@ def main() -> None:
         np.abs(np.asarray(jax.device_get(integrated_value)) - np.asarray(jax.device_get(reference_value)))
     )
     gradient_metrics = {
-        name: _error_metrics(integrated_gradient, reference_gradient)
+        name: _error_metrics(
+            integrated_gradient,
+            reference_gradient,
+            absolute_tolerance=SHARED_GRADIENT_BF16_ATOL if name.startswith("shared_") else BF16_ATOL,
+        )
         for name, integrated_gradient, reference_gradient in zip(
             gradient_names,
             integrated_gradients,

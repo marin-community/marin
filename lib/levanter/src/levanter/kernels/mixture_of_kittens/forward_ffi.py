@@ -15,6 +15,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -29,11 +30,12 @@ from levanter.kernels.mixture_of_kittens.source import (
 )
 
 
-_TARGET = "levanter_mok_forward_bf16_4"
+_FORWARD_TARGET = "levanter_mok_forward_bf16_4"
+_BACKWARD_TARGET = "levanter_mok_backward_bf16_4"
 _INIT_SYMBOL = "levanter_mok_init_runtime"
 _SHUTDOWN_SYMBOL = "levanter_mok_shutdown_runtime"
 _LAST_ERROR_SYMBOL = "levanter_mok_last_error"
-_BUILD_SCHEMA = "mok_forward_ffi_v1"
+_BUILD_SCHEMA = "mok_forward_backward_ffi_v2"
 _NUM_DEVICES = 4
 _TILE_ROWS = 256
 _CLUSTER_SIZE = 2
@@ -44,16 +46,34 @@ class MoKForwardConfig:
     """Static controls for one fused forward call."""
 
     num_comm_sms: int = 40
+    bwd_num_comm_sms: int = 28
     minibatch_size: int = 4096
+    macrobatch_size: int = 131072
     schedule_capacity_factor: float = 1.1
 
     def __post_init__(self) -> None:
         if self.num_comm_sms < _CLUSTER_SIZE or self.num_comm_sms % _CLUSTER_SIZE != 0:
             raise ValueError("num_comm_sms must be a positive multiple of the cluster size")
+        if self.bwd_num_comm_sms < _CLUSTER_SIZE or self.bwd_num_comm_sms % _CLUSTER_SIZE != 0:
+            raise ValueError("bwd_num_comm_sms must be a positive multiple of the cluster size")
         if self.minibatch_size < _TILE_ROWS or self.minibatch_size % _TILE_ROWS != 0:
             raise ValueError("minibatch_size must be a positive multiple of 256")
+        if self.macrobatch_size < self.minibatch_size or self.macrobatch_size % self.minibatch_size != 0:
+            raise ValueError("macrobatch_size must be a positive multiple of minibatch_size")
         if self.schedule_capacity_factor < 1.0:
             raise ValueError("schedule_capacity_factor must be at least one")
+
+
+class MoKForwardContext(NamedTuple):
+    """Activations saved by the BF16 forward for the fused backward."""
+
+    x_routed: jax.Array
+    gate_shared: jax.Array
+    gate_routed: jax.Array
+    up_shared: jax.Array
+    up_routed: jax.Array
+    hidden_shared: jax.Array
+    hidden_routed: jax.Array
 
 
 def _jaxlib_include_dir() -> Path:
@@ -128,7 +148,17 @@ def _prepared_source_bytes(source_root: Path) -> tuple[bytes, bytes, bytes]:
     )
     while first_host_wrapper > 0 and "static __host__" not in mok_lines[first_host_wrapper]:
         first_host_wrapper -= 1
-    mok_text = "".join(mok_lines[:first_host_wrapper])
+    backward_device_kernel = next(
+        index for index, line in enumerate(mok_lines) if "dispatch_mlp_swiglu_combine_bwd_kernel(" in line
+    )
+    while backward_device_kernel > 0 and "template <bool" not in mok_lines[backward_device_kernel]:
+        backward_device_kernel -= 1
+    backward_host_wrapper = next(
+        index
+        for index, line in enumerate(mok_lines[backward_device_kernel:], start=backward_device_kernel)
+        if "static __host__" in line
+    )
+    mok_text = "".join(mok_lines[:first_host_wrapper] + mok_lines[backward_device_kernel:backward_host_wrapper])
     mok_text = mok_text.replace('#include "pyutils/torchutils.cuh"\n', "")
     mok_text = mok_text.replace("#include <ATen/ops/empty.h>\n", "")
     mok_text = mok_text.replace("#include <ATen/ops/empty_like.h>\n", "")
@@ -245,15 +275,16 @@ def _last_error(default: str) -> str:
 def _register_target() -> None:
     if getattr(_register_target, "_done", False):
         return
-    handler = getattr(_load_library(), _TARGET)
-    handler.restype = ctypes.c_void_p
-    jax.ffi.register_ffi_target(
-        _TARGET,
-        jax.ffi.pycapsule(handler),
-        platform="CUDA",
-        api_version=1,
-    )
-    jax.ffi.register_ffi_target_as_batch_partitionable(_TARGET)
+    for target in (_FORWARD_TARGET, _BACKWARD_TARGET):
+        handler = getattr(_load_library(), target)
+        handler.restype = ctypes.c_void_p
+        jax.ffi.register_ffi_target(
+            target,
+            jax.ffi.pycapsule(handler),
+            platform="CUDA",
+            api_version=1,
+        )
+        jax.ffi.register_ffi_target_as_batch_partitionable(target)
     _register_target._done = True
 
 
@@ -325,7 +356,7 @@ def forward_bf16_local(
     tokens_per_expert: jax.Array,
     *,
     config: MoKForwardConfig,
-) -> jax.Array:
+) -> tuple[jax.Array, MoKForwardContext]:
     """Run fused dispatch, shared and routed SwiGLU, combine, and epilogue."""
     if x.ndim != 2 or router_weights.ndim != 2:
         raise ValueError("x and router_weights must be rank two")
@@ -343,7 +374,7 @@ def forward_bf16_local(
 
     ensure_runtime(num_tokens=num_tokens, hidden_dim=hidden_dim, top_k=top_k)
     intermediate_dim = shared_gate.shape[0]
-    routed_rows = capacity
+    routed_rows = config.macrobatch_size
     global_minibatches = capacity // config.minibatch_size
     global_row_blocks = capacity // (_TILE_ROWS // _CLUSTER_SIZE)
     shared_row_blocks = num_tokens // _TILE_ROWS
@@ -369,7 +400,7 @@ def forward_bf16_local(
         jax.ShapeDtypeStruct((global_row_blocks,), jnp.int32),
     )
     results = jax.ffi.ffi_call(
-        _TARGET,
+        _FORWARD_TARGET,
         result_shapes,
         has_side_effect=True,
         vmap_method="broadcast_all",
@@ -388,7 +419,116 @@ def forward_bf16_local(
         jnp.asarray(tokens_per_expert, dtype=jnp.int32),
         top_k=np.int32(top_k),
         num_comm_sms=np.int32(config.num_comm_sms),
-        macrobatch_size=np.int32(capacity),
+        macrobatch_size=np.int32(config.macrobatch_size),
         minibatch_size=np.int32(config.minibatch_size),
     )
-    return results[0]
+    context = MoKForwardContext(
+        x_routed=results[1],
+        gate_shared=results[2],
+        gate_routed=results[3],
+        up_shared=results[4],
+        up_routed=results[5],
+        hidden_shared=results[6],
+        hidden_routed=results[7],
+    )
+    return results[0], context
+
+
+def backward_bf16_local(
+    grad_output: jax.Array,
+    x: jax.Array,
+    router_weights: jax.Array,
+    shared_gate: jax.Array,
+    routed_gate: jax.Array,
+    shared_up: jax.Array,
+    routed_up: jax.Array,
+    shared_down: jax.Array,
+    routed_down: jax.Array,
+    context: MoKForwardContext,
+    schedule_peer_rank: jax.Array,
+    schedule_peer_token_idx: jax.Array,
+    num_scheduled_tokens: jax.Array,
+    tokens_per_expert: jax.Array,
+    *,
+    config: MoKForwardConfig,
+) -> tuple[jax.Array, ...]:
+    """Run the fused BF16 backward and return input, router, and weight gradients."""
+    if x.ndim != 2 or router_weights.ndim != 2 or grad_output.shape != x.shape:
+        raise ValueError("x, grad_output, and router_weights must have matching rank-two token shapes")
+    num_tokens, hidden_dim = x.shape
+    top_k = router_weights.shape[1]
+    if router_weights.shape[0] != num_tokens:
+        raise ValueError("router_weights must have the same token count as x")
+    if schedule_peer_rank.shape != schedule_peer_token_idx.shape:
+        raise ValueError("schedule arrays must have the same shape")
+    capacity = schedule_peer_rank.shape[0]
+    if capacity % config.minibatch_size != 0:
+        raise ValueError("schedule capacity must be divisible by minibatch_size")
+    if num_tokens % _TILE_ROWS != 0 or capacity % _TILE_ROWS != 0:
+        raise ValueError("token count and schedule capacity must be divisible by 256")
+
+    ensure_runtime(num_tokens=num_tokens, hidden_dim=hidden_dim, top_k=top_k)
+    intermediate_dim = shared_gate.shape[0]
+    local_experts = routed_gate.shape[0]
+    routed_rows = config.macrobatch_size
+    global_minibatches = capacity // config.minibatch_size
+    num_macrobatches = math.ceil(capacity / config.macrobatch_size)
+    shared_row_blocks = num_tokens // _TILE_ROWS
+    routed_row_blocks = capacity // _TILE_ROWS
+    intermediate_col_blocks = intermediate_dim // _TILE_ROWS
+
+    result_shapes = (
+        jax.ShapeDtypeStruct((num_tokens, hidden_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((num_tokens, top_k), jnp.float32),
+        jax.ShapeDtypeStruct((local_experts, intermediate_dim, hidden_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((local_experts, intermediate_dim, hidden_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((local_experts, hidden_dim, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((intermediate_dim, hidden_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((intermediate_dim, hidden_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((hidden_dim, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows,), jnp.float32),
+        jax.ShapeDtypeStruct((routed_rows, intermediate_col_blocks), jnp.float32),
+        jax.ShapeDtypeStruct((routed_rows, hidden_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((num_tokens, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((num_tokens, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((num_tokens, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, intermediate_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((routed_rows, hidden_dim), jnp.bfloat16),
+        jax.ShapeDtypeStruct((num_macrobatches,), jnp.int32),
+        jax.ShapeDtypeStruct((global_minibatches,), jnp.int32),
+        jax.ShapeDtypeStruct(((shared_row_blocks + routed_row_blocks) * intermediate_col_blocks,), jnp.int32),
+        jax.ShapeDtypeStruct((shared_row_blocks + routed_row_blocks,), jnp.int32),
+        jax.ShapeDtypeStruct((global_minibatches,), jnp.int32),
+        jax.ShapeDtypeStruct((global_minibatches,), jnp.int32),
+        jax.ShapeDtypeStruct((routed_row_blocks * intermediate_col_blocks,), jnp.int32),
+        jax.ShapeDtypeStruct((routed_row_blocks,), jnp.int32),
+        jax.ShapeDtypeStruct((num_macrobatches,), jnp.int32),
+    )
+    results = jax.ffi.ffi_call(
+        _BACKWARD_TARGET,
+        result_shapes,
+        has_side_effect=True,
+        vmap_method="broadcast_all",
+    )(
+        jnp.asarray(grad_output, dtype=jnp.bfloat16),
+        jnp.asarray(x, dtype=jnp.bfloat16),
+        jnp.asarray(router_weights, dtype=jnp.float32),
+        jnp.asarray(shared_gate, dtype=jnp.bfloat16),
+        jnp.asarray(routed_gate, dtype=jnp.bfloat16),
+        jnp.asarray(shared_up, dtype=jnp.bfloat16),
+        jnp.asarray(routed_up, dtype=jnp.bfloat16),
+        jnp.asarray(shared_down, dtype=jnp.bfloat16),
+        jnp.asarray(routed_down, dtype=jnp.bfloat16),
+        *(jnp.asarray(value, dtype=jnp.bfloat16) for value in context),
+        jnp.asarray(schedule_peer_rank, dtype=jnp.int32),
+        jnp.asarray(schedule_peer_token_idx, dtype=jnp.int32),
+        jnp.reshape(jnp.asarray(num_scheduled_tokens, dtype=jnp.int32), (1,)),
+        jnp.asarray(tokens_per_expert, dtype=jnp.int32),
+        top_k=np.int32(top_k),
+        num_comm_sms=np.int32(config.bwd_num_comm_sms),
+        macrobatch_size=np.int32(config.macrobatch_size),
+        minibatch_size=np.int32(config.minibatch_size),
+    )
+    return tuple(results[:8])

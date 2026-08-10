@@ -16,7 +16,7 @@ author: rav
 
 ## Current TL;DR
 
-The first implementation reproduces the deterministic 256-row-padded schedule. The strict XLA device kernel and 32 updates per peer raise steady MFU from about 2.8% to 19.6% on one four-GPU GB200 worker. The profile shows that transfer tuning alone cannot reach 25%, so the next increment must fuse or overlap transfer and expert compute.
+The first implementation reproduces the deterministic 256-row-padded schedule. The strict XLA device kernel and 32 updates per peer raise steady MFU from about 2.8% to 19.6% on one four-GPU GB200 worker. A raw JAX FFI path now passes fused BF16 forward and backward checks on four GB200 GPUs. The next gate is full-model memory and one completed training step before the 25-step profile.
 
 Both measured arms use hash-pinned JAX `0.11.1.dev20260809` wheels. Its XLA pin includes the device kernel that is not in JAX 0.11.0. A full fused kernel can use XLA collective FFI, but jaxlib does not publish its collective context headers.
 
@@ -232,3 +232,13 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: XLA reduced its original estimate from 224.04 GiB to 219.11 GiB, still above its 170.60 GiB target. Execution then failed on a 12.66 GiB collective-memory allocation. This is 71.71 GiB lower than the four-times reserve result, but no step ran.
 - Interpretation: Route capacity was one large cause, but the custom backward still builds its JAX fallback VJP outside the model block rematerialization boundary. The fallback forward activations stay live inside the custom backward and add about 48.5 GiB above the target.
 - Next action: Put an explicit JAX checkpoint around the reference function before its VJP, repeat the exact gradient gate, and retry the one-step full-model run.
+
+### 2026-08-10 10:33 UTC - Native fused backward passed the four-GPU gate
+
+- Hypothesis: The source BF16 backward kernel can replace the memory-heavy JAX fallback VJP and preserve the training gradients.
+- Commit Hash: `2ddae13f4` plus uncommitted native-backward changes.
+- Commands: Five short four-GPU GB200 build and correctness iterations, followed by one terminal correctness job with no retry.
+- Config: 512 tokens per GPU, hidden and intermediate dimensions 256, four routed experts at top-1, one shared expert, explicit production mesh, 256-token minibatches, and a 1,024-token macrobatch.
+- Result: The adapter builds and runs the fused BF16 backward without PyTorch. Forward maximum error was 0.03125. Input, router, and routed-weight gradient maximum errors were 0.0625, 0.2632, and at most 0.5. Shared-weight gradients were summed across the expert axis and had maximum error 1.0 after four BF16 local reductions. All checks passed their stated limits with no mismatch.
+- Interpretation: Native backward removes the JAX fallback activations and supplies correct distributed gradients. The remaining risk is full-shape compiler memory and training execution.
+- Next action: Run one full-model step with the native backward, then submit the 25-step profile if the memory gate passes.

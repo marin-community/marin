@@ -54,10 +54,18 @@ struct DeviceRuntime {
   int num_devices = 0;
   void* x = nullptr;
   void* combine = nullptr;
+  void* d_y = nullptr;
+  void* d_x_routed = nullptr;
+  void* router_weights = nullptr;
+  void* d_router_weights = nullptr;
   uint32_t* signals = nullptr;
   uint32_t* epoch = nullptr;
   std::array<void*, kNumDevices> x_ptrs{};
   std::array<void*, kNumDevices> combine_ptrs{};
+  std::array<void*, kNumDevices> d_y_ptrs{};
+  std::array<void*, kNumDevices> d_x_routed_ptrs{};
+  std::array<void*, kNumDevices> router_weight_ptrs{};
+  std::array<void*, kNumDevices> d_router_weight_ptrs{};
   std::array<uint32_t*, kNumDevices> signal_ptrs{};
 };
 
@@ -103,8 +111,13 @@ class RuntimeManager {
         runtime->num_devices = num_devices;
         const size_t x_bytes = static_cast<size_t>(num_tokens) * hidden_dim * sizeof(uint16_t);
         const size_t combine_bytes = static_cast<size_t>(num_tokens) * top_k * hidden_dim * sizeof(uint16_t);
+        const size_t router_bytes = static_cast<size_t>(num_tokens) * top_k * sizeof(float);
         ThrowOnCuda(cudaMalloc(&runtime->x, x_bytes), "cudaMalloc(x)");
         ThrowOnCuda(cudaMalloc(&runtime->combine, combine_bytes), "cudaMalloc(combine)");
+        ThrowOnCuda(cudaMalloc(&runtime->d_y, x_bytes), "cudaMalloc(d_y)");
+        ThrowOnCuda(cudaMalloc(&runtime->d_x_routed, combine_bytes), "cudaMalloc(d_x_routed)");
+        ThrowOnCuda(cudaMalloc(&runtime->router_weights, router_bytes), "cudaMalloc(router_weights)");
+        ThrowOnCuda(cudaMalloc(&runtime->d_router_weights, router_bytes), "cudaMalloc(d_router_weights)");
         ThrowOnCuda(cudaMalloc(&runtime->signals, num_devices * sizeof(uint32_t)), "cudaMalloc(signals)");
         ThrowOnCuda(cudaMalloc(&runtime->epoch, sizeof(uint32_t)), "cudaMalloc(epoch)");
         ThrowOnCuda(cudaMemset(runtime->signals, 0, num_devices * sizeof(uint32_t)), "cudaMemset(signals)");
@@ -117,6 +130,10 @@ class RuntimeManager {
         for (int peer = 0; peer < num_devices; ++peer) {
           runtime.x_ptrs[peer] = runtimes_[peer]->x;
           runtime.combine_ptrs[peer] = runtimes_[peer]->combine;
+          runtime.d_y_ptrs[peer] = runtimes_[peer]->d_y;
+          runtime.d_x_routed_ptrs[peer] = runtimes_[peer]->d_x_routed;
+          runtime.router_weight_ptrs[peer] = runtimes_[peer]->router_weights;
+          runtime.d_router_weight_ptrs[peer] = runtimes_[peer]->d_router_weights;
           runtime.signal_ptrs[peer] = runtimes_[peer]->signals;
           if (peer == rank) {
             continue;
@@ -179,6 +196,10 @@ class RuntimeManager {
       (void)cudaSetDevice(runtime->device);
       (void)cudaFree(runtime->epoch);
       (void)cudaFree(runtime->signals);
+      (void)cudaFree(runtime->d_router_weights);
+      (void)cudaFree(runtime->router_weights);
+      (void)cudaFree(runtime->d_x_routed);
+      (void)cudaFree(runtime->d_y);
       (void)cudaFree(runtime->combine);
       (void)cudaFree(runtime->x);
     }
@@ -281,6 +302,45 @@ __global__ void ForwardEpilogueKernel(
     value += router_weights[route] * __bfloat162float(combine[route * hidden_dim + hidden]);
   }
   output[static_cast<size_t>(token) * hidden_dim + hidden] = __float2bfloat16_rn(value);
+}
+
+__global__ void BackwardEpilogueKernel(
+    __nv_bfloat16* d_x,
+    const __nv_bfloat16* d_x_routed,
+    int num_tokens,
+    int hidden_dim,
+    int top_k) {
+  const int token = blockIdx.y;
+  const int hidden = blockIdx.x * blockDim.x + threadIdx.x;
+  if (token >= num_tokens || hidden >= hidden_dim) {
+    return;
+  }
+  float value = __bfloat162float(d_x[static_cast<size_t>(token) * hidden_dim + hidden]);
+  for (int k = 0; k < top_k; ++k) {
+    const size_t route = static_cast<size_t>(token) * top_k + k;
+    value += __bfloat162float(d_x_routed[route * hidden_dim + hidden]);
+  }
+  d_x[static_cast<size_t>(token) * hidden_dim + hidden] = __float2bfloat16_rn(value);
+}
+
+__global__ void ZeroEmptyRoutedWeightGradients(
+    uint16_t* d_w_routed_gate,
+    uint16_t* d_w_routed_up,
+    uint16_t* d_w_routed_down,
+    const int32_t* tokens_per_expert,
+    int64_t elements_per_expert) {
+  const int expert = blockIdx.y;
+  if (tokens_per_expert[expert] != 0) {
+    return;
+  }
+  const int64_t offset = static_cast<int64_t>(expert) * elements_per_expert;
+  for (int64_t index = blockIdx.x * blockDim.x + threadIdx.x;
+       index < elements_per_expert;
+       index += gridDim.x * blockDim.x) {
+    d_w_routed_gate[offset + index] = 0;
+    d_w_routed_up[offset + index] = 0;
+    d_w_routed_down[offset + index] = 0;
+  }
 }
 
 template <typename GL, typename T>
@@ -443,6 +503,243 @@ ffi::Error ForwardBf16(
   }
 }
 
+ffi::Error BackwardBf16(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::BF16, 2> grad_output,
+    ffi::Buffer<ffi::BF16, 2> x,
+    ffi::Buffer<ffi::F32, 2> router_weights,
+    ffi::Buffer<ffi::BF16, 2> shared_gate,
+    ffi::Buffer<ffi::BF16, 3> routed_gate,
+    ffi::Buffer<ffi::BF16, 2> shared_up,
+    ffi::Buffer<ffi::BF16, 3> routed_up,
+    ffi::Buffer<ffi::BF16, 2> shared_down,
+    ffi::Buffer<ffi::BF16, 3> routed_down,
+    ffi::Buffer<ffi::BF16, 2> x_routed,
+    ffi::Buffer<ffi::BF16, 2> gate_shared,
+    ffi::Buffer<ffi::BF16, 2> gate_routed,
+    ffi::Buffer<ffi::BF16, 2> up_shared,
+    ffi::Buffer<ffi::BF16, 2> up_routed,
+    ffi::Buffer<ffi::BF16, 2> hidden_shared,
+    ffi::Buffer<ffi::BF16, 2> hidden_routed,
+    ffi::Buffer<ffi::S32, 1> schedule_peer_rank,
+    ffi::Buffer<ffi::S32, 1> schedule_peer_token_idx,
+    ffi::Buffer<ffi::S32, 1> num_tokens,
+    ffi::Buffer<ffi::S32, 1> tokens_per_expert,
+    int32_t top_k,
+    int32_t num_comm_sms,
+    int32_t macrobatch_size,
+    int32_t minibatch_size,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_x,
+    ffi::Result<ffi::Buffer<ffi::F32, 2>> d_router_weights,
+    ffi::Result<ffi::Buffer<ffi::BF16, 3>> d_w_routed_gate,
+    ffi::Result<ffi::Buffer<ffi::BF16, 3>> d_w_routed_up,
+    ffi::Result<ffi::Buffer<ffi::BF16, 3>> d_w_routed_down,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_w_shared_gate,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_w_shared_up,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_w_shared_down,
+    ffi::Result<ffi::Buffer<ffi::F32, 1>> router_weights_staged,
+    ffi::Result<ffi::Buffer<ffi::F32, 2>> d_router_weight_partials,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_y_routed,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_hidden_shared,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_hidden_routed,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_gate_shared,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_gate_routed,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_up_shared,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_up_routed,
+    ffi::Result<ffi::Buffer<ffi::BF16, 2>> d_x_routed,
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> router_weights_ready,
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> d_y_routed_ready,
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> d_hidden_ready,
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> d_gate_up_ready,
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> d_x_routed_ready,
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> replayed_x_routed_ready,
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> replayed_gate_up_ready,
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> replayed_hidden_ready,
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> routed_buffers_done) {
+  try {
+    DeviceRuntime& runtime = RuntimeManager::Instance().Current();
+    const int local_tokens = static_cast<int>(x.dimensions()[0]);
+    const int hidden_dim = static_cast<int>(x.dimensions()[1]);
+    const int intermediate_dim = static_cast<int>(shared_gate.dimensions()[0]);
+    const int local_experts = static_cast<int>(routed_gate.dimensions()[0]);
+    const int schedule_capacity = static_cast<int>(schedule_peer_rank.dimensions()[0]);
+    if (grad_output.dimensions() != x.dimensions() || router_weights.dimensions()[0] != local_tokens ||
+        router_weights.dimensions()[1] != top_k) {
+      return ffi::Error::InvalidArgument("backward token input shapes do not match");
+    }
+    if (schedule_peer_token_idx.dimensions()[0] != schedule_capacity || num_tokens.dimensions()[0] != 1 ||
+        tokens_per_expert.dimensions()[0] != local_experts) {
+      return ffi::Error::InvalidArgument("backward schedule tensor shape mismatch");
+    }
+    if (macrobatch_size <= 0 || minibatch_size <= 0 || macrobatch_size % minibatch_size != 0 ||
+        schedule_capacity % minibatch_size != 0) {
+      return ffi::Error::InvalidArgument("backward batch sizes do not meet the kernel rules");
+    }
+    if (x_routed.dimensions()[0] != macrobatch_size || x_routed.dimensions()[1] != hidden_dim ||
+        gate_shared.dimensions()[0] != local_tokens || gate_shared.dimensions()[1] != intermediate_dim ||
+        gate_routed.dimensions()[0] != macrobatch_size || gate_routed.dimensions()[1] != intermediate_dim ||
+        up_shared.dimensions() != gate_shared.dimensions() || up_routed.dimensions() != gate_routed.dimensions() ||
+        hidden_shared.dimensions() != gate_shared.dimensions() ||
+        hidden_routed.dimensions() != gate_routed.dimensions()) {
+      return ffi::Error::InvalidArgument("backward forward-context shape mismatch");
+    }
+
+    const size_t x_bytes = static_cast<size_t>(local_tokens) * hidden_dim * sizeof(uint16_t);
+    const size_t routed_x_bytes = static_cast<size_t>(local_tokens) * top_k * hidden_dim * sizeof(uint16_t);
+    const size_t router_bytes = static_cast<size_t>(local_tokens) * top_k * sizeof(float);
+    ThrowOnCuda(cudaMemcpyAsync(runtime.d_y, grad_output.typed_data(), x_bytes, cudaMemcpyDeviceToDevice, stream),
+                "cudaMemcpyAsync(d_y workspace)");
+    ThrowOnCuda(cudaMemcpyAsync(runtime.x, x.typed_data(), x_bytes, cudaMemcpyDeviceToDevice, stream),
+                "cudaMemcpyAsync(x backward workspace)");
+    ThrowOnCuda(cudaMemcpyAsync(runtime.router_weights, router_weights.typed_data(), router_bytes,
+                                cudaMemcpyDeviceToDevice, stream),
+                "cudaMemcpyAsync(router workspace)");
+    ThrowOnCuda(cudaMemsetAsync(runtime.d_x_routed, 0, routed_x_bytes, stream), "memset(d_x routed workspace)");
+    ThrowOnCuda(cudaMemsetAsync(runtime.d_router_weights, 0, router_bytes, stream),
+                "memset(d_router workspace)");
+
+    auto clear = [&](auto& result, const char* context) {
+      ThrowOnCuda(cudaMemsetAsync(result->typed_data(), 0, result->size_bytes(), stream), context);
+    };
+    clear(router_weights_ready, "memset(router ready)");
+    clear(d_y_routed_ready, "memset(d_y ready)");
+    clear(d_hidden_ready, "memset(d_hidden ready)");
+    clear(d_gate_up_ready, "memset(d_gate_up ready)");
+    clear(d_x_routed_ready, "memset(d_x ready)");
+    clear(replayed_x_routed_ready, "memset(replayed x ready)");
+    clear(replayed_gate_up_ready, "memset(replayed gate/up ready)");
+    clear(replayed_hidden_ready, "memset(replayed hidden ready)");
+    clear(routed_buffers_done, "memset(routed buffers done)");
+    LaunchPeerBarrier(runtime, stream);
+
+    MoK::activation_bf16_pgl x_pointer_data;
+    MoK::activation_bf16_pgl d_y_pointer_data;
+    MoK::activation_bf16_pgl d_x_pointer_data;
+    MoK::router_weight_pgl router_pointer_data;
+    MoK::router_weight_pgl d_router_pointer_data;
+    for (int peer = 0; peer < kNumDevices; ++peer) {
+      x_pointer_data[peer] = reinterpret_cast<kittens::bf16*>(runtime.x_ptrs[peer]);
+      d_y_pointer_data[peer] = reinterpret_cast<kittens::bf16*>(runtime.d_y_ptrs[peer]);
+      d_x_pointer_data[peer] = reinterpret_cast<kittens::bf16*>(runtime.d_x_routed_ptrs[peer]);
+      router_pointer_data[peer] = reinterpret_cast<float*>(runtime.router_weight_ptrs[peer]);
+      d_router_pointer_data[peer] = reinterpret_cast<float*>(runtime.d_router_weight_ptrs[peer]);
+    }
+
+    MoK::globals_bwd globals{
+        .x_shared = MakeGl<MoK::wgrad_bf16_gl>(reinterpret_cast<kittens::bf16*>(runtime.x), 1, 1, local_tokens, hidden_dim),
+        .x_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(x_routed.typed_data()), 1, 1, macrobatch_size, hidden_dim),
+        .x_sc_routed = {},
+        .x_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(x_routed.typed_data()), 1, 1, macrobatch_size, hidden_dim),
+        .x_sc_t_routed = {},
+        .gate_shared = MakeGl<MoK::swiglu_bf16_gl>(reinterpret_cast<kittens::bf16*>(gate_shared.typed_data()), 1, 1, local_tokens, intermediate_dim),
+        .gate_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(gate_routed.typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .gate_fp8_routed = MakeGl<MoK::routed_gate_up_gl>(reinterpret_cast<kittens::bf16*>(gate_routed.typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .gate_sc_routed = {},
+        .up_shared = MakeGl<MoK::swiglu_bf16_gl>(reinterpret_cast<kittens::bf16*>(up_shared.typed_data()), 1, 1, local_tokens, intermediate_dim),
+        .up_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(up_routed.typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .up_fp8_routed = MakeGl<MoK::routed_gate_up_gl>(reinterpret_cast<kittens::bf16*>(up_routed.typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .up_sc_routed = {},
+        .hidden_shared = MakeGl<MoK::wgrad_bf16_gl>(reinterpret_cast<kittens::bf16*>(hidden_shared.typed_data()), 1, 1, local_tokens, intermediate_dim),
+        .hidden_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(hidden_routed.typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .hidden_sc_routed = {},
+        .hidden_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(hidden_routed.typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .hidden_sc_t_routed = {},
+        .d_y_shared = MakeGl<MoK::mlp_bf16_gl>(reinterpret_cast<kittens::bf16*>(runtime.d_y), 1, 1, local_tokens, hidden_dim),
+        .d_y_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(d_y_routed->typed_data()), 1, 1, macrobatch_size, hidden_dim),
+        .d_y_sc_routed = {},
+        .d_y_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(d_y_routed->typed_data()), 1, 1, macrobatch_size, hidden_dim),
+        .d_y_sc_t_routed = {},
+        .d_hidden_shared = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_hidden_shared->typed_data()), 1, 1, local_tokens, intermediate_dim),
+        .d_hidden_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_hidden_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .d_gate_shared = MakeGl<MoK::mlp_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_gate_shared->typed_data()), 1, 1, local_tokens, intermediate_dim),
+        .d_gate_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(d_gate_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .d_gate_sc_routed = {},
+        .d_gate_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(d_gate_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .d_gate_sc_t_routed = {},
+        .d_up_shared = MakeGl<MoK::mlp_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_up_shared->typed_data()), 1, 1, local_tokens, intermediate_dim),
+        .d_up_fp8_routed = MakeGl<MoK::routed_activation_gl>(reinterpret_cast<kittens::bf16*>(d_up_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .d_up_sc_routed = {},
+        .d_up_fp8_t_routed = MakeGl<MoK::routed_transposed_gl>(reinterpret_cast<kittens::bf16*>(d_up_routed->typed_data()), 1, 1, macrobatch_size, intermediate_dim),
+        .d_up_sc_t_routed = {},
+        .d_x_shared = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_x->typed_data()), 1, 1, local_tokens, hidden_dim),
+        .d_x_routed = MakeGl<MoK::epi_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_x_routed->typed_data()), 1, 1, macrobatch_size, hidden_dim),
+        .x_routed_send_buffer = x_pointer_data,
+        .d_y_buffer = d_y_pointer_data,
+        .d_x_routed_buffer = d_x_pointer_data,
+        .router_weight_buffer = router_pointer_data,
+        .d_router_weight_buffer = d_router_pointer_data,
+        .router_weights = MakeGl<MoK::router_weight_gl>(router_weights_staged->typed_data(), 1, 1, 1, macrobatch_size),
+        .d_router_weight_partials = MakeGl<MoK::d_router_weight_partials_gl>(d_router_weight_partials->typed_data(), 1, 1, macrobatch_size, intermediate_dim / MoK::config::SWIGLU_Nb),
+        .w_routed_gate = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_gate.typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .w_routed_gate_sc = {},
+        .w_routed_up = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_up.typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .w_routed_up_sc = {},
+        .w_shared_gate = MakeGl<MoK::weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(shared_gate.typed_data()), 1, 1, intermediate_dim, hidden_dim),
+        .w_routed_gate_T = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_gate.typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .w_routed_gate_T_sc = {},
+        .w_shared_up = MakeGl<MoK::weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(shared_up.typed_data()), 1, 1, intermediate_dim, hidden_dim),
+        .w_routed_up_T = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_up.typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .w_routed_up_T_sc = {},
+        .w_shared_down = MakeGl<MoK::weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(shared_down.typed_data()), 1, 1, hidden_dim, intermediate_dim),
+        .w_routed_down_T = MakeGl<MoK::routed_weight_gl>(reinterpret_cast<kittens::bf16*>(routed_down.typed_data()), 1, local_experts, hidden_dim, intermediate_dim),
+        .w_routed_down_T_sc = {},
+        .d_w_shared_gate = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_shared_gate->typed_data()), 1, 1, intermediate_dim, hidden_dim),
+        .d_w_routed_gate = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_routed_gate->typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .d_w_shared_up = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_shared_up->typed_data()), 1, 1, intermediate_dim, hidden_dim),
+        .d_w_routed_up = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_routed_up->typed_data()), 1, local_experts, intermediate_dim, hidden_dim),
+        .d_w_shared_down = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_shared_down->typed_data()), 1, 1, hidden_dim, intermediate_dim),
+        .d_w_routed_down = MakeGl<MoK::d_weight_bf16_gl>(reinterpret_cast<kittens::bf16*>(d_w_routed_down->typed_data()), 1, local_experts, hidden_dim, intermediate_dim),
+        .schedule_peer_rank = MakeGl<MoK::index_gl>(schedule_peer_rank.typed_data(), 1, 1, 1, schedule_capacity),
+        .schedule_peer_token_idx = MakeGl<MoK::index_gl>(schedule_peer_token_idx.typed_data(), 1, 1, 1, schedule_capacity),
+        .num_tokens = MakeGl<MoK::index_gl>(num_tokens.typed_data(), 1, 1, 1, 1),
+        .tokens_per_expert = MakeGl<MoK::index_gl>(tokens_per_expert.typed_data(), 1, 1, 1, local_experts),
+        .router_weights_ready = MakeGl<MoK::index_gl>(router_weights_ready->typed_data(), 1, 1, 1, router_weights_ready->dimensions()[0]),
+        .d_y_routed_ready = MakeGl<MoK::index_gl>(d_y_routed_ready->typed_data(), 1, 1, 1, d_y_routed_ready->dimensions()[0]),
+        .d_hidden_ready = MakeGl<MoK::index_gl>(d_hidden_ready->typed_data(), 1, 1, 1, d_hidden_ready->dimensions()[0]),
+        .d_gate_up_ready = MakeGl<MoK::index_gl>(d_gate_up_ready->typed_data(), 1, 1, 1, d_gate_up_ready->dimensions()[0]),
+        .d_x_routed_ready = MakeGl<MoK::index_gl>(d_x_routed_ready->typed_data(), 1, 1, 1, d_x_routed_ready->dimensions()[0]),
+        .replayed_x_routed_ready = MakeGl<MoK::index_gl>(replayed_x_routed_ready->typed_data(), 1, 1, 1, replayed_x_routed_ready->dimensions()[0]),
+        .replayed_gate_up_ready = MakeGl<MoK::index_gl>(replayed_gate_up_ready->typed_data(), 1, 1, 1, replayed_gate_up_ready->dimensions()[0]),
+        .replayed_hidden_ready = MakeGl<MoK::index_gl>(replayed_hidden_ready->typed_data(), 1, 1, 1, replayed_hidden_ready->dimensions()[0]),
+        .routed_buffers_done = MakeGl<MoK::index_gl>(routed_buffers_done->typed_data(), 1, 1, 1, routed_buffers_done->dimensions()[0]),
+        .topk = top_k,
+        .swiglu_limit = 0.0F,
+        .num_comm_sms = num_comm_sms,
+        .macrobatch_size = macrobatch_size,
+        .minibatch_size = minibatch_size,
+    };
+    LaunchKernel<MoK::config, MoK::globals_bwd, MoK::dispatch_mlp_swiglu_combine_bwd_kernel<false>>(
+        globals,
+        stream);
+
+    const int64_t elements_per_expert = static_cast<int64_t>(intermediate_dim) * hidden_dim;
+    ZeroEmptyRoutedWeightGradients<<<dim3(128, local_experts), 256, 0, stream>>>(
+        reinterpret_cast<uint16_t*>(d_w_routed_gate->typed_data()),
+        reinterpret_cast<uint16_t*>(d_w_routed_up->typed_data()),
+        reinterpret_cast<uint16_t*>(d_w_routed_down->typed_data()),
+        tokens_per_expert.typed_data(),
+        elements_per_expert);
+    ThrowOnCuda(cudaGetLastError(), "ZeroEmptyRoutedWeightGradients");
+    LaunchPeerBarrier(runtime, stream);
+
+    constexpr int kThreads = 256;
+    const dim3 epilogue_grid((hidden_dim + kThreads - 1) / kThreads, local_tokens, 1);
+    BackwardEpilogueKernel<<<epilogue_grid, kThreads, 0, stream>>>(
+        reinterpret_cast<__nv_bfloat16*>(d_x->typed_data()),
+        reinterpret_cast<const __nv_bfloat16*>(runtime.d_x_routed),
+        local_tokens,
+        hidden_dim,
+        top_k);
+    ThrowOnCuda(cudaGetLastError(), "BackwardEpilogueKernel");
+    ThrowOnCuda(cudaMemcpyAsync(d_router_weights->typed_data(), runtime.d_router_weights, router_bytes,
+                                cudaMemcpyDeviceToDevice, stream),
+                "cudaMemcpyAsync(d_router output)");
+    return ffi::Error::Success();
+  } catch (const std::exception& exc) {
+    return ffi::Error::Internal(exc.what());
+  }
+}
+
 auto ForwardBinding() {
   return ffi::Ffi::Bind()
       .Ctx<ffi::PlatformStream<cudaStream_t>>()
@@ -472,6 +769,62 @@ auto ForwardBinding() {
       .Ret<ffi::Buffer<ffi::BF16, 2>>()
       .Ret<ffi::Buffer<ffi::BF16, 2>>()
       .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>();
+}
+
+auto BackwardBinding() {
+  return ffi::Ffi::Bind()
+      .Ctx<ffi::PlatformStream<cudaStream_t>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::F32, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 3>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 3>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 3>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::BF16, 2>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Arg<ffi::Buffer<ffi::S32, 1>>()
+      .Attr<int32_t>("top_k")
+      .Attr<int32_t>("num_comm_sms")
+      .Attr<int32_t>("macrobatch_size")
+      .Attr<int32_t>("minibatch_size")
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::F32, 2>>()
+      .Ret<ffi::Buffer<ffi::BF16, 3>>()
+      .Ret<ffi::Buffer<ffi::BF16, 3>>()
+      .Ret<ffi::Buffer<ffi::BF16, 3>>()
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::F32, 1>>()
+      .Ret<ffi::Buffer<ffi::F32, 2>>()
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>()
@@ -509,3 +862,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     levanter_mok_forward_bf16_4,
     ForwardBf16,
     ForwardBinding());
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    levanter_mok_backward_bf16_4,
+    BackwardBf16,
+    BackwardBinding());
