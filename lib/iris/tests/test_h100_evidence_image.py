@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import ast
 import re
+import tomllib
 from pathlib import Path, PurePosixPath
 
 import yaml
@@ -12,6 +14,9 @@ DOCKERIGNORE = REPO_ROOT / "lib" / "iris" / "Dockerfile.dockerignore"
 PACKAGE_MANIFEST = REPO_ROOT / "lib" / "iris" / "images" / "h100-evidence-debian12-amd64.sha256"
 H100_IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-h100-evidence-image.yaml"
 BROAD_IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-docker-images.yaml"
+ROOT_PYPROJECT = REPO_ROOT / "pyproject.toml"
+TILE_LIFETIME_PYPROJECT = REPO_ROOT / "lib" / "tile_lifetime" / "pyproject.toml"
+UV_LOCK = REPO_ROOT / "uv.lock"
 
 EXPECTED_PACKAGES = {
     "cuda-cccl-13-2_13.2.86-1_amd64.deb",
@@ -88,6 +93,23 @@ def _docker_context_includes(path: str, dockerignore: str) -> bool:
     return included
 
 
+def _docker_stage(name: str) -> str:
+    dockerfile = DOCKERFILE.read_text()
+    stage_start = re.search(rf"^FROM \S+ AS {re.escape(name)}$", dockerfile, re.MULTILINE)
+    assert stage_start is not None
+    next_stage = re.search(r"^FROM \S+ AS \S+$", dockerfile[stage_start.end() :], re.MULTILINE)
+    if next_stage is None:
+        return dockerfile[stage_start.end() :]
+    return dockerfile[stage_start.end() : stage_start.end() + next_stage.start()]
+
+
+def _locked_package(name: str) -> dict:
+    lock = tomllib.loads(UV_LOCK.read_text())
+    matches = [package for package in lock["package"] if package["name"] == name]
+    assert len(matches) == 1
+    return matches[0]
+
+
 def test_h100_evidence_package_manifest_is_closed_and_hash_pinned():
     records = [line.split() for line in PACKAGE_MANIFEST.read_text().splitlines()]
 
@@ -109,13 +131,78 @@ def test_h100_evidence_manifest_is_in_the_real_nonempty_docker_context():
 
 
 def test_h100_evidence_target_inherits_task_and_checks_every_required_tool():
-    dockerfile = DOCKERFILE.read_text()
-    target = dockerfile.split("FROM task AS task-h100-evidence", maxsplit=1)[1]
+    target = _docker_stage("task-h100-evidence")
 
     assert "h100-evidence-debian12-amd64.sha256" in target
     assert 'test "$(dpkg --print-architecture)" = amd64' in target
     for tool in ("nvcc", "ptxas", "cuobjdump", "ncu", "nsys"):
         assert re.search(rf"/[^ ;]*{tool} --version", target)
+
+
+def test_h100_evidence_runtime_uses_the_frozen_cuda13_workspace_closure():
+    project = tomllib.loads(TILE_LIFETIME_PYPROJECT.read_text())["project"]
+    assert {"jax==0.10.1", "marin-shuttle", "numpy>=2.0"} <= set(project["dependencies"])
+    assert project["optional-dependencies"] == {"cuda13": ["jax[cuda13]==0.10.1"]}
+
+    for distribution in ("jax", "jaxlib", "jax-cuda13-plugin", "jax-cuda13-pjrt"):
+        assert _locked_package(distribution)["version"] == "0.10.1"
+    assert _locked_package("marin-shuttle")["version"] == "0.1.0"
+    assert _locked_package("jax")["optional-dependencies"]["cuda13"] == [
+        {"name": "jax-cuda13-plugin", "extra": ["with-cuda"]},
+        {"name": "jaxlib"},
+    ]
+
+    runtime = _docker_stage("h100-evidence-runtime")
+    sync = " ".join(line.strip().removesuffix("\\").strip() for line in runtime.splitlines())
+    assert "uv sync --frozen --package marin-tile-lifetime --extra cuda13" in sync
+    assert "--no-default-groups --no-editable --no-install-project" in sync
+    assert "UV_PROJECT_ENVIRONMENT=/opt/h100-evidence-runtime" in runtime
+
+
+def test_h100_evidence_runtime_builder_has_complete_context_without_shipping_repo_source():
+    runtime = _docker_stage("h100-evidence-runtime")
+    final = _docker_stage("task-h100-evidence")
+    copied_sources = {
+        token.rstrip("/")
+        for line in runtime.splitlines()
+        if line.startswith("COPY ") and "--from=" not in line
+        for token in line.split()[1:-1]
+    }
+    workspace_members = tomllib.loads(ROOT_PYPROJECT.read_text())["tool"]["uv"]["workspace"]["members"]
+    assert {f"{member}/pyproject.toml" for member in workspace_members} <= copied_sources
+
+    dockerignore = DOCKERIGNORE.read_text()
+    for source in copied_sources:
+        assert (REPO_ROOT / source).exists(), source
+        assert _docker_context_includes(source, dockerignore), source
+
+    assert "lib/shuttle/src" in copied_sources
+    assert "lib/tile_lifetime/src" not in copied_sources
+    assert "COPY --from=h100-evidence-runtime /opt/h100-evidence-runtime /opt/h100-evidence-runtime" in final
+    assert "COPY lib/shuttle/" not in final
+    assert "COPY lib/tile_lifetime/" not in final
+
+
+def test_h100_evidence_runtime_smoke_is_cpu_only_and_matches_the_lock():
+    final = _docker_stage("task-h100-evidence")
+    smoke = final.split("RUN JAX_PLATFORMS=cpu python - <<'PY'", maxsplit=1)[1].split("\nPY", maxsplit=1)[0]
+    expected_match = re.search(r"expected = (?P<expected>\{.*?\n\})", smoke, re.DOTALL)
+    assert expected_match is not None
+    expected = ast.literal_eval(expected_match.group("expected"))
+    assert expected == {
+        "jax": "0.10.1",
+        "jax-cuda13-pjrt": "0.10.1",
+        "jax-cuda13-plugin": "0.10.1",
+        "jaxlib": "0.10.1",
+        "marin-shuttle": "0.1.0",
+    }
+    assert expected == {distribution: _locked_package(distribution)["version"] for distribution in expected}
+    for imported_module in ("jax", "jaxlib", "numpy", "scipy"):
+        assert re.search(rf"^import {imported_module}$", smoke, re.MULTILINE)
+    assert "from shuttle.ir import DType" in smoke
+    assert 'DType.BF16.value != "bf16"' in smoke
+    assert "jax.devices(" not in smoke
+    assert "nvidia-smi" not in smoke
 
 
 def test_h100_evidence_workflow_dispatch_builds_one_exact_source_image():
