@@ -244,9 +244,9 @@ def _write_stage_output(
             full_gen,
             source_shard,
             data_path,
-            key_fn=scatter_op.key_fn,
+            key=scatter_op.key,
             num_output_shards=num_output_shards,
-            sort_fn=scatter_op.sort_fn,
+            sort_by=scatter_op.sort_by,
             combiner_fn=scatter_op.combiner_fn,
         )
         return TaskResult(shard=shard)

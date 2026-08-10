@@ -40,12 +40,13 @@ import time
 from collections.abc import Iterator
 
 import click
+import polars as pl
 from fray.types import ResourceConfig
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
-from zephyr.shard_keys import deterministic_hash
+from zephyr.shuffle import _SCATTER_HASH_SEED
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +60,13 @@ def _hot_keys_for_shard(target_shard: int, num_output_shards: int, count: int) -
     """Find the first ``count`` integer keys whose hash routes to ``target_shard``.
 
     Used by the skewed benchmark to bias most items toward one reducer.
+    Matches the Python-item scatter path: Polars ``Expr.hash`` of the raw key value.
     """
     keys: list[int] = []
     k = 0
     while len(keys) < count:
-        if deterministic_hash(k) % num_output_shards == target_shard:
+        shard = int(pl.select((pl.lit(k).hash(seed=_SCATTER_HASH_SEED) % num_output_shards).cast(pl.Int32)).item())
+        if shard == target_shard:
             keys.append(k)
         k += 1
     return keys

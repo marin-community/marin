@@ -43,7 +43,7 @@ from zephyr.dataset import (
     WriteOp,
     resolve_glob,
 )
-from zephyr.expr import Expr, referenced_columns
+from zephyr.expr import ColumnExpr, Expr, referenced_columns
 from zephyr.input_file import InputFileSpec
 from zephyr.readers import compute_parquet_splits, load_file, load_file_batch
 from zephyr.shuffle import ScatterReader
@@ -97,9 +97,9 @@ class Write:
 class Scatter:
     """Distribute items to output shards by key hash."""
 
-    key_fn: Callable[[Any], Any]  # item → key
+    key: Callable[[Any], Any] | ColumnExpr  # item → key, or a zephyr.expr.col(...)
     num_output_shards: int
-    sort_fn: Callable[[Any], Any] | None = None  # Optional secondary sort within each group
+    sort_by: Callable[[Any], Any] | ColumnExpr | None = None  # Optional secondary sort within each group
     combiner_fn: Callable | None = None  # Optional local pre-aggregation per key
 
 
@@ -110,7 +110,7 @@ class Reduce:
     Sort within each group is encoded into ``_SORT_KEY_COL`` at scatter time
     """
 
-    key_fn: Callable[[Any], Any]
+    key: Callable[[Any], Any] | ColumnExpr
     reducer_fn: Callable[[Any, Iterator], Any]
 
 
@@ -165,13 +165,14 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
 
 def _reduce_gen(
     shard: ScatterReader,
-    key_fn: Callable,
+    key: Callable | ColumnExpr,
     reducer_fn: Callable,
     external_sort_dir: str,
 ) -> Iterator:
+    row_key = key.evaluate if isinstance(key, ColumnExpr) else key
     merged = shard.merge_sorted_chunks(external_sort_dir)
-    for key, grouped in groupby(merged, key=key_fn):
-        result = reducer_fn(key, grouped)
+    for group_key, grouped in groupby(merged, key=row_key):
+        result = reducer_fn(group_key, grouped)
         if isinstance(result, Iterator):
             yield from result
         else:
@@ -440,15 +441,15 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
             num_shards = op.num_output_shards if op.num_output_shards is not None else -1
             state.add_op(
                 Scatter(
-                    key_fn=op.key_fn,
+                    key=op.key,
                     num_output_shards=num_shards,
-                    sort_fn=op.sort_fn,
+                    sort_by=op.sort_by,
                     combiner_fn=op.combiner_fn,
                 ),
                 output_shards=num_shards if num_shards > 0 else None,
             )
             state.end_stage()
-            state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn))
+            state.add_op(Reduce(key=op.key, reducer_fn=op.reducer_fn))
 
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
@@ -789,11 +790,15 @@ def run_stage(
             return
 
         elif isinstance(op, Reduce):
-            # The shard holds every mapper's scatter-data path. The reducer
-            # reads all per-mapper sidecars in parallel, filters for its own
-            # target shard, then merges the sorted chunks and reduces per key.
-            reader = ScatterReader.from_sidecars(list(ctx.shard), ctx.shard_idx)
-            stream = _reduce_gen(reader, op.key_fn, op.reducer_fn, external_sort_dir)
+            # Build ScatterReader directly from per-mapper sidecars, then
+            # merge sorted chunks and reduce per key.
+            shard = ctx.shard
+            if not isinstance(shard, ScatterReader):
+                # Shard contains every mapper's scatter-data path — reducer
+                # reads all sidecars in parallel and filters for its target.
+                scatter_paths = list(shard)
+                shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
+            stream = _reduce_gen(shard, op.key, op.reducer_fn, external_sort_dir)
             op_index += 1
 
         elif isinstance(op, Fold):

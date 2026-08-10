@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic hashing and sort-key helpers for Zephyr shard routing."""
+"""Deterministic hashing for datakit store subshard routing."""
 
 import msgspec
 import xxhash

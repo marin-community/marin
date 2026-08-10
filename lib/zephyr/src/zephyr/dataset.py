@@ -15,7 +15,7 @@ from braceexpand import braceexpand
 from pyarrow import RecordBatch
 from rigging.filesystem import StoragePath, url_to_fs
 
-from zephyr.expr import Expr
+from zephyr.expr import ColumnExpr, Expr
 from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 
 logger = logging.getLogger(__name__)
@@ -280,16 +280,16 @@ class ReshardOp:
 
 @dataclass
 class GroupByOp:
-    """Group items by `key_fn`, reducing each group with `reducer_fn`."""
+    """Group items by `key`, reducing each group with `reducer_fn`."""
 
-    key_fn: Callable  # Function from item -> hashable key
+    key: Callable | ColumnExpr  # Function (or zephyr.expr.col(...)) from item -> hashable key
     reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
     num_output_shards: int | None = None  # None = auto-detect from current shard count
-    sort_fn: Callable | None = None  # Optional secondary sort within each group
+    sort_by: Callable | ColumnExpr | None = None  # Optional secondary sort within each group
     combiner_fn: Callable | None = None  # Optional local pre-aggregation during scatter
 
     def __repr__(self):
-        return f"GroupByOp(key={_get_fn_name(self.key_fn)})"
+        return f"GroupByOp(key={_get_fn_name(self.key)})"
 
 
 @dataclass
@@ -869,10 +869,10 @@ class Dataset(Generic[T]):
     @overload
     def group_by(
         self,
-        key: Callable[[T], K],
+        key: Callable[[T], K] | ColumnExpr,
         *,
         reducer: Callable[[K, Iterator[T]], Iterator[R]],
-        sort_by: Callable[[T], Any] | None = None,
+        sort_by: Callable[[T], Any] | ColumnExpr | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> "Dataset[R]": ...
@@ -880,20 +880,20 @@ class Dataset(Generic[T]):
     @overload
     def group_by(
         self,
-        key: Callable[[T], K],
+        key: Callable[[T], K] | ColumnExpr,
         *,
         reducer: Callable[[K, Iterator[T]], R],
-        sort_by: Callable[[T], Any] | None = None,
+        sort_by: Callable[[T], Any] | ColumnExpr | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> "Dataset[R]": ...
 
     def group_by(
         self,
-        key: Callable[[T], K],
+        key: Callable[[T], K] | ColumnExpr,
         *,
         reducer: Callable[[K, Iterator[T]], R | Iterator[R]],
-        sort_by: Callable[[T], Any] | None = None,
+        sort_by: Callable[[T], Any] | ColumnExpr | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> "Dataset[R]":
@@ -906,10 +906,16 @@ class Dataset(Generic[T]):
         Custom dataclasses and arbitrary objects will have degraded performance (serde via pickle).
 
         Args:
-            key: Function extracting grouping key from item (must be hashable)
+            key: Function extracting grouping key from item (must be hashable), or a
+                ``zephyr.expr.col(name)``. A ``col(...)`` is required when items are
+                ``pl.DataFrame``/``pa.RecordBatch`` batches (e.g. after
+                ``load_parquet(batch_mode=True)``), since it lets the scatter write
+                path compute routing columns as vectorized Polars expressions instead
+                of calling a Python function per row.
             reducer: Function from (key, Iterator[items]) -> result
-            sort_by: Optional function extracting a sort key from each item. When provided,
-                items within each group are delivered to the reducer sorted by this key.
+            sort_by: Optional function (or ``col(...)``) extracting a sort key from each
+                item. When provided, items within each group are delivered to the
+                reducer sorted by this key.
             num_output_shards: Number of output shards (None = auto-detect, uses current shard count)
             combiner: Optional local pre-aggregation applied during scatter. Receives
                 (key, Iterator[items]) and yields reduced items of the same type. Must be
@@ -939,10 +945,19 @@ class Dataset(Generic[T]):
             ...         sort_by=lambda x: x["ts"],
             ...     )
             ... )
+
+            >>> # DataFrame-batch pipeline: col(...) lets Scatter ingest batches directly
+            >>> from zephyr.expr import col
+            >>> ds = (Dataset
+            ...     .from_list(files)
+            ...     .load_parquet(batch_mode=True)
+            ...     .map(my_batch_transform)  # RecordBatch -> pl.DataFrame
+            ...     .group_by(key=col("cat"), sort_by=col("id"), reducer=my_reducer)
+            ... )
         """
         return cast(
             "Dataset[R]",
-            self._derive(GroupByOp(key, reducer, num_output_shards, sort_fn=sort_by, combiner_fn=combiner)),
+            self._derive(GroupByOp(key, reducer, num_output_shards, sort_by=sort_by, combiner_fn=combiner)),
         )
 
     def deduplicate(self, key: Callable[[T], object], num_output_shards: int | None = None) -> "Dataset[T]":
