@@ -1,0 +1,56 @@
+Experiment: TLTC-XLA-063
+
+Measured Shuttle revision:
+870ce22524
+
+Source archive:
+2662c0e5b1bc15f112f4d7a791cbf7270464a5479b3cf0ea5e1777e1dcad02bd  shuttle-contract-map-capture-h100-870ce225.tar.gz
+
+Allocation-control revision:
+eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb
+
+Holder request:
+
+uv run --project /private/tmp/marin-iris-current.JoCV0V \
+  --package marin-iris --extra controller \
+  /private/tmp/marin-iris-current.JoCV0V/scripts/iris/dev_gpu.py \
+  --config /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml \
+  --name dlwh-shuttle-contract-map-capture-h100 allocate \
+  --gpu-variant h100 --gpus-per-node 1 --nodes 1 --priority batch \
+  --cpu 1 --memory 32GB --disk 50GB --timeout 1800 --pod-timeout 300
+
+In-pod environment:
+
+uv pip install --python /app/.venv/bin/python \
+  'jax==0.11.0' 'jaxlib==0.11.0' \
+  'jax-cuda13-plugin==0.11.0' 'jax-cuda13-pjrt==0.11.0' \
+  nvidia-cuda-cccl
+uv pip install --python /app/.venv/bin/python 'jax[cuda13]==0.11.0'
+
+Compile/link/load preflight used the benchmark command below with
+`--preflight-only` and a separate output directory. It passed with fresh
+handler counts `(0, 0)`.
+
+Sole measured benchmark invocation:
+
+cd /tmp/source
+export PYTHONPATH="$PWD/lib/tile_lifetime/src:$PWD"
+export XLA_FLAGS="--xla_gpu_enable_command_buffer=CUSTOM_CALL --xla_gpu_graph_min_graph_size=1"
+/app/.venv/bin/python \
+  lib/tile_lifetime/benchmarks/h100_generated_contract_map_chain_training.py \
+  --hlo-fixture \
+    lib/tile_lifetime/benchmarks/artifacts/xla_grug_shared_map_h100_narrowed_unaccepted_da49b94c_v0/transformed-gpu-pre-scheduler-hlo.txt.gz \
+  --nvcc /app/.venv/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc \
+  --architecture sm_90a \
+  --artifact-directory /tmp/shuttle-contract-map-capture-h100/run/generated \
+  --json-output /tmp/shuttle-contract-map-capture-h100/run/result.json \
+  --shuttle-revision 870ce22524 \
+  --require-jax-version 0.11.0 \
+  --threads 256 \
+  --physical-candidate command_buffer_capture_safe \
+  --seed 20260809 \
+  --warmups 4 \
+  --repeats 30 \
+  --iterations 1000
+
+No second measured invocation, tuning pass, or profiler invocation was made.

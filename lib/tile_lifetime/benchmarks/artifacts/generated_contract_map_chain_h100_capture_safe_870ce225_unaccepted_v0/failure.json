@@ -1,0 +1,18 @@
+{
+  "accepted": false,
+  "benchmark_iterations_completed": true,
+  "experiment_id": "TLTC-XLA-063",
+  "failure": "capture_only_handler_counts_did_not_stabilize_after_warmup",
+  "handler_count_checkpoints": {
+    "after_correctness": {"forward": 1, "reverse": 1},
+    "after_determinism": {"forward": 3, "reverse": 3},
+    "after_warmup": {"forward": 4, "reverse": 4},
+    "after_measurement": {"forward": 6, "reverse": 6}
+  },
+  "logical_generated_executions": 30007,
+  "performance_result": null,
+  "raw_timing_distribution": null,
+  "reason_timing_unavailable": "The strict capture-count gate fired before result serialization.",
+  "retried": false,
+  "source_revision": "870ce22524"
+}

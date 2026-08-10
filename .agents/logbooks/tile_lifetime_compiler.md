@@ -3368,6 +3368,29 @@ author: dlwh
   StableHLO, optimized HLO, environment, invocation, and release proof are under
   `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_fixed_layout_239372d3_v0/`.
 
+### 2026-08-09 - TLTC-XLA-063 natural-Grug Contract/Map ABI audit
+
+- The `shared_map_fused_reverses` HLO contains 13 existing calls. Generic
+  low-rank recovery adds six forward/rematerialization calls and four JAX-owned
+  reverse calls, for 23 calls total. The ten new calls share one shape/AST
+  family with target multiplicities 6 and 4 and remove 28 old Contracts.
+- The CUDA generator now exposes one physical ABI used by direct-HLO emission,
+  source auditing, and the JAX wrapper. Forward calls take three row-major
+  rank-two BF16 buffers and return four row-major buffers. Reverse calls take
+  seven row-major buffers and return row-major dX plus two recovered
+  column-major dW buffers.
+- Direct HLO retains XLA's minor-to-major spelling: dX is `{1,0}` and both dW
+  outputs are `{0,1}`. The standalone JAX wrapper reverses these only when
+  passing `output_layouts` to `jax.ffi.ffi_call`, yielding `(0,1)` for dX and
+  `(1,0)` for each dW.
+- Rank-three `[2,4,*]` logical outputs and cotangents are accepted only as
+  contiguous `{2,1,0}` views of the rank-two CUDA buffers. The pre-allocation
+  audit rejects mismatched operand constraints, dX layout, either dW layout,
+  and noncontiguous logical views.
+- Thirty-five focused CPU/static tests, including the capture-safe handler
+  checks, and all 559 package tests pass. No GPU allocation or performance
+  claim was made.
+
 ### 2026-08-09 - TLTC-XLA-064 multi-output row-Fold schedule
 
 - Revision `449bd8690d` adds a physical schedule parameter that lets each tiled
@@ -3410,25 +3433,29 @@ author: dlwh
   will use a generic bounded scalar segmented Contract; composed multi-source
   TMA remains the high-throughput follow-up.
 
-### 2026-08-09 - TLTC-XLA-063 natural-Grug Contract/Map ABI audit
+### 2026-08-09 - TLTC-XLA-066 capture-safe Contract/Map recapture gate
 
-- The `shared_map_fused_reverses` HLO contains 13 existing calls. Generic
-  low-rank recovery adds six forward/rematerialization calls and four JAX-owned
-  reverse calls, for 23 calls total. The ten new calls share one shape/AST
-  family with target multiplicities 6 and 4 and remove 28 old Contracts.
-- The CUDA generator now exposes one physical ABI used by direct-HLO emission,
-  source auditing, and the JAX wrapper. Forward calls take three row-major
-  rank-two BF16 buffers and return four row-major buffers. Reverse calls take
-  seven row-major buffers and return row-major dX plus two recovered
-  column-major dW buffers.
-- Direct HLO retains XLA's minor-to-major spelling: dX is `{1,0}` and both dW
-  outputs are `{0,1}`. The standalone JAX wrapper reverses these only when
-  passing `output_layouts` to `jax.ffi.ffi_call`, yielding `(0,1)` for dX and
-  `(1,0)` for each dW.
-- Rank-three `[2,4,*]` logical outputs and cotangents are accepted only as
-  contiguous `{2,1,0}` views of the rank-two CUDA buffers. The pre-allocation
-  audit rejects mismatched operand constraints, dX layout, either dW layout,
-  and noncontiguous logical views.
-- Thirty-five focused CPU/static tests, including the capture-safe handler
-  checks, and all 559 package tests pass. No GPU allocation or performance
-  claim was made.
+- Revision `870ce22524` adds an explicit capture-safe physical candidate to the
+  standalone Contract/Map harness. The launch-checked baseline retains exact
+  logical handler-count accounting; the capture-safe path requires XLA
+  `CUSTOM_CALL` command buffers and records host callbacks only as graph-capture
+  evidence.
+- One fixed-protocol batch-priority H100 replay used four warmups and 30
+  counterbalanced samples with 1,000 iterations each. JAX, JAXLIB, CUDA plugin,
+  and PJRT were all 0.11.0; NVCC was 13.3.73. The environment was Torch-free.
+  Compile/link/load preflight passed, both fresh counts were zero, and the
+  generated source passed the capture-safety audit.
+- Forward/reverse callback counts were `(1,1)` after correctness, `(3,3)` after
+  determinism, `(4,4)` after warmup, and `(6,6)` after measurement. Six host
+  callbacks across 30,007 logical generated executions show command-buffer
+  capture and replay. Two recaptures occurred after the warmup checkpoint, so
+  the strict post-warmup plateau gate failed.
+- The natural-JAX, ordered-CPU, layout, and deterministic-hash guards completed
+  before the final count assertion. The process also completed all timed loops,
+  but it serializes results only after count validation. Raw timing
+  distributions, numeric correctness details, and a performance ratio are
+  unavailable. The run remains unaccepted and was not retried.
+- The holder was explicitly terminated after evidence copy. Iris reports
+  `JOB_STATE_KILLED` and no active matching job; local session state and the
+  exact task-label pod are absent. Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/generated_contract_map_chain_h100_capture_safe_870ce225_unaccepted_v0/`.

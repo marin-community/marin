@@ -1,0 +1,14 @@
+Experiment: TLTC-XLA-063
+Holder: /dlwh/dev-gpu-dlwh-shuttle-contract-map-capture-h100
+Released: 2026-08-10T00:04:28Z
+
+Controller query after release:
+/dlwh/dev-gpu-dlwh-shuttle-contract-map-capture-h100 JOB_STATE_KILLED
+active_jobs= []
+
+Local holder status after release:
+Error: No active dev GPU session at /Users/dlwh/.cache/marin/dev_gpu_iris/dlwh-shuttle-contract-map-capture-h100.json
+
+Exact task-label pod query after release:
+iris.task_id=dlwh.dev-gpu-dlwh-shuttle-contract-map-capture-h100.0
+Result: no resources
