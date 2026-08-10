@@ -112,7 +112,10 @@ The staging schema reuses behavior that already has focused tests:
   compiles ordinary JAX forward plus JAX VJP, runs numerical and repeat gates
   before timing, and coordinates isolated compile, cache, Nsight Compute, and
   Nsight Systems workers. It publishes `accepted_bundle.json` only after the
-  existing validator accepts all 24 records in fixed order.
+  existing validator accepts all 24 records in fixed order. Ordinary-XLA
+  boundary evidence comes from the same final optimized HLO identity observed
+  by its compile, cache, timing, and profiler workers; it never reuses a
+  generated candidate ABI.
 - `contract_map_chain.py`, `cuda_contract_map_chain_codegen.py`,
   `jax_contract_map_chain_ffi.py`, and
   `h100_generated_contract_map_chain_training.py` are historical evidence.
@@ -181,9 +184,23 @@ candidate records the removed save and all extra Contract/Map launches. The
 comparison rejects a row if one backend includes an adapter, copy, or saved
 state that another backend silently excludes.
 
+The ordinary-XLA combined executable has the reviewed entry contract
+`x,w0,w1,do -> y,dx,dw0,dw1`. The runner maps its four parameters by exact
+`parameter(0..3)` attributes and its four outputs by the tuple root, then
+records every parameter and root shape/layout. Reachable entry copies,
+transposes, or bitcasts reject until separate evidence can prove their
+materialization. Fusion and custom-call facts remain in the HLO manifest;
+launch count and order come only from nsys and ncu. The exact reviewed entry
+proves no saved state crosses the executable boundary and does not prove
+semantic recomputation, so both records are empty. An additional parameter or
+root output rejects. Kernel-only and logical records describe the same
+executable and can differ only through proven host or layout adapters.
+
 Timing uses isolated processes and records four costs independently:
 
-1. process start through executable compilation;
+1. coordinator subprocess spawn through executable compilation, including
+   interpreter startup, imports, device initialization, FFI registration, and
+   deterministic input setup;
 2. first execution and all ten warmup samples;
 3. counterbalanced steady-state samples;
 4. persistent-cache cold and hit processes under isolated cache roots.
@@ -197,7 +214,7 @@ iteration must have the same ordered kernel sequence.
 
 ## Numerical gates
 
-Numerical floors are immutable fields of schema version 1. They are serialized
+Numerical floors are immutable fields of schema version 2. They are serialized
 before a run and cannot be supplied by the result producer. The schema records
 the canonical SHA-256 digest of the complete floor tuple. Plan construction and
 result validation reject a different tuple or digest even when every replacement
@@ -247,26 +264,34 @@ empty artifact identity, empty provenance field, empty compile/warmup/cache
 sample list, or launch-count mismatch rejects the headline row. PTXAS text
 alone is insufficient when SASS or profiler evidence is missing.
 
-Generated variants retain the emitted source, shared library, PTX, cubin, and
-SASS. Their ptxas registers, spills, and static shared memory must agree with
-Nsight Compute launch evidence. Ordinary XLA must expose exactly one nonempty
-PTX and cubin from its first isolated compile worker through the pinned jaxlib
-dump flags; the runner copies them, disassembles the cubin with the preflighted
-`cuobjdump`, and hashes every artifact. The run aborts if ordinary-XLA SASS
-contains `LDL` or `STL` because the public dump path does not provide ptxas
-spill-byte evidence. It does not
-substitute a private executable extractor or infer spill bytes from instruction
-counts.
+Generated variants retain the emitted source, loaded shared library, PTX,
+cubin, cubin disassembly, and loaded-image disassembly. Kernel records use the
+SASS extracted from the shared object that JAX loaded. The separately compiled
+cubin remains an available cubin artifact but cannot supply the loaded-image
+SASS identity. Generated ptxas registers, spills, and static shared memory must
+agree with Nsight Compute launch evidence.
+
+Ordinary XLA must expose exactly one nonempty PTX from its first isolated
+compile worker through the pinned public jaxlib dump flags. Cubin evidence is a
+closed tagged record. Generated backends require `available` with a concrete
+path and SHA-256. Ordinary XLA may report `unavailable` only with
+`public_xla_dump_omits_cubin`; mixing unavailable and available fields or using
+another reason rejects the record. Ordinary-XLA SASS comes from the retained
+Nsight Compute report's public `--page source --print-source sass` export, not a
+private executable extractor. The run aborts if that SASS contains `LDL` or
+`STL` because the public profiler path does not provide spill-byte evidence.
 
 Nsight Compute must report the closed launch, register, shared-memory,
 occupancy-limit, and achieved-occupancy metric set for every launch. Nsight
 Systems must export `NVTX_EVENTS`, `StringIds`,
 `CUPTI_ACTIVITY_KIND_KERNEL`, and `CUPTI_ACTIVITY_KIND_MEMCPY` tables. Missing
-tables, ambiguous kernel identities, launch-order drift, or any steady-state
-CUDA copy aborts the run. Three independent compile workers and three paired
-cold/hit cache roots retain compile, first-execution, and cache samples. A cache
-pair must preserve its content identity, and all isolated roots must converge
-to the same identity.
+tables, ambiguous kernel identities, launch-order drift, substring-only kernel
+matches, or any steady-state CUDA copy aborts the run. Three independent
+compile workers and three paired cold/hit cache roots retain compile,
+first-execution, and cache samples. A cache pair must preserve its content
+identity, and all nine isolated compile, cold, and hit roots must converge to
+the same identity. Their final optimized HLO must also equal the timing and
+profile worker HLO before their evidence can be merged.
 
 The machine result schema requires 24 records: one for each of the four reviewed
 structural cases, three backends, and two measurement boundaries. Kernel

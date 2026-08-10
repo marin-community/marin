@@ -26,6 +26,8 @@ from tile_lifetime.h100_contract_map_benchmark import (
     REVIEWED_NUMERICAL_FLOORS_SHA256,
     ArchitectureStatus,
     BackendVariant,
+    CubinAvailability,
+    CubinUnavailableReason,
     ExternalComparator,
     MeasurementBoundary,
     RepeatabilityMode,
@@ -47,6 +49,11 @@ def _complete_result_evidence() -> dict[str, Any]:
         "name": "contract_map_kernel",
         "ptx_path": "artifacts/contract_map.ptx",
         "ptx_sha256": "1" * 64,
+        "cubin": {
+            "availability": CubinAvailability.AVAILABLE.value,
+            "path": "artifacts/contract_map.cubin",
+            "sha256": "6" * 64,
+        },
         "sass_path": "artifacts/contract_map.sass",
         "sass_sha256": "2" * 64,
         "registers_per_thread": 64,
@@ -393,10 +400,41 @@ def test_result_evidence_accepts_complete_reviewed_payload() -> None:
     validate_result_evidence(payload)
 
 
+def test_result_evidence_accepts_typed_absent_ordinary_xla_cubin() -> None:
+    payload = _complete_result_evidence()
+    payload["resources"]["kernel_records"][0]["cubin"] = {
+        "availability": CubinAvailability.UNAVAILABLE.value,
+        "unavailable_reason": CubinUnavailableReason.PUBLIC_XLA_DUMP_OMITS_CUBIN.value,
+    }
+
+    validate_result_evidence(json.loads(json.dumps(payload)))
+
+
+def test_result_evidence_rejects_impossible_or_generated_absent_cubin_claim() -> None:
+    payload = _complete_result_evidence()
+    payload["resources"]["kernel_records"][0]["cubin"] = {
+        "availability": CubinAvailability.UNAVAILABLE.value,
+        "unavailable_reason": CubinUnavailableReason.PUBLIC_XLA_DUMP_OMITS_CUBIN.value,
+        "path": "artifacts/impossible.cubin",
+    }
+    with pytest.raises(ValueError, match="must contain exactly"):
+        validate_result_evidence(payload)
+
+    payload = _complete_result_evidence()
+    payload["identity"]["backend"] = BackendVariant.SHUTTLE_FAST.value
+    payload["resources"]["kernel_records"][0]["cubin"] = {
+        "availability": CubinAvailability.UNAVAILABLE.value,
+        "unavailable_reason": CubinUnavailableReason.PUBLIC_XLA_DUMP_OMITS_CUBIN.value,
+    }
+    with pytest.raises(ValueError, match="generated backends require"):
+        validate_result_evidence(payload)
+
+
 def test_result_evidence_schema_names_all_24_required_records() -> None:
     schema = result_evidence_schema()
     required_records = schema["required_result_records"]
 
+    assert schema["schema"] == "shuttle.h100_contract_map_result_evidence.v2"
     assert len(required_records) == 24
     assert required_records == [
         {"case_id": case.case_id, "backend": backend.value, "measurement_boundary": boundary.value}

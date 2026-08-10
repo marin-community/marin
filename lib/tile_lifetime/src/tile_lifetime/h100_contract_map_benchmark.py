@@ -29,6 +29,19 @@ class BackendVariant(StrEnum):
     SHUTTLE_FAST = "shuttle_fast"
 
 
+class CubinAvailability(StrEnum):
+    """Whether a public backend artifact path exposed a cubin."""
+
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+
+
+class CubinUnavailableReason(StrEnum):
+    """Closed reasons for accepting an absent cubin."""
+
+    PUBLIC_XLA_DUMP_OMITS_CUBIN = "public_xla_dump_omits_cubin"
+
+
 class MeasurementBoundary(StrEnum):
     """Physical scopes measured separately for each backend."""
 
@@ -261,6 +274,7 @@ class ResourceEvidence:
     """Required physical evidence for every backend and boundary."""
 
     ptx: bool = True
+    cubin_availability: bool = True
     sass: bool = True
     registers_per_thread: bool = True
     spill_load_bytes: bool = True
@@ -377,6 +391,7 @@ KERNEL_RECORD_REQUIRED_FIELDS = (
     "name",
     "ptx_path",
     "ptx_sha256",
+    "cubin",
     "sass_path",
     "sass_sha256",
     "registers_per_thread",
@@ -492,6 +507,27 @@ def _require_lowercase_hex_digest(value: object, length: int, context: str) -> N
         or any(character not in "0123456789abcdef" for character in value)
     ):
         raise ValueError(f"{context} must be exactly {length} lowercase hexadecimal characters")
+
+
+def _validate_cubin_evidence(value: object, backend: object, context: str) -> None:
+    cubin = _mapping(value, context)
+    availability = cubin.get("availability")
+    if availability == CubinAvailability.AVAILABLE.value:
+        required = ("availability", "path", "sha256")
+        if set(cubin) != set(required):
+            raise ValueError(f"{context} available record must contain exactly {required}")
+        _require_artifact_path(cubin["path"], f"{context}.path")
+        _require_lowercase_hex_digest(cubin["sha256"], _SHA256_LENGTH, f"{context}.sha256")
+        return
+    if availability != CubinAvailability.UNAVAILABLE.value:
+        raise ValueError(f"{context}.availability must name a closed cubin availability")
+    required = ("availability", "unavailable_reason")
+    if set(cubin) != set(required):
+        raise ValueError(f"{context} unavailable record must contain exactly {required}")
+    if backend != BackendVariant.ORDINARY_XLA.value:
+        raise ValueError("generated backends require an available cubin")
+    if cubin["unavailable_reason"] != CubinUnavailableReason.PUBLIC_XLA_DUMP_OMITS_CUBIN.value:
+        raise ValueError(f"{context}.unavailable_reason must name the closed public-XLA reason")
 
 
 def _require_nonempty_string_list(value: object, context: str) -> None:
@@ -728,11 +764,15 @@ def result_evidence_schema() -> dict[str, Any]:
     """Return the immutable result schema before any benchmark execution."""
     plan = default_h100_contract_map_benchmark_plan()
     return {
-        "schema": "shuttle.h100_contract_map_result_evidence.v1",
+        "schema": "shuttle.h100_contract_map_result_evidence.v2",
         "required_sections": [section.name for section in RESULT_EVIDENCE_SECTIONS],
         "sections": [asdict(section) for section in RESULT_EVIDENCE_SECTIONS],
         "nested_records": {
             "kernel_record": KERNEL_RECORD_REQUIRED_FIELDS,
+            "cubin": {
+                CubinAvailability.AVAILABLE.value: ("availability", "path", "sha256"),
+                CubinAvailability.UNAVAILABLE.value: ("availability", "unavailable_reason"),
+            },
             "numerical_output_roles": NUMERICAL_OUTPUT_ROLES,
             "numerical_output": NUMERICAL_OUTPUT_REQUIRED_FIELDS,
             "pairwise_drift": PAIRWISE_DRIFT_REQUIRED_FIELDS,
@@ -792,6 +832,7 @@ def validate_result_evidence(payload: Mapping[str, Any]) -> None:
         for path_field, digest_field in (("ptx_path", "ptx_sha256"), ("sass_path", "sass_sha256")):
             _require_artifact_path(record[path_field], f"{context}.{path_field}")
             _require_lowercase_hex_digest(record[digest_field], _SHA256_LENGTH, f"{context}.{digest_field}")
+        _validate_cubin_evidence(record["cubin"], identity["backend"], f"{context}.cubin")
         for field in (
             "registers_per_thread",
             "spill_load_bytes",
@@ -970,8 +1011,8 @@ class H100ContractMapBenchmarkPlan:
     logical_boundary: LogicalBoundaryEvidence
 
     def __post_init__(self) -> None:
-        if self.schema_version != 1:
-            raise ValueError("the staged H100 benchmark schema version is fixed at one")
+        if self.schema_version != 2:
+            raise ValueError("the staged H100 benchmark schema version is fixed at two")
         if self.architecture_status is not ArchitectureStatus.NONCONFORMING:
             raise ValueError("this harness must remain architecture-nonconforming until ordinary-JAX integration")
         if self.features != (StructuralFeature.CONTRACT, StructuralFeature.MAP):
@@ -1023,7 +1064,7 @@ def default_h100_contract_map_benchmark_plan() -> H100ContractMapBenchmarkPlan:
         StructuralCase(521, 328, 184, ScalarMapFamily.SIGMOID_PRODUCT),
     )
     return H100ContractMapBenchmarkPlan(
-        schema_version=1,
+        schema_version=2,
         architecture_status=ArchitectureStatus.NONCONFORMING,
         features=(StructuralFeature.CONTRACT, StructuralFeature.MAP),
         cases=cases,
@@ -1051,39 +1092,41 @@ def staged_backend_wiring() -> tuple[BackendWiring, ...]:
         BackendWiring(
             backend=BackendVariant.ORDINARY_XLA,
             generated_backend_wired=True,
-            resource_collectors_wired=False,
+            resource_collectors_wired=True,
             reviewed=False,
-            evidence_paths=("lib/tile_lifetime/benchmarks/h100_generated_contract_map_chain_training.py",),
-            blockers=("XLA PTX/SASS, occupancy, launch, and unexpected-copy collectors are not wired",),
+            evidence_paths=("lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py",),
+            blockers=("the executable collectors have no reviewed H100 result bundle",),
         ),
         BackendWiring(
             backend=BackendVariant.SHUTTLE_SOURCE_ORDERED,
             generated_backend_wired=False,
-            resource_collectors_wired=False,
+            resource_collectors_wired=True,
             reviewed=False,
             evidence_paths=(
                 "lib/tile_lifetime/src/tile_lifetime/contract_map_backend.py",
                 "lib/tile_lifetime/src/tile_lifetime/cuda_contract_map_backend_codegen.py",
                 "lib/tile_lifetime/benchmarks/h100_contract_map_backend_training.py",
+                "lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py",
             ),
             blockers=(
                 "the multi-CTA direct FFI is not reached through the ordinary-JAX Shuttle transform",
-                "profiler, copy, and ordinary-XLA resource collectors are not wired",
+                "the executable collectors have no reviewed H100 result bundle",
             ),
         ),
         BackendWiring(
             backend=BackendVariant.SHUTTLE_FAST,
             generated_backend_wired=False,
-            resource_collectors_wired=False,
+            resource_collectors_wired=True,
             reviewed=False,
             evidence_paths=(
                 "lib/tile_lifetime/src/tile_lifetime/contract_map_backend.py",
                 "lib/tile_lifetime/src/tile_lifetime/cuda_contract_map_backend_codegen.py",
                 "lib/tile_lifetime/benchmarks/h100_contract_map_backend_training.py",
+                "lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py",
             ),
             blockers=(
                 "the fixed-tree FAST direct FFI is not reached through the ordinary-JAX Shuttle transform",
-                "profiler, copy, and ordinary-XLA resource collectors are not wired",
+                "the executable collectors have no reviewed H100 result bundle",
             ),
         ),
     )
@@ -1097,7 +1140,7 @@ def staging_manifest(*, shuttle_revision: str) -> dict[str, Any]:
     wiring = staged_backend_wiring()
     decisions = tuple(comparator_decision(comparator, plan.features) for comparator in ExternalComparator)
     return {
-        "schema": "shuttle.h100_contract_map_backend_evidence.v1",
+        "schema": "shuttle.h100_contract_map_backend_evidence.v2",
         "kind": "staged_plan_no_gpu_evidence",
         "shuttle_revision": shuttle_revision,
         "plan": asdict(plan),
