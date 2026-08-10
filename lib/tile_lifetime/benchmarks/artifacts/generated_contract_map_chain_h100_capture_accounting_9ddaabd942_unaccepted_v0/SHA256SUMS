@@ -1,4 +1,4 @@
-37035f48cd7f3bb669baf472fa9aede6d874ee4cd22ed434182f5aea2c517d36  ./README.md
+c4bdb6249af797c3fc82eb31404dcfa6c764ae99557ce5481d89075366719680  ./README.md
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865  ./benchmark-exit-code.txt
 e8d5f6fc6f890d53901147dcd6b90e651985d1556ba6923224867b2e07c5438e  ./environment-preflight.json
 e6e0604fa4d79dd42229fe4d9adb93107dccb63b86a96aa89377073e7bb3d7e8  ./generated/generated_contract_map_chain.cu
@@ -13,7 +13,7 @@ ac5e8c7bac5b7eded98a93bb728002a8a80a606a19c397488fc804fab433085c  ./nvidia-smi-q
 c065acc7f22be60c75629e8e68924fe88a713b4ceb3795d83c833717e03bf29d  ./raw/benchmark.stdout.gz
 9fd7f8dabc0726ef34d1b0d3b3b62e48109681c33bd96476502f7b703aec03b1  ./raw/preflight.stdout.gz
 462fb05ff550945415bdfa9a399f258e52e4f3937d041afb6559ec6facd5cdd5  ./raw/remote-SHA256SUMS
-70578ba52b87f06e3bc50ed7ef2f5214512222c1edfd5e8c9241e606129f19fb  ./release-proof.txt
+be9823c439cbfd64e39bf90cd59466f73c629977ce83ca6a82d48dd9a5cd099c  ./release-proof.txt
 7f46788ec65ae3776e5b3094239f91de68f93db1097bf3488e185be359dead15  ./result.json
 e0511d1adef99c83a8fadd783f086b3a6a93f1b95d2332c0aac87f04ade803f4  ./source-archive-sha256.txt
 68c0abbb0f143eb39f3163975d9e58f39733892d131afdb7e71b917cd2f3f22a  ./uname.txt

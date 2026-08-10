@@ -2,7 +2,7 @@
 
 ## Result
 
-TLTC-XLA-067 is an unaccepted command-buffer replay from canonical Shuttle
+TLTC-XLA-068 is an unaccepted command-buffer replay from canonical Shuttle
 revision `9ddaabd9420d96eb06cb11f5d2efb7085677bb5e`. The one authorized measured
 process used one batch-priority H100, four warmups, 30 counterbalanced samples,
 and 1,000 iterations per variant and sample. It was not retried or tuned.
@@ -82,4 +82,3 @@ was then explicitly terminated. The controller reports `killed` with reason
 `Terminated by user`; the exact pod is absent; a namespace pod-name search is
 empty; the local session cache is absent; and no holder process remains. See
 `release-proof.txt`.
-
