@@ -52,6 +52,11 @@ MODEL_REVISION = "ba978f7d347eaf65d22f1a86833408afdb953541"
 # gang loads all 756 GB of weights and only then dies in ninja with
 # ``cannot find -lnvrtc``. SM100 takes a path that does not need it.
 CUDA_COMPILER_REQUIREMENT = "cuda-toolkit[cccl,crt,cudart,nvcc,nvvm,nvrtc]==13.0.2"
+# Parallel JIT compilations. Bounded because each nvcc for the fused-MoE CUTLASS
+# kernels takes gigabytes, and ninja's default of one per core OOM-kills the whole
+# build on a many-core task. Low enough to fit, high enough that a cold build is
+# still tens of minutes rather than hours.
+JIT_COMPILE_JOBS = 8
 MODEL_CACHE_TTL_DAYS = 30
 GPU_MEMORY_UTILIZATION = 0.9
 ENDPOINT_TIMEOUT = 3 * 3600
@@ -362,8 +367,15 @@ def _task_env_vars(launch: Glm52LaunchConfig) -> dict[str, str]:
     Both ``AWS_ENDPOINT_URL`` and ``CW_S3_ENDPOINT`` are overridden together: the
     RunAI streamer reads the former and rigging's S3 config reads the latter, and
     leaving them disagreeing gives a loader that works and a reader that does not.
+
+    ``MAX_JOBS`` bounds the JIT compile fan-out. On a fleet without prebuilt kernels
+    for its architecture, FlashInfer builds its fused-MoE CUTLASS kernels on first
+    start, and ninja defaults to one compiler per core. Each nvcc for those kernels
+    takes gigabytes, so on a 96-core task they exhaust the container together: an
+    H100 start died this way after 29 minutes with 135 killed compilers, surfacing
+    only as a linker error about missing object files.
     """
-    env = {"VLLM_USE_FLASHINFER_SAMPLER": "0"}
+    env = {"VLLM_USE_FLASHINFER_SAMPLER": "0", "MAX_JOBS": str(JIT_COMPILE_JOBS)}
     if launch.object_store_endpoint:
         env["AWS_ENDPOINT_URL"] = launch.object_store_endpoint
         env["CW_S3_ENDPOINT"] = launch.object_store_endpoint
