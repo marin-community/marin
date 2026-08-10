@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import jaxlib
 import numpy as np
 from clean_routed_streaming_emitter import (
+    MINIMAX_MSA_CUTE_ROOT,
     ExtractedSM100Sources,
     GeneratedPartialMergeFfi,
     PartialMergeScheduleKind,
@@ -210,7 +211,7 @@ def compile_right_resource_physical_call(
     cute = importlib.import_module("cutlass.cute")
     cjax = importlib.import_module("cutlass.jax")
     cuda = importlib.import_module("cuda.bindings.driver")
-    physical_support = install_torch_free_physical_support()
+    physical_support = install_torch_free_physical_support((msa_root / MINIMAX_MSA_CUTE_ROOT).resolve())
     physical_module = import_extracted_python_sources(
         plan.sources,
         msa_root=msa_root,
