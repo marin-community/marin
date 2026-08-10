@@ -28,6 +28,7 @@ from tile_lifetime.jax_partitioned_gemm_ffi import (
     call_cuda_partitioned_gemm_ffi,
     compile_cuda_partitioned_gemm_ffi,
     evaluate_partitioned_gemm_jax,
+    partitioned_gemm_handler_call_count,
     register_cuda_partitioned_gemm_ffi,
 )
 from tile_lifetime.partitioned_gemm_reference import (
@@ -106,6 +107,7 @@ def run_benchmark(
         natural = tuple(np.asarray(value) for value in natural_executable(*operands))
         repeated = tuple(np.asarray(value) for value in generated_executable(*operands))
         jax.block_until_ready(repeated)
+        handler_count_before_timing = partitioned_gemm_handler_call_count(generated, library)
 
         reference_metrics = partitioned_gemm_error_metrics(actual, expected)
         natural_metrics = partitioned_gemm_error_metrics(actual, natural)
@@ -132,6 +134,11 @@ def run_benchmark(
                     result = executable(*operands)
                 jax.block_until_ready(result)
                 destination.append((time.perf_counter_ns() - start) / iterations / 1.0e6)
+        handler_count_after_timing = partitioned_gemm_handler_call_count(generated, library)
+        if handler_count_before_timing < 1 or handler_count_after_timing < handler_count_before_timing:
+            raise ValueError(
+                "generated partitioned Contract handler count did not establish one monotone host invocation"
+            )
 
     generated_median = float(np.median(generated_samples))
     natural_median = float(np.median(natural_samples))
@@ -156,6 +163,8 @@ def run_benchmark(
         "reference_error": reference_metrics,
         "natural_jax_error": natural_metrics,
         "deterministic_outputs": deterministic,
+        "handler_count_before_timing": handler_count_before_timing,
+        "handler_count_after_timing": handler_count_after_timing,
         "generated_latency_ms": {
             "median": generated_median,
             "raw": generated_samples,

@@ -74,6 +74,16 @@ def register_cuda_partitioned_gemm_ffi(
     )
 
 
+def partitioned_gemm_handler_call_count(
+    generated: GeneratedCudaPartitionedGemmFfi,
+    library: ctypes.CDLL,
+) -> int:
+    """Read the host handler count without adding device-side atomics."""
+    counter = getattr(library, generated.call_count_symbol)
+    counter.restype = ctypes.c_uint64
+    return int(counter())
+
+
 def call_cuda_partitioned_gemm_ffi(
     generated: GeneratedCudaPartitionedGemmFfi,
     operands: tuple[jax.Array, ...],
