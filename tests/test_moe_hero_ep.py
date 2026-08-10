@@ -18,10 +18,10 @@ import optax
 import pytest
 from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
-from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.callbacks.watch import WatchConfig
 from marin.execution.lazy import StepContext
 
-from experiments.grug.moe_hero_ep import grugmuon_hero, jax_runtime, launch, model, small_scale_abl_launch, train
+from experiments.grug.moe_hero_ep import grugmuon_hero, jax_runtime, launch, model, small_scale_ablation_launch, train
 
 
 def _grug_run_config(
@@ -77,7 +77,7 @@ def test_four_node_ep_proxy_preserves_the_per_gpu_hero_shape():
 
 def test_small_ep_run_pins_one_complete_cuda_jax_nightly_on_workers():
     nightly = "0.11.1.dev20260808"
-    step = small_scale_abl_launch.build_small_run(
+    step = small_scale_ablation_launch.build_small_run(
         run_id="nightly-device-kernel",
         size="d768",
         target="gb200-4node",
@@ -88,8 +88,8 @@ def test_small_ep_run_pins_one_complete_cuda_jax_nightly_on_workers():
     )
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
-    assert step.runtime_args["train_resources"].cpu == launch.FOUR_NODE_EP_WORKER_CPU
-    assert step.runtime_args["train_resources"].ram == small_scale_abl_launch.GB200_SCREEN_WORKER_RAM
+    assert step.runtime_args["train_resources"].cpu == small_scale_ablation_launch.GB200_SCREEN_WORKER_CPU
+    assert step.runtime_args["train_resources"].ram == small_scale_ablation_launch.GB200_SCREEN_WORKER_RAM
     assert config.worker_pip_packages == (
         f"jax=={nightly}",
         f"jaxlib=={nightly}",
@@ -101,7 +101,7 @@ def test_small_ep_run_pins_one_complete_cuda_jax_nightly_on_workers():
 
 
 def test_small_ep_ring_control_preserves_expert_sharding_without_ragged_all_to_all():
-    step = small_scale_abl_launch.build_small_run(
+    step = small_scale_ablation_launch.build_small_run(
         run_id="ring-gradient-control",
         size="d768",
         target="gb200-2node",
@@ -119,19 +119,24 @@ def test_small_ep_ring_control_preserves_expert_sharding_without_ragged_all_to_a
     assert config.processes_per_task == 4
 
 
-def test_small_ragged_run_propagates_peer_transfer_splits():
-    step = small_scale_abl_launch.build_small_run(
-        run_id="split-ragged-transfers",
+@pytest.mark.parametrize(
+    ("flavor", "expected_implementation"),
+    [("ep-ragged", "ragged_all_to_all"), ("ep-ragged-cute", "ragged_all_to_all_cute")],
+)
+def test_small_ragged_run_selects_backend_and_propagates_peer_transfer_splits(flavor, expected_implementation):
+    step = small_scale_ablation_launch.build_small_run(
+        run_id="ragged-cute-experts",
         size="d768",
         target="gb200-2node",
-        flavor="ep-ragged",
+        flavor=flavor,
         tokens_per_step=524_288,
-        num_experts=96,
+        num_experts=24,
         ragged_all_to_all_splits_per_peer=32,
         version="dev",
     )
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
+    assert config.model.moe_implementation == expected_implementation
     assert config.model.ragged_all_to_all_splits_per_peer == 32
 
 
@@ -151,7 +156,7 @@ def test_small_ep_probes_preserve_per_rank_routing_geometry(
     expected_expert_axis: int,
     expected_batch: int,
 ):
-    step = small_scale_abl_launch.build_small_run(
+    step = small_scale_ablation_launch.build_small_run(
         run_id=f"{target}-ragged-gradient-probe",
         size="d768",
         target=target,
@@ -245,9 +250,10 @@ def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "platform"
 
 
-def test_run_grug_uses_safe_ragged_xla_schedule(monkeypatch):
+@pytest.mark.parametrize("implementation", ["ragged_all_to_all", "ragged_all_to_all_cute"])
+def test_run_grug_uses_safe_ragged_xla_schedule(monkeypatch, implementation: str):
     monkeypatch.delenv("XLA_FLAGS", raising=False)
-    config = _grug_run_config(watch_interval=0, moe_implementation="ragged_all_to_all")
+    config = _grug_run_config(watch_interval=0, moe_implementation=implementation)
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
@@ -420,6 +426,11 @@ def test_capacity_factor_is_rejected_for_a_flavor_that_never_drops():
             run_id="nodrop-cf", dp_racks=1, num_steps=1, flavor="fsdp-nodrop", capacity_factor=1.5, version="dev"
         )
 
+    with pytest.raises(ValueError, match="must be omitted"):
+        small_scale_ablation_launch.build_small_run(
+            run_id="small-nodrop-cf", size="d768", flavor="fsdp-nodrop", capacity_factor=1.5, version="dev"
+        )
+
 
 def test_eval_every_adds_the_held_out_suites_as_dependencies():
     # Held-out sets are what make a run scoreable; a throughput-only run should not pay for them.
@@ -452,8 +463,8 @@ def _abstract_mesh(*axis_sizes):
 
 
 def _latent_config(size="d768", latent_dim=None):
-    shape = small_scale_abl_launch.SMALL_SHAPES[size]
-    return small_scale_abl_launch._small_model(
+    shape = small_scale_ablation_launch.SMALL_SHAPES[size]
+    return small_scale_ablation_launch._small_model(
         shape,
         capacity_factor=1.0,
         attention_implementation="reference",
@@ -544,20 +555,17 @@ def test_diagnostic_watch_stats_match_direct_gradient_and_parameter_norms():
             return_router_metrics=True,
         )[0]
     )(params)
-    expected = compute_watch_stats(
-        watch_targets=watch.watch_targets,
-        include_norms=watch.include_norms,
-        include_per_parameter_norms=watch.include_per_parameter_norms,
-        include_histogram=watch.include_histograms,
-        split_scan_layers=watch.split_scan_layers,
-        params=params,
-        grads=grads,
-        model_tree_type=type(params),
-    )
-
-    assert actual.keys() == expected.keys()
-    for key in actual:
-        np.testing.assert_allclose(actual[key], expected[key])
+    assert set(actual) == {
+        "grad/norm/total",
+        "grad/norm/weight",
+        "params/norm/total",
+        "params/norm/weight",
+    }
+    np.testing.assert_allclose(grads.weight, 16.5)
+    np.testing.assert_allclose(actual["grad/norm/total"], 16.5)
+    np.testing.assert_allclose(actual["grad/norm/weight"], 16.5)
+    np.testing.assert_allclose(actual["params/norm/total"], 2.0)
+    np.testing.assert_allclose(actual["params/norm/weight"], 2.0)
 
 
 def test_inline_watch_uses_one_watched_train_step_between_log_intervals(monkeypatch):

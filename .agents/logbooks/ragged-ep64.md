@@ -17,38 +17,37 @@ author: rjpower
 
 ## Current TL;DR
 
-The selected latent-E192 EP hero cannot reach its first ragged step with either JAX 0.11 transport at default settings. The one-shot path fails with an illegal address beginning at device 32. Disabling one-shot avoids that signature but exhausts HBM while allocating 4 MiB peer FIFOs. Reducing them to 1 MiB removes the explicit OOM and creates the 64-rank communicator, then every sampled GPU spins at 100% utilization and about 203-232 W without completing step 0. `RA2A-004` will test NVIDIA's documented `NCCL_LAUNCH_MODE=GROUP` workaround for multi-device, single-process hangs.
+The process-per-GPU, four-node exact proxy now trains with finite loss and zero routing drops. The original ragged transfer launched only one block per peer and reached 11.28% MFU. Splitting each peer slice into 32 logical updates raises the grid from 16 to 512 blocks and reaches 18.08% MFU. Reusing the existing QuACK/CuTe SM100 grouped GEMMs for activation-path expert compute reaches the best stable result, 19.63% mean MFU. XProf, exact weight-gradient tile sweeps, and the final command-buffer treatment did not expose another bounded change capable of crossing 20%.
 
 ## Current Baseline
 
-- Date: 2026-08-08.
-- Code refs: historical baseline `120ccfbe2`; launch source `67c78093d7a3fb464a339ba168e68d1178d157ac`, which integrates PR #8013's EP lineage while retaining main's FSDP launcher.
-- Historical numbers: MHEP-001, E128 x i3072, d6144, top-4, capacity factor 1.0, EP64, 25 steps, 14.9614% median MFU, 2.4099% final drops. This is not shape-matched to the selected E192 latent hero.
-- Current baseline: no step metrics. `RA2A-001` fails at the device-32 boundary in one-shot; `RA2A-002` avoids the illegal address but fails on every rank with `ncclCuMemAlloc` out of memory; `RA2A-003` removes that allocator failure but spins in the first executable call without optimizer progress.
+- Date: 2026-08-10.
+- Code refs: PR #8013 EP lineage plus implementation PR #8081 on `weaver/hero-run-why-can-t-we-ragged-all`.
+- Exact safe baseline: S24, d6144/L48/E48, EP16, 1,048,576 tokens/step, one process per GPU, latency hiding off, overlap limit one, one update per peer: 33.8187 seconds/step and 11.2834% MFU.
+- Selected result: S33, the same shape and runtime with 32 updates per peer and the QuACK/CuTe activation-path expert backend: 19.4429 seconds/step, 53,939.7 tokens/s, and 19.6291% MFU, with finite loss and zero routing drops.
 
 ## Hypothesis Queue
 
 ### Active
 
-- `RA2A-006`: One process manages four GPUs per worker, and the reachable send/recv path now hangs after its 64-rank communicator appears. Next test: retain the 1 MiB FIFO and set `NCCL_LAUNCH_MODE=GROUP`, NVIDIA's documented workaround for this topology and symptom.
-- `RA2A-002`: XLA latency hiding and four-way collective overlap add scheduling cost or excessive concurrency to dynamic EP collectives. Next test: disable latency hiding, then reduce overlap independently if the baseline completes.
-- `RA2A-003`: NCCL NVLS/SHARP settings help only if the ragged lowering uses NCCL. Next test: if launch grouping does not restore progress, disable unused NVLS resource allocation because send/recv cannot use NVLink SHARP.
+- None. The bounded runtime, conventional NCCL, packaged grouped-matmul, transfer-splitting, and exact Pallas tile arms are exhausted.
 
 ### Blocked
 
-- None.
+- Full-rack EP64 validation depends on production capacity. It is not expected to improve the equal per-GPU routed-token and local-expert shapes through scale alone.
 
 ### Falsified / Dead End
 
-- `RA2A-001`: The default JAX 0.11 ragged flavor does not establish a performance baseline. It fails before step 0 with an illegal GPU address.
-- `RA2A-002`: Disabling one-shot alone does not establish a performance baseline. It replaces the illegal address with an explicit NCCL allocation OOM before step 0.
-- `RA2A-004`: A 1 MiB peer FIFO does not establish a performance baseline. It removes the allocation OOM but leaves all ranks in a low-power GPU spin before step 0.
+- The private NCCL send/recv fallback OOMs with 4 MiB peer FIFOs and stalls with 1 MiB FIFOs, even in process-per-GPU mode.
+- Restoring `NCCL_BUFFSIZE` from 1 MiB to 4 MiB is neutral on the working one-shot path. NVLS is already selected for the largest NCCL all-gathers, while SHARP, protocol, channel, and launch settings cannot tune the custom peer-write kernel.
+- XLA `ragged_dot_general` OOMs on one 159.32 GiB allocation. The generic symmetric backend rejects the source window, and the pinned GXL backend is unimplemented.
+- Command buffers complete cleanly but regress mean MFU from 19.6291% to 19.3369%.
 
 ### Promoted
 
-- `RA2A-005`: The first failure begins on host 8, whose local devices are global devices 32 through 35, immediately after the EP64 clique initializes. This matches the prior rank-32 symmetric-memory failure signature. JAX 0.11 also removed the eight-output one-shot limit that made older EP64 runs fall back to NCCL send/recv.
-- `RA2A-004`: One-shot-off reaches `ncclGroupEnd()` and all ranks report `ncclCuMemAlloc` out of memory. NVIDIA documents a dedicated `NCCL_BUFFSIZE` FIFO for each send/recv source-destination pair and recommends reducing the 4 MiB default under memory pressure.
-- `RA2A-006`: With 1 MiB FIFOs, two distant hosts show identical 100%-utilization, 203-232 W GPU spin while all Python main threads wait inside the first `pjit`. NVIDIA specifically recommends `NCCL_LAUNCH_MODE=GROUP` for hangs when one process manages multiple Blackwell GPUs.
+- Disable latency hiding and use collective overlap limit one for ragged EP. The default scheduler corrupts the first backward at larger expert banks, while overlap four is 24% slower on the clean small proxy.
+- Run one JAX process per GPU and reserve 850 GiB of host memory per four-GPU worker. Disable auto-PGLE because four concurrent CUPTI sessions collide.
+- Split each peer slice into 32 updates for the exact hero geometry, and use the QuACK/CuTe ragged expert backend. Keep the library split default at one until other shapes are profiled.
 
 ## Decision Log
 
@@ -920,3 +919,99 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s30-exact-ep16-e48-split32-buff4m-20260810
 - Decision: stop the serialized sweep. XProf shows that the custom ragged transfer is no longer the target-closing bottleneck after split-32, and the final conventional NCCL correction was neutral. Clearing 20% on this proxy now requires reducing model compute or a structural communication change capable of removing more than 81% of all remaining communication, not another obvious NCCL protocol, channel, buffer, NVLS, or SHARP setting.
 - Final report: https://github.com/marin-community/marin/issues/8077. Reusable incident record: https://echo.oa.dev/wiki/101.
+
+### 2026-08-10 04:47 UTC - Fixed XProf moves the bottleneck to ragged expert compute
+
+- Prompt: the full-rack fixed backend has reported roughly 23-26% MFU. Check whether the four-node ragged proxy should improve at the larger global batch or whether the backend performs different work.
+- Geometry: the four-node EP16/E48 proxy and full-rack EP64/E192 hero both carry 65,536 tokens and three resident experts per GPU. Their routed expert width, latent width, top-k, attention shape, and expected assignments per local expert are equal. EP64 raises global batch and GPU count by the same factor, so it does not enlarge per-GPU compute shapes.
+- Profile regeneration: regenerated both the existing MHEP-193 selected-shape XProf and S29 with the merged profile generator. S29's regenerated `kernel_stats.json` is byte-for-byte identical to the previous table. The fixed artifact captured four GPU devices for five steps, established by 960 attention-backward launches divided by 48 layers; S29 captured one device for three steps. All comparisons below normalize by 20 and three device-steps respectively.
+- Kernel comparison: fixed all-to-all averages 16.3015 seconds of aggregate device-kernel time per step; split-32 ragged averages 20.6900 seconds. `moe_up_down` accounts for 4.5023 seconds fixed and 8.9647 seconds ragged, a 4.4624-second difference that explains the entire 4.3884-second kernel gap.
+- Compute mechanism: ragged spends 7.7073 seconds per step in Pallas-Triton `ragged_dot` kernels, whose leading kernels report 12.5-18.75% theoretical occupancy, plus about 1.26 seconds in padding and other expert-scope work. Fixed uses dense NVJet GEMMs and spends 2.8717 seconds in expert `dot_general` kernels, or 4.5023 seconds for the complete expert scope.
+- Communication control: all communication kernels total 2.4964 seconds per step for ragged and 3.3829 seconds for fixed. The fixed backend's dispatch and combine scopes are also larger, 2.2981 versus 1.2436 seconds. The residual MFU gap is not a larger-rack or NCCL advantage.
+- Caveat: the commonly cited 26.02% mean run was MHEP-009, a smaller 128-expert, width-3072 model that dropped 9.97% of assignments. The selected E192/width-6272 fixed run is the relevant profile and reports about 23.47% median MFU before automatic PGLE; PGLE later improved selected-shape throughput by 3.40%.
+- Decision: reopen #8077. The next exact four-node arm changes only `RAGGED_DOT_IMPL=xla`, retaining process-per-GPU, split-32 transport, latency hiding off, overlap one, and clean steps 5-24. This directly tests the packaged alternative grouped-matmul lowering before starting kernel work.
+
+### 2026-08-10 04:51 UTC - Exact XLA grouped-matmul treatment admitted
+
+- Run: `ra2a-s31b-exact-ep16-e48-split32-xla-gmm-20260810`; child job `/power/ra2a-s31b-exact-ep16-e48-split32-xla-gmm-20260810-coord/grug-train-ra2a-s31b-exact-ep16-e48-split32-xla-gmm-20260810`.
+- Controlled change: relative to S28, set only `RAGGED_DOT_IMPL=xla`. Retain the exact d6144/L48/E48 shape, split-32 ragged transport, 16 one-device JAX processes, latency hiding off, overlap limit one, command buffers and PGLE off, `NCCL_BUFFSIZE=1048576`, and clean steps 5-24. Watch, eval, profiling, and checkpoints remain disabled.
+- Placement: workers `s7nqxs64`, `s62xxs64`, `s14fys64`, and `s2brxs64` all share rack `dh1-r397-us-east-08a`, fabric `US-EAST-08A-FAB27`, leaf `400.6-DH1`, and topology zone `397`.
+- Runtime verification: task logs enumerate global process IDs 0-15 with one visible GPU each. A narrow worker environment check confirms `RAGGED_DOT_IMPL=xla`, `NCCL_BUFFSIZE=1048576`, and `XLA_FLAGS='--xla_gpu_experimental_parallel_collective_overlap_limit=1 --xla_gpu_enable_latency_hiding_scheduler=false --xla_gpu_enable_command_buffer= --xla_gpu_nccl_termination_timeout_seconds=600'`.
+- Launch correction: the first S31 coordinator stopped before worker creation because the label `2026.08.10-s31` failed the launcher's CalVer validation. S31b uses valid version `2026.08.10.31`; the failed coordinator consumed no GPU time or experiment data.
+- Monitoring: a 30-minute terminal-state monitor is armed. Score only completed steps 5-24 and require finite loss plus zero unexpected routing drops before comparing with S28's 21.1090-second, 18.0770% MFU baseline.
+
+### 2026-08-10 05:22 UTC - Packaged XLA ragged dot OOMs before step zero
+
+- Run: `ra2a-s31b-exact-ep16-e48-split32-xla-gmm-20260810`; same-rack placement and effective runtime controls as the launch contract above.
+- Result: no optimizer step completed. Multiple ranks failed in `jit_train_step` while requesting one 171,068,784,344-byte allocation, reported by JAX as 159.32 GiB. `cuMemAllocAsync` returned `CUDA_ERROR_OUT_OF_MEMORY`; sibling ranks then reported coordination connection failures after the first processes exited.
+- Interpretation: `jax.lax.ragged_dot_general` is not a viable packaged replacement at the exact d6144/E48 shape. The coordination errors are secondary, not the root cause. Repeating the same exact arm or raising the allocator ceiling cannot service a single 159.32 GiB temporary alongside resident model state.
+- Resource state: Iris marked the four-node child `worker_failed`, the coordinator failed, and all GPU workers were released. The terminal monitor initially omitted Iris's `worker_failed` spelling from its grep predicate; the explicit 30-minute inspection recovered the already-terminal root cause.
+- Next arm: reuse the existing SM100 QuACK/CuTe grouped GEMMs for the ragged EP local expert MLP. Preserve XLA `ragged_dot` only for the two weight-gradient contractions as the existing `sonic_cute` path does. Validate values/gradients and a small accelerator shape before promoting to the exact four-node performance arm.
+
+### 2026-08-10 05:42 UTC - CuTe expert backend passes the four-node correctness screen
+
+- Integration: added an explicit `ragged_all_to_all_cute` MoE implementation. It retains the split-32 ragged dispatch/combine path, runs the forward, down, `dh`, and `dx` grouped GEMMs through the existing QuACK/CuTe SM100 kernels, and retains XLA `ragged_dot` only for the two weight-gradient contractions. The original ragged implementation remains unchanged, and unsupported activations fail fast instead of silently falling back.
+- Run: `ra2a-s32-ep16-e48-split32-cute-correctness-20260810`; child `/power/ra2a-s32-ep16-e48-split32-cute-correctness-20260810-coord/grug-train-ra2a-s32-ep16-e48-split32-cute-correctness-20260810`.
+- Geometry: d768/L8, E48, top-4, capacity 1.33, 1,048,576 tokens per step, EP16 across four GB200 nodes, split-32 ragged transport, and 16 one-device JAX processes. This preserves the exact proxy's 65,536 tokens and three resident experts per GPU while reducing only model width and depth.
+- Placement: workers `s53txs64`, `s4150t64`, `s1csxs64`, and `s1b62nb4` all shared rack `dh1-r122-us-east-08a`, NVLink domain `DH1-122-US-EAST-08A`, fabric `US-EAST-08A-FAB27`, and IB leaf `130.1-DH1`.
+- Result: all 52 optimizer steps completed and every recorded training loss was finite, decreasing from 11.806656 at step 0 to 5.592094 at step 51. The job and all four workers succeeded without retry, preemption, or kernel/runtime error.
+- Diagnostic timing: steps 5-24 averaged 0.506422 seconds, 2,072,229 tokens/s, and 5.2741% small-model MFU. The narrow-model routing distribution dropped up to 14.0052% of assignments at capacity 1.33, so this run is a value/gradient execution screen rather than a performance or loss comparison. The exact E48 proxy has already demonstrated zero drops at the same capacity.
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s32-ep16-e48-split32-cute-correctness-20260810
+- Decision: promote the explicit CuTe backend to the exact d6144/L48/E48 four-node timing arm, with watch, eval, profiling, checkpoints, and periodic metrics disabled. Score only clean steps 5-24 and compare with S28's 21.1090-second, 18.0770% MFU split-32 baseline.
+
+### 2026-08-10 05:45 UTC - Exact CuTe performance arm admitted
+
+- Run: `ra2a-s33-exact-ep16-e48-split32-cute-perf-20260810`; child `/power/ra2a-s33-exact-ep16-e48-split32-cute-perf-20260810-coord/grug-train-ra2a-s33-exact-ep16-e48-split32-cute-perf-20260810`.
+- Controlled change: relative to S28, select only the explicit `ragged_all_to_all_cute` expert backend. Retain the exact d6144/L48/E48 shape, expert width 6272, latent width 3072, top-4 routing, capacity 1.33, split-32 transport, EP16, 1,048,576 tokens per step, 16 one-device JAX processes, latency hiding off, overlap limit one, command buffers and PGLE off, `NCCL_BUFFSIZE=1048576`, and 850 GiB host memory per node. Watch, evaluation, profiling, checkpoints, and periodic metrics are disabled.
+- Placement: S33 reused the S32 workers `s53txs64`, `s4150t64`, `s1csxs64`, and `s1b62nb4`. All four share rack `dh1-r122-us-east-08a`, NVLink domain `DH1-122-US-EAST-08A`, fabric `US-EAST-08A-FAB27`, and IB leaf `130.1-DH1`.
+- Runtime verification: all 16 one-GPU processes started. The effective environment is `JAX_ENABLE_PGLE=false`, `NCCL_BUFFSIZE=1048576`, and `XLA_FLAGS='--xla_gpu_experimental_parallel_collective_overlap_limit=1 --xla_gpu_enable_latency_hiding_scheduler=false --xla_gpu_enable_command_buffer= --xla_gpu_nccl_termination_timeout_seconds=600'`.
+- Monitoring: poll terminal state every 30 minutes. On success, require finite loss and zero unexpected routing drops, then score clean steps 5-24 against S28's 21.1090181-second, 49,674.6925-token/s, 18.0770248% MFU baseline. Profile the exact CuTe path before selecting any further runtime or NCCL treatment.
+
+### 2026-08-10 06:17 UTC - CuTe reaches 19.63% MFU without dropping tokens
+
+- Completion: S33 and all four workers succeeded with exit 0, zero failures, and zero preemptions. All 25 optimizer steps completed on the verified rack-122 placement with 16 one-device JAX processes.
+- Correctness: every scored loss was finite. Across steps 5-24, mean loss was 11.8084195, and dropped assignments, drop fraction, and capacity overflow were exactly zero.
+- Timing: steps 5-24 averaged 19.4428557 seconds, 53,939.6848 tokens/s, and 19.6290902% MFU. Median duration was 19.3697725 seconds, median MFU was 19.7000425%, and duration sample standard deviation was 0.2561011 seconds.
+- Controlled comparison: S28's split-32 ragged-dot backend averaged 21.1090181 seconds, 49,674.6925 tokens/s, and 18.0770248% MFU. QuACK/CuTe reduced mean step time by 7.893%, raised throughput by 8.586%, and recovered 1.5521 MFU points. It remains 0.3709 MFU points below the 20% target.
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s33-exact-ep16-e48-split32-cute-perf-20260810
+- Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5236592758
+
+### 2026-08-10 06:18 UTC - Exact CuTe XProf submitted
+
+- Run: `ra2a-s34-exact-ep16-e48-split32-cute-profile-20260810`; coordinator `/power/ra2a-s34-exact-ep16-e48-split32-cute-profile-20260810-coord`.
+- Diagnostic contract: retain S33's exact model, routing, split-32 transport, CuTe expert backend, process topology, memory reservation, PGLE-off, 1 MiB NCCL FIFO, latency-hiding-off, overlap-one, and disabled command buffers. Shorten the run to nine steps and capture rank 0 over steps 5-7 with HLO metadata. Watch, evaluation, checkpoints, and periodic metric work remain disabled.
+- Decision rule: use the profile to measure residual expert compute, ragged transport, ordinary NCCL, and launch gaps. Test Blackwell command buffers or another runtime treatment only if the trace exposes a mechanism capable of recovering the remaining 0.3709 MFU points.
+
+### 2026-08-10 06:58 UTC - CuTe XProf confirms the residual weight-gradient hotspot
+
+- Run: `ra2a-s34-exact-ep16-e48-split32-cute-profile-20260810`; all four workers succeeded on the same `s53txs64`, `s4150t64`, `s1csxs64`, and `s1b62nb4` rack-122 placement as S33. The rank-0 XProf capture covers steps 5-7 and is available at https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fra2a-s34-exact-ep16-e48-split32-cute-profile-20260810.
+- Regeneration: reran the merged fast profile generator from `a5f0269edc` against the uncapped XPlane protobuf. The structured summary is `/tmp/marin-ragged-profile-summary-s34-fast.json`; the raw xprof tables are `/tmp/marin-ragged-xprof-tables-s34-fast`.
+- Total device-kernel time fell from 20.6900 seconds/step in S29 to 18.8072 seconds/step in S34, a 1.8828-second reduction consistent with S33's clean timing uplift. The S34 trace is 84.96% compute and 15.04% communication.
+- The two retained Pallas weight-gradient kernels are now the leading structural expert hotspot: `dw13` is 1.4678 seconds/step and `dw2` is 0.6159 seconds/step, 2.0837 seconds/step combined. Both use a 128x128 output tile, 65,552 bytes of shared memory, 154-155 registers per thread, and only 18.75% theoretical occupancy.
+- The split-32 custom ragged transfer is 0.7881 seconds/step and its barriers are 0.4138 seconds/step. The trace already contains `ncclSymkDevKernel_AllGather_STMC`, confirming that NCCL selected its NVLS multicast path automatically; forcing NVLS or SHARP cannot accelerate the custom direct peer-write kernel.
+- Target math: S33 needs 19.0823 seconds/step to reach 20% MFU, a 0.3606-second improvement. A 17.3% reduction in the two weight-gradient kernels would suffice, so screen exact weight-gradient tiles on one GB200 before spending another four-node run.
+
+### 2026-08-10 07:12 UTC - Exact one-GPU tile sweeps find only a sub-target win
+
+- Harness: added `ragged_weight_grad_benchmark.py`, which instantiates the production Pallas-Triton kernel body at the exact S34 HLO shapes: `dw13` `(348672,3072) x (348672,12544)` and `dw2` `(348672,6272) x (348672,3072)`, each with three local expert groups. It records compile and five-run steady-state timings plus exact-output deviation in machine-readable rows.
+- Submission corrections: a direct module invocation used Marin's CPU fallback client and consumed no GPU; a federated `marin` root could not schedule a GB200 child and also consumed no GPU. The valid runs submitted their whole trees directly to `cw-us-east-08a` at interactive priority.
+- S35 (`ra2a-s35-weight-grad-tile-bench-20260810-coord-r1`) swept 64/128 output tiles and two/four stages. The production 128x128, K32, four-warp/four-stage tile won both shapes at 32.5246 ms for `dw13` and 12.6110 ms for `dw2`; every smaller tile or two-stage treatment was slower. Every candidate matched the baseline output exactly.
+- S36 (`ra2a-s36-weight-grad-large-tile-bench-20260810-coord`) swept K16/K64, eight warps, and 256-wide output tiles. `dw2` again favored the production tile at 12.3833 ms. `dw13` improved from 30.3105 to 28.0236 ms with a 128x256, K32, eight-warp/four-stage tile, a 7.54% kernel gain; every output again matched exactly.
+- Ceiling: applying the `dw13` microbenchmark gain to S34 saves approximately 0.1107 seconds/step and predicts 19.74% MFU, still below the 20% target. Do not promote this tile alone to four nodes. The remaining bounded runtime arm is command-buffer enablement because S34 leaves only about 0.56 seconds/step between aggregate kernel time and clean wall time; this arm has explicit prior-risk evidence and must remain isolated from kernel changes.
+
+### 2026-08-10 07:14 UTC - Exact command-buffer arm submitted
+
+- Run: `ra2a-s37-exact-ep16-e48-split32-cute-command-buffers-20260810`; coordinator `/power/ra2a-s37-exact-cute-command-buffers-perf-20260810-coord` on `cw-us-east-08a` at interactive priority.
+- Controlled change: relative to S33, enable XLA GPU command buffers for `FUSION,CUSTOM_CALL`. Retain the exact d6144/L48/E48 model, split-32 transport, CuTe expert backend, process-per-GPU topology, latency hiding off, overlap limit one, PGLE off, 1 MiB NCCL FIFO, and 850 GiB per worker. Watch, evaluation, profiling, checkpoints, and periodic metric work remain disabled.
+- Decision rule: require all 25 finite steps, zero routing drops, and same-rack placement before scoring steps 5-24. If the arm fails with the known CUDA graph/custom-call failure, test `FUSION` alone only when the failure implicates custom-call capture. If it succeeds below 19.89% MFU, the independently measured 0.1107-second kernel-tile ceiling cannot make a combined arm cross 20%, so stop without spending that run.
+
+### 2026-08-10 07:34 UTC - Command buffers regress the exact proxy
+
+- Completion: S37 and all four workers succeeded with exit 0 after 25 optimizer steps. Every recorded loss was finite; dropped assignments, drop fraction, and capacity overflow were zero. The post-rank-zero coordination warnings occurred during normal teardown, and all 16 GPU processes exited cleanly.
+- Placement: workers `sbmvxs64`, `sc8qxs64`, `scypxs64`, and `sfjrxs64` all shared rack `dh1-r126-us-east-08a`, NVLink domain `DH1-126-US-EAST-08A`, fabric `US-EAST-08A-FAB27`, and IB leaf `130.5-DH1`.
+- Timing: steps 5-24 averaged 19.7338456 seconds, 53,136.8825 tokens/s, and 19.3369439% MFU. Median duration was 19.7102675 seconds and median MFU was 19.3597243%.
+- Controlled comparison: command-buffer-off S33 averaged 19.4428557 seconds and 19.6290902% MFU. Enabling `FUSION,CUSTOM_CALL` increased duration by 1.497%, reduced throughput by 1.488%, and lost 0.2921 MFU points.
+- Combined ceiling: stacking S36's independently measured 0.1107-second `dw13` tile estimate perfectly with S37 would predict only about 19.45% MFU. No combined four-node arm is justified.
+- Decision: keep command buffers disabled. The investigation has exhausted the obvious EP runtime, conventional NCCL, transport-parallelism, packaged grouped-matmul, existing CuTe, and bounded Pallas tile changes. Preserve S33 as the selected configuration and require a full-rack EP64 validation before production adoption.
+- W&B: https://wandb.ai/marin-community/marin_moe/runs/ra2a-s37-exact-ep16-e48-split32-cute-command-buffers-20260810
+- Issue update: https://github.com/marin-community/marin/issues/8077#issuecomment-5237216568

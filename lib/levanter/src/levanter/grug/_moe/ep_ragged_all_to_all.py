@@ -5,6 +5,7 @@
 
 import math
 from collections.abc import Callable
+from typing import TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -24,8 +25,52 @@ from levanter.grug._moe.ep_common import (
 )
 from levanter.grug.sharding import _batch_axes
 
+_ExpertMlp: TypeAlias = Callable[
+    [jax.Array, jax.Array, jax.Array, jax.Array, Callable[[jax.Array], jax.Array]], jax.Array
+]
 
-def _moe_mlp_ep_ragged_a2a_local(
+
+def _ragged_dot_expert_mlp(
+    x_dispatch: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    local_group_sizes: jax.Array,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> jax.Array:
+    w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+    moe_dim = moe_w2_local.shape[1]
+    gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+    return ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+
+
+def _cute_expert_mlp(
+    x_dispatch: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    local_group_sizes: jax.Array,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> jax.Array:
+    if activation_fn is not jax.nn.silu:
+        raise ValueError("ragged_all_to_all_cute requires SiLU because its QuACK kernel fuses SwiGLU")
+
+    # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
+    from levanter.grug._moe.sonic_cute import _expert_mlp, _interleave_gate_up  # noqa: PLC0415
+
+    moe_dim = moe_w2_local.shape[1]
+    w13_interleaved = _interleave_gate_up(moe_w13_local, moe_dim)
+    cumulative_group_sizes = jnp.concatenate(
+        [jnp.zeros((1,), jnp.int32), jnp.cumsum(local_group_sizes).astype(jnp.int32)]
+    )
+    return _expert_mlp(
+        x_dispatch,
+        w13_interleaved,
+        moe_w2_local,
+        local_group_sizes,
+        cumulative_group_sizes,
+    )
+
+
+def _moe_mlp_ep_ragged_a2a_impl(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
     combine_weights_local: Float[Array, "Tlocal K"],
@@ -36,6 +81,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     num_experts: int,
     capacity_factor: float,
     splits_per_peer: int,
+    expert_mlp: _ExpertMlp,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -94,10 +140,13 @@ def _moe_mlp_ep_ragged_a2a_local(
         )
 
     with jax.named_scope("moe_up_down"):
-        w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
-        moe_dim = moe_w2_local.shape[1]
-        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+        out_dispatch = expert_mlp(
+            x_dispatch,
+            moe_w13_local,
+            moe_w2_local,
+            local_group_sizes,
+            activation_fn,
+        )
 
     with jax.named_scope("combine"):
         local_output = _sort_activations(out_dispatch, jnp.argsort(local_sorted_indices))
@@ -125,3 +174,55 @@ def _moe_mlp_ep_ragged_a2a_local(
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(sender_group_sizes, dtype=jnp.int32)
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total
+
+
+def _moe_mlp_ep_ragged_a2a_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+    splits_per_peer: int,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    return _moe_mlp_ep_ragged_a2a_impl(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        splits_per_peer=splits_per_peer,
+        expert_mlp=_ragged_dot_expert_mlp,
+    )
+
+
+def _moe_mlp_ep_ragged_a2a_cute_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+    splits_per_peer: int,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    return _moe_mlp_ep_ragged_a2a_impl(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+        splits_per_peer=splits_per_peer,
+        expert_mlp=_cute_expert_mlp,
+    )

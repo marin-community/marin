@@ -45,7 +45,6 @@ from experiments.grug.moe_hero_ep.jax_runtime import jax_nightly_pip_packages
 from experiments.grug.moe_hero_ep.launch import (
     DEFAULT_WANDB_PROJECT,
     FLAVORS,
-    FOUR_NODE_EP_WORKER_CPU,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MIXED_PRECISION,
@@ -69,6 +68,7 @@ GLOBAL_EVERY = 4
 EVAL_BATCH_SIZE = 256
 BASELINE_TOKENS_PER_ACTIVE_PARAM = 60
 GB200_SCREEN_WORKER_RAM = "128g"
+GB200_SCREEN_WORKER_CPU = 16
 # These runs are hours long, so they checkpoint: the trainer restores from the latest committed
 # checkpoint, and an interrupted run would otherwise restart at step 0. A d1280 checkpoint is about
 # 38 GB, against 2.7 TiB at the d6144 hero shape.
@@ -115,7 +115,7 @@ TARGETS: dict[str, Target] = {
         "GB200",
         HERO_GPUS_PER_NODE,
         1,
-        FOUR_NODE_EP_WORKER_CPU,
+        GB200_SCREEN_WORKER_CPU,
         GB200_SCREEN_WORKER_RAM,
         "1t",
         "gpu_fa4_cute",
@@ -128,7 +128,7 @@ TARGETS: dict[str, Target] = {
         "GB200",
         HERO_GPUS_PER_NODE,
         2,
-        FOUR_NODE_EP_WORKER_CPU,
+        GB200_SCREEN_WORKER_CPU,
         GB200_SCREEN_WORKER_RAM,
         "1t",
         "gpu_fa4_cute",
@@ -142,7 +142,7 @@ TARGETS: dict[str, Target] = {
         "GB200",
         HERO_GPUS_PER_NODE,
         4,
-        FOUR_NODE_EP_WORKER_CPU,
+        GB200_SCREEN_WORKER_CPU,
         GB200_SCREEN_WORKER_RAM,
         "1t",
         "gpu_fa4_cute",
@@ -213,11 +213,7 @@ def _small_model(
     latent_dim: int | None,
     ragged_all_to_all_splits_per_peer: int = 1,
 ) -> GrugModelConfig:
-    """The hero shape (moe_hero_ep ``HERO_MODEL``) downsized to this width.
-
-    Every routing and attention-kernel field is kept from the d6144 hero shape; only the width,
-    depth, head split, intermediate width, expert count, and caller-selected MoE backend can change.
-    """
+    """Build one downsized hero-derived model for an ablation run."""
     return GrugModelConfig(
         vocab_size=128_256,
         hidden_dim=shape.hidden_dim,
@@ -262,7 +258,7 @@ def build_small_run(
     size: str,
     target: str = "gb200-rack",
     flavor: str = "ep",
-    capacity_factor: float = 1.0,
+    capacity_factor: float | None = None,
     seq_len: int = SEQ_LEN,
     tokens_per_step: int = TOKENS_PER_STEP,
     num_experts: int = 128,
@@ -301,6 +297,9 @@ def build_small_run(
     shape = SMALL_SHAPES[size]
     fleet = TARGETS[target]
     sharding = FLAVORS[flavor]
+    if capacity_factor is not None and sharding.moe_implementation == "scatter":
+        raise ValueError(f"flavor={flavor!r} never drops assignments, so capacity_factor must be omitted")
+    effective_capacity_factor = capacity_factor if capacity_factor is not None else 1.0
     # Tokens per step stay fixed, so a shorter context trains on the same data with a wider batch.
     batch_size = tokens_per_step // seq_len
     # The 60x token budget is what the step count encodes, so a wider step needs proportionally
@@ -319,7 +318,7 @@ def build_small_run(
     expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
     model = _small_model(
         shape,
-        capacity_factor,
+        effective_capacity_factor,
         fleet.attention_implementation,
         sharding.moe_implementation,
         seq_len,
@@ -378,9 +377,9 @@ def build_small_run(
                     "moe",
                     "hero",
                     "ep",
-                    "small-abl",
+                    "small-ablation",
                     f"shape-{size}",
-                    f"capacity-{capacity_factor:g}",
+                    f"capacity-{effective_capacity_factor:g}",
                     f"seq{seq_len}",
                     f"tok{tokens_per_step // 1024}k",
                     f"watch{watch_interval}",
@@ -390,7 +389,7 @@ def build_small_run(
                     target,
                     "MHEP",
                 ],
-                group="moe-hero-ep-small-abl",
+                group="moe-hero-ep-small-ablation",
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
@@ -492,9 +491,8 @@ def build_small_run(
 @click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
-    default=1.0,
-    show_default=True,
-    help="Fixed all-to-all capacity factor. Higher values drop fewer assignments and pad more.",
+    default=None,
+    help="Fixed all-to-all capacity factor. Omit it for a backend that never drops assignments.",
 )
 @click.option("--num-experts", type=click.IntRange(min=1), default=128, help="Routed expert count.")
 @click.option("--num-experts-per-token", type=click.IntRange(min=1), default=4, help="Routed experts per token.")
@@ -543,7 +541,7 @@ def main(
     flavor: str,
     seq_len: int,
     tokens_per_step: int,
-    capacity_factor: float,
+    capacity_factor: float | None,
     num_experts: int,
     num_experts_per_token: int,
     intermediate_dim: int | None,

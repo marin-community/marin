@@ -28,6 +28,7 @@ from jaxtyping import Array, Float, Int
 from levanter.grug._moe.common import (
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
+    _RAGGED_ALL_TO_ALL_IMPLEMENTATIONS,
     _init_weight,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     MoEExpertMlpPspecs,
@@ -45,7 +46,10 @@ from levanter.grug._moe.ep_common import (
 )
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
-from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
+from levanter.grug._moe.ep_ragged_all_to_all import (
+    _moe_mlp_ep_ragged_a2a_cute_local,
+    _moe_mlp_ep_ragged_a2a_local,
+)
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
@@ -175,9 +179,9 @@ def moe_mlp(
         raise ValueError(
             "ragged_all_to_all_splits_per_peer must be positive, " f"got {ragged_all_to_all_splits_per_peer}"
         )
-    if ragged_all_to_all_splits_per_peer != 1 and resolved_implementation != "ragged_all_to_all":
+    if ragged_all_to_all_splits_per_peer != 1 and resolved_implementation not in _RAGGED_ALL_TO_ALL_IMPLEMENTATIONS:
         raise ValueError(
-            "ragged_all_to_all_splits_per_peer only applies to the ragged_all_to_all implementation, "
+            "ragged_all_to_all_splits_per_peer only applies to a ragged all-to-all implementation, "
             f"got {resolved_implementation!r}"
         )
 
@@ -247,6 +251,8 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
+        elif resolved_implementation == "ragged_all_to_all_cute":
+            shard_local_fn = _moe_mlp_ep_ragged_a2a_cute_local
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
         elif resolved_implementation == "deepep":
@@ -268,7 +274,7 @@ def moe_mlp(
             "num_experts": num_experts,
             "capacity_factor": capacity_factor,
         }
-        if resolved_implementation == "ragged_all_to_all":
+        if resolved_implementation in _RAGGED_ALL_TO_ALL_IMPLEMENTATIONS:
             shard_local_kwargs["splits_per_peer"] = ragged_all_to_all_splits_per_peer
         shard_fn = shard_map(
             partial(shard_local_fn, **shard_local_kwargs),

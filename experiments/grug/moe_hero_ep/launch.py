@@ -79,6 +79,9 @@ FLAVORS: dict[str, Flavor] = {
     # drops far less -- every expert on a device draws from one pool. `fixed_all_to_all` exists
     # because this path measured slow, which is what a same-shape run is for.
     "ep-ragged": Flavor(None, "ragged_all_to_all"),
+    # The same split-capable ragged transport, with the existing SM100 QuACK grouped GEMMs for
+    # activation-path expert compute. Weight gradients retain the ragged-dot implementation.
+    "ep-ragged-cute": Flavor(None, "ragged_all_to_all_cute"),
     "fsdp-nodrop": Flavor(1, "scatter"),
 }
 

@@ -31,6 +31,7 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.grug._moe.common import _RAGGED_ALL_TO_ALL_IMPLEMENTATIONS
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -59,7 +60,6 @@ XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overla
 XLA_LATENCY_HIDING_FLAG = "--xla_gpu_enable_latency_hiding_scheduler"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
-RAGGED_ALL_TO_ALL_IMPLEMENTATION = "ragged_all_to_all"
 RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
@@ -80,7 +80,7 @@ def _apply_hero_ep_runtime_defaults(
         os.environ.setdefault(name, value)
     os.environ.setdefault(JAX_ENABLE_PGLE_ENV, "false" if processes_per_task > 1 else "true")
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    ragged_all_to_all = moe_implementation == RAGGED_ALL_TO_ALL_IMPLEMENTATION
+    ragged_all_to_all = moe_implementation in _RAGGED_ALL_TO_ALL_IMPLEMENTATIONS
     if ragged_all_to_all:
         overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
     elif inline_watch_enabled:

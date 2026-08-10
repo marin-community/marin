@@ -51,15 +51,32 @@ so NCCL protocol, channel, NVLS, and SHARP settings do not tune the dominant tra
 
 Splitting every peer slice into 32 updates raises that kernel to 512 cooperating blocks. On the same
 topology class, clean steps 5-24 reached 18.0770% MFU and 49,674.7 tokens/s, a 60.2% throughput gain,
-with finite loss and zero dropped assignments or router overflow. This result is for the four-node
-proxy; the one-rack EP64 shape still needs its own validation. Issue
-[#8077](https://github.com/marin-community/marin/issues/8077) contains the profile and experiment
-record.
+with finite loss and zero dropped assignments or router overflow.
 
-The post-treatment trace measured 0.777 seconds per step in the ragged kernel and 0.295 seconds in
-its barriers. Removing both entirely would reach only about 19.04% MFU. Restoring `NCCL_BUFFSIZE`
-from the fallback's 1 MiB setting to 4 MiB was neutral, so further conventional NCCL tuning is not
-expected to close the 20% gap on this proxy.
+The remaining gap to fixed all-to-all was local expert compute, not communication. A matching
+profile measured 8.965 seconds per step in the ragged `moe_up_down` scope versus 4.502 seconds for
+fixed all-to-all; ragged communication was 0.886 seconds faster. The `ep-ragged-cute` flavor keeps
+the split-capable ragged transport but uses the existing QuACK/CuTe SM100 grouped GEMMs for the
+activation path. Its exact clean run reached 19.6291% mean MFU, 19.7000% median MFU, and 53,939.7
+tokens/s with finite loss and zero routing drops.
+
+CuTe XProf measured 18.807 seconds of device-kernel time per step, 1.883 seconds below the prior
+ragged trace. The two retained Pallas weight-gradient contractions account for 2.084 seconds per
+step and use 128x128 tiles at 18.75% theoretical occupancy. Exact one-GB200 tile sweeps found a
+7.54% improvement for the larger contraction and no improvement for the smaller one; combined,
+that predicts only 19.74% MFU. The trace already uses NCCL's STMC/NVLS multicast kernels for its
+largest all-gathers, and restoring `NCCL_BUFFSIZE` from 1 MiB to 4 MiB was neutral.
+
+Enabling `FUSION,CUSTOM_CALL` command buffers completed cleanly but regressed the exact proxy to
+19.3369% mean MFU and 53,136.9 tokens/s. Command buffers remain disabled. Even stacking the best
+weight-gradient tile result perfectly with that arm predicts only 19.45% MFU, so the bounded
+runtime and kernel-tile changes do not clear the 20% target.
+
+The four-node proxy and one-rack EP64 shape both route 65,536 tokens and hold three experts per GPU,
+so the larger run does not improve the local grouped-GEMM shapes or imply a larger-batch uplift.
+The full one-rack EP64 shape still needs its own validation. Issue
+[#8077](https://github.com/marin-community/marin/issues/8077) contains the profiles and complete
+experiment record.
 
 ## Sweeps
 
@@ -77,6 +94,21 @@ compute-scaled optimizer values stay constant across a sweep.
 Ragged runs also accept `--ragged-all-to-all-splits-per-peer`. It is a transport-parallelism knob,
 not a model-shape sweep: increasing it preserves all routed tokens and divides each peer's contiguous
 slice into more XLA ragged updates. The default is one; the measured four-node treatment used 32.
+
+`ragged_weight_grad_benchmark.py` screens the two exact local weight-gradient shapes on one GB200.
+Submit the whole job tree directly to the GB200 cluster; a coordinator on the federated Marin
+cluster cannot send only its child to a peer:
+
+```bash
+uv run iris --cluster=cw-us-east-08a job run --no-wait \
+  --cpu 1 --memory 2G --disk 5G --priority interactive --extra cpu \
+  --job-name ragged-weight-grad-benchmark-coord \
+  -- python -m experiments.grug.moe_hero_ep.ragged_weight_grad_benchmark \
+    --version dev --run --max-concurrent 1
+```
+
+The benchmark writes compile time, five-run steady-state time, throughput, tile parameters, device
+provenance, and output deviation to `results.json` in its artifact.
 
 Three quantities move independently, which sets what a sweep can afford on one rack:
 
@@ -114,7 +146,7 @@ python -m experiments.grug.moe_hero_ep.launch \
   --dp-racks 1 --ep-nodes 4 \
   --num-steps 25 --schedule-steps 17652512 \
   --batch-size 256 --num-experts 48 \
-  --flavor ep-ragged --ragged-all-to-all-splits-per-peer 32 \
+  --flavor ep-ragged-cute --ragged-all-to-all-splits-per-peer 32 \
   --watch-interval 0 --eval-every 0 --profile-steps 0 --no-save-checkpoints \
   --version 2026.08.10
 ```

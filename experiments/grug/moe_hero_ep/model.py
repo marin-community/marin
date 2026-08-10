@@ -30,7 +30,7 @@ except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.grug._moe.common import _zero_dropped_assignments
+from levanter.grug._moe.common import _RAGGED_ALL_TO_ALL_IMPLEMENTATIONS, _zero_dropped_assignments
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -216,10 +216,11 @@ class GrugModelConfig:
             raise ValueError("expert_chunks must be positive")
         if self.ragged_all_to_all_splits_per_peer <= 0:
             raise ValueError("ragged_all_to_all_splits_per_peer must be positive")
-        if self.ragged_all_to_all_splits_per_peer != 1 and self.moe_implementation != "ragged_all_to_all":
-            raise ValueError(
-                "ragged_all_to_all_splits_per_peer only applies when moe_implementation is ragged_all_to_all"
-            )
+        if (
+            self.ragged_all_to_all_splits_per_peer != 1
+            and self.moe_implementation not in _RAGGED_ALL_TO_ALL_IMPLEMENTATIONS
+        ):
+            raise ValueError("ragged_all_to_all_splits_per_peer only applies to a ragged all-to-all implementation")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
         resolve_moe_implementation(self.moe_implementation)
