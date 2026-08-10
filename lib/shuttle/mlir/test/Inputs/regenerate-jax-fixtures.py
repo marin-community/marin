@@ -5,6 +5,7 @@
 
 import argparse
 import hashlib
+import json
 import re
 import subprocess
 import tempfile
@@ -23,6 +24,7 @@ JAX_VERSION = "0.10.1"
 JAXLIB_VERSION = "0.10.1"
 PINNED_XLA_REVISION = "9b635916ecc6df6efee62d8e4b0c7ef87ef84d69"
 FINGERPRINT_PATTERN = re.compile(r"(?m)^([0-9A-Fa-f]{64})$")
+NORMALIZER_DIAGNOSTIC_LIMIT = 2_048
 ACCEPTANCE_FIXTURE_FILENAMES = frozenset(
     {
         "jax-0.10.1-tanh-dot-forward.mlir",
@@ -106,20 +108,34 @@ def normalized_fingerprint(payload: str, normalizer: Path) -> str:
     with tempfile.TemporaryDirectory(prefix="shuttle-fixture-audit-") as directory:
         fixture_path = Path(directory) / "fixture.mlir"
         fixture_path.write_text(payload)
-        result = subprocess.run(
-            [
-                str(normalizer),
-                "--shuttle-test-report-normalized-fingerprint",
-                str(fixture_path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        command = [
+            str(normalizer),
+            "--shuttle-test-report-normalized-fingerprint",
+            str(fixture_path),
+        ]
+        try:
+            result = subprocess.run(command, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as error:
+            stdout = _bounded_diagnostic(error.stdout or "")
+            stderr = _bounded_diagnostic(error.stderr or "")
+            raise RuntimeError(
+                "normalizer subprocess failed: "
+                f"exit_code={error.returncode}; argv={json.dumps(command)}; "
+                f"stdout={json.dumps(stdout)}; stderr={json.dumps(stderr)}"
+            ) from error
     match = FINGERPRINT_PATTERN.search(result.stdout)
     if not match:
-        raise RuntimeError("normalizer did not report a structural SHA-256")
+        stdout = _bounded_diagnostic(result.stdout)
+        details = f"argv={json.dumps(command)}; stdout={json.dumps(stdout)}"
+        raise RuntimeError(f"normalizer did not report a structural SHA-256: {details}")
     return match.group(1).upper()
+
+
+def _bounded_diagnostic(value: str) -> str:
+    if len(value) <= NORMALIZER_DIAGNOSTIC_LIMIT:
+        return value
+    omitted = len(value) - NORMALIZER_DIAGNOSTIC_LIMIT
+    return f"{value[:NORMALIZER_DIAGNOSTIC_LIMIT]}\n... {omitted} characters omitted"
 
 
 def xla_hook_boundary_stablehlo(payload: str) -> str:

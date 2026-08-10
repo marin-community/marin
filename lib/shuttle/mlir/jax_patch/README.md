@@ -70,10 +70,33 @@ Before building, run the pinned fixture-contract regression suite explicitly:
 PYTHONPATH=lib/shuttle/mlir/jax_patch \
   uv run pytest -q \
     lib/shuttle/mlir/jax_patch/test_acceptance_contract.py \
-    lib/shuttle/mlir/jax_patch/test_verify_acceptance_patch.py
+    lib/shuttle/mlir/jax_patch/test_verify_acceptance_patch.py \
+    lib/shuttle/mlir/jax_patch/test_fixture_audit_gate.py
 PYTHONPATH=lib/shuttle/mlir/jax_patch \
   uv run python lib/shuttle/mlir/jax_patch/verify_acceptance_fixture_oracles.py
 ```
+
+The remote preflight runs the default no-write audit through the checked-in
+gate, which builds and resolves the test-only normalizer target directly:
+
+```bash
+PYTHONPATH=lib/shuttle/mlir/jax_patch \
+  uv run python lib/shuttle/mlir/jax_patch/fixture_audit_gate.py \
+    --bazel /path/to/bazel-7.7.0 \
+    --xla-source /path/to/patched/xla \
+    --output-user-root /path/to/bazel-output \
+    --repository-cache /path/to/repository-cache \
+    --jobs 24 \
+    --ram-mb 65536 \
+    --python /path/to/jax-0.10.1-python \
+    --generator lib/shuttle/mlir/test/Inputs/regenerate-jax-fixtures.py
+```
+
+The gate requires the single executable output from
+`@shuttle_mlir//:shuttle-test-opt`. Production `shuttle-opt` does not link the
+test-only fingerprint pass and is rejected before the fixture audit starts.
+The generator includes the failed tool argv, exit code, and bounded stdout and
+stderr when a normalizer subprocess fails.
 
 The contract is audited from the checked-in pinned forward and JAX-owned VJP
 StableHLO fixtures at XLA's module-transform hook boundary. The fixture audit

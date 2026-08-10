@@ -85,3 +85,29 @@ path because the pinned Darwin toolchain requests unavailable SDK
 
 - [ ] Run the full CPU acceptance job after independent source review and
       canonical integration.
+
+## Hypothesis 2
+
+The `jaxacceptance4` six-fixture audit failed before comparing a fixture because
+the frozen runner selected the production `shuttle-opt` target for a test-only
+fingerprint flag.
+
+## Changes to make
+
+Build and resolve `@shuttle_mlir//:shuttle-test-opt` through a checked-in
+preflight gate. Keep `shuttle-opt` as the production pipeline gate. Report a
+bounded normalizer argv, exit code, stdout, and stderr on subprocess failure.
+
+## Results
+
+The exact `2fadce00a8` CPU job passed all seven native build gates, including
+`shuttle-opt`, then stopped when that binary rejected
+`--shuttle-test-report-normalized-fingerprint`. `ShuttleTestPasses` owns the
+flag and is linked only by `shuttle-test-opt`. No fixture fingerprint was
+evaluated, and native tests, lit, XLA tests, the wheel, and acceptance workers
+did not run.
+
+The checked-in gate now builds and queries the exact test target, rejects an
+output named `shuttle-opt`, requires one executable output, and runs the full
+six-fixture no-write audit. The generator bounds failed subprocess output while
+retaining the tool argv and exit code. No Iris relaunch was performed.
