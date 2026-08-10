@@ -40,3 +40,30 @@ description: Target-1 workload-free JAX module-transform plugin and shared accep
   slice and stop for architecture review before GPU integration.
 - Report:
   `.agents/projects/tile_lifetime_compiler/module_transform_plugin_acceptance_harness_audit_20260809.md`
+
+### 2026-08-10 - Exact-pin native MLIR preflight
+
+- Hypothesis: the reviewed native Shuttle dialect scaffold and XLA hook patch
+  build against the XLA revision pinned by JAX 0.10.1, then pass the MLIR lit
+  suite and four XLA hook tests on a CPU worker.
+- Commit Hash: `0481d4ef2b9f7139b53784ea3d03790d72d1699c` for
+  the tested canonical source; this entry's containing revision seals the raw
+  result.
+- Command: `launch-command.txt` in
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810/`, requesting 24 CPU,
+  96GB memory, 250GB disk, no accelerator, and zero retries.
+- Config: Bazel `7.7.0`; XLA
+  `9b635916ecc6df6efee62d8e4b0c7ef87ef84d69`; Debian 13; GCC 14.2.0;
+  embedded OpenJDK 21.0.5.
+- Result: hypothesis rejected at the first target. Both Shuttle operation
+  TableGen actions rejected `ReturnLike` in `ShuttleOps.td:69`. Bazel loaded 86
+  packages and configured 24,359 targets. No Shuttle C++ target completed, and
+  the MLIR lit suite and all four XLA tests did not run.
+- Interpretation: source-only parsing did not exercise the pinned native
+  TableGen environment. The dialect trait definition must be corrected and
+  statically re-reviewed before another native preflight.
+- Next action: inspect the exact pinned MLIR operation traits, replace or import
+  the intended terminator semantics, then run the same target matrix. This
+  checkpoint does not authorize a relaunch.
+- Artifact:
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810/README.md`

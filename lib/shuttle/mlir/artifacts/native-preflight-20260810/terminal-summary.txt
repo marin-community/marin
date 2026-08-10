@@ -1,0 +1,31 @@
+I20260810 01:41:35 8418467456 iris.cluster.config Loading config from lib/iris/config/cw-us-east-02a.yaml
+I20260810 01:41:35 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260810 01:41:36 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10001 -> iris-controller-svc:10000
+Job: /dlwh/shuttle-native-mlir-preflight-20260810 (/dlwh/shuttle-native-mlir-preflight-20260810)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: stead.
+INFO: Analyzed target @@shuttle_mlir//:shuttle-opt (86 packages loaded, 24359 targets configured).
+ERROR: /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/external/shuttle_mlir/BUILD.bazel:51:18: TdGenerate external/shuttle_mlir/include/shuttle/IR/ShuttleOps.h.inc failed: (Exit 1): mlir-tblgen failed: error executing TdGenerate command (from target @@shuttle_mlir//:shuttle_ops_inc_gen_filegroup___gen_op_decls_1294557351_genrule) bazel-out/k8-opt-exec-ST-0465588ec812/bin/external/llvm-project/mlir/mlir-tblgen -gen-op-decls external/shuttle_mlir/include/shuttle/IR/ShuttleOps.td -I external/llvm-project/mlir/include -I ... (remaining 15 arguments skipped)
+external/shuttle_mlir/include/shuttle/IR/ShuttleOps.td:69:34: error: Variable not defined: 'ReturnLike'
+                           Pure, ReturnLike, Terminator]> {
+                                 ^
+ERROR: /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/external/shuttle_mlir/BUILD.bazel:51:18: TdGenerate external/shuttle_mlir/include/shuttle/IR/ShuttleOps.cc.inc failed: (Exit 1): mlir-tblgen failed: error executing TdGenerate command (from target @@shuttle_mlir//:shuttle_ops_inc_gen_filegroup___gen_op_defs_1288686000_genrule) bazel-out/k8-opt-exec-ST-0465588ec812/bin/external/llvm-project/mlir/mlir-tblgen -gen-op-defs external/shuttle_mlir/include/shuttle/IR/ShuttleOps.td -I external/llvm-project/mlir/include -I ... (remaining 15 arguments skipped)
+external/shuttle_mlir/include/shuttle/IR/ShuttleOps.td:69:34: error: Variable not defined: 'ReturnLike'
+                           Pure, ReturnLike, Terminator]> {
+                                 ^
+Use --verbose_failures to see the command lines of failed build steps.
+INFO: Elapsed time: 51.942s, Critical Path: 12.16s
+INFO: 2127 processes: 1290 internal, 837 local.
+ERROR: Build did NOT complete successfully
++ run_native_preflight.sh:1: finish
++ run_native_preflight.sh:27: local status=1
++ run_native_preflight.sh:28: set +x
+preflight_exit_code=1
+preflight_finished_utc=2026-08-10T08:37:15Z
+
+
+  TASK  STATE      EXIT  DURATION                    PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  failed        1  1 minute and 32.92 seconds  -           -          stead.
+                                                                            INFO: Analyzed target @@shuttle_mlir//:shuttle-opt (86 packages loaded, 24359 targets configured).
+                                                                            ERROR: /app...
