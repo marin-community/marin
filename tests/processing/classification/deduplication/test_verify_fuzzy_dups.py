@@ -992,8 +992,9 @@ def test_verifier_rejects_mismatched_source_sets(tmp_path, monkeypatch):
 def test_verifier_falls_back_when_a_cluster_lost_its_canonical(tmp_path, monkeypatch):
     """Connected components can leave a cluster whose label owner moved away.
 
-    Those members are still candidates for one another, so verification keeps
-    running against the first retained member instead of failing the job.
+    Those members are still candidates for one another, so verification anchors
+    on the longest of them and reports ``cluster_longest`` instead of failing
+    the job.
     """
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     source_key, source = _write_source(

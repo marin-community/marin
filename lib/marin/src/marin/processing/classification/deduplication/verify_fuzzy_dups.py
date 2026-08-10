@@ -313,10 +313,10 @@ def _cluster_key(record: dict[str, Any]) -> tuple[str, str]:
 def _cluster_sort_key(record: dict[str, Any]) -> bytes:
     """Order a cluster by content ID so that equal IDs group together.
 
-    The canonical no longer sorts first. The reducer picks its representative by
-    length instead, and it removes that record from the stream, which preserves
-    ascending ID order only when the order does not depend on which record was
-    removed.
+    The order must not depend on which record the reducer removes as its
+    anchor, so it rests on the content ID alone. The reducer relies on that:
+    it pulls one record out of the stream and still needs the remainder in
+    ascending ID order to group equal IDs.
     """
     content_id = record.get("id", "").encode()
     return len(content_id).to_bytes(8, byteorder="big") + content_id + record["file_idx"].to_bytes(8, byteorder="big")

@@ -349,9 +349,7 @@ def _iter_surviving_docs(spec: dict[str, str], cluster_col: str) -> Iterator[tup
             n_contaminated += 1
             continue
         # Verified attributes mark only the members a full-text comparison
-        # confirmed, so membership alone decides. The unverified candidate
-        # attributes needed a tri-state check because a cluster member that was
-        # merely a candidate still had to reach the exact-dedup test.
+        # confirmed, so membership alone decides.
         if doc_id in verified_duplicates:
             n_dedup_dropped += 1
             continue

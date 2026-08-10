@@ -324,19 +324,19 @@ def inspect_verification(
         # connected-components canonical instead would disagree with a correct
         # run on every cluster whose canonical is not its longest member.
         stream = sorted(cluster_members, key=lambda member: (len(member.id), member.id, member.file_idx))
-        canonical = max(stream, key=lambda member: (len(member.text), member.id))
-        ordered = [canonical, *(member for member in stream if member is not canonical)]
+        anchor = max(stream, key=lambda member: (len(member.text), member.id))
+        ordered = [anchor, *(member for member in stream if member is not anchor)]
         # The verifier labels the anchor by whether it is also the canonical.
-        canonical_kind = "cluster_canonical" if canonical.is_cluster_canonical else "cluster_longest"
-        retained = [canonical]
+        anchor_kind = "cluster_canonical" if anchor.is_cluster_canonical else "cluster_longest"
+        retained = [anchor]
         local_representative_chars = 0
         member_reviews = []
 
         for member_id, same_id_iterator in groupby(ordered[1:], key=lambda member: member.id):
             same_id_members = list(same_id_iterator)
-            if member_id == canonical.id:
+            if member_id == anchor.id:
                 for member in same_id_members:
-                    if member.text != canonical.text:
+                    if member.text != anchor.text:
                         raise AssertionError(f"Content ID {member.id!r} has different text")
                     marker_key = (member.source_key, member.id)
                     decisions["delegated_global_exact"] += 1
@@ -380,22 +380,22 @@ def inspect_verification(
             marker_key = (member.source_key, member.id)
             attempts = []
             comparison_count = 1
-            shared_buckets = len(set(member.buckets) & set(canonical.buckets))
-            result = verify_candidate(member.text, canonical.text, verified.verification)
+            shared_buckets = len(set(member.buckets) & set(anchor.buckets))
+            result = verify_candidate(member.text, anchor.text, verified.verification)
             comparison_decision = result.rejection.value if result.rejection is not None else "accepted"
             comparison_decisions[comparison_decision] += 1
             attempts.append(
                 {
-                    "representative_id": canonical.id,
-                    "representative_kind": canonical_kind,
+                    "representative_id": anchor.id,
+                    "representative_kind": anchor_kind,
                     "shared_lsh_buckets": shared_buckets,
                     "decision": comparison_decision,
                     "scores": _score_fields(result),
                 }
             )
-            matched = canonical if result.accepted else None
+            matched = anchor if result.accepted else None
             matched_result = result if result.accepted else None
-            matched_kind = canonical_kind
+            matched_kind = anchor_kind
             matched_local_token_sequence_equal = None
             matched_local_char_jaccard = None
 
@@ -508,9 +508,9 @@ def inspect_verification(
                 "cluster_id": cluster_id,
                 "cluster_size": len(ordered),
                 "representative": {
-                    **asdict(canonical),
-                    "text": canonical.text[:TEXT_PREVIEW_CHARS],
-                    "text_chars": len(canonical.text),
+                    **asdict(anchor),
+                    "text": anchor.text[:TEXT_PREVIEW_CHARS],
+                    "text_chars": len(anchor.text),
                 },
                 "retained_representatives": len(retained),
                 "members": member_reviews,
