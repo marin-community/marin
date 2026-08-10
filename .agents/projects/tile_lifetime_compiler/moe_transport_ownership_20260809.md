@@ -27,10 +27,30 @@ cotangents return with exact relation-edge identity. Transport does not define
 the cotangent algebra.
 
 This interface follows the useful communication boundary visible inside MoK,
-but does not call MoK or encode an expert, activation, or model name. It also
-admits a DeepEP dispatch backend for the outbound leg. Public DeepEP combine
-is not an accepted backend for the return leg because its interface performs a
-semantic reduction.
+but does not call MoK or encode an expert, activation, or model name. The
+coalesced outbound mechanism has DeepEP dispatch as physical lineage, not as a
+current production entrypoint. Public DeepEP combine is not an accepted return
+mechanism because its interface performs a semantic reduction.
+
+## Current path and reference lineage
+
+The current generic path is:
+
+```text
+RelationPlan
+  -> RelationTransportTemplate + runtime metadata
+  -> per-field TransportFieldFlowPlan
+  -> EventTensor readiness and tile/macrobatch task dependencies
+  -> generic mechanism selection
+```
+
+DeepEP and MoK are references and physical-mechanism lineage only. No current
+Shuttle plan contains a DeepEP handle, MoK schedule, model-name dispatch key,
+or callable semantic entrypoint from either implementation. A future adapter
+may implement a generic payload-only mechanism such as coalesced dispatch,
+symmetric-memory pull, or exact-edge push after its interface is audited. It
+must consume the generic metadata ABI and may not introduce a DeepEP/MoK
+semantic call target. The pinned DeepEP and MoK executions remain oracles.
 
 ## Evidence map
 
