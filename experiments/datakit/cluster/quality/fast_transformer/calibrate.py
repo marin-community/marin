@@ -40,6 +40,9 @@ YK = [0.0, *BUCKET_EDGES, 1.0]  # the interior IS BUCKET_EDGES, so the two can't
 # Labels a type needs before it gets its own cutpoints. Five cutpoints from a
 # handful of documents move with the sample rather than with the type.
 DEFAULT_MIN_PER_TYPE = 400
+# The rubric's catch-all. It is not a content type with its own standard of
+# excellence, so it is held to the quality scale but not to cross-type parity.
+RESIDUAL_TYPE = "other"
 
 
 def apply_calibration(raw: np.ndarray, types: np.ndarray | None, knots: dict) -> np.ndarray:
@@ -120,8 +123,17 @@ def per_type_knots(raw: np.ndarray, levels: np.ndarray, types: np.ndarray, *, mi
 
 
 def _parity_ratio(buckets: np.ndarray, types: np.ndarray) -> float:
-    """Widest-to-narrowest top-bucket share across types; 1.0 is perfect parity."""
-    shares = [float((buckets[types == t] == 4).mean()) for t in sorted(set(types.tolist()))]
+    """Widest-to-narrowest top-bucket share across types; 1.0 is perfect parity.
+
+    ``other`` is excluded. The rubric defines it as the residual bin — what is left
+    when a document is not prose, code, math, multilingual, structured or a
+    trajectory — and its members are junk (mean oracle quality 1.97). Requiring it to
+    reach the top bucket as often as math would be requiring the filter to promote
+    junk, so including it measures the opposite of what parity is for.
+    """
+    shares = [float((buckets[types == t] == 4).mean()) for t in sorted(set(types.tolist())) if t != RESIDUAL_TYPE]
+    if not shares:
+        return float("nan")
     return max(shares) / max(min(shares), 1e-6)
 
 
