@@ -1,0 +1,42 @@
+Remote runner proof and gate summary
+
+source=2fadce00a8a94512f613fd0ceb24d51525698c27
+jax=619764c15117fbefc4ba13ab941871cb514c23f6
+xla=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+llvm=9a4faee1068c09efbf837cfb7b0f5693b24635f4
+xla_patch_order=0001,0002
+jax_patch_order=0001,0002
+apply_check=PASS_ALL_FOUR
+reverse_apply_check=PASS_ALL_FOUR
+combined_git_diff_check=PASS
+anchored_xla_runtime_label_count=7
+configured_cquery_verifier=PASS
+pure_acceptance_and_verifier_tests=PASS_47_OF_47
+fixture_oracle=PASS
+bundled_shuttle_source_files=82
+
+@shuttle_mlir//:shuttle_ops_inc_gen PASS elapsed=26.990s
+@shuttle_mlir//:ShuttleDialect PASS elapsed=78.141s
+@shuttle_mlir//:ShuttlePasses PASS elapsed=79.142s
+@shuttle_mlir//:ShuttleXlaRegistration PASS elapsed=4.623s
+@shuttle_mlir//:ShuttleXlaRegistryAdapter PASS elapsed=2.821s
+@shuttle_mlir//:ShuttleObserverTestBridge PASS elapsed=2.130s
+@shuttle_mlir//:shuttle-opt PASS elapsed=88.463s
+
+six_fixture_default_audit=FAIL_WRONG_NATIVE_TOOL
+normalizer_target_selected=@shuttle_mlir//:shuttle-opt
+normalizer_required_target=@shuttle_mlir//:shuttle-test-opt
+normalizer_subprocess_exit=1
+normalizer_subprocess_stderr_retained=false
+
+@shuttle_mlir//:xla_registration_test NOT_RUN
+@shuttle_mlir//:xla_registry_adapter_test NOT_RUN
+@shuttle_mlir//:pipeline_observer_test NOT_RUN
+@shuttle_mlir//:observer_test_bridge_test NOT_RUN
+@shuttle_mlir//:mlir_tests NOT_RUN
+xla_tests=NOT_RUN_0_OF_4
+wheel_result=NOT_RUN
+ordinary_jax_acceptance=NOT_RUN
+
+preflight_exit_code=1
+preflight_finished_utc=2026-08-10T23:10:11Z
