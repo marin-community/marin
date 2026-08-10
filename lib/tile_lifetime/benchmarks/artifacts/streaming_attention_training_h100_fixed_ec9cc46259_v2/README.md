@@ -22,6 +22,54 @@ The earlier CPU-only dependency gate
 submitted. The H100 reproduction repeats that header compile before the only
 benchmark invocation.
 
-The result, raw logs, generated sources, toolchain records, and release proof
-will be added after the terminal job is collected. Until then this is a
-reproduction checkpoint, not a performance claim.
+## Result
+
+This is a negative layout-contract artifact, not a performance result. The
+sole actual benchmark invocation ran the generated and Flash-SDPA boundaries,
+then the pre-timing physical-layout guard rejected their result strides:
+
+```text
+Flash-SDPA:
+((8388608, 128, 4096, 1),
+ (8388608, 128, 4096, 1),
+ (2097152, 128, 1024, 1),
+ (2097152, 128, 1024, 1))
+
+generated expectation:
+((8388608, 262144, 128, 1),
+ (8388608, 262144, 128, 1),
+ (2097152, 262144, 128, 1),
+ (2097152, 262144, 128, 1))
+```
+
+The first tuple in each group is forward output, followed by dQ, dK, and dV.
+The observed Flash-SDPA storage is contiguous BSHD viewed as BHSD. The
+generated boundary instead requested the wrong axis order. The process exited
+before warmup or timing, so this artifact makes no latency, parity,
+correctness, or determinism claim. No GB200 run followed.
+
+The failed actual invocation was Iris task
+`/dlwh/shuttle-attn-training-h100-actual-20260809`. It used one H100 80GB HBM3
+(UUID `GPU-87333bd6-8e3c-d187-e433-a290b2da8e1b`), driver 595.71.05, CUDA
+runtime 13.0.96, NVCC/PTXAS 13.2.78, CCCL 13.3.3.4.1, JAX/JAXLIB 0.10.1,
+Triton 3.6.0, and Torch 2.11.0+cu128 as oracle only. The CUDA header smoke
+succeeded and produced a 10,288-byte SM90 object before the benchmark was
+invoked.
+
+An earlier task, `/dlwh/shuttle-attn-training-h100-cccl-20260809`, failed
+before invoking the benchmark because the Iris source bundle intentionally
+contains no `.git` directory. The reproduction script was changed to carry the
+pinned revision explicitly before the actual invocation.
+
+## Preserved evidence
+
+`raw/iris.log` is the complete Iris output from the actual invocation.
+`raw/preserved.tgz` is the exact job-produced archive containing the generated
+AOT C sources and headers, typed-FFI CUDA handler, shared object, source
+StableHLO bytecode, copied generator sources, Triton metadata, header-smoke
+source/object, and toolchain records. Its SHA-256 is
+`97944bd4f6cf29ad6d9bc29604f8419e0971417c43799af9f8210ad48b0ed3cb`.
+
+After terminal failure, the H100 release query returned `No resources found`
+for label
+`iris.task_id=dlwh-shuttle-attn-training-h100-actual-20260809-0`.
