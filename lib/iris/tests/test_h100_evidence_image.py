@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
 REPO_ROOT = Path(__file__).parents[3]
 DOCKERFILE = REPO_ROOT / "lib" / "iris" / "Dockerfile"
+DOCKERIGNORE = REPO_ROOT / "lib" / "iris" / "Dockerfile.dockerignore"
 PACKAGE_MANIFEST = REPO_ROOT / "lib" / "iris" / "images" / "h100-evidence-debian12-amd64.sha256"
 H100_IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-h100-evidence-image.yaml"
 BROAD_IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-docker-images.yaml"
@@ -70,12 +71,41 @@ def _jobs_for(workflow: dict, *, event_name: str, image_set: str = "", schedule:
     }
 
 
+def _docker_context_includes(path: str, dockerignore: str) -> bool:
+    included = True
+    candidate = PurePosixPath(path)
+    for raw_rule in dockerignore.splitlines():
+        rule = raw_rule.strip()
+        if not rule or rule.startswith("#"):
+            continue
+
+        reinclude = rule.startswith("!")
+        pattern = rule.removeprefix("!").removeprefix("/")
+        directory_prefix = pattern.removesuffix("/")
+        matches = candidate.match(pattern) or (pattern.endswith("/") and path.startswith(f"{directory_prefix}/"))
+        if matches:
+            included = reinclude
+    return included
+
+
 def test_h100_evidence_package_manifest_is_closed_and_hash_pinned():
     records = [line.split() for line in PACKAGE_MANIFEST.read_text().splitlines()]
 
     assert {filename for _, filename in records} == EXPECTED_PACKAGES
     assert len(records) == len(EXPECTED_PACKAGES)
     assert all(re.fullmatch(r"[0-9a-f]{64}", digest) for digest, _ in records)
+
+
+def test_h100_evidence_manifest_is_in_the_real_nonempty_docker_context():
+    target = DOCKERFILE.read_text().split("FROM task AS task-h100-evidence", maxsplit=1)[1]
+    manifest_copy = re.search(r"^COPY (?P<source>\S+) /tmp/h100-evidence-debian12-amd64\.sha256$", target, re.MULTILINE)
+
+    assert manifest_copy is not None
+    source = manifest_copy.group("source")
+    assert (REPO_ROOT / source).read_bytes()
+    dockerignore = DOCKERIGNORE.read_text()
+    assert _docker_context_includes(source, dockerignore)
+    assert not _docker_context_includes(source, dockerignore.replace(f"!{source}\n", ""))
 
 
 def test_h100_evidence_target_inherits_task_and_checks_every_required_tool():
@@ -112,11 +142,16 @@ def test_h100_evidence_workflow_dispatch_builds_one_exact_source_image():
     assert "strategy" not in job
     checkout = next(step for step in job["steps"] if step.get("uses") == "actions/checkout@v5")
     source = next(step for step in job["steps"] if step.get("id") == "source")
+    context = next(step for step in job["steps"] if step.get("id") == "context")
     build = next(step for step in job["steps"] if step.get("id") == "build")
 
     assert checkout["with"] == {"ref": "${{ inputs.ref }}", "persist-credentials": False}
     assert source["run"].count("git rev-parse HEAD") == 1
     assert "^[0-9a-f]{40}$" in source["run"]
+    assert 'context_manifest="lib/iris/images/h100-evidence-debian12-amd64.sha256"' in context["run"]
+    assert '[[ ! -s "$context_manifest" ]]' in context["run"]
+    assert 'grep -Fxq "!$context_manifest" "$dockerignore"' in context["run"]
+    assert job["steps"].index(context) < job["steps"].index(build)
     assert build["env"]["IMAGE"] == (
         "ghcr.io/marin-community/iris-task-h100-evidence:${{ steps.source.outputs.full_sha }}"
     )
