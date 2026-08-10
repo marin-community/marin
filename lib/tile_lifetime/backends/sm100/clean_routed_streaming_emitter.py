@@ -122,6 +122,24 @@ class PartialMergeScheduleKind(StrEnum):
     TILED_PIPELINED = "tiled_pipelined"
 
 
+@dataclass(frozen=True)
+class StaticLaunchGridAudit:
+    """Source-level proof that a bounded launch grid is host-specialized."""
+
+    capacity_annotation: str
+    grid_expression: str
+    runtime_work_count_forwarded: bool
+
+    @property
+    def clean(self) -> bool:
+        """Return whether the physical ABI separates capacity from work count."""
+        return (
+            self.capacity_annotation == "cutlass.Constexpr[int]"
+            and self.grid_expression in {"work_capacity", "num_ctas"}
+            and self.runtime_work_count_forwarded
+        )
+
+
 def real_col_to_stg128_half_col(real_col: int) -> int:
     """Map one real BF16 feature column to the physical STG.128 column."""
     tile, col32 = divmod(real_col, 32)
@@ -528,7 +546,73 @@ def _replace_semantic_imports(source: str) -> str:
     source = source.replace("SoftmaxSm100", "NormalizedExpFoldSm100")
     source = source.replace("AttentionMask", "DomainRestrictionSm100")
     source = source.replace("SparseAttentionForwardSm100", GENERATED_PHYSICAL_CLASS)
-    return source
+    return specialize_static_launch_grid(source)
+
+
+def specialize_static_launch_grid(source: str) -> str:
+    """Make the bounded maximum task count a CuTe compile-time parameter."""
+    dynamic_signature = "        work_capacity: Int32,\n        stream=None,"
+    static_signature = "        work_capacity: cutlass.Constexpr[int],\n        stream=None,"
+    if source.count(dynamic_signature) != 1:
+        raise ValueError("expected one host launch-capacity parameter in the pinned physical source")
+    specialized = source.replace(dynamic_signature, static_signature)
+    audit = audit_static_launch_grid(specialized)
+    if not audit.clean:
+        raise ValueError(f"physical launch-grid specialization is incomplete: {audit}")
+    return specialized
+
+
+def audit_static_launch_grid(source: str) -> StaticLaunchGridAudit:
+    """Audit host capacity specialization and runtime work-count forwarding."""
+    tree = ast.parse(source)
+    physical_class = next(
+        (node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == GENERATED_PHYSICAL_CLASS),
+        None,
+    )
+    if physical_class is None:
+        return StaticLaunchGridAudit("", "", False)
+    host_call = next(
+        (
+            node
+            for node in physical_class.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "__call__"
+        ),
+        None,
+    )
+    if host_call is None:
+        return StaticLaunchGridAudit("", "", False)
+    capacity_argument = next(
+        (argument for argument in host_call.args.args if argument.arg == "work_capacity"),
+        None,
+    )
+    annotation = (
+        ""
+        if capacity_argument is None or capacity_argument.annotation is None
+        else ast.unparse(capacity_argument.annotation)
+    )
+    aliases = {"work_capacity"}
+    for node in ast.walk(host_call):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Name):
+            continue
+        if node.value.id not in aliases:
+            continue
+        aliases.update(target.id for target in node.targets if isinstance(target, ast.Name))
+    grid_expression = ""
+    runtime_work_count_forwarded = False
+    for node in ast.walk(host_call):
+        if not isinstance(node, ast.Call):
+            continue
+        runtime_work_count_forwarded |= any(
+            isinstance(argument, ast.Name) and argument.id == "mWorkCount" for argument in node.args
+        )
+        if not isinstance(node.func, ast.Attribute) or node.func.attr != "launch":
+            continue
+        grid = next((keyword.value for keyword in node.keywords if keyword.arg == "grid"), None)
+        if isinstance(grid, ast.Tuple) and len(grid.elts) == 1 and isinstance(grid.elts[0], ast.Name):
+            grid_expression = grid.elts[0].id
+    if grid_expression not in aliases:
+        grid_expression = ""
+    return StaticLaunchGridAudit(annotation, grid_expression, runtime_work_count_forwarded)
 
 
 def _replace_fold_names(source: str) -> str:

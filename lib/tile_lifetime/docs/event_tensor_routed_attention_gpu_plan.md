@@ -161,16 +161,17 @@ resources, and `D=128`) before attempting the primary shape above. JAX exposed
 one real GB200, Torch was neither installed nor loaded, and the generated Fold
 FFI handlers compiled and registered.
 
-The first CuTe compile found a two-argument wrapper mismatch. Commit
-`728d0dfcd4` corrected that narrow ABI error. One rerun then entered the
-extracted SM100 method body and failed at launch construction: the extracted
-template's `work_capacity` reached `grid=(work_capacity,)` as a CUTLASS MLIR
-`BlockArgument`, but `cutlass.jax.cutlass_call` requires a compile-time integer
-grid dimension. No device kernel launched, so correctness, determinism, and
-timings remain unmeasured.
+The first CuTe compile found one extra optional-metadata placeholder in the
+physical-call ABI. Commit `728d0dfcd4` removed the immediate positional-count
+error but incorrectly removed two required sequence-offset operands. One rerun
+then entered the extracted SM100 method body with shifted arguments; the JAX
+stream occupied the `work_capacity` position and was rejected as a CUTLASS MLIR
+`BlockArgument` in `grid=(work_capacity,)`. No device kernel launched, so
+correctness, determinism, and timings remain unmeasured.
 
 The preserved negative artifact is
 `benchmarks/artifacts/event_tensor_right_resource_jax_gb200_compile_blocker_v0`.
-Before another allocation, specialize only the bounded maximum work capacity
-at the generic physical-launch boundary, retain runtime `work_count` for tail
-work, and extend the Linux preflight to prove that CuTe sees a constant grid.
+Before another allocation, correct the positional ABI, specialize only the
+bounded maximum work capacity at the generic physical-launch boundary, retain
+runtime `work_count` for tail work, and extend the Linux preflight to prove the
+constant-grid source and ABI contract.

@@ -20,3 +20,7 @@ Extracted physical source site:
 
 No device kernel launched in either attempt.
 
+Post-run audit found that the interim fix shifted the positional ABI: the JAX
+stream occupied the physical work_capacity position. The BlockArgument error
+therefore does not establish that a correctly positioned Python capacity is
+dynamic.
