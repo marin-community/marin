@@ -125,9 +125,12 @@ python lib/tile_lifetime/benchmarks/h100_contract_map_source_payload.py prepare 
 The output contains only the deterministic capsule ZIP, canonical manifest,
 and stdlib-only launcher, and reports the SHA-256 of both manifest and launcher.
 The eventual submitted command must use trusted image tooling to verify both
-identities before invoking Python; launcher self-verification cannot establish
-its own trust. As defense in depth, `run` also requires the expected launcher
-SHA-256 explicitly before it verifies the trusted manifest hash,
+identities before invoking `/opt/h100-evidence-runtime/bin/python` by absolute
+path. The `run` command requires that same absolute path through
+`--runtime-python`; it never resolves or falls back to an unqualified `python`
+from `PATH`. Launcher self-verification cannot establish its own trust. As
+defense in depth, `run` also requires the expected launcher SHA-256 explicitly
+before it verifies the trusted manifest hash,
 commit and tree, archive hash, exact member set, bounds, paths, modes, symlinks,
 and member hashes before starting the runner. Runner preflight repeats the
 manifest and extracted-file checks without asserting Git-clean status. After
@@ -137,13 +140,21 @@ the capsule or with a hash not present in the manifest. This detects provenance
 drift but is not a sandbox: imported code has already executed. Accepted
 evidence records the commit, tree, and capsule-manifest digest.
 
-There is still no accepted Iris launch command in this checkpoint: the image
-must first be built, published under its full-Git-SHA tag, resolved to an OCI
-digest, and independently reviewed together with the source capsule. A future
-launch must use the default container profile, one explicit `H100x1`, no UV
-sync against the partial capsule, a fresh artifact path outside the capsule,
-and `max_retries=0`. Nsight Compute permission failure remains a fail-closed
-runtime result; this plan does not enable the privileged profile.
+An image built before this interpreter contract is not accepted for another
+launch. A rebuilt image must be published under its full-Git-SHA tag, resolved
+to an OCI digest, and independently reviewed together with the source capsule.
+The task command must invoke both the launcher and runner with the exact frozen
+interpreter:
+
+```text
+/opt/h100-evidence-runtime/bin/python h100_contract_map_source_payload.py run \
+  --runtime-python /opt/h100-evidence-runtime/bin/python ...
+```
+
+A future launch must use the default container profile, one explicit
+`H100x1`, no UV sync against the partial capsule, a fresh artifact path outside
+the capsule, and `max_retries=0`. Nsight Compute permission failure remains a
+fail-closed runtime result; this plan does not enable the privileged profile.
 
 ## Reused prototype evidence
 

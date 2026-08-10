@@ -154,6 +154,7 @@ def test_h100_evidence_image_probes_every_runner_loaded_cuda_library():
     assert "cuda-cudart-13-2_13.2.86-1_amd64.deb" in EXPECTED_PACKAGES
     assert "cuda-nvtx-13-2_13.2.86-1_amd64.deb" in EXPECTED_PACKAGES
     assert "ln -s libnvtx3interop.so /usr/local/cuda-13.2/lib64/libnvToolsExt.so" in target
+    assert "RUN /opt/h100-evidence-runtime/bin/python - <<'PY'" in target
 
 
 def test_h100_evidence_runtime_uses_the_frozen_cuda13_workspace_closure():
@@ -202,7 +203,9 @@ def test_h100_evidence_runtime_builder_has_complete_context_without_shipping_rep
 
 def test_h100_evidence_runtime_smoke_is_cpu_only_and_matches_the_lock():
     final = _docker_stage("task-h100-evidence")
-    smoke = final.split("RUN JAX_PLATFORMS=cpu python - <<'PY'", maxsplit=1)[1].split("\nPY", maxsplit=1)[0]
+    smoke = final.split("RUN JAX_PLATFORMS=cpu /opt/h100-evidence-runtime/bin/python - <<'PY'", maxsplit=1)[1].split(
+        "\nPY", maxsplit=1
+    )[0]
     expected_match = re.search(r"expected = (?P<expected>\{.*?\n\})", smoke, re.DOTALL)
     assert expected_match is not None
     expected = ast.literal_eval(expected_match.group("expected"))
