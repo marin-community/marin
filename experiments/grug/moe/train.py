@@ -83,6 +83,7 @@ class GrugEvalConfig:
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
+    shuffle: bool = True  # Mix eval domains within batches to reduce expert-capacity drops.
 
 
 @dataclass(frozen=True)
@@ -193,6 +194,7 @@ def build_tagged_evaluator(
         device_mesh=mesh,
         axis_mapping=eval_axis_mapping,
         max_examples_per_dataset=max_examples_per_dataset,
+        shuffle=eval_cfg.shuffle,
     )
 
 

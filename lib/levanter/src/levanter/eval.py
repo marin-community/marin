@@ -45,6 +45,7 @@ from levanter.utils.tree_utils import inference_mode
 
 
 logger = logging.getLogger(__name__)
+_TAGGED_EVAL_SHUFFLE_SEED = 0
 
 
 T = TypeVar("T")
@@ -516,13 +517,18 @@ class TaggedEvaluator(Generic[Ex, M]):
         device_mesh=None,
         axis_mapping=None,
         max_examples_per_dataset=None,
+        shuffle: bool = False,
     ):
         if isinstance(EvalBatch, int):
             EvalBatch = hax.Axis("batch", EvalBatch)
         self.loss_fn = loss_fn
         self.dataset = DomainTaggedDataset(tagged_eval_sets, max_examples_per_dataset)
+        loader_dataset = self.dataset.as_async_dataset()
+        if shuffle:
+            # Keep evaluation order reproducible across hosts and repeated evaluations.
+            loader_dataset = loader_dataset.shuffle(jax.random.PRNGKey(_TAGGED_EVAL_SHUFFLE_SEED))
         self.loader = DataLoader(
-            self.dataset.as_async_dataset(),
+            loader_dataset,
             EvalBatch,
             max_buffered_batches=100,
             mesh=device_mesh,
