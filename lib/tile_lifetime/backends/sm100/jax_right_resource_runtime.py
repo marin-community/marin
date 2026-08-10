@@ -241,8 +241,6 @@ def compile_right_resource_physical_call(
             None,
             None,
             None,
-            left_offsets,
-            right_payload_offsets,
             cutlass.Float32(lowering.score_map.scale),
             cutlass.Float32(1.0),
             cutlass.Int32(lowering.right_block_count),
