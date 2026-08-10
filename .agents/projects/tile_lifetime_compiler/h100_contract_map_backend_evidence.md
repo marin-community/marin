@@ -21,6 +21,27 @@ same `TensorProgram`. `cuda_contract_map_backend_codegen.py` emits multi-CTA
 direct FFI source for both policies and all four reviewed shapes. This direct
 FFI source is not connected to the native ordinary-JAX transform.
 
+CUDA reverse lowering accepts exactly five differentiated operations in order:
+hidden-adjoint Contract, second-weight-adjoint Contract, pointwise-adjoint Map,
+input-adjoint Contract, and first-weight-adjoint Contract. Kernel operands,
+output axes, reduction axes, and the hidden-adjoint-to-Map fusion come from
+those operations. Missing, reordered, or rewired operations reject before
+source generation.
+
+The direct ABI uses signed 32-bit flattened indices. Every positive rank-two
+buffer product, kernel work-item product, grid numerator, grid block count, and
+BF16 byte size is checked before source generation. Each value must be at most
+`2,147,483,647`; the two-byte BF16 boundary limits a buffer to
+`1,073,741,823` elements. The grid-x limit is `2,147,483,647` blocks. These
+bounds apply to both `SOURCE_ORDERED` and `FAST`; exceeding any bound rejects
+the candidate.
+
+Each generated variant has a physical digest over the semantic digest, target
+prefix, threads, launch-check or command-buffer traits, the complete FFI ABI,
+kernel topology, five reverse operations, and the declared fusion. The digest
+suffix appears in both FFI targets, all exported symbols, the reported backend
+fingerprint, and every CUDA artifact stem.
+
 `contract_map_chain.py`, `cuda_contract_map_chain_codegen.py`, and
 `h100_generated_contract_map_chain_training.py` remain historical. They use a
 one-CTA shared-memory body and reconstruct a different residual-gated graph

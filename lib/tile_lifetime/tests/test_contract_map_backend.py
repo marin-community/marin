@@ -16,6 +16,7 @@ from lib.tile_lifetime.benchmarks.h100_contract_map_backend_training import (
     natural_jax_training_step,
 )
 from tile_lifetime.contract_map_backend import (
+    ContractMapBackendProgram,
     ContractMapNumericalPolicy,
     build_contract_map_backend_program,
     cubic_mix_expression,
@@ -26,11 +27,16 @@ from tile_lifetime.contract_map_backend import (
     tanh_product_expression,
 )
 from tile_lifetime.contract_map_backend_resources import (
+    contract_map_compile_plan,
     expected_contract_map_logical_boundary,
     parse_ptxas_kernel_resources,
 )
 from tile_lifetime.cuda_contract_map_backend_codegen import (
+    CONTRACT_MAP_BF16_BYTES,
+    CONTRACT_MAP_GRID_X_MAX,
+    CONTRACT_MAP_INT32_MAX,
     audit_cuda_contract_map_backend_source,
+    contract_map_backend_size_audit,
     generate_cuda_contract_map_backend_ffi,
 )
 from tile_lifetime.ffi_command_buffer import DirectLaunchFfiPhysicalCandidate
@@ -47,6 +53,7 @@ from tile_lifetime.tensor_program import (
     ScalarExpression,
     ScalarExpressionKind,
     TensorProgram,
+    scalar_binary,
     scalar_input,
 )
 
@@ -167,6 +174,134 @@ def test_contract_map_scalar_mutation_changes_forward_and_derived_reverse() -> N
     assert baseline_reverse != mutated_reverse
 
 
+@pytest.mark.parametrize("reverse_index", (0, 1, 3, 4))
+def test_contract_map_reverse_contract_operands_are_authoritative(reverse_index: int) -> None:
+    baseline = build_contract_map_backend_program(
+        rows=5,
+        reduction=8,
+        features=4,
+        scalar_expression=tanh_product_expression(),
+        numerical_policy=ContractMapNumericalPolicy.SOURCE_ORDERED,
+    )
+    reverse = list(baseline.differentiated.program.operations[len(baseline.source.operations) :])
+    operation = reverse[reverse_index]
+    assert isinstance(operation, ContractPrimitive)
+    reverse[reverse_index] = replace(operation, inputs=tuple(reversed(operation.inputs)))
+    mutated = _replace_reverse_operations(baseline, tuple(reverse))
+
+    with pytest.raises(ValueError, match="adjoint Contract operands"):
+        generate_cuda_contract_map_backend_ffi(mutated)
+
+
+def test_contract_map_reverse_pointwise_expression_drives_code_and_physical_digest() -> None:
+    baseline = build_contract_map_backend_program(
+        rows=5,
+        reduction=8,
+        features=4,
+        scalar_expression=tanh_product_expression(),
+        numerical_policy=ContractMapNumericalPolicy.SOURCE_ORDERED,
+    )
+    reverse = list(baseline.differentiated.program.operations[len(baseline.source.operations) :])
+    pointwise = reverse[2]
+    assert isinstance(pointwise, MapPrimitive)
+    mutated_expression = scalar_binary(
+        ScalarExpressionKind.ADD,
+        scalar_input(pointwise.inputs[0].name),
+        scalar_input(pointwise.inputs[1].name),
+    )
+    reverse[2] = replace(pointwise, expression=mutated_expression)
+    mutated = _replace_reverse_operations(baseline, tuple(reverse))
+
+    baseline_generated = generate_cuda_contract_map_backend_ffi(baseline)
+    mutated_generated = generate_cuda_contract_map_backend_ffi(mutated)
+    assert baseline_generated.source_sha256 != mutated_generated.source_sha256
+    assert baseline_generated.physical_digest != mutated_generated.physical_digest
+    assert baseline_generated.forward_target != mutated_generated.forward_target
+
+
+def test_contract_map_reverse_operation_removal_and_reordering_fail_closed() -> None:
+    baseline = build_contract_map_backend_program(
+        rows=5,
+        reduction=8,
+        features=4,
+        scalar_expression=tanh_product_expression(),
+        numerical_policy=ContractMapNumericalPolicy.FAST,
+    )
+    reverse = baseline.differentiated.program.operations[len(baseline.source.operations) :]
+    reordered = _replace_reverse_operations(baseline, (reverse[1], reverse[0], *reverse[2:]))
+    with pytest.raises(ValueError, match="hidden-adjoint Contract operands"):
+        generate_cuda_contract_map_backend_ffi(reordered)
+
+    shortened_program = replace(
+        baseline.differentiated.program,
+        operations=(*baseline.source.operations, reverse[0], *reverse[2:]),
+        outputs=(baseline.input_adjoint, baseline.first_weight_adjoint),
+    )
+    shortened_differentiated = replace(
+        baseline.differentiated,
+        program=shortened_program,
+        input_gradients=(baseline.input_adjoint, baseline.first_weight_adjoint),
+    )
+    shortened = replace(baseline, differentiated=shortened_differentiated)
+    with pytest.raises(ValueError, match="gradients must preserve source-input order"):
+        generate_cuda_contract_map_backend_ffi(shortened)
+
+
+def test_contract_map_reverse_reduction_axes_are_authoritative() -> None:
+    baseline = build_contract_map_backend_program(
+        rows=5,
+        reduction=8,
+        features=4,
+        scalar_expression=tanh_product_expression(),
+        numerical_policy=ContractMapNumericalPolicy.FAST,
+    )
+    reverse = list(baseline.differentiated.program.operations[len(baseline.source.operations) :])
+    hidden_adjoint = reverse[0]
+    assert isinstance(hidden_adjoint, ContractPrimitive)
+    reverse[0] = replace(hidden_adjoint, reduction_axes=())
+    mutated = _replace_reverse_operations(baseline, tuple(reverse))
+
+    with pytest.raises(ValueError, match="hidden-adjoint Contract has incompatible reduction axes"):
+        generate_cuda_contract_map_backend_ffi(mutated)
+
+
+def test_contract_map_reverse_output_axes_are_authoritative() -> None:
+    baseline = build_contract_map_backend_program(
+        rows=5,
+        reduction=8,
+        features=4,
+        scalar_expression=tanh_product_expression(),
+        numerical_policy=ContractMapNumericalPolicy.FAST,
+    )
+    reverse = list(baseline.differentiated.program.operations[len(baseline.source.operations) :])
+    second_weight_adjoint = reverse[1]
+    assert isinstance(second_weight_adjoint, ContractPrimitive)
+    wrong_output = ProgramValue(
+        second_weight_adjoint.output.name,
+        tuple(reversed(second_weight_adjoint.output.axes)),
+        second_weight_adjoint.output.dtype,
+    )
+    reverse[1] = replace(second_weight_adjoint, output=wrong_output)
+    differentiated_program = replace(
+        baseline.differentiated.program,
+        operations=(*baseline.source.operations, *reverse),
+        outputs=(baseline.input_adjoint, baseline.first_weight_adjoint, wrong_output),
+    )
+    differentiated = replace(
+        baseline.differentiated,
+        program=differentiated_program,
+        input_gradients=(baseline.input_adjoint, baseline.first_weight_adjoint, wrong_output),
+    )
+    mutated = replace(
+        baseline,
+        differentiated=differentiated,
+        second_weight_adjoint=wrong_output,
+    )
+
+    with pytest.raises(ValueError, match="second-weight-adjoint Contract has incompatible output axes"):
+        generate_cuda_contract_map_backend_ffi(mutated)
+
+
 def test_contract_map_capture_safe_handlers_preserve_multi_launch_topology() -> None:
     program = build_contract_map_backend_program(
         rows=43,
@@ -185,6 +320,95 @@ def test_contract_map_capture_safe_handlers_preserve_multi_launch_topology() -> 
     assert audit.command_buffer_eligible
     assert not audit.forbidden_command_buffer_operations
     assert audit.launch_count == generated.forward_launch_count + generated.reverse_launch_count
+
+
+@pytest.mark.parametrize("policy", tuple(ContractMapNumericalPolicy))
+def test_contract_map_int32_abi_accepts_byte_size_boundary(policy: ContractMapNumericalPolicy) -> None:
+    maximum_bf16_elements = CONTRACT_MAP_INT32_MAX // CONTRACT_MAP_BF16_BYTES
+    program = build_contract_map_backend_program(
+        rows=1,
+        reduction=1,
+        features=maximum_bf16_elements,
+        scalar_expression=tanh_product_expression(),
+        numerical_policy=policy,
+    )
+
+    generated = generate_cuda_contract_map_backend_ffi(program)
+    size_audit = contract_map_backend_size_audit(program)
+    assert max(buffer.bytes for buffer in size_audit.buffers) == maximum_bf16_elements * CONTRACT_MAP_BF16_BYTES
+    assert len(size_audit.buffers) == 16
+    assert len(size_audit.launches) == 6
+    assert all(launch.grid_numerator <= CONTRACT_MAP_INT32_MAX for launch in size_audit.launches)
+    assert all(launch.block_count <= CONTRACT_MAP_GRID_X_MAX for launch in size_audit.launches)
+    assert generated.physical_abi.forward_outputs[1].shape == (1, maximum_bf16_elements)
+
+
+@pytest.mark.parametrize("policy", tuple(ContractMapNumericalPolicy))
+def test_contract_map_int32_abi_rejects_one_bf16_element_past_byte_size_boundary(
+    policy: ContractMapNumericalPolicy,
+) -> None:
+    program = build_contract_map_backend_program(
+        rows=1,
+        reduction=1,
+        features=CONTRACT_MAP_INT32_MAX // CONTRACT_MAP_BF16_BYTES + 1,
+        scalar_expression=tanh_product_expression(),
+        numerical_policy=policy,
+    )
+
+    with pytest.raises(ValueError, match="byte size exceeds the signed-int32 ABI bound"):
+        generate_cuda_contract_map_backend_ffi(program)
+
+
+def test_contract_map_physical_digest_separates_codegen_variants_and_artifact_stems(tmp_path) -> None:
+    program = build_contract_map_backend_program(
+        rows=43,
+        reduction=104,
+        features=72,
+        scalar_expression=tanh_product_expression(),
+        numerical_policy=ContractMapNumericalPolicy.FAST,
+    )
+    baseline = generate_cuda_contract_map_backend_ffi(program, threads=256)
+    identical = generate_cuda_contract_map_backend_ffi(program, threads=256)
+    different_threads = generate_cuda_contract_map_backend_ffi(program, threads=128)
+    capture_safe = generate_cuda_contract_map_backend_ffi(
+        program,
+        threads=256,
+        physical_candidate=DirectLaunchFfiPhysicalCandidate.COMMAND_BUFFER_CAPTURE_SAFE,
+    )
+    different_prefix = generate_cuda_contract_map_backend_ffi(program, target_prefix="shuttle.alternate.contract_map")
+    variants = (baseline, different_threads, capture_safe, different_prefix)
+
+    assert identical == baseline
+    assert len({variant.physical_digest for variant in variants}) == len(variants)
+    assert len({variant.forward_target for variant in variants}) == len(variants)
+    assert len({variant.reverse_target for variant in variants}) == len(variants)
+    assert len({variant.forward_handler_symbol for variant in variants}) == len(variants)
+    assert len({variant.reverse_handler_symbol for variant in variants}) == len(variants)
+    assert len({variant.forward_call_count_symbol for variant in variants}) == len(variants)
+    assert len({variant.reverse_call_count_symbol for variant in variants}) == len(variants)
+    assert len({variant.backend_fingerprint_symbol for variant in variants}) == len(variants)
+    assert len({variant.source_sha256 for variant in variants}) == len(variants)
+    for variant in variants:
+        suffix = variant.physical_digest
+        assert suffix in variant.forward_target
+        assert suffix in variant.reverse_target
+        assert suffix in variant.forward_handler_symbol
+        assert suffix in variant.reverse_handler_symbol
+        assert suffix in variant.forward_call_count_symbol
+        assert suffix in variant.reverse_call_count_symbol
+        assert suffix in variant.backend_fingerprint_symbol
+        assert f'return "{variant.physical_digest}";' in variant.source
+        compile_plan = contract_map_compile_plan(
+            variant,
+            artifact_directory=tmp_path,
+            nvcc=tmp_path / "nvcc",
+            include_directory=tmp_path / "include",
+        )
+        assert suffix in compile_plan.source_path.stem
+        assert suffix in compile_plan.shared_library_path.stem
+        assert suffix in compile_plan.ptx_path.stem
+        assert suffix in compile_plan.cubin_path.stem
+        assert suffix in compile_plan.sass_path.stem
 
 
 def test_contract_map_semantic_fingerprint_ignores_value_and_operation_names() -> None:
@@ -320,6 +544,20 @@ def test_contract_map_ffi_rejects_wrong_logical_buffers_before_dispatch() -> Non
             jnp.zeros((5, 4), dtype=jnp.bfloat16),
             jnp.zeros((5, 8), dtype=jnp.bfloat16),
         )
+
+
+def _replace_reverse_operations(
+    program: ContractMapBackendProgram,
+    reverse_operations: tuple[ContractPrimitive | MapPrimitive, ...],
+) -> ContractMapBackendProgram:
+    differentiated_program = replace(
+        program.differentiated.program,
+        operations=(*program.source.operations, *reverse_operations),
+    )
+    return replace(
+        program,
+        differentiated=replace(program.differentiated, program=differentiated_program),
+    )
 
 
 def _rename_program(source: TensorProgram) -> TensorProgram:

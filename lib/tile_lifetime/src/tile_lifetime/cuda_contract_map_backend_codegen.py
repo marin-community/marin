@@ -10,7 +10,12 @@ import json
 import re
 from dataclasses import dataclass
 
-from tile_lifetime.contract_map_backend import ContractMapBackendProgram, ContractMapNumericalPolicy
+from tile_lifetime.contract_map_backend import (
+    ContractMapBackendProgram,
+    ContractMapNumericalPolicy,
+    ContractMapReverseLoweringPlan,
+    contract_map_reverse_lowering_plan,
+)
 from tile_lifetime.cuda_map_fold_codegen import (
     CudaArithmeticMode,
     CudaMapFoldProgram,
@@ -23,7 +28,19 @@ from tile_lifetime.ffi_command_buffer import (
     direct_launch_status_check,
     finalize_ffi_handler_source,
 )
-from tile_lifetime.tensor_program import MapPrimitive, ScalarExpression, ScalarExpressionKind, scalar_input
+from tile_lifetime.tensor_program import (
+    ContractPrimitive,
+    MapPrimitive,
+    ProgramValue,
+    ScalarExpression,
+    ScalarExpressionKind,
+    TensorAxis,
+    scalar_input,
+)
+
+CONTRACT_MAP_INT32_MAX = 2_147_483_647
+CONTRACT_MAP_BF16_BYTES = 2
+CONTRACT_MAP_GRID_X_MAX = 2_147_483_647
 
 
 @dataclass(frozen=True)
@@ -61,8 +78,12 @@ class GeneratedCudaContractMapBackendFfi:
     reverse_target: str
     forward_handler_symbol: str
     reverse_handler_symbol: str
+    forward_call_count_symbol: str
+    reverse_call_count_symbol: str
+    backend_fingerprint_symbol: str
     source: str
     semantic_fingerprint: str
+    physical_digest: str
     source_sha256: str
     threads: int
     physical_candidate: DirectLaunchFfiPhysicalCandidate
@@ -92,6 +113,43 @@ class ContractMapBackendSourceAudit:
     command_buffer_eligible: bool
     forbidden_command_buffer_operations: tuple[str, ...]
     opaque_semantic_dependencies: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ContractMapBufferSize:
+    """Checked flattened size for one ABI buffer occurrence."""
+
+    boundary: str
+    role: str
+    elements: int
+    bytes: int
+
+
+@dataclass(frozen=True)
+class ContractMapLaunchSize:
+    """Checked work and grid dimensions for one generated kernel."""
+
+    kernel_name: str
+    work_items: int
+    work_items_per_block: int
+    grid_numerator: int
+    block_count: int
+
+
+@dataclass(frozen=True)
+class ContractMapBackendSizeAudit:
+    """All int32 ABI and grid bounds checked before source generation."""
+
+    buffers: tuple[ContractMapBufferSize, ...]
+    launches: tuple[ContractMapLaunchSize, ...]
+
+
+@dataclass(frozen=True)
+class _RenderedReverseKernel:
+    name: str
+    source: str
+    launch_arguments: tuple[str, ...]
+    output_axes: tuple[TensorAxis, ...]
 
 
 def contract_map_backend_physical_abi(program: ContractMapBackendProgram) -> ContractMapBackendPhysicalAbi:
@@ -145,41 +203,51 @@ def generate_cuda_contract_map_backend_ffi(
     """Emit one policy-specific multi-CTA forward and derived reverse."""
     if threads not in {128, 256, 512}:
         raise ValueError("Contract/Map backends require 128, 256, or 512 threads")
+    if type(physical_candidate) is not DirectLaunchFfiPhysicalCandidate:
+        raise TypeError("physical_candidate must be a DirectLaunchFfiPhysicalCandidate")
     if not target_prefix or any(character.isspace() for character in target_prefix):
         raise ValueError("typed-FFI target prefix must be nonempty and contain no whitespace")
     rows, reduction, features = program.rows, program.reduction, program.features
-    suffix = program.semantic_fingerprint[:16]
+    reverse_plan = contract_map_reverse_lowering_plan(program)
+    physical_abi = contract_map_backend_physical_abi(program)
+    reverse_kernels = _render_reverse_kernels(program, reverse_plan)
+    kernel_names = (
+        "ShuttleContractMapFirstForwardKernel",
+        "ShuttleContractMapSecondForwardKernel",
+        *(kernel.name for kernel in reverse_kernels),
+    )
+    _validate_contract_map_backend_sizes(
+        program,
+        threads=threads,
+        physical_abi=physical_abi,
+        reverse_kernels=reverse_kernels,
+    )
+    physical_digest = _physical_codegen_digest(
+        program,
+        reverse_plan,
+        physical_abi=physical_abi,
+        kernel_names=kernel_names,
+        threads=threads,
+        physical_candidate=physical_candidate,
+        target_prefix=target_prefix,
+    )
+    suffix = physical_digest
     forward_target = f"{target_prefix}.{program.numerical_policy.value}.{suffix}.forward"
     reverse_target = f"{target_prefix}.{program.numerical_policy.value}.{suffix}.reverse"
     forward_symbol = _target_symbol(forward_target)
     reverse_symbol = _target_symbol(reverse_target)
-    scalar_include = _scalar_include(program)
-    kernels = (
-        "ShuttleContractMapFirstForwardKernel",
-        "ShuttleContractMapSecondForwardKernel",
-        "ShuttleContractMapAdjointMapKernel",
-        "ShuttleContractMapInputAdjointKernel",
-        "ShuttleContractMapFirstWeightAdjointKernel",
-        "ShuttleContractMapSecondWeightAdjointKernel",
-    )
-    policy_record = {
-        "semantic_fingerprint": program.semantic_fingerprint,
-        "policy": program.numerical_policy.value,
-        "threads": threads,
-        "physical_family": "multi_cta_global_intermediate_contract_map",
-        "kernel_names": kernels,
-    }
-    backend_fingerprint = hashlib.sha256(
-        json.dumps(policy_record, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    forward_call_count_symbol = f"shuttle_contract_map_backend_forward_call_count_{suffix}"
+    reverse_call_count_symbol = f"shuttle_contract_map_backend_reverse_call_count_{suffix}"
+    backend_fingerprint_symbol = f"shuttle_contract_map_backend_fingerprint_{suffix}"
+    scalar_include = _scalar_include(program, reverse_plan)
     forward_feature_grid = _grid_expression("kRows * kFeatures", program.numerical_policy)
     forward_output_grid = _grid_expression("kRows * kReduction", program.numerical_policy)
-    reverse_feature_grid = _grid_expression("kRows * kFeatures", program.numerical_policy)
-    reverse_input_grid = _grid_expression("kRows * kReduction", program.numerical_policy)
-    first_weight_grid = _grid_expression("kReduction * kFeatures", program.numerical_policy)
-    second_weight_grid = _grid_expression("kFeatures * kReduction", program.numerical_policy)
     forward_status = direct_launch_status_check(physical_candidate, operation="Contract/Map forward")
     reverse_status = direct_launch_status_check(physical_candidate, operation="Contract/Map reverse")
+    reverse_kernel_source = "\n\n".join(kernel.source for kernel in reverse_kernels)
+    reverse_launch_source = "\n".join(
+        _render_kernel_launch(kernel, program, policy=program.numerical_policy) for kernel in reverse_kernels
+    )
     source_template = f"""// Generated from anonymous Contract/Map algebra; do not edit.
 #include <atomic>
 #include <cstdint>
@@ -207,13 +275,7 @@ std::atomic<std::uint64_t> reverse_call_count{{0}};
 
 {_second_forward_kernel(program.numerical_policy)}
 
-{_adjoint_map_kernel(program.numerical_policy)}
-
-{_input_adjoint_kernel(program.numerical_policy)}
-
-{_first_weight_adjoint_kernel(program.numerical_policy)}
-
-{_second_weight_adjoint_kernel(program.numerical_policy)}
+{reverse_kernel_source}
 
 ffi::Error ShuttleContractMapForward(
     cudaStream_t stream,
@@ -260,14 +322,7 @@ ffi::Error ShuttleContractMapReverse(
   __nv_bfloat16* first_weight_adjoint = reinterpret_cast<__nv_bfloat16*>(first_weight_adjoint_buffer->typed_data());
   __nv_bfloat16* second_weight_adjoint = reinterpret_cast<__nv_bfloat16*>(second_weight_adjoint_buffer->typed_data());
   __nv_bfloat16* preactivation_adjoint = reinterpret_cast<__nv_bfloat16*>(preactivation_adjoint_buffer->typed_data());
-  ShuttleContractMapAdjointMapKernel<<<{reverse_feature_grid}, kThreads, 0, stream>>>(
-      preactivation, second_weight, output_cotangent, preactivation_adjoint);
-  ShuttleContractMapInputAdjointKernel<<<{reverse_input_grid}, kThreads, 0, stream>>>(
-      preactivation_adjoint, first_weight, input_adjoint);
-  ShuttleContractMapFirstWeightAdjointKernel<<<{first_weight_grid}, kThreads, 0, stream>>>(
-      activation, preactivation_adjoint, first_weight_adjoint);
-  ShuttleContractMapSecondWeightAdjointKernel<<<{second_weight_grid}, kThreads, 0, stream>>>(
-      hidden, output_cotangent, second_weight_adjoint);
+{reverse_launch_source}
 {reverse_status}
   reverse_call_count.fetch_add(1, std::memory_order_relaxed);
   return ffi::Error::Success();
@@ -307,16 +362,16 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     {reverse_symbol}, ShuttleContractMapReverse,
     ShuttleContractMapReverseBinding()__SHUTTLE_FFI_HANDLER_TRAITS__);
 
-extern "C" std::uint64_t shuttle_contract_map_backend_forward_call_count() {{
+extern "C" std::uint64_t {forward_call_count_symbol}() {{
   return forward_call_count.load(std::memory_order_relaxed);
 }}
 
-extern "C" std::uint64_t shuttle_contract_map_backend_reverse_call_count() {{
+extern "C" std::uint64_t {reverse_call_count_symbol}() {{
   return reverse_call_count.load(std::memory_order_relaxed);
 }}
 
-extern "C" const char* shuttle_contract_map_backend_fingerprint() {{
-  return "{backend_fingerprint}";
+extern "C" const char* {backend_fingerprint_symbol}() {{
+  return "{physical_digest}";
 }}
 """
     source = finalize_ffi_handler_source(
@@ -330,13 +385,17 @@ extern "C" const char* shuttle_contract_map_backend_fingerprint() {{
         reverse_target=reverse_target,
         forward_handler_symbol=forward_symbol,
         reverse_handler_symbol=reverse_symbol,
+        forward_call_count_symbol=forward_call_count_symbol,
+        reverse_call_count_symbol=reverse_call_count_symbol,
+        backend_fingerprint_symbol=backend_fingerprint_symbol,
         source=source,
         semantic_fingerprint=program.semantic_fingerprint,
+        physical_digest=physical_digest,
         source_sha256=hashlib.sha256(source.encode()).hexdigest(),
         threads=threads,
         physical_candidate=physical_candidate,
-        physical_abi=contract_map_backend_physical_abi(program),
-        kernel_names=kernels,
+        physical_abi=physical_abi,
+        kernel_names=kernel_names,
         forward_launch_count=2,
         reverse_launch_count=4,
     )
@@ -366,19 +425,15 @@ def audit_cuda_contract_map_backend_source(
     )
 
 
-def _scalar_include(program: ContractMapBackendProgram) -> str:
+def _scalar_include(
+    program: ContractMapBackendProgram,
+    reverse_plan: ContractMapReverseLoweringPlan,
+) -> str:
     scalar_map = program.source.operations[1]
     assert isinstance(scalar_map, MapPrimitive)
     source_name = scalar_map.inputs[0].name
     primal = _rename_expression(scalar_map.expression, {source_name: "z"})
-    reverse_maps = tuple(
-        operation
-        for operation in program.differentiated.program.operations[len(program.source.operations) :]
-        if isinstance(operation, MapPrimitive)
-    )
-    if len(reverse_maps) != 1 or len(reverse_maps[0].inputs) != 2:
-        raise ValueError("mechanical reverse must contain one binary scalar Map")
-    reverse = reverse_maps[0]
+    reverse = reverse_plan.pointwise_adjoint
     reverse_expression = _rename_expression(
         reverse.expression,
         {reverse.inputs[0].name: "z", reverse.inputs[1].name: "cotangent"},
@@ -442,92 +497,120 @@ def _second_forward_kernel(policy: ContractMapNumericalPolicy) -> str:
     )
 
 
-def _adjoint_map_kernel(policy: ContractMapNumericalPolicy) -> str:
-    return _contract_kernel(
-        name="ShuttleContractMapAdjointMapKernel",
-        parameters=(
-            "const __nv_bfloat16* preactivation",
-            "const __nv_bfloat16* second_weight",
-            "const __nv_bfloat16* output_cotangent",
-            "__nv_bfloat16* preactivation_adjoint",
+def _render_reverse_kernels(
+    program: ContractMapBackendProgram,
+    plan: ContractMapReverseLoweringPlan,
+) -> tuple[_RenderedReverseKernel, ...]:
+    roles = _reverse_value_roles(program, plan)
+    return (
+        _render_reverse_contract_kernel(
+            "ShuttleContractMapAdjointMapKernel",
+            plan.hidden_adjoint_contract,
+            program,
+            roles,
+            fused_map=plan.pointwise_adjoint,
         ),
-        output_count="kRows * kFeatures",
-        coordinates="const int row = linear / kFeatures;\n  const int feature = linear - row * kFeatures;",
-        reduction_count="kReduction",
-        product=(
-            "__bfloat162float(output_cotangent[row * kReduction + reduction])",
-            "__bfloat162float(second_weight[feature * kReduction + reduction])",
+        _render_reverse_contract_kernel(
+            "ShuttleContractMapSecondWeightAdjointKernel",
+            plan.second_weight_adjoint_contract,
+            program,
+            roles,
         ),
-        store=(
-            "const float z = __bfloat162float(preactivation[linear]);",
-            "preactivation_adjoint[linear] = __float2bfloat16_rn(generated_phi_vjp(z, accumulator));",
+        _render_reverse_contract_kernel(
+            "ShuttleContractMapInputAdjointKernel",
+            plan.input_adjoint_contract,
+            program,
+            roles,
         ),
-        policy=policy,
+        _render_reverse_contract_kernel(
+            "ShuttleContractMapFirstWeightAdjointKernel",
+            plan.first_weight_adjoint_contract,
+            program,
+            roles,
+        ),
     )
 
 
-def _input_adjoint_kernel(policy: ContractMapNumericalPolicy) -> str:
-    return _contract_kernel(
-        name="ShuttleContractMapInputAdjointKernel",
-        parameters=(
-            "const __nv_bfloat16* preactivation_adjoint",
-            "const __nv_bfloat16* first_weight",
-            "__nv_bfloat16* input_adjoint",
-        ),
-        output_count="kRows * kReduction",
-        coordinates="const int row = linear / kReduction;\n  const int column = linear - row * kReduction;",
-        reduction_count="kFeatures",
-        product=(
-            "__bfloat162float(preactivation_adjoint[row * kFeatures + reduction])",
-            "__bfloat162float(first_weight[column * kFeatures + reduction])",
-        ),
-        store=("input_adjoint[linear] = __float2bfloat16_rn(accumulator);",),
-        policy=policy,
+def _render_reverse_contract_kernel(
+    name: str,
+    operation: ContractPrimitive,
+    program: ContractMapBackendProgram,
+    roles: dict[ProgramValue, str],
+    *,
+    fused_map: MapPrimitive | None = None,
+) -> _RenderedReverseKernel:
+    if len(operation.inputs) != 2 or len(operation.reduction_axes) != 1 or len(operation.output.axes) != 2:
+        raise ValueError("reverse Contract lowering requires two operands, one reduction axis, and rank-two output")
+    output = fused_map.output if fused_map is not None else operation.output
+    if output.axes != operation.output.axes:
+        raise ValueError("hidden-adjoint Map fusion requires identical Contract and Map output axes")
+    external_map_inputs = (
+        () if fused_map is None else tuple(value for value in fused_map.inputs if value != operation.output)
+    )
+    input_values = tuple(dict.fromkeys((*external_map_inputs, *operation.inputs)))
+    output_role = _required_role(roles, output)
+    parameters = (
+        *(f"const __nv_bfloat16* {_required_role(roles, value)}" for value in input_values),
+        f"__nv_bfloat16* {output_role}",
+    )
+    reduction_axis = operation.reduction_axes[0]
+    indices = tuple(_flattened_index(value, output.axes, reduction_axis, program) for value in operation.inputs)
+    product = tuple(
+        f"__bfloat162float({_required_role(roles, value)}[{index}])"
+        for value, index in zip(operation.inputs, indices, strict=True)
+    )
+    if fused_map is None:
+        store = (f"{output_role}[linear] = __float2bfloat16_rn(accumulator);",)
+    else:
+        if external_map_inputs != (program.preactivation,):
+            raise ValueError("hidden-adjoint fusion requires preactivation as the only external Map input")
+        preactivation_role = _required_role(roles, external_map_inputs[0])
+        store = (
+            f"const float z = __bfloat162float({preactivation_role}[linear]);",
+            f"{output_role}[linear] = __float2bfloat16_rn(generated_phi_vjp(z, accumulator));",
+        )
+    source = _contract_kernel(
+        name=name,
+        parameters=parameters,
+        output_count=_axes_product_expression(output.axes, program),
+        coordinates=_output_coordinates(output.axes, program),
+        reduction_count=_axis_extent_expression(reduction_axis, program),
+        product=(product[0], product[1]),
+        store=store,
+        policy=program.numerical_policy,
+    )
+    return _RenderedReverseKernel(
+        name=name,
+        source=source,
+        launch_arguments=(*(_required_role(roles, value) for value in input_values), output_role),
+        output_axes=output.axes,
     )
 
 
-def _first_weight_adjoint_kernel(policy: ContractMapNumericalPolicy) -> str:
-    return _contract_kernel(
-        name="ShuttleContractMapFirstWeightAdjointKernel",
-        parameters=(
-            "const __nv_bfloat16* activation",
-            "const __nv_bfloat16* preactivation_adjoint",
-            "__nv_bfloat16* first_weight_adjoint",
-        ),
-        output_count="kReduction * kFeatures",
-        coordinates=(
-            "const int input_feature = linear / kFeatures;\n  const int feature = linear - input_feature * kFeatures;"
-        ),
-        reduction_count="kRows",
-        product=(
-            "__bfloat162float(activation[reduction * kReduction + input_feature])",
-            "__bfloat162float(preactivation_adjoint[reduction * kFeatures + feature])",
-        ),
-        store=("first_weight_adjoint[linear] = __float2bfloat16_rn(accumulator);",),
-        policy=policy,
-    )
+def _reverse_value_roles(
+    program: ContractMapBackendProgram,
+    plan: ContractMapReverseLoweringPlan,
+) -> dict[ProgramValue, str]:
+    return {
+        program.activation: "activation",
+        program.first_weight: "first_weight",
+        program.second_weight: "second_weight",
+        program.preactivation: "preactivation",
+        program.hidden: "hidden",
+        program.output_cotangent: "output_cotangent",
+        plan.hidden_adjoint_contract.output: "hidden_adjoint",
+        plan.pointwise_adjoint.output: "preactivation_adjoint",
+        plan.input_adjoint_contract.output: "input_adjoint",
+        plan.first_weight_adjoint_contract.output: "first_weight_adjoint",
+        plan.second_weight_adjoint_contract.output: "second_weight_adjoint",
+    }
 
 
-def _second_weight_adjoint_kernel(policy: ContractMapNumericalPolicy) -> str:
-    return _contract_kernel(
-        name="ShuttleContractMapSecondWeightAdjointKernel",
-        parameters=(
-            "const __nv_bfloat16* hidden",
-            "const __nv_bfloat16* output_cotangent",
-            "__nv_bfloat16* second_weight_adjoint",
-        ),
-        output_count="kFeatures * kReduction",
-        coordinates=(
-            "const int feature = linear / kReduction;\n  const int output_feature = linear - feature * kReduction;"
-        ),
-        reduction_count="kRows",
-        product=(
-            "__bfloat162float(hidden[reduction * kFeatures + feature])",
-            "__bfloat162float(output_cotangent[reduction * kReduction + output_feature])",
-        ),
-        store=("second_weight_adjoint[linear] = __float2bfloat16_rn(accumulator);",),
-        policy=policy,
-    )
+def _required_role(roles: dict[ProgramValue, str], value: ProgramValue) -> str:
+    try:
+        return roles[value]
+    except KeyError as error:
+        raise ValueError(f"reverse lowering has no physical role for value {value.name!r}") from error
 
 
 def _contract_kernel(
@@ -577,10 +660,263 @@ def _contract_kernel(
 }}"""
 
 
+def contract_map_backend_size_audit(
+    program: ContractMapBackendProgram,
+    *,
+    threads: int = 256,
+) -> ContractMapBackendSizeAudit:
+    """Fail closed when the current flattened int32 BF16 ABI cannot address a buffer or launch."""
+    reverse_plan = contract_map_reverse_lowering_plan(program)
+    return _validate_contract_map_backend_sizes(
+        program,
+        threads=threads,
+        physical_abi=contract_map_backend_physical_abi(program),
+        reverse_kernels=_render_reverse_kernels(program, reverse_plan),
+    )
+
+
+def _validate_contract_map_backend_sizes(
+    program: ContractMapBackendProgram,
+    *,
+    threads: int,
+    physical_abi: ContractMapBackendPhysicalAbi,
+    reverse_kernels: tuple[_RenderedReverseKernel, ...],
+) -> ContractMapBackendSizeAudit:
+    if threads not in {128, 256, 512}:
+        raise ValueError("Contract/Map backends require 128, 256, or 512 threads")
+    buffers: list[ContractMapBufferSize] = []
+    for boundary, group in (
+        ("forward_input", physical_abi.forward_inputs),
+        ("forward_output", physical_abi.forward_outputs),
+        ("reverse_input", physical_abi.reverse_inputs),
+        ("reverse_output", physical_abi.reverse_outputs),
+        ("reverse_scratch_output", physical_abi.reverse_scratch_outputs),
+    ):
+        for buffer in group:
+            elements = _checked_int32_product(buffer.shape, context=f"{boundary}.{buffer.role} flattened elements")
+            if elements > CONTRACT_MAP_INT32_MAX // CONTRACT_MAP_BF16_BYTES:
+                raise ValueError(
+                    f"{boundary}.{buffer.role} byte size exceeds the signed-int32 ABI bound {CONTRACT_MAP_INT32_MAX}"
+                )
+            buffers.append(
+                ContractMapBufferSize(
+                    boundary=boundary,
+                    role=buffer.role,
+                    elements=elements,
+                    bytes=elements * CONTRACT_MAP_BF16_BYTES,
+                )
+            )
+    launch_axes = (
+        ("ShuttleContractMapFirstForwardKernel", program.preactivation.axes),
+        ("ShuttleContractMapSecondForwardKernel", program.output.axes),
+        *((kernel.name, kernel.output_axes) for kernel in reverse_kernels),
+    )
+    work_items_per_block = (
+        threads if program.numerical_policy is ContractMapNumericalPolicy.SOURCE_ORDERED else threads // 32
+    )
+    launches: list[ContractMapLaunchSize] = []
+    for kernel_name, axes in launch_axes:
+        work_items = _checked_int32_product(
+            tuple(axis.extent for axis in axes),
+            context=f"{kernel_name} flattened work items",
+        )
+        increment = work_items_per_block - 1
+        if work_items > CONTRACT_MAP_INT32_MAX - increment:
+            raise ValueError(f"{kernel_name} grid numerator exceeds the signed-int32 ABI bound")
+        grid_numerator = work_items + increment
+        block_count = grid_numerator // work_items_per_block
+        if block_count > CONTRACT_MAP_GRID_X_MAX:
+            raise ValueError(f"{kernel_name} block count exceeds the device grid.x bound")
+        launches.append(
+            ContractMapLaunchSize(
+                kernel_name=kernel_name,
+                work_items=work_items,
+                work_items_per_block=work_items_per_block,
+                grid_numerator=grid_numerator,
+                block_count=block_count,
+            )
+        )
+    return ContractMapBackendSizeAudit(buffers=tuple(buffers), launches=tuple(launches))
+
+
+def _checked_int32_product(dimensions: tuple[int, ...], *, context: str) -> int:
+    product = 1
+    for dimension in dimensions:
+        if type(dimension) is not int or dimension <= 0:
+            raise ValueError(f"{context} requires positive integer dimensions")
+        if product > CONTRACT_MAP_INT32_MAX // dimension:
+            raise ValueError(f"{context} exceeds the signed-int32 ABI bound {CONTRACT_MAP_INT32_MAX}")
+        product *= dimension
+    return product
+
+
+def _render_kernel_launch(
+    kernel: _RenderedReverseKernel,
+    program: ContractMapBackendProgram,
+    *,
+    policy: ContractMapNumericalPolicy,
+) -> str:
+    output_count = _axes_product_expression(kernel.output_axes, program)
+    grid = _grid_expression(output_count, policy)
+    arguments = ", ".join(kernel.launch_arguments)
+    return f"  {kernel.name}<<<{grid}, kThreads, 0, stream>>>(\n      {arguments});"
+
+
+def _output_coordinates(axes: tuple[TensorAxis, ...], program: ContractMapBackendProgram) -> str:
+    if len(axes) != 2:
+        raise ValueError("Contract CUDA lowering requires rank-two output axes")
+    inner_extent = _axis_extent_expression(axes[1], program)
+    return (
+        f"const int coordinate_0 = linear / {inner_extent};\n"
+        f"  const int coordinate_1 = linear - coordinate_0 * {inner_extent};"
+    )
+
+
+def _flattened_index(
+    value: ProgramValue,
+    output_axes: tuple[TensorAxis, ...],
+    reduction_axis: TensorAxis,
+    program: ContractMapBackendProgram,
+) -> str:
+    if len(value.axes) != 2 or len(output_axes) != 2:
+        raise ValueError("Contract CUDA lowering requires rank-two values")
+    indices: list[str] = []
+    for axis in value.axes:
+        if axis == reduction_axis:
+            indices.append("reduction")
+            continue
+        try:
+            indices.append(f"coordinate_{output_axes.index(axis)}")
+        except ValueError as error:
+            raise ValueError(f"Contract operand {value.name!r} has an axis outside output and reduction axes") from error
+    inner_extent = _axis_extent_expression(value.axes[1], program)
+    return f"{indices[0]} * {inner_extent} + {indices[1]}"
+
+
+def _axes_product_expression(axes: tuple[TensorAxis, ...], program: ContractMapBackendProgram) -> str:
+    if len(axes) != 2:
+        raise ValueError("Contract CUDA lowering requires rank-two output axes")
+    return " * ".join(_axis_extent_expression(axis, program) for axis in axes)
+
+
+def _axis_extent_expression(axis: TensorAxis, program: ContractMapBackendProgram) -> str:
+    row_axis, reduction_axis = program.activation.axes
+    feature_axis = program.first_weight.axes[1]
+    if axis == row_axis:
+        return "kRows"
+    if axis == reduction_axis:
+        return "kReduction"
+    if axis == feature_axis:
+        return "kFeatures"
+    raise ValueError("Contract CUDA lowering encountered an unanchored logical axis")
+
+
 def _grid_expression(output_count: str, policy: ContractMapNumericalPolicy) -> str:
     if policy is ContractMapNumericalPolicy.SOURCE_ORDERED:
         return f"({output_count} + kThreads - 1) / kThreads"
     return f"({output_count} + kWarpsPerBlock - 1) / kWarpsPerBlock"
+
+
+def _physical_codegen_digest(
+    program: ContractMapBackendProgram,
+    reverse_plan: ContractMapReverseLoweringPlan,
+    *,
+    physical_abi: ContractMapBackendPhysicalAbi,
+    kernel_names: tuple[str, ...],
+    threads: int,
+    physical_candidate: DirectLaunchFfiPhysicalCandidate,
+    target_prefix: str,
+) -> str:
+    roles = _reverse_value_roles(program, reverse_plan)
+    axis_roles = {
+        program.activation.axes[0]: "row",
+        program.activation.axes[1]: "reduction",
+        program.first_weight.axes[1]: "feature",
+    }
+
+    def axes(value: ProgramValue) -> tuple[str, ...]:
+        try:
+            return tuple(axis_roles[axis] for axis in value.axes)
+        except KeyError as error:
+            raise ValueError(f"physical digest encountered an unanchored axis on {value.name!r}") from error
+
+    operations: list[dict[str, object]] = []
+    for operation in reverse_plan.operations:
+        if isinstance(operation, ContractPrimitive):
+            operations.append(
+                {
+                    "kind": "contract",
+                    "inputs": tuple(_required_role(roles, value) for value in operation.inputs),
+                    "output": _required_role(roles, operation.output),
+                    "output_axes": axes(operation.output),
+                    "reduction_axes": tuple(axis_roles[axis] for axis in operation.reduction_axes),
+                    "accumulation_dtype": operation.accumulation_dtype.value,
+                }
+            )
+            continue
+        operations.append(
+            {
+                "kind": "map",
+                "inputs": tuple(_required_role(roles, value) for value in operation.inputs),
+                "output": _required_role(roles, operation.output),
+                "output_axes": axes(operation.output),
+                "expression": _expression_digest_record(operation.expression, roles),
+            }
+        )
+    record = {
+        "semantic_digest": program.semantic_fingerprint,
+        "policy": program.numerical_policy.value,
+        "threads": threads,
+        "target_prefix": target_prefix,
+        "candidate": physical_candidate.value,
+        "command_buffer_trait": physical_candidate.command_buffer_compatible,
+        "abi": {
+            "forward_inputs": _buffer_digest_records(physical_abi.forward_inputs),
+            "forward_outputs": _buffer_digest_records(physical_abi.forward_outputs),
+            "reverse_inputs": _buffer_digest_records(physical_abi.reverse_inputs),
+            "reverse_outputs": _buffer_digest_records(physical_abi.reverse_outputs),
+            "reverse_scratch_outputs": _buffer_digest_records(physical_abi.reverse_scratch_outputs),
+        },
+        "topology": {
+            "family": "multi_cta_global_intermediate_contract_map",
+            "kernel_names": kernel_names,
+            "forward_launch_count": 2,
+            "reverse_launch_count": 4,
+            "source_map_expression": _expression_digest_record(program.scalar_expression, roles),
+            "reverse_operations": operations,
+            "fusion": ("hidden_adjoint_contract", "pointwise_adjoint"),
+        },
+    }
+    return hashlib.sha256(json.dumps(record, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _buffer_digest_records(buffers: tuple[ContractMapBackendBuffer, ...]) -> tuple[dict[str, object], ...]:
+    return tuple(
+        {
+            "role": buffer.role,
+            "shape": buffer.shape,
+            "minor_to_major": buffer.minor_to_major,
+        }
+        for buffer in buffers
+    )
+
+
+def _expression_digest_record(
+    expression: ScalarExpression,
+    roles: dict[ProgramValue, str],
+) -> dict[str, object]:
+    names = {value.name: role for value, role in roles.items()}
+    record: dict[str, object] = {"kind": expression.kind.value}
+    if expression.input_name is not None:
+        try:
+            record["input"] = names[expression.input_name]
+        except KeyError as error:
+            raise ValueError(f"physical digest has no role for scalar input {expression.input_name!r}") from error
+    if expression.constant is not None:
+        record["constant"] = expression.constant
+    if expression.operands:
+        record["operands"] = tuple(_expression_digest_record(operand, roles) for operand in expression.operands)
+    return record
 
 
 def _rename_expression(expression: ScalarExpression, names: dict[str, str]) -> ScalarExpression:
