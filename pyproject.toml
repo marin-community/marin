@@ -257,6 +257,7 @@ project-includes = [
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "lib/finestore/src/**/*.py",
+    "infra/evaldash/src/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
 ]
@@ -277,6 +278,9 @@ search-path = [
     # benchmark_controller.py imports controller test fixtures from lib/iris/tests
     # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
     "lib/iris",
+    # The evaldash server's modules are flat top-level imports of each other; the image copies them
+    # all to /app, so this directory is what stands in for that root.
+    "infra/evaldash/src",
 ]
 disable-search-path-heuristics = true
 
@@ -299,6 +303,13 @@ tensor-shapes = true
 # and compute deps a local venv commonly skips (torch, sympy). List both `pkg` and
 # `pkg.*`.
 ignore-missing-imports = [
+    # The evaldash server's own deps: its image installs them, no lint profile does.
+    "anthropic",
+    "anthropic.*",
+    "google.cloud.compute_v1",
+    "google.cloud.compute_v1.*",
+    "google.cloud.sql.connector",
+    "google.cloud.sql.connector.*",
     # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
     "google.cloud.secretmanager",
     "google.cloud.secretmanager.*",

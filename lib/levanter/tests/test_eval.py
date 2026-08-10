@@ -9,6 +9,7 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
 from jax._src import config as jax_config
@@ -38,6 +39,49 @@ from levanter.utils.tree_utils import inference_mode
 
 from test_lm_model_loss import ToyLmConfig, ToyLmHeadModel
 from test_utils import use_test_mesh
+
+
+@pytest.mark.asyncio
+async def test_tagged_evaluator_shuffle_reorders_combined_dataset_and_preserves_tags():
+    EvalBatch = Axis("batch", max(1, len(jax.devices())))
+    first_dataset = ListAsyncDataset([jnp.array([i], dtype=jnp.int32) for i in range(8)])
+    second_dataset = ListAsyncDataset([jnp.array([100 + i], dtype=jnp.int32) for i in range(8)])
+    tagged_eval_sets = [(first_dataset, ["first"]), (second_dataset, ["second"])]
+
+    def loss_fn(_model, batch) -> LossFnOutput:
+        weights = jnp.ones_like(batch, dtype=jnp.float32)
+        return batch.astype(jnp.float32), weights, batch
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        ordered_evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=tagged_eval_sets,
+            loss_fn=loss_fn,
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+            shuffle=False,
+        )
+        shuffled_evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=tagged_eval_sets,
+            loss_fn=loss_fn,
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+            shuffle=True,
+        )
+
+    indices = list(range(16))
+    ordered = await ordered_evaluator.loader.data_store.get_batch(indices)
+    shuffled = await shuffled_evaluator.loader.data_store.get_batch(indices)
+    ordered_examples = [int(example.item()) for example, _ in ordered]
+    shuffled_examples = [int(example.item()) for example, _ in shuffled]
+
+    assert ordered_examples == list(range(8)) + list(range(100, 108))
+    assert shuffled_examples != ordered_examples
+    assert sorted(shuffled_examples) == sorted(ordered_examples)
+    for example, tags in shuffled:
+        expected_tags = [1, 0] if example.item() < 100 else [0, 1]
+        assert tags.tolist() == expected_tags
 
 
 def test_tagged_evaluator_accepts_grug_lm_examples():

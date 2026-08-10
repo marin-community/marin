@@ -6,18 +6,22 @@
 import gzip
 import hashlib
 import html
+import json
 import logging
 import re
 import shutil
 import tempfile
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import parse_qs, urlencode
 
+from fsspec.callbacks import Callback
 from rigging.filesystem import StoragePath
 
 from infra.xprof.config import HEALTH_PATH
@@ -35,6 +39,79 @@ WsgiApplication = Callable[[dict, StartResponse], Iterable[bytes]]
 
 class ProfileSourceError(ValueError):
     """Raised when a profile URI is not a supported XProf TTL root."""
+
+
+@dataclass(frozen=True)
+class ProfileStageProgress:
+    """Current progress for one profile transfer."""
+
+    downloaded_bytes: int
+    files_completed: int
+    total_files: int | None
+    elapsed_seconds: float
+    cache_hit: bool
+
+    @property
+    def throughput_bytes_per_second(self) -> float:
+        if self.elapsed_seconds == 0:
+            return 0
+        return self.downloaded_bytes / self.elapsed_seconds
+
+
+class ProfileDownloadCallback(Callback):
+    """Collect byte and file progress from an fsspec recursive transfer."""
+
+    def __init__(self, now: Callable[[], float] = time.monotonic):
+        super().__init__()
+        self._now = now
+        self._started_at = now()
+        self._downloaded_bytes = 0
+        self._files_completed = 0
+        self._total_files: int | None = None
+        self._cache_hit = False
+        self._lock = threading.Lock()
+
+    def set_size(self, size: int) -> None:
+        with self._lock:
+            self._total_files = size
+
+    def branched(self, path_1: str, path_2: str, **kwargs) -> Callback:
+        del path_1, path_2, kwargs
+        return _FileDownloadCallback(self)
+
+    def add_bytes(self, count: int) -> None:
+        with self._lock:
+            self._downloaded_bytes += count
+
+    def complete_file(self) -> None:
+        with self._lock:
+            self._files_completed += 1
+
+    def mark_cache_hit(self) -> None:
+        with self._lock:
+            self._cache_hit = True
+
+    def snapshot(self) -> ProfileStageProgress:
+        with self._lock:
+            return ProfileStageProgress(
+                downloaded_bytes=self._downloaded_bytes,
+                files_completed=self._files_completed,
+                total_files=self._total_files,
+                elapsed_seconds=self._now() - self._started_at,
+                cache_hit=self._cache_hit,
+            )
+
+
+class _FileDownloadCallback(Callback):
+    def __init__(self, parent: ProfileDownloadCallback):
+        super().__init__()
+        self._parent = parent
+
+    def relative_update(self, inc: int = 1) -> None:
+        self._parent.add_bytes(inc)
+
+    def close(self) -> None:
+        self._parent.complete_file()
 
 
 class ProfileCache:
@@ -58,19 +135,21 @@ class ProfileCache:
             raise ProfileSourceError("profile URI must contain ttl=Nd/xprof/<run>")
         return str(source)
 
-    def stage(self, uri: str) -> Path:
+    def stage(self, uri: str, progress: ProfileDownloadCallback | None = None) -> Path:
         """Return the cached XProf run path."""
+        progress = progress or ProfileDownloadCallback()
         source_uri = self.validate(uri)
         cache_key = hashlib.sha256(source_uri.encode()).hexdigest()[:24]
         target = self._cache_dir / cache_key
         with self._lock_for(cache_key):
             if self._is_ready(target, source_uri):
+                progress.mark_cache_hit()
                 return self._xprof_run_path(target)
 
             temporary = Path(tempfile.mkdtemp(prefix=f".{cache_key}-", dir=self._cache_dir))
             downloaded = temporary / "profile"
             try:
-                StoragePath(source_uri).download_to(str(downloaded), recursive=True)
+                StoragePath(source_uri).download_to(str(downloaded), recursive=True, callback=progress)
                 run_path = self._xprof_run_path(downloaded)
                 if not any(run_path.glob("*/*.xplane.pb")) and not any(run_path.glob("*/*.xplane.riegeli")):
                     raise FileNotFoundError(f"no XPlane files found under {source_uri}")
@@ -100,7 +179,7 @@ class ProfileStager(Protocol):
 
     def validate(self, uri: str) -> str: ...
 
-    def stage(self, uri: str) -> Path: ...
+    def stage(self, uri: str, progress: ProfileDownloadCallback) -> Path: ...
 
 
 class ProfileStageManager:
@@ -110,6 +189,7 @@ class ProfileStageManager:
         self._stager = stager
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="xprof-stage")
         self._futures: OrderedDict[str, Future[Path]] = OrderedDict()
+        self._progress: dict[str, ProfileDownloadCallback] = {}
         self._max_retained = max_retained
         self._lock = threading.Lock()
 
@@ -121,11 +201,46 @@ class ProfileStageManager:
         with self._lock:
             future = self._futures.get(uri)
             if future is None:
-                future = self._executor.submit(self._stager.stage, uri)
+                progress = ProfileDownloadCallback()
+                future = self._executor.submit(self._stage, uri, progress)
                 self._futures[uri] = future
+                self._progress[uri] = progress
             self._futures.move_to_end(uri)
             self._discard_old_results()
             return future
+
+    def _stage(self, uri: str, progress: ProfileDownloadCallback) -> Path:
+        try:
+            path = self._stager.stage(uri, progress)
+        except Exception:
+            snapshot = progress.snapshot()
+            logger.exception(
+                "Profile download failed uri=%s bytes=%d files=%d elapsed=%.1fs throughput=%.1fMiB/s",
+                uri,
+                snapshot.downloaded_bytes,
+                snapshot.files_completed,
+                snapshot.elapsed_seconds,
+                snapshot.throughput_bytes_per_second / (1024 * 1024),
+            )
+            raise
+        snapshot = progress.snapshot()
+        if snapshot.cache_hit:
+            logger.info("Profile cache hit uri=%s elapsed=%.1fs", uri, snapshot.elapsed_seconds)
+            return path
+        logger.info(
+            "Profile download complete uri=%s bytes=%d files=%d elapsed=%.1fs throughput=%.1fMiB/s",
+            uri,
+            snapshot.downloaded_bytes,
+            snapshot.files_completed,
+            snapshot.elapsed_seconds,
+            snapshot.throughput_bytes_per_second / (1024 * 1024),
+        )
+        return path
+
+    def progress(self, uri: str) -> ProfileStageProgress | None:
+        with self._lock:
+            progress = self._progress.get(uri)
+            return progress.snapshot() if progress is not None else None
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
@@ -134,6 +249,7 @@ class ProfileStageManager:
         with self._lock:
             if self._futures.get(uri) is future:
                 self._futures.pop(uri)
+                self._progress.pop(uri, None)
 
     def _discard_old_results(self) -> None:
         while len(self._futures) > self._max_retained:
@@ -141,6 +257,7 @@ class ProfileStageManager:
             if not oldest.done():
                 return
             self._futures.pop(oldest_uri)
+            self._progress.pop(oldest_uri, None)
 
 
 class XprofGateway:
@@ -157,6 +274,8 @@ class XprofGateway:
             return _response(start_response, "200 OK", b"ok\n", "text/plain; charset=utf-8")
         if path == "/open":
             return self._open(environ, start_response)
+        if path == "/progress":
+            return self._progress(environ, start_response)
         return self._serve_xprof(path, environ, start_response)
 
     def shutdown(self) -> None:
@@ -189,6 +308,40 @@ class XprofGateway:
         location = f"./?{urlencode({'run_path': str(local_path)})}"
         start_response("303 See Other", [("Location", location), ("Content-Length", "0")])
         return [b""]
+
+    def _progress(self, environ: dict, start_response: StartResponse) -> Iterable[bytes]:
+        uri = parse_qs(environ.get("QUERY_STRING", "")).get("uri", [""])[0]
+        try:
+            normalized_uri = self._profiles.validate(uri)
+        except ProfileSourceError as exc:
+            return _json_response(start_response, "403 Forbidden", {"error": str(exc)})
+
+        future = self._profiles.future(normalized_uri)
+        progress = self._profiles.progress(normalized_uri)
+        if future.done():
+            if future.exception() is not None:
+                self._profiles.discard(normalized_uri, future)
+                return _json_response(start_response, "200 OK", {"state": "failed"})
+            local_path = future.result()
+            return _json_response(
+                start_response,
+                "200 OK",
+                {"state": "ready", "location": f"./?{urlencode({'run_path': str(local_path)})}"},
+            )
+        if progress is None:
+            return _json_response(start_response, "200 OK", {"state": "starting"})
+        return _json_response(
+            start_response,
+            "200 OK",
+            {
+                "state": "downloading",
+                "downloaded_bytes": progress.downloaded_bytes,
+                "files_completed": progress.files_completed,
+                "total_files": progress.total_files,
+                "elapsed_seconds": round(progress.elapsed_seconds, 1),
+                "throughput_bytes_per_second": round(progress.throughput_bytes_per_second),
+            },
+        )
 
     def _serve_xprof(self, path: str, environ: dict, start_response: StartResponse) -> Iterable[bytes]:
         if path != "/" and not path.endswith(_REWRITE_SUFFIXES):
@@ -232,10 +385,52 @@ def _response(
     return [body]
 
 
+def _json_response(start_response: StartResponse, status: str, value: dict) -> list[bytes]:
+    return _response(start_response, status, json.dumps(value).encode(), "application/json")
+
+
 def _loading_page(uri: str) -> bytes:
     safe_uri = html.escape(uri)
+    progress_url = f"./progress?{urlencode({'uri': uri})}"
     return f"""<!doctype html>
-<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="2">
-<title>Loading XProf profile</title></head>
-<body><p>Staging <code>{safe_uri}</code> for XProf…</p></body></html>
+<html><head><meta charset="utf-8"><title>Loading XProf profile</title>
+<style>
+body {{ font: 16px system-ui; margin: 4rem auto; max-width: 48rem; padding: 0 1rem; }}
+.bar {{ background: #ddd; border-radius: 4px; height: 8px; margin: 2rem 0; overflow: hidden; }}
+.bar::after {{
+  animation: move 1.2s infinite linear; background: #1976d2; content: "";
+  display: block; height: 100%; width: 35%;
+}}
+@keyframes move {{ from {{ margin-left: -35%; }} to {{ margin-left: 100%; }} }}
+code {{ overflow-wrap: anywhere; }}
+</style></head>
+<body><h1>Loading XProf profile</h1><p><code>{safe_uri}</code></p>
+<div class="bar"></div><p id="status">Starting download…</p>
+<script>
+const status = document.getElementById('status');
+const units = value => {{
+  if (value < 1024 * 1024) return `${{(value / 1024).toFixed(1)}} KiB`;
+  return `${{(value / 1024 / 1024).toFixed(1)}} MiB`;
+}};
+async function update() {{
+  try {{
+    const response = await fetch({json.dumps(progress_url)}, {{cache: 'no-store'}});
+    const progress = await response.json();
+    if (progress.state === 'ready') {{ window.location.replace(progress.location); return; }}
+    if (progress.state === 'failed') {{
+      status.textContent = 'Download failed. Reload this page to try again.';
+      return;
+    }}
+    if (progress.state === 'downloading') {{
+      const files = progress.total_files === null
+        ? `${{progress.files_completed}} files`
+        : `${{progress.files_completed}} of ${{progress.total_files}} files`;
+      status.textContent = `${{units(progress.downloaded_bytes)}} downloaded · ${{files}} · ` +
+        `${{units(progress.throughput_bytes_per_second)}}/s · ${{progress.elapsed_seconds.toFixed(1)}} seconds`;
+    }}
+  }} catch (error) {{ status.textContent = 'Waiting for the XProf service…'; }}
+  window.setTimeout(update, 1000);
+}}
+update();
+</script></body></html>
 """.encode()
