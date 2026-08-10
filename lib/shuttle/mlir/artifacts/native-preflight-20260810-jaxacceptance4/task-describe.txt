@@ -1,0 +1,41 @@
+I20260810 16:13:14 8418467456 iris.cluster.config Loading config from /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml
+I20260810 16:13:14 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260810 16:13:15 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10003 -> iris-controller-svc:10000
+Task: /dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance4/0
+State: failed  exit=1
+Resources: 24 cpu, 96 GiB, 250 GiB disk
+Error: 96fb92427ae41e4649b934ca495991b7852b855  /app/logs/acceptance-fixture-oracle-proof.log
+d32ffeff78bab20f921a5e60b5509f693eb9317e33decdf7d4dbd4b75417b9d5  /app/logs/applied-jax.patch
+d2f1ce5b6d8bcc8789e373602765ddedcae7d7aaef95a2bb0e43bd29cd310d61  /app/logs/applied-xla.patch
+953f1235a590546a4a9a83d757c075ecf7c7d8dbc30221fd086959a20d8c7a69  /app/logs/bazel-binary-sha256.txt
+5b93f69f6ec669a9742e36b4a79fa6c4be8d61fc685f42cea05d23dc17cfa003  /app/logs/bazel-build-ShuttleDialect.log
+ed96fe5ae615cb23eb41dcefea5ebfd574193e85c08b91edc2b907388ae58ba7  /app/logs/bazel-build-ShuttleObserverTestBridge.log
+400ddc08743d96b3c6889b2180b7e06398c15d675202ea3872372e8000859b59  /app/logs/bazel-build-ShuttlePasses.log
+5216d29bde5ea11689592a9618363abaf4eda6f68f22db3962d7a8ade66dbcb6  /app/logs/bazel-build-ShuttleXlaRegistration.log
+d90820cd07a7e21785e34016709bb75f9b511ffa5cfdf481f2960833465f8077  /app/logs/bazel-build-ShuttleXlaRegistryAdapter.log
+f097aeb7cf827e56071893c8088ff64e9f07b53ae28786b5c290ababd554b0e8  /app/logs/bazel-build-shuttle-opt.log
+b1f7b0e8894b46c68e6ef8c4865a95618c8e15a328197da2b0a22487949336d9  /app/logs/bazel-build-shuttle_ops_inc_gen.log
+35acdd7f8bff18f6531b158771358450e81df8a694066e77b8f1cef0b43cf4de  /app/logs/bundled-source-sha256.txt
+725a7772f41e3640a8111c5669efe18f9c5ec8fb1cb37495ff7515ca2f64887e  /app/logs/jax-acceptance-cquery-proof.log
+e8b605a0fcf06cd0f3e5eae394455b4f77d5667150cd859957ee7194548a9851  /app/logs/jax-patch-sha256.txt
+d43cb1899f235d6490c5ff7baeadae1a62931dab94f33fb6ee45dc70572edc6c  /app/logs/jax-patch-stat.txt
+1e0b22f66ead7b9fc35b7787b3693cf1d8c90e353e510a87a90cc76ddd9c561d  /app/logs/lit-label-proof.txt
+01afad027d227d1f5b459e2f83334498308e7691b2a4ced31b552ab856289058  /app/logs/shuttle-opt-path.txt
+a9a35920058105cd494241f046b600732a7f6fc48205390da59f9b6facbe0c5b  /app/logs/six-fixture-default-audit.log
+858436d681258b3c97c6bccc4530fbf82439ddbc5c8c555c3239873332af2768  /app/logs/xla-patch-sha256.txt
+835786bd7f7cc0fb1188b402c9e60f8f5bc4ce274f3e29dec70211a9120d196a  /app/logs/xla-patch-stat.txt
+
+
+Attempts:
+  ATTEMPT  UID           STATE      EXIT  WORKER    REASON
+        0  dcdd7893e821  failed        1  -         96fb92427ae41e4649b934ca495991b7852b855  /app/logs/acceptan…
+
+Root cause:
+  Traceback (most recent call last):
+    File "/app/lib/shuttle/mlir/test/Inputs/regenerate-jax-fixtures.py", line 194, in <module>
+    File "/app/lib/shuttle/mlir/test/Inputs/regenerate-jax-fixtures.py", line 181, in main
+    File "/app/lib/shuttle/mlir/test/Inputs/regenerate-jax-fixtures.py", line 138, in audited_fixture
+    File "/app/lib/shuttle/mlir/test/Inputs/regenerate-jax-fixtures.py", line 109, in normalized_fingerprint
+    File "/usr/local/lib/python3.12/subprocess.py", line 571, in run
+      raise CalledProcessError(retcode, process.args,
+  subprocess.CalledProcessError: Command '['/app/sources/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/shuttle-opt', '--shuttle-test-report-normalized-fingerprint', '/tmp/shuttle-fixture-audit-2fwg2mhu/fixture.mlir']' returned non-zero exit status 1.

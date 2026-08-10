@@ -1,0 +1,24 @@
+First failed gate: default no-write audit of all six generated fixtures
+Canonical Marin source: 2fadce00a8a94512f613fd0ceb24d51525698c27
+Native build gates: PASS_7_OF_7
+Later native tests: NOT_RUN
+MLIR lit tests: NOT_RUN
+Patched XLA tests: NOT_RUN
+JAX wheel: NOT_RUN
+Ordinary-JAX acceptance: NOT_RUN
+
+The generator invoked:
+
+/app/sources/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/shuttle-opt --shuttle-test-report-normalized-fingerprint /tmp/shuttle-fixture-audit-2fwg2mhu/fixture.mlir
+
+The subprocess returned exit 1. The generator raised:
+
+subprocess.CalledProcessError: Command '['/app/sources/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/shuttle-opt', '--shuttle-test-report-normalized-fingerprint', '/tmp/shuttle-fixture-audit-2fwg2mhu/fixture.mlir']' returned non-zero exit status 1.
+
+Post-terminal source inspection found that the test-only fingerprint pass is
+registered by ShuttleTestPasses and linked into shuttle-test-opt. Production
+shuttle-opt does not register the flag. The runner selected the wrong built
+tool; this failure does not evaluate any fixture fingerprint.
+
+The submitted generator captured stderr without emitting it, so no tool-level
+diagnostic is present in the retained log.
