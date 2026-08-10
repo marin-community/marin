@@ -1,0 +1,45 @@
+I20260810 02:04:43 8418467456 iris.cluster.config Loading config from /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml
+I20260810 02:04:43 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260810 02:04:44 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10000 -> iris-controller-svc:10000
+Job: /dlwh/shuttle-native-mlir-preflight-20260810-fixed (/dlwh/shuttle-native-mlir-preflight-20260810-fixed)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: .inc:243:9: note: 'Properties' declared here
+  243 |   using Properties = FoldAdaptor::Properties;
+      |         ^
+bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.h.inc:368:5: error: use of undeclared identifier 'getProperties'; did you mean 'Properties'?
+  368 |     getProperties().iterator_kinds = attr;
+      |     ^
+bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.h.inc:243:9: note: 'Properties' declared here
+  243 |   using Properties = FoldAdaptor::Properties;
+      |         ^
+bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.h.inc:372:5: error: use of undeclared identifier 'getProperties'; did you mean 'Properties'?
+  372 |     getProperties().accumulator_types = attr;
+      |     ^
+bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.h.inc:243:9: note: 'Properties' declared here
+  243 |   using Properties = FoldAdaptor::Properties;
+      |         ^
+bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.h.inc:376:5: error: use of undeclared identifier 'getProperties'; did you mean 'Properties'?
+  376 |     getProperties().precision = attr;
+      |     ^
+bazel-out/k8-opt/bin/external/shuttle_mlir/_virtual_includes/shuttle_ops_inc_gen/shuttle/IR/ShuttleOps.h.inc:243:9: note: 'Properties' declared here
+  243 |   using Properties = FoldAdaptor::Properties;
+      |         ^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+20 errors generated.
+Use --verbose_failures to see the command lines of failed build steps.
+INFO: Elapsed time: 56.365s, Critical Path: 29.19s
+INFO: 3187 processes: 1501 internal, 1686 local.
+ERROR: Build did NOT complete successfully
++ run_native_preflight.sh:1: finish
++ run_native_preflight.sh:27: local status=1
++ run_native_preflight.sh:28: set +x
+preflight_exit_code=1
+preflight_finished_utc=2026-08-10T09:02:00Z
+
+
+  TASK  STATE      EXIT  DURATION                    PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  failed        1  1 minute and 49.93 seconds  -           -          .inc:243:9: note: 'Properties' declared here
+                                                                              243 |   using Properties = FoldAdaptor::Properties;
+                                                                                  |         ^
+                                                                            ...
