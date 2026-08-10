@@ -1273,7 +1273,7 @@ class ZephyrCoordinator:
         try:
             shards = _build_source_shards(plan.source_items)
             if not shards:
-                self._persist_result(result_path, ZephyrExecutionResult(results=[], counters={}))
+                self._persist_success(run, result_path, ZephyrExecutionResult(results=[], counters={}))
                 return None
 
             last_worker_stage_idx = max(
@@ -1308,7 +1308,7 @@ class ZephyrCoordinator:
 
             with self._lock:
                 counters = {name: entry.value for name, entry in run.merged_counters().items()}
-            self._persist_result(result_path, ZephyrExecutionResult(results=flat_result, counters=counters))
+            self._persist_success(run, result_path, ZephyrExecutionResult(results=flat_result, counters=counters))
             return None
         except Exception as e:
             # Persist the normalized exception so the driver can recover the
@@ -1402,6 +1402,23 @@ class ZephyrCoordinator:
         """
         ensure_parent_dir(result_path)
         StoragePath(result_path).write_bytes(cloudpickle.dumps(payload))
+
+    def _persist_success(
+        self,
+        run: _PipelineExecution,
+        result_path: str,
+        result: "ZephyrExecutionResult",
+    ) -> None:
+        """Persist a result only if cancellation did not reach the result boundary."""
+        self._raise_if_execution_cancelled(run)
+        self._persist_result(result_path, result)
+        self._raise_if_execution_cancelled(run)
+
+    def _raise_if_execution_cancelled(self, run: _PipelineExecution) -> None:
+        with self._lock:
+            reason = run.cancellation_reason
+        if reason is not None:
+            raise ZephyrWorkerError(reason)
 
     def _run_worker_stage(
         self,

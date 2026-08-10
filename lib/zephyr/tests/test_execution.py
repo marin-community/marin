@@ -427,14 +427,19 @@ def test_abort_execution_before_registration_rejects_pipeline(coordinator):
         coordinator.run_pipeline(plan, "not-registered", _TEST_TASK_COST, _TEST_TASK_COST)
 
 
-def test_worker_releases_execution_cancellation_state():
-    worker = ZephyrWorker.__new__(ZephyrWorker)
-    worker._resources_lock = threading.Lock()
-    worker._cancelled_executions = {"released", "active"}
+def test_abort_during_result_persist_rejects_success(coordinator, monkeypatch):
+    plan = compute_plan(Dataset.from_list([]))
+    original_persist = coordinator._persist_result
 
-    worker.release_execution("released")
+    def cancel_during_success_persist(result_path, payload) -> None:
+        if not isinstance(payload, Exception):
+            coordinator.abort_execution(_TEST_EXECUTION_ID, "late lease loss")
+        original_persist(result_path, payload)
 
-    assert worker._cancelled_executions == {"active"}
+    monkeypatch.setattr(coordinator, "_persist_result", cancel_during_success_persist)
+
+    with pytest.raises(ZephyrWorkerError, match="late lease loss"):
+        coordinator.run_pipeline(plan, _TEST_EXECUTION_ID, _TEST_TASK_COST, _TEST_TASK_COST)
 
 
 def test_duplicate_execution_id_joins_terminal_execution(coordinator):

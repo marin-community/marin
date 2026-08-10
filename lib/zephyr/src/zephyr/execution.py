@@ -579,6 +579,10 @@ class ZephyrContext:
             )
         try:
             operation.result()
+            if cancellation_token is not None and cancellation_token.cancelled:
+                reason = cancellation_token.reason
+                assert reason is not None
+                raise ZephyrWorkerError(reason)
         except Exception:
             payload = _try_read_coordinator_result(result_path)
             if isinstance(payload, Exception):

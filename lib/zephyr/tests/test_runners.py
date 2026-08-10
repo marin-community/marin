@@ -11,6 +11,7 @@ from contextlib import suppress
 
 import polars as pl
 import pytest
+import zephyr.execution as execution_module
 from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
 from fray.types import ResourceConfig
@@ -191,8 +192,9 @@ def test_subprocess_runner_isolates_native_crash(local_client, tmp_path):
     assert "exited with code 139" in rendered or "failed" in rendered
 
 
-def test_subprocess_cancellation_keeps_shared_pool_available(local_client, tmp_path):
+def test_subprocess_cancellation_keeps_shared_pool_available(local_client, tmp_path, monkeypatch):
     """Cancellation stops one subprocess pipeline without stopping the shared pool."""
+    monkeypatch.setattr(execution_module, "_generate_execution_id", lambda: "reused-execution")
     marker = tmp_path / "started"
     gate = tmp_path / "gate"
     os.mkfifo(gate)
