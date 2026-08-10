@@ -251,5 +251,14 @@ run. A benchmark gate for the exact Grug shapes now exists at
   TE, TE-JAX, and TE-cu13 reported version 2.17.1; all ten benchmark attention symbols,
   `MeshResource`, and TE autocast imported successfully. The only warning was the expected missing
   optional PyTorch extension.
+- First 262144-token Ring gate: parent `/dlwh/grug-cp-te217-s262k-ring5-coord`, child
+  `/dlwh/grug-cp-te217-s262k-ring5-coord/grug-train-grug-cp-te217-s262k-ring5`, commit
+  `7f53a82da5`. One four-GB200 node ran the exact fixed-token batch 16 local KV12/SWA512 and global
+  KV6/full-causal cases. Both reached TE/cuDNN before XLA compilation, then returned
+  `CUDNN_STATUS_BAD_PARAM` from `fused_attn_f16_arbitrary_seqlen.cu:934`. cuDNN frontend reported
+  both `libcudart.so.12` and `libcudart.so.13` and selected CUDA 12. The benchmark recorded both
+  failures as JSON and exited cleanly; no HBM allocation or timing occurred.
+- Runtime fix: set `CUDNN_FRONTEND_CUDART_LIB_NAME=libcudart.so.13`, the documented selector for
+  environments containing more than one CUDA runtime, and rerun the same four-GB200 gate.
 - Next action: complete the four-GPU qualification, snapshot the distributed launcher, and queue the
   64-GPU job when the environment gate passes.

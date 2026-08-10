@@ -42,6 +42,9 @@ uv pip install --python "$IRIS_VENV/bin/python" --no-deps transformer_engine==2.
 TRANSFORMER_ENGINE_BUILD_ENV = {
     # TE 2.17.1 falls back to CUDA 12 when JAX 0.11 does not expose its private runtime-version API.
     "CUDA_VERSION": "13.0",
+    # The GPU workspace contains CUDA 12 packages for optional dependencies. cuDNN frontend must
+    # bind to the CUDA 13 runtime used by JAX and the TE core.
+    "CUDNN_FRONTEND_CUDART_LIB_NAME": "libcudart.so.13",
     # CUDA 13's unified pip layout nests the CCCL headers below the directory TE discovers.
     "CPLUS_INCLUDE_PATH": (
         "/app/.venv/lib/python3.12/site-packages/nvidia/cu13/include/cccl:"
