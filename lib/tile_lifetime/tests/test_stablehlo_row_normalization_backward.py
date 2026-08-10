@@ -12,6 +12,7 @@ from tile_lifetime import (
 )
 from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldPipelineSchedule,
+    AxisFoldTiledReductionStrategy,
     evaluate_axis_fold_pipeline,
     evaluate_axis_fold_program,
     generate_cuda_axis_fold,
@@ -194,6 +195,36 @@ def test_natural_uncentered_vjp_can_select_generic_same_domain_fold_coalescing()
     assert "ShuttleAxisFoldKernel0And1" in compilation.generated.source
     assert "ShuttleAxisFoldKernel2" in compilation.generated.source
     assert "inverse_scale_storage = scratch.Allocate" in compilation.generated.source
+
+
+def test_natural_uncentered_vjp_can_select_warp_finalized_feature_fold() -> None:
+    _, graph = _natural_jax_vjp(centered=False, rows=64, hidden=64)
+
+    barrier_tree = compile_stablehlo_row_normalization_backward_ffi(
+        graph,
+        target_name="shuttle.row_statistic_backward_barrier_tree_v1",
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        threads=256,
+        feature_groups_per_block=32,
+    )
+    warp_finalize = compile_stablehlo_row_normalization_backward_ffi(
+        graph,
+        target_name="shuttle.row_statistic_backward_warp_finalize_v1",
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        threads=256,
+        feature_groups_per_block=32,
+        feature_tiled_reduction_strategy=AxisFoldTiledReductionStrategy.WARP_FINALIZE,
+    )
+
+    barrier_feature = barrier_tree.pipeline.stages[-1].program
+    warp_feature = warp_finalize.pipeline.stages[-1].program
+    assert warp_feature.tiled_reduction_strategy is AxisFoldTiledReductionStrategy.WARP_FINALIZE
+    assert warp_feature.semantic_fingerprint == barrier_feature.semantic_fingerprint
+    assert warp_finalize.generated.semantic_fingerprints == barrier_tree.generated.semantic_fingerprints
+    assert warp_finalize.generated.source_sha256 != barrier_tree.generated.source_sha256
+    warp_kernel = warp_finalize.generated.source.split("ShuttleAxisFoldKernel2", maxsplit=1)[1]
+    assert warp_kernel.count("__syncthreads();") == 1
+    assert "for (int stride" not in warp_kernel
 
 
 def test_natural_scalar_mutation_changes_generated_pipeline_without_physical_switch() -> None:

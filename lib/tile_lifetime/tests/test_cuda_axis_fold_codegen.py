@@ -17,6 +17,7 @@ from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldProgram,
     AxisFoldReassociation,
     AxisFoldReduction,
+    AxisFoldTiledReductionStrategy,
     evaluate_axis_fold_pipeline,
     evaluate_axis_fold_program,
     generate_cuda_axis_fold,
@@ -86,6 +87,61 @@ def test_axis_fold_semantics_are_independent_of_schedule_and_mutate_through_ast(
         evaluate_axis_fold_program(mutation, {"value": values, "scale": scale}),
         evaluate_axis_fold_program(program, {"value": values, "scale": scale}) * 0.5,
     )
+
+
+def test_tiled_row_fold_can_finalize_all_feature_groups_with_one_warp() -> None:
+    barrier_tree = replace(
+        _scaled_column_sum_program(threads=256),
+        rows=2048,
+        columns=4096,
+        groups_per_block=32,
+    )
+    warp_finalize = replace(
+        barrier_tree,
+        tiled_reduction_strategy=AxisFoldTiledReductionStrategy.WARP_FINALIZE,
+    )
+    values = np.arange(35, dtype=np.float32).reshape(7, 5)
+    scale = np.linspace(0.5, 1.5, 5, dtype=np.float32)
+
+    assert warp_finalize.semantic_fingerprint == barrier_tree.semantic_fingerprint
+    np.testing.assert_array_equal(
+        evaluate_axis_fold_program(
+            replace(warp_finalize, rows=7, columns=5),
+            {"value": values, "scale": scale},
+        ),
+        evaluate_axis_fold_program(
+            replace(barrier_tree, rows=7, columns=5),
+            {"value": values, "scale": scale},
+        ),
+    )
+
+    torch_source = generate_cuda_axis_fold(warp_finalize).source
+    ffi_source = generate_cuda_axis_fold_ffi((warp_finalize,), target_name="shuttle.warp_finalize_v1").source
+    for source in (torch_source, ffi_source):
+        assert source.count("__syncthreads();") == 1
+        assert "for (int stride" not in source
+        assert "partial *" in source
+        assert "if (threadIdx.x <" in source
+    assert torch_source != generate_cuda_axis_fold(barrier_tree).source
+
+
+@pytest.mark.parametrize(
+    ("groups", "outputs", "threads"),
+    [(16, 1, 256), (32, 2, 256), (32, 1, 2048)],
+)
+def test_warp_finalized_tiled_row_fold_rejects_unsupported_physical_shapes(
+    groups: int,
+    outputs: int,
+    threads: int,
+) -> None:
+    with pytest.raises(ValueError, match="warp-finalized"):
+        replace(
+            _scaled_column_sum_program(),
+            threads=threads,
+            groups_per_block=groups,
+            outputs_per_group=outputs,
+            tiled_reduction_strategy=AxisFoldTiledReductionStrategy.WARP_FINALIZE,
+        )
 
 
 def test_tiled_row_fold_multiple_outputs_preserve_tail_column_semantics() -> None:

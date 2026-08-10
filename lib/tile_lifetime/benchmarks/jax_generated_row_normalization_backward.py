@@ -24,7 +24,11 @@ import jax.numpy as jnp
 import jaxlib
 import numpy as np
 
-from tile_lifetime.cuda_axis_fold_codegen import AxisFoldPipelineSchedule, generate_cuda_axis_fold_ffi
+from tile_lifetime.cuda_axis_fold_codegen import (
+    AxisFoldPipelineSchedule,
+    AxisFoldTiledReductionStrategy,
+    generate_cuda_axis_fold_ffi,
+)
 from tile_lifetime.cuda_toolchain import (
     cuda_toolkit_link_flags,
     cuda_toolkit_shared_library,
@@ -190,6 +194,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     serialized = exported.mlir_module_serialized
     graph = import_stablehlo(serialized, input_names=("matrix_a", "feature_vector", "matrix_b"))
     selected_schedule = AxisFoldPipelineSchedule(args.pipeline_schedule)
+    selected_reduction_strategy = AxisFoldTiledReductionStrategy(args.column_reduction_strategy)
     schedules = tuple(AxisFoldPipelineSchedule) if args.compare_pipeline_schedules else (selected_schedule,)
     output_counts = (1, 2) if args.compare_column_outputs_per_group else (args.column_outputs_per_group,)
     variant_specs = tuple((schedule, output_count) for schedule in schedules for output_count in output_counts)
@@ -219,6 +224,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             threads=args.threads,
             feature_groups_per_block=args.column_groups_per_block,
             feature_outputs_per_group=output_count,
+            feature_tiled_reduction_strategy=selected_reduction_strategy,
             pipeline_schedule=schedule,
         )
         generated = compilation.generated
@@ -249,6 +255,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 component_compilation.programs.feature_scale_cotangent,
                 groups_per_block=args.column_groups_per_block,
                 outputs_per_group=args.column_outputs_per_group,
+                tiled_reduction_strategy=selected_reduction_strategy,
             ),
         )
         input_generated = generate_cuda_axis_fold_ffi((programs[0],), target_name=_INPUT_TARGET_NAME)
@@ -553,6 +560,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "pipeline_schedule": generated.pipeline_schedule.value,
             "feature_groups_per_block": args.column_groups_per_block,
             "feature_outputs_per_group": args.column_outputs_per_group,
+            "feature_tiled_reduction_strategy": selected_reduction_strategy.value,
             "handler_executions": _handler_call_count(library),
         },
         "generated_schedule_comparison": {
@@ -633,6 +641,11 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=256)
     parser.add_argument("--column-groups-per-block", type=int, default=32)
     parser.add_argument("--column-outputs-per-group", type=int, default=1)
+    parser.add_argument(
+        "--column-reduction-strategy",
+        choices=tuple(strategy.value for strategy in AxisFoldTiledReductionStrategy),
+        default=AxisFoldTiledReductionStrategy.BARRIER_TREE.value,
+    )
     parser.add_argument("--compare-column-outputs-per-group", action="store_true")
     parser.add_argument("--warmups", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=30)

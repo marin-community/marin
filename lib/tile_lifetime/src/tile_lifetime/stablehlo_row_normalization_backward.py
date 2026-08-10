@@ -19,6 +19,7 @@ from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldProgram,
     AxisFoldReassociation,
     AxisFoldReduction,
+    AxisFoldTiledReductionStrategy,
     GeneratedCudaAxisFoldFfi,
     generate_cuda_axis_fold_pipeline_ffi,
 )
@@ -201,6 +202,7 @@ def compile_stablehlo_row_normalization_backward_ffi(
     threads: int = 256,
     feature_groups_per_block: int = 1,
     feature_outputs_per_group: int = 1,
+    feature_tiled_reduction_strategy: AxisFoldTiledReductionStrategy = AxisFoldTiledReductionStrategy.BARRIER_TREE,
     pipeline_schedule: AxisFoldPipelineSchedule = AxisFoldPipelineSchedule.SEPARATE_STAGES,
 ) -> StableHLORowNormalizationBackwardFfiCompilation:
     """Replace one natural row-statistic VJP with generated Folds.
@@ -225,6 +227,7 @@ def compile_stablehlo_row_normalization_backward_ffi(
             threads=threads,
             feature_groups_per_block=feature_groups_per_block,
             feature_outputs_per_group=feature_outputs_per_group,
+            feature_tiled_reduction_strategy=feature_tiled_reduction_strategy,
         )
     else:
         pipeline = _uncentered_second_moment_backward_pipeline(
@@ -232,6 +235,7 @@ def compile_stablehlo_row_normalization_backward_ffi(
             threads=threads,
             feature_groups_per_block=feature_groups_per_block,
             feature_outputs_per_group=feature_outputs_per_group,
+            feature_tiled_reduction_strategy=feature_tiled_reduction_strategy,
         )
     generated = generate_cuda_axis_fold_pipeline_ffi(
         pipeline,
@@ -262,6 +266,7 @@ def _uncentered_second_moment_backward_pipeline(
     threads: int,
     feature_groups_per_block: int,
     feature_outputs_per_group: int,
+    feature_tiled_reduction_strategy: AxisFoldTiledReductionStrategy,
 ) -> AxisFoldPipeline:
     source_dtype = recovered.source_dtype
     output_dtype = recovered.graph.value(recovered.input_cotangent).dtype
@@ -350,6 +355,7 @@ def _uncentered_second_moment_backward_pipeline(
         threads=threads,
         groups_per_block=feature_groups_per_block,
         outputs_per_group=feature_outputs_per_group,
+        tiled_reduction_strategy=feature_tiled_reduction_strategy,
         reassociation=AxisFoldReassociation.DETERMINISTIC_TREE,
     )
     return AxisFoldPipeline(
@@ -371,6 +377,7 @@ def _centered_second_moment_backward_pipeline(
     threads: int,
     feature_groups_per_block: int,
     feature_outputs_per_group: int,
+    feature_tiled_reduction_strategy: AxisFoldTiledReductionStrategy,
 ) -> AxisFoldPipeline:
     source_dtype = recovered.source_dtype
     output_dtype = recovered.graph.value(recovered.input_cotangent).dtype
@@ -482,6 +489,7 @@ def _centered_second_moment_backward_pipeline(
         threads=threads,
         groups_per_block=feature_groups_per_block,
         outputs_per_group=feature_outputs_per_group,
+        tiled_reduction_strategy=feature_tiled_reduction_strategy,
         reassociation=AxisFoldReassociation.DETERMINISTIC_TREE,
     )
     return AxisFoldPipeline(

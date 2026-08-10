@@ -66,6 +66,13 @@ class AxisFoldPipelineSchedule(StrEnum):
     COALESCE_COMPATIBLE_ROW_STAGES = "coalesce_compatible_row_stages"
 
 
+class AxisFoldTiledReductionStrategy(StrEnum):
+    """How tiled row-axis partials are combined inside one block."""
+
+    BARRIER_TREE = "barrier_tree"
+    WARP_FINALIZE = "warp_finalize"
+
+
 @dataclass(frozen=True)
 class AxisFoldInput:
     """One typed tensor input and its logical broadcast relation."""
@@ -108,10 +115,20 @@ class AxisFoldProgram:
     threads: int = 256
     groups_per_block: int = 1
     outputs_per_group: int = 1
+    tiled_reduction_strategy: AxisFoldTiledReductionStrategy = AxisFoldTiledReductionStrategy.BARRIER_TREE
     reassociation: AxisFoldReassociation = AxisFoldReassociation.DETERMINISTIC_TREE
 
     def __post_init__(self) -> None:
-        if min(self.rows, self.columns, self.threads, self.groups_per_block, self.outputs_per_group) <= 0:
+        if (
+            min(
+                self.rows,
+                self.columns,
+                self.threads,
+                self.groups_per_block,
+                self.outputs_per_group,
+            )
+            <= 0
+        ):
             raise ValueError("axis-Fold dimensions and thread count must be positive")
         if self.threads & (self.threads - 1):
             raise ValueError("axis-Fold thread count must be a power of two")
@@ -127,6 +144,12 @@ class AxisFoldProgram:
             self.reduction_axis is not AxisFoldDirection.ROWS or self.output_kind is not AxisFoldOutputKind.REDUCED
         ):
             raise ValueError("tiled axis-Fold groups currently require a reduced row-axis Fold")
+        if self.tiled_reduction_strategy is AxisFoldTiledReductionStrategy.WARP_FINALIZE and (
+            self.groups_per_block != 32 or self.outputs_per_group != 1 or self.threads // self.groups_per_block > 32
+        ):
+            raise ValueError(
+                "warp-finalized tiled axis Fold requires 32 groups, one output per group, and at most 32 partials"
+            )
         if self.output_dtype not in {DType.BF16, DType.FP32}:
             raise ValueError("axis-Fold output must be BF16 or FP32")
         input_names = tuple(value.name for value in self.inputs)
@@ -165,10 +188,18 @@ class AxisFoldProgram:
             "rows": self.rows,
             "columns": self.columns,
             "inputs": [
-                {"name": value.name, "dtype": value.dtype.value, "layout": value.layout.value} for value in self.inputs
+                {
+                    "name": value.name,
+                    "dtype": value.dtype.value,
+                    "layout": value.layout.value,
+                }
+                for value in self.inputs
             ],
             "reductions": [
-                {"name": value.name, "contribution": json.loads(serialize_scalar_expression(value.contribution))}
+                {
+                    "name": value.name,
+                    "contribution": json.loads(serialize_scalar_expression(value.contribution)),
+                }
                 for value in self.reductions
             ],
             "reduction_axis": self.reduction_axis.value,
@@ -514,6 +545,55 @@ def _generate_tiled_row_axis_fold(program: AxisFoldProgram) -> GeneratedCudaAxis
     output_aliases = _reduced_output_aliases(program.inputs, program.reduction_axis, "group") | reduction_aliases
     output_expression = _cuda_expression(program.output_expression, output_aliases)
     output_store = _output_store(program.output_dtype, "group", output_expression)
+    if program.tiled_reduction_strategy is AxisFoldTiledReductionStrategy.WARP_FINALIZE:
+        warp_reductions = "\n".join(
+            f"    float reduced_{value.name} = shared_{value.name}[threadIdx.x];\n"
+            "    #pragma unroll\n"
+            "    for (int partial = 1; partial < kReductionLanes; ++partial) {\n"
+            f"      reduced_{value.name} = __fadd_rn(reduced_{value.name}, "
+            f"shared_{value.name}[partial * kGroupsPerBlock + threadIdx.x]);\n"
+            "    }"
+            for value in program.reductions
+        )
+        warp_aliases = _reduced_output_aliases(program.inputs, program.reduction_axis, "group") | {
+            value.name: f"reduced_{value.name}" for value in program.reductions
+        }
+        warp_output = _output_store(
+            program.output_dtype,
+            "group",
+            _cuda_expression(program.output_expression, warp_aliases),
+        )
+        reduction_body = f"""  __syncthreads();
+  if (threadIdx.x < kGroupsPerBlock) {{
+    const int group = blockIdx.x * kGroupsPerBlock + threadIdx.x;
+{warp_reductions}
+    if (group < kColumns) {{
+      {warp_output}
+    }}
+  }}"""
+    else:
+        reduction_body = f"""  __syncthreads();
+  for (int stride = kReductionLanes / 2; stride > 0; stride /= 2) {{
+    if (reduction_lane < stride) {{
+      #pragma unroll
+      for (int output_lane = 0; output_lane < kOutputsPerGroup; ++output_lane) {{
+        const int shared_index = output_lane * kThreads + threadIdx.x;
+{shared_updates}
+      }}
+    }}
+    __syncthreads();
+  }}
+  if (reduction_lane == 0) {{
+    #pragma unroll
+    for (int output_lane = 0; output_lane < kOutputsPerGroup; ++output_lane) {{
+      const int group = blockIdx.x * kGroupsPerBlock * kOutputsPerGroup
+          + output_lane * kGroupsPerBlock + group_lane;
+      const int shared_index = output_lane * kThreads + threadIdx.x;
+      if (group < kColumns) {{
+        {output_store}
+      }}
+    }}
+  }}"""
     output_torch_dtype = "torch::kBFloat16" if program.output_dtype is DType.BF16 else "torch::kFloat32"
     output_pointer_type = "__nv_bfloat16" if program.output_dtype is DType.BF16 else "float"
     source = f"""
@@ -560,28 +640,7 @@ __global__ __launch_bounds__(kThreads) void shuttle_axis_fold_kernel(
     const int shared_index = output_lane * kThreads + threadIdx.x;
 {shared_initialization}
   }}
-  __syncthreads();
-  for (int stride = kReductionLanes / 2; stride > 0; stride /= 2) {{
-    if (reduction_lane < stride) {{
-      #pragma unroll
-      for (int output_lane = 0; output_lane < kOutputsPerGroup; ++output_lane) {{
-        const int shared_index = output_lane * kThreads + threadIdx.x;
-{shared_updates}
-      }}
-    }}
-    __syncthreads();
-  }}
-  if (reduction_lane == 0) {{
-    #pragma unroll
-    for (int output_lane = 0; output_lane < kOutputsPerGroup; ++output_lane) {{
-      const int group = blockIdx.x * kGroupsPerBlock * kOutputsPerGroup
-          + output_lane * kGroupsPerBlock + group_lane;
-      const int shared_index = output_lane * kThreads + threadIdx.x;
-      if (group < kColumns) {{
-        {output_store}
-      }}
-    }}
-  }}
+{reduction_body}
 }}
 
 }}  // namespace
@@ -625,7 +684,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {{
     )
 
 
-def _ffi_input_buffers(programs: tuple[AxisFoldProgram, ...]) -> tuple[CudaAxisFoldFfiBuffer, ...]:
+def _ffi_input_buffers(
+    programs: tuple[AxisFoldProgram, ...],
+) -> tuple[CudaAxisFoldFfiBuffer, ...]:
     ordered: list[CudaAxisFoldFfiBuffer] = []
     by_name: dict[str, CudaAxisFoldFfiBuffer] = {}
     for program in programs:
@@ -789,7 +850,10 @@ def _can_coalesce_row_stages(first: AxisFoldPipelineStage, second: AxisFoldPipel
         or second_program.output_kind is not AxisFoldOutputKind.ELEMENT
     ):
         return False
-    first_input = next((value for value in second_program.inputs if value.name == first.output_name), None)
+    first_input = next(
+        (value for value in second_program.inputs if value.name == first.output_name),
+        None,
+    )
     if first_input is None or first_input.layout is not AxisFoldInputLayout.ROW:
         return False
     if any(
@@ -1015,7 +1079,10 @@ def _ffi_axis_fold_kernel(program: AxisFoldProgram, *, symbol: str, prefix: str)
     columns = f"k{prefix}Columns"
     threads = f"k{prefix}Threads"
     parameters = ", ".join(
-        (*(_kernel_parameter(value) for value in program.inputs), f"{_ffi_output_type(program)} output")
+        (
+            *(_kernel_parameter(value) for value in program.inputs),
+            f"{_ffi_output_type(program)} output",
+        )
     )
     local_reductions = "\n".join(f"  float local_{value.name} = 0.0f;" for value in program.reductions)
     shared_declarations = "\n".join(
@@ -1119,6 +1186,54 @@ def _ffi_tiled_row_axis_fold_kernel(
     shared_initialization = "\n".join(
         f"    shared_{value.name}[shared_index] = local_{value.name}[output_lane];" for value in program.reductions
     )
+    if program.tiled_reduction_strategy is AxisFoldTiledReductionStrategy.WARP_FINALIZE:
+        warp_reductions = "\n".join(
+            f"    float reduced_{value.name} = shared_{value.name}[threadIdx.x];\n"
+            "    #pragma unroll\n"
+            f"    for (int partial = 1; partial < {lanes}; ++partial) {{\n"
+            f"      reduced_{value.name} = __fadd_rn(reduced_{value.name}, "
+            f"shared_{value.name}[partial * {groups} + threadIdx.x]);\n"
+            "    }"
+            for value in program.reductions
+        )
+        warp_aliases = _ffi_reduced_output_aliases(program.inputs, program.reduction_axis, "group") | {
+            value.name: f"reduced_{value.name}" for value in program.reductions
+        }
+        warp_output = _output_store(
+            program.output_dtype,
+            "group",
+            _cuda_expression(program.output_expression, warp_aliases),
+        )
+        reduction_body = f"""  __syncthreads();
+  if (threadIdx.x < {groups}) {{
+    const int group = blockIdx.x * {groups} + threadIdx.x;
+{warp_reductions}
+    if (group < {columns}) {{
+      {warp_output}
+    }}
+  }}"""
+    else:
+        reduction_body = f"""  __syncthreads();
+  for (int stride = {lanes} / 2; stride > 0; stride /= 2) {{
+    if (reduction_lane < stride) {{
+      #pragma unroll
+      for (int output_lane = 0; output_lane < {outputs}; ++output_lane) {{
+        const int shared_index = output_lane * {threads} + threadIdx.x;
+{shared_updates}
+      }}
+    }}
+    __syncthreads();
+  }}
+  if (reduction_lane == 0) {{
+    #pragma unroll
+    for (int output_lane = 0; output_lane < {outputs}; ++output_lane) {{
+      const int group = blockIdx.x * {groups} * {outputs} + output_lane * {groups} + group_lane;
+      const int shared_index = output_lane * {threads} + threadIdx.x;
+      if (group < {columns}) {{
+        {output_store}
+      }}
+    }}
+  }}"""
     return f"""
 constexpr int {rows} = {program.rows};
 constexpr int {columns} = {program.columns};
@@ -1147,27 +1262,7 @@ __global__ __launch_bounds__({threads}) void {symbol}({parameters}) {{
     const int shared_index = output_lane * {threads} + threadIdx.x;
 {shared_initialization}
   }}
-  __syncthreads();
-  for (int stride = {lanes} / 2; stride > 0; stride /= 2) {{
-    if (reduction_lane < stride) {{
-      #pragma unroll
-      for (int output_lane = 0; output_lane < {outputs}; ++output_lane) {{
-        const int shared_index = output_lane * {threads} + threadIdx.x;
-{shared_updates}
-      }}
-    }}
-    __syncthreads();
-  }}
-  if (reduction_lane == 0) {{
-    #pragma unroll
-    for (int output_lane = 0; output_lane < {outputs}; ++output_lane) {{
-      const int group = blockIdx.x * {groups} * {outputs} + output_lane * {groups} + group_lane;
-      const int shared_index = output_lane * {threads} + threadIdx.x;
-      if (group < {columns}) {{
-        {output_store}
-      }}
-    }}
-  }}
+{reduction_body}
 }}
 """.strip()
 

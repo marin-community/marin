@@ -3731,3 +3731,22 @@ author: dlwh
   final-HLO topology and rejects a repeated-site mismatch.
 - AxisFold and handlers with scratch allocation, lazy cuBLAS handles, or the
   Triton attention wrapper remain excluded. No GPU replay was run.
+
+### 2026-08-09 - TLTC-XLA-075 warp-finalized row Fold candidate
+
+- The generic tiled row-axis Fold now has a `warp_finalize` physical strategy.
+  It retains the existing coalesced mapping in which each warp lane owns a
+  distinct feature and each of eight warps accumulates one row partition.
+  After one shared-memory handoff, the first warp assigns one lane to each of
+  32 feature groups and combines the eight partials in a deterministic order.
+- This removes the three additional block-wide barriers and repeated shared
+  read/write rounds in the existing barrier-tree candidate. It does not change
+  the semantic Fold fingerprint, frontend recovery, output type, or declared
+  rounding-reassociation policy.
+- The bounded implementation requires exactly 32 feature groups, one output
+  per group, and at most 32 row partials. Unsupported geometries fail closed;
+  the previously measured two-output candidate remains rejected.
+- Ordinary JAX RMS backward can select the new strategy through generic Fold
+  compilation and the Torch-free typed-FFI benchmark CLI. Twenty-four focused
+  recovery/codegen tests and targeted Pyrefly pass. H100 latency remains
+  unmeasured at this checkpoint.
