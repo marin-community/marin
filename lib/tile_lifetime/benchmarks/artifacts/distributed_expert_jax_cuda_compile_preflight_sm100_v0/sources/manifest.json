@@ -1,0 +1,53 @@
+{
+  "architecture": "sm_100a",
+  "device_query_or_execution": false,
+  "handlers": [
+    {
+      "family": "relation_edge_map_fold",
+      "handler_symbol": "shuttle_distributed_expert_cpu_edge_rank0_edge_reverse",
+      "semantic_digest": "486bc29928cb95fbb10ce88e995a90ae416b2e10606c7847930b3752a3ebf7a9",
+      "source": "shuttle_distributed_expert_cpu_edge_rank0_edge_reverse.cu",
+      "source_sha256": "7910b5af0dff3ccb43f72317391e9573e48cb87e63e93baad2df9e774769bff2",
+      "target": "shuttle.distributed_expert_cpu.edge.rank0.edge_reverse"
+    },
+    {
+      "family": "segmented_input_adjoint",
+      "handler_symbol": "shuttle_distributed_expert_cpu_input_adjoint",
+      "semantic_digest": "759635eea57c492d10ac19ff91f459fdf536ffef07b256daba2314a80eba4778",
+      "source": "shuttle_distributed_expert_cpu_input_adjoint.cu",
+      "source_sha256": "7bd71a2d427a1d900b4c1e108ee314757e5fdf03d567b5b12ad9e0684a457e41",
+      "target": "shuttle.distributed_expert_cpu.input_adjoint"
+    },
+    {
+      "family": "group_batched_w13_weight_adjoint",
+      "handler_symbol": "shuttle_distributed_expert_cpu_weight_gradient_w13",
+      "semantic_digest": "bc823db717d1a7f90d5c818bdeb6b3fc9c8afa91006a79555116634c0e7540d1",
+      "source": "shuttle_distributed_expert_cpu_weight_gradient_w13.cu",
+      "source_sha256": "b726a52cf0a6c8d1dfa0408377df9b5151de8d36f711596f0b5b5862619859dd",
+      "target": "shuttle.distributed_expert_cpu.weight_gradient.w13"
+    },
+    {
+      "family": "group_batched_w2_weight_adjoint",
+      "handler_symbol": "shuttle_distributed_expert_cpu_weight_gradient_w2",
+      "semantic_digest": "c6bc15d4e470023415c7398a91ea22b88bee271fe954649ecc94e2076206694c",
+      "source": "shuttle_distributed_expert_cpu_weight_gradient_w2.cu",
+      "source_sha256": "a1155f2442deda72bb1bd4f8eabd2db983fd9229362a3b9d7db428b0bb04fc56",
+      "target": "shuttle.distributed_expert_cpu.weight_gradient.w2"
+    },
+    {
+      "family": "deterministic_source_fold",
+      "handler_symbol": "shuttle_distributed_expert_cpu_source_fold",
+      "semantic_digest": "f53bffb74e0c09d7878f0b0e1d91f500e52d6418f7e13450d96f861e8295532d",
+      "source": "shuttle_distributed_expert_cpu_source_fold.cu",
+      "source_sha256": "706a2d4814bb60975b50c95c8371183dead64605192e2f34374096bcc242eebf",
+      "target": "shuttle.distributed_expert_cpu.source_fold"
+    }
+  ],
+  "kind": "distributed_expert_jax_cuda_compile_register_preflight",
+  "runtime_dependencies": [
+    "JAX/XLA typed FFI",
+    "CUDA runtime",
+    "cuBLAS"
+  ],
+  "source_revision": "348fa2120b"
+}

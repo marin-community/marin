@@ -1,0 +1,98 @@
+{
+  "status": "cpu_linux_compile_load_register_passed",
+  "job": "/dlwh/shuttle-moe-ffi-cpu-preflight",
+  "job_duration_seconds": 39.61,
+  "accelerator_requested": false,
+  "device_query_or_execution": false,
+  "architecture": "sm_100a",
+  "source_revision": "348fa2120b",
+  "manifest_sha256": "15a889cdbeb10d62b4b939f29afc950b4a47ade2fd914fd134e419b121e9cf64",
+  "compile_command_template": [
+    "nvcc",
+    "-std=c++17",
+    "-O3",
+    "-arch=sm_100a",
+    "-shared",
+    "-Xcompiler",
+    "-fPIC",
+    "-I",
+    "<jaxlib>/include",
+    "-I",
+    "<nvidia/cu13>/include",
+    "<source>",
+    "-o",
+    "<library>",
+    "-cudart=none",
+    "-L",
+    "<nvidia/cu13>/lib",
+    "-Xlinker",
+    "-rpath",
+    "-Xlinker",
+    "<nvidia/cu13>/lib",
+    "-Xlinker",
+    "<nvidia/cu13>/lib/libcudart.so.13",
+    "-Xlinker",
+    "<nvidia/cu13>/lib/libcublas.so.13"
+  ],
+  "environment": {
+    "platform": "Linux-6.17.13-155-gdec5393c-coreweave-arm64-aarch64-with-glibc2.41",
+    "python": "3.12.13",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "nvidia-cublas": "13.4.1.1",
+    "nvidia-cuda-cccl": "13.3.3.4.1",
+    "nvidia-cuda-crt": "13.2.78",
+    "nvidia-cuda-nvcc": "13.2.78",
+    "nvidia-cuda-nvrtc": "13.0.88",
+    "nvidia-cuda-runtime": "13.0.96",
+    "nvidia-nvvm": "13.2.78",
+    "nvcc": "Cuda compilation tools, release 13.2, V13.2.78"
+  },
+  "handlers": [
+    {
+      "target": "shuttle.distributed_expert_cpu.edge.rank0.edge_reverse",
+      "handler_symbol": "shuttle_distributed_expert_cpu_edge_rank0_edge_reverse",
+      "source_sha256": "7910b5af0dff3ccb43f72317391e9573e48cb87e63e93baad2df9e774769bff2",
+      "library_sha256": "966f2605d3fbda7326079f4a369d9e431c24feb3614ca0516a29938b7562159b",
+      "compiler_stderr_sha256": "5f11430f699f27fcb4c1346a45d5cbbfe2370d06476cdd6f3024ae23736d3c77",
+      "loaded": true,
+      "registered": true
+    },
+    {
+      "target": "shuttle.distributed_expert_cpu.input_adjoint",
+      "handler_symbol": "shuttle_distributed_expert_cpu_input_adjoint",
+      "source_sha256": "7bd71a2d427a1d900b4c1e108ee314757e5fdf03d567b5b12ad9e0684a457e41",
+      "library_sha256": "b0dd86e626e9df1422e652ef9ed9beaefa30bd92499e949d6ad965bd8e024966",
+      "compiler_stderr_sha256": "5f11430f699f27fcb4c1346a45d5cbbfe2370d06476cdd6f3024ae23736d3c77",
+      "loaded": true,
+      "registered": true
+    },
+    {
+      "target": "shuttle.distributed_expert_cpu.weight_gradient.w13",
+      "handler_symbol": "shuttle_distributed_expert_cpu_weight_gradient_w13",
+      "source_sha256": "b726a52cf0a6c8d1dfa0408377df9b5151de8d36f711596f0b5b5862619859dd",
+      "library_sha256": "d06b364b1fb666d40e68a422955dcb6661774cdeb64f052eabaffce9249c08d6",
+      "compiler_stderr_sha256": "5f11430f699f27fcb4c1346a45d5cbbfe2370d06476cdd6f3024ae23736d3c77",
+      "loaded": true,
+      "registered": true
+    },
+    {
+      "target": "shuttle.distributed_expert_cpu.weight_gradient.w2",
+      "handler_symbol": "shuttle_distributed_expert_cpu_weight_gradient_w2",
+      "source_sha256": "a1155f2442deda72bb1bd4f8eabd2db983fd9229362a3b9d7db428b0bb04fc56",
+      "library_sha256": "3b36d4dc2ead085cb9e3ab1399d161f28ecf51281b1623989f3aab0f6f1d45c4",
+      "compiler_stderr_sha256": "5f11430f699f27fcb4c1346a45d5cbbfe2370d06476cdd6f3024ae23736d3c77",
+      "loaded": true,
+      "registered": true
+    },
+    {
+      "target": "shuttle.distributed_expert_cpu.source_fold",
+      "handler_symbol": "shuttle_distributed_expert_cpu_source_fold",
+      "source_sha256": "706a2d4814bb60975b50c95c8371183dead64605192e2f34374096bcc242eebf",
+      "library_sha256": "7d662c3959bcab905def4aa90d1ac68a12625fb015a1001d1179050b64559bc8",
+      "compiler_stderr_sha256": "5f11430f699f27fcb4c1346a45d5cbbfe2370d06476cdd6f3024ae23736d3c77",
+      "loaded": true,
+      "registered": true
+    }
+  ]
+}

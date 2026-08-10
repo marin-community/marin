@@ -25,6 +25,7 @@ class GeneratedGroupBatchedContractFfi:
     """CUDA source and semantic identity for one generated Contract."""
 
     target: str
+    handler_symbol: str
     source: str
     semantic_digest: str
     source_digest: str
@@ -159,6 +160,7 @@ extern "C" int shuttle_routed_weight_gradient_call_count() {{
 """
     return GeneratedGroupBatchedContractFfi(
         target=target,
+        handler_symbol=target_symbol,
         source=source,
         semantic_digest=semantic_digest,
         source_digest=hashlib.sha256(source.encode()).hexdigest(),

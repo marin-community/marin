@@ -74,6 +74,7 @@ class GeneratedSourceIndexedFoldFfi:
     """CUDA source and semantic identity for a generated source-indexed Fold."""
 
     target: str
+    handler_symbol: str
     source: str
     semantic_digest: str
     source_digest: str
@@ -295,6 +296,7 @@ extern "C" int shuttle_source_indexed_fold_call_count() {{
         raise ValueError("source-indexed Fold generation introduced atomic accumulation")
     return GeneratedSourceIndexedFoldFfi(
         target=target,
+        handler_symbol=target_symbol,
         source=source,
         semantic_digest=semantic_digest,
         source_digest=hashlib.sha256(source.encode()).hexdigest(),

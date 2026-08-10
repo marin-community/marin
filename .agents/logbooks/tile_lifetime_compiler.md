@@ -4023,3 +4023,39 @@ author: dlwh
   `lib/tile_lifetime/benchmarks/artifacts/event_tensor_right_resource_jax_gb200_linkage_v0/`
   and
   `lib/tile_lifetime/benchmarks/artifacts/event_tensor_right_resource_jax_gb200_dependency_blocker_v0/`.
+
+### 2026-08-09 21:43 PDT - TLTC-MOE-007 segmented input adjoint and compile gate
+
+- Review rejected the prior local input-adjoint specialization because it
+  expanded each row across all 96 local experts. At the primary per-rank shape
+  `E=96, C=256, H=7168, I=3072`, that path implied 106,803,757,056 bytes of
+  intermediates, 14,495,514,624 Map items, and 96 times the required Contract
+  work. No GPU was requested for the rejected path.
+- Commit `348fa2120b1e67ffa67781628add0a7c4719ae18` replaces that expansion with a
+  fixed-capacity segmented Contract/Map/Contract family. Its non-allocating
+  primary audit reports 805,306,368 bytes across projection scratch and
+  outputs, 150,994,944 Map items with 64-bit indexing, and
+  3,246,995,275,776 Contract FLOPs.
+- The CPU reference covers nonsquare `H=48, I=32`, occupancy `[3,0,1,2]`, an
+  empty expert, transposed per-expert input-adjoint weights, natural gate/up
+  rebinding outside the handler, maximum/mean absolute and relative error, and
+  BF16 ULP distance. The four-rank graph still contains five typed-FFI calls,
+  three all-to-all operations, and one router-gradient all-reduce. Forty-nine
+  focused tests pass.
+- CPU-only Iris job `/dlwh/shuttle-moe-ffi-cpu-preflight` compiled the five
+  generated source hashes for `sm_100a`, loaded each DSO, resolved every
+  handler symbol, and registered every target with JAX typed FFI. The successful
+  sealed task took 39.61 seconds and did not request an accelerator, call
+  `jax.devices()`, or execute a kernel.
+- The first diagnostic compile allowed NVCC subpackages to float. It failed
+  with PTX 9.3 output and a PTX 9.2 assembler. Pinning the complete repository
+  lock set fixed the environment: JAX/jaxlib 0.10.1, NVCC/CRT/NVVM 13.2.78,
+  NVRTC 13.0.88, CUDA runtime 13.0.96, CCCL 13.3.3.4.1, and cuBLAS 13.4.1.1.
+- The segmented plan exposes `[segment,row,feature]` producer, pair-state, and
+  consumer tile domains plus readiness and buffer-elision conditions. The
+  standalone typed-FFI path materializes full buffers; future fused schedules
+  may stream exact-edge tiles without changing RelationPlan or Fold semantics.
+- Evidence:
+  `lib/tile_lifetime/benchmarks/artifacts/distributed_expert_jax_cuda_compile_preflight_sm100_v0/`.
+  Device compilation through JAX, integrated numerical execution, and latency
+  remain unmeasured. Independent review remains required before GB200.
