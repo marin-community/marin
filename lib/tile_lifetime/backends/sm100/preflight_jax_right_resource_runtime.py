@@ -177,7 +177,7 @@ def main() -> None:
         "event_program_fingerprint": baseline.sources.emitter_plan.event_schedule.program_fingerprint,
         "event_runtime_fingerprint": baseline.sources.emitter_plan.event_schedule.runtime_fingerprint,
         "mutation_runtime_fingerprint": mutation.sources.emitter_plan.event_schedule.runtime_fingerprint,
-        "physical_source_sha256": baseline.sources.lineage["physical_source_sha256"],
+        "physical_source_sha256": baseline.sources.generated_source_sha256["physical"],
         "partial_merge_source_sha256": baseline.merge_ffi.source_sha256,
         "partial_merge_handler": baseline.merge_ffi.handler_symbol,
         "partial_merge_library": str(Path(merge_library._name).resolve()),
