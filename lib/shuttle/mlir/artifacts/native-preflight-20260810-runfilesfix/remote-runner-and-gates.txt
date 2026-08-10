@@ -1,0 +1,32 @@
+Remote runner proof and gate summary
+
+source=f2ef178dcc13f04c9b89b817674f7158d6add5d8
+xla=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+patch_order=0001,0002
+apply_check=PASS_BOTH
+reverse_apply_check=PASS_BOTH
+combined_git_diff_check=PASS
+anchored_xla_runtime_label_count=7
+bundled_shuttle_source_files=54
+bundled_input_fixtures=6
+
+@shuttle_mlir//:shuttle_ops_inc_gen PASS elapsed=31.718s actions=1
+@shuttle_mlir//:ShuttleDialect PASS elapsed=51.856s actions=952
+@shuttle_mlir//:ShuttlePasses PASS elapsed=70.968s actions=498
+@shuttle_mlir//:ShuttleXlaRegistration PASS elapsed=1.973s actions=9
+@shuttle_mlir//:shuttle-opt PASS elapsed=55.483s actions=778
+bazel build @shuttle_mlir//:pipeline_observer_test PASS elapsed=36.336s actions=261
+bazel test @shuttle_mlir//:pipeline_observer_test PASS_UNCACHED elapsed=1.756s tests=1/1 actions=2
+bazel build @shuttle_mlir//:mlir_tests PASS elapsed=34.698s actions=591
+bazel test @shuttle_mlir//:mlir_tests PASS_UNCACHED elapsed=1.201s tests=17/17 actions=18
+
+//xla/pjrt:stablehlo_module_transform_test PASS_UNCACHED
+//xla/pjrt:mlir_to_hlo_test PASS_UNCACHED
+//xla/pjrt:mlir_to_hlo_unregistered_transform_test PASS_UNCACHED
+//xla/pjrt:pjrt_executable_test PASS_UNCACHED
+
+xla_gate_elapsed=254.228s
+xla_gate_actions=4609
+xla_tests=PASS_4_OF_4_UNCACHED
+preflight_exit_code=0
+preflight_finished_utc=2026-08-10T15:37:50Z

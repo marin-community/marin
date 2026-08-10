@@ -1,0 +1,4 @@
+45541c8e6a960d2f778d2457e119fbcad8ac58d75f4c2d83391103ec44218054  run_native_preflight.sh
+dd54ac90b056e82eecb97184ad70bc3f0fcb4cc7f2c1f7721c59d9c007825daa  manifest.env
+b4e9f7cf2a49c42957cf24f16b43a1e0ead0a7e25d664629a841a5dbb0c7dbf9  lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
+e4f3121f3123d7e2ee781cc5ee92f1ddeb0df662b6702d37615bcae821ecbc99  lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
