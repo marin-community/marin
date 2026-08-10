@@ -1,0 +1,30 @@
+Workflow run: https://github.com/marin-community/marin/actions/runs/31439464114
+Run ID: 31439464114
+Run attempt: 1
+Event: workflow_dispatch
+Head SHA: e5e5582909cd27f5ceae27bd1d7fb4e3a5afecdf
+Created: 2026-08-10T22:43:16Z
+Completed: 2026-08-10T22:47:18Z
+Conclusion: success
+
+Build job: h100-evidence-image / build-h100-evidence-image
+Build job ID: 93620892205
+Build started: 2026-08-10T22:43:20Z
+Build completed: 2026-08-10T22:47:17Z
+Build conclusion: success
+
+Skipped legacy jobs:
+- iris-tags
+- finelog-image
+- iris-images
+- iris-manifests
+- marin-tpu-ci-images
+
+Image tag: ghcr.io/marin-community/iris-task-h100-evidence:e5e5582909cd27f5ceae27bd1d7fb4e3a5afecdf
+OCI digest: sha256:38e4ff36fba55f336782b5430b41b0aa67129c9b7d3cac51753e2cb7d00bfa28
+Immutable image: ghcr.io/marin-community/iris-task-h100-evidence:e5e5582909cd27f5ceae27bd1d7fb4e3a5afecdf@sha256:38e4ff36fba55f336782b5430b41b0aa67129c9b7d3cac51753e2cb7d00bfa28
+
+The build log recorded the CUDA/NVTX shared-library probe and the CPU-only
+JAX/NumPy/SciPy/Shuttle import smoke as completed layers. Those build steps used
+the Docker build shell and therefore did not exercise Iris's login-shell task
+entrypoint or the submitted unqualified `python` command.

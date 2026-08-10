@@ -1,0 +1,26 @@
+I20260810 15:54:38 8418467456 iris.cluster.config Loading config from /private/tmp/shuttle-h100-launch-e5e5582/lib/iris/config/cw-us-west-04a.yaml
+I20260810 15:54:38 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260810 15:54:38 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10003 -> iris-ci-controller-svc:10000
+Job: /dlwh/shuttle-h100-contract-map-evidence-e5e5582 (/dlwh/shuttle-h100-contract-map-evidence-e5e5582)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: h100_contract_map_source_payload.py: OK
+h100-evidence-source-manifest.json: OK
+Traceback (most recent call last):
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2507, in <module>
+    main()
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2489, in main
+    output = run_coordinator(
+             ^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1531, in run_coordinator
+    from tile_lifetime.contract_map_backend_resources import (  # noqa: PLC0415
+  File "/app/source/lib/tile_lifetime/src/tile_lifetime/__init__.py", line 6, in <module>
+    from tile_lifetime.attention import (
+  File "/app/source/lib/tile_lifetime/src/tile_lifetime/attention.py", line 8, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'
+
+
+  TASK  STATE      EXIT  DURATION      PEAK MEM    CUR MEM    ERROR
+     0  failed        1  5.45 seconds  -           -          h100_contract_map_source_payload.py: OK
+                                                              h100-evide...

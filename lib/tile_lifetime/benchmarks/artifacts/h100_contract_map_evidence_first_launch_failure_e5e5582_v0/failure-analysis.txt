@@ -1,0 +1,27 @@
+Observed boundary
+=================
+
+1. The final image copies the frozen environment to
+   /opt/h100-evidence-runtime and prepends /opt/h100-evidence-runtime/bin to its
+   Docker ENV PATH.
+2. The CoreWeave Kubernetes backend starts tasks with `bash -lc`, which is a
+   login shell, then conditionally activates /app/.venv only when that file
+   exists.
+3. This job used --no-sync and its three-file source bundle did not contain
+   /app/.venv, so Iris activated no task venv.
+4. The exact persisted task argv used `/bin/sh -ceu` and then
+   `exec python h100_contract_map_source_payload.py run ...`.
+5. The stdlib-only launcher authenticated the manifest, restored the capsule,
+   and used sys.executable for the runner.
+6. The runner reached the first third-party import through
+   tile_lifetime.__init__ and failed because that interpreter had no NumPy.
+
+The image build smoke used `RUN ... python` during Docker build. It proved the
+frozen environment was internally coherent under the Dockerfile PATH, but it
+did not reproduce Iris's `bash -lc` launch boundary. The task failure therefore
+does not contradict the build smoke.
+
+No H100 architecture check, nvidia-smi invocation, CUDA compilation, profiler
+collection, JAX device query, or kernel execution occurred. The controller
+recorded one failed attempt and max_retries_failure=0; no retry or relaunch was
+performed.
