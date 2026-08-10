@@ -1,0 +1,5 @@
+Command:
+kubectl --kubeconfig ~/.kube/coreweave-iris --context marin-rn02a_RNO2A --namespace iris get pods -l iris.task_id=dlwh-shuttle-attn-training-h100-fixed-20260809-0 -o wide
+
+Output:
+No resources found in iris namespace.
