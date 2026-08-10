@@ -48,9 +48,12 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
+from levanter.kernels.mixture_of_kittens.forward_ffi import MoKForwardConfig
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
+
+from experiments.grug.mixture_of_kittens.fused_moe import mixture_of_kittens_mlp
 
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
@@ -160,6 +163,7 @@ class GrugModelConfig:
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
     ragged_all_to_all_splits_per_peer: int = 1
+    mixture_of_kittens: MoKForwardConfig | None = None
     report_capacity_overflow: bool = False
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
@@ -203,6 +207,13 @@ class GrugModelConfig:
             raise ValueError("expert_chunks must be positive")
         if self.ragged_all_to_all_splits_per_peer <= 0:
             raise ValueError("ragged_all_to_all_splits_per_peer must be positive")
+        if self.mixture_of_kittens is not None:
+            if self.moe_implementation != "ragged_all_to_all":
+                raise ValueError("Mixture-of-Kittens requires the ragged all-to-all fallback")
+            if self.shared_expert_intermediate_dim != self.intermediate_dim:
+                raise ValueError("Mixture-of-Kittens requires matching routed and shared intermediate dimensions")
+            if self.hidden_dim % 256 != 0 or self.intermediate_dim % 256 != 0:
+                raise ValueError("Mixture-of-Kittens hidden and intermediate dimensions must be divisible by 256")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
         resolve_moe_implementation(self.moe_implementation)
@@ -752,6 +763,8 @@ class MoEMLP(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
+        *,
+        fused_shared: DenseMLP | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
@@ -798,18 +811,39 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        moe_out = self.expert_mlp(
-            x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            mesh=get_abstract_mesh(),
-            report_capacity_overflow=self.cfg.report_capacity_overflow,
-        )
-        if self.cfg.report_capacity_overflow:
-            routed_flat, dropped_assignments = moe_out
-        else:
-            routed_flat = moe_out
+        selected_experts = selected_experts.astype(jnp.int32)
+        if self.cfg.mixture_of_kittens is not None:
+            if fused_shared is None:
+                raise ValueError("Mixture-of-Kittens requires one shared expert")
+            routed_flat = mixture_of_kittens_mlp(
+                x_flat,
+                selected_experts,
+                combine_weights,
+                self.expert_mlp.w_gate,
+                self.expert_mlp.w_up,
+                self.expert_mlp.w_down,
+                fused_shared.w_gate,
+                fused_shared.w_up,
+                fused_shared.w_down,
+                mesh=get_abstract_mesh(),
+                config=self.cfg.mixture_of_kittens,
+                fallback_implementation=self.expert_mlp.implementation,
+                ragged_all_to_all_splits_per_peer=self.expert_mlp.ragged_all_to_all_splits_per_peer,
+            )
             dropped_assignments = _zero_dropped_assignments()
+        else:
+            moe_out = self.expert_mlp(
+                x_flat,
+                selected_experts,
+                combine_weights,
+                mesh=get_abstract_mesh(),
+                report_capacity_overflow=self.cfg.report_capacity_overflow,
+            )
+            if self.cfg.report_capacity_overflow:
+                routed_flat, dropped_assignments = moe_out
+            else:
+                routed_flat = moe_out
+                dropped_assignments = _zero_dropped_assignments()
         router_stats["capacity_overflow"] = dropped_assignments
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
@@ -876,9 +910,15 @@ class Block(eqx.Module):
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
+        fused_shared = None
+        if self.mlp.cfg.mixture_of_kittens is not None:
+            if self.shared is None:
+                raise ValueError("Mixture-of-Kittens requires one shared expert")
+            fused_shared = self.shared[0]
+        mlp_out, router_stats = self.mlp(mlp_in, fused_shared=fused_shared)
         if self.shared is not None:
-            for shared_expert in self.shared:
+            first_unfused = 1 if fused_shared is not None else 0
+            for shared_expert in self.shared[first_unfused:]:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)

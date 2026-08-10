@@ -82,6 +82,8 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 [project.optional-dependencies]
 gpu = [
   "jax[cuda13]==0.11.0",
+  # CUDA 13 splits the C++ and CUB headers from the compiler wheel.
+  "nvidia-cuda-cccl==13.3.3.4.1; sys_platform == 'linux'",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.

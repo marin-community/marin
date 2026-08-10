@@ -1,0 +1,355 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Run a four-GPU correctness check for the Mixture-of-Kittens JAX FFI."""
+
+import json
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import AxisType, Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
+from levanter.kernels.mixture_of_kittens.forward_ffi import (
+    MoKForwardConfig,
+    ensure_runtime,
+    forward_bf16_local,
+    schedule_capacity,
+)
+
+from experiments.grug.mixture_of_kittens.fused_moe import (
+    mixture_of_kittens_mlp,
+    mixture_of_kittens_reference,
+)
+from experiments.grug.mixture_of_kittens.schedule import build_schedule
+
+WORLD_SIZE = 4
+NUM_TOKENS = 512
+HIDDEN_DIM = 256
+INTERMEDIATE_DIM = 256
+TOP_K = 1
+NUM_LOCAL_EXPERTS = 1
+BF16_ATOL = 0.5
+BF16_RTOL = 0.01
+
+
+def _random_inputs() -> tuple[np.ndarray, ...]:
+    random = np.random.default_rng(1234)
+    x = random.normal(size=(WORLD_SIZE, NUM_TOKENS, HIDDEN_DIM)).astype(np.float32)
+    router_weights = np.ones((WORLD_SIZE, NUM_TOKENS, TOP_K), dtype=np.float32)
+    shared_gate = (random.normal(size=(INTERMEDIATE_DIM, HIDDEN_DIM)) / HIDDEN_DIM**0.5).astype(np.float32)
+    shared_up = (random.normal(size=(INTERMEDIATE_DIM, HIDDEN_DIM)) / HIDDEN_DIM**0.5).astype(np.float32)
+    shared_down = (random.normal(size=(HIDDEN_DIM, INTERMEDIATE_DIM)) / INTERMEDIATE_DIM**0.5).astype(np.float32)
+    routed_gate = (
+        random.normal(size=(WORLD_SIZE, NUM_LOCAL_EXPERTS, INTERMEDIATE_DIM, HIDDEN_DIM)) / HIDDEN_DIM**0.5
+    ).astype(np.float32)
+    routed_up = (
+        random.normal(size=(WORLD_SIZE, NUM_LOCAL_EXPERTS, INTERMEDIATE_DIM, HIDDEN_DIM)) / HIDDEN_DIM**0.5
+    ).astype(np.float32)
+    routed_down = (
+        random.normal(size=(WORLD_SIZE, NUM_LOCAL_EXPERTS, HIDDEN_DIM, INTERMEDIATE_DIM)) / INTERMEDIATE_DIM**0.5
+    ).astype(np.float32)
+    return x, router_weights, shared_gate, shared_up, shared_down, routed_gate, routed_up, routed_down
+
+
+def _routes() -> np.ndarray:
+    source_ranks = np.arange(WORLD_SIZE, dtype=np.int32)[:, None]
+    token_indices = np.arange(NUM_TOKENS, dtype=np.int32)[None, :]
+    return ((source_ranks + token_indices) % WORLD_SIZE)[..., None]
+
+
+def _schedules(top_experts: np.ndarray, config: MoKForwardConfig) -> tuple[np.ndarray, ...]:
+    capacity = schedule_capacity(NUM_TOKENS, TOP_K, NUM_LOCAL_EXPERTS, config)
+    schedules = [
+        build_schedule(
+            jnp.asarray(top_experts),
+            num_local_experts=NUM_LOCAL_EXPERTS,
+            schedule_capacity=capacity,
+            rank=jnp.asarray(rank, dtype=jnp.int32),
+        )
+        for rank in range(WORLD_SIZE)
+    ]
+    if any(bool(jax.device_get(schedule.overflow)) for schedule in schedules):
+        raise RuntimeError("The smoke-test schedule capacity is too small")
+    return tuple(
+        np.stack([np.asarray(jax.device_get(getattr(schedule, field))) for schedule in schedules])
+        for field in ("peer_rank", "peer_token_idx", "num_tokens", "tokens_per_expert")
+    )
+
+
+def _reference(
+    x: jax.Array,
+    router_weights: jax.Array,
+    shared_gate: jax.Array,
+    shared_up: jax.Array,
+    shared_down: jax.Array,
+    routed_gate: jax.Array,
+    routed_up: jax.Array,
+    routed_down: jax.Array,
+    top_experts: jax.Array,
+) -> jax.Array:
+    shared_gate_values = jnp.einsum("wth,ih->wti", x, shared_gate)
+    shared_up_values = jnp.einsum("wth,ih->wti", x, shared_up)
+    shared_hidden = jax.nn.silu(shared_gate_values) * shared_up_values
+    shared_output = jnp.einsum("wti,hi->wth", shared_hidden, shared_down)
+
+    selected_gate = routed_gate[top_experts, 0]
+    selected_up = routed_up[top_experts, 0]
+    selected_down = routed_down[top_experts, 0]
+    routed_gate_values = jnp.einsum("wth,wtkih->wtki", x, selected_gate)
+    routed_up_values = jnp.einsum("wth,wtkih->wtki", x, selected_up)
+    routed_hidden = jax.nn.silu(routed_gate_values) * routed_up_values
+    routed_output = jnp.einsum("wtki,wtkhi->wtkh", routed_hidden, selected_down)
+    return (shared_output.astype(jnp.float32) + jnp.sum(routed_output * router_weights[..., None], axis=2)).astype(
+        jnp.bfloat16
+    )
+
+
+def _error_metrics(actual: jax.Array, expected: jax.Array) -> dict[str, float | bool]:
+    actual_float = np.asarray(jax.device_get(actual), dtype=np.float32)
+    expected_float = np.asarray(jax.device_get(expected), dtype=np.float32)
+    absolute_error = np.abs(actual_float - expected_float)
+    close = np.isclose(actual_float, expected_float, atol=BF16_ATOL, rtol=BF16_RTOL)
+    return {
+        "allclose": bool(np.all(close)),
+        "max_absolute_error": float(np.max(absolute_error)),
+        "mean_absolute_error": float(np.mean(absolute_error)),
+        "mismatch_fraction": float(np.mean(~close)),
+    }
+
+
+def main() -> None:
+    devices = jax.devices()
+    if len(devices) != WORLD_SIZE:
+        raise RuntimeError(f"The smoke test requires {WORLD_SIZE} visible GPUs, got {len(devices)}")
+
+    config = MoKForwardConfig()
+    inputs = _random_inputs()
+    top_experts = _routes()
+    peer_rank, peer_token_idx, num_scheduled_tokens, tokens_per_expert = _schedules(top_experts, config)
+    ensure_runtime(num_tokens=NUM_TOKENS, hidden_dim=HIDDEN_DIM, top_k=TOP_K)
+
+    mesh = Mesh(np.asarray(devices), ("expert",), axis_types=(AxisType.Explicit,))
+    sharded = NamedSharding(mesh, P("expert"))
+    replicated = NamedSharding(mesh, P())
+    x, router_weights, shared_gate, shared_up, shared_down, routed_gate, routed_up, routed_down = inputs
+    arguments = (
+        jax.device_put(jnp.asarray(x, dtype=jnp.bfloat16), sharded),
+        jax.device_put(jnp.asarray(router_weights), sharded),
+        jax.device_put(jnp.asarray(shared_gate, dtype=jnp.bfloat16), replicated),
+        jax.device_put(jnp.asarray(routed_gate, dtype=jnp.bfloat16), sharded),
+        jax.device_put(jnp.asarray(shared_up, dtype=jnp.bfloat16), replicated),
+        jax.device_put(jnp.asarray(routed_up, dtype=jnp.bfloat16), sharded),
+        jax.device_put(jnp.asarray(shared_down, dtype=jnp.bfloat16), replicated),
+        jax.device_put(jnp.asarray(routed_down, dtype=jnp.bfloat16), sharded),
+        jax.device_put(jnp.asarray(peer_rank), sharded),
+        jax.device_put(jnp.asarray(peer_token_idx), sharded),
+        jax.device_put(jnp.asarray(num_scheduled_tokens), sharded),
+        jax.device_put(jnp.asarray(tokens_per_expert), sharded),
+    )
+
+    def local_forward(
+        local_x: jax.Array,
+        local_router_weights: jax.Array,
+        local_shared_gate: jax.Array,
+        local_routed_gate: jax.Array,
+        local_shared_up: jax.Array,
+        local_routed_up: jax.Array,
+        local_shared_down: jax.Array,
+        local_routed_down: jax.Array,
+        local_peer_rank: jax.Array,
+        local_peer_token_idx: jax.Array,
+        local_num_scheduled_tokens: jax.Array,
+        local_tokens_per_expert: jax.Array,
+    ) -> jax.Array:
+        output = forward_bf16_local(
+            local_x[0],
+            local_router_weights[0],
+            local_shared_gate,
+            local_routed_gate[0],
+            local_shared_up,
+            local_routed_up[0],
+            local_shared_down,
+            local_routed_down[0],
+            local_peer_rank[0],
+            local_peer_token_idx[0],
+            local_num_scheduled_tokens[0],
+            local_tokens_per_expert[0],
+            config=config,
+        )
+        return output[None]
+
+    fused_forward = jax.jit(
+        jax.shard_map(
+            local_forward,
+            mesh=mesh,
+            in_specs=(
+                P("expert", None, None),
+                P("expert", None, None),
+                P(None, None),
+                P("expert", None, None, None),
+                P(None, None),
+                P("expert", None, None, None),
+                P(None, None),
+                P("expert", None, None, None),
+                P("expert", None),
+                P("expert", None),
+                P("expert"),
+                P("expert", None),
+            ),
+            out_specs=P("expert", None, None),
+            check_vma=False,
+        )
+    )
+    actual = fused_forward(*arguments)
+    actual.block_until_ready()
+
+    with jax.default_device(devices[0]):
+        reference = jax.jit(_reference)(
+            jnp.asarray(x, dtype=jnp.bfloat16),
+            jnp.asarray(router_weights),
+            jnp.asarray(shared_gate, dtype=jnp.bfloat16),
+            jnp.asarray(shared_up, dtype=jnp.bfloat16),
+            jnp.asarray(shared_down, dtype=jnp.bfloat16),
+            jnp.asarray(routed_gate, dtype=jnp.bfloat16),
+            jnp.asarray(routed_up, dtype=jnp.bfloat16),
+            jnp.asarray(routed_down, dtype=jnp.bfloat16),
+            jnp.asarray(top_experts),
+        )
+        reference.block_until_ready()
+
+    forward_metrics = _error_metrics(actual, reference)
+
+    output_gradient = np.random.default_rng(4321).normal(size=x.shape).astype(np.float32)
+    current_layout_arguments = (
+        jax.device_put(jnp.asarray(x.reshape(-1, HIDDEN_DIM), dtype=jnp.bfloat16), sharded),
+        jax.device_put(jnp.asarray(router_weights.reshape(-1, TOP_K)), sharded),
+        jax.device_put(
+            jnp.asarray(
+                np.transpose(routed_gate, (0, 1, 3, 2)).reshape(-1, HIDDEN_DIM, INTERMEDIATE_DIM), dtype=jnp.bfloat16
+            ),
+            sharded,
+        ),
+        jax.device_put(
+            jnp.asarray(
+                np.transpose(routed_up, (0, 1, 3, 2)).reshape(-1, HIDDEN_DIM, INTERMEDIATE_DIM), dtype=jnp.bfloat16
+            ),
+            sharded,
+        ),
+        jax.device_put(
+            jnp.asarray(
+                np.transpose(routed_down, (0, 1, 3, 2)).reshape(-1, INTERMEDIATE_DIM, HIDDEN_DIM), dtype=jnp.bfloat16
+            ),
+            sharded,
+        ),
+        jax.device_put(jnp.asarray(shared_gate.T, dtype=jnp.bfloat16), replicated),
+        jax.device_put(jnp.asarray(shared_up.T, dtype=jnp.bfloat16), replicated),
+        jax.device_put(jnp.asarray(shared_down.T, dtype=jnp.bfloat16), replicated),
+    )
+    selected_experts = jax.device_put(jnp.asarray(top_experts.reshape(-1, TOP_K)), sharded)
+    sharded_output_gradient = jax.device_put(
+        jnp.asarray(output_gradient.reshape(-1, HIDDEN_DIM), dtype=jnp.bfloat16), sharded
+    )
+
+    def integrated_loss(*differentiable: jax.Array) -> jax.Array:
+        (
+            integrated_x,
+            integrated_combine_weights,
+            integrated_w_gate,
+            integrated_w_up,
+            integrated_w_down,
+            integrated_shared_gate,
+            integrated_shared_up,
+            integrated_shared_down,
+        ) = differentiable
+        output = mixture_of_kittens_mlp(
+            integrated_x,
+            selected_experts,
+            integrated_combine_weights,
+            integrated_w_gate,
+            integrated_w_up,
+            integrated_w_down,
+            integrated_shared_gate,
+            integrated_shared_up,
+            integrated_shared_down,
+            mesh=mesh,
+            config=config,
+            fallback_implementation="ring",
+            ragged_all_to_all_splits_per_peer=1,
+        )
+        return jnp.sum(output.astype(jnp.float32) * sharded_output_gradient.astype(jnp.float32))
+
+    integrated_value, integrated_gradients = jax.jit(jax.value_and_grad(integrated_loss, argnums=tuple(range(8))))(
+        *current_layout_arguments
+    )
+    integrated_value.block_until_ready()
+
+    def fallback_loss(*differentiable: jax.Array) -> jax.Array:
+        (
+            fallback_x,
+            fallback_combine_weights,
+            fallback_w_gate,
+            fallback_w_up,
+            fallback_w_down,
+            fallback_shared_gate,
+            fallback_shared_up,
+            fallback_shared_down,
+        ) = differentiable
+        output = mixture_of_kittens_reference(
+            fallback_x,
+            selected_experts,
+            fallback_combine_weights,
+            fallback_w_gate,
+            fallback_w_up,
+            fallback_w_down,
+            fallback_shared_gate,
+            fallback_shared_up,
+            fallback_shared_down,
+            mesh=mesh,
+            config=config,
+            fallback_implementation="ring",
+            ragged_all_to_all_splits_per_peer=1,
+        )
+        return jnp.sum(output.astype(jnp.float32) * sharded_output_gradient.astype(jnp.float32))
+
+    reference_value, reference_gradients = jax.jit(jax.value_and_grad(fallback_loss, argnums=tuple(range(8))))(
+        *current_layout_arguments
+    )
+    reference_value.block_until_ready()
+
+    gradient_names = (
+        "x",
+        "router_weights",
+        "routed_gate",
+        "routed_up",
+        "routed_down",
+        "shared_gate",
+        "shared_up",
+        "shared_down",
+    )
+    loss_absolute_error = float(
+        np.abs(np.asarray(jax.device_get(integrated_value)) - np.asarray(jax.device_get(reference_value)))
+    )
+    gradient_metrics = {
+        name: _error_metrics(integrated_gradient, reference_gradient)
+        for name, integrated_gradient, reference_gradient in zip(
+            gradient_names,
+            integrated_gradients,
+            reference_gradients,
+            strict=True,
+        )
+    }
+    metrics = {
+        "forward": forward_metrics,
+        "loss_absolute_error": loss_absolute_error,
+        "gradients": gradient_metrics,
+    }
+    print(json.dumps(metrics, sort_keys=True))
+    checks = [forward_metrics["allclose"]]
+    checks.extend(result["allclose"] for result in gradient_metrics.values())
+    if not all(checks):
+        raise AssertionError("The fused output or fallback gradient does not match the JAX BF16 reference")
+
+
+if __name__ == "__main__":
+    main()

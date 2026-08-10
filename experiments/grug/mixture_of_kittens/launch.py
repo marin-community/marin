@@ -5,6 +5,7 @@
 
 import dataclasses
 import os
+from enum import StrEnum
 
 import click
 import jmp
@@ -12,6 +13,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.kernels.mixture_of_kittens.forward_ffi import MoKForwardConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import Artifact
@@ -47,6 +49,13 @@ _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
 
 
+class MokExecution(StrEnum):
+    """Forward execution boundary for the throughput gate."""
+
+    XLA = "xla"
+    FUSED = "fused"
+
+
 def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
     return tokenized(
         "slimpajama-6b",
@@ -70,6 +79,7 @@ def build_mok_run(
     *,
     run_id: str,
     num_steps: int,
+    execution: MokExecution,
     implementation: RaggedAllToAllImplementation,
     num_nodes: int,
     num_experts: int | None = None,
@@ -89,6 +99,8 @@ def build_mok_run(
         raise ValueError(f"num_steps must be positive, got {num_steps}")
     if not 1 <= num_nodes <= MAX_MOK_NODES:
         raise ValueError(f"num_nodes must be between 1 and {MAX_MOK_NODES}, got {num_nodes}")
+    if execution is MokExecution.FUSED and num_nodes != 1:
+        raise ValueError("Fused Mixture-of-Kittens execution requires one four-GPU worker")
 
     expert_axis_size = num_nodes * MOK_GPUS_PER_NODE
     train_batch_size = MOK_BATCH_SIZE_PER_GPU * expert_axis_size
@@ -106,6 +118,8 @@ def build_mok_run(
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
+    if execution is MokExecution.FUSED:
+        model = dataclasses.replace(model, mixture_of_kittens=MoKForwardConfig())
     # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
     # already allocated and the workspace is built. Reject it here instead.
     if model.num_experts % expert_axis_size != 0:
@@ -165,6 +179,7 @@ def build_mok_run(
                     "ep",
                     backend_tag,
                     f"xla-{implementation.value}",
+                    f"execution-{execution.value}",
                     capacity_tag,
                     size_tag,
                     f"batch-{train_batch_size}",
@@ -205,6 +220,12 @@ def build_mok_run(
 
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
+@click.option(
+    "--execution",
+    type=click.Choice(MokExecution, case_sensitive=False),
+    required=True,
+    help="Use the XLA forward or the fused Mixture-of-Kittens forward.",
+)
 @click.option(
     "--implementation",
     type=click.Choice(RaggedAllToAllImplementation, case_sensitive=False),
@@ -251,6 +272,7 @@ def build_mok_run(
 @build_options
 def main(
     run_id: str,
+    execution: MokExecution,
     implementation: RaggedAllToAllImplementation,
     num_nodes: int,
     num_steps: int,
@@ -262,6 +284,7 @@ def main(
     return build_mok_run(
         run_id=run_id,
         num_steps=num_steps,
+        execution=execution,
         implementation=implementation,
         num_nodes=num_nodes,
         num_experts=num_experts,

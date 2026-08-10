@@ -172,3 +172,23 @@ The device kernel landed in XLA commit `acb5aaffe4c0d844bacb57ad85234422f0ceaae0
 - Result: The run succeeded without a retry. Steps 2 through 4 took 17.82 to 17.84 seconds and reached 19.59% to 19.60% MFU. Loss decreased from 11.81 to 6.49. The device ragged all-to-all kernel fell from 4.73 to 2.14 seconds per step. All device collectives total about 2.87 seconds per step. The XProf session and normalized summary are under `s3://marin-us-east-02a/tmp/ttl=30d/xprof/mok-jax-002-device-s32-1n-25-20260810-0710`.
 - Interpretation: The split treatment improves steady MFU by 13.4%, but transfer tuning alone cannot reach the target. Subtracting all measured device-collective duration gives an optimistic arithmetic limit of about 23.4% MFU. A useful next increment must also remove launch gaps or overlap transfer with expert compute.
 - Next action: Prototype the fused forward boundary. Prefer a runtime that owns NCCL symmetric buffers over a private XLA collective-context dependency.
+
+### 2026-08-10 08:33 UTC - Fused JAX FFI forward passed the first GB200 gate
+
+- Hypothesis: A raw CUDA JAX FFI adapter can run the fused BF16 dispatch, expert compute, and combine kernel without PyTorch or a private XLA API.
+- Commit Hash: `ca858c2da` plus uncommitted adapter changes.
+- Commands: CUDA 13 CPU build probe; one four-GPU GB200 Iris correctness job; independent JAX BF16 reference.
+- Config: Mixture-of-Kittens `6438bf48f88094d305972fbe0fa6deba0f7d4d1a`, ThunderKittens `1c3920d993404dd49a6d4c7267ea11d583bd5c68`, SM100a, four GPUs, 512 tokens per GPU, hidden and intermediate dimensions 256, four routed experts at top-1, and one fused shared expert.
+- Result: The adapter compiled and linked without PyTorch. The four-GPU job succeeded. The maximum absolute output error was 0.03125, the mean absolute error was 0.00350, and all values passed the BF16 check.
+- Interpretation: JAX FFI can host the fused peer-memory kernel on GB200. The remaining correctness work is the training-shape forward path and a JAX fallback gradient.
+- Next action: Add a custom gradient, connect the fused forward to the experiment model, and run a training-shape correctness gate before the 25-step profile.
+
+### 2026-08-10 09:00 UTC - Fused custom gradient passed the GB200 gate
+
+- Hypothesis: A custom VJP can use the fused FFI forward and the exact JAX MoE fallback for backward propagation without a change to training gradients.
+- Commit Hash: `ca858c2da` plus uncommitted fused-model changes.
+- Commands: One four-GPU GB200 Iris correctness job; independent BF16 forward reference; gradient comparison against the training fallback.
+- Config: The prior fused-forward gate with model weight layouts, one fused shared expert, and gradients for the input, router, routed expert, and shared expert arrays.
+- Result: The job succeeded. The fused forward again had a maximum absolute error of 0.03125 and a mean absolute error of 0.00350. All eight gradient leaves matched the exact JAX fallback bit for bit.
+- Interpretation: The FFI boundary and custom VJP are correct at the small four-GPU shape. The next risk is full training shape, memory use, and the nightly JAX FFI ABI.
+- Next action: Run the local change gate, commit the fused increment, and submit a short full-model correctness run on the pinned nightly runtime.

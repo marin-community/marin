@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from fray.cluster import ResourceConfig
+from levanter.kernels.mixture_of_kittens.forward_ffi import MoKForwardConfig, schedule_capacity
 
 from experiments.grug import dispatch as grug_dispatch
 from experiments.grug.mixture_of_kittens import heuristic, launch, train
@@ -249,6 +250,7 @@ def test_gate_keeps_the_per_gpu_batch_constant(num_nodes: int, expected_batch_si
     step = launch.build_mok_run(
         run_id=f"batch-{num_nodes}",
         num_steps=1,
+        execution=launch.MokExecution.XLA,
         implementation=train.RaggedAllToAllImplementation.ONE_SHOT,
         num_nodes=num_nodes,
         version="dev",
@@ -267,8 +269,51 @@ def test_expert_bank_must_divide_requested_topology():
         launch.build_mok_run(
             run_id="bad-bank",
             num_steps=1,
+            execution=launch.MokExecution.FUSED,
             implementation=train.RaggedAllToAllImplementation.ONE_SHOT,
             num_nodes=1,
             num_experts=10,
+            version="dev",
+        )
+
+
+def test_fused_gate_records_the_mixture_of_kittens_boundary():
+    step = launch.build_mok_run(
+        run_id="fused-boundary",
+        num_steps=1,
+        execution=launch.MokExecution.FUSED,
+        implementation=train.RaggedAllToAllImplementation.DEVICE,
+        num_nodes=1,
+        version="dev",
+    )
+
+    config = json.loads(step.fingerprint_payload())
+    fused = config["model"]["mixture_of_kittens"]
+    assert fused["num_comm_sms"] == 40
+    assert fused["minibatch_size"] == 4096
+    assert fused["schedule_capacity_multiplier"] == 4
+
+
+def test_fused_schedule_capacity_covers_all_routes_and_expert_padding():
+    capacity = schedule_capacity(
+        num_tokens=16 * 4096,
+        top_k=4,
+        num_local_experts=2,
+        config=MoKForwardConfig(),
+    )
+
+    worst_case_routes = 4 * 16 * 4096 * 4
+    assert capacity >= worst_case_routes + 2 * 255
+    assert capacity % 4096 == 0
+
+
+def test_fused_gate_rejects_more_than_one_worker():
+    with pytest.raises(ValueError, match="requires one four-GPU worker"):
+        launch.build_mok_run(
+            run_id="fused-multinode",
+            num_steps=1,
+            execution=launch.MokExecution.FUSED,
+            implementation=train.RaggedAllToAllImplementation.DEVICE,
+            num_nodes=2,
             version="dev",
         )
