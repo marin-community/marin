@@ -9,7 +9,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from tile_lifetime import DType, ExpertParallelConfig, NumericalPolicy
+from shuttle.ir import DType
+from tile_lifetime import ExpertParallelConfig, NumericalPolicy
 from tile_lifetime.cuda_expert_parallel_training_codegen import (
     expert_parallel_training_scalar_program,
     render_cuda_expert_parallel_training_include,

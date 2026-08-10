@@ -6,6 +6,7 @@
 from dataclasses import dataclass, field
 from math import ceil, isfinite
 
+from shuttle.ir import DType
 from tile_lifetime.expert_parallel_plan import (
     BufferLifetime,
     ExchangeRelationProjection,
@@ -32,7 +33,6 @@ from tile_lifetime.expert_parallel_plan import (
     WorkerPool,
 )
 from tile_lifetime.ir import (
-    DType,
     LinearOp,
     RoutedExpertMLPOp,
     SharedExpertMLPOp,

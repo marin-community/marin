@@ -10,6 +10,7 @@ from enum import StrEnum
 
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime.autodiff import differentiate_scalar_expression
 from tile_lifetime.event_dataflow import TaskAxis, TaskFamily, TaskRelation
 from tile_lifetime.fold_placement import (
@@ -18,7 +19,6 @@ from tile_lifetime.fold_placement import (
     OwnerTileAvailability,
     attach_fold_to_owner_preparation,
 )
-from tile_lifetime.ir import DType
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.shared_reverse_fusion import SharedReverseFusionPlan, plan_shared_producer_reverse_fusion
 from tile_lifetime.streaming_attention import (

@@ -8,11 +8,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from shuttle.ir import DType
 from tile_lifetime import (
     AttentionScoreAxis,
     AxisIndexMap,
     ContractPrimitive,
-    DType,
     FoldPrimitive,
     MapPrimitive,
     ScalarExpressionKind,

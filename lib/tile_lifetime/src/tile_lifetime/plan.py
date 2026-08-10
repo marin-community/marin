@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-from tile_lifetime.ir import DType
+from shuttle.ir import DType
 
 
 class NumericalPolicy(StrEnum):

@@ -5,9 +5,9 @@ import math
 
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime import (
     ContractPrimitive,
-    DType,
     FoldPrimitive,
     FoldReducer,
     MapPrimitive,

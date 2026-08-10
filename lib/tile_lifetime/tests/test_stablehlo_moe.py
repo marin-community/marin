@@ -7,8 +7,13 @@ from pathlib import Path
 
 import pytest
 
+from shuttle.ir import DType
+from shuttle.stablehlo_import import (
+    CompositeAttributes,
+    GatherAttributes,
+    import_stablehlo,
+)
 from tile_lifetime import (
-    DType,
     ExpertParallelConfig,
     ExpertParallelStageKind,
     NumericalPolicy,
@@ -32,11 +37,6 @@ from tile_lifetime.moe_reference import (
 from tile_lifetime.reference_pipeline import (
     compile_reference_stablehlo_expert_parallel_region,
     recover_reference_stablehlo_moe_region,
-)
-from tile_lifetime.stablehlo_import import (
-    CompositeAttributes,
-    GatherAttributes,
-    import_stablehlo,
 )
 from tile_lifetime.tensor_program import ScalarExpressionKind, scalar_binary, scalar_input
 

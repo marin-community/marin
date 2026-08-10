@@ -7,8 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime.event_dataflow_adapters import streaming_contract_fold_event_descriptor
-from tile_lifetime.ir import DType
 from tile_lifetime.relation import build_relation_plan
 from tile_lifetime.segmented_grouped_contract_event_schedule import (
     derive_same_stream_segmented_grouped_contract_schedule,

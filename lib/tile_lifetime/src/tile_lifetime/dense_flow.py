@@ -6,8 +6,8 @@
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
+from shuttle.ir import DType
 from tile_lifetime.ir import (
-    DType,
     LinearOp,
     PairwiseSwiGLUOp,
     QKVProjectionOp,

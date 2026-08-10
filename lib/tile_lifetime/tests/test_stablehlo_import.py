@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from tile_lifetime.ir import DType
+from shuttle.ir import DType
+from shuttle.stablehlo_import import CompareAttributes, DotAttributes, ReductionAttributes, import_stablehlo
 from tile_lifetime.pipeline import (
     FrontendSourceKind,
     compile_experimental_whole_pattern_stablehlo_streaming_attention_program,
@@ -28,7 +29,6 @@ from tile_lifetime.reference_pipeline import (
 from tile_lifetime.reference_semantic_recovery import recover_reference_rms_region
 from tile_lifetime.semantic_erasure import SemanticErasureError, validate_plan_semantic_erasure
 from tile_lifetime.semantic_recovery import recover_attention_region
-from tile_lifetime.stablehlo_import import CompareAttributes, DotAttributes, ReductionAttributes, import_stablehlo
 from tile_lifetime.streaming_attention import StreamingTileSchedule
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "rms_region_v1_14_1.mlir.bc.b64"

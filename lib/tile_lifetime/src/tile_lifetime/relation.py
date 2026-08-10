@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime.expert_parallel_plan import ExpertParallelPlan
-from tile_lifetime.ir import DType
 from tile_lifetime.tile_program import (
     TileOp,
     TilePrimitive,

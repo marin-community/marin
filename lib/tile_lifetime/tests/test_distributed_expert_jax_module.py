@@ -12,7 +12,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from tile_lifetime import DType, ExpertParallelConfig, NumericalPolicy
+from shuttle.ir import DType
+from tile_lifetime import ExpertParallelConfig, NumericalPolicy
 from tile_lifetime.distributed_expert_jax_module import (
     DistributedExpertJaxModuleConfig,
     audit_handler_module_stablehlo,

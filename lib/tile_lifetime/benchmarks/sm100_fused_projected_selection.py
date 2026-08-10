@@ -26,7 +26,8 @@ from typing import Any
 import numpy as np
 import torch
 
-from tile_lifetime import DType, StreamingTileSchedule, build_attention_tensor_program
+from shuttle.ir import DType
+from tile_lifetime import StreamingTileSchedule, build_attention_tensor_program
 from tile_lifetime.relation import build_relation_plan
 from tile_lifetime.routed_attention import IndexDomainRestriction, ProjectedBlockSelectionProgram
 from tile_lifetime.sm100_routed_lowering import (

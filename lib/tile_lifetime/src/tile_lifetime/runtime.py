@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
+from shuttle.ir import DType
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND, GemmProgram, compile_gemm_program
-from tile_lifetime.ir import DType
 from tile_lifetime.plan import (
     Attachment,
     AttachmentSite,

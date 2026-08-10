@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 
-from tile_lifetime.ir import DType
+from shuttle.ir import DType
 
 
 @dataclass(frozen=True)

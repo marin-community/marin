@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import ceil, prod
 
+from shuttle.ir import DType
 from tile_lifetime.collective_transport import CollectiveCompletionPlan
 from tile_lifetime.event_buffering import BoundedBufferPlan, derive_bounded_buffer_plan
 from tile_lifetime.event_dataflow import (
@@ -22,7 +23,6 @@ from tile_lifetime.event_dataflow import (
     TaskRelation,
     derive_event_tensor_plan,
 )
-from tile_lifetime.ir import DType
 from tile_lifetime.relation import RelationPlan
 from tile_lifetime.right_resource_event_schedule import RightResourcePipelineDescriptor
 from tile_lifetime.sm100_routed_lowering import SM100RoutedStreamingLowering

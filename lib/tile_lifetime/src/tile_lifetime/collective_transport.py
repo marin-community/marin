@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
-from tile_lifetime.ir import DType
+from shuttle.ir import DType
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.xla_hlo_recovery import HloInstruction, HloModuleGraph, parse_hlo_module_text
 

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from shuttle.stablehlo_import import import_stablehlo
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     StreamingAttentionBackwardFfiBufferLayout,
     StreamingAttentionBackwardStatePolicy,
@@ -14,7 +15,6 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
 )
 from tile_lifetime.jax_streaming_attention_forward_ffi import generate_streaming_attention_forward_ffi
 from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_import import import_stablehlo
 from tile_lifetime.stablehlo_streaming_attention_backward import (
     recover_experimental_whole_pattern_streaming_attention_backward,
 )

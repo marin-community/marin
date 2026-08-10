@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from math import ceil, isfinite
 
+from shuttle.ir import DType
 from tile_lifetime.ir import (
-    DType,
     LinearOp,
     RoutedExpertMLPOp,
     SharedExpertMLPOp,

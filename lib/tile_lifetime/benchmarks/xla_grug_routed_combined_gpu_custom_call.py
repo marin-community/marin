@@ -39,6 +39,7 @@ from lib.tile_lifetime.benchmarks.xla_pair_map_custom_call_smoke import (
     _compile_cuda_ffi_handler,
     write_gzip_text,
 )
+from shuttle.stablehlo_import import import_stablehlo
 from tile_lifetime.command_buffer_capture import CaptureSiteManifest, derive_capture_site_manifest
 from tile_lifetime.cuda_axis_fold_codegen import generate_cuda_axis_fold_ffi
 from tile_lifetime.cuda_contract_map_chain_codegen import (
@@ -65,7 +66,6 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
     register_streaming_attention_backward_ffi,
 )
 from tile_lifetime.plan import NumericalPolicy
-from tile_lifetime.stablehlo_import import import_stablehlo
 from tile_lifetime.stablehlo_streaming_attention_backward import (
     recover_experimental_whole_pattern_streaming_attention_backward,
 )

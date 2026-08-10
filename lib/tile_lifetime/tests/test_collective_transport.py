@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from shuttle.ir import DType
 from tile_lifetime.collective_transport import (
     CollectiveReduction,
     ValueCompleteness,
@@ -23,7 +24,6 @@ from tile_lifetime.event_dataflow_adapters import (
     CollectiveCompletionSchedule,
     collective_completion_task_dataflow,
 )
-from tile_lifetime.ir import DType
 from tile_lifetime.plan import NumericalPolicy
 
 _HLO = (

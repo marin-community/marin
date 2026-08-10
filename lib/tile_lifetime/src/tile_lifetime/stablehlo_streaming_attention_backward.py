@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from tile_lifetime.stablehlo_import import (
+from shuttle.stablehlo_import import (
     CompareAttributes,
     ConstantAttributes,
     ReductionAttributes,

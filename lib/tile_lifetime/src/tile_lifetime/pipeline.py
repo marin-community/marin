@@ -9,9 +9,11 @@ from enum import StrEnum
 
 import numpy as np
 
+from shuttle.ir import DType
+from shuttle.stablehlo_import import import_stablehlo
 from tile_lifetime.compiler import RowScalePlacement
 from tile_lifetime.dense_region import compile_dense_transformer_region
-from tile_lifetime.ir import DType, ScaledDotProductAttentionOp
+from tile_lifetime.ir import ScaledDotProductAttentionOp
 from tile_lifetime.msa_recovery import (
     NaturalProjectedRoutedAttentionCompilation,
     RecoveredProjectedRoutedAttentionProgram,
@@ -37,7 +39,6 @@ from tile_lifetime.semantic_recovery import (
     recover_attention_region,
     recover_dense_transformer_region,
 )
-from tile_lifetime.stablehlo_import import import_stablehlo
 from tile_lifetime.streaming_attention import (
     StreamingAttentionProgram,
     StreamingTileSchedule,

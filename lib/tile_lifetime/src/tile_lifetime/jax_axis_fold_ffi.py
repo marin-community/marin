@@ -12,8 +12,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime.cuda_axis_fold_codegen import GeneratedCudaAxisFoldFfi
-from tile_lifetime.ir import DType
 
 
 def register_cuda_axis_fold_ffi(generated: GeneratedCudaAxisFoldFfi, library: ctypes.CDLL) -> None:

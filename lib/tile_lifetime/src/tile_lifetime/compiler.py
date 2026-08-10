@@ -6,10 +6,10 @@
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
+from shuttle.ir import DType
 from tile_lifetime.dense_algebra import DenseSemanticErasureError, erase_dense_semantics
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
 from tile_lifetime.ir import (
-    DType,
     LayerNormOp,
     LinearOp,
     ResidualAddOp,

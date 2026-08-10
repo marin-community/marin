@@ -30,7 +30,8 @@ from jax_right_resource_runtime import (  # noqa: E402
     prepare_jax_right_resource_runtime,
 )
 
-from tile_lifetime import DType, StreamingTileSchedule, build_attention_tensor_program  # noqa: E402
+from shuttle.ir import DType  # noqa: E402
+from tile_lifetime import StreamingTileSchedule, build_attention_tensor_program  # noqa: E402
 from tile_lifetime.relation import build_relation_plan  # noqa: E402
 from tile_lifetime.sm100_routed_lowering import (  # noqa: E402
     default_sm100_routed_schedules,

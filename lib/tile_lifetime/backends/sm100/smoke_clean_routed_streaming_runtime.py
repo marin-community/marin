@@ -23,7 +23,8 @@ if str(BACKEND_ROOT) not in sys.path:
 from clean_routed_streaming_emitter import PartialMergeScheduleKind, PartialValueDType  # noqa: E402
 from clean_routed_streaming_runtime import compile_routed_streaming_callable  # noqa: E402
 
-from tile_lifetime import DType, StreamingTileSchedule, build_attention_tensor_program  # noqa: E402
+from shuttle.ir import DType  # noqa: E402
+from tile_lifetime import StreamingTileSchedule, build_attention_tensor_program  # noqa: E402
 from tile_lifetime.relation import build_relation_plan  # noqa: E402
 from tile_lifetime.sm100_routed_lowering import (  # noqa: E402
     default_sm100_routed_schedules,

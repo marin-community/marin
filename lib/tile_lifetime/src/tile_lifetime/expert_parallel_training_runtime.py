@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime.expert_parallel_training import ExpertParallelTrainingPlan
-from tile_lifetime.ir import DType
 from tile_lifetime.relation import RelationPlan
 from tile_lifetime.tensor_program import ScalarExpression, ScalarExpressionKind
 

@@ -10,6 +10,7 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 
+from shuttle.ir import DType
 from tile_lifetime.event_dataflow import (
     EventDataflowProgram,
     EventGenerationPolicy,
@@ -21,7 +22,6 @@ from tile_lifetime.event_dataflow import (
     verify_event_dataflow_program,
     verify_event_tensor_plan,
 )
-from tile_lifetime.ir import DType
 
 
 class CudaDynamicEventLoweringError(ValueError):

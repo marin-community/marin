@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from jaxlib.mlir import ir
 from jaxlib.mlir.dialects import stablehlo
 
-from tile_lifetime.ir import DType
+from shuttle.ir import DType
 
 SUPPORTED_OPERATIONS = frozenset(
     {

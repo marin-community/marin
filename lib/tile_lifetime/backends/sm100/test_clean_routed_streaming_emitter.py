@@ -44,7 +44,7 @@ from clean_routed_streaming_emitter import (  # noqa: E402
     specialize_static_launch_grid,
 )
 
-from tile_lifetime.ir import DType  # noqa: E402
+from shuttle.ir import DType  # noqa: E402
 from tile_lifetime.relation import build_relation_plan  # noqa: E402
 from tile_lifetime.sm100_routed_lowering import SM100RelationOrientation  # noqa: E402
 from tile_lifetime.tensor_program import TensorAxis  # noqa: E402

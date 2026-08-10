@@ -3,8 +3,8 @@
 
 from dataclasses import replace
 
+from shuttle.ir import DType
 from tile_lifetime import (
-    DType,
     GemmSkeleton,
     MaterializationDisposition,
     NumericalPolicy,

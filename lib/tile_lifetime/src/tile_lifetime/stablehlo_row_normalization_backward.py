@@ -8,6 +8,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from shuttle.ir import DType
+from shuttle.stablehlo_import import (
+    ConstantAttributes,
+    ReductionAttributes,
+    StableHLOGraph,
+    StableHLOOperation,
+)
 from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldDirection,
     AxisFoldInput,
@@ -23,18 +30,11 @@ from tile_lifetime.cuda_axis_fold_codegen import (
     GeneratedCudaAxisFoldFfi,
     generate_cuda_axis_fold_pipeline_ffi,
 )
-from tile_lifetime.ir import DType
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.row_normalization_training import (
     RowNormalizationAxisFoldPrograms,
     RowStatisticKind,
     build_row_normalization_axis_fold_programs,
-)
-from tile_lifetime.stablehlo_import import (
-    ConstantAttributes,
-    ReductionAttributes,
-    StableHLOGraph,
-    StableHLOOperation,
 )
 from tile_lifetime.tensor_program import (
     ScalarExpression,

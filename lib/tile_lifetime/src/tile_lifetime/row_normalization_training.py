@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from shuttle.ir import DType
 from tile_lifetime.autodiff import DifferentiatedTensorProgram, differentiate_tensor_program
 from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldDirection,
@@ -25,7 +26,6 @@ from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldReduction,
 )
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
-from tile_lifetime.ir import DType
 from tile_lifetime.plan import Attachment, AttachmentSite, GemmSkeleton, NumericalEquivalence
 from tile_lifetime.tensor_program import (
     ContractPrimitive,

@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-from tile_lifetime.ir import DType
+from shuttle.ir import DType
 from tile_lifetime.plan import MaterializationRecord, RewriteExplanation
 from tile_lifetime.tensor_program import ScalarExpression
 from tile_lifetime.tile_program import TileProgram

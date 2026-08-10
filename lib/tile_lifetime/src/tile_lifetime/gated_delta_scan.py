@@ -7,11 +7,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime.delta_rule_reference import (
     delta_rule_update_expression,
     prepare_delta_rule_inputs,
 )
-from tile_lifetime.ir import DType
 from tile_lifetime.plan import (
     ScanNumericalContract,
     StatefulScanSkeleton,

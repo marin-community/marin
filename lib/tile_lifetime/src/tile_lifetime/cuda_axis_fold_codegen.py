@@ -20,7 +20,7 @@ from enum import StrEnum
 
 import numpy as np
 
-from tile_lifetime.ir import DType
+from shuttle.ir import DType
 from tile_lifetime.tensor_program import (
     ScalarExpression,
     ScalarExpressionKind,

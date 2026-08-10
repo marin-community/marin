@@ -121,7 +121,6 @@ from tile_lifetime.gemm_program import (
     GemmProgram,
     compile_gemm_program,
 )
-from tile_lifetime.ir import DType
 from tile_lifetime.jax_collective_transport import (
     JaxCollectiveExecutionPlan,
     build_jax_collective_execution_plan,

@@ -3,8 +3,8 @@
 
 import pytest
 
+from shuttle.ir import DType
 from tile_lifetime import (
-    DType,
     NumericalPolicy,
 )
 from tile_lifetime.ir import TensorGraph

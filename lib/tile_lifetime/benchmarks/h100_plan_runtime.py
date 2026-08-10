@@ -32,8 +32,8 @@ try:
 except ModuleNotFoundError:
     flash_attn_3_gpu = None
 
+from shuttle.ir import DType
 from tile_lifetime import (
-    DType,
     GemmSkeleton,
     NumericalPolicy,
     ReductionSkeleton,

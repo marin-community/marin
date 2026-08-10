@@ -8,7 +8,8 @@ from enum import StrEnum
 
 import numpy as np
 
-from tile_lifetime.ir import DType, ScaledDotProductAttentionOp
+from shuttle.ir import DType
+from tile_lifetime.ir import ScaledDotProductAttentionOp
 from tile_lifetime.tensor_program import (
     AxisIndexMap,
     ContractPrimitive,

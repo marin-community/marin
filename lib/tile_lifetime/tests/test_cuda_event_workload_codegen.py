@@ -3,6 +3,7 @@
 
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime.cuda_event_workload_codegen import (
     evaluate_segmented_contract_event,
     evaluate_streaming_contract_fold_event,
@@ -14,7 +15,6 @@ from tile_lifetime.event_dataflow_adapters import (
     relation_segmented_contract_task_dataflow,
     streaming_fold_task_dataflow,
 )
-from tile_lifetime.ir import DType
 from tile_lifetime.relation import build_relation_plan
 from tile_lifetime.streaming_attention import (
     StreamingTileSchedule,

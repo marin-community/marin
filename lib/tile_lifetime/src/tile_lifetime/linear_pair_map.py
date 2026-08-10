@@ -8,9 +8,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from shuttle.ir import DType
 from tile_lifetime.autodiff import scalar_expression_vjp
 from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
-from tile_lifetime.ir import DType
 from tile_lifetime.plan import Attachment, AttachmentSite, GemmSkeleton
 from tile_lifetime.tensor_program import (
     ContractPrimitive,

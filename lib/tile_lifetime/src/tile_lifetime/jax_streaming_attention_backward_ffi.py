@@ -28,8 +28,8 @@ import jax.numpy as jnp
 import jaxlib
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime.cuda_toolchain import cuda_toolkit_link_flags, cuda_toolkit_shared_library_link_flags
-from tile_lifetime.ir import DType
 from tile_lifetime.streaming_attention_backward import (
     StreamingAttentionBackwardDomainTraversal,
     StreamingAttentionBackwardMaximumVJP,

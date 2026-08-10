@@ -11,6 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from shuttle.ir import DType
 from tile_lifetime.collective_transport import (
     CollectiveCompletionPlan,
     CollectiveReduction,
@@ -25,7 +26,6 @@ from tile_lifetime.event_dataflow_adapters import (
     CollectiveCompletionTaskDataflow,
     collective_completion_task_dataflow,
 )
-from tile_lifetime.ir import DType
 from tile_lifetime.plan import NumericalPolicy
 
 

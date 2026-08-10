@@ -6,8 +6,8 @@
 import re
 from dataclasses import dataclass
 
-from tile_lifetime.ir import DType, TensorGraph
-from tile_lifetime.stablehlo_import import (
+from shuttle.ir import DType
+from shuttle.stablehlo_import import (
     BroadcastAttributes,
     CompareAttributes,
     CompositeAttributes,
@@ -18,6 +18,7 @@ from tile_lifetime.stablehlo_import import (
     StableHLOGraph,
     StableHLOOperation,
 )
+from tile_lifetime.ir import TensorGraph
 
 INTEGER_ATTRIBUTE = re.compile(r"^(\d+) : i64$")
 SCALAR_LITERAL = re.compile(r"dense<([^>]+)>")

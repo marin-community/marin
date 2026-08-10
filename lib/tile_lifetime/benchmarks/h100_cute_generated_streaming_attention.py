@@ -18,7 +18,7 @@ from pathlib import Path
 import torch
 from backends.h100.cute_streaming_emitter import compile_h100_streaming_program
 
-from tile_lifetime import DType
+from shuttle.ir import DType
 from tile_lifetime.ir import ScaledDotProductAttentionOp, TensorGraph
 from tile_lifetime.streaming_attention import (
     StreamingTileSchedule,

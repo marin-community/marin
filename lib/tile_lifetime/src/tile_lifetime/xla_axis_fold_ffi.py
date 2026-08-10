@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from functools import reduce
 from operator import mul
 
+from shuttle.ir import DType
 from tile_lifetime.cuda_axis_fold_codegen import (
     AxisFoldDirection,
     AxisFoldInput,
@@ -29,7 +30,6 @@ from tile_lifetime.cuda_axis_fold_codegen import (
     CudaAxisFoldFfiBuffer,
     GeneratedCudaAxisFoldFfi,
 )
-from tile_lifetime.ir import DType
 from tile_lifetime.plan import NumericalPolicy
 from tile_lifetime.tensor_program import (
     ScalarExpression,

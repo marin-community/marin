@@ -13,6 +13,7 @@ import pytest
 from jax.sharding import Mesh
 from jax.sharding import PartitionSpec as P
 
+from shuttle.ir import DType
 from tile_lifetime.collective_transport import (
     CollectiveCompletionPlan,
     CollectiveFoldPlan,
@@ -21,7 +22,6 @@ from tile_lifetime.collective_transport import (
     ReplicaGroupDomain,
 )
 from tile_lifetime.event_dataflow import EventMemoryScope, EventSchedulingMode
-from tile_lifetime.ir import DType
 from tile_lifetime.jax_collective_transport import (
     build_jax_collective_execution_plan,
     execute_jax_collective_completion,

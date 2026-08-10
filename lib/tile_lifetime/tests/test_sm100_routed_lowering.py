@@ -4,7 +4,8 @@
 import numpy as np
 import pytest
 
-from tile_lifetime import DType, StreamingTileSchedule, apply_causal_score_mask, build_attention_tensor_program
+from shuttle.ir import DType
+from tile_lifetime import StreamingTileSchedule, apply_causal_score_mask, build_attention_tensor_program
 from tile_lifetime.relation import build_relation_plan
 from tile_lifetime.sm100_routed_lowering import (
     SM100RelationOrientation,

@@ -15,8 +15,8 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from tile_lifetime.ir import DType, TensorGraph, TensorValue
-from tile_lifetime.stablehlo_import import (
+from shuttle.ir import DType
+from shuttle.stablehlo_import import (
     BroadcastAttributes,
     CompareAttributes,
     ConcatenateAttributes,
@@ -29,6 +29,7 @@ from tile_lifetime.stablehlo_import import (
     StableHLOOperation,
     TransposeAttributes,
 )
+from tile_lifetime.ir import TensorGraph, TensorValue
 
 SCALAR_LITERAL = re.compile(r"dense<([^>]+)>")
 
