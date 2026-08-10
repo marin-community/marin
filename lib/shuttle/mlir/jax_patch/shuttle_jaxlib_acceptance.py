@@ -27,6 +27,7 @@ from acceptance_contract import (
     FixtureExpectation,
     ObserverIdentity,
     decode_native_snapshot,
+    match_fixture_contract,
     validate_success_events,
 )
 from jaxlib import _jax
@@ -174,19 +175,12 @@ def grouped_event_evidence(events: Sequence[dict[str, Any]]) -> list[dict[str, A
     for invocation_id, group in groups.items():
         del invocation_id
         numerics = Numerics(group[0]["policy"])
-        matches = []
-        for fixture in FIXTURE_EXPECTATIONS:
-            try:
-                matches.append(validate_event_group(group, numerics, fixture))
-            except AssertionError:
-                pass
-        if len(matches) != 1:
-            raise AssertionError("observer invocation did not match exactly one audited fixture contract")
-        contract = (matches[0]["policy"], matches[0]["fixture"])
+        match = match_fixture_contract(group, expected_identity(numerics))
+        contract = (match["policy"], match["fixture"])
         if contract in observed_contracts:
             raise AssertionError("concurrent acceptance emitted a duplicate policy/fixture contract")
         observed_contracts.add(contract)
-        evidence.append(matches[0])
+        evidence.append(match)
     expected_contracts = {(numerics.value, fixture.name) for numerics in Numerics for fixture in FIXTURE_EXPECTATIONS}
     if observed_contracts != expected_contracts:
         raise AssertionError("concurrent acceptance omitted an audited policy/fixture contract")
