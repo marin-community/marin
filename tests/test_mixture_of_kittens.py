@@ -173,6 +173,7 @@ def test_runtime_environment_selects_one_ragged_all_to_all_implementation(
     environment = train.runtime_environment(existing, implementation)
 
     flags = environment["XLA_FLAGS"].split()
+    assert environment["XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"] == str(train.MOK_HOST_MEMORY_LIMIT_GB)
     assert "--unrelated=true" in flags
     assert "--xla_gpu_experimental_enable_nccl_symmetric_buffers=false" in flags
     assert "--xla_gpu_ragged_all_to_all_mode=private" in flags
