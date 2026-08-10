@@ -1,0 +1,15 @@
+cfe74fb0a17c30a76d2baffa142832d15ab9b8716967e1f258bc3b7c582960b7  ./README.md
+df36f4ca9e2b1e7822fc04eedd83594bb726e53e861b09c2a02cecbd89b2729c  ./bundle-proof.txt
+9a454f4cfb382e04df5aeff7d254063327b8143dec84df67628df1381ccc6238  ./client-proof.txt
+314ef0212242e1ad00ece5c06b2aad4fa204a6ed4c872e4ae7f26073eccf3c03  ./launch-command.txt
+750864179446711f4a134f40be290917bdf78eb9b0d603e0ef8f076931156cc2  ./local-applied-xla.patch.gz
+fb1848d1673b1f251a2346a109490c6b4a23672721ec9c8b804597bb78261341  ./local-runner-proof.txt
+017e66c32ee652335491f1df8d80f4fc14aa7e340773aa97b535daf1ac9a3ecc  ./manifest.env
+68b6be5ba90b78d99eb89437011f49832b7a205c07c7d715ba4ccbf266ef3375  ./monitoring-state.json
+abc119cf75aa235c77213dd07ff0e13a9c815ac855e895e5ac84b1a651d3ea1c  ./raw-attempt.log.gz
+2530d6c63ce0ad13597ab287e17fe427d4db75613e8817a66b3689b9a742135d  ./remote-runner-and-gates.txt
+73525ae344d5b25c89e38f910a4f44d0ec4f5df0b27d5ef8168cac1f5a6ac068  ./run_native_preflight.sh
+60300b60f74844ce27c79fff035454d5b349016eb4ea63827f341aa811efe196  ./runner-manifest-patch-sha256.txt
+a1cb41fac23cc8ac3bbfcacae9cd6a3c731e43f37fb97223802c729fb766012f  ./source-sha256.txt
+142aae61b27ef1ba089cf0aadba4f12de2ca384fb95ea0fbd1752358ceb0e3a5  ./terminal-summary.txt
+7556214c07e78d53647184327bc82cbed71cb98296271003eed6bcdfbf0bd0c1  ./toolchain.txt
