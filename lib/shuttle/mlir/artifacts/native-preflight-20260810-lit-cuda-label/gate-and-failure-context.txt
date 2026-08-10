@@ -1,0 +1,29 @@
+[10:57:38] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:136: /app/tools/bazel-7.7.0 --output_user_root=/app/bazel-output-user-root build --repository_cache=/app/bazel-repository-cache --jobs=24 --local_cpu_resources=24 --local_ram_resources=65536 --noshow_progress --show_result=0 @shuttle_mlir//:shuttle_ops_inc_gen
+[10:57:38] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:138: tee /app/logs/bazel-build-shuttle-ops-inc-gen.log
+[10:57:57] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | INFO: Analyzed target @@shuttle_mlir//:shuttle_ops_inc_gen (84 packages loaded, 14124 targets configured).
+[10:57:57] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | INFO: Elapsed time: 19.677s, Critical Path: 0.02s
+[10:57:57] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | INFO: Build completed successfully, 1 total action
+[10:57:57] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:140: /app/tools/bazel-7.7.0 --output_user_root=/app/bazel-output-user-root build --repository_cache=/app/bazel-repository-cache --jobs=24 --local_cpu_resources=24 --local_ram_resources=65536 --noshow_progress --show_result=0 @shuttle_mlir//:ShuttleDialect
+[10:57:57] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:142: tee /app/logs/bazel-build-shuttle-dialect.log
+[10:57:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | INFO: Analyzed target @@shuttle_mlir//:ShuttleDialect (0 packages loaded, 1577 targets configured).
+[10:58:48] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | INFO: Elapsed time: 51.004s, Critical Path: 17.39s
+[10:58:48] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | INFO: Build completed successfully, 952 total actions
+[10:58:48] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:144: /app/tools/bazel-7.7.0 --output_user_root=/app/bazel-output-user-root build --repository_cache=/app/bazel-repository-cache --jobs=24 --local_cpu_resources=24 --local_ram_resources=65536 --noshow_progress --show_result=0 @shuttle_mlir//:ShuttlePasses
+[10:58:48] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:146: tee /app/logs/bazel-build-shuttle-passes.log
+[10:58:49] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | INFO: Analyzed target @@shuttle_mlir//:ShuttlePasses (0 packages loaded, 192 targets configured).
+[10:58:56] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | INFO: Elapsed time: 7.327s, Critical Path: 6.10s
+[10:58:56] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | INFO: Build completed successfully, 91 total actions
+[10:58:56] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:148: /app/tools/bazel-7.7.0 --output_user_root=/app/bazel-output-user-root build --repository_cache=/app/bazel-repository-cache --jobs=24 --local_cpu_resources=24 --local_ram_resources=65536 --noshow_progress --show_result=0 @shuttle_mlir//:shuttle-opt
+[10:58:56] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:150: tee /app/logs/bazel-build-shuttle-opt.log
+[10:58:57] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | INFO: Analyzed target @@shuttle_mlir//:shuttle-opt (2 packages loaded, 8466 targets configured).
+[11:07:25] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | INFO: Elapsed time: 509.650s, Critical Path: 109.01s
+[11:07:25] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | INFO: Build completed successfully, 5951 total actions
+[11:07:25] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:152: /app/tools/bazel-7.7.0 --output_user_root=/app/bazel-output-user-root build --repository_cache=/app/bazel-repository-cache --jobs=24 --local_cpu_resources=24 --local_ram_resources=65536 --noshow_progress --show_result=0 @shuttle_mlir//:mlir_tests
+[11:07:25] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | + run_native_preflight.sh:154: tee /app/logs/bazel-build-shuttle-mlir-tests.log
+[11:07:26] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | ERROR: no such package '@@shuttle_mlir//xla/tsl/cuda': BUILD file not found in directory 'xla/tsl/cuda' of external repository @@shuttle_mlir. Add a BUILD file to a directory to mark it as a package.
+[11:07:26] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | ERROR: /app/bazel-output-user-root/7bcae6140cd45c3d4e0ed6da28f91b54/external/shuttle_mlir/BUILD.bazel:126:15: no such package '@@shuttle_mlir//xla/tsl/cuda': BUILD file not found in directory 'xla/tsl/cuda' of external repository @@shuttle_mlir. Add a BUILD file to a directory to mark it as a package. and referenced by '@@shuttle_mlir//:_test/semantic-erasure-errors.mlir.test_tools_on_path'
+[11:07:26] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | ERROR: Analysis of target '@@shuttle_mlir//:test/semantic-erasure-errors.mlir.test' failed; build aborted: Analysis failed
+[11:07:26] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | INFO: Elapsed time: 0.668s, Critical Path: 0.00s
+[11:07:26] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | ERROR: Build did NOT complete successfully
+[11:07:26] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | preflight_exit_code=1
+[11:07:26] task=/dlwh/shuttle-native-mlir-preflight-20260810-litfix/0 | preflight_finished_utc=2026-08-10T11:07:26Z

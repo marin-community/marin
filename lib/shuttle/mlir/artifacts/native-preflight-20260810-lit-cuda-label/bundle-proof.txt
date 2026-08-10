@@ -1,0 +1,10 @@
+entries=121
+bytes=240501
+sha256=60287a59f7795f24cddcd3d7037e927dd967c43f2d75ae1294d9991daf2126e6
+config_entries=0
+pyproject_entries=0
+git_entries=0
+proof_entries=0
+runner_entries=1
+patch1_entries=1
+patch2_entries=1

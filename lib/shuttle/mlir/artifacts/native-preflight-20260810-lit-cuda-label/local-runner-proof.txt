@@ -1,0 +1,52 @@
++ readonly PAYLOAD_ROOT=/private/tmp/shuttle-native-litfix-payload.cQraIo
++ PAYLOAD_ROOT=/private/tmp/shuttle-native-litfix-payload.cQraIo
++ readonly XLA_ROOT=/private/tmp/xla-litfix-runner-proof-v2
++ XLA_ROOT=/private/tmp/xla-litfix-runner-proof-v2
++ readonly EXPECTED_XLA_REVISION=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
++ EXPECTED_XLA_REVISION=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
++ XLA_PATCHES=("${PAYLOAD_ROOT}/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch" "${PAYLOAD_ROOT}/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch")
++ readonly -a XLA_PATCHES
++ bash -n /private/tmp/shuttle-native-litfix-payload.cQraIo/run_native_preflight.sh
+++ git -C /private/tmp/xla-litfix-runner-proof-v2 rev-parse HEAD
++ test 9b635916ecc6df6efee62d8e4b0c7ef87ef84d69 = 9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+++ git -C /private/tmp/xla-litfix-runner-proof-v2 status --short
++ test -z ''
++ for patch in '"${XLA_PATCHES[@]}"'
++ test -f /private/tmp/shuttle-native-litfix-payload.cQraIo/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
++ git -C /private/tmp/xla-litfix-runner-proof-v2 apply --check /private/tmp/shuttle-native-litfix-payload.cQraIo/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
++ git -C /private/tmp/xla-litfix-runner-proof-v2 apply /private/tmp/shuttle-native-litfix-payload.cQraIo/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
++ for patch in '"${XLA_PATCHES[@]}"'
++ test -f /private/tmp/shuttle-native-litfix-payload.cQraIo/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
++ git -C /private/tmp/xla-litfix-runner-proof-v2 apply --check /private/tmp/shuttle-native-litfix-payload.cQraIo/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
++ git -C /private/tmp/xla-litfix-runner-proof-v2 apply /private/tmp/shuttle-native-litfix-payload.cQraIo/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
++ (( patch_index=2 - 1 ))
++ (( patch_index >= 0 ))
++ git -C /private/tmp/xla-litfix-runner-proof-v2 apply --reverse --check /private/tmp/shuttle-native-litfix-payload.cQraIo/lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
++ (( patch_index-- ))
++ (( patch_index >= 0 ))
++ git -C /private/tmp/xla-litfix-runner-proof-v2 apply --reverse --check /private/tmp/shuttle-native-litfix-payload.cQraIo/lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
++ (( patch_index-- ))
++ (( patch_index >= 0 ))
++ git -C /private/tmp/xla-litfix-runner-proof-v2 diff --check
++ git -C /private/tmp/xla-litfix-runner-proof-v2 diff --stat
+ xla/lit.bzl                                |  2 +-
+ xla/pjrt/BUILD                             | 55 ++++++++++++++++++++++++++++++
+ xla/pjrt/cpu/cpu_client.cc                 |  5 ++-
+ xla/pjrt/gpu/se_gpu_pjrt_compiler.cc       |  5 ++-
+ xla/pjrt/interpreter/interpreter_client.cc |  5 ++-
+ xla/pjrt/mlir_to_hlo.cc                    | 32 +++++++++++++++++
+ xla/pjrt/mlir_to_hlo.h                     | 11 ++++++
+ xla/pjrt/mlir_to_hlo_test.cc               | 52 ++++++++++++++++++++++++++++
+ xla/pjrt/pjrt_executable_test.cc           | 25 ++++++++++++++
+ xla/pjrt/pjrt_stream_executor_client.cc    |  5 ++-
+ xla/xla.proto                              |  6 +++-
+ 11 files changed, 189 insertions(+), 14 deletions(-)
++ git -C /private/tmp/xla-litfix-runner-proof-v2 diff --binary
++ grep -F 'Label("//xla:sh_test_with_runfiles.py")' /private/tmp/xla-litfix-runner-proof-v2/xla/lit.bzl
+    data = (data or []) + [Label("//xla:sh_test_with_runfiles.py")]
++ grep -nF 0001-add-stablehlo-module-transform-hook.patch /private/tmp/shuttle-native-litfix-payload.cQraIo/lib/shuttle/mlir/xla_patch/README.md
+44:git apply --check /path/to/0001-add-stablehlo-module-transform-hook.patch
+45:git apply /path/to/0001-add-stablehlo-module-transform-hook.patch
++ grep -nF 0002-anchor-lit-labels-to-xla-repository.patch /private/tmp/shuttle-native-litfix-payload.cQraIo/lib/shuttle/mlir/xla_patch/README.md
+46:git apply --check /path/to/0002-anchor-lit-labels-to-xla-repository.patch
+47:git apply /path/to/0002-anchor-lit-labels-to-xla-repository.patch

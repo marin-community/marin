@@ -1,0 +1,14 @@
+{
+  "ts": 1786359425000,
+  "job_id": "/dlwh/shuttle-native-mlir-preflight-20260810-litfix",
+  "config": "/private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml",
+  "resubmit_command": "/private/tmp/marin-iris-current.JoCV0V/.venv/bin/iris --config /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml job run --no-wait --no-sync --enable-extra-resources --cpu 24 --memory 96GB --disk 250GB --max-retries 0 --timeout 14400 --priority interactive --job-name shuttle-native-mlir-preflight-20260810-litfix -- bash run_native_preflight.sh",
+  "restart_count": 0,
+  "submission_count": 1,
+  "terminal_state": "failed",
+  "task_exit_code": 1,
+  "task_duration_seconds": 623.96,
+  "failures": 1,
+  "preemptions": 0,
+  "terminal_utc": "2026-08-10T11:07:26Z"
+}
