@@ -57,11 +57,11 @@ from levanter.store.cache import (
 from marin.datakit.decon import DeconAttributes
 from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import read_artifact, write_artifact
-from marin.processing.tokenize._core import CHUNK_INDEX_FIELD
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     VerifiedFuzzyDupsAttrData,
     VerifiedFuzzyDupsPerSource,
 )
+from marin.processing.tokenize._core import CHUNK_INDEX_FIELD
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath

@@ -787,7 +787,7 @@ def reference_datakit_steps(
     )
     verified_dedup = StepSpec(
         name="datakit/verify_fuzzy_dups",
-        deps=[*sources.values(), *minhash_steps.values(), dedup],
+        deps=[*sources.values(), *(stages["minhash"] for stages in per_source.values()), dedup],
         hash_attrs={
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
             "verification": verification_params.model_dump(mode="json"),
