@@ -1,0 +1,22 @@
+Initial compile, Shuttle 7a0891feef:
+
+TypeError: RoutedStreamingFoldContractSm100.__call__() takes from 23 to 24
+positional arguments but 25 were given
+
+Bounded rerun after ABI correction, Shuttle 728d0dfcd4:
+
+cutlass.base_dsl.common.DSLRuntimeError: Expected integer for grid dimension at
+index 0, but got
+cutlass._mlir._mlir_libs._cutlass_ir._mlir.ir.BlockArgument
+
+Extracted physical source site:
+
+    num_ctas = work_capacity
+    self.kernel(...).launch(
+        grid=(num_ctas,),
+        block=[self.threads_per_cta, 1, 1],
+        ...
+    )
+
+No device kernel launched in either attempt.
+

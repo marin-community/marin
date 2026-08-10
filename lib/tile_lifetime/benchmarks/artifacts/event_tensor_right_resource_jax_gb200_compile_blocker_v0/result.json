@@ -1,0 +1,91 @@
+{
+  "benchmark": "shuttle_event_tensor_right_resource_jax_gb200_compile_checkpoint_v0",
+  "status": "compile_blocked_static_launch_grid",
+  "scope": "one bounded linkage attempt; no device launch, overlap, tuning, correctness, or performance claim",
+  "hardware": {
+    "allocated_node": "4x NVIDIA GB200 bare-metal node",
+    "visible_device": "cuda:0",
+    "device_kind": "NVIDIA GB200",
+    "driver": "595.71.05",
+    "power_limit_watts": 1200.0,
+    "physical_target": "GB200"
+  },
+  "resource_request": {
+    "cpu": 2,
+    "memory_gib": 32,
+    "priority": "batch",
+    "gpu_visible_to_smoke": 1
+  },
+  "shape": {
+    "query_length": 128,
+    "key_length": 1024,
+    "query_heads": 16,
+    "key_value_heads": 2,
+    "feature_dimension": 128,
+    "selected_count": 4,
+    "dtype": "BF16",
+    "right_item_width": 128,
+    "work_capacity": 16,
+    "warmups_requested": 2,
+    "samples_requested": 10
+  },
+  "source": {
+    "initial_shuttle_revision": "7a0891feef53415f180aef158e6d9ee6a2850c2a",
+    "corrected_shuttle_revision": "728d0dfcd4ab28cb46322863130006d5408009fc",
+    "msa_revision": "80434d7f67877c6570ca19cac444b84bc9855dac",
+    "msa_cutlass_revision": "eb61c911471867a5fd2466bfd8f29306cea6ebf8",
+    "physical_source_sha256": "425341e8e87277e89624197c0b271d1c4a70874af889a735674342e303cf6027",
+    "partial_merge_source_sha256": "2679b86d8e5341f08a58f3a75a2d924bb0da81d59592df77376dc273c663834d"
+  },
+  "dependency_versions": {
+    "python": "3.12.13",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "jax-cuda13-plugin": "0.10.1",
+    "jax-cuda13-pjrt": "0.10.1",
+    "nvidia-cutlass-dsl": "4.5.3",
+    "cuda-python": "13.3.1",
+    "nvidia-cuda-nvcc": "13.3.73",
+    "nvidia-cuda-cccl": "13.3.3.4.1",
+    "quack-kernels": "0.2.10"
+  },
+  "torch_free_runtime": {
+    "torch_installed": false,
+    "torch_loaded": false
+  },
+  "semantic_boundary": {
+    "external_semantic_kernels": [],
+    "event_program_fingerprint": "196b0f299c37c22559064f1fee88a1693173aa9211b8b3af33400d7c2f8dac57",
+    "baseline_runtime_fingerprint": "1788d488fe7e392af94408c3a2918784e32b42c479e34ab6abf181234badc1ca",
+    "mutation_runtime_fingerprint": "a98f092e10480bd555d9e0b6986527f83fa594cc138b3347cefe696e457dd18e",
+    "partial_merge_handler": "shuttle_partial_state_fold_finalize_handler",
+    "internal_synchronization_boundary": "primitive-owned mbarrier sites"
+  },
+  "attempts": [
+    {
+      "shuttle_revision": "7a0891feef53415f180aef158e6d9ee6a2850c2a",
+      "stage_reached": "CUTLASS JAX CuTe compilation",
+      "device_kernel_launched": false,
+      "error_type": "TypeError",
+      "error": "RoutedStreamingFoldContractSm100.__call__() takes from 23 to 24 positional arguments but 25 were given",
+      "resolution": "removed two relation-layout operands from the extracted physical call; kept them in the generic JAX/EventTensor ABI"
+    },
+    {
+      "shuttle_revision": "728d0dfcd4ab28cb46322863130006d5408009fc",
+      "stage_reached": "extracted SM100 method body and CUTLASS LaunchConfig construction",
+      "device_kernel_launched": false,
+      "error_type": "cutlass.base_dsl.common.DSLRuntimeError",
+      "error": "Expected integer for grid dimension at index 0, but got cutlass MLIR BlockArgument",
+      "source_site": "num_ctas = work_capacity; kernel(...).launch(grid=(num_ctas,))",
+      "resolution": null
+    }
+  ],
+  "results": {
+    "correctness": null,
+    "determinism": null,
+    "latency_samples_ms": [],
+    "device_execution": false
+  },
+  "next_gate": "specialize maximum work capacity into the host-side physical launch and prove a constant CuTe grid in a dependency-only Linux lowering preflight before reallocating GB200"
+}
+

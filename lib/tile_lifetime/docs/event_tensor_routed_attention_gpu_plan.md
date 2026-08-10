@@ -152,3 +152,25 @@ It compiled the generated Fold handler, instantiated the extracted physical
 class as a CUTLASS JAX `PjitFunction`, retained the program fingerprint across
 a relation mutation, changed the runtime fingerprint, and confirmed that
 Torch was neither installed nor loaded. Device execution remains unproven.
+
+## GB200 compile checkpoint
+
+The first bounded GB200 attempt used a reduced ABI-smoke shape (`Sq=128`,
+`Sk=1024`, 16 query heads, two right-resource partitions, four selected right
+resources, and `D=128`) before attempting the primary shape above. JAX exposed
+one real GB200, Torch was neither installed nor loaded, and the generated Fold
+FFI handlers compiled and registered.
+
+The first CuTe compile found a two-argument wrapper mismatch. Commit
+`728d0dfcd4` corrected that narrow ABI error. One rerun then entered the
+extracted SM100 method body and failed at launch construction: the extracted
+template's `work_capacity` reached `grid=(work_capacity,)` as a CUTLASS MLIR
+`BlockArgument`, but `cutlass.jax.cutlass_call` requires a compile-time integer
+grid dimension. No device kernel launched, so correctness, determinism, and
+timings remain unmeasured.
+
+The preserved negative artifact is
+`benchmarks/artifacts/event_tensor_right_resource_jax_gb200_compile_blocker_v0`.
+Before another allocation, specialize only the bounded maximum work capacity
+at the generic physical-launch boundary, retain runtime `work_count` for tail
+work, and extend the Linux preflight to prove that CuTe sees a constant grid.
