@@ -510,6 +510,27 @@ def test_latent_moe_is_absent_by_default():
     assert built.expert_mlp.w_gate.shape[1] == cfg.hidden_dim
 
 
+def test_latent_moe_hf_config_round_trip_preserves_width():
+    cfg = _latent_config(latent_dim=192)
+
+    restored = model.GrugModelConfig.from_hf_config(cfg.to_hf_config(cfg.vocab_size))
+
+    assert restored.latent_dim == 192
+
+
+def test_latent_moe_state_dict_exports_projection_and_norm_weights():
+    mesh = _abstract_mesh(1, 1, 64, 1)
+    cfg = _latent_config(latent_dim=192)
+    with use_abstract_mesh(mesh):
+        exported = jax.eval_shape(lambda: model.Transformer.init(cfg, key=jax.random.key(0)).to_state_dict())
+
+    latent_keys = {key for key in exported if ".mlp.latent_" in key}
+    assert len(latent_keys) == 3 * cfg.num_layers
+    assert exported["model.layers.0.mlp.latent_down_proj.weight"].shape == (192, cfg.hidden_dim)
+    assert exported["model.layers.0.mlp.latent_norm.weight"].shape == (192,)
+    assert exported["model.layers.0.mlp.latent_up_proj.weight"].shape == (cfg.hidden_dim, 192)
+
+
 def test_latent_dim_above_hidden_is_rejected():
     # A latent wider than the hidden dim adds communication instead of removing it.
     with pytest.raises(ValueError, match="latent_dim must be in"):

@@ -283,6 +283,7 @@ class GrugModelConfig:
             num_shared_experts=int(_hf_config_attr(hf_config, ("num_shared_experts",), 1)),
             num_experts=int(_hf_config_attr(hf_config, ("num_experts", "num_local_experts"), 8)),
             num_experts_per_token=int(_hf_config_attr(hf_config, ("num_experts_per_token", "num_experts_per_tok"), 2)),
+            latent_dim=_hf_config_attr(hf_config, ("latent_dim",)),
             num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
             num_heads=int(_hf_config_attr(hf_config, ("num_heads", "num_attention_heads"), 16)),
             num_kv_heads=int(_hf_config_attr(hf_config, ("num_kv_heads", "num_key_value_heads"), 16)),
@@ -327,6 +328,7 @@ class GrugModelConfig:
             "moe_intermediate_size": self.intermediate_dim,
             "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
             "num_shared_experts": self.num_shared_experts,
+            "latent_dim": self.latent_dim,
             # grug-specific (no public equivalent)
             "qk_mult": self.qk_mult,
             "local_kv_heads": self.local_kv_heads,
@@ -1247,6 +1249,12 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
                 tensors[f"{shared_prefix}.gate_proj.weight"] = _linear_inference_tensor(expert.w_gate)
                 tensors[f"{shared_prefix}.up_proj.weight"] = _linear_inference_tensor(expert.w_up)
                 tensors[f"{shared_prefix}.down_proj.weight"] = _linear_inference_tensor(expert.w_down)
+        if block.mlp.w_latent_down is not None:
+            if block.mlp.latent_norm is None or block.mlp.w_latent_up is None:
+                raise ValueError("latent MoE projection and norm parameters must be present together")
+            tensors[f"{layer_prefix}.mlp.latent_down_proj.weight"] = _linear_inference_tensor(block.mlp.w_latent_down)
+            tensors[f"{layer_prefix}.mlp.latent_norm.weight"] = block.mlp.latent_norm.weight
+            tensors[f"{layer_prefix}.mlp.latent_up_proj.weight"] = _linear_inference_tensor(block.mlp.w_latent_up)
 
     return {_with_state_dict_prefix(prefix, name): value for name, value in tensors.items()}
 
