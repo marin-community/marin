@@ -123,7 +123,7 @@ def main() -> None:
     if len(devices) != WORLD_SIZE:
         raise RuntimeError(f"The smoke test requires {WORLD_SIZE} visible GPUs, got {len(devices)}")
 
-    config = MoKForwardConfig()
+    config = MoKForwardConfig(minibatch_size=256)
     inputs = _random_inputs()
     top_experts = _routes()
     peer_rank, peer_token_idx, num_scheduled_tokens, tokens_per_expert = _schedules(top_experts, config)
