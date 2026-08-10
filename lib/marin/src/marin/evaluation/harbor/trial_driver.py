@@ -102,15 +102,12 @@ def _resolve_import_path(import_path: str, label: str) -> None:
 
 def _validate_agent(agent: AgentConfig) -> str:
     if agent.import_path is not None:
-        if agent.mode == "local":
-            raise ValueError("Harbor local-mode agents must use a supported agent name")
         _resolve_import_path(agent.import_path, "agent")
         return agent.import_path
     if agent.name is None or agent.name not in AgentName.values():
         raise ValueError("Harbor config agent name is not supported by the pinned runtime")
     agent_name = AgentName(agent.name)
-    agent_registry = AgentFactory._LOCAL_AGENT_MAP if agent.mode == "local" else AgentFactory._AGENT_MAP
-    if agent_name not in agent_registry:
+    if agent_name not in AgentFactory._AGENT_MAP:
         raise ValueError("Harbor config agent is not available in the pinned runtime")
     return agent.name
 
