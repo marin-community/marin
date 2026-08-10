@@ -148,7 +148,7 @@ class TraceEventArgs(msgspec.Struct, gc=False):
     step_num: int | str | None = None
 
 
-class CompleteTraceEvent(msgspec.Struct, gc=False):
+class TraceEvent(msgspec.Struct, gc=False):
     """Compact event decoded directly from Perfetto JSON or an XPlane line."""
 
     ph: str = ""
@@ -198,8 +198,26 @@ class CompleteTraceEvent(msgspec.Struct, gc=False):
 class TracePayload(msgspec.Struct, gc=False):
     """Typed subset of a Perfetto trace payload."""
 
-    traceEvents: list[CompleteTraceEvent] = msgspec.field(default_factory=list)
+    traceEvents: list[TraceEvent] = msgspec.field(default_factory=list)
     displayTimeUnit: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TraceSummaryContext:
+    """Input identity, metadata, and summary settings shared by trace ingesters."""
+
+    source_format: str
+    source_path: Path
+    display_time_unit: str | None
+    num_events_total: int
+    process_names: dict[int, str]
+    thread_names: dict[tuple[int, int], str]
+    trace_sha256: str
+    run_metadata: RunMetadata | None
+    warmup_steps: int
+    hot_op_limit: int
+    breakdown_mode: str
+    extra_quality_warnings: Sequence[str] = ()
 
 
 @dataclass
@@ -218,7 +236,7 @@ class TraceEventTrack:
     tid: int
     process_name: str | None
     thread_name: str | None
-    events: Iterable[CompleteTraceEvent]
+    events: Iterable[TraceEvent]
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,13 +248,13 @@ class TraceTrackAggregate:
     profile_end: float | None
     run_ids: Counter[str]
     source_files: Counter[str]
-    step_events: list[CompleteTraceEvent]
+    step_events: list[TraceEvent]
     breakdown_totals: dict[str, float]
 
 
 @dataclass(slots=True)
 class _OpenTraceEvent:
-    event: CompleteTraceEvent
+    event: TraceEvent
     child_duration: float
     device_event_index: int | None
 
@@ -249,10 +267,10 @@ class _TraceSummaryBuilder:
         self.profile_end: float | None = None
         self.run_ids: Counter[str] = Counter()
         self.source_files: Counter[str] = Counter()
-        self.step_events: list[CompleteTraceEvent] = []
+        self.step_events: list[TraceEvent] = []
         self.breakdown_totals = empty_category_totals()
-        self.global_events: list[CompleteTraceEvent] = []
-        self.device_events: list[CompleteTraceEvent] = []
+        self.global_events: list[TraceEvent] = []
+        self.device_events: list[TraceEvent] = []
         self.device_exclusive_durations: list[float] = []
         self.device_track_indices: list[list[int]] = []
 
@@ -311,7 +329,7 @@ class _TraceSummaryBuilder:
         for category, duration in aggregate.breakdown_totals.items():
             self.breakdown_totals[category] += duration
 
-    def _record_event(self, event: CompleteTraceEvent) -> None:
+    def _record_event(self, event: TraceEvent) -> None:
         self.num_complete_events += 1
         self.profile_start = event.ts if self.profile_start is None else min(self.profile_start, event.ts)
         event_end = event.ts + event.dur
@@ -351,20 +369,9 @@ class _TraceSummaryBuilder:
 def summarize_event_tracks(
     tracks: Iterable[TraceEventTrack | TraceTrackAggregate],
     *,
-    source_format: str,
-    source_path: Path,
-    display_time_unit: str | None,
-    num_events_total: int,
-    process_names: dict[int, str],
-    thread_names: dict[tuple[int, int], str],
-    trace_sha256: str,
-    run_metadata: RunMetadata | None,
-    warmup_steps: int,
-    hot_op_limit: int,
-    breakdown_mode: str,
-    extra_quality_warnings: list[str] | None = None,
+    context: TraceSummaryContext,
 ) -> ProfileSummary:
-    builder = _TraceSummaryBuilder(breakdown_mode=breakdown_mode)
+    builder = _TraceSummaryBuilder(breakdown_mode=context.breakdown_mode)
     for track in tracks:
         if isinstance(track, TraceTrackAggregate):
             builder.add_track_aggregate(track)
@@ -372,16 +379,15 @@ def summarize_event_tracks(
             builder.add_track(track)
 
     suspected_truncation, quality_warnings = trace_quality_warnings(num_complete_events=builder.num_complete_events)
-    if extra_quality_warnings:
-        quality_warnings.extend(extra_quality_warnings)
-    if source_format == "xplane_pb" and builder.num_complete_events == 0:
+    quality_warnings.extend(context.extra_quality_warnings)
+    if context.source_format == "xplane_pb" and builder.num_complete_events == 0:
         quality_warnings.append("XPlane protobuf contained no direct timeline events with offset/duration data.")
     trace_overview = TraceOverview(
-        display_time_unit=display_time_unit,
-        num_events_total=num_events_total,
+        display_time_unit=context.display_time_unit,
+        num_events_total=context.num_events_total,
         num_complete_events=builder.num_complete_events,
-        num_processes=len(process_names),
-        num_threads=len(thread_names),
+        num_processes=len(context.process_names),
+        num_threads=len(context.thread_names),
         profile_start_ts=builder.profile_start,
         profile_end_ts=builder.profile_end,
         duration_basis="exclusive_duration_per_track",
@@ -389,50 +395,50 @@ def summarize_event_tracks(
         quality_warnings=quality_warnings,
     )
     trace_provenance = TraceProvenance(
-        trace_sha256=trace_sha256,
+        trace_sha256=context.trace_sha256,
         run_ids=[name for name, _ in builder.run_ids.most_common(20)],
         source_file_hints=[name for name, _ in builder.source_files.most_common(20)],
     )
-    step_time = _summarize_step_times(builder.step_events, warmup_steps=warmup_steps)
-    if breakdown_mode == "exclusive_per_track":
+    step_time = _summarize_step_times(builder.step_events, warmup_steps=context.warmup_steps)
+    if context.breakdown_mode == "exclusive_per_track":
         time_breakdown = make_time_breakdown(
             "exclusive_duration_per_track",
             builder.breakdown_totals,
             sum(builder.breakdown_totals.values()),
         )
-    elif breakdown_mode == "exclusive_global":
+    elif context.breakdown_mode == "exclusive_global":
         time_breakdown = _summarize_breakdown_global(builder.global_events)
     else:
-        raise ValueError(f"Unsupported breakdown mode: {breakdown_mode}")
+        raise ValueError(f"Unsupported breakdown mode: {context.breakdown_mode}")
 
     hot_ops = _summarize_hot_ops(
         builder.device_events,
         builder.device_exclusive_durations,
-        limit=hot_op_limit,
+        limit=context.hot_op_limit,
     )
     semantic_families = summarize_semantic_families(
         hot_ops,
         total_duration=time_breakdown.total_duration,
-        limit=max(hot_op_limit, 50),
+        limit=max(context.hot_op_limit, 50),
     )
     communication_ops = _summarize_communication(builder.device_events, builder.device_exclusive_durations)
     device_op_gaps = list(_iter_device_op_gaps(builder.device_events, builder.device_track_indices))
-    gap_before_ops = _summarize_pre_op_gaps(device_op_gaps, limit=max(hot_op_limit, 500))
+    gap_before_ops = _summarize_pre_op_gaps(device_op_gaps, limit=max(context.hot_op_limit, 500))
     hierarchical_regions = _summarize_hierarchical_regions(
         builder.device_events,
         builder.device_exclusive_durations,
-        limit=max(hot_op_limit, 500),
+        limit=max(context.hot_op_limit, 500),
     )
     gap_region_contexts = _summarize_gap_region_contexts(
         builder.device_events,
         device_op_gaps,
-        limit=max(hot_op_limit, 500),
+        limit=max(context.hot_op_limit, 500),
     )
 
     summary = ProfileSummary(
-        source_format=source_format,
-        source_path=str(source_path),
-        run_metadata=run_metadata or RunMetadata(),
+        source_format=context.source_format,
+        source_path=str(context.source_path),
+        run_metadata=context.run_metadata or RunMetadata(),
         trace_overview=trace_overview,
         trace_provenance=trace_provenance,
         step_time=step_time,
@@ -449,48 +455,26 @@ def summarize_event_tracks(
 
 
 def summarize_complete_events(
-    parsed_events: list[CompleteTraceEvent],
+    parsed_events: list[TraceEvent],
     *,
-    source_format: str,
-    source_path: Path,
-    display_time_unit: str | None,
-    num_events_total: int,
-    process_names: dict[int, str],
-    thread_names: dict[tuple[int, int], str],
-    trace_sha256: str,
-    run_metadata: RunMetadata | None,
-    warmup_steps: int,
-    hot_op_limit: int,
-    breakdown_mode: str,
-    extra_quality_warnings: list[str] | None = None,
+    context: TraceSummaryContext,
 ) -> ProfileSummary:
-    by_track: dict[tuple[int, int], list[CompleteTraceEvent]] = defaultdict(list)
+    by_track: dict[tuple[int, int], list[TraceEvent]] = defaultdict(list)
     for event in parsed_events:
         by_track[(event.pid, event.tid)].append(event)
     tracks = (
         TraceEventTrack(
             pid=pid,
             tid=tid,
-            process_name=process_names.get(pid),
-            thread_name=thread_names.get((pid, tid)),
+            process_name=context.process_names.get(pid),
+            thread_name=context.thread_names.get((pid, tid)),
             events=sorted(events, key=lambda event: (event.ts, -(event.ts + event.dur))),
         )
         for (pid, tid), events in by_track.items()
     )
     return summarize_event_tracks(
         tracks,
-        source_format=source_format,
-        source_path=source_path,
-        display_time_unit=display_time_unit,
-        num_events_total=num_events_total,
-        process_names=process_names,
-        thread_names=thread_names,
-        trace_sha256=trace_sha256,
-        run_metadata=run_metadata,
-        warmup_steps=warmup_steps,
-        hot_op_limit=hot_op_limit,
-        breakdown_mode=breakdown_mode,
-        extra_quality_warnings=extra_quality_warnings,
+        context=context,
     )
 
 
@@ -511,8 +495,8 @@ def load_trace_payload(trace_path: Path) -> TracePayload:
 
 
 def parse_complete_events(
-    events: list[CompleteTraceEvent],
-) -> tuple[list[CompleteTraceEvent], dict[int, str], dict[tuple[int, int], str]]:
+    events: list[TraceEvent],
+) -> tuple[list[TraceEvent], dict[int, str], dict[tuple[int, int], str]]:
     process_names: dict[int, str] = {}
     thread_names: dict[tuple[int, int], str] = {}
 
@@ -530,7 +514,7 @@ def parse_complete_events(
         elif event.name == "thread_name" and event.tid >= 0 and args.name is not None:
             thread_names[(event.pid, event.tid)] = args.name
 
-    complete_events: list[CompleteTraceEvent] = []
+    complete_events: list[TraceEvent] = []
     for event in events:
         if event.ph != "X":
             continue
@@ -568,7 +552,7 @@ def trace_quality_warnings(*, num_complete_events: int) -> tuple[bool, list[str]
     return suspected_truncation, warnings
 
 
-def _summarize_step_times(events: list[CompleteTraceEvent], *, warmup_steps: int) -> StepTimeSummary:
+def _summarize_step_times(events: list[TraceEvent], *, warmup_steps: int) -> StepTimeSummary:
     per_step: dict[int, list[float]] = defaultdict(list)
 
     # TPU path: device "Steps" thread with numeric event names.
@@ -614,7 +598,7 @@ def _summarize_step_times(events: list[CompleteTraceEvent], *, warmup_steps: int
     )
 
 
-def _summarize_breakdown_global(events: list[CompleteTraceEvent]) -> TimeBreakdown:
+def _summarize_breakdown_global(events: list[TraceEvent]) -> TimeBreakdown:
     totals = empty_category_totals()
 
     window = _global_stall_window(events)
@@ -671,7 +655,7 @@ def _summarize_breakdown_global(events: list[CompleteTraceEvent]) -> TimeBreakdo
     return make_time_breakdown("exclusive_duration_global_timeline", totals, window_duration)
 
 
-def _global_stall_window(events: list[CompleteTraceEvent]) -> tuple[float, float] | None:
+def _global_stall_window(events: list[TraceEvent]) -> tuple[float, float] | None:
     compute_events = [event for event in events if event.thread_name != "Steps" and _event_category(event) == "compute"]
     if not compute_events:
         return None
@@ -683,7 +667,7 @@ def _global_stall_window(events: list[CompleteTraceEvent]) -> tuple[float, float
 
 
 def _summarize_hot_ops(
-    events: list[CompleteTraceEvent],
+    events: list[TraceEvent],
     exclusive: list[float],
     *,
     limit: int,
@@ -837,7 +821,7 @@ def summarize_semantic_families(
     return result
 
 
-def _summarize_communication(events: list[CompleteTraceEvent], exclusive: list[float]) -> list[CommunicationOp]:
+def _summarize_communication(events: list[TraceEvent], exclusive: list[float]) -> list[CommunicationOp]:
     aggregate: dict[str, tuple[int, float]] = {}
 
     for event, duration in zip(events, exclusive, strict=True):
@@ -863,9 +847,9 @@ def _summarize_communication(events: list[CompleteTraceEvent], exclusive: list[f
 
 
 def _iter_device_op_gaps(
-    events: list[CompleteTraceEvent],
+    events: list[TraceEvent],
     sorted_track_indices: list[list[int]],
-) -> Iterator[tuple[CompleteTraceEvent, CompleteTraceEvent, float]]:
+) -> Iterator[tuple[TraceEvent, TraceEvent, float]]:
     """Yield ``(marker_event, payload_event, gap)`` for every idle window on a device-op track.
 
     Device ops are grouped per ``(pid, tid)`` track and walked in start order. A gap is the
@@ -891,7 +875,7 @@ def _iter_device_op_gaps(
             previous_end = end if previous_end is None else max(previous_end, end)
 
 
-def _gap_order_indices(events: list[CompleteTraceEvent], exclusive_order: list[int]) -> list[int]:
+def _gap_order_indices(events: list[TraceEvent], exclusive_order: list[int]) -> list[int]:
     """Restore the stable ``(start, end)`` order used by gap payload lookahead."""
     gap_order: list[int] = []
     group_start = 0
@@ -910,9 +894,7 @@ def _gap_order_indices(events: list[CompleteTraceEvent], exclusive_order: list[i
     return gap_order
 
 
-def _summarize_pre_op_gaps(
-    gaps: list[tuple[CompleteTraceEvent, CompleteTraceEvent, float]], *, limit: int
-) -> list[GapBeforeOp]:
+def _summarize_pre_op_gaps(gaps: list[tuple[TraceEvent, TraceEvent, float]], *, limit: int) -> list[GapBeforeOp]:
     aggregate: dict[str, _PreOpGapStats] = {}
 
     for marker_event, payload_event, gap in gaps:
@@ -956,7 +938,7 @@ def _summarize_pre_op_gaps(
 
 
 def _summarize_hierarchical_regions(
-    events: list[CompleteTraceEvent],
+    events: list[TraceEvent],
     exclusive: list[float],
     *,
     limit: int,
@@ -1037,8 +1019,8 @@ def _prune_redundant_unary_hierarchy_paths(aggregate: dict[str, dict[str, float 
 
 
 def _summarize_gap_region_contexts(
-    events: list[CompleteTraceEvent],
-    gaps: list[tuple[CompleteTraceEvent, CompleteTraceEvent, float]],
+    events: list[TraceEvent],
+    gaps: list[tuple[TraceEvent, TraceEvent, float]],
     *,
     limit: int,
 ) -> list[GapRegionContext]:
@@ -1085,11 +1067,11 @@ def _summarize_gap_region_contexts(
 
 
 def _resolve_gap_payload_event(
-    events: list[CompleteTraceEvent],
+    events: list[TraceEvent],
     sorted_indices: list[int],
     *,
     marker_position: int,
-) -> tuple[CompleteTraceEvent, CompleteTraceEvent]:
+) -> tuple[TraceEvent, TraceEvent]:
     marker_event = events[sorted_indices[marker_position]]
     if not _is_likely_gap_marker_op(marker_event):
         return marker_event, marker_event
@@ -1108,7 +1090,7 @@ def _resolve_gap_payload_event(
     return marker_event, marker_event
 
 
-def _is_likely_gap_marker_op(event: CompleteTraceEvent) -> bool:
+def _is_likely_gap_marker_op(event: TraceEvent) -> bool:
     return _is_likely_gap_marker_name(event.name)
 
 
@@ -1407,7 +1389,7 @@ def _active_device_category(active: dict[str, int]) -> str | None:
     return None
 
 
-def _event_category(event: CompleteTraceEvent) -> str:
+def _event_category(event: TraceEvent) -> str:
     return trace_event_category(event.name, event.process_name)
 
 
@@ -1439,7 +1421,7 @@ def _is_communication_name(name: str) -> bool:
     return any(pattern in lowered for pattern in _COMM_PATTERNS)
 
 
-def _is_device_event(event: CompleteTraceEvent) -> bool:
+def _is_device_event(event: TraceEvent) -> bool:
     return bool(event.process_name and event.process_name.startswith("/device:"))
 
 
@@ -1453,7 +1435,7 @@ def is_device_op_thread(thread_name: str | None) -> bool:
     return False
 
 
-def _is_device_op_event(event: CompleteTraceEvent) -> bool:
+def _is_device_op_event(event: TraceEvent) -> bool:
     return _is_device_event(event) and is_device_op_thread(event.thread_name)
 
 
@@ -1477,7 +1459,7 @@ def collective_kind(name: str) -> str:
     return "other-collective"
 
 
-def _hierarchical_parts(event: CompleteTraceEvent) -> tuple[str, ...]:
+def _hierarchical_parts(event: TraceEvent) -> tuple[str, ...]:
     return _hierarchical_parts_for_event(event.name, event.tf_op)
 
 
@@ -1502,7 +1484,7 @@ def _hierarchical_parts_for_event(name: str, tf_op: str | None) -> tuple[str, ..
 
 
 def _event_gap_region_path(
-    event: CompleteTraceEvent,
+    event: TraceEvent,
     *,
     preferred_paths: dict[str, str] | None = None,
     max_depth: int = 4,
@@ -1579,7 +1561,7 @@ def _is_blacklisted_hierarchy_segment(part: str) -> bool:
     return False
 
 
-def _preferred_region_path_by_op(events: list[CompleteTraceEvent], *, max_depth: int = 4) -> dict[str, str]:
+def _preferred_region_path_by_op(events: list[TraceEvent], *, max_depth: int = 4) -> dict[str, str]:
     counters: dict[str, dict[str, int]] = defaultdict(dict)
 
     for event in events:
@@ -1601,7 +1583,7 @@ def _preferred_region_path_by_op(events: list[CompleteTraceEvent], *, max_depth:
     return preferred
 
 
-def _is_fallback_parts_for_event(parts: Sequence[str], event: CompleteTraceEvent) -> bool:
+def _is_fallback_parts_for_event(parts: Sequence[str], event: TraceEvent) -> bool:
     return len(parts) == 1 and parts[0] == _canonical_name_part(event.name)
 
 

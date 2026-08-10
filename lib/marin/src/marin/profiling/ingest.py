@@ -23,6 +23,7 @@ from levanter.utils.profile_dirs import (
 
 from marin.profiling.schema import ProfileSummary, RunMetadata
 from marin.profiling.trace_summary import (
+    TraceSummaryContext,
     load_trace_payload,
     parse_complete_events,
     sha256_for_path,
@@ -203,17 +204,19 @@ def summarize_trace(
     parsed_events, process_names, thread_names = parse_complete_events(all_events)
     return summarize_complete_events(
         parsed_events,
-        source_format="perfetto_trace_json",
-        source_path=trace_path,
-        display_time_unit=display_time_unit,
-        num_events_total=len(all_events),
-        process_names=process_names,
-        thread_names=thread_names,
-        trace_sha256=sha256_for_path(trace_path),
-        run_metadata=run_metadata,
-        warmup_steps=warmup_steps,
-        hot_op_limit=hot_op_limit,
-        breakdown_mode=breakdown_mode,
+        context=TraceSummaryContext(
+            source_format="perfetto_trace_json",
+            source_path=trace_path,
+            display_time_unit=display_time_unit,
+            num_events_total=len(all_events),
+            process_names=process_names,
+            thread_names=thread_names,
+            trace_sha256=sha256_for_path(trace_path),
+            run_metadata=run_metadata,
+            warmup_steps=warmup_steps,
+            hot_op_limit=hot_op_limit,
+            breakdown_mode=breakdown_mode,
+        ),
     )
 
 
