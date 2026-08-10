@@ -146,6 +146,7 @@ from tile_lifetime.jax_streaming_attention_backward_ffi import (
     StreamingAttentionBackwardFfiBuffer,
     StreamingAttentionBackwardResultPolicy,
     StreamingAttentionBackwardStatePolicy,
+    StreamingAttentionLogSumExpEncoding,
     TritonAotKernelPlan,
     call_streaming_attention_backward_ffi,
     call_streaming_attention_training_ffi,

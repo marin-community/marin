@@ -77,6 +77,7 @@ class StreamingAttentionBackwardProvenance(StrEnum):
 
     REFERENCE_SYMBOLIC_VJP = "reference_symbolic_vjp"
     JAX_VJP_HLO_RECOVERY = "jax_vjp_hlo_recovery"
+    EXPERIMENTAL_REGENERATED_REVERSE_FROM_JAX_VJP_ALGEBRA = "experimental_regenerated_reverse_from_jax_vjp_algebra"
 
 
 class StreamingAttentionBackwardDomainTraversal(StrEnum):
@@ -160,9 +161,8 @@ class StreamingAttentionBackwardWorkEstimate:
 class StreamingAttentionBackwardProgram:
     """A reverse stream with visible scalar and contraction algebra.
 
-    Accepted end-to-end paths recover this structure from JAX VJP HLO.  The
-    local symbolic derivation remains a component oracle for physical schedule
-    work until that recovery boundary is connected.
+    The local symbolic derivation and attention-pattern importers are component
+    references. They do not yet establish an accepted end-to-end plugin path.
     """
 
     forward: StreamingAttentionProgram

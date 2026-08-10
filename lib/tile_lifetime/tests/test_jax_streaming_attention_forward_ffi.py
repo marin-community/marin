@@ -6,6 +6,7 @@ import functools
 import jax.numpy as jnp
 import pytest
 
+from tile_lifetime.jax_streaming_attention_backward_ffi import StreamingAttentionLogSumExpEncoding
 from tile_lifetime.jax_streaming_attention_forward_ffi import (
     call_streaming_attention_forward_ffi,
     generate_streaming_attention_forward_ffi,
@@ -75,6 +76,8 @@ def test_forward_family_exposes_only_qkv_output_and_minimal_fold_state() -> None
         ("log_sum_exp", (1, 4, 64), "fp32"),
     )
     assert generated.aot_kernel.kernel_name == "_streaming_grouped_query_forward"
+    assert generated.saved_state_encoding is StreamingAttentionLogSumExpEncoding.NATURAL_LOG
+    assert generated.aot_kernel.signature[-1] == "1"
     assert "torch" not in generated.handler_template.lower()
     assert "triton" not in generated.handler_template.lower()
     assert "log_sum_exp_pointer" in generated.handler_template

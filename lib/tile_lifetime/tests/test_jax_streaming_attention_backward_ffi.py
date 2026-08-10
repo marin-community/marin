@@ -12,6 +12,7 @@ import pytest
 from tile_lifetime.jax_streaming_attention_backward_ffi import (
     StreamingAttentionBackwardResultPolicy,
     StreamingAttentionBackwardStatePolicy,
+    StreamingAttentionLogSumExpEncoding,
     _run_triton_aot_compile,
     call_streaming_attention_backward_ffi,
     call_streaming_attention_training_ffi,
@@ -118,6 +119,7 @@ def test_recompute_plan_preserves_natural_vjp_signature_and_emits_three_aot_kern
     )
 
     assert generated.state_policy is StreamingAttentionBackwardStatePolicy.RECOMPUTE
+    assert generated.saved_state_encoding is None
     assert generated.result_policy is StreamingAttentionBackwardResultPolicy.GRADIENTS_ONLY
     assert tuple(value.name for value in generated.inputs) == ("query", "key", "value", "output_cotangent")
     assert tuple(value.name for value in generated.outputs) == (
@@ -130,6 +132,7 @@ def test_recompute_plan_preserves_natural_vjp_signature_and_emits_three_aot_kern
         "_streaming_dq_kernel",
         "_streaming_dkdv_kernel",
     )
+    assert all(kernel.signature[-1] == "0" for kernel in generated.aot_kernels)
     for kernel in generated.aot_kernels:
         assert len(kernel.signature) == _function_argument_count(REPOSITORY / kernel.source, kernel.kernel_name)
     assert "torch" not in generated.handler_template.lower()
@@ -226,9 +229,9 @@ def test_short_d16_plan_legalizes_only_physical_aot_tiles() -> None:
 
     forward, query_cotangent, key_value_cotangents = generated.aot_kernels
     assert (schedule.query_tile_size, schedule.key_value_tile_size) == (4, 4)
-    assert forward.signature[-8:-4] == ("16", "16", "16", "2")
-    assert query_cotangent.signature[-6:-2] == ("16", "16", "16", "2")
-    assert key_value_cotangents.signature[-6:-2] == ("16", "16", "16", "2")
+    assert forward.signature[-9:-5] == ("16", "16", "16", "2")
+    assert query_cotangent.signature[-7:-3] == ("16", "16", "16", "2")
+    assert key_value_cotangents.signature[-7:-3] == ("16", "16", "16", "2")
     assert tuple(kernel.grid for kernel in generated.aot_kernels) == ((1, 2, 1), (1, 2, 1), (1, 2, 1))
 
 
@@ -253,6 +256,8 @@ def test_saved_state_is_an_explicit_alternative_not_a_hidden_recompute_input() -
         state_policy=StreamingAttentionBackwardStatePolicy.SAVED_OUTPUT_AND_LOG_SUM_EXP,
     )
 
+    assert generated.saved_state_encoding is StreamingAttentionLogSumExpEncoding.NATURAL_LOG
+    assert all(kernel.signature[-1] == "1" for kernel in generated.aot_kernels)
     assert tuple(value.name for value in generated.inputs) == (
         "query",
         "key",
