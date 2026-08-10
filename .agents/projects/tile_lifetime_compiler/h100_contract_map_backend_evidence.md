@@ -88,8 +88,10 @@ missing profiler, or different GPU rejects before worker execution.
 The reviewed Iris image target is `task-h100-evidence`. It inherits the current
 `task` image, including Nsight Systems 2026.1.3, and adds the hash-pinned Debian
 12 amd64 CUDA 13.2.86 compiler closure, `cuobjdump`, and Nsight Compute
-2026.1.1. The manual Docker workflow publishes only
-`iris-task-h100-evidence:<full-git-sha>` and reports the resulting OCI digest.
+2026.1.1. The dedicated manual-only `ops-h100-evidence-image.yaml` workflow
+checks out an explicitly selected ref, resolves it to one full commit SHA,
+publishes only `iris-task-h100-evidence:<full-git-sha>`, and reports the
+resulting OCI digest.
 A launch must use
 `ghcr.io/marin-community/iris-task-h100-evidence:<full-git-sha>@sha256:<digest>`;
 the tag alone, `latest`, and a date tag are not accepted. The launch overrides

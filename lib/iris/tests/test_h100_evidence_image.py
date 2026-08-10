@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import re
 from pathlib import Path
 
@@ -9,7 +10,8 @@ import yaml
 REPO_ROOT = Path(__file__).parents[3]
 DOCKERFILE = REPO_ROOT / "lib" / "iris" / "Dockerfile"
 PACKAGE_MANIFEST = REPO_ROOT / "lib" / "iris" / "images" / "h100-evidence-debian12-amd64.sha256"
-IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-docker-images.yaml"
+H100_IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-h100-evidence-image.yaml"
+BROAD_IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-docker-images.yaml"
 
 EXPECTED_PACKAGES = {
     "cuda-cccl-13-2_13.2.86-1_amd64.deb",
@@ -47,15 +49,43 @@ def test_h100_evidence_target_inherits_task_and_checks_every_required_tool():
         assert re.search(rf"/[^ ;]*{tool} --version", target)
 
 
-def test_h100_evidence_workflow_publishes_only_full_sha_tag_for_amd64():
-    workflow = yaml.safe_load(IMAGE_WORKFLOW.read_text())
-    job = workflow["jobs"]["iris-h100-evidence-image"]
+def test_h100_evidence_workflow_dispatch_builds_one_exact_source_image():
+    workflow = yaml.safe_load(H100_IMAGE_WORKFLOW.read_text())
+    triggers = workflow[True]
+
+    assert set(triggers) == {"workflow_dispatch"}
+    assert triggers["workflow_dispatch"]["inputs"] == {
+        "ref": {"description": "Git ref to build", "required": True, "type": "string"}
+    }
+    assert workflow["permissions"] == {"contents": "read", "packages": "write"}
+    assert set(workflow["jobs"]) == {"build-h100-evidence-image"}
+
+    job = workflow["jobs"]["build-h100-evidence-image"]
+    checkout = next(step for step in job["steps"] if step.get("uses") == "actions/checkout@v5")
+    source = next(step for step in job["steps"] if step.get("id") == "source")
     build = next(step for step in job["steps"] if step.get("id") == "build")
 
-    assert job["if"] == "github.event_name == 'workflow_dispatch'"
-    assert build["env"]["IMAGE"].endswith(":${{ needs.iris-tags.outputs.full_hash }}")
+    assert checkout["with"] == {"ref": "${{ inputs.ref }}", "persist-credentials": False}
+    assert source["run"].count("git rev-parse HEAD") == 1
+    assert "^[0-9a-f]{40}$" in source["run"]
+    assert build["env"]["IMAGE"] == (
+        "ghcr.io/marin-community/iris-task-h100-evidence:${{ steps.source.outputs.full_sha }}"
+    )
     assert "--target task-h100-evidence" in build["run"]
     assert "--platform linux/amd64" in build["run"]
+    assert build["run"].count("docker buildx build ") == 1
+    assert re.findall(r"--tag ([^ ]+)", build["run"]) == ['"$IMAGE"']
     assert "containerimage.digest" in build["run"]
+    assert 'docker buildx imagetools inspect "$image_ref"' in build["run"]
     assert ":latest" not in build["run"]
-    assert "outputs.date" not in build["run"]
+    assert "DATE_TAG" not in build["run"]
+    assert "HASH_TAG" not in build["run"]
+
+
+def test_broad_ops_workflow_cannot_build_h100_evidence_image():
+    workflow = yaml.safe_load(BROAD_IMAGE_WORKFLOW.read_text())
+    serialized_jobs = json.dumps(workflow["jobs"], sort_keys=True)
+
+    assert "iris-h100-evidence-image" not in workflow["jobs"]
+    assert "task-h100-evidence" not in serialized_jobs
+    assert "iris-task-h100-evidence" not in serialized_jobs
