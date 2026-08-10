@@ -72,7 +72,25 @@ def test_four_node_ep_proxy_preserves_the_per_gpu_hero_shape():
     assert step.runtime_args["train_resources"].ram == launch.HERO_WORKER_RAM
     assert config.processes_per_task == 4
     assert config.trainer.trainer.train_batch_size == 256
+    assert config.trainer.offload_opt_state is True
     assert config.stop_after_steps == 25
+
+
+def test_four_node_ep_proxy_can_keep_optimizer_state_in_hbm():
+    step = launch.build_hero_run(
+        run_id="four-node-hbm-opt-state",
+        dp_racks=1,
+        ep_nodes=4,
+        num_steps=25,
+        batch_size=256,
+        num_experts=48,
+        flavor="ep-ragged-cute",
+        offload_opt_state=False,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.offload_opt_state is False
 
 
 def test_small_ep_run_pins_one_complete_cuda_jax_nightly_on_workers():
