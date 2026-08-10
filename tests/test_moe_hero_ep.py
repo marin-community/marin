@@ -296,6 +296,53 @@ def test_ep_padded_newton_schulz_returns_to_parameter_sharding():
     assert output.sharding == parameter_sharding
 
 
+def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
+    # The dropless eval transform must retarget only the static MoE backend fields and keep every
+    # weight leaf shared by identity, so the eval scores the trained weights with no capacity drops.
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    cfg = model.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_shared_experts=1,
+        num_experts=4,
+        num_experts_per_token=1,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        local_kv_heads=2,
+        global_kv_heads=1,
+        head_dim=8,
+        max_seq_len=8,
+        sliding_window=4,
+        global_every=2,
+        capacity_factor=1.0,
+        initializer_std=0.5 / math.sqrt(32),
+        qk_mult=1.3,
+        attention_implementation="reference",
+        moe_implementation="fixed_all_to_all",
+        report_capacity_overflow=True,
+    )
+    with set_mesh(mesh):
+        m = model.Transformer.init(cfg, key=jax.random.key(0))
+    dropless = train._to_dropless_local(m)
+
+    original = m.stacked_blocks.stacked.mlp.expert_mlp
+    swapped = dropless.stacked_blocks.stacked.mlp.expert_mlp
+    assert original.implementation == "fixed_all_to_all"  # input model left untouched
+    assert swapped.implementation == "sonic_cute"
+    assert swapped.expert_chunks == 1
+    orig_leaves = jax.tree_util.tree_leaves(original)
+    swapped_leaves = jax.tree_util.tree_leaves(swapped)
+    assert len(orig_leaves) == len(swapped_leaves)
+    assert all(a is b for a, b in zip(orig_leaves, swapped_leaves, strict=True))
+
+
 def test_eval_every_adds_the_held_out_suites_as_dependencies():
     # Held-out sets are what make a run scoreable; a throughput-only run should not pay for them.
     off = launch.build_hero_run(run_id="eval-off", dp_racks=1, num_steps=1, version="dev")

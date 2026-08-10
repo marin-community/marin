@@ -432,6 +432,9 @@ def build_small_run(
                 max_eval_batches=8,
                 eval_current=True,
                 eval_ema=False,
+                # EP rungs also log an `eval_dropless` macro loss (dropless local backend on an
+                # expert-collapsed mesh); a no-op for the FSDP flavors, which already run dropless.
+                dropless_eval=True,
             ),
             processes_per_task=HERO_PROCESSES_PER_TASK,
         )
