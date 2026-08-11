@@ -118,6 +118,11 @@ BROKER_READY_TIMEOUT = 900.0
 # In-flight payloads are a few KB of window text each, so the broker needs no
 # per-fleet memory sizing the way the image-carrying OCR broker does.
 BROKER_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="8g", disk="20g", preemptible=False)
+# Ceiling on the driver's sender threads. Past this the engines run below their
+# per-gang in-flight budget at full fleet, which costs a little throughput; a
+# single Python process holding many thousands of mostly-blocked threads costs
+# more. The broker's queue, not the sender count, is what keeps engines fed.
+DRIVER_MAX_CONCURRENCY = 4_096
 
 
 def _expand_globs(patterns: Sequence[str]) -> list[str]:
@@ -197,6 +202,7 @@ def _label_through_pool(
     server: ServerConfig,
     run_id: str,
     num_gangs: int,
+    interactive_gangs: int,
     gang_in_flight: int,
     chunk_size: int,
     label_batch: str,
@@ -219,23 +225,25 @@ def _label_through_pool(
     try:
         broker = broker_group.wait_ready(count=1, timeout=BROKER_READY_TIMEOUT)[0]
         for gang in range(num_gangs):
+            # The first ``interactive_gangs`` gangs guarantee forward progress;
+            # the rest ride the batch band, joining the pool whenever the
+            # scheduler admits them and rejoining after preemption (gang
+            # submission leaves iris's generous preemption retries in place).
+            band = job_pb2.PRIORITY_BAND_INTERACTIVE if gang < interactive_gangs else job_pb2.PRIORITY_BAND_BATCH
             launch = Glm52LaunchConfig(
                 f"{VLLM_ENDPOINT}-{run_id}-g{gang}",
                 f"{RAY_ENDPOINT}-{run_id}-g{gang}",
                 server,
                 fleet=FLEETS[fleet_name],
                 object_store_endpoint=object_store_endpoint,
-                # The campaign runs both driver and pool at interactive priority:
-                # a batch-band gang behind an interactive driver would hold the
-                # driver's slot while its own gang waits at the back of the queue.
-                priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+                priority_band=band,
                 broker_worker=BrokerWorkerConfig(
                     broker=broker, max_in_flight=gang_in_flight, request_timeout=WORKER_REQUEST_TIMEOUT
                 ),
             )
             gang_jobs.append(submit_glm52(ctx, launch, name=f"vllm-g{gang}"))
 
-        concurrency = num_gangs * gang_in_flight
+        concurrency = min(num_gangs * gang_in_flight, DRIVER_MAX_CONCURRENCY)
         with serve_inference_proxy(
             broker=broker,
             model=MODEL,
@@ -251,7 +259,17 @@ def _label_through_pool(
             readiness = httpx.get(running_model.endpoint.url("models"), timeout=POOL_READY_TIMEOUT)
             readiness.raise_for_status()
             logger.info("label_windows_vllm: pool serving at %s", running_model.endpoint.base_url)
-            client = OpenAI(base_url=running_model.endpoint.base_url, api_key="EMPTY")
+            # httpx defaults to 100 pooled connections, which silently caps
+            # in-flight requests below the sender's thread count (the OCR
+            # campaign measured engines pinned at ~99 running requests until
+            # the pool was sized to the concurrency).
+            limits = httpx.Limits(max_connections=concurrency + 64, max_keepalive_connections=concurrency)
+            client = OpenAI(
+                base_url=running_model.endpoint.base_url,
+                api_key="EMPTY",
+                timeout=PROXY_REQUEST_TIMEOUT,
+                http_client=httpx.Client(limits=limits, timeout=PROXY_REQUEST_TIMEOUT),
+            )
 
             def label_chunk(batch: Sequence[dict], rejects: list[str]) -> list[dict]:
                 return label_rows(client, batch, concurrency, label_batch, rejects)
@@ -278,6 +296,7 @@ def run(
     server: ServerConfig,
     run_id: str,
     num_gangs: int,
+    interactive_gangs: int,
     gang_in_flight: int,
     chunk_size: int,
     label_batch: str,
@@ -310,6 +329,7 @@ def run(
             server=server,
             run_id=run_id,
             num_gangs=num_gangs,
+            interactive_gangs=interactive_gangs,
             gang_in_flight=gang_in_flight,
             chunk_size=chunk_size,
             label_batch=label_batch,
@@ -338,6 +358,15 @@ def main() -> None:
     parser.add_argument("--out", required=True, help="labels parquet path; checkpoints live under <out>.chunks/")
     parser.add_argument("--run-id", required=True, help="unique tag for this run's broker and gang endpoints")
     parser.add_argument("--num-gangs", type=int, default=DEFAULT_NUM_GANGS, help="GLM-5.2 gangs in the pool")
+    parser.add_argument(
+        "--interactive-gangs",
+        type=int,
+        default=None,
+        help=(
+            "how many gangs run at interactive priority (the rest ride the batch band and join "
+            "as admitted); default: all of them"
+        ),
+    )
     parser.add_argument(
         "--gang-in-flight",
         type=int,
@@ -378,6 +407,7 @@ def main() -> None:
         server=ServerConfig(max_model_len=args.max_model_len, max_num_seqs=args.max_num_seqs),
         run_id=args.run_id,
         num_gangs=args.num_gangs,
+        interactive_gangs=args.interactive_gangs if args.interactive_gangs is not None else args.num_gangs,
         gang_in_flight=args.gang_in_flight,
         chunk_size=args.chunk_size,
         label_batch=args.label_batch,
