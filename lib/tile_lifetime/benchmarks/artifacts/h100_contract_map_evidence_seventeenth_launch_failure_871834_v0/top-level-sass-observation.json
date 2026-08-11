@@ -1,0 +1,8 @@
+{
+  "line": "------------------ ------------------------------------------------------------ ------ ------ ------ ------",
+  "line_bytes": 107,
+  "line_number": 1,
+  "line_sha256": "122e874e3697a1afff045ed06277875d09e54df9bfd4b34f4d02577dcf3fab94",
+  "separator_group_widths": [18, 60, 6, 6, 6, 6],
+  "source": "bounded terminal ValueError from the first NCU public SASS parse failure"
+}
