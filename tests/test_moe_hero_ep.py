@@ -23,6 +23,7 @@ from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, launch, model, train
+from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
 
 
 def test_hero_run_without_shape_overrides_uses_the_selected_model():
@@ -355,6 +356,48 @@ def test_eval_every_adds_the_held_out_suites_as_dependencies():
     assert off_config.eval is None
     assert on_config.eval is not None
     assert on_config.eval.steps_per_eval == 50
+
+
+def test_ep_ablation_defaults_match_the_documented_arm_and_scale_per_rack():
+    one = abl.build_small_run(run_id="d768", size="d768", flavor="ep", version="dev")
+    cfg = one.build_config(StepContext.for_fingerprint(one.runtime_args, one.deps))
+    m = cfg.model
+    # The EP rung reproduces the documented latent/histogram/1.33 arm from issue #8062.
+    assert m.latent_dim == m.hidden_dim // 2
+    assert m.capacity_factor == 1.33
+    assert m.qb_estimator == model.QbEstimator.HIST
+    assert m.num_layers % 2 == 0  # even depth applied in the launcher, not GrugModelConfig
+    # Histogram QB is selectable off through the builder.
+    topk = abl.build_small_run(run_id="d768-topk", size="d768", flavor="ep", qb_use_histogram=False, version="dev")
+    assert topk.build_config(StepContext.for_fingerprint(topk.runtime_args, topk.deps)).model.qb_estimator == (
+        model.QbEstimator.TOPK
+    )
+    # The global batch scales with the rack count, holding the per-rack token load constant.
+    four = abl.build_small_run(run_id="d2048", size="d2048", flavor="ep", dp_racks=4, version="dev")
+    four_cfg = four.build_config(StepContext.for_fingerprint(four.runtime_args, four.deps))
+    assert four_cfg.trainer.trainer.train_batch_size == cfg.trainer.trainer.train_batch_size * 4
+
+
+def test_odd_depth_config_is_not_silently_rounded():
+    # GrugModelConfig must preserve an odd depth so HF round-trips and odd configs stay faithful;
+    # even-rounding is the launcher's job.
+    cfg = model.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_shared_experts=1,
+        num_experts=4,
+        num_experts_per_token=1,
+        num_layers=3,
+        num_heads=4,
+        num_kv_heads=2,
+        local_kv_heads=2,
+        global_kv_heads=1,
+        head_dim=8,
+        max_seq_len=8,
+    )
+    assert cfg.num_layers == 3
 
 
 def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():

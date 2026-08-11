@@ -201,7 +201,9 @@ def _small_model(
         num_shared_experts=2,
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
-        num_layers=shape.num_layers,
+        # Round depth up to even here (not in GrugModelConfig) so global_every scheduling and the
+        # last-layer-global rule land cleanly, without rewriting odd-depth configs elsewhere (e.g. HF).
+        num_layers=shape.num_layers + shape.num_layers % 2,
         num_heads=shape.num_heads,
         num_kv_heads=max(shape.local_kv_heads, shape.global_kv_heads),
         local_kv_heads=shape.local_kv_heads,
@@ -217,7 +219,8 @@ def _small_model(
         attention_implementation=attention_implementation,
         moe_implementation=moe_implementation,
         expert_chunks=expert_chunks,
-        latent_dim=latent_dim,
+        # Routed experts run in a latent space half the hidden width, matching the EP hero arm.
+        latent_dim=latent_dim if latent_dim is not None else shape.hidden_dim // 2,
         qb_estimator=QbEstimator.HIST if qb_use_histogram else QbEstimator.TOPK,
         qb_hist_bins=qb_hist_bins,
         report_capacity_overflow=True,
@@ -253,14 +256,14 @@ def build_small_run(
     size: str,
     target: str = "gb200-rack",
     flavor: str = "ep",
-    capacity_factor: float = 1.0,
+    capacity_factor: float = 1.33,
     seq_len: int = SEQ_LEN,
     tokens_per_step: int = TOKENS_PER_STEP,
     num_experts: int = 128,
     num_experts_per_token: int = 4,
     intermediate_dim: int | None = None,
     latent_dim: int | None = None,
-    qb_use_histogram: bool = False,
+    qb_use_histogram: bool = True,
     qb_hist_bins: int = 1000,
     tokens_per_active_param: int = 750,
     num_train_steps_override: int | None = None,
@@ -304,8 +307,11 @@ def build_small_run(
     shape = SMALL_SHAPES[size]
     fleet = TARGETS[target]
     sharding = FLAVORS[flavor]
-    # Tokens per step stay fixed, so a shorter context trains on the same data with a wider batch.
-    batch_size = tokens_per_step // seq_len
+    # `tokens_per_step` is the per-rack (per expert mesh) token load; it stays fixed so the
+    # fixed-all-to-all drop dynamics are constant across sizes. The global batch scales with the
+    # rack count, so a wider rung on more racks keeps the same per-rack load as a one-rack rung.
+    global_tokens_per_step = tokens_per_step * dp_racks
+    batch_size = global_tokens_per_step // seq_len
     expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
     model = _small_model(
         shape,
@@ -321,11 +327,11 @@ def build_small_run(
         qb_use_histogram,
         qb_hist_bins,
     )
-    # Train to `tokens_per_active_param` tokens per active parameter, at the fixed tokens per step.
+    # Train to `tokens_per_active_param` tokens per active parameter, at the global tokens per step.
     if num_train_steps_override is not None:
         num_steps = num_train_steps_override
     else:
-        num_steps = max(1, round(tokens_per_active_param * _active_params(model) / tokens_per_step))
+        num_steps = max(1, round(tokens_per_active_param * _active_params(model) / global_tokens_per_step))
     optimizer = dataclasses.replace(
         MoeHeuristic().build_optimizer_config(
             num_train_steps=num_steps,
@@ -484,14 +490,14 @@ def build_small_run(
     type=click.IntRange(min=1),
     default=TOKENS_PER_STEP,
     show_default=True,
-    help="Tokens per optimizer step. Widens the batch and shortens the run to hold the token budget.",
+    help="Per-rack tokens per step; the global batch scales with --dp-racks. Holds the drop dynamics.",
 )
 @click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
-    default=1.0,
+    default=1.33,
     show_default=True,
-    help="Fixed all-to-all capacity factor. Higher values drop fewer assignments and pad more.",
+    help="Fixed all-to-all capacity factor (EP hero arm is 1.33). Higher drops fewer and pads more.",
 )
 @click.option("--num-experts", type=click.IntRange(min=1), default=128, help="Routed expert count.")
 @click.option("--num-experts-per-token", type=click.IntRange(min=1), default=4, help="Routed experts per token.")
@@ -499,13 +505,26 @@ def build_small_run(
     "--intermediate-dim",
     type=click.IntRange(min=1),
     default=None,
-    help="Expert width. Defaults to hidden_dim // 2.",
+    help="Routed expert MLP width. Defaults to hidden_dim (hidden-wide), matching the EP hero.",
 )
 @click.option(
     "--latent-dim",
     type=click.IntRange(min=1),
     default=None,
-    help="LatentMoE: run routed experts at this width. Divides all-to-all traffic by hidden/latent.",
+    help="LatentMoE routed-expert width. Defaults to hidden_dim // 2 (the EP hero arm).",
+)
+@click.option(
+    "--qb-histogram/--no-qb-histogram",
+    default=True,
+    show_default=True,
+    help="Estimate the QB quantile with the histogram estimator (EP hero arm) instead of top-k mean.",
+)
+@click.option(
+    "--qb-hist-bins",
+    type=click.IntRange(min=1),
+    default=1000,
+    show_default=True,
+    help="Histogram bin count for the QB quantile estimator.",
 )
 @click.option(
     "--tokens-per-active-param",
@@ -548,6 +567,8 @@ def main(
     num_experts_per_token: int,
     intermediate_dim: int | None,
     latent_dim: int | None,
+    qb_histogram: bool,
+    qb_hist_bins: int,
     tokens_per_active_param: int,
     watch_interval: int,
     dp_racks: int,
@@ -565,6 +586,8 @@ def main(
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
         latent_dim=latent_dim,
+        qb_use_histogram=qb_histogram,
+        qb_hist_bins=qb_hist_bins,
         tokens_per_active_param=tokens_per_active_param,
         watch_interval=watch_interval,
         dp_racks=dp_racks,

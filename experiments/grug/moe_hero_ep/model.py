@@ -187,9 +187,6 @@ class GrugModelConfig:
     rope_fused: bool = False
 
     def __post_init__(self) -> None:
-        # Round depth up to the nearest even count so global_every scheduling and the last-layer-global
-        # rule land on a clean even depth.
-        object.__setattr__(self, "num_layers", self.num_layers + self.num_layers % 2)
         _ = self.inferred_head_dim
         if self.num_heads % self.stored_kv_heads != 0:
             raise ValueError("num_heads must be divisible by the stored KV-head count")
