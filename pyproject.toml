@@ -278,9 +278,6 @@ search-path = [
     # benchmark_controller.py imports controller test fixtures from lib/iris/tests
     # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
     "lib/iris",
-    # The evaldash server's modules are flat top-level imports of each other; the image copies them
-    # all to /app, so this directory is what stands in for that root.
-    "infra/evaldash/src",
 ]
 disable-search-path-heuristics = true
 

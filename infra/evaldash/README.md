@@ -162,16 +162,16 @@ npm --prefix infra/evaldash/dashboard run build
 
 # Generate fixtures, then serve them.
 PYTHONPATH=lib/marin/src uv run --with fsspec --with pyarrow --with pydantic \
-  python infra/evaldash/src/fixtures.py /tmp/evaldash-fixtures
+  python -m infra.evaldash.src.fixtures /tmp/evaldash-fixtures
 
 EVALDASH_STORE=local \
 RECORDS_PREFIXES=/tmp/evaldash-fixtures \
 EVALDASH_DASHBOARD_DIST=infra/evaldash/dashboard/dist \
 PORT=8080 \
-PYTHONPATH=infra/evaldash/src:lib/marin/src:lib/rigging/src \
+PYTHONPATH=lib/marin/src:lib/rigging/src \
 uv run --with starlette --with uvicorn --with sqlalchemy --with pyarrow --with pydantic --with fsspec \
   --with anthropic \
-  python infra/evaldash/src/server.py
+  python -m infra.evaldash.src.server
 # → http://localhost:8080  (binds loopback in local mode)
 # The samples/review endpoint needs `anthropic` importable and ANTHROPIC_API_KEY set; without either it
 # degrades to {available: false, reason}. EVALDASH_REVIEW_MODEL overrides the default review model.
@@ -198,7 +198,7 @@ uv run \
   --with pydantic \
   --with sqlalchemy \
   --with uvicorn \
-  python infra/evaldash/src/server.py
+  python -m infra.evaldash.src.server
 # → http://localhost:8080  (the image copies these import-light package directories too)
 ```
 
