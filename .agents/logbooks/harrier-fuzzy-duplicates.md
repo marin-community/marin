@@ -154,3 +154,14 @@ author: Rafal Wojdyla
 - RNO progress: Two source jobs succeeded. `common_corpus-english_0e1cf2c4` reached 455 of 8,018 output shards with 32 live workers and no dead workers.
 - Retry check: RNO reports 59 one-time shard retries. The count stayed unchanged for at least five minutes. No matching exception, timeout, request, connection, or memory error was present.
 - Next action: Continue the 15-minute check cadence. Track whether the RNO retry count grows.
+
+### 2026-08-11 21:55 UTC - TEI transport retry safeguard
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- East progress: Six source jobs succeeded. `eai-taxonomy-code-w-dclm_39527a3d` reached 250 of 5,872 output shards with 32 live workers and no dead workers.
+- RNO progress: Two source jobs succeeded. `common_corpus-english_0e1cf2c4` reached 858 of 8,018 output shards with 32 live workers and no dead workers.
+- Retry diagnosis: TEI closed some HTTP connections without a response. This raised `http.client.RemoteDisconnected` outside the client retry loop. East has six one-time shard retries. RNO has 109 one-time shard retries. No shard has retried twice.
+- Safeguard commit: `fdea5ebfd9cda42a7d37c61dbaea83d5b4914392` retries transport errors in the TEI request and health-check paths.
+- Regression evidence: The observed disconnect test failed before the change and passed after it. Datakit has 253 passing tests and five expected failures. Pre-commit and Pyrefly passed. An independent review led to coverage of reset, timeout, and incomplete-response errors.
+- Decision: Keep both v3 roots running because they continue to write shards with all workers live. Use the safeguard only if a recovery launch becomes necessary.
+- Next action: Continue the 15-minute check cadence. Escalate if a shard reaches a second retry or either root stops making progress.
