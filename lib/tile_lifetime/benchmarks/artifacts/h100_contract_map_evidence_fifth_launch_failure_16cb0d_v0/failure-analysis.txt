@@ -1,0 +1,36 @@
+Observed boundary
+=================
+
+1. The task command authenticated the transported launcher and manifest with
+   trusted image `sha256sum` before invoking Python.
+2. The command selected `/opt/h100-evidence-runtime/bin/python` both to execute
+   the launcher and as the launcher's required `--runtime-python` value.
+3. `run_coordinator` reached `_run_profiled_case`. Its control flow requires
+   the capsule audit, H100/tool preflight, generated compilation, and exact
+   retained loaded-shared-library SASS topology validation to finish first.
+4. Nsight Systems 2026.1.3 accepted `--capture-range-end=stop`, launched the
+   exact case worker, and printed `Processing events...` after that worker
+   exited. It produced no report because the worker failed.
+5. The worker reached `_numerical_evidence` for the first reviewed case,
+   `contract_map_9836cdbed389db24`, then rejected the forward
+   `mean_ulp_distance` against the immutable ordinary-XLA floor.
+
+Exact first failure
+===================
+
+ValueError: numerical.outputs.forward.mean_ulp_distance exceeds the immutable ordinary_xla numerical floor
+
+Evidence limit
+==============
+
+The diagnostic at source commit 16cb0da did not include the measured value,
+threshold, candidate backend, case, measurement boundary, or the other output
+metrics. Those values cannot be reconstructed from the controller-retained
+log, and the task's temporary artifact directory was not exported. This
+artifact therefore records only the rejected field and immutable floor owner.
+No numerical value is inferred.
+
+Nsight Systems did not complete a report. Nsight Compute, cache protocol,
+steady timing, repeat acceptance, and the final 24-record evidence bundle were
+not reached. The job had one failed attempt, no preemptions, zero configured
+failure retries, and was not relaunched.

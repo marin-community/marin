@@ -1,0 +1,29 @@
+Job: /dlwh/shuttle-h100-contract-map-evidence-16cb0da-v5
+State: failed
+Submitted epoch ms: 1786417301913
+Started epoch ms: 1786417303016
+Finished epoch ms: 1786417466108
+Failures: 1
+Preemptions: 0
+Tasks: 0/1 completed; failed=1
+
+Task: /dlwh/shuttle-h100-contract-map-evidence-16cb0da-v5/0
+State: failed
+Exit: 1
+Submitted epoch ms: 1786417301913
+Started epoch ms: 1786417302950
+Finished epoch ms: 1786417466108
+Failure retries: 0
+Preemption retries: 1000
+Attempt count: 1
+
+Attempt: 0
+State: failed
+Created epoch ms: 1786417302950
+Started epoch ms: 1786417384573
+Finished epoch ms: 1786417466108
+Duration: 81.535 seconds
+Exit: 1
+
+First diagnostic:
+ValueError: numerical.outputs.forward.mean_ulp_distance exceeds the immutable ordinary_xla numerical floor
