@@ -1,0 +1,30 @@
+{
+  "column_count": 274,
+  "column_names_sha256": "5b728a44b7b41580760ba03a3fcd2f1b1a203703a404261969ca45868f91a298",
+  "identity_fields": {
+    "Block Size": "",
+    "CC": "",
+    "Context": "",
+    "Device": "",
+    "Grid Size": "",
+    "Host Name": "",
+    "ID": "",
+    "Kernel Name": "",
+    "Process ID": "",
+    "Process Name": "",
+    "Stream": ""
+  },
+  "nonempty_column_count": 33,
+  "required_metric_units": {
+    "launch__block_size": "",
+    "launch__occupancy_limit_blocks": "block",
+    "launch__occupancy_limit_registers": "block",
+    "launch__occupancy_limit_shared_mem": "block",
+    "launch__occupancy_limit_warps": "block",
+    "launch__registers_per_thread": "register/thread",
+    "launch__shared_mem_per_block_dynamic": "byte/block",
+    "launch__shared_mem_per_block_static": "byte/block",
+    "sm__warps_active.avg.pct_of_peak_sustained_active": "%"
+  },
+  "schema_version": 1
+}

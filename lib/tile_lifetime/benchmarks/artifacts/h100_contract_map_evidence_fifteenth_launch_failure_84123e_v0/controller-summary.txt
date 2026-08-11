@@ -1,0 +1,30 @@
+Job: /dlwh/shuttle-h100-contract-map-evidence-84123e8-v15
+State: failed
+Submitted epoch ms: 1786460041725
+Started epoch ms: 1786460043961
+Finished epoch ms: 1786460267602
+Stored job exit: null
+Failures: 1
+Preemptions: 0
+Tasks: 0/1 completed; failed=1
+
+Task: /dlwh/shuttle-h100-contract-map-evidence-84123e8-v15/0
+State: failed
+Exit: 1
+Submitted epoch ms: 1786460041725
+Started epoch ms: 1786460042732
+Finished epoch ms: 1786460267602
+Failure retries: 0
+Preemption retries: 1000
+Attempt count: 1
+
+Attempt: 0
+State: failed
+Started epoch ms: 1786460049527
+Finished epoch ms: 1786460267602
+Duration: 218.075 seconds
+Exit: 1
+Attempt UID: f555f7cd303c65e6
+
+First diagnostic:
+ValueError: Nsight Compute row omits 'Kernel Name'

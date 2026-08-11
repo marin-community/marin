@@ -1,0 +1,45 @@
+Observed boundary
+=================
+
+1. Trusted image `sha256sum` authenticated the launcher and manifest before
+   Python execution.
+2. The capsule restored exact source commit 84123e89713445b7b23fc5dc1f16e0675063b0aa
+   and the runner completed its imported-module audit and H100/tool preflight.
+3. Generated candidate compilation and loaded-library SASS topology validation
+   returned before the first case began.
+4. The first case completed three unmeasured canonical-cache preparations,
+   merged their exact roots, and returned from `_run_profiled_case`. Returning
+   requires three-backend numerical and repeat gates before warmup/timing, the
+   24-row steady schedule, balanced NVTX ranges, Nsight Systems export, and
+   strict range/kernel attribution.
+5. All three `_run_cache_protocol` calls returned before the Nsight Compute
+   dictionary comprehension began. Their internal fresh-miss and canonical-hit
+   checks passed. Cross-consumer validation occurs after all three NCU records
+   and was not reached.
+6. The first `_run_ncu_profile` worker produced its result JSON, CSV, report,
+   unchanged cache snapshot, and public SASS export. `parse_ncu_metrics` then
+   passed its first CSV data row to `_csv_field`; that row was the units row and
+   had an empty `Kernel Name`.
+
+Diagnostic interpretation
+=========================
+
+The units row has 274 columns. Its eleven standard identity fields are empty.
+The nine requested metric columns carry the observed units recorded in
+`ncu-units-observation.json`; `launch__block_size` is the dimensionless empty
+unit, four occupancy limits use `block`, register count uses `register/thread`,
+shared-memory sizes use `byte/block`, and active warps use `%`.
+
+The parser had no reviewed units-row contract and treated every CSV row after
+the header as a kernel metric row. This artifact establishes the exact required
+unit values and position symptom. It does not retain arbitrary profiler column
+names or values outside those identity and requested-metric fields.
+
+Evidence limit
+==============
+
+No NCU metric record returned to the coordinator. Cross-consumer cache
+validation, retained backend artifacts, the other two NCU profiles, remaining
+three cases, and final bundle publication were not reached. The job had one
+failed attempt, no preemptions, zero configured failure retries, and was not
+relaunched.
