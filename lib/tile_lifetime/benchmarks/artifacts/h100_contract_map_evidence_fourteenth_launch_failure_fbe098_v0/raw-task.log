@@ -1,0 +1,17 @@
+h100_contract_map_source_payload.py: OK
+h100-evidence-source-manifest.json: OK
+Traceback (most recent call last):
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3325, in <module>
+    main()
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3307, in main
+    output = run_coordinator(
+             ^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2297, in run_coordinator
+    backend.value: _run_cache_protocol(
+                   ^^^^^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2799, in _run_cache_protocol
+    identity = validated_cache_protocol_identity(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2650, in validated_cache_protocol_identity
+    raise ValueError(message)
+ValueError: all compile, cold, and hit roots must converge to one cache content identity diagnostic={"backend":"ordinary_xla","case_id":"contract_map_9836cdbed389db24","class_fields":["equality_partition","cache_key_digest","serialized_executable_sha256"],"classes":[["class_0","957860baf5e324b1fc6c3ba54a43f27e531e847102c8a68fa20ec9abb2cec491","5b3c2bae4ed1cdb6eadb8277657e5343395a468ac74d3cae340d44ceaa3b8944"],["class_1","957860baf5e324b1fc6c3ba54a43f27e531e847102c8a68fa20ec9abb2cec491","69c38bf227255537ffa6ea8d260a803d2cc97340d1164b5cdf515b166ac70c21"],["class_2","957860baf5e324b1fc6c3ba54a43f27e531e847102c8a68fa20ec9abb2cec491","7e9969dbdf81b88329c756fc2b2e24e94ef17e55492fe35926c4ba3248f88f17"],["class_3","957860baf5e324b1fc6c3ba54a43f27e531e847102c8a68fa20ec9abb2cec491","de157c6c12aa846131b4f512d5e864acf668cf56b9ecb5c60346482550403c40"],["class_4","957860baf5e324b1fc6c3ba54a43f27e531e847102c8a68fa20ec9abb2cec491","b68701b09565f82866e643cc8bbbbf7ac3d3933202c756f720498235e3a0e2cf"],["class_5","957860baf5e324b1fc6c3ba54a43f27e531e847102c8a68fa20ec9abb2cec491","b4a5e3a59f81e7b6653e2e676fa751763b2afe0a21d0c7fb809e631a9cca3715"]],"expected_equality_partitions":1,"observed_equality_partitions":6,"root_fields":["phase","index","equality_partition","persistent_cache_file_count","persistent_cache_total_bytes","final_hlo_sha256"],"roots":[["compile",0,"class_0",4,45969,"0704ab8d2959bf8a2ef9b576a8bc85a09177d89302355f41bbb3da83c955d87f"],["compile",1,"class_1",4,38019,"9fabfb9f0c98667cd380a2a535f994ddd36f0e93d3c055c074e571cbf25a168e"],["compile",2,"class_2",4,45971,"0704ab8d2959bf8a2ef9b576a8bc85a09177d89302355f41bbb3da83c955d87f"],["cold",0,"class_3",4,42224,"9a4000e849b636aba8efde53734ec5a9ecc9074e0b8192bfef5c43f098954a7a"],["cold",1,"class_4",4,35795,"501f743a4da8606a2122e833cd523aeb76f9a2dc44764a2fdaa95613003ca688"],["cold",2,"class_5",4,38054,"014867aa71259c8c935f878c6d268ad78492973c184e7fd7c2be808cbd30323e"],["hit",0,"class_3",4,42224,"9a4000e849b636aba8efde53734ec5a9ecc9074e0b8192bfef5c43f098954a7a"],["hit",1,"class_4",4,35795,"501f743a4da8606a2122e833cd523aeb76f9a2dc44764a2fdaa95613003ca688"],["hit",2,"class_5",4,38054,"014867aa71259c8c935f878c6d268ad78492973c184e7fd7c2be808cbd30323e"]],"schema_version":2}
