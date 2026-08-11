@@ -31,6 +31,10 @@ with `SIGALRM`; if the test suppresses that failure, the test process exits five
 seconds later. Give a legitimately longer test an explicit
 `@pytest.mark.timeout(...)` value instead of increasing the repository default.
 
+A formatter-only mechanical edit does not require another test run. Rerun the
+repository formatting and lint checks after the edit; rerun tests only when the
+follow-up changes executable behavior or test expectations.
+
 ## Core Rule
 
 A test must fail when behavior is wrong. It should not fail only because an
