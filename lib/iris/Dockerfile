@@ -349,6 +349,7 @@ RUN --mount=type=bind,source=lib/tile_lifetime/src/tile_lifetime/nvtx_range.py,t
     set -eux; \
     env NSYS_NVTX_PROFILER_REGISTER_ONLY=0 \
       /usr/local/bin/nsys profile --force-overwrite=true --trace=nvtx \
+      --cuda-graph-trace=node \
       --capture-range=nvtx --capture-range-end=stop \
       --nvtx-capture=h100-evidence-nvtx-smoke \
       --output /tmp/h100-evidence-nvtx \
