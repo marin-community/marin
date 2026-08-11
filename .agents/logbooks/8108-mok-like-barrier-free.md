@@ -615,3 +615,8 @@ W&B: https://wandb.ai/marin-community/marin_moe/runs/mok-like-ab-mok-like-100-20
 - Correction: the identical Kueue exclusion at 120 and 96 requested cores does not establish that the request size is the limiting threshold. A read-only node inventory showed that no complete rack slice was currently available even under substantially smaller hypothetical CPU requests.
 - Interpretation: other GPU work occupies the nodes needed for the hard 16-node slice. The 96-core setting remains safe relative to the measured 1.698% peak CPU use, but it does not solve the current capacity state.
 - Decision: keep `/dlwh/mok-scale-005-v12-dropless-1rack-cpu96-25-20260811-1120-coord` pending at interactive priority. Do not lower the request again, submit competing gangs, or mutate the cluster. Resume the numerical/performance gate when one complete rack becomes available.
+
+### 2026-08-11 11:52 PT - One-rack admission improves while remaining pending
+
+- Status: after 31m58s, all 16 tasks remained scheduling-gated with zero failures, preemptions, logs, or partial GPU allocation. The scheduler's feasible fit improved from 2 of 16 tasks to 10 of 16 tasks as occupied capacity cleared.
+- Decision: keep the single interactive request pending. Do not submit a competing gang or change its resources; begin the numerical and throughput gate only after all 16 tasks co-schedule on one complete rack slice.
