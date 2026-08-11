@@ -96,7 +96,7 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
             ),
             sha256="d4e5d6e19da49c0f1dd030bd14d3ab795a10b8f1185c55162ae5daf6745c98eb",
             runtime_requirements=(
-                "deep-gemm @ https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260805-fa50698a9a30/deep_gemm-2.5.0%2B891d57b-cp312-cp312-linux_x86_64.whl#sha256=2a98b8eed0a79267533c6302aa0e72dcd598d7bb857fa2b49e8a207171109e15",
+                "deep-gemm @ https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260805-fa50698a9a30/deep_gemm-2.5.0%2B891d57b.nvrtc376-cp312-cp312-linux_x86_64.whl#sha256=1b18e3c35fb2f4dc729432443e0ddc6c4203e2b2a96ae014d2bfc955e6010d17",
             ),
         ),
         VllmGpuWheel(
