@@ -38,14 +38,14 @@ from marin.inference.model_preparation import read_attention_heads, select_tenso
 from marin.inference.vllm_backend import VllmBackend
 from rigging.timing import Duration, ExponentialBackoff
 
-from .backend_parity import (
+from marin.testing.inference.backend_parity import (
     NextTokenObservation,
     NextTokenParity,
     assert_same_rank_repeatability,
     cross_rank_diagnostic,
     parity_from_logprob_row,
 )
-from .snowball import (
+from marin.testing.inference.snowball import (
     BATCH_SIZE,
     MAX_PROBABILITY_ERROR,
     SNOWBALL,

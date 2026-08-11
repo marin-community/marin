@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 from rigging.filesystem import StoragePath
 
-from .backend_parity import TokenScore
+from marin.testing.inference.backend_parity import TokenScore
 
 BATCH_SIZE = 8
 TOP_K = 25

@@ -17,7 +17,7 @@ from rigging.filesystem import StoragePath
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as VendoredGrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.model import Transformer as VendoredTransformer
 
-from .snowball import SNOWBALL
+from marin.testing.inference.snowball import SNOWBALL
 
 
 def read_executor_info() -> dict[str, Any]:

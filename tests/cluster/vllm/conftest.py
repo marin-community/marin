@@ -4,21 +4,12 @@
 """vLLM-specific options for the Snowball e2es.
 
 The ``marin_gpu_client`` fixture these tests use lives in the shared
-``tests/cluster/conftest.py``; this module only adds the attention-backend option
-and registers remote-job helpers for by-value pickling.
+``tests/cluster/conftest.py``; this module only adds the attention-backend option.
 """
 
-import cloudpickle
 import pytest
 
-from . import backend_parity, snowball, snowball_checkpoint
-
 VLLM_ATTENTION_BACKENDS = ("FLASH_ATTN", "TRITON_ATTN")
-
-# Iris serializes the direct test callable by value; register its shared test helpers too.
-cloudpickle.register_pickle_by_value(snowball)
-cloudpickle.register_pickle_by_value(snowball_checkpoint)
-cloudpickle.register_pickle_by_value(backend_parity)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
