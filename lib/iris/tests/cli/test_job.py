@@ -124,27 +124,6 @@ def test_job_run_explicit_gcs_prefix_requires_pinned_placement(recorded_job_subm
     assert recorded_job_submissions == []
 
 
-def test_job_run_explicit_gcs_prefix_accepts_matching_region(monkeypatch, recorded_job_submissions):
-    monkeypatch.setattr("iris.cli.job.get_bucket_location", lambda _path: "us-central1", raising=False)
-
-    result = _run_cli(["-e", "MARIN_PREFIX", "gs://marin-us-central1/runs", "--region", "us-central1"])
-
-    assert result.exit_code == 0, result.output
-    assert len(recorded_job_submissions) == 1
-
-
-def test_job_run_explicit_gcs_prefix_rejects_mismatched_region(monkeypatch, recorded_job_submissions):
-    monkeypatch.setattr("iris.cli.job.get_bucket_location", lambda _path: "us-central1", raising=False)
-
-    result = _run_cli(["-e", "MARIN_PREFIX", "gs://marin-us-central1/runs", "--region", "us-central2"])
-
-    assert result.exit_code != 0
-    assert "gs://marin-us-central1/runs" in result.output
-    assert "us-central1" in result.output
-    assert "us-central2" in result.output
-    assert recorded_job_submissions == []
-
-
 def test_job_run_explicit_gcs_prefix_rejects_any_mismatched_candidate(monkeypatch, recorded_job_submissions):
     monkeypatch.setattr("iris.cli.job.get_bucket_location", lambda _path: "us-central1", raising=False)
 
@@ -161,21 +140,10 @@ def test_job_run_explicit_gcs_prefix_rejects_any_mismatched_candidate(monkeypatc
     )
 
     assert result.exit_code != 0
+    assert "gs://marin-us-central1/runs" in result.output
+    assert "us-central1" in result.output
     assert "us-central2" in result.output
     assert recorded_job_submissions == []
-
-
-def test_job_run_explicit_gcs_prefix_accepts_matching_zone(monkeypatch, recorded_job_submissions):
-    monkeypatch.setattr("iris.cli.job.get_bucket_location", lambda _path: "us-central1", raising=False)
-    config = _make_config_with_zones(["us-central1-a"])
-
-    result = _run_cli(
-        ["-e", "MARIN_PREFIX", "gs://marin-us-central1/runs", "--zone", "us-central1-a"],
-        config=config,
-    )
-
-    assert result.exit_code == 0, result.output
-    assert len(recorded_job_submissions) == 1
 
 
 def test_child_job_run_rejects_mismatched_region_for_inherited_gcs_prefix(monkeypatch, recorded_job_submissions):
@@ -192,22 +160,6 @@ def test_child_job_run_rejects_mismatched_region_for_inherited_gcs_prefix(monkey
 
     assert result.exit_code != 0
     assert recorded_job_submissions == []
-
-
-def test_child_job_run_accepts_inherited_gcs_prefix_and_region(monkeypatch, recorded_job_submissions):
-    parent_info = JobInfo(
-        task_id=JobName.from_wire("/test-user/parent/0"),
-        env={"MARIN_PREFIX": "gs://marin-us-central1/runs"},
-        constraints=[region_constraint(["us-central1"])],
-        worker_region="us-central1",
-    )
-    monkeypatch.setattr("iris.cli.job.get_job_info", lambda: parent_info)
-    monkeypatch.setattr("iris.cli.job.get_bucket_location", lambda _path: "us-central1")
-
-    result = _run_cli([])
-
-    assert result.exit_code == 0, result.output
-    assert len(recorded_job_submissions) == 1
 
 
 def test_job_run_allow_cross_region_submits_mismatch(

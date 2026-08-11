@@ -19,7 +19,7 @@ training step. The whole pipeline (ferry → tokenize → weights → train) liv
 ``StepSpec`` graph that :class:`StepRunner` walks, scheduling each step once its
 dependencies are satisfied.
 
-Submit in the staging region::
+Submit in the staging region:
 
     uv run iris --cluster=marin job run --region us-central1 -- \\
         python experiments/datakit/testbed/baseline.py

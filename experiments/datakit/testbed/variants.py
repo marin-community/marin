@@ -13,7 +13,7 @@ The whole pipeline (ferry → minhash → fuzzy_dups → consolidate → tokeniz
 → weights → train) lives in one ``StepSpec`` graph that :class:`StepRunner`
 walks, scheduling each step once its dependencies are satisfied.
 
-Submit in the staging region::
+Submit in the staging region:
 
     uv run iris --cluster=marin job run --region us-central1 -- \\
         python experiments/datakit/testbed/variants.py
