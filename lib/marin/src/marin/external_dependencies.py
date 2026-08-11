@@ -58,7 +58,7 @@ EVALCHEMY = ExternalDependency(
     distribution="evalchemy",
     repository="https://github.com/marin-community/evalchemy.git",
     version="0.1.0",
-    commit="d1a1005118e5928ed02064b85f14e8854ed28e22",
+    commit="8e9bb8dbf2618c32ba4481ec42834618612462aa",
     runtime_requirements=(),
 )
 
@@ -76,7 +76,7 @@ MARIN_SKYRL = ExternalDependency(
     distribution="marinskyrl",
     repository="https://github.com/marin-community/MarinSkyRL.git",
     version="0.1.0",
-    commit="a906145aaf2bee56e3d8062830ef463f67722ea2",
+    commit="3a32b73ac035ceab5a774dcb941dc99a5a7eb609",
     runtime_requirements=(),
 )
 
@@ -97,7 +97,7 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
             sha256="d4e5d6e19da49c0f1dd030bd14d3ab795a10b8f1185c55162ae5daf6745c98eb",
             runtime_requirements=(
                 "deep-gemm @ https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260805-fa50698a9a30/deep_gemm-2.5.0%2B891d57b.nvrtc376-cp312-cp312-linux_x86_64.whl#sha256=1b18e3c35fb2f4dc729432443e0ddc6c4203e2b2a96ae014d2bfc955e6010d17",
-                "marin-cuda-nvcc @ https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260805-fa50698a9a30/marin_cuda_nvcc-12.9.86-py3-none-manylinux2014_x86_64.whl#sha256=05decb1dbf81ec6a66680b2ba0c32a333ccb697fac864556afd9dd00d51b0bd5",
+                "marin-cuda-nvcc @ https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260805-fa50698a9a30/marin_cuda_nvcc-12.9.86.post1-py3-none-manylinux2014_x86_64.whl#sha256=f70b4cc6b1a2b1bdcfb7fa53f1e4877c87aa6c8fcf2c1ef2c6ea8c75ba5844c5",
             ),
         ),
         VllmGpuWheel(
