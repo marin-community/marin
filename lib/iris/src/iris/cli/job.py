@@ -31,6 +31,7 @@ from tabulate import tabulate
 from iris.cli.connect import iris_client_for_ctx, require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
+from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
     Constraint,
@@ -38,6 +39,7 @@ from iris.cluster.constraints import (
     WellKnownAttribute,
     availability_constraint,
     device_variant_constraint,
+    extract_placement_requirements,
     get_device_variant,
     infer_preemptible_constraint,
     preemptible_constraint,
@@ -227,6 +229,19 @@ def _placement_regions(regions: tuple[str, ...] | None, zone: str | None) -> tup
     requested = list(regions or ())
     if zone:
         requested.append(zone.rsplit("-", 1)[0])
+
+    job_info = get_job_info()
+    if job_info is None:
+        return tuple(dict.fromkeys(requested))
+
+    inherited = extract_placement_requirements(job_info.constraints)
+    if not regions:
+        if inherited.required_regions:
+            requested.extend(sorted(inherited.required_regions))
+        elif job_info.worker_region:
+            requested.append(job_info.worker_region)
+    if not zone and inherited.required_zones:
+        requested.extend(sorted(parent_zone.rsplit("-", 1)[0] for parent_zone in inherited.required_zones))
     return tuple(dict.fromkeys(requested))
 
 
@@ -264,13 +279,15 @@ def _validate_marin_prefix_placement(
     zone: str | None,
 ) -> None:
     """Validate an explicitly configured GCS prefix against job placement."""
-    prefix = env_vars.get(MARIN_PREFIX_ENV)
+    job_info = get_job_info()
+    effective_env_vars = {**(job_info.env if job_info else {}), **env_vars}
+    prefix = effective_env_vars.get(MARIN_PREFIX_ENV)
     if not prefix or not prefix.startswith("gs://"):
         return
 
     requested_regions = _placement_regions(regions, zone)
     override_source = MARIN_CROSS_REGION_OVERRIDE_ENV
-    override = bool(env_vars.get(MARIN_CROSS_REGION_OVERRIDE_ENV))
+    override = bool(effective_env_vars.get(MARIN_CROSS_REGION_OVERRIDE_ENV))
 
     if not requested_regions:
         if override:

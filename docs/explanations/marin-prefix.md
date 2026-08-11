@@ -75,6 +75,8 @@ An explicit GCS `MARIN_PREFIX`, supplied with `iris job run -e` or the `env`
 section of `.marin.yaml`, requires `--region` or `--zone`. Before submission,
 Iris reads the bucket location and rejects the job unless every requested region
 matches it. This check happens before the root job or any child job is submitted.
+For child submissions, Iris checks the effective environment and placement after
+including values inherited from the parent job.
 
 ```bash
 uv run iris --cluster=marin job run \
