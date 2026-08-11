@@ -698,7 +698,10 @@ class JobRequest:
         resources: Resource requirements per replica
         environment: Environment configuration (dependencies, env vars)
         replicas: Gang-scheduled replicas (e.g. TPU slices for multislice training)
-        processes_per_task: GPU processes to run inside each task (default 1). When
+        processes_per_task: GPU processes to run inside each task. ``None`` (the default)
+            means one process per GPU, which is what JAX's multi-controller model expects;
+            a task with no GPU resolves to 1. Set an explicit count to override, including
+            ``1`` for the single-process-drives-every-GPU layout. When the resolved value is
             > 1, fray composes the ``iris.hooks.multigpu_main`` supervisor into the command
             (one process per GPU group); iris runs it verbatim. ``1`` is a no-op.
         max_retries_failure: Max retries on failure
@@ -714,7 +717,7 @@ class JobRequest:
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     environment: EnvironmentConfig | None = None
     replicas: int | None = None
-    processes_per_task: int = 1
+    processes_per_task: int | None = None
     max_retries_failure: int = 0
     max_retries_preemption: int = 100
     max_task_failures: int = 0
@@ -726,6 +729,20 @@ class JobRequest:
         if self.replicas is None:
             # Pick up replicas from ResourceConfig (set by e.g. with_tpu slice_count)
             self.replicas = self.resources.replicas
+        if self.processes_per_task is not None and self.processes_per_task < 1:
+            raise ValueError(f"processes_per_task must be positive, got {self.processes_per_task}")
+
+    def resolve_processes_per_task(self) -> int:
+        """Processes to run inside each task, defaulting to one per GPU.
+
+        JAX addresses one device per process in its multi-controller model, so a GPU task
+        that runs a single process collapses every local GPU onto one rank. Only a GPU
+        device has anything to fan out over; everything else resolves to 1.
+        """
+        if self.processes_per_task is not None:
+            return self.processes_per_task
+        device = self.resources.device
+        return device.count if isinstance(device, GpuConfig) else 1
 
 
 class JobStatus(StrEnum):

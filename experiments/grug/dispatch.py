@@ -49,7 +49,7 @@ def dispatch_grug_training_run(
     local_entrypoint: Callable[[ConfigT], None],
     resources: ResourceConfig,
     max_retries_failure: int = 3,
-    processes_per_task: int = 1,
+    processes_per_task: int | None = None,
     priority: int = INHERIT_PRIORITY,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.

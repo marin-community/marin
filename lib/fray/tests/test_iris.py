@@ -552,3 +552,27 @@ def test_wrap_nsys_composes_the_hook_into_a_binary_entrypoint(monkeypatch):
         "--steps",
         "5",
     ]
+
+
+def _job(resources: ResourceConfig, **kwargs) -> JobRequest:
+    return JobRequest(name="job", entrypoint=Entrypoint.from_binary("python", ["x.py"]), resources=resources, **kwargs)
+
+
+def test_gpu_jobs_default_to_one_process_per_gpu() -> None:
+    assert _job(ResourceConfig.with_gpu("H100", count=8)).resolve_processes_per_task() == 8
+
+
+def test_an_explicit_process_count_survives_the_default() -> None:
+    """One process over every GPU stays reachable: it is the pre-default layout."""
+    assert _job(ResourceConfig.with_gpu("H100", count=8), processes_per_task=1).resolve_processes_per_task() == 1
+    assert _job(ResourceConfig.with_gpu("H100", count=8), processes_per_task=4).resolve_processes_per_task() == 4
+
+
+def test_non_gpu_jobs_resolve_to_a_single_process() -> None:
+    assert _job(ResourceConfig.with_cpu()).resolve_processes_per_task() == 1
+    assert _job(ResourceConfig.with_tpu("v5litepod-8")).resolve_processes_per_task() == 1
+
+
+def test_a_non_positive_process_count_is_rejected() -> None:
+    with pytest.raises(ValueError, match="processes_per_task must be positive"):
+        _job(ResourceConfig.with_gpu("H100", count=8), processes_per_task=0)

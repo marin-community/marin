@@ -660,8 +660,9 @@ class FrayIrisClient:
     def submit(self, request: JobRequest, adopt_existing: bool = True) -> IrisJobHandle:
         iris_resources = convert_resources(request.resources)
         iris_entrypoint = convert_entrypoint(request.entrypoint)
-        if request.processes_per_task > 1:
-            iris_entrypoint = wrap_multiprocess(iris_entrypoint, iris_resources, request.processes_per_task)
+        processes_per_task = request.resolve_processes_per_task()
+        if processes_per_task > 1:
+            iris_entrypoint = wrap_multiprocess(iris_entrypoint, iris_resources, processes_per_task)
         iris_entrypoint = wrap_nsys(iris_entrypoint)
         iris_environment = convert_environment(request.environment, request.resources.device)
         iris_constraints = convert_constraints(request.resources)

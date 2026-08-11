@@ -153,9 +153,10 @@ class GrugRunConfig:
     # schedule. Warmup and decay are fractions of `num_train_steps`, so training the head of a
     # long schedule requires the two to differ. None runs the whole schedule.
     stop_after_steps: int | None = None
-    # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
-    # via the iris.hooks.multigpu_main supervisor instead of one process per node.
-    processes_per_task: int = 1
+    # GPU processes per task. None takes the fray default of one JAX process per GPU
+    # (multi-controller) via the iris.hooks.multigpu_main supervisor; 1 puts a single
+    # process on every GPU in the node.
+    processes_per_task: int | None = None
 
 
 def build_train_dataset(

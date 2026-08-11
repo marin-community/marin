@@ -36,7 +36,6 @@ HERO_EP_BATCH_SIZE = 1024
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
-HERO_PROCESSES_PER_TASK = 1
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 # The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
 # of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
@@ -104,6 +103,7 @@ def build_hero_run(
     latent_dim: int | None = None,
     flavor: str = "ep",
     eval_every: int = 0,
+    processes_per_task: int | None = None,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
     watch_interval: int = HERO_WATCH_INTERVAL,
@@ -270,7 +270,7 @@ def build_hero_run(
                 GrugEvalConfig(steps_per_eval=eval_every, eval_ema=False, compute_bpb=True) if eval_every > 0 else None
             ),
             stop_after_steps=num_steps,
-            processes_per_task=HERO_PROCESSES_PER_TASK,
+            processes_per_task=processes_per_task,
         )
 
     return ArtifactStep(
@@ -354,6 +354,12 @@ def build_hero_run(
     help="Expert-parallel MoE implementation.",
 )
 @click.option(
+    "--processes-per-task",
+    type=click.IntRange(min=1),
+    default=None,
+    help="GPU processes per node. Default is one per GPU; pass 1 for a single process over all of them.",
+)
+@click.option(
     "--save-checkpoints/--no-save-checkpoints",
     default=False,
     show_default=True,
@@ -421,6 +427,7 @@ def main(
     capacity_factor: float | None,
     latent_dim: int | None,
     flavor: str,
+    processes_per_task: int | None,
     save_checkpoints: bool,
     checkpoint_minutes: float,
     eval_every: int,
@@ -442,6 +449,7 @@ def main(
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
         flavor=flavor,
+        processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
         eval_every=eval_every,
