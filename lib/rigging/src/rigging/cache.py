@@ -274,21 +274,20 @@ def _write_object(obj: StoragePath, value: bytes) -> None:
 
 
 class SyncedDirectory:
-    """Mirror a whole local directory to and from an object-store directory.
+    """Keep a local directory warm from and persisted to shared object storage.
 
     A consumer that can only open a local path — XLA's per-fusion autotune cache,
     which its C++ opens through ``tsl::Env`` and cannot point at an object store —
-    is the case :class:`PersistentKvCache` does not cover: the contents are a
-    mirrored tree, not keyed values a caller serializes. On construction this stages
-    the object-store directory down into the local one so the consumer starts warm.
-    A daemon thread packages newly written files into append-only compressed archives;
-    independent writers therefore add to the same remote mirror without replacing one
-    another. Legacy raw files remain readable and are fetched concurrently. Mirroring
-    is best-effort: on a hard exit the last unflushed files are simply rebuilt next run.
+    is the case :class:`PersistentKvCache` does not cover: the consumer owns a
+    directory rather than keyed values it serializes. Construction populates the local
+    directory from shared storage, and files added during the instance's lifetime are
+    available to later instances. Multiple instances may contribute distinct immutable
+    filenames to the same remote directory.
 
-    Every transfer degrades to a warning rather than failing the caller. The remote
-    directory resolves on first use, so this is safe to build before the active
-    cluster config loads.
+    Synchronization is best-effort: transfer failures warn rather than failing the
+    caller, and a hard exit may lose the last unflushed files. The remote directory
+    resolves on first use, so this is safe to build before the active cluster config
+    loads.
     """
 
     def __init__(self, remote: Callable[[], str], local: str, *, flush_interval: float = _SYNC_FLUSH_INTERVAL) -> None:
