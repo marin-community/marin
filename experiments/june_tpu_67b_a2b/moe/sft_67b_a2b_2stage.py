@@ -249,11 +249,15 @@ _SNOWBALL_STEP105149_CKPT: str = (
     "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step102k-3dac46/"
     "checkpoints/step-105149/"
 )
+_THINKING_STEP630_CKPT: str = (
+    "s3://marin-us-east-02a/marin/grug/" "grug_67b_a2b_sft_s2_thinking/2026.07.16/checkpoints/step-630/"
+)
 
 _JOB1_RUN_ID: str = "grug_67b_a2b_sft_s1_wildchat"
 _JOB2_RUN_ID: str = "grug_67b_a2b_sft_s2_thinking"
 _SMOKE_RUN_ID: str = "grug_67b_a2b_sft_smoke"
 _NEMOTRON_TERMINAL_RUN_ID: str = "snowball_step105149_sft_nemotron_terminal_steps1888_ben_recipe"
+_NEMOTRON_TERMINAL_THINKING_RUN_ID: str = "sft_repro_thinking_step630_nemotron_terminal_steps1888"
 _NEMOTRON_TERMINAL_STEPS: int = 1_888
 _AGENTIC_RUN_ID: str = "snowball_step105149_sft_grug_a2b_agentic_eot_5ep"
 _AGENTIC_TRAIN_RESOURCES: str = "agentic_train_resources"
@@ -417,6 +421,29 @@ def build_nemotron_terminal(
     return sft_step(spec, resources if resources is not None else _gpu_resources(_NODES))
 
 
+def build_nemotron_terminal_thinking(version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Run the Nemotron Terminal control recipe from the stage-2 thinking checkpoint."""
+    step_name = f"grug/{_NEMOTRON_TERMINAL_THINKING_RUN_ID}"
+    version = resolve_version(step_name, version)
+    spec = _spec(
+        name=user_namespaced_name(step_name, version),
+        version=version,
+        dataset=_NEMOTRON_TERMINAL_DATASET,
+        model_source=_grug_source(
+            _THINKING_STEP630_CKPT,
+            stage="nemotron_terminal_thinking_step630",
+            seq=_SEQ,
+            save_interval_minutes=60,
+            wandb_mode="disabled",
+        ),
+        steps=_NEMOTRON_TERMINAL_STEPS,
+        chat_template=MARIN_CHAT_TEMPLATE,
+        chat_cache_mode=ChatCacheMode.PREBUILT,
+        optimizer=_agentic_optimizer,
+    )
+    return sft_step(spec, _gpu_resources(_NODES))
+
+
 def _agentic_data_config(cache_path: str) -> LmDataConfig:
     source = UrlDatasetSourceConfig(
         train_urls=[],
@@ -533,7 +560,16 @@ def build_agentic(
 @click.option(
     "--stage",
     type=click.Choice(
-        ["smoke", "job1", "2stage", "nemotron-terminal", "nemotron-terminal-gb200", "agentic", "agentic-gb200"]
+        [
+            "smoke",
+            "job1",
+            "2stage",
+            "nemotron-terminal",
+            "nemotron-terminal-gb200",
+            "nemotron-terminal-thinking",
+            "agentic",
+            "agentic-gb200",
+        ]
     ),
     default="2stage",
     show_default=True,
@@ -549,6 +585,8 @@ def main(stage: str) -> ArtifactStep[LevanterCheckpoint]:
         return build_nemotron_terminal()
     if stage == "nemotron-terminal-gb200":
         return build_nemotron_terminal(resources=_gb200_resources(), accelerator_tag="cw-gb200")
+    if stage == "nemotron-terminal-thinking":
+        return build_nemotron_terminal_thinking()
     if stage == "agentic":
         return build_agentic()
     if stage == "agentic-gb200":
