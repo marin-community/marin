@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import sys
 import zlib
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -806,6 +807,7 @@ def test_runner_profiles_cuda_range_with_supported_nsys_end_policy(
     case_directory.mkdir()
     generated_manifest = tmp_path / "generated.json"
     generated_manifest.write_text("{}\n")
+    cache, cache_contract = _worker_cache_fixture(tmp_path, (BackendVariant.ORDINARY_XLA.value,))
 
     monkeypatch.setattr(runner, "_worker_base_command", lambda *args, **kwargs: ("worker", "--case"))
 
@@ -827,7 +829,7 @@ def test_runner_profiles_cuda_range_with_supported_nsys_end_policy(
     monkeypatch.setattr(runner.subprocess, "run", reject_after_inspecting_command)
 
     with pytest.raises(RuntimeError, match="synthetic nsys refusal"):
-        runner._run_profiled_case(config, "case-id", generated_manifest, case_directory)
+        runner._run_profiled_case(config, "case-id", generated_manifest, case_directory, cache, cache_contract)
 
 
 def test_runner_profile_boundary_explicitly_binds_lazy_export_to_cuda_trace_provenance(
@@ -838,6 +840,7 @@ def test_runner_profile_boundary_explicitly_binds_lazy_export_to_cuda_trace_prov
     case_directory.mkdir()
     generated_manifest = tmp_path / "generated.json"
     generated_manifest.write_text("{}\n")
+    cache, cache_contract = _worker_cache_fixture(tmp_path, (BackendVariant.ORDINARY_XLA.value,))
     result_path = case_directory / "case_result.json"
     monkeypatch.setattr(runner, "_worker_base_command", lambda *args, **kwargs: ("worker", "--case"))
 
@@ -872,7 +875,9 @@ def test_runner_profile_boundary_explicitly_binds_lazy_export_to_cuda_trace_prov
     monkeypatch.setattr(runner.subprocess, "run", successful_profile)
     monkeypatch.setattr(runner, "_run_retained", successful_lazy_export)
 
-    result, records = runner._run_profiled_case(config, "case-id", generated_manifest, case_directory)
+    result, records = runner._run_profiled_case(
+        config, "case-id", generated_manifest, case_directory, cache, cache_contract
+    )
 
     assert result["raw_samples"][0]["sample_index"] == 0
     assert records[0].ordered_kernel_names == ("fusion_kernel",)
@@ -889,6 +894,7 @@ def test_runner_profile_failure_binds_bounded_diagnostic_to_retained_report_and_
     case_directory.mkdir()
     generated_manifest = tmp_path / "generated.json"
     generated_manifest.write_text("{}\n")
+    cache, cache_contract = _worker_cache_fixture(tmp_path, (BackendVariant.ORDINARY_XLA.value,))
     result_path = case_directory / "case_result.json"
     report_path = case_directory / "steady_trace.nsys-rep"
     sqlite_path = case_directory / "steady_trace.sqlite"
@@ -920,7 +926,7 @@ def test_runner_profile_failure_binds_bounded_diagnostic_to_retained_report_and_
     monkeypatch.setattr(runner, "_run_retained", export_without_contained_kernel)
 
     with pytest.raises(ValueError, match="contains no associated CUDA kernels") as error:
-        runner._run_profiled_case(config, "case-id", generated_manifest, case_directory)
+        runner._run_profiled_case(config, "case-id", generated_manifest, case_directory, cache, cache_contract)
 
     diagnostic = _nsys_failure_diagnostic(error)
     assert diagnostic["report"] == {
@@ -1289,10 +1295,7 @@ def test_compile_worker_records_target_cache_key_executable_root_events_and_fina
         jax=SimpleNamespace(block_until_ready=lambda value: None, monitoring=monitoring),
     )
 
-    root_identity = hashlib.sha256()
-    for path in sorted(cache_directory.iterdir()):
-        root_identity.update(path.name.encode())
-        root_identity.update(bytes.fromhex(runner.file_sha256(path)))
+    root_identity = runner._persistent_cache_snapshot(runner._persistent_cache_files(cache_directory)).root_identity
     executable_identity = hashlib.sha256(b"serialized executable").hexdigest()
     contract_identity = hashlib.sha256(key.encode() + bytes.fromhex(executable_identity)).hexdigest()
     assert record["persistent_cache_identity"] == contract_identity
@@ -1300,7 +1303,7 @@ def test_compile_worker_records_target_cache_key_executable_root_events_and_fina
     assert record["persistent_cache_serialized_executable_sha256"] == executable_identity
     assert record["persistent_cache_compile_time"] == 17
     assert record["persistent_cache_entry_sha256"] == hashlib.sha256(target_entry).hexdigest()
-    assert record["persistent_cache_root_identity"] == root_identity.hexdigest()
+    assert record["persistent_cache_root_identity"] == root_identity
     assert record["persistent_cache_compression"] == "zlib"
     assert record["persistent_cache_events"] == {
         runner._CACHE_EVENT_NAMES[0]: 1,
@@ -1311,6 +1314,80 @@ def test_compile_worker_records_target_cache_key_executable_root_events_and_fina
     assert record["persistent_cache_total_bytes"] == len(target_entry) + len(_compressed_cache_entry(b"helper"))
     assert record["final_hlo"] == "authoritative final HLO"
     assert compression_checks == [True]
+
+
+def test_cached_worker_requires_scoped_public_hit_and_unchanged_canonical_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = BackendVariant.ORDINARY_XLA.value
+    cache, contract_path = _worker_cache_fixture(tmp_path, (backend,))
+    contract = json.loads(contract_path.read_text())
+    monitoring = _FakeMonitoring()
+
+    class Compiled:
+        def as_text(self):
+            return f"hlo-{backend}"
+
+    def cached_compile(*args, **kwargs):
+        assert monitoring.listener is not None
+        monitoring.listener(runner._CACHE_EVENT_NAMES[0])
+        monitoring.listener(runner._CACHE_EVENT_NAMES[1])
+        return Compiled(), 123
+
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", str(cache))
+    monkeypatch.setattr(runner, "_compiled_backend", cached_compile)
+    compiled, evidence = runner._cache_hit_executable(
+        SimpleNamespace(),
+        SimpleNamespace(),
+        backend,
+        contract,
+        jax=SimpleNamespace(monitoring=monitoring),
+    )
+    assert compiled.as_text() == f"hlo-{backend}"
+    assert evidence["persistent_cache_events"] == dict(zip(runner._CACHE_EVENT_NAMES, (1, 1, 0), strict=True))
+
+    def fallback_compile(*args, **kwargs):
+        assert monitoring.listener is not None
+        monitoring.listener(runner._CACHE_EVENT_NAMES[0])
+        monitoring.listener(runner._CACHE_EVENT_NAMES[2])
+        return Compiled(), 123
+
+    monkeypatch.setattr(runner, "_compiled_backend", fallback_compile)
+    with pytest.raises(ValueError, match="did not prove one public persistent-cache hit"):
+        runner._cache_hit_executable(
+            SimpleNamespace(),
+            SimpleNamespace(),
+            backend,
+            contract,
+            jax=SimpleNamespace(monitoring=monitoring),
+        )
+
+
+def test_cached_worker_rejects_context_or_compile_mutation_of_cloned_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = BackendVariant.ORDINARY_XLA.value
+    cache, contract_path = _worker_cache_fixture(tmp_path, (backend,))
+    contract = json.loads(contract_path.read_text())
+    monitoring = _FakeMonitoring()
+
+    def mutate_cache(*args, **kwargs):
+        (cache / f"jit_helper-{'e' * 64}-cache").write_bytes(_compressed_cache_entry(b"mutation"))
+        assert monitoring.listener is not None
+        monitoring.listener(runner._CACHE_EVENT_NAMES[0])
+        monitoring.listener(runner._CACHE_EVENT_NAMES[1])
+        return SimpleNamespace(as_text=lambda: f"hlo-{backend}"), 123
+
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", str(cache))
+    monkeypatch.setattr(runner, "_compiled_backend", mutate_cache)
+    with pytest.raises(ValueError, match="differs from its sealed source"):
+        runner._cache_hit_executable(
+            SimpleNamespace(),
+            SimpleNamespace(),
+            backend,
+            contract,
+            jax=SimpleNamespace(monitoring=monitoring),
+        )
 
 
 def test_persistent_cache_target_rejects_metadata_nested_and_ambiguous_entries(tmp_path: Path) -> None:
@@ -1400,11 +1477,101 @@ def test_persistent_cache_target_bounds_all_entries_and_root_size(
     monkeypatch.setattr(runner, "_MAX_PERSISTENT_CACHE_FILES", 1)
     with pytest.raises(RuntimeError, match="file-count bound"):
         runner._persistent_cache_target(tmp_path)
-
     monkeypatch.setattr(runner, "_MAX_PERSISTENT_CACHE_FILES", 2)
     monkeypatch.setattr(runner, "_MAX_PERSISTENT_CACHE_ROOT_BYTES", len(target) + len(helper) - 1)
     with pytest.raises(RuntimeError, match="total-byte bound"):
         runner._persistent_cache_target(tmp_path)
+
+
+def test_canonical_cache_snapshot_keeps_one_full_base_and_overlays_only_distinct_targets(tmp_path: Path) -> None:
+    sources = []
+    records = {}
+    for index, backend in enumerate(("ordinary_xla", "shuttle_source_ordered", "shuttle_fast")):
+        source = tmp_path / f"source-{index}"
+        source.mkdir()
+        key = f"jit_step-{index + 1:x}" + "a" * 63
+        executable = f"executable-{backend}".encode()
+        entry = _compressed_cache_entry(executable, compile_time=index + 1)
+        (source / f"{key}-cache").write_bytes(entry)
+        (source / f"jit_helper-{'f' * 64}-cache").write_bytes(_compressed_cache_entry(f"helper-{index}".encode()))
+        target, files = runner._persistent_cache_target(source)
+        source_snapshot = runner._persistent_cache_snapshot(files)
+        snapshot = tmp_path / f"canonical-{index}"
+        runner._seal_canonical_target_snapshot(
+            source,
+            snapshot,
+            {
+                "persistent_cache_entry_sha256": target.compressed_entry_sha256,
+                "persistent_cache_file_count": source_snapshot.file_count,
+                "persistent_cache_key": key,
+                "persistent_cache_root_identity": source_snapshot.root_identity,
+                "persistent_cache_serialized_executable_sha256": target.serialized_executable_sha256,
+                "persistent_cache_total_bytes": source_snapshot.total_bytes,
+            },
+        )
+        assert len(runner._persistent_cache_files(snapshot)) == len(files)
+        sources.append(snapshot)
+        records[backend] = {
+            "persistent_cache_entry_sha256": target.compressed_entry_sha256,
+            "persistent_cache_key": key,
+            "persistent_cache_serialized_executable_sha256": target.serialized_executable_sha256,
+            "final_hlo": f"hlo-{backend}",
+        }
+
+    merged = tmp_path / "merged"
+    runner._merge_canonical_target_snapshots(sources, merged)
+    files = dict(runner._persistent_cache_files(merged))
+    assert files[f"jit_helper-{'f' * 64}-cache"] == _compressed_cache_entry(b"helper-0")
+    assert {name for name in files if name.startswith("jit_step-")} == {
+        f"{record['persistent_cache_key']}-cache" for record in records.values()
+    }
+    contract = runner._write_worker_cache_contract(tmp_path / "contract.json", merged, records)
+    assert json.loads(contract.read_text())["snapshot"]["file_count"] == 4
+
+    clone = tmp_path / "clone"
+    runner._clone_cache_snapshot(merged, clone)
+    first_target = next(path for path in clone.iterdir() if path.name.startswith("jit_step-"))
+    first_target.write_bytes(b"changed clone")
+    assert dict(runner._persistent_cache_files(merged))[first_target.name] != b"changed clone"
+
+
+def test_worker_cache_contract_rejects_duplicate_backend_target_key(tmp_path: Path) -> None:
+    cache, contract = _worker_cache_fixture(tmp_path, ("ordinary_xla",))
+    payload = json.loads(contract.read_text())
+    payload["backends"]["shuttle_fast"] = dict(payload["backends"]["ordinary_xla"])
+    records = {
+        backend: {
+            "persistent_cache_entry_sha256": record["compressed_entry_sha256"],
+            "persistent_cache_key": record["cache_key"],
+            "persistent_cache_serialized_executable_sha256": record["serialized_executable_sha256"],
+            "final_hlo": "hlo-ordinary_xla",
+        }
+        for backend, record in payload["backends"].items()
+    }
+    with pytest.raises(ValueError, match="one distinct target"):
+        runner._write_worker_cache_contract(tmp_path / "duplicate.json", cache, records)
+
+
+def test_canonical_snapshot_rejects_helper_mutation_after_compile_worker(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    key = f"jit_step-{'a' * 64}"
+    (source / f"{key}-cache").write_bytes(_compressed_cache_entry(b"executable"))
+    helper = source / f"jit_helper-{'b' * 64}-cache"
+    helper.write_bytes(_compressed_cache_entry(b"helper"))
+    target, files = runner._persistent_cache_target(source)
+    snapshot = runner._persistent_cache_snapshot(files)
+    record = {
+        "persistent_cache_entry_sha256": target.compressed_entry_sha256,
+        "persistent_cache_file_count": snapshot.file_count,
+        "persistent_cache_key": key,
+        "persistent_cache_root_identity": snapshot.root_identity,
+        "persistent_cache_serialized_executable_sha256": target.serialized_executable_sha256,
+        "persistent_cache_total_bytes": snapshot.total_bytes,
+    }
+    helper.write_bytes(_compressed_cache_entry(b"changed helper"))
+    with pytest.raises(ValueError, match="root changed after its compile worker"):
+        runner._seal_canonical_target_snapshot(source, tmp_path / "canonical", record)
 
 
 def test_cache_compression_contract_rejects_optional_zstandard(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1522,8 +1689,8 @@ def _cache_root_record(
         "persistent_cache_entry_sha256": "b" * 64,
         "persistent_cache_events": {
             runner._CACHE_EVENT_NAMES[0]: 1,
-            runner._CACHE_EVENT_NAMES[1]: int(phase == "hit"),
-            runner._CACHE_EVENT_NAMES[2]: int(phase != "hit"),
+            runner._CACHE_EVENT_NAMES[1]: int(phase != "compile"),
+            runner._CACHE_EVENT_NAMES[2]: int(phase == "compile"),
         },
         "persistent_cache_identity": identity,
         "persistent_cache_file_count": file_count,
@@ -1535,7 +1702,36 @@ def _cache_root_record(
     }
 
 
-def test_cache_protocol_rejects_any_compile_cold_or_hit_root_identity_mismatch() -> None:
+def _materialized_cache_record(
+    environment: Mapping[str, str],
+    executable: bytes,
+    *,
+    phase: str,
+    final_hlo: str = "stable final HLO",
+) -> dict[str, object]:
+    cache = Path(environment["JAX_COMPILATION_CACHE_DIR"])
+    cache.mkdir(parents=True, exist_ok=True)
+    key = f"jit_step-{'a' * 64}"
+    target_path = cache / f"{key}-cache"
+    if not target_path.exists():
+        target_path.write_bytes(_compressed_cache_entry(executable))
+    target, files = runner._persistent_cache_target(cache, key)
+    snapshot = runner._persistent_cache_snapshot(files)
+    return {
+        **_cache_root_record(
+            target.serialized_executable_sha256,
+            phase=phase,
+            final_hlo=final_hlo,
+            file_count=snapshot.file_count,
+            total_bytes=snapshot.total_bytes,
+            root_identity=snapshot.root_identity,
+        ),
+        "persistent_cache_compile_time": target.compile_time,
+        "persistent_cache_entry_sha256": target.compressed_entry_sha256,
+    }
+
+
+def test_cache_protocol_accepts_fresh_executable_nondeterminism_but_rejects_cached_mismatch() -> None:
     executable_identity = "a" * 64
     compile_records = tuple(_cache_root_record(executable_identity, phase="compile") for _ in range(3))
     cold_records = tuple(_cache_root_record(executable_identity, phase="cold") for _ in range(3))
@@ -1554,7 +1750,7 @@ def test_cache_protocol_rejects_any_compile_cold_or_hit_root_identity_mismatch()
         == identity
     )
     mismatched = (*compile_records[:2], _cache_root_record("d" * 64, phase="compile"))
-    with pytest.raises(ValueError, match="all compile, cold, and hit roots"):
+    assert (
         runner.validated_cache_protocol_identity(
             mismatched,
             cold_records,
@@ -1563,9 +1759,21 @@ def test_cache_protocol_rejects_any_compile_cold_or_hit_root_identity_mismatch()
             backend="ordinary_xla",
             required_processes=3,
         )
+        == identity
+    )
+    mismatched_cold = (*cold_records[:2], _cache_root_record("d" * 64, phase="cold"))
+    with pytest.raises(ValueError, match="canonical executable"):
+        runner.validated_cache_protocol_identity(
+            mismatched,
+            mismatched_cold,
+            hit_records,
+            case_id="contract_map_case",
+            backend="ordinary_xla",
+            required_processes=3,
+        )
 
 
-def test_cache_protocol_accepts_proven_metadata_and_unrelated_root_differences() -> None:
+def test_cache_protocol_accepts_fresh_root_differences_but_requires_exact_cloned_roots() -> None:
     executable = "a" * 64
 
     def records(phase: str) -> tuple[dict[str, object], ...]:
@@ -1584,8 +1792,20 @@ def test_cache_protocol_accepts_proven_metadata_and_unrelated_root_differences()
         )
 
     compile_records = records("compile")
-    cold_records = records("cold")
-    hit_records = records("hit")
+    canonical_entry = compile_records[0]["persistent_cache_entry_sha256"]
+    canonical_root = compile_records[0]["persistent_cache_root_identity"]
+
+    def cloned(phase: str) -> tuple[dict[str, object], ...]:
+        return tuple(
+            {
+                **_cache_root_record(executable, phase=phase, root_identity=str(canonical_root)),
+                "persistent_cache_entry_sha256": canonical_entry,
+            }
+            for _ in range(3)
+        )
+
+    cold_records = cloned("cold")
+    hit_records = cloned("hit")
 
     assert (
         runner.validated_cache_protocol_identity(
@@ -1600,17 +1820,13 @@ def test_cache_protocol_accepts_proven_metadata_and_unrelated_root_differences()
     )
 
 
-@pytest.mark.parametrize("difference", ("cache_key", "serialized_executable"))
-def test_cache_protocol_rejects_target_key_and_executable_differences_independently(difference: str) -> None:
+def test_cache_protocol_rejects_fresh_target_key_difference_but_records_executable_difference() -> None:
     compile_records = [_cache_root_record("a" * 64, phase="compile") for _ in range(3)]
-    if difference == "cache_key":
-        compile_records[2] = _cache_root_record("a" * 64, cache_key_digest="d" * 64, phase="compile")
-    else:
-        compile_records[2] = _cache_root_record("d" * 64, phase="compile")
     cold_records = tuple(_cache_root_record("a" * 64, phase="cold") for _ in range(3))
     hit_records = tuple(_cache_root_record("a" * 64, phase="hit") for _ in range(3))
 
-    with pytest.raises(ValueError, match="one cache content identity"):
+    compile_records[2] = _cache_root_record("a" * 64, cache_key_digest="d" * 64, phase="compile")
+    with pytest.raises(ValueError, match="one target key"):
         runner.validated_cache_protocol_identity(
             compile_records,
             cold_records,
@@ -1619,6 +1835,15 @@ def test_cache_protocol_rejects_target_key_and_executable_differences_independen
             backend="ordinary_xla",
             required_processes=3,
         )
+    compile_records[2] = _cache_root_record("d" * 64, phase="compile")
+    runner.validated_cache_protocol_identity(
+        compile_records,
+        cold_records,
+        hit_records,
+        case_id="contract_map_case",
+        backend="ordinary_xla",
+        required_processes=3,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1658,7 +1883,11 @@ def test_cache_protocol_failure_reports_closed_nine_root_equality_partition() ->
         _cache_root_record(executable_b, final_hlo="changed HLO", file_count=3, total_bytes=200),
         _cache_root_record(executable_a, final_hlo="compile HLO", file_count=2, total_bytes=100),
     )
-    cold_records = tuple(_cache_root_record(executable_a, phase="cold", final_hlo="compile HLO") for _ in range(3))
+    cold_records = (
+        _cache_root_record(executable_a, phase="cold", final_hlo="compile HLO"),
+        _cache_root_record(executable_b, phase="cold", final_hlo="changed cached HLO"),
+        _cache_root_record(executable_a, phase="cold", final_hlo="compile HLO"),
+    )
     hit_records = tuple(_cache_root_record(executable_a, phase="hit", final_hlo="compile HLO") for _ in range(3))
 
     with pytest.raises(ValueError) as raised:
@@ -1675,7 +1904,8 @@ def test_cache_protocol_failure_reports_closed_nine_root_equality_partition() ->
     assert diagnostic["case_id"] == "contract_map_9836cdbed389db24"
     assert diagnostic["backend"] == "ordinary_xla"
     assert diagnostic["schema_version"] == 2
-    assert diagnostic["expected_equality_partitions"] == 1
+    assert diagnostic["expected_cached_equality_partitions"] == 1
+    assert diagnostic["fresh_compile_equality_partitions"] == 2
     assert diagnostic["observed_equality_partitions"] == 2
     root_fields = diagnostic["root_fields"]
     roots = tuple(dict(zip(root_fields, root, strict=True)) for root in diagnostic["roots"])
@@ -1696,19 +1926,19 @@ def test_cache_protocol_failure_reports_closed_nine_root_equality_partition() ->
         "class_1",
         "class_0",
         "class_0",
-        "class_0",
+        "class_1",
         "class_0",
         "class_0",
         "class_0",
         "class_0",
     )
-    assert roots[1] == {
+    assert roots[4] == {
         "equality_partition": "class_1",
-        "final_hlo_sha256": hashlib.sha256(b"changed HLO").hexdigest(),
+        "final_hlo_sha256": hashlib.sha256(b"changed cached HLO").hexdigest(),
         "index": 1,
-        "persistent_cache_file_count": 3,
-        "persistent_cache_total_bytes": 200,
-        "phase": "compile",
+        "persistent_cache_file_count": 2,
+        "persistent_cache_total_bytes": 4096,
+        "phase": "cold",
     }
     assert classes[1] == {
         "equality_partition": "class_1",
@@ -1731,9 +1961,15 @@ def test_run_cache_protocol_propagates_bounded_root_diagnostic_from_production_b
         phase = command[1]
         index = phase_counts[phase]
         phase_counts[phase] += 1
-        identity = "d" * 64 if phase == "compile" and index == 1 else "a" * 64
+        record = _materialized_cache_record(
+            kwargs["environment"], b"canonical", phase=phase, final_hlo=f"private HLO {phase} {index}"
+        )
+        if phase == "cold" and index == 1:
+            record["persistent_cache_serialized_executable_sha256"] = "d" * 64
+            key = str(record["persistent_cache_key"])
+            record["persistent_cache_identity"] = hashlib.sha256(key.encode() + bytes.fromhex("d" * 64)).hexdigest()
         return {
-            **_cache_root_record(identity, phase=phase, final_hlo=f"private HLO {phase} {index}"),
+            **record,
             "private_cache_path": f"/secret/cache/{phase}/{index}",
         }
 
@@ -1812,15 +2048,21 @@ def test_run_cache_protocol_maximal_reachable_partition_emits_bounded_diagnostic
         index = phase_counts[phase]
         phase_counts[phase] += 1
         class_index = index + (0 if phase == "compile" else 3)
-        return _cache_root_record(
-            f"{class_index + 1:x}" * 64,
-            cache_key_digest=f"{class_index + 10:x}"[-1] * 64,
+        record = _materialized_cache_record(
+            kwargs["environment"],
+            f"fresh-{index}".encode() if phase == "compile" else b"fresh-0",
             phase=phase,
             final_hlo="private\x00HLO\U0001f680/" + ("x" * 10_000),
-            file_count=2**63 - 1,
-            total_bytes=2**63 - 1,
-            root_identity=f"{index + 1:x}" * 64,
         )
+        if phase != "compile":
+            executable = f"{class_index + 1:x}" * 64
+            record["persistent_cache_serialized_executable_sha256"] = executable
+            key = str(record["persistent_cache_key"])
+            record["persistent_cache_identity"] = hashlib.sha256(key.encode() + bytes.fromhex(executable)).hexdigest()
+        if phase != "compile":
+            record["persistent_cache_file_count"] = 2**63 - 1
+            record["persistent_cache_total_bytes"] = 2**63 - 1
+        return record
 
     monkeypatch.setattr(runner, "_worker_base_command", worker_command)
     monkeypatch.setattr(runner, "run_timed_compile_worker_command", worker_result)
@@ -1855,8 +2097,10 @@ def test_run_cache_protocol_rejects_cold_hit_root_byte_change_before_semantic_me
         phase = command[1]
         index = phase_counts[phase]
         phase_counts[phase] += 1
-        root_identity = "d" * 64 if phase == "hit" and index == 0 else "c" * 64
-        return _cache_root_record("a" * 64, phase=phase, root_identity=root_identity)
+        record = _materialized_cache_record(kwargs["environment"], b"canonical", phase=phase)
+        if phase == "hit" and index == 0:
+            record["persistent_cache_root_identity"] = "d" * 64
+        return record
 
     monkeypatch.setattr(runner, "_worker_base_command", worker_command)
     monkeypatch.setattr(runner, "run_timed_compile_worker_command", worker_result)
@@ -1875,13 +2119,13 @@ def test_cache_protocol_diagnostic_fails_closed_at_serialized_bound(monkeypatch:
     compile_records = tuple(_cache_root_record("a" * 64, phase="compile") for _ in range(3))
     cold_records = tuple(_cache_root_record("a" * 64, phase="cold") for _ in range(3))
     hit_records = tuple(_cache_root_record("a" * 64, phase="hit") for _ in range(3))
-    mismatched = (*compile_records[:2], _cache_root_record("d" * 64, phase="compile"))
+    mismatched = (*cold_records[:2], _cache_root_record("d" * 64, phase="cold"))
     monkeypatch.setattr(runner, "_MAX_CACHE_IDENTITY_DIAGNOSTIC_CHARS", 1)
 
     with pytest.raises(AssertionError, match="exceeds its reviewed bound"):
         runner.validated_cache_protocol_identity(
+            compile_records,
             mismatched,
-            cold_records,
             hit_records,
             case_id="contract_map_case",
             backend="ordinary_xla",
@@ -1927,7 +2171,11 @@ def test_cache_protocol_rejects_malformed_root_diagnostic_fields(field: str, val
 
 def test_executable_hlo_rejects_mismatch_between_timing_cache_and_profile_workers() -> None:
     records = tuple({"final_hlo": "same"} for _ in range(3))
-    protocol = {"compile": records, "cold": records, "hit": records}
+    protocol = {
+        "compile": (records[0], {"final_hlo": "fresh nondeterministic HLO"}, {"final_hlo": "other fresh HLO"}),
+        "cold": records,
+        "hit": records,
+    }
 
     assert (
         runner.validated_executable_hlo(
@@ -1945,6 +2193,47 @@ def test_executable_hlo_rejects_mismatch_between_timing_cache_and_profile_worker
             cache_protocol=protocol,
             profile_worker_hlo="same",
         )
+
+
+def test_measurement_workers_require_canonical_key_executable_root_and_public_hit() -> None:
+    backends = tuple(backend.value for backend in BackendVariant)
+    protocols = {
+        backend: {"compile": (_cache_root_record(f"{index + 1:x}" * 64, phase="compile"),)}
+        for index, backend in enumerate(backends)
+    }
+    root = "f" * 64
+    events = dict(zip(runner._CACHE_EVENT_NAMES, (1, 1, 0), strict=True))
+
+    def evidence(backend: str) -> dict[str, object]:
+        canonical = protocols[backend]["compile"][0]
+        return {
+            "persistent_cache_entry_sha256": canonical["persistent_cache_entry_sha256"],
+            "persistent_cache_events": events,
+            "persistent_cache_key": canonical["persistent_cache_key"],
+            "persistent_cache_root_identity": root,
+            "persistent_cache_serialized_executable_sha256": canonical["persistent_cache_serialized_executable_sha256"],
+        }
+
+    case = {"persistent_cache": {backend: evidence(backend) for backend in sorted(backends)}}
+    profiles = {
+        backend: runner.NcuProfileEvidence(
+            metrics=(),
+            report_path="report",
+            report_sha256="a" * 64,
+            sass_source_path="sass",
+            sass_source_sha256="b" * 64,
+            final_hlo="hlo",
+            persistent_cache=evidence(backend),
+        )
+        for backend in backends
+    }
+    runner.validate_measurement_cache_consumers(protocols, case, profiles, canonical_root_identity=root)
+
+    case["persistent_cache"][backends[1]]["persistent_cache_events"] = dict(
+        zip(runner._CACHE_EVENT_NAMES, (1, 0, 1), strict=True)
+    )
+    with pytest.raises(ValueError, match="did not execute the canonical cached executable"):
+        runner.validate_measurement_cache_consumers(protocols, case, profiles, canonical_root_identity=root)
 
 
 def test_ordinary_xla_boundary_comes_from_numbered_final_hlo_entry_abi() -> None:
@@ -2396,6 +2685,25 @@ def _runner_config(tmp_path: Path) -> Any:
         ),
         require_jax_version="1.2.3",
     )
+
+
+def _worker_cache_fixture(tmp_path: Path, backends: tuple[str, ...]) -> tuple[Path, Path]:
+    cache = tmp_path / "sealed-cache"
+    cache.mkdir()
+    records = {}
+    for index, backend in enumerate(backends):
+        key = f"jit_step-{index + 1:x}" + "a" * 63
+        executable = f"serialized-{backend}".encode()
+        entry = _compressed_cache_entry(executable)
+        (cache / f"{key}-cache").write_bytes(entry)
+        records[backend] = {
+            "persistent_cache_entry_sha256": hashlib.sha256(entry).hexdigest(),
+            "persistent_cache_key": key,
+            "persistent_cache_serialized_executable_sha256": hashlib.sha256(executable).hexdigest(),
+            "final_hlo": f"hlo-{backend}",
+        }
+    contract = runner._write_worker_cache_contract(tmp_path / "cache-contract.json", cache, records)
+    return cache, contract
 
 
 def _write_ncu_csv(path: Path) -> None:

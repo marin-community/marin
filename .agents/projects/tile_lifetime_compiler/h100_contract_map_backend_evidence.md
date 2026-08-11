@@ -375,21 +375,32 @@ copies only when the same database contains nonempty
 device. An absent kernel table, empty kernel activity, invalid GPU identity,
 schedule mismatch, malformed schema, ambiguous kernel identity, launch-order
 drift, substring-only kernel match, or any steady-state CUDA copy aborts the
-run. Result-evidence schema v4 retains closed H2D, D2H, and D2D count and byte
-accounting before the no-copy gate. Three independent compile workers and three
-paired cold/hit cache roots retain compile, first-execution, and cache samples:
-nine records over six physical roots. The runner disables JAX's auxiliary
-root-relative XLA caches and pins the unbounded flat-file cache mode. It
-identifies exactly one `jit_step-<SHA256>-cache` target entry in each record.
-The exact target cache key and SHA-256 of the serialized executable must match
-across all nine records. The executable digest removes only JAX 0.10.1's
-documented four-byte big-endian cached compile-time prefix after bounded zlib
-decompression. The compressed entry and whole-root identities remain
-diagnostics, while each cold/hit pair must preserve its complete path-and-byte
-root identity. Public JAX monitoring must report one request and one write
-event for each compile or cold record, and one request and one hit for each hit
-record. Their final optimized HLO must still equal the timing and profile
-worker HLO before their evidence can be merged.
+run. Result-evidence schema v5 retains closed H2D, D2H, and D2D count and byte
+accounting before the no-copy gate. Three independent clean-root compile
+workers retain compile and first-execution samples. They must produce one
+public target key, but their serialized executables and final-HLO hashes are
+retained as nondeterminism evidence rather than required to match. The runner
+chooses compile worker zero as the canonical populated cache for each backend.
+One merged snapshot keeps the complete first backend root and adds only the
+other two validated target entries, rejecting target collisions and requiring
+one distinct target key per backend.
+
+Every cold-process retrieval, repeated hit, timed case worker, and profiled
+worker receives its own copied snapshot. The coordinator and worker both
+require the copy's complete path-and-byte identity before and after execution.
+Public JAX monitoring must report exactly one request, one hit, and no miss
+around each backend compile in those consumers; fallback compilation therefore
+rejects the run even if the cache files remain unchanged.
+`persistent_cache_cold_samples_ns` denotes the first isolated-process retrieval
+from a freshly copied populated snapshot, not compilation from an empty cache.
+
+The executable digest removes only JAX 0.10.1's documented four-byte big-endian
+cached compile-time prefix after bounded zlib decompression. Measurement and
+profile evidence must use compile worker zero's exact target key, compressed
+entry, and serialized-executable identity. Compile workers one and two remain
+fresh misses and timing samples but are excluded from executable convergence.
+Compile worker zero's final optimized HLO is authoritative; every cloned-cache
+consumer's final HLO must equal it before evidence can be merged.
 
 Each compile sample begins on the coordinator's monotonic clock immediately
 before spawning its isolated worker. The worker records the same host monotonic
