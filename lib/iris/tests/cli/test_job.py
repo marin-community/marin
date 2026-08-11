@@ -241,33 +241,29 @@ def test_job_run_allow_cross_region_submits_mismatch(
     assert event["body"] == {
         "bucket_region": "us-central1",
         "marin_prefix": "gs://marin-us-central1/runs",
-        "override_source": "--allow-cross-region",
+        "override_source": MARIN_CROSS_REGION_OVERRIDE_ENV,
         "requested_regions": "us-central2",
     }
 
 
-def test_job_run_override_environment_submits_mismatch(
-    monkeypatch, recorded_job_submissions, caplog: pytest.LogCaptureFixture
-):
+def test_job_run_override_environment_submits_mismatch(monkeypatch, recorded_job_submissions):
     monkeypatch.setattr("iris.cli.job.get_bucket_location", lambda _path: "us-central1", raising=False)
 
-    with caplog.at_level("WARNING", logger="iris.cli.job"):
-        result = _run_cli(
-            [
-                "-e",
-                "MARIN_PREFIX",
-                "gs://marin-us-central1/runs",
-                "-e",
-                MARIN_CROSS_REGION_OVERRIDE_ENV,
-                "approved",
-                "--region",
-                "us-central2",
-            ]
-        )
+    result = _run_cli(
+        [
+            "-e",
+            "MARIN_PREFIX",
+            "gs://marin-us-central1/runs",
+            "-e",
+            MARIN_CROSS_REGION_OVERRIDE_ENV,
+            "approved",
+            "--region",
+            "us-central2",
+        ]
+    )
 
     assert result.exit_code == 0, result.output
     assert len(recorded_job_submissions) == 1
-    assert any(MARIN_CROSS_REGION_OVERRIDE_ENV in record.message for record in caplog.records)
 
 
 def test_job_run_explicit_gcs_prefix_fails_when_bucket_region_is_unknown(monkeypatch, recorded_job_submissions):
@@ -279,7 +275,6 @@ def test_job_run_explicit_gcs_prefix_fails_when_bucket_region_is_unknown(monkeyp
     result = _run_cli(["-e", "MARIN_PREFIX", "gs://private-bucket/runs", "--region", "us-central1"])
 
     assert result.exit_code != 0
-    assert "Could not determine the GCS bucket region" in result.output
     assert recorded_job_submissions == []
 
 

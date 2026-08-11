@@ -262,16 +262,15 @@ def _validate_marin_prefix_placement(
     env_vars: dict[str, str],
     regions: tuple[str, ...] | None,
     zone: str | None,
-    allow_cross_region: bool,
 ) -> None:
-    """Reject an explicitly configured GCS prefix without matching placement."""
+    """Validate an explicitly configured GCS prefix against job placement."""
     prefix = env_vars.get(MARIN_PREFIX_ENV)
     if not prefix or not prefix.startswith("gs://"):
         return
 
     requested_regions = _placement_regions(regions, zone)
-    override_source = "--allow-cross-region" if allow_cross_region else MARIN_CROSS_REGION_OVERRIDE_ENV
-    override = allow_cross_region or bool(env_vars.get(MARIN_CROSS_REGION_OVERRIDE_ENV))
+    override_source = MARIN_CROSS_REGION_OVERRIDE_ENV
+    override = bool(env_vars.get(MARIN_CROSS_REGION_OVERRIDE_ENV))
 
     if not requested_regions:
         if override:
@@ -1148,7 +1147,7 @@ def run(
     env_vars_dict = load_env_vars(env_vars)
     if allow_cross_region:
         env_vars_dict[MARIN_CROSS_REGION_OVERRIDE_ENV] = "1"
-    _validate_marin_prefix_placement(env_vars_dict, region or None, zone, allow_cross_region)
+    _validate_marin_prefix_placement(env_vars_dict, region or None, zone)
 
     try:
         exit_code = run_iris_job(

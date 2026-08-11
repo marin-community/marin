@@ -33,14 +33,13 @@ from rigging.log_setup import configure_logging
 
 from experiments.datakit.testbed.mixture import tokenized_bucket_weights_step
 from experiments.datakit.testbed.sampler import build_testbed_steps
-from experiments.datakit.testbed.settings import TESTBED_TOKENIZER
+from experiments.datakit.testbed.settings import TESTBED_STAGING_REGION, TESTBED_TOKENIZER
 from experiments.datakit.testbed.train import run_testbed_config, testbed_tokenize
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 
 logger = logging.getLogger(__name__)
 
-STAGING_REGION = "us-central1"
 TARGET_TOTAL_TOKENS_B = 1000.0
 MAX_STEP_CONCURRENCY = 20
 
@@ -49,7 +48,7 @@ _SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 
 def main() -> None:
     """Build the baseline DAG and run it."""
-    check_path_in_region("MARIN_PREFIX", marin_prefix(), STAGING_REGION)
+    check_path_in_region("MARIN_PREFIX", marin_prefix(), TESTBED_STAGING_REGION)
 
     tokenizer = TESTBED_TOKENIZER
     run_id = "baseline"

@@ -44,11 +44,10 @@ from experiments.datakit.decontam.config import (
 )
 from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
 from experiments.datakit.testbed.sampler import build_testbed_steps
-from experiments.datakit.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
+from experiments.datakit.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B, TESTBED_STAGING_REGION
 
 logger = logging.getLogger(__name__)
 
-STAGING_REGION = "us-central1"
 _SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 
 # Bloom sizing mirrors experiments/datakit/reference_pipeline.py.
@@ -169,7 +168,7 @@ def build_testbed_decon_steps(
 
 def main() -> None:
     configure_logging(logging.INFO)
-    check_path_in_region("MARIN_PREFIX", marin_prefix(), STAGING_REGION)
+    check_path_in_region("MARIN_PREFIX", marin_prefix(), TESTBED_STAGING_REGION)
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", nargs="*", default=None, help="restrict decon to these source names (smoke)")
     ap.add_argument(
