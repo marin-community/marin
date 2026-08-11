@@ -57,6 +57,30 @@ def test_full_bank_top_k_is_rejected_before_launch():
         )
 
 
+def test_checkpoint_path_overrides_the_step_output_path():
+    """A run that only exercises the checkpoint write sends it to disposable storage."""
+    temp_path = "s3://marin-us-east-02a/tmp/ttl=1d/hero-ckpt-smoke"
+    step = launch.build_hero_run(
+        run_id="ckpt-elsewhere",
+        dp_racks=1,
+        num_steps=1,
+        save_checkpoints=True,
+        checkpoint_path=temp_path,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.trainer.checkpointer.base_path == temp_path
+
+
+def test_checkpoint_path_defaults_under_the_step_output_path():
+    step = launch.build_hero_run(run_id="ckpt-default", dp_racks=1, num_steps=1, version="dev")
+    ctx = StepContext.for_fingerprint(step.runtime_args, step.deps)
+    config = step.build_config(ctx)
+
+    assert config.trainer.trainer.checkpointer.base_path == f"{ctx.output_path}/checkpoints"
+
+
 def test_checkpoint_interval_must_be_positive():
     with pytest.raises(ValueError, match="checkpoint_interval must be positive"):
         launch.build_hero_run(
