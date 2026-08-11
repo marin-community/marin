@@ -21,6 +21,7 @@ mirrors newly written files back up. :func:`sync_kv_cache` namespaces it per bui
 """
 
 import atexit
+import gzip
 import hashlib
 import logging
 import os
@@ -353,7 +354,7 @@ class SyncedDirectory:
                     for archive in sorted(archive_root.glob("*.tar.gz")):
                         try:
                             self._known.update(_extract_archive(archive, pathlib.Path(self._local)))
-                        except (OSError, tarfile.TarError, ValueError) as exc:
+                        except (EOFError, OSError, tarfile.TarError, ValueError) as exc:
                             logger.warning("synced cache archive fetch failed for %s: %s", archive.name, exc)
 
                 for staged_file in sorted(staged_root.rglob("*")):
@@ -371,19 +372,31 @@ class SyncedDirectory:
 def _extract_archive(archive: pathlib.Path, destination: pathlib.Path) -> set[str]:
     """Extract regular files from one cache archive and return their relative paths."""
     extracted: set[str] = set()
-    with tarfile.open(archive, "r:gz") as tar:
-        for member in tar:
-            relative = pathlib.PurePosixPath(member.name)
-            if not member.isfile() or relative.is_absolute() or ".." in relative.parts:
-                raise ValueError(f"unsafe synced-cache archive member: {member.name!r}")
-            source = tar.extractfile(member)
-            if source is None:
-                raise ValueError(f"synced-cache archive member has no contents: {member.name!r}")
-            target = destination.joinpath(*relative.parts)
+    with tempfile.TemporaryDirectory(prefix="synced-cache-extract-") as staging_dir:
+        staging_root = pathlib.Path(staging_dir)
+        verified_tar = staging_root / "archive.tar"
+        with gzip.open(archive, "rb") as compressed, verified_tar.open("wb") as output:
+            shutil.copyfileobj(compressed, output)
+
+        extracted_root = staging_root / "files"
+        with tarfile.open(verified_tar, "r:") as tar:
+            for member in tar:
+                relative = pathlib.PurePosixPath(member.name)
+                if not member.isfile() or relative.is_absolute() or ".." in relative.parts:
+                    raise ValueError(f"unsafe synced-cache archive member: {member.name!r}")
+                source = tar.extractfile(member)
+                if source is None:
+                    raise ValueError(f"synced-cache archive member has no contents: {member.name!r}")
+                target = extracted_root.joinpath(*relative.parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with target.open("wb") as output:
+                    shutil.copyfileobj(source, output)
+                extracted.add(relative.as_posix())
+
+        for relative in sorted(extracted):
+            target = destination / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("wb") as output:
-                shutil.copyfileobj(source, output)
-            extracted.add(relative.as_posix())
+            shutil.copyfile(extracted_root / relative, target)
     return extracted
 
 

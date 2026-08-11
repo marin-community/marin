@@ -272,6 +272,22 @@ def test_synced_directory_preserves_files_from_concurrent_writers(tmp_path):
     reader.close()
 
 
+def test_synced_directory_skips_a_truncated_archive_without_partial_extraction(tmp_path):
+    remote, local = tmp_path / "remote", tmp_path / "local"
+    writer = SyncedDirectory(remote=lambda: str(remote), local=str(local))
+    for index in range(100):
+        (local / f"{index}.textproto").write_bytes(f"value-{index}".encode())
+    writer.close()
+    archive = next(remote.rglob("*.tar.gz"))
+    archive.write_bytes(archive.read_bytes()[:-8])
+
+    reloaded = tmp_path / "reloaded"
+    reader = SyncedDirectory(remote=lambda: str(remote), local=str(reloaded))
+
+    assert not [path for path in reloaded.rglob("*") if path.is_file()]
+    reader.close()
+
+
 def test_sync_kv_cache_namespaces_the_object_store_by_tree_hash(tmp_path, monkeypatch):
     monkeypatch.setattr(cache_module, "launch_provenance", lambda: _provenance("treehash"))
     monkeypatch.setattr(cache_module, "marin_temp_bucket", lambda ttl_days, prefix: str(tmp_path / prefix))
