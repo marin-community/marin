@@ -11,8 +11,10 @@ Given an iris job id, this uses the Iris client to extract:
   tasks, fetched from each leaf worker job
 
 The report is written as JSON locally and (optionally) mirrored to a GCS prefix
-under a ``report_<utc-ts>_<short-name>/`` directory so that runs can be compared
-across time and architecture changes.
+under a ``report_<utc-ts>_<short-name>/`` directory so that canary operation can
+be compared across time and architecture changes. It records Iris lifecycle and
+resource context; Zephyr code/config A/B tests use the per-stage Finelog workflow
+in ``.agents/skills/ab-test-zephyr/SKILL.md``.
 
 Used by the scheduled ``marin-canary-datakit-tier{1,2,3}`` workflows.
 """
