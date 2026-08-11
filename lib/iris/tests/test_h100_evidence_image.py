@@ -203,10 +203,11 @@ def test_h100_evidence_image_executes_the_runner_cubin_disassembly_closure():
 
     assert _runner_cubin_disassemblers() == {"cuobjdump"}
     assert "cuda-nvdisasm-13-2_13.2.86-1_amd64.deb" in EXPECTED_PACKAGES
-    assert 'ENV NVDISASM_PATH="${CUDA_HOME}/bin/nvdisasm"' in target
-    assert "nvcc -arch=sm_90a --cubin" in smoke
-    assert "cuobjdump --dump-sass /tmp/h100-evidence-smoke.cubin" in smoke
-    assert "nvdisasm /tmp/h100-evidence-smoke.cubin" in smoke
+    assert 'ENV NVDISASM_PATH="${CUDA_HOME}/bin"' in target
+    assert '"${CUDA_HOME}/bin/nvcc" -arch=sm_90a --cubin' in smoke
+    assert 'env PATH=/usr/bin:/bin NVDISASM_PATH="${CUDA_HOME}/bin"' in smoke
+    assert '"${CUDA_HOME}/bin/cuobjdump" --dump-sass /tmp/h100-evidence-smoke.cubin' in smoke
+    assert '"${CUDA_HOME}/bin/nvdisasm" /tmp/h100-evidence-smoke.cubin' in smoke
     assert smoke.count("grep -Fq h100_evidence_smoke") == 2
     assert smoke.count("grep -Eq") == 2
     assert "nvidia-smi" not in smoke
