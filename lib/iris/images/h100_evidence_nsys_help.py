@@ -11,12 +11,12 @@ import sys
 from pathlib import Path
 
 MAX_HELP_BYTES = 1 << 20
-MAX_OPTION_BLOCK_BYTES = 1024
+MAX_POSSIBLE_VALUES_CLAUSE_BYTES = 1024
 MAX_FAILURE_MESSAGE_CHARS = 4096
-FAILURE_DIAGNOSTIC_SCHEMA = "iris.h100_evidence_nsys_help_failure.v1"
+FAILURE_DIAGNOSTIC_SCHEMA = "iris.h100_evidence_nsys_help_failure.v2"
 OPTION_DECLARATION = re.compile(r"^\s*(?:-[A-Za-z0-9],\s+)?--(?P<name>[a-z0-9][a-z0-9-]*)(?:[ =].*)?$")
 POSSIBLE_VALUES = re.compile(
-    r"Possible values\s*(?:are|:)\s*(?P<values>.*?)(?:\.\s|\.$)",
+    r"Possible values\s*(?:are|:)\s*(?P<values>.*?)\.(?=\s|$)",
     re.IGNORECASE | re.DOTALL,
 )
 QUOTED_VALUE = re.compile(r"['\"](?P<value>[^'\"]+)['\"]")
@@ -103,50 +103,60 @@ def validate_file(path: Path) -> tuple[tuple[str, ...], tuple[str, ...]]:
     return validate_nsys_profile_help(_read_help_file(path))
 
 
-def _diagnostic_option_block(text: str, option: str) -> dict[str, object]:
+def _diagnostic_possible_values_clause(text: str, option: str) -> dict[str, object]:
     try:
         block = _option_block(text, option)
     except ValueError:
         return {
             "available": False,
             "bytes": 0,
-            "reason": "exact_option_block_unavailable",
+            "reason": "exact_option_anchor_unavailable",
             "sha256": None,
         }
-    payload = block.encode("utf-8")
+    clauses = tuple(POSSIBLE_VALUES.finditer(block))
+    if len(clauses) != 1:
+        return {
+            "available": False,
+            "bytes": 0,
+            "reason": "unique_possible_values_clause_unavailable",
+            "sha256": None,
+        }
+    clause = clauses[0].group(0)
+    payload = clause.encode("utf-8")
     record: dict[str, object] = {
-        "available": len(payload) <= MAX_OPTION_BLOCK_BYTES,
+        "available": len(payload) <= MAX_POSSIBLE_VALUES_CLAUSE_BYTES,
         "bytes": len(payload),
         "sha256": hashlib.sha256(payload).hexdigest(),
     }
-    if len(payload) <= MAX_OPTION_BLOCK_BYTES:
-        record["text"] = block
+    if len(payload) <= MAX_POSSIBLE_VALUES_CLAUSE_BYTES:
+        record["text"] = clause
     else:
-        record["reason"] = f"exceeds_{MAX_OPTION_BLOCK_BYTES}_byte_bound"
+        record["reason"] = f"exceeds_{MAX_POSSIBLE_VALUES_CLAUSE_BYTES}_byte_bound"
     return record
 
 
 def _failure_diagnostic(text: str) -> dict[str, object]:
     return {
-        "blocks": {
-            option: _diagnostic_option_block(text, option) for option in ("capture-range-end", "cuda-graph-trace")
+        "clauses": {
+            option: _diagnostic_possible_values_clause(text, option)
+            for option in ("capture-range-end", "cuda-graph-trace")
         },
         "schema": FAILURE_DIAGNOSTIC_SCHEMA,
     }
 
 
-def _without_block_text(diagnostic: dict[str, object]) -> dict[str, object]:
-    blocks = diagnostic["blocks"]
-    assert isinstance(blocks, dict)
-    bounded_blocks: dict[str, object] = {}
-    for option, value in blocks.items():
+def _without_clause_text(diagnostic: dict[str, object]) -> dict[str, object]:
+    clauses = diagnostic["clauses"]
+    assert isinstance(clauses, dict)
+    bounded_clauses: dict[str, object] = {}
+    for option, value in clauses.items():
         assert isinstance(value, dict)
         record = {key: field for key, field in value.items() if key != "text"}
         if "text" in value:
             record["available"] = False
             record["reason"] = f"omitted_to_fit_{MAX_FAILURE_MESSAGE_CHARS}_character_bound"
-        bounded_blocks[option] = record
-    return {"blocks": bounded_blocks, "schema": FAILURE_DIAGNOSTIC_SCHEMA}
+        bounded_clauses[option] = record
+    return {"clauses": bounded_clauses, "schema": FAILURE_DIAGNOSTIC_SCHEMA}
 
 
 def _validation_failure_message(text: str, error: ValueError) -> str:
@@ -158,7 +168,7 @@ def _validation_failure_message(text: str, error: ValueError) -> str:
         return message
 
     serialized = json.dumps(
-        _without_block_text(diagnostic),
+        _without_clause_text(diagnostic),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
