@@ -198,7 +198,7 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert separator
     assert urlunsplit(parsed_url._replace(fragment="")) == wheel.url
     assert parse_qs(parsed_url.fragment) == {"sha256": [wheel.sha256]}
-    expected_toolkit = ["nvidia-cuda-nvrtc==13.0.88", "nvidia-curand==10.4.0.35"] if wheel.runtime_requirements else []
+    expected_toolkit = ["cuda-toolkit[curand,nvrtc]==12.9.1"] if wheel.runtime_requirements else []
     assert runtime_requirements == [
         "runai-model-streamer[s3]==0.16.1",
         *wheel.runtime_requirements,
@@ -212,7 +212,7 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     env = launcher.env()
     assert "VLLM_USE_PRECOMPILED" not in env
     assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
-    assert env["DG_JIT_USE_NVRTC"] == "0"
+    assert env["DG_JIT_USE_NVRTC"] == "1"
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
     assert requirement in launcher.cache_identity()
     for runtime_requirement in wheel.runtime_requirements:

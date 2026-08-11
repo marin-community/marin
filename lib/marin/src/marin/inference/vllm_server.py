@@ -53,10 +53,7 @@ _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
 _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
 _FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
 _DEEPGEMM_NVRTC_ENV_VAR = "DG_JIT_USE_NVRTC"
-_DEEP_GEMM_TOOLKIT_REQUIREMENTS = (
-    "nvidia-cuda-nvrtc==13.0.88",
-    "nvidia-curand==10.4.0.35",
-)
+_DEEP_GEMM_TOOLKIT_REQUIREMENTS = ("cuda-toolkit[curand,nvrtc]==12.9.1",)
 _PYTHON_FILE_BOOTSTRAP = """\
 import runpy
 import sys
@@ -221,12 +218,11 @@ class IsolatedCudaVllm:
         return command
 
     def env(self) -> dict[str, str]:
-        # The promoted Marin wheel provisions DeepGEMM's packaged NVCC environment in its entrypoint.
-        # Upstream vLLM remains on NVRTC because it does not use that promoted companion wheel. Both
-        # variants may also receive an s3:// path; CoreWeave rejects path-style S3 requests.
+        # Keep DeepGEMM on the NVRTC ABI shipped with the selected vLLM environment. Both variants may
+        # also receive an s3:// path; CoreWeave rejects path-style S3 requests.
         environment = {
             _FLASHINFER_SAMPLER_ENV_VAR: "0",
-            _DEEPGEMM_NVRTC_ENV_VAR: "0" if self.source is VllmType.MARIN_FORK else "1",
+            _DEEPGEMM_NVRTC_ENV_VAR: "1",
             _AWS_CONFIG_FILE_ENV_VAR: _write_virtual_hosted_s3_config(),
         }
         return environment
