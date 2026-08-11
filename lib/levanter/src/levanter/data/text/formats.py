@@ -1,8 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, TypedDict
 
 import numpy as np
@@ -70,6 +71,20 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
         )
 
 
+class LossWeightTransform(StrEnum):
+    """Serializable transforms applied to prebuilt per-token loss weights."""
+
+    IDENTITY = "identity"
+    SHIFT_LEFT = "shift_left"
+
+    def apply(self, loss_weight: np.ndarray) -> np.ndarray:
+        if self is LossWeightTransform.IDENTITY:
+            return loss_weight
+        if self is LossWeightTransform.SHIFT_LEFT:
+            return np.roll(loss_weight, -1)
+        raise ValueError(f"Unknown loss weight transform {self}")
+
+
 @LmDatasetFormatBase.register_subclass("prebuilt")
 @dataclass(frozen=True)
 class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
@@ -78,12 +93,12 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
     Attributes:
         input_ids_key: Field name containing token ids.
         loss_weights_key: Optional field name containing loss weights.
-        loss_weight_transform: Optional callable to transform loss weights before training.
+        loss_weight_transform: Transform applied to loss weights before training.
     """
 
     input_ids_key: str = "input_ids"
     loss_weights_key: str | None = None
-    loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None = None
+    loss_weight_transform: LossWeightTransform = LossWeightTransform.IDENTITY
 
     @property
     def token_data_key(self) -> str:

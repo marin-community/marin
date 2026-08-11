@@ -28,6 +28,7 @@ from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_name
 from levanter.data.text.formats import (
     ChatLmDatasetFormat,
     LmDatasetFormatBase,
+    LossWeightTransform,
     PrebuiltLmDatasetFormat,
     TextLmDatasetFormat,
     preprocessor_for_format,
@@ -356,7 +357,7 @@ def test_prebuilt_cache_with_loss_weights(tmp_path):
         source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
         format=PrebuiltLmDatasetFormat(
             loss_weights_key="loss_weights",
-            loss_weight_transform=lambda weights: weights * 2.0,
+            loss_weight_transform=LossWeightTransform.SHIFT_LEFT,
         ),
         cache_dir=str(tmp_path),
     )
@@ -378,8 +379,76 @@ def test_prebuilt_cache_with_loss_weights(tmp_path):
 
     example = ds[0]
     np.testing.assert_array_equal(np.asarray(example.tokens), np.array(records[0]["input_ids"], dtype=np.int32))
-    expected_loss_weight = np.array([2.0, 1.0, 0.0, 0.0], dtype=np.asarray(example.loss_weight).dtype)
+    expected_loss_weight = np.array([0.5, 0.0, 1.0, 0.0], dtype=np.asarray(example.loss_weight).dtype)
     np.testing.assert_array_equal(np.asarray(example.loss_weight), expected_loss_weight)
+
+
+def test_prebuilt_cache_packs_variable_length_records_with_transformed_loss_weights(tmp_path):
+    records = [
+        {"input_ids": [1, 2, 3], "assistant_mask": [0.0, 1.0, 1.0]},
+        {"input_ids": [4, 5], "assistant_mask": [0.0, 1.0]},
+    ]
+    data_path = tmp_path / "prebuilt_packed.jsonl"
+    _write_prebuilt_jsonl(data_path, records)
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
+        format=PrebuiltLmDatasetFormat(
+            loss_weights_key="assistant_mask",
+            loss_weight_transform=LossWeightTransform.SHIFT_LEFT,
+        ),
+        cache_dir=str(tmp_path),
+        pack=True,
+    )
+    config = LmDataConfig(
+        components={"prebuilt": component},
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+
+    cache = config.build_caches("train")["prebuilt"]
+    Pos = hax.Axis("position", 8)
+    ds = dataset_for_component(
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=config.block_cross_document_attention,
+    ).as_sync_dataset()
+
+    assert len(ds) == 1
+    example = ds[0]
+    np.testing.assert_array_equal(np.asarray(example.tokens), np.array([1, 2, 3, 4, 5, 0, 0, 0]))
+    np.testing.assert_array_equal(np.asarray(example.loss_weight), np.array([1, 1, 0, 1, 0, 0, 0, 0]))
+
+
+def test_prebuilt_cache_right_slices_overlength_record(tmp_path):
+    records = [{"input_ids": [1, 2, 3, 4, 5, 6], "assistant_mask": [0.0, 0.0, 1.0, 1.0, 1.0, 1.0]}]
+    data_path = tmp_path / "prebuilt_right_slice.jsonl"
+    _write_prebuilt_jsonl(data_path, records)
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
+        format=PrebuiltLmDatasetFormat(
+            loss_weights_key="assistant_mask",
+            loss_weight_transform=LossWeightTransform.SHIFT_LEFT,
+        ),
+        cache_dir=str(tmp_path),
+        pack=True,
+        packed_slice_strategy="right",
+    )
+    config = LmDataConfig(components={"prebuilt": component}, tokenizer="passthrough", vocab_size=16)
+    cache = config.build_caches("train")["prebuilt"]
+
+    example = dataset_for_component(
+        component,
+        hax.Axis("position", 4),
+        cache,
+        eos_id=None,
+        block_cross_document_attention=True,
+    ).as_sync_dataset()[0]
+
+    np.testing.assert_array_equal(np.asarray(example.tokens), np.array([3, 4, 5, 6]))
+    np.testing.assert_array_equal(np.asarray(example.loss_weight), np.array([1, 1, 1, 0]))
 
 
 def test_build_caches_surfaces_component_failure(tmp_path):
