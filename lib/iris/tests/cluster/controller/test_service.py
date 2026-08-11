@@ -43,8 +43,9 @@ from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func
 from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+
+from lib.iris.tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
+from lib.iris.tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
     make_job_request,

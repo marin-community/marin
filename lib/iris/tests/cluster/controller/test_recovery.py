@@ -17,7 +17,8 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 from iris.cluster.platforms.types import CloudSliceState, ListedSlice
 from iris.cluster.types import WorkerStatus
 from rigging.timing import Duration, Timestamp
-from tests.cluster.backends.conftest import make_fake_slice_handle, make_mock_platform
+
+from lib.iris.tests.cluster.backends.conftest import make_fake_slice_handle, make_mock_platform
 
 from .conftest import make_autoscaler, mark_discovered_ready
 

@@ -19,17 +19,18 @@ from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.types import CloudSliceState
 from iris.rpc import job_pb2
 from rigging.timing import Duration, Timestamp
-from tests.cluster.controller.conftest import (
+
+from lib.iris.tests.cluster.controller.conftest import (
     advance_all_tpus,
     make_autoscaler,
     make_demand_entries,
     make_gcp_provider,
     make_scale_group_config,
 )
-from tests.cluster.controller.conftest import (
+from lib.iris.tests.cluster.controller.conftest import (
     make_big_demand_entries as _make_big_demand_entries,
 )
-from tests.cluster.controller.conftest import (
+from lib.iris.tests.cluster.controller.conftest import (
     mark_all_slices_ready as _mark_all_slices_ready,
 )
 

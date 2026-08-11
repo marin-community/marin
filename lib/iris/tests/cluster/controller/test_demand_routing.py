@@ -30,19 +30,20 @@ from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, 
 from iris.cluster.types import AcceleratorType, CapacityType
 from iris.rpc import job_pb2
 from rigging.timing import Duration, Timestamp
-from tests.cluster.backends.conftest import (
+
+from lib.iris.tests.cluster.backends.conftest import (
     make_mock_platform,
     make_mock_slice_handle,
 )
-from tests.cluster.controller.conftest import (
+from lib.iris.tests.cluster.controller.conftest import (
     DEFAULT_RESOURCES,
     make_demand_entries,
     make_scale_group_config,
 )
-from tests.cluster.controller.conftest import (
+from lib.iris.tests.cluster.controller.conftest import (
     make_big_demand_entries as _make_big_demand_entries,
 )
-from tests.cluster.controller.conftest import (
+from lib.iris.tests.cluster.controller.conftest import (
     mark_discovered_ready as _mark_discovered_ready,
 )
 

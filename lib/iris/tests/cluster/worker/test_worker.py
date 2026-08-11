@@ -39,7 +39,8 @@ from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
-from tests.cluster.worker.conftest import (
+
+from lib.iris.tests.cluster.worker.conftest import (
     FakeContainerHandle,
     FakeLogReader,
     create_mock_container_handle,

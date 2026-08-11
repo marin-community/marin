@@ -20,8 +20,9 @@ from iris.cluster.controller.scheduling.scheduler import JobRequirements, Runnin
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
-from tests.cluster.controller._test_support import submit_job_in_tx
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+
+from lib.iris.tests.cluster.controller._test_support import submit_job_in_tx
+from lib.iris.tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
     ControllerTestHarness,

@@ -35,7 +35,8 @@ from iris.cluster.platforms.types import (
 from iris.cluster.types import AcceleratorType, WorkerStatus
 from iris.rpc import vm_pb2
 from rigging.timing import Duration, Timestamp
-from tests.cluster.backends.conftest import (
+
+from lib.iris.tests.cluster.backends.conftest import (
     FakeSliceHandle,
     FakeWorkerHandle,
     make_mock_platform,

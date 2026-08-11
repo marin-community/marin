@@ -27,8 +27,9 @@ from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import RateLimiter, Timestamp
 from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
-from tests.cluster.controller.transition_driver import commit_dispatch_updates
+
+from lib.iris.tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
+from lib.iris.tests.cluster.controller.transition_driver import commit_dispatch_updates
 
 from .conftest import (
     make_direct_job_request,

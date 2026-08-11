@@ -56,8 +56,9 @@ from rigging.timing import Timestamp
 from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
-from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+
+from lib.iris.tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
+from lib.iris.tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
     check_task_can_be_scheduled,

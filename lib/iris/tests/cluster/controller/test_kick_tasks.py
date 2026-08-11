@@ -12,7 +12,8 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+
+from lib.iris.tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
     make_direct_job_request,

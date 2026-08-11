@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import MagicMock, call, patch
 
+import numpy as np
 import pytest
 import rigging.timing as timing
 
@@ -725,12 +726,20 @@ def test_explicit_remote_cache_dir_still_gets_the_xla_guard(tmp_path) -> None:
         assert f"--xla_gpu_per_fusion_autotune_cache_dir={autotune_dir}" in os.environ["XLA_FLAGS"]
 
 
-def test_xla_autotune_flag_is_excluded_from_the_compilation_cache_key() -> None:
-    """The split depends on JAX ignoring this flag when it hashes XLA_FLAGS.
+def test_xla_autotune_directory_does_not_change_the_compilation_cache_key() -> None:
+    """Node-local autotune paths must share the remote compilation cache."""
+    from jax._src import cache_key, compiler  # noqa: PLC0415
 
-    If a JAX upgrade drops the exclusion, every node's autotune directory name
-    enters the compilation cache key and the shared cache stops hitting.
-    """
-    from jax._src import cache_key  # noqa: PLC0415
+    lowered = jax.jit(lambda value: value + 1).lower(1)
+    module = lowered.compiler_ir(dialect="stablehlo")
+    devices = np.asarray(jax.devices(), dtype=object)
+    backend = jax.devices()[0].client
 
-    assert jax_init_module._XLA_AUTOTUNE_CACHE_DIR_FLAG in cache_key.xla_flags_to_exclude_from_cache_key
+    def compilation_cache_key(autotune_dir: str) -> str:
+        options = compiler.get_compile_options(num_replicas=1, num_partitions=1)
+        options.executable_build_options.debug_options.xla_gpu_per_fusion_autotune_cache_dir = autotune_dir
+        xla_flags = f"{jax_init_module._XLA_AUTOTUNE_CACHE_DIR_FLAG}={autotune_dir}"
+        with patch.dict(os.environ, {"XLA_FLAGS": xla_flags}):
+            return cache_key.get(module, devices, options, backend)
+
+    assert compilation_cache_key("/cache/node-a") == compilation_cache_key("/cache/node-b")

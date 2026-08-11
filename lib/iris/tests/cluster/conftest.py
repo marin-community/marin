@@ -31,9 +31,10 @@ from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
-from tests.cluster.controller._test_support import ControllerTestState
-from tests.cluster.controller.conftest import make_test_entrypoint
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+
+from lib.iris.tests.cluster.controller._test_support import ControllerTestState
+from lib.iris.tests.cluster.controller.conftest import make_test_entrypoint
+from lib.iris.tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 # ---------------------------------------------------------------------------
 # Constraint builders

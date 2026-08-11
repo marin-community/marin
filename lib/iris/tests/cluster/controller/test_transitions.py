@@ -57,12 +57,13 @@ from iris.test_util import FakeStatsTable
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import (
+
+from lib.iris.tests.cluster.controller._test_support import (
     ControllerTestState,
     create_attempt_for_test,
     submit_job_in_tx,
 )
-from tests.cluster.controller.transition_driver import (
+from lib.iris.tests.cluster.controller.transition_driver import (
     WorkerTaskUpdates,
     apply_task_observations,
     commit_dispatch_updates,
