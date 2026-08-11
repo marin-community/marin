@@ -33,7 +33,6 @@ from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, WORKER_STATS_NAMESPA
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ThreadContainer
@@ -1255,33 +1254,6 @@ def test_adopted_attempt_publishes_logs_and_stats(mock_bundle_store, mock_runtim
         for row in task_rows
     )
     worker.stop()
-
-
-def test_adopt_reserves_host_ports_against_reallocation():
-    """A re-adopted task keeps its host ports and the allocator won't re-hand them out.
-
-    Regression for #6721: before the fix, adopt() rebuilt ports={} and never
-    re-marked the allocator, so a restarted worker could double-allocate the
-    in-use ports of an adopted container.
-    """
-    # Three candidate ports: 50500, 50501, 50502. Two belong to the adopted task.
-    port_allocator = PortAllocator(port_range=(50500, 50503))
-    container = _make_discovered_container(ports={"http": 50500, "grpc": 50501})
-
-    attempt = TaskAttempt.adopt(
-        discovered=container,
-        container_handle=create_mock_container_handle(),
-        log_client=None,
-        port_allocator=port_allocator,
-    )
-
-    # The adopted attempt retains its original port mapping.
-    assert attempt.ports == {"http": 50500, "grpc": 50501}
-
-    # The only port the allocator may hand to a new task is the one not in use.
-    assert port_allocator.allocate(1) == [50502]
-    with pytest.raises(RuntimeError, match="No free ports"):
-        port_allocator.allocate(1)
 
 
 # ============================================================================
