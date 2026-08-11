@@ -54,7 +54,7 @@ class TeiServiceConfig:
     max_input_tokens: int
 
 
-def _download_model(config: TeiServiceConfig, root: Path) -> Path:
+def _prepare_model(config: TeiServiceConfig, root: Path) -> Path:
     archive_path = root / "checkpoint.tar"
     with StoragePath(config.model_archive).open("rb") as source, archive_path.open("wb") as destination:
         shutil.copyfileobj(source, destination)
@@ -93,7 +93,7 @@ def run_tei_service(config: TeiServiceConfig) -> None:
 
     configure_logging()
     with tempfile.TemporaryDirectory() as temporary_directory:
-        model_path = _download_model(config, Path(temporary_directory))
+        model_path = _prepare_model(config, Path(temporary_directory))
         process = subprocess.Popen(
             [
                 "text-embeddings-router",

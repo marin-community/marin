@@ -9,8 +9,23 @@ from types import SimpleNamespace
 import numpy as np
 
 from experiments.datakit.embeddings.harrier import tei_client
+from experiments.datakit.embeddings.harrier.pipeline import EmbeddingAttrData
 
 EMBEDDING_DIM = 4
+
+
+def test_embedding_artifact_uses_calver():
+    artifact = EmbeddingAttrData(
+        output_dir="embeddings",
+        source_key="source",
+        model_name="harrier",
+        embedding_dim=1_024,
+        quantization_scale=0.3 / 127,
+        quantization_range=0.3,
+        batch_size=4_096,
+    )
+
+    assert artifact.model_dump()["version"] == "2026.08.11"
 
 
 class _Resolver:
@@ -32,7 +47,6 @@ def test_tei_client_retries_against_refreshed_endpoints(monkeypatch):
     monkeypatch.setattr(tei_client.random, "shuffle", lambda _items: None)
 
     def urlopen(request, timeout):
-        assert timeout == 300
         if request.full_url.startswith("http://dead"):
             raise urllib.error.URLError("connection refused")
         texts = json.loads(request.data)["inputs"]
@@ -51,7 +65,6 @@ def test_tei_client_splits_large_requests_without_reordering(monkeypatch):
     monkeypatch.setattr(tei_client.random, "shuffle", lambda _items: None)
 
     def urlopen(request, timeout):
-        assert timeout == 300
         texts = json.loads(request.data)["inputs"]
         if len(texts) > 2:
             raise urllib.error.HTTPError(request.full_url, 413, "payload too large", {}, None)

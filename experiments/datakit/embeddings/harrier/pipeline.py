@@ -32,13 +32,14 @@ from experiments.datakit.embeddings.harrier.tei_client import TeiEmbeddingClient
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_ATTR_DATA_VERSION = 2
+EMBEDDING_ATTR_DATA_VERSION = "2026.08.11"
 HARRIER_REPO = "microsoft/harrier-oss-v1-0.6b"
 HARRIER_REVISION = "f9b9dc8d367d443f2479d27aa5d8d2850c0774ee"
 HARRIER_DIM = 1_024
 HARRIER_MAX_TOKENS = 8_192
 HARRIER_MAX_RAW_TEXT_CHARS = 100_000
 HARRIER_MAX_WORKERS = 256
+TEMP_TTL_DAYS = 1
 
 DEFAULT_BATCH_SIZE = 4_096
 
@@ -63,7 +64,7 @@ _EMBEDDING_SCHEMA = pa.schema(
 class EmbeddingAttrData(BaseModel):
     """Co-partitioned per-source embedding shards."""
 
-    version: str = f"v{EMBEDDING_ATTR_DATA_VERSION}"
+    version: str = EMBEDDING_ATTR_DATA_VERSION
     output_dir: DatakitArtifactPath
     source_key: str
     dedup_attr_dir: DatakitArtifactPath | None = None
@@ -85,14 +86,14 @@ def quantize_to_int8(arr: np.ndarray) -> np.ndarray:
 
 
 def dequantize_to_fp32(arr: np.ndarray, scale: float = QUANT_SCALE) -> np.ndarray:
-    """Dequantize Harrier int8 values to fp32."""
+    """Restore approximate normalized vectors from int8 storage."""
     return arr.astype(np.float32) * scale
 
 
 def stage_harrier(repo_id: str, revision: str, destination_path: str) -> str:
     """Download and archive a pinned model in the output region."""
     archive_url = str(
-        StoragePath(marin_temp_bucket(ttl_days=1, prefix="harrier-staging", source_prefix=destination_path))
+        StoragePath(marin_temp_bucket(ttl_days=TEMP_TTL_DAYS, prefix="harrier-staging", source_prefix=destination_path))
         / repo_id.replace("/", "__")
         / revision
         / _MODEL_ARCHIVE_NAME
@@ -164,8 +165,6 @@ def embed_source(
     normalized: NormalizedData,
     *,
     endpoint_name: str,
-    repo_id: str = HARRIER_REPO,
-    revision: str = HARRIER_REVISION,
     batch_size: int = DEFAULT_BATCH_SIZE,
     max_shards: int | None = None,
     dedup_attr_dir: str | None = None,
@@ -213,7 +212,7 @@ def embed_source(
         resources=resources,
         coordinator_resources=ResourceConfig(cpu=1, ram="8g", preemptible=False),
         max_workers=min(max_workers, HARRIER_MAX_WORKERS, len(source_shards)),
-        chunk_storage_prefix=marin_temp_bucket(ttl_days=1, prefix="zephyr", source_prefix=output_path),
+        chunk_storage_prefix=marin_temp_bucket(ttl_days=TEMP_TTL_DAYS, prefix="zephyr", source_prefix=output_path),
         name=f"embed-harrier-{os.path.basename(normalized.main_output_dir)[:8]}",
         stage_runner_factory=InlineRunner,
     )
@@ -224,8 +223,8 @@ def embed_source(
         output_dir=output_path,
         source_key=datakit_source_key(normalized.main_output_dir),
         dedup_attr_dir=dedup_attr_dir,
-        model_name=repo_id,
-        model_revision=revision,
+        model_name=HARRIER_REPO,
+        model_revision=HARRIER_REVISION,
         embedding_dim=HARRIER_DIM,
         quantization_scale=QUANT_SCALE,
         quantization_range=QUANT_RANGE,

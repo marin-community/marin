@@ -7,6 +7,7 @@ import argparse
 
 from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
+from marin.datakit.source_key import datakit_source_path
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
@@ -20,6 +21,7 @@ from experiments.datakit.embeddings.harrier.pipeline import (
     HARRIER_MAX_TOKENS,
     HARRIER_REPO,
     HARRIER_REVISION,
+    EmbeddingAttrData,
     embed_source,
     stage_harrier,
 )
@@ -27,16 +29,16 @@ from experiments.datakit.embeddings.harrier.tei import tei_service_pool
 from experiments.datakit.reference_pipeline import select_sources
 
 DEDUP_ID = "dedup_709f5997"
-DEDUP_PATH = f"s3://marin-us-east-02a/marin/datakit/{DEDUP_ID}"
+DEDUP_PATH = datakit_source_path(f"datakit/{DEDUP_ID}")
 WORKERS_PER_SOURCE = 32
 MAX_CONCURRENT = 8
 TEI_INSTANCES = 128
 
 
-def _embed_source(output_path: str, normalized_path: str, endpoint_name: str) -> None:
+def _embed_source(output_path: str, normalized_path: str, endpoint_name: str) -> EmbeddingAttrData:
     normalized = read_artifact(normalized_path, NormalizedData)
     dedup = read_artifact(DEDUP_PATH, FuzzyDupsAttrData)
-    embed_source(
+    return embed_source(
         output_path=output_path,
         normalized=normalized,
         endpoint_name=endpoint_name,
