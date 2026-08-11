@@ -70,6 +70,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
+from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 import click
@@ -104,6 +105,7 @@ _TRAIN_RESOURCES = "train_resources"
 # Compute in bf16, keep master params and optimizer state in f32 — the standard marin policy.
 _MARIN_PRECISION = "p=f32,c=bfloat16"
 _MIXTURE_BLOCK_SIZE = 2048
+_CHAT_TOKENIZE_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="32g", regions=[ANY_REGION])
 # Bump to rebuild every chat cache; the (tokenizer, template, pack) hash in the name already forks a
 # new cache when any of those change, so this is only for reprocessing the same recipe.
 _CHAT_CACHE_VERSION = "2026.07.17"
@@ -123,6 +125,14 @@ class DatasetSpec:
     revision: str  # 7-char commit pin, for fingerprint stability
     adapter_kwargs: Mapping[str, object]
     weight: float
+    columns: list[str] | None = None
+    parquet_files: Mapping[str, Sequence[str]] | None = None
+    parquet_batch_size: int | None = None
+
+
+class ChatCacheMode(StrEnum):
+    AUTO = "auto"
+    PREBUILT = "prebuilt"
 
 
 @runtime_checkable
@@ -510,9 +520,11 @@ class SFTSpec:
     # step count at run time from the chat cache's token total -- ``ceil(epochs * tokens / (seq_len *
     # batch))``, the packed-sequence count -- so it is not hand-calibrated; it routes the run through a
     # ``chat_tokenize`` dep (see :func:`sft_step`). ``num_train_steps`` is the explicit count (required
-    # for a mixture, where epoch semantics are undefined) and keeps the ``auto_build_caches`` path.
+    # for a mixture, where epoch semantics are undefined). It builds caches on the training pod unless
+    # ``chat_cache_mode`` requests a prebuilt cache.
     num_train_steps: int | None = None
     num_train_epochs: int | None = None
+    chat_cache_mode: ChatCacheMode = ChatCacheMode.AUTO
     wandb_project: str = "marin-sft-launcher"
 
     def __post_init__(self) -> None:
@@ -664,6 +676,9 @@ def _dataset_deps(spec: SFTSpec) -> tuple[ArtifactStep, ...]:
                 adapter=multi_turn_adapter(**dict(dataset.adapter_kwargs)),
                 metadata_columns=[],
                 name=dataset.slug,
+                columns=dataset.columns,
+                parquet_files={key: list(files) for key, files in (dataset.parquet_files or {}).items()},
+                parquet_batch_size=dataset.parquet_batch_size,
             )
         )
         for dataset in spec.datasets
@@ -691,6 +706,7 @@ def chat_tokenize(spec: SFTSpec, dataset: DatasetSpec, transform_dep: ArtifactSt
             tokenizer=spec.model.resolve_tokenizer(ctx),
             format=_chat_format(spec),
             tags=[dataset.slug],
+            worker_resources=_CHAT_TOKENIZE_RESOURCES,
         )
 
     return ArtifactStep(
@@ -726,15 +742,16 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
     runtime arg, so changing the accelerator never forks the checkpoint's identity. The data flow
     depends on how the training length is set:
 
-    - ``num_train_steps`` (a mixture, or an explicit count): the transforms are the deps and Levanter
-      builds the chat cache on the training pod (``auto_build_caches``).
+    - ``num_train_steps`` (a mixture, or an explicit count): by default the transforms are the deps and
+      Levanter builds the chat cache on the training pod (``auto_build_caches``). ``chat_cache_mode``
+      can instead materialize and reuse the same prebuilt cache as the epoch path.
     - ``num_train_epochs`` (a single dataset): a ``chat_tokenize`` dep materializes the chat cache so
       the step count resolves from its token total, and training reads the pre-built cache.
     """
     model = spec.model
     transform_deps = _dataset_deps(spec)
 
-    if spec.num_train_epochs is not None:
+    if spec.num_train_epochs is not None or spec.chat_cache_mode is ChatCacheMode.PREBUILT:
         chat_caches = tuple(
             chat_tokenize(spec, dataset, dep) for dataset, dep in zip(spec.datasets, transform_deps, strict=True)
         )
@@ -744,7 +761,11 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
             run_resources = ctx.runtime_arg(_TRAIN_RESOURCES)
             tokenizer = model.resolve_tokenizer(ctx)
             data_config = _prebuilt_chat_data_config(spec, [ctx.artifact_path(c) for c in chat_caches], tokenizer)
-            num_train_steps = _resolve_epoch_steps(ctx, spec, chat_caches[0])
+            if spec.num_train_epochs is not None:
+                num_train_steps = _resolve_epoch_steps(ctx, spec, chat_caches[0])
+            else:
+                assert spec.num_train_steps is not None
+                num_train_steps = spec.num_train_steps
             return model.build_train_config(ctx, spec, data_config, run_resources, num_train_steps)
 
     else:

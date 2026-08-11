@@ -29,6 +29,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
 
 from experiments.sft.launcher import (
+    ChatCacheMode,
     ConvertedCheckpointModel,
     DatasetSpec,
     LevanterCheckpointModel,
@@ -123,6 +124,24 @@ def test_epoch_chat_tokenize_declares_the_conversion_dependency():
         assert conv.step in cache.deps
         # Materializing resolves the tokenizer through the (now declared) conversion step.
         assert materialized_config(cache, prefix).tokenizer == conv.step.path(prefix)
+
+
+def test_explicit_steps_can_reuse_prebuilt_chat_cache():
+    conv = _fake_conversion()
+    spec = dataclasses.replace(
+        _spec(ConvertedCheckpointModel(conversion=conv)),
+        num_train_steps=1_888,
+        chat_cache_mode=ChatCacheMode.PREBUILT,
+    )
+    step = sft_step(spec, ResourceConfig.with_cpu())
+
+    chat_caches = [dep for dep in step.deps if dep.artifact_type is TokenizedCache]
+    assert len(chat_caches) == 1
+
+    train_config = materialized_config(step, _PREFIX).train_config
+    assert train_config.trainer.num_train_steps == 1_888
+    assert train_config.data.auto_build_caches is False
+    assert train_config.data.components["ds"].source.train_urls == []
 
 
 def test_lm_config_draccus_round_trip_selects_subclass_by_model_type():
