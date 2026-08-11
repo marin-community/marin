@@ -251,10 +251,12 @@ _NCU_SASS_SECTION_PATTERNS = {
 _NCU_SASS_SEPARATOR = " ".join("-" * width for width in _NCU_SASS_SEPARATOR_WIDTH_OPTIONS[0])
 _NCU_SASS_COLUMN_WIDTHS = _NCU_SASS_SEPARATOR_WIDTH_OPTIONS[0]
 _NCU_SASS_COLUMN_ASCII_CLASS_FIELDS = ("control", "digit", "lowercase", "punctuation", "uppercase", "whitespace")
+_NCU_SASS_COLUMN_PUNCTUATION_FIELDS = tuple(string.punctuation)
 _NCU_SASS_COLUMN_FIELDS = (
     "index",
     "trimmed_utf8_bytes",
     "ascii_class_counts",
+    "punctuation_counts",
     "non_ascii_bytes",
     "token_count",
     "Address",
@@ -988,6 +990,7 @@ def _ncu_sass_fixed_columns(line: bytes, column_widths: tuple[int, ...]) -> dict
         offset += width
         trimmed = column.strip(b" ")
         ascii_class_counts = dict.fromkeys(_NCU_SASS_COLUMN_ASCII_CLASS_FIELDS, 0)
+        punctuation_counts = dict.fromkeys(_NCU_SASS_COLUMN_PUNCTUATION_FIELDS, 0)
         non_ascii_bytes = 0
         for value in trimmed:
             if value >= 128:
@@ -1002,6 +1005,7 @@ def _ncu_sass_fixed_columns(line: bytes, column_widths: tuple[int, ...]) -> dict
                 ascii_class_counts["whitespace"] += 1
             elif chr(value) in string.punctuation:
                 ascii_class_counts["punctuation"] += 1
+                punctuation_counts[chr(value)] += 1
             elif value < 32 or value == 127:
                 ascii_class_counts["control"] += 1
             else:
@@ -1017,6 +1021,7 @@ def _ncu_sass_fixed_columns(line: bytes, column_widths: tuple[int, ...]) -> dict
                 index,
                 len(trimmed),
                 [ascii_class_counts[field] for field in _NCU_SASS_COLUMN_ASCII_CLASS_FIELDS],
+                [punctuation_counts[field] for field in _NCU_SASS_COLUMN_PUNCTUATION_FIELDS],
                 non_ascii_bytes,
                 len(re.findall(rb"\S+", trimmed)),
                 "Address" in public_words,
@@ -1034,6 +1039,7 @@ def _ncu_sass_fixed_columns(line: bytes, column_widths: tuple[int, ...]) -> dict
         "column_widths": list(column_widths),
         "columns": columns,
         "gap_single_ascii_space": gap_single_ascii_space,
+        "punctuation_fields": list(_NCU_SASS_COLUMN_PUNCTUATION_FIELDS),
     }
 
 

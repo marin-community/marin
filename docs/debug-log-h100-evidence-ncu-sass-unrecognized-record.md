@@ -271,3 +271,27 @@ layouts, including the production NCU subprocess boundary.
 
 No image build, GPU execution, v28 submission, retry, or relaunch was performed
 for this source-only diagnostic change.
+
+## V28 selected-width punctuation diagnostic
+
+The single v28 task used source
+`65ac4bc1bfe724f1a3ce3f779a42c387d5ba57a4`. It selected the 108-byte layout
+and accepted the kernel identity, both preceding separators, and the
+fixed-column header. The first rejection was line 5. Its bounded diagnostic
+reports empty first and second columns followed by four six-byte columns. Each
+of those four columns contains four lowercase ASCII letters and two ASCII
+punctuation bytes. The old diagnostic does not distinguish which punctuation
+characters occur.
+
+The fixed-column diagnostic now includes an aligned count vector for the closed
+ASCII `string.punctuation` catalog in every column. The catalog and vectors add
+counts only; they do not expose token values, punctuation order, raw or redacted
+rows, adjacent records, paths, or environment. The parser still rejects the
+record, and the complete serialized exception remains limited to 2,048 UTF-8
+bytes with the existing non-content fallback.
+
+Behavioral tests exercise the complete punctuation catalog under both reviewed
+widths, non-ASCII punctuation lookalikes, same-histogram private values in
+different orders, the 2,048-byte exception bound, and the production NCU
+subprocess boundary. No image build, GPU execution, v29 submission, retry, or
+relaunch was performed for this source-only diagnostic change.

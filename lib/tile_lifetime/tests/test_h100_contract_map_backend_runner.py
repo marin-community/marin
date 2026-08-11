@@ -9,6 +9,7 @@ import importlib
 import json
 import os
 import sqlite3
+import string
 import subprocess
 import sys
 import zlib
@@ -228,6 +229,10 @@ def _ncu_sass_fixed_column_row(
     row = b"".join(chunks)
     assert len(row) == sum(column_widths) + len(column_widths) - 1
     return row.decode("utf-8")
+
+
+def _ncu_sass_punctuation_counts(value: str) -> list[int]:
+    return [value.count(character) for character in string.punctuation]
 
 
 def _ncu_sass_diagnostic(error: ValueError) -> dict[str, object]:
@@ -588,7 +593,7 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         elif variant == "wide-address-close-private":
             lines = source.splitlines()
             lines[4] = _ncu_sass_fixed_column_row(
-                ("Address", "private", "Source", "secret", "hidden", "opaque"),
+                ("", "", "ab!?cd", "ef#$gh", "ij%&kl", "mn()op"),
                 column_widths=separator_widths,
             )
             lines[5] = "adjacent-private-token"
@@ -702,8 +707,12 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         fixed_columns = structure["fixed_columns"]
         assert isinstance(fixed_columns, dict)
         assert fixed_columns["column_widths"] == list(_NCU_SASS_WIDE_COLUMN_WIDTHS)
+        assert fixed_columns["punctuation_fields"] == list(string.punctuation)
+        assert [column[3] for column in fixed_columns["columns"][2:]] == [
+            _ncu_sass_punctuation_counts(value) for value in ("!?", "#$", "%&", "()")
+        ]
         message = str(failure.value)
-        for private in ("private", "secret", "hidden", "opaque", "adjacent-private-token", environment_token):
+        for private in ("ab!?cd", "ef#$gh", "ij%&kl", "mn()op", "adjacent-private-token", environment_token):
             assert private not in message
         return
 
@@ -1054,6 +1063,7 @@ def test_runner_ncu_sass_fixed_columns_report_closed_per_column_aggregates(
             "index",
             "trimmed_utf8_bytes",
             "ascii_class_counts",
+            "punctuation_counts",
             "non_ascii_bytes",
             "token_count",
             "Address",
@@ -1061,14 +1071,15 @@ def test_runner_ncu_sass_fixed_columns_report_closed_per_column_aggregates(
         ],
         "column_widths": list(column_widths),
         "columns": [
-            [0, 7, [0, 0, 6, 0, 1, 0], 0, 1, True, False],
-            [1, 13, [0, 0, 12, 0, 0, 1], 0, 2, False, False],
-            [2, 6, [0, 0, 5, 0, 1, 0], 0, 1, False, True],
-            [3, 4, [0, 1, 1, 1, 1, 0], 0, 1, False, False],
-            [4, 3, [0, 0, 2, 0, 0, 1], 0, 1, False, False],
-            [5, 3, [1, 0, 2, 0, 0, 0], 0, 1, False, False],
+            [0, 7, [0, 0, 6, 0, 1, 0], _ncu_sass_punctuation_counts(""), 0, 1, True, False],
+            [1, 13, [0, 0, 12, 0, 0, 1], _ncu_sass_punctuation_counts(""), 0, 2, False, False],
+            [2, 6, [0, 0, 5, 0, 1, 0], _ncu_sass_punctuation_counts(""), 0, 1, False, True],
+            [3, 4, [0, 1, 1, 1, 1, 0], _ncu_sass_punctuation_counts("_"), 0, 1, False, False],
+            [4, 3, [0, 0, 2, 0, 0, 1], _ncu_sass_punctuation_counts(""), 0, 1, False, False],
+            [5, 3, [1, 0, 2, 0, 0, 0], _ncu_sass_punctuation_counts(""), 0, 1, False, False],
         ],
         "gap_single_ascii_space": [True, True, True, True, True],
+        "punctuation_fields": list(string.punctuation),
     }
     assert record not in str(failure.value)
 
@@ -1113,7 +1124,7 @@ def test_runner_ncu_sass_fixed_columns_public_words_reject_attached_lookalikes()
     assert fixed_columns["columns"][0][-2:] == [False, False]
     assert fixed_columns["columns"][1][-2:] == [False, False]
     assert fixed_columns["columns"][1][1] == 8
-    assert fixed_columns["columns"][1][3] == 2
+    assert fixed_columns["columns"][1][4] == 2
 
 
 def test_runner_ncu_sass_fixed_columns_trim_ascii_space_on_both_sides() -> None:
@@ -1124,7 +1135,72 @@ def test_runner_ncu_sass_fixed_columns_trim_ascii_space_on_both_sides() -> None:
 
     fixed_columns = _ncu_sass_structure(failure.value)["fixed_columns"]
     assert isinstance(fixed_columns, dict)
-    assert fixed_columns["columns"][0][1:5] == [5, [0, 0, 5, 0, 0, 0], 0, 1]
+    assert fixed_columns["columns"][0][1:6] == [
+        5,
+        [0, 0, 5, 0, 0, 0],
+        _ncu_sass_punctuation_counts(""),
+        0,
+        1,
+    ]
+
+
+@pytest.mark.parametrize("column_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+def test_runner_ncu_sass_fixed_columns_report_the_closed_ascii_punctuation_catalog(
+    column_widths: tuple[int, ...],
+) -> None:
+    record = _ncu_sass_fixed_column_row(("", string.punctuation, "", "", "", ""), column_widths=column_widths)
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(
+            _ncu_sass_export((_NCU_KERNEL_A, (record,)), separator_widths=column_widths),
+            (_NCU_KERNEL_A,),
+        )
+
+    fixed_columns = _ncu_sass_structure(failure.value)["fixed_columns"]
+    assert isinstance(fixed_columns, dict)
+    assert fixed_columns["punctuation_fields"] == list(string.punctuation)
+    assert fixed_columns["columns"][1][3] == [1] * len(string.punctuation)
+    other_counts = [column[3] for index, column in enumerate(fixed_columns["columns"]) if index != 1]
+    assert other_counts == [[0] * len(string.punctuation)] * 5
+    assert len(str(failure.value).encode("utf-8")) <= 2048
+
+
+@pytest.mark.parametrize("column_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+def test_runner_ncu_sass_fixed_columns_do_not_classify_unicode_punctuation_as_ascii(
+    column_widths: tuple[int, ...],
+) -> None:
+    record = _ncu_sass_fixed_column_row(
+        ("", "\N{FULLWIDTH EXCLAMATION MARK}", "", "", "", ""), column_widths=column_widths
+    )
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(
+            _ncu_sass_export((_NCU_KERNEL_A, (record,)), separator_widths=column_widths),
+            (_NCU_KERNEL_A,),
+        )
+
+    column = _ncu_sass_structure(failure.value)["fixed_columns"]["columns"][1]
+    assert column[1] == 3
+    assert column[2][3] == 0
+    assert column[3] == [0] * len(string.punctuation)
+    assert column[4] == 3
+
+
+@pytest.mark.parametrize("column_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+def test_runner_ncu_sass_fixed_columns_count_repeated_punctuation(
+    column_widths: tuple[int, ...],
+) -> None:
+    record = _ncu_sass_fixed_column_row(("", "!!!abc", "", "", "", ""), column_widths=column_widths)
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(
+            _ncu_sass_export((_NCU_KERNEL_A, (record,)), separator_widths=column_widths),
+            (_NCU_KERNEL_A,),
+        )
+
+    column = _ncu_sass_structure(failure.value)["fixed_columns"]["columns"][1]
+    assert column[2][3] == 3
+    assert column[3] == [3, *([0] * (len(string.punctuation) - 1))]
 
 
 def test_runner_ncu_sass_fixed_columns_use_the_reviewed_byte_boundaries() -> None:
@@ -1151,7 +1227,7 @@ def test_runner_ncu_sass_fixed_columns_do_not_expose_private_values_or_order(
     monkeypatch: pytest.MonkeyPatch,
     column_widths: tuple[int, ...],
 ) -> None:
-    private_values = ("secret", "hidden")
+    private_values = ("se!cret?", "hi?dden!")
     adjacent = "adjacent-private-value"
     environment_value = "environment-private-value"
     monkeypatch.setenv("NCU_PRIVATE_TEST_TOKEN", environment_value)
