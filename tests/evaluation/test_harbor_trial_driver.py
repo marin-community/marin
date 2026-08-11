@@ -54,6 +54,7 @@ def _external_python(*args: str, hash_seed: str = "0", check: bool = True) -> su
         [
             "uv",
             "run",
+            "--isolated",
             "--project",
             str(_EXTERNAL_PROJECT),
             "--frozen",
