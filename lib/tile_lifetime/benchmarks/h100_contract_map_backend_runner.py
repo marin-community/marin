@@ -50,6 +50,7 @@ _NSYS_PROFILE_ARGS = (
 )
 _NSYS_EXPORT_ARGS = ("--type=sqlite", f"--lazy={_NSYS_EXPORT_LAZY}")
 _MAX_NSYS_NO_KERNEL_DIAGNOSTIC_CHARS = 4096
+_MAX_CACHE_IDENTITY_DIAGNOSTIC_CHARS = 4096
 _NSYS_RELEVANT_TABLES = (
     "CUDA_GRAPH_EVENTS",
     "CUDA_GRAPH_NODE_EVENTS",
@@ -1555,6 +1556,8 @@ def _run_compile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *
         "compile_done_monotonic_ns": compile_done_monotonic_ns,
         "first_execution_ns": first_execution_ns,
         "persistent_cache_identity": identity.hexdigest(),
+        "persistent_cache_file_count": len(cache_files),
+        "persistent_cache_total_bytes": sum(path.stat().st_size for path in cache_files),
         "final_hlo": compiled.as_text(),
     }
 
@@ -2412,6 +2415,8 @@ def validated_cache_protocol_identity(
     cold_records: Sequence[Mapping[str, Any]],
     hit_records: Sequence[Mapping[str, Any]],
     *,
+    case_id: str,
+    backend: str,
     required_processes: int,
 ) -> str:
     """Require every declared isolated root to converge to one cache identity."""
@@ -2419,14 +2424,57 @@ def validated_cache_protocol_identity(
     for name, records in groups.items():
         if len(records) != required_processes:
             raise ValueError(f"cache protocol requires {required_processes} {name} roots")
-    identities = {str(record["persistent_cache_identity"]) for records in groups.values() for record in records}
-    if (
-        len(identities) != 1
-        or len(next(iter(identities))) != 64
-        or any(character not in "0123456789abcdef" for character in next(iter(identities)))
-    ):
-        raise ValueError("all compile, cold, and hit roots must converge to one cache content identity")
-    return next(iter(identities))
+    if re.fullmatch(r"[a-z0-9_]{1,128}", case_id) is None:
+        raise ValueError("cache identity diagnostic requires a canonical case id")
+    if re.fullmatch(r"[a-z0-9_]{1,64}", backend) is None:
+        raise ValueError("cache identity diagnostic requires a canonical backend")
+
+    partitions: dict[str, str] = {}
+    roots = []
+    for phase, records in groups.items():
+        for index, record in enumerate(records):
+            identity = record.get("persistent_cache_identity")
+            if not isinstance(identity, str) or re.fullmatch(r"[0-9a-f]{64}", identity) is None:
+                raise ValueError(f"cache protocol {phase}[{index}] has an invalid content identity")
+            file_count = record.get("persistent_cache_file_count")
+            total_bytes = record.get("persistent_cache_total_bytes")
+            if type(file_count) is not int or not 0 < file_count <= 2**63 - 1:
+                raise ValueError(f"cache protocol {phase}[{index}] has an invalid file count")
+            if type(total_bytes) is not int or not 0 < total_bytes <= 2**63 - 1:
+                raise ValueError(f"cache protocol {phase}[{index}] has an invalid byte total")
+            final_hlo = record.get("final_hlo")
+            if not isinstance(final_hlo, str) or not final_hlo.strip():
+                raise ValueError(f"cache protocol {phase}[{index}] has an invalid final HLO")
+            partition = partitions.setdefault(identity, f"class_{len(partitions)}")
+            roots.append(
+                {
+                    "equality_partition": partition,
+                    "final_hlo_sha256": hashlib.sha256(final_hlo.encode()).hexdigest(),
+                    "index": index,
+                    "persistent_cache_file_count": file_count,
+                    "persistent_cache_identity": identity,
+                    "persistent_cache_total_bytes": total_bytes,
+                    "phase": phase,
+                    "role": f"{phase}[{index}]",
+                }
+            )
+    if len(partitions) != 1:
+        diagnostic = {
+            "backend": backend,
+            "case_id": case_id,
+            "expected_equality_partitions": 1,
+            "observed_equality_partitions": len(partitions),
+            "roots": roots,
+            "schema_version": 1,
+        }
+        serialized = json.dumps(diagnostic, sort_keys=True, separators=(",", ":"))
+        message = (
+            "all compile, cold, and hit roots must converge to one cache content identity " f"diagnostic={serialized}"
+        )
+        if len(message) > _MAX_CACHE_IDENTITY_DIAGNOSTIC_CHARS:
+            raise AssertionError("cache identity diagnostic exceeds its reviewed bound")
+        raise ValueError(message)
+    return next(iter(partitions))
 
 
 def validated_executable_hlo(
@@ -2577,6 +2625,8 @@ def _run_cache_protocol(
         compile_records,
         cold_records,
         hit_records,
+        case_id=case_id,
+        backend=backend,
         required_processes=protocol.compile_processes,
     )
     return {

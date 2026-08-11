@@ -1189,6 +1189,46 @@ def test_compile_timing_stops_at_worker_compile_completion_before_delayed_public
     assert record["postcompile_ns"] == 600
 
 
+def test_compile_worker_records_public_cache_count_bytes_identity_and_final_hlo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache_directory = tmp_path / "cache"
+    cache_directory.mkdir()
+    (cache_directory / "entry-a-cache").write_bytes(b"first cache entry")
+    (cache_directory / "entry-b-cache").write_bytes(b"second")
+    compiled = SimpleNamespace(
+        __call__=lambda *args: ("output",),
+        as_text=lambda: "authoritative final HLO",
+    )
+
+    class FakeCompiled:
+        def __call__(self, *args):
+            return compiled.__call__(*args)
+
+        def as_text(self):
+            return compiled.as_text()
+
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", str(cache_directory))
+    monkeypatch.setattr(runner, "_compiled_backend", lambda *args, **kwargs: (FakeCompiled(), 123))
+    context = SimpleNamespace(inputs=("x", "w0", "w1", "do"))
+    args = SimpleNamespace(case_id="case", backend="ordinary_xla", cache_kind="compile")
+
+    record = runner._run_compile_worker(
+        args,
+        context,
+        jax=SimpleNamespace(block_until_ready=lambda value: None),
+    )
+
+    identity = hashlib.sha256()
+    for path in sorted(cache_directory.iterdir()):
+        identity.update(path.name.encode())
+        identity.update(bytes.fromhex(runner.file_sha256(path)))
+    assert record["persistent_cache_identity"] == identity.hexdigest()
+    assert record["persistent_cache_file_count"] == 2
+    assert record["persistent_cache_total_bytes"] == len(b"first cache entrysecond")
+    assert record["final_hlo"] == "authoritative final HLO"
+
+
 @pytest.mark.parametrize("compile_done", [99, 1_001, True])
 def test_compile_timing_rejects_worker_timestamp_outside_spawn_and_exit(tmp_path: Path, compile_done: object) -> None:
     output = tmp_path / "compile.json"
@@ -1209,14 +1249,191 @@ def test_compile_timing_rejects_worker_timestamp_outside_spawn_and_exit(tmp_path
         )
 
 
+def _cache_root_record(
+    identity: str,
+    *,
+    final_hlo: str = "stable final HLO",
+    file_count: int = 2,
+    total_bytes: int = 4096,
+) -> dict[str, object]:
+    return {
+        "persistent_cache_identity": identity,
+        "persistent_cache_file_count": file_count,
+        "persistent_cache_total_bytes": total_bytes,
+        "final_hlo": final_hlo,
+    }
+
+
 def test_cache_protocol_rejects_any_compile_cold_or_hit_root_identity_mismatch() -> None:
     identity = "a" * 64
-    matching = tuple({"persistent_cache_identity": identity} for _ in range(3))
+    matching = tuple(_cache_root_record(identity) for _ in range(3))
 
-    assert runner.validated_cache_protocol_identity(matching, matching, matching, required_processes=3) == identity
-    mismatched = (*matching[:2], {"persistent_cache_identity": "b" * 64})
+    assert (
+        runner.validated_cache_protocol_identity(
+            matching,
+            matching,
+            matching,
+            case_id="contract_map_case",
+            backend="ordinary_xla",
+            required_processes=3,
+        )
+        == identity
+    )
+    mismatched = (*matching[:2], _cache_root_record("b" * 64))
     with pytest.raises(ValueError, match="all compile, cold, and hit roots"):
-        runner.validated_cache_protocol_identity(mismatched, matching, matching, required_processes=3)
+        runner.validated_cache_protocol_identity(
+            mismatched,
+            matching,
+            matching,
+            case_id="contract_map_case",
+            backend="ordinary_xla",
+            required_processes=3,
+        )
+
+
+def test_cache_protocol_failure_reports_closed_nine_root_equality_partition() -> None:
+    identity_a = "a" * 64
+    identity_b = "b" * 64
+    compile_records = (
+        _cache_root_record(identity_a, final_hlo="compile HLO", file_count=2, total_bytes=100),
+        _cache_root_record(identity_b, final_hlo="changed HLO", file_count=3, total_bytes=200),
+        _cache_root_record(identity_a, final_hlo="compile HLO", file_count=2, total_bytes=100),
+    )
+    cold_records = tuple(_cache_root_record(identity_a, final_hlo="compile HLO") for _ in range(3))
+    hit_records = tuple(_cache_root_record(identity_a, final_hlo="compile HLO") for _ in range(3))
+
+    with pytest.raises(ValueError) as raised:
+        runner.validated_cache_protocol_identity(
+            compile_records,
+            cold_records,
+            hit_records,
+            case_id="contract_map_9836cdbed389db24",
+            backend="ordinary_xla",
+            required_processes=3,
+        )
+
+    diagnostic = json.loads(str(raised.value).split("diagnostic=", 1)[1])
+    assert diagnostic["case_id"] == "contract_map_9836cdbed389db24"
+    assert diagnostic["backend"] == "ordinary_xla"
+    assert diagnostic["expected_equality_partitions"] == 1
+    assert diagnostic["observed_equality_partitions"] == 2
+    assert tuple(root["role"] for root in diagnostic["roots"]) == (
+        "compile[0]",
+        "compile[1]",
+        "compile[2]",
+        "cold[0]",
+        "cold[1]",
+        "cold[2]",
+        "hit[0]",
+        "hit[1]",
+        "hit[2]",
+    )
+    assert tuple(root["equality_partition"] for root in diagnostic["roots"]) == (
+        "class_0",
+        "class_1",
+        "class_0",
+        "class_0",
+        "class_0",
+        "class_0",
+        "class_0",
+        "class_0",
+        "class_0",
+    )
+    assert diagnostic["roots"][1] == {
+        "equality_partition": "class_1",
+        "final_hlo_sha256": hashlib.sha256(b"changed HLO").hexdigest(),
+        "index": 1,
+        "persistent_cache_file_count": 3,
+        "persistent_cache_identity": identity_b,
+        "persistent_cache_total_bytes": 200,
+        "phase": "compile",
+        "role": "compile[1]",
+    }
+    assert "compile HLO" not in str(raised.value)
+
+
+def test_run_cache_protocol_propagates_bounded_root_diagnostic_from_production_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _runner_config(tmp_path)
+    phase_counts = {"compile": 0, "cold": 0, "hit": 0}
+
+    def worker_command(*args, cache_kind: str, **kwargs) -> tuple[str, str]:
+        return ("worker", cache_kind)
+
+    def worker_result(command, **kwargs):
+        phase = command[1]
+        index = phase_counts[phase]
+        phase_counts[phase] += 1
+        identity = "b" * 64 if phase == "compile" and index == 1 else "a" * 64
+        return {
+            **_cache_root_record(identity, final_hlo=f"private HLO {phase} {index}"),
+            "private_cache_path": f"/secret/cache/{phase}/{index}",
+        }
+
+    monkeypatch.setattr(runner, "_worker_base_command", worker_command)
+    monkeypatch.setattr(runner, "run_timed_compile_worker_command", worker_result)
+
+    with pytest.raises(ValueError) as raised:
+        runner._run_cache_protocol(
+            config,
+            "contract_map_9836cdbed389db24",
+            "ordinary_xla",
+            tmp_path / "generated.json",
+            tmp_path / "cache_protocol",
+        )
+
+    message = str(raised.value)
+    diagnostic = json.loads(message.split("diagnostic=", 1)[1])
+    assert len(message) <= runner._MAX_CACHE_IDENTITY_DIAGNOSTIC_CHARS
+    assert diagnostic["case_id"] == "contract_map_9836cdbed389db24"
+    assert diagnostic["backend"] == "ordinary_xla"
+    assert len(diagnostic["roots"]) == 9
+    assert "private HLO" not in message
+    assert "/secret/cache" not in message
+
+
+def test_cache_protocol_diagnostic_fails_closed_at_serialized_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    matching = tuple(_cache_root_record("a" * 64) for _ in range(3))
+    mismatched = (*matching[:2], _cache_root_record("b" * 64))
+    monkeypatch.setattr(runner, "_MAX_CACHE_IDENTITY_DIAGNOSTIC_CHARS", 1)
+
+    with pytest.raises(AssertionError, match="exceeds its reviewed bound"):
+        runner.validated_cache_protocol_identity(
+            mismatched,
+            matching,
+            matching,
+            case_id="contract_map_case",
+            backend="ordinary_xla",
+            required_processes=3,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("persistent_cache_identity", "not-a-digest", "invalid content identity"),
+        ("persistent_cache_file_count", True, "invalid file count"),
+        ("persistent_cache_file_count", 0, "invalid file count"),
+        ("persistent_cache_total_bytes", True, "invalid byte total"),
+        ("persistent_cache_total_bytes", 0, "invalid byte total"),
+        ("final_hlo", "", "invalid final HLO"),
+    ),
+)
+def test_cache_protocol_rejects_malformed_root_diagnostic_fields(field: str, value: object, message: str) -> None:
+    record = _cache_root_record("a" * 64)
+    record[field] = value
+    records = (record, _cache_root_record("a" * 64), _cache_root_record("a" * 64))
+
+    with pytest.raises(ValueError, match=message):
+        runner.validated_cache_protocol_identity(
+            records,
+            tuple(_cache_root_record("a" * 64) for _ in range(3)),
+            tuple(_cache_root_record("a" * 64) for _ in range(3)),
+            case_id="contract_map_case",
+            backend="ordinary_xla",
+            required_processes=3,
+        )
 
 
 def test_executable_hlo_rejects_mismatch_between_timing_cache_and_profile_workers() -> None:
