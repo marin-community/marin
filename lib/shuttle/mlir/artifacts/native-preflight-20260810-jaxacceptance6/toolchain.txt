@@ -1,0 +1,20 @@
+Canonical Marin revision: 6340706df454d699124fc7b676499f5db9cccd4a
+Pinned XLA revision: 9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+Pinned JAX revision: 619764c15117fbefc4ba13ab941871cb514c23f6
+Pinned nanobind revision: 30f12ae6650ecec86042053d522d9af585f269b0
+Bazel version: 7.7.0
+Bazel binary sha256: 953f1235a590546a4a9a83d757c075ecf7c7d8dbc30221fd086959a20d8c7a69
+XLA patch 0001 sha256: b4e9f7cf2a49c42957cf24f16b43a1e0ead0a7e25d664629a841a5dbb0c7dbf9
+XLA patch 0002 sha256: e4f3121f3123d7e2ee781cc5ee92f1ddeb0df662b6702d37615bcae821ecbc99
+JAX patch 0001 sha256: 1e8b1400ee05bf8c8037277046113e1f1b1fae5ef56077899b7e853855e3424e
+JAX patch 0002 sha256: c4d5bc4aaa4b72ee7e2ecb44d28719be99da8defcf01ebd107308df41cb71942
+Runner sha256: fe46ef6982df9c578bd9eadb8886de5a5cf81bb24d00ed124e6c2cd9f84e21c2
+Manifest sha256: e7b3dfceed9672bad4a2022f1879ee7d310c28afd7e5e11871670ad2a2563114
+
+Runtime resources: 24 CPU, 96 GiB memory, 250 GiB disk
+Timeout: 14400 seconds
+Maximum retries: 0
+Accelerator query: none
+JAX platform during acceptance: CPU
+Built jaxlib wheel: jaxlib-0.10.1-cp312-cp312-manylinux_2_27_x86_64.whl
+Built jaxlib wheel sha256: 7a47e8f2277516db57da0912a765877ec08fc4f8ad656bd0166888643281436a

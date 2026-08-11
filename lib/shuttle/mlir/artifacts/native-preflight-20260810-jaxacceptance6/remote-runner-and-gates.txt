@@ -1,0 +1,138 @@
+[01:20:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:99: printf 'preflight_started_utc=%s\n' 2026-08-11T01:20:50Z
+[01:20:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | preflight_started_utc=2026-08-11T01:20:50Z
+[01:20:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:100: printf 'canonical_marin_sha=%s\n' 6340706df454d699124fc7b676499f5db9cccd4a
+[01:20:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | canonical_marin_sha=6340706df454d699124fc7b676499f5db9cccd4a
+[01:20:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:101: printf 'xla_revision=%s\n' 9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+[01:20:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | xla_revision=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+[01:20:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:102: printf 'jax_revision=%s\n' 619764c15117fbefc4ba13ab941871cb514c23f6
+[01:20:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | jax_revision=619764c15117fbefc4ba13ab941871cb514c23f6
+[01:20:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:103: printf 'bazel_version=%s\n' 7.7.0
+[01:20:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | bazel_version=7.7.0
+[01:20:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:106: printf 'bundled_shuttle_file_count=%s\n' 84
+[01:20:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | bundled_shuttle_file_count=84
+[01:21:02] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:182: printf 'anchored_xla_runtime_label_count=%s\n' 7
+[01:21:02] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | anchored_xla_runtime_label_count=7
+[01:21:21] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | ======================== 55 passed, 2 warnings in 0.98s ========================
+[01:21:21] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:204: grep -F '55 passed' /app/logs/acceptance-contract-pytest.log
+[01:21:21] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | ======================== 55 passed, 2 warnings in 0.98s ========================
+[01:22:05] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:219: printf 'jax_acceptance_cquery_proof=PASS\n'
+[01:22:05] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | jax_acceptance_cquery_proof=PASS
+[01:22:43] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 1 total action
+[01:23:35] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 952 total actions
+[01:24:42] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 498 total actions
+[01:24:48] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 191 total actions
+[01:24:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 12 total actions
+[01:24:52] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 9 total actions
+[01:24:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 27 total actions
+[01:25:52] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 778 total actions
+[01:25:56] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 11 total actions
+[01:25:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | fixture_audit_normalizer=/app/sources/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/shuttle-test-opt
+[01:25:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | six_fixture_default_audit=PASS
+[01:25:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:283: grep -F fixture_audit_normalizer= /app/logs/six-fixture-default-audit.log
+[01:25:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | fixture_audit_normalizer=/app/sources/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/shuttle-test-opt
+[01:25:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | fixture_audit_normalizer=/app/sources/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/shuttle-test-opt
+[01:25:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:285: grep -Fx six_fixture_default_audit=PASS /app/logs/six-fixture-default-audit.log
+[01:25:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | six_fixture_default_audit=PASS
+[01:26:34] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 397 total actions
+[01:26:34] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | @shuttle_mlir//:xla_registration_test                                    PASSED in 0.1s
+[01:26:47] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 24 total actions
+[01:26:47] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | @shuttle_mlir//:xla_registry_adapter_test                                PASSED in 0.0s
+[01:26:52] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 9 total actions
+[01:26:52] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | @shuttle_mlir//:pipeline_observer_test                                   PASSED in 0.1s
+[01:26:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 10 total actions
+[01:26:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | @shuttle_mlir//:observer_test_bridge_test                                PASSED in 0.1s
+[01:27:26] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 584 total actions
+[01:27:28] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 18 total actions
+[01:27:28] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | Executed 17 out of 17 tests: 17 tests pass.
+[01:27:28] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:309: grep -F 'Executed 17 out of 17 tests: 17 tests pass.' /app/logs/bazel-test-shuttle-mlir.log
+[01:27:28] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | Executed 17 out of 17 tests: 17 tests pass.
+[01:31:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 4501 total actions
+[01:31:50] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | //xla/pjrt:stablehlo_module_transform_test                               PASSED in 0.0s
+[01:32:02] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 9 total actions
+[01:32:02] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | //xla/pjrt:mlir_to_hlo_test                                              PASSED in 0.0s
+[01:32:13] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 9 total actions
+[01:32:13] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | //xla/pjrt:mlir_to_hlo_unregistered_transform_test                       PASSED in 0.0s
+[01:32:24] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 9 total actions
+[01:32:24] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | //xla/pjrt:pjrt_executable_test                                          PASSED in 0.0s
+[02:00:56] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | INFO: Build completed successfully, 25078 total actions
+[02:00:56] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | 2026-08-11 02:00:56,274 - INFO - Distribution path: /app/wheel-dist/jaxlib-0.10.1-cp312-cp312-manylinux_2_27_x86_64.whl
+[02:00:56] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:350: tee /app/logs/jaxlib-wheel-sha256.txt
+[02:00:56] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | 7a47e8f2277516db57da0912a765877ec08fc4f8ad656bd0166888643281436a  /app/wheel-dist/jaxlib-0.10.1-cp312-cp312-manylinux_2_27_x86_64.whl
+[02:00:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | Successfully installed jaxlib-0.10.1
+[02:01:04] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | jaxlib @ file:///app/wheel-dist/jaxlib-0.10.1-cp312-cp312-manylinux_2_27_x86_64.whl#sha256=7a47e8f2277516db57da0912a765877ec08fc4f8ad656bd0166888643281436a
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | ff02ff358a124039356f9c8d88ba5e0d6fc6cae0b4ab7862a25acb85e39bb91d  /app/acceptance-work/concurrency.json
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | 8e1657a2cacaa4603d7bc293858ae58fa4f5b3244c683142558c04bcae2b1636  /app/acceptance-work/context_manager.json
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | 325d32d15329b58e5fc325d8e23c2cb651033c7d315d921367a1abf849102a63  /app/acceptance-work/populate.json
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | 5d2b85127f8c314823c490051f6f07878d6836b4601137de2ea825160ca1eef2  /app/acceptance-work/reuse.json
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:378: for report in "${ACCEPTANCE_REPORT}" "${ACCEPTANCE_WORK}/baseline.json" "${ACCEPTANCE_WORK}/context_manager.json" "${ACCEPTANCE_WORK}/concurrency.json" "${ACCEPTANCE_WORK}/populate.json" "${ACCEPTANCE_WORK}/reuse.json" "${ACCEPTANCE_WORK}/cache-keys.json"
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |   "concurrency": {
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |   "context_manager": {
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |   "populate": {
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |     "mode": "populate",
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |     "public_cache_hits": 0,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |           "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |           "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |           "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |           "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |   "reuse": {
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |     "mode": "reuse",
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |     "public_cache_hits": 4,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "observer": null,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |           "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "observer": null,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |           "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "observer": null,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |           "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "observer": null,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |           "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:378: for report in "${ACCEPTANCE_REPORT}" "${ACCEPTANCE_WORK}/baseline.json" "${ACCEPTANCE_WORK}/context_manager.json" "${ACCEPTANCE_WORK}/concurrency.json" "${ACCEPTANCE_WORK}/populate.json" "${ACCEPTANCE_WORK}/reuse.json" "${ACCEPTANCE_WORK}/cache-keys.json"
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:378: for report in "${ACCEPTANCE_REPORT}" "${ACCEPTANCE_WORK}/baseline.json" "${ACCEPTANCE_WORK}/context_manager.json" "${ACCEPTANCE_WORK}/concurrency.json" "${ACCEPTANCE_WORK}/populate.json" "${ACCEPTANCE_WORK}/reuse.json" "${ACCEPTANCE_WORK}/cache-keys.json"
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:386: printf '===== %s =====\n' /app/acceptance-work/context_manager.json
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | ===== /app/acceptance-work/context_manager.json =====
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:387: cat /app/acceptance-work/context_manager.json
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |       "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |       "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:378: for report in "${ACCEPTANCE_REPORT}" "${ACCEPTANCE_WORK}/baseline.json" "${ACCEPTANCE_WORK}/context_manager.json" "${ACCEPTANCE_WORK}/concurrency.json" "${ACCEPTANCE_WORK}/populate.json" "${ACCEPTANCE_WORK}/reuse.json" "${ACCEPTANCE_WORK}/cache-keys.json"
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:386: printf '===== %s =====\n' /app/acceptance-work/concurrency.json
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | ===== /app/acceptance-work/concurrency.json =====
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:387: cat /app/acceptance-work/concurrency.json
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |       "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |       "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |       "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |       "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:378: for report in "${ACCEPTANCE_REPORT}" "${ACCEPTANCE_WORK}/baseline.json" "${ACCEPTANCE_WORK}/context_manager.json" "${ACCEPTANCE_WORK}/concurrency.json" "${ACCEPTANCE_WORK}/populate.json" "${ACCEPTANCE_WORK}/reuse.json" "${ACCEPTANCE_WORK}/cache-keys.json"
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:386: printf '===== %s =====\n' /app/acceptance-work/populate.json
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | ===== /app/acceptance-work/populate.json =====
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:387: cat /app/acceptance-work/populate.json
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |   "mode": "populate",
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |   "public_cache_hits": 0,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:378: for report in "${ACCEPTANCE_REPORT}" "${ACCEPTANCE_WORK}/baseline.json" "${ACCEPTANCE_WORK}/context_manager.json" "${ACCEPTANCE_WORK}/concurrency.json" "${ACCEPTANCE_WORK}/populate.json" "${ACCEPTANCE_WORK}/reuse.json" "${ACCEPTANCE_WORK}/cache-keys.json"
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:386: printf '===== %s =====\n' /app/acceptance-work/reuse.json
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | ===== /app/acceptance-work/reuse.json =====
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:387: cat /app/acceptance-work/reuse.json
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |   "mode": "reuse",
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |   "public_cache_hits": 4,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |       "observer": null,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |       "observer": null,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |       "observer": null,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |       "observer": null,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 |         "bitwise": true,
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:378: for report in "${ACCEPTANCE_REPORT}" "${ACCEPTANCE_WORK}/baseline.json" "${ACCEPTANCE_WORK}/context_manager.json" "${ACCEPTANCE_WORK}/concurrency.json" "${ACCEPTANCE_WORK}/populate.json" "${ACCEPTANCE_WORK}/reuse.json" "${ACCEPTANCE_WORK}/cache-keys.json"
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | + run_jax_acceptance_preflight.sh:389: printf 'jaxlib_cpu_acceptance=PASS\n'
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | jaxlib_cpu_acceptance=PASS
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | preflight_exit_code=0
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | preflight_finished_utc=2026-08-11T02:01:08Z
+[02:01:08] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6/0 | 2cad157711d1fa47ad19b453f9564847db3779c0be9ad8875e92420dac08ca0a  /app/logs/jaxlib-wheel-sha256.txt
