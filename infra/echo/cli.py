@@ -15,6 +15,7 @@ ambient service-account credentials with no login. See ``infra/echo/README.md``.
 
     uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
     uv run infra/echo/cli.py get file:lib/iris/OPS.md
+    uv run infra/echo/cli.py feedback --query "deploy iris" --grade file:lib/iris/OPS.md=10
     uv run infra/echo/cli.py grep ragged_all_to_all --source discord
     uv run infra/echo/cli.py wiki search "grafana access" --tag ops
     uv run infra/echo/cli.py wiki add --file note.md          # OKF: frontmatter title/use_when + body
@@ -25,14 +26,17 @@ ambient service-account credentials with no login. See ``infra/echo/README.md``.
 import argparse
 import logging
 import os
+import shlex
 import shutil
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote
 
 import okf
 import requests
 import search_config
+import search_feedback
 from rigging.auth import (
     MARIN_DESKTOP_OAUTH_CLIENT,
     IapCredentialsUnavailable,
@@ -195,6 +199,7 @@ def read_body(value: str) -> str:
 
 def cmd_search(args: argparse.Namespace) -> None:
     domains = list(dict.fromkeys(args.domain or DEFAULT_DOMAINS))
+    started_at = time.perf_counter()
     remote_value = response_objects(
         request(
             "GET",
@@ -203,7 +208,42 @@ def cmd_search(args: argparse.Namespace) -> None:
         )
     )
     results = [SearchResult.from_json(result) for result in remote_value]
+    elapsed = time.perf_counter() - started_at
+    noun = "result" if len(results) == 1 else "results"
+    print(f"{len(results)} {noun} in {elapsed:.2f}s")
     print_search_results(results)
+    print("Feedback: uv run infra/echo/cli.py feedback " f"--query {shlex.quote(args.query)} --grade '<id>=<0-10>'")
+
+
+def feedback_grade(value: str) -> search_feedback.FeedbackGrade:
+    try:
+        return search_feedback.FeedbackGrade.from_spec(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def feedback_note() -> str | None:
+    if sys.stdin.isatty():
+        return None
+    return sys.stdin.read().strip() or None
+
+
+def cmd_feedback(args: argparse.Namespace) -> None:
+    note = feedback_note()
+    if not args.grade and note is None:
+        raise SystemExit("provide at least one --grade or a note on stdin")
+    entry = response_object(
+        request(
+            "POST",
+            "/feedback",
+            body={
+                "query": args.query,
+                "grades": [{"result_id": grade.result_id, "grade": grade.grade} for grade in args.grade],
+                "note": note,
+            },
+        )
+    )
+    print(f"recorded feedback #{entry['id']}")
 
 
 def cmd_grep(args: argparse.Namespace) -> None:
@@ -316,12 +356,10 @@ def nonblank(value: str) -> str:
 
 
 def artifact_id(value: str) -> str:
-    domain, separator, detail = value.partition(":")
-    if not separator or domain not in DOMAINS or not detail:
-        raise argparse.ArgumentTypeError("must be <wiki|file|discord|pr|issue>:<id>")
-    if domain != "file" and not detail.isdecimal():
-        raise argparse.ArgumentTypeError(f"{domain} result IDs are numeric")
-    return value
+    try:
+        return search_feedback.checked_result_id(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def add_wiki_write_args(parser: argparse.ArgumentParser) -> None:
@@ -352,6 +390,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     search.add_argument("--limit", type=bounded_limit, default=10)
     search.set_defaults(func=cmd_search)
+    feedback = sub.add_parser("feedback", help="grade federated-search results")
+    feedback.add_argument("--query", required=True, type=nonblank, help="the exact search query")
+    feedback.add_argument(
+        "--grade",
+        action="append",
+        type=feedback_grade,
+        default=[],
+        metavar="<result-id>=<0-10>",
+        help="grade one result; repeat as needed (an optional note is read from stdin)",
+    )
+    feedback.set_defaults(func=cmd_feedback)
 
     grep = sub.add_parser("grep", help="exact substring scan over activity, newest first")
     grep.add_argument("pattern", type=nonblank)

@@ -7,7 +7,8 @@ The single source of truth for echo's schema. Migrations (migrations/) create an
 these tables; the sync job (sync/main.py) uses them for DML. `chunks` mirrors the
 marinmirror corpus schema for the github+discord sources; `repository_file_chunks`
 indexes GitHub branch heads; `wiki_entries` holds durable agent-authored notes;
-`work_log` is the agents' shared logbook; the state tables hold sync watermarks.
+`work_log` is the agents' shared logbook; search feedback records relevance judgments;
+the state tables hold sync watermarks.
 """
 
 from pgvector.sqlalchemy import Vector
@@ -20,10 +21,12 @@ from sqlalchemy import (
     Column,
     Computed,
     DateTime,
+    ForeignKey,
     Identity,
     Index,
     Integer,
     MetaData,
+    SmallInteger,
     Table,
     Text,
     UniqueConstraint,
@@ -170,6 +173,27 @@ work_log = Table(
     Column("body", Text),
     Index("idx_work_log_project_at", "project", text("at DESC")),
     Index("idx_work_log_at", text("at DESC")),
+)
+
+search_feedback = Table(
+    "search_feedback",
+    metadata,
+    Column("id", BigInteger, Identity(always=True), primary_key=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("author", Text, nullable=False),
+    Column("query", Text, nullable=False),
+    Column("note", Text),
+    Index("idx_search_feedback_created_at", text("created_at DESC")),
+)
+
+search_feedback_grades = Table(
+    "search_feedback_grades",
+    metadata,
+    Column("feedback_id", BigInteger, ForeignKey("search_feedback.id", ondelete="CASCADE"), primary_key=True),
+    Column("result_id", Text, primary_key=True),
+    Column("grade", SmallInteger, nullable=False),
+    CheckConstraint("grade BETWEEN 0 AND 10", name="search_feedback_grades_range"),
+    Index("idx_search_feedback_grades_result_id", "result_id"),
 )
 
 wiki_entries = Table(

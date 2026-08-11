@@ -14,6 +14,8 @@ provides an IAP-gated HTTP interface and browser dashboard.
   embeddings, timestamps, attribution, and deliberate-reference counters. Search
   indexes the prose fields and can filter by tags.
 - `work_log` is an append-only agent logbook with one row per distilled milestone.
+- `search_feedback` records the query, IAP-authenticated caller, and optional note for
+  one agent judgment. `search_feedback_grades` stores its result IDs and 0–10 grades.
 
 ## CLI
 
@@ -23,6 +25,10 @@ provides an IAP-gated HTTP interface and browser dashboard.
 uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
 uv run infra/echo/cli.py search "ragged_all_to_all" --domain file --domain pr
 uv run infra/echo/cli.py get file:lib/iris/OPS.md
+uv run infra/echo/cli.py feedback --query "how do I deploy Iris?" \
+  --grade wiki:123=0 --grade file:lib/iris/OPS.md=10 <<'EOF'
+The file result answered the question; the wiki result did not.
+EOF
 uv run infra/echo/cli.py grep ragged_all_to_all --source discord
 uv run infra/echo/cli.py wiki search "grafana access" --tag ops
 uv run infra/echo/cli.py wiki add --file note.md          # OKF markdown document
@@ -92,6 +98,16 @@ Wiki summaries use the `use_when` hint; files and activity use the matching sour
 excerpt. Echo does not generate summaries with an LLM at query time, avoiding added
 latency and an additional prompt-injection path.
 
+`search` reports the number of results and elapsed wall-clock time before its table. The
+measurement covers token acquisition, the network request, server retrieval and
+reranking, and response decoding: the time the caller waited for Echo.
+
+Submit useful or poor results with `feedback`. Repeat `--grade <result-id>=<0-10>` for
+the results you evaluated, where 0 means irrelevant and 10 means directly useful to the
+task. The exact query makes each judgment replayable against a future search version.
+An optional short note is read from stdin; a note-only submission can describe an empty
+or globally poor result set.
+
 The scheduled sync checks GitHub at most once per hour. An unchanged head only advances
 the check time. A new head uses GitHub's compare API to delete, fetch, and re-embed
 changed paths; the first build, a divergent history, or a comparison of at least 300
@@ -139,8 +155,9 @@ A pg_trgm GIN index on chunks.text makes the substring match an index scan.
 Direct SQL access remains available for raw queries through Cloud SQL IAM group
 authentication. Members of `eng-all@openathena.ai` inherit `roles/cloudsql.instanceUser`,
 `roles/cloudsql.client`, `SELECT` on `chunks`, `repository_file_chunks`,
-`repository_index_state`, and `wiki_entries`, and `SELECT, INSERT` on `work_log`; the
-`loom-vm` service account receives the same access. No database password is shared.
+`repository_index_state`, `wiki_entries`, `search_feedback`, and
+`search_feedback_grades`, and `SELECT, INSERT` on `work_log`; the `loom-vm` service
+account receives the same access. No database password is shared.
 Group membership and IAM changes can take about 15 minutes to propagate.
 
 ## Dashboard and HTTP API
@@ -158,6 +175,7 @@ the activity corpus and wiki notes. The same service exposes OpenAPI documentati
 - `GET /api/chunks/{id}`
 - `GET /api/wiki/search`
 - `GET /api/wiki/{id}`
+- `POST /api/feedback`
 - `POST /api/wiki`
 - `PUT /api/wiki/{id}`
 - `POST /api/wiki/{id}/references`
@@ -177,6 +195,10 @@ state on its landing page. `GET /api/search-configuration` supplies the domain c
 defaults, and displayed commit length used by the dashboard. The CLI's `get` command
 uses the existing wiki and activity detail endpoints plus
 `GET /api/repository-files/{path}` for complete indexed files.
+
+`POST /api/feedback` accepts an exact query, up to 20 unique result grades from 0 through
+10, and an optional note of at most 2,000 characters. At least one grade or note is
+required. The API attributes feedback to the IAP-authenticated caller.
 
 The dashboard is a Vue single-page app served from the same origin, with client-side
 routes at `/` (search), `/wiki` (recently updated notes), `/wiki/<id>` (a note), and

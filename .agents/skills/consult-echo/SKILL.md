@@ -37,6 +37,18 @@ raw-source detail with the printed ID:
 uv run infra/echo/cli.py get <domain:id>
 ```
 
+When a result materially helps, is irrelevant, or the result set fails the task,
+submit a compact judgment using the exact query and printed result IDs:
+
+```bash
+uv run infra/echo/cli.py feedback --query "stalled TPU collective" \
+  --grade wiki:123=0 --grade file:lib/iris/OPS.md=10
+```
+
+Use 0 for an irrelevant result and 10 for one that directly changes or answers the
+task. Grade only results you evaluated. Add a short stdin note only when the grades do
+not explain the failure; note-only feedback is valid for an empty result set.
+
 Use `grep` for exact strings in GitHub or Discord activity, with `--source` or
 `--kind` when needed:
 

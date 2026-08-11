@@ -166,6 +166,86 @@ def test_add_work_log_attributes_to_iap_caller_not_client(client_with):
     assert resp.json()["author"] == "bob@openathena.ai"
 
 
+def test_add_search_feedback_persists_authenticated_replayable_judgments(client_with):
+    row = make_row(
+        id=17,
+        created_at=datetime(2026, 8, 11, tzinfo=UTC),
+        author="agent@openathena.ai",
+        query="how do I deploy Iris?",
+        note="Wiki result was unrelated.",
+    )
+    harness = client_with([row])
+    response = harness.client.post(
+        "/api/feedback",
+        json={
+            "query": "  how do I deploy Iris?  ",
+            "grades": [
+                {"result_id": "wiki:123", "grade": 0},
+                {"result_id": "file:lib/iris/OPS.md", "grade": 10},
+            ],
+            "note": "  Wiki result was unrelated.  ",
+        },
+        headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:agent@openathena.ai"},
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "id": 17,
+        "created_at": "2026-08-11T00:00:00Z",
+        "author": "agent@openathena.ai",
+        "query": "how do I deploy Iris?",
+        "grades": [
+            {"result_id": "wiki:123", "grade": 0},
+            {"result_id": "file:lib/iris/OPS.md", "grade": 10},
+        ],
+        "note": "Wiki result was unrelated.",
+    }
+    feedback_params = harness.engine.executions[-2].compile().params
+    assert feedback_params["author"] == "agent@openathena.ai"
+    assert feedback_params["query"] == "how do I deploy Iris?"
+    assert feedback_params["note"] == "Wiki result was unrelated."
+    grade_params = harness.engine.executions[-1].compile().params
+    assert grade_params == {
+        "feedback_id_m0": 17,
+        "result_id_m0": "wiki:123",
+        "grade_m0": 0,
+        "feedback_id_m1": 17,
+        "result_id_m1": "file:lib/iris/OPS.md",
+        "grade_m1": 10,
+    }
+
+
+def test_search_feedback_rejects_out_of_range_grade(client_with):
+    harness = client_with([])
+    response = harness.client.post(
+        "/api/feedback",
+        json={"query": "scheduler", "grades": [{"result_id": "wiki:123", "grade": 11}]},
+    )
+
+    assert response.status_code == 422
+    assert harness.engine.executions == []
+
+
+def test_search_feedback_accepts_note_for_empty_result_set(client_with):
+    row = make_row(
+        id=18,
+        created_at=datetime(2026, 8, 11, tzinfo=UTC),
+        author="agent@openathena.ai",
+        query="missing scheduler detail",
+        note="No relevant results.",
+    )
+    harness = client_with([row])
+    response = harness.client.post(
+        "/api/feedback",
+        json={"query": "missing scheduler detail", "note": "No relevant results."},
+        headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:agent@openathena.ai"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["grades"] == []
+    assert response.json()["note"] == "No relevant results."
+
+
 def test_missing_chunk_is_404(client_with):
     harness = client_with([])
     assert harness.client.get("/api/chunks/999").status_code == 404
