@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 const routes: RouteRecordRaw[] = [
-  { path: '/', name: 'leaderboard', component: () => import('@/pages/LeaderboardPage.vue') },
+  { path: '/', name: 'panel', component: () => import('@/pages/PanelPage.vue') },
   { path: '/models', name: 'models', component: () => import('@/pages/ModelsIndexPage.vue') },
   {
     path: '/models/:model',

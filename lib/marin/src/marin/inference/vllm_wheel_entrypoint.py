@@ -172,8 +172,6 @@ def _configure_deep_gemm_cuda_environment() -> None:
     nvidia_roots = tuple(Path(path) for path in nvidia.__path__)
     environment = deep_gemm_cuda_environment(nvidia_roots, Path(tempfile.gettempdir()))
     os.environ.update(environment)
-
-
 def main() -> None:
     expected = _WheelProvenance.from_json(sys.argv.pop(1))
     print(f"{_SELECTED_SENTINEL}{json.dumps(expected.record(), sort_keys=True)}", flush=True)

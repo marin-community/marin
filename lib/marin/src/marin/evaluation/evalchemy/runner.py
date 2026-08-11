@@ -27,7 +27,7 @@ from marin.evaluation.evalchemy.runtime import (
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.lm_eval_samples import export_lm_eval_samples
-from marin.evaluation.records import RunStatus
+from marin.evaluation.records import RunStatus, TaskCoverage
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
@@ -113,10 +113,11 @@ class EvalchemyRunConfig:
 
 @dataclass(frozen=True)
 class EvalchemyOutcome:
-    """A completed result tree and its child job identity."""
+    """A completed result tree, its child job identity, and the coverage its samples establish."""
 
     jobs: dict[str, str]
     result: EvalchemyResult
+    coverage: dict[str, TaskCoverage]
 
 
 def _task_dir(task: EvalTaskConfig) -> str:
@@ -252,7 +253,7 @@ def run_evalchemy(
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
     try:
         _verify_durable_artifacts(output_dir)
-        samples_written = export_lm_eval_samples(output_dir)
+        export = export_lm_eval_samples(output_dir)
     except Exception as exc:
         raise EvalPipelineError(
             str(exc),
@@ -261,14 +262,16 @@ def run_evalchemy(
             log_tails={},
         ) from exc
     logger.info(
-        "Evalchemy run %s wrote %d sample(s) to the finestore archive under %s",
+        "Evalchemy run %s wrote %d sample(s) to the finestore archive under %s, covering %d task(s)",
         config.name,
-        samples_written,
+        export.samples,
         output_dir,
+        len(export.coverage),
     )
     return EvalchemyOutcome(
         jobs={_EVAL_JOB_ROLE: eval_job},
         result=EvalchemyResult(path=output_dir),
+        coverage=export.coverage,
     )
 
 
@@ -301,4 +304,4 @@ class EvalchemyExecutor:
                 status=RunStatus.ARTIFACT_FAILED,
                 jobs=outcome.jobs,
             )
-        return EvaluationOutcome(metrics=metrics, jobs=outcome.jobs)
+        return EvaluationOutcome(metrics=metrics, jobs=outcome.jobs, coverage=outcome.coverage)

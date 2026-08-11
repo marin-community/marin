@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -66,7 +67,7 @@ _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
-GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
+GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 2
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -140,6 +141,13 @@ class GrugModelConfig:
     num_shared_experts: int = 1
     num_experts: int = 256
     num_experts_per_token: int = 4
+    # LatentMoE (arXiv 2601.18089): routed experts operate in a latent space of this width instead
+    # of `hidden_dim`. Tokens are projected down before routing and back up after the combine, so
+    # the expert-parallel all-to-all carries `latent_dim`-wide rows -- communication falls by
+    # `hidden_dim / latent_dim`. Shared experts and the router stay at `hidden_dim`. To hold FLOPs
+    # constant the paper scales the routed bank and top-k by the same ratio. None keeps a
+    # standard MoE, in which case no projection is built and the layer is unchanged.
+    latent_dim: int | None = None
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -194,6 +202,11 @@ class GrugModelConfig:
             # QB routing takes top-(k+1) and keeps the last entry as the threshold alpha, so a
             # full-bank top-k asks `jax.lax.top_k` for more entries than the router has experts.
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
+        if self.latent_dim is not None and not 0 < self.latent_dim <= self.hidden_dim:
+            raise ValueError(
+                f"latent_dim must be in (0, hidden_dim={self.hidden_dim}], got {self.latent_dim}; "
+                "it only reduces communication when it is smaller than the hidden dimension"
+            )
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.capacity_factor <= 0:
@@ -246,6 +259,7 @@ class GrugModelConfig:
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "GrugModelConfig":
         rope = RotaryConfig(theta=float(_hf_config_attr(hf_config, ("rope_theta",), 10000.0)))
+        latent_dim = _hf_config_attr(hf_config, ("latent_dim",))
         return cls(
             vocab_size=int(_hf_config_attr(hf_config, ("vocab_size",))),
             hidden_dim=int(_hf_config_attr(hf_config, ("hidden_dim", "hidden_size"), 2048)),
@@ -262,6 +276,7 @@ class GrugModelConfig:
             num_shared_experts=int(_hf_config_attr(hf_config, ("num_shared_experts",), 1)),
             num_experts=int(_hf_config_attr(hf_config, ("num_experts", "num_local_experts"), 8)),
             num_experts_per_token=int(_hf_config_attr(hf_config, ("num_experts_per_token", "num_experts_per_tok"), 2)),
+            latent_dim=None if latent_dim is None else int(latent_dim),
             num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
             num_heads=int(_hf_config_attr(hf_config, ("num_heads", "num_attention_heads"), 16)),
             num_kv_heads=int(_hf_config_attr(hf_config, ("num_kv_heads", "num_key_value_heads"), 16)),
@@ -307,6 +322,7 @@ class GrugModelConfig:
             "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
             "num_shared_experts": self.num_shared_experts,
             # grug-specific (no public equivalent)
+            "latent_dim": self.latent_dim,
             "qk_mult": self.qk_mult,
             "local_kv_heads": self.local_kv_heads,
             "global_kv_heads": self.global_kv_heads,
@@ -462,7 +478,22 @@ class CausalSelfAttention(eqx.Module):
         if self.cfg.local_kv_heads is not None and self.cfg.global_kv_heads is not None:
             stored_kv_heads = self.cfg.stored_kv_heads
 
+            # Both branches must agree on sharding, not just shape: `lax.cond` compares full types
+            # under explicit mesh axes. The pass-through case keeps the projection's `model`-sharded
+            # head axis, while the align case slices to one head -- which cannot stay sharded -- and
+            # broadcasts back, giving an identical shape with a different sharding. Reshard both to
+            # the same spec. This is a no-op wherever the mesh leaves `model` at one, which is why
+            # the hero shape never hit it despite also setting local_kv_heads != global_kv_heads.
+            #
+            # Replicate the head axis rather than pinning it to `model`: a shape can carry fewer
+            # KV heads than the model axis is wide (d768 stores one), and the KV tensors are small
+            # enough -- at most a dozen heads of 128 -- that replication is not worth a special case.
+            kv_spec = P(_BATCH_AXES, None, None, None)
+
             def _logical_kv(projection: jax.Array, num_kv_heads: int) -> jax.Array:
+                # Replicate before slicing, not after: narrowing a `model`-sharded head axis to a
+                # count that does not divide the mesh axis is unsupported.
+                projection = reshard(projection, kv_spec)
                 if num_kv_heads == stored_kv_heads:
                     return projection
                 return align_kv_heads(projection[:, :, :num_kv_heads, :], num_q_heads=stored_kv_heads)
@@ -715,11 +746,14 @@ class MoEMLP(eqx.Module):
     router: jax.Array
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
+    w_latent_down: jax.Array | None
+    latent_norm: RMSNorm | None
+    w_latent_up: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_expert = random.split(key, 2)
+        k_router, k_expert, k_down, k_up = random.split(key, 4)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -727,12 +761,31 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e = cfg.hidden_dim, cfg.num_experts
+        # Routed experts live in the latent space; the router reads the full-width token, so its
+        # own projection keeps `hidden_dim`.
+        expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
+        latent = cfg.latent_dim
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
+            w_latent_down=(
+                None
+                if latent is None
+                else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(_FSDP_AXES, "model"))
+            ),
+            latent_norm=None if latent is None else RMSNorm.init(latent, cfg.layer_norm_eps),
+            w_latent_up=(
+                None
+                if latent is None
+                else reshard(_init_weight(k_up, (latent, d), cfg.initializer_std), P("model", _FSDP_AXES))
+            ),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
-                hidden_dim=cfg.hidden_dim,
+                hidden_dim=expert_width,
+                # The single `initializer_std` is derived from `hidden_dim`. Under LatentMoE the
+                # gate/up fan-in is `latent_dim`, so without this the routed path stays attenuated
+                # by sqrt(hidden/latent) even after the latent RMSNorm.
+                gate_up_initializer_std=(None if latent is None else cfg.initializer_std * math.sqrt(d / expert_width)),
                 intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
@@ -794,8 +847,21 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
+        # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
+        # `latent_dim`-wide rows in both directions. The router above already read the full-width
+        # token, and the shared experts in the enclosing block never see this path.
+        routed_input = x_flat
+        if self.w_latent_down is not None and self.latent_norm is not None:
+            routed_input = jnp.einsum(
+                "td,dl->tl",
+                x_flat,
+                self.w_latent_down.astype(x_flat.dtype),
+                out_sharding=_batch_spec(),
+            )
+            # Keep the expert input scale independent of the down-projection initialization.
+            routed_input = self.latent_norm(routed_input)
         moe_out = self.expert_mlp(
-            x_flat,
+            routed_input,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
@@ -807,6 +873,16 @@ class MoEMLP(eqx.Module):
             routed_flat = moe_out
             dropped_assignments = _zero_dropped_assignments()
         router_stats["capacity_overflow"] = dropped_assignments
+
+        # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,
+        # which is the vector the paper's W_up acts on.
+        if self.w_latent_up is not None:
+            routed_flat = jnp.einsum(
+                "tl,ld->td",
+                routed_flat,
+                self.w_latent_up.astype(routed_flat.dtype),
+                out_sharding=_batch_spec(),
+            )
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
@@ -1144,6 +1220,16 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
                 f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
             }
         )
+        if block.mlp.w_latent_down is not None:
+            assert block.mlp.latent_norm is not None
+            assert block.mlp.w_latent_up is not None
+            tensors.update(
+                {
+                    f"{layer_prefix}.mlp.latent_down_proj.weight": _linear_inference_tensor(block.mlp.w_latent_down),
+                    f"{layer_prefix}.mlp.latent_norm.weight": block.mlp.latent_norm.weight,
+                    f"{layer_prefix}.mlp.latent_up_proj.weight": _linear_inference_tensor(block.mlp.w_latent_up),
+                }
+            )
         # SConv weights are learned; export them per site so the checkpoint reconstructs an sconv model.
         for site_name, conv in (
             ("self_attn.sconv_k", block.attn.sconv_k),

@@ -278,8 +278,6 @@ def test_deep_gemm_cuda_environment_rejects_compiler_without_nvvm(tmp_path):
 
     with pytest.raises(RuntimeError, match="Packaged CUDA compiler is missing NVVM cicc"):
         deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime")
-
-
 @pytest.mark.parametrize(
     ("wheel", "compute_capability"),
     [(H100_WHEEL, (9, 0)), (GB200_WHEEL, (10, 0))],

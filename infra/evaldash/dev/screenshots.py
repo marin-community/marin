@@ -41,13 +41,17 @@ VIEWPORT = {"width": 1480, "height": 1000}
 # (filename, path, wait-for-selector-or-text). Paths are SPA routes; the server's catch-all serves
 # index.html for each so deep links render. Selectors gate the screenshot on the view being drawn.
 SHOTS = [
-    ("01-leaderboard.png", "/", "text=Leaderboard"),
+    ("01-panel.png", "/", "text=Per-benchmark"),
     ("02-runs.png", "/runs", "text=Runs"),
     ("03-run-detail.png", "/runs/snowball-2026.07.20-mmlu", "text=Metrics"),
     ("04-sample-mcq.png", "/runs/snowball-2026.07.20-mmlu/samples?task=mmlu&i=1", "text=Choices"),
     ("05-sample-agentic.png", "/runs/snowball-2026.07.20-aime/samples?task=aime&i=0", "text=Trajectory"),
     ("06-run-failed.png", "/runs/tootsie-8b-2026.07.20-aime", "text=Error"),
     ("07-debug.png", "/debug", "text=Prefixes scanned"),
+    ("08-compare.png", "/compare?models=snowball,qwen3-8b", "text=Shared-benchmark ranking"),
+    ("09-model-detail.png", "/models/snowball", "text=Measurement profile"),
+    ("10-run-agentic.png", "/runs/snowball-2026.07.20-aime", "text=Ungraded items"),
+    ("11-run-flagged.png", "/runs/tootsie-8b-2026.07.20-humaneval", "text=Worth checking"),
 ]
 
 
