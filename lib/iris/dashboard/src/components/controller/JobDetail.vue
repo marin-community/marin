@@ -169,7 +169,7 @@ async function loadChildJobs(): Promise<ResourceJobSummary[]> {
   let pageToken: string | undefined
   do {
     const response = await resourceRpcCall<ResourceListJobsResponse>('ListJobs', {
-      query: { parent: key.value, page: { pageSize: 100, pageToken } },
+      query: { jobIdPrefix: `${props.jobId}/`, page: { pageSize: 100, pageToken } },
     })
     items.push(...(response.jobs ?? []))
     pageToken = response.page?.nextPageToken || undefined
@@ -347,7 +347,7 @@ useAutoRefresh(refreshPage, JOB_REFRESH_MS)
       </details>
 
       <section v-if="childError || childJobs.length">
-        <h3 class="mb-2 text-sm font-semibold uppercase tracking-wider text-text-secondary">Child Jobs</h3>
+        <h3 class="mb-2 text-sm font-semibold uppercase tracking-wider text-text-secondary">Descendant Jobs</h3>
         <div v-if="childError" class="text-sm text-status-danger">{{ childError }}</div>
         <div v-else class="overflow-x-auto rounded border border-surface-border">
           <table class="w-full border-collapse text-sm">
@@ -356,7 +356,13 @@ useAutoRefresh(refreshPage, JOB_REFRESH_MS)
             </tr></thead>
             <tbody>
               <tr v-for="child in childJobs" :key="child.identity.jobUid" class="border-b border-surface-border-subtle">
-                <td class="px-3 py-2"><RouterLink :to="jobRoute(child)" class="font-mono text-accent hover:underline">{{ child.identity.key.resourceId }}</RouterLink></td>
+                <td class="px-3 py-2">
+                  <RouterLink
+                    :to="jobRoute(child)"
+                    class="font-mono text-accent hover:underline"
+                    :style="{ paddingLeft: `${Math.max(0, child.identity.key.resourceId.split('/').length - props.jobId.split('/').length - 1) * 1.25}rem` }"
+                  >{{ child.identity.key.resourceId }}</RouterLink>
+                </td>
                 <td class="px-3 py-2"><StatusBadge :status="child.state" size="sm" /></td>
                 <td class="px-3 py-2 text-right">{{ child.numTasks }}</td>
               </tr>
@@ -431,7 +437,7 @@ useAutoRefresh(refreshPage, JOB_REFRESH_MS)
 
       <section>
         <h3 class="mb-3 text-sm font-semibold uppercase tracking-wider text-text-secondary">Job Logs</h3>
-        <LogViewer :task-id="jobId" :cluster="logCluster" />
+        <LogViewer :task-id="jobId" :cluster="logCluster" :authority-cluster="clusterId" />
       </section>
     </div>
   </PageShell>

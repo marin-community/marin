@@ -189,7 +189,7 @@ checking status — do not poll in a tight loop.
 
 Reconnect to logs:
 ```bash
-.venv/bin/iris --cluster=marin job logs -f JOB_ID
+.venv/bin/iris --cluster=marin job logs --tail JOB_ID
 ```
 
 List your jobs:

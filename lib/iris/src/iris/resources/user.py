@@ -16,3 +16,6 @@ class UserSummary:
     task_state_counts: tuple[tuple[TaskState, int], ...]
     job_state_counts: tuple[tuple[JobState, int], ...]
     role: str
+    budget_limit: int | None
+    budget_spent: int
+    max_band: int | None

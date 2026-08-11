@@ -6,6 +6,7 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from rigging.provenance import Provenance
 from rigging.timing import Timestamp
 
 from iris.backends.protocol import BackendCapability, ProviderError, TaskBackend
@@ -140,7 +141,17 @@ def _worker_node_metadata(
         accelerator_count = worker.total_gpu_count
     elif worker.device_type == "tpu":
         accelerator_count = worker.total_tpu_count
-    region = attributes.get("region")
+    visible_attributes = dict(attributes)
+    if worker.md_provenance_json and worker.md_provenance_json != "{}":
+        provenance = Provenance.from_json(worker.md_provenance_json)
+        visible_attributes["provenance.tree_hash"] = provenance.tree_hash
+        visible_attributes["provenance.base_commit"] = provenance.base_commit
+        visible_attributes["provenance.dirty"] = int(provenance.dirty)
+        if provenance.branch:
+            visible_attributes["provenance.branch"] = provenance.branch
+        if provenance.built_by:
+            visible_attributes["provenance.built_by"] = provenance.built_by
+    region = visible_attributes.get("region")
     return _WorkerNodeMetadata(
         capacity=NodeCapacity(
             cpu_millicores=worker.total_cpu_millicores,
@@ -151,7 +162,7 @@ def _worker_node_metadata(
             accelerator_count=accelerator_count,
         ),
         slice_id=worker.slice_id or None,
-        attributes=tuple(_node_attribute(key, value) for key, value in sorted(attributes.items())),
+        attributes=tuple(_node_attribute(key, value) for key, value in sorted(visible_attributes.items())),
         region=region if isinstance(region, str) and region else None,
     )
 
@@ -308,9 +319,15 @@ class NodeResources:
             address=details.address,
             attributes=details.attributes,
             recent_attempts=self._recent_attempts_for_node(node),
-            bootstrap_log_key=None,
+            bootstrap_logs=self._bootstrap_logs(node),
             source_statuses=provider_snapshot.source_statuses,
         )
+
+    def _bootstrap_logs(self, node: NodeSummary) -> str | None:
+        backend = self._dependencies.backends[node.identity.backend_id]
+        if BackendCapability.WORKER_DAEMON not in backend.capabilities or backend.autoscaler is None:
+            return None
+        return backend.autoscaler.get_init_log(node.identity.key.resource_id, tail=200) or None
 
     def _recent_attempts_for_node(self, node: NodeSummary) -> tuple[AttemptSummary, ...]:
         backend = self._dependencies.backends[node.identity.backend_id]

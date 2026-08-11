@@ -26,7 +26,7 @@ This script:
 
 Usage:
     uv run python scripts/job_profile_summary.py \\
-        'https://iris.oa.dev/#/job/%2Frav%2Firis-run-job-20260601-054954'
+        'https://iris.oa.dev/#/job/marin/%2Frav%2Firis-run-job-20260601-054954'
 
     uv run python scripts/job_profile_summary.py /rav/iris-run-job-20260601-054954
 
@@ -113,7 +113,8 @@ class TaskProfile:
 def parse_job_id(arg: str) -> str:
     """Accept either a raw ``/user/job/...`` path or a dashboard URL.
 
-    Dashboard URLs look like ``https://iris.oa.dev/#/job/<percent-encoded path>``.
+    Dashboard URLs look like
+    ``https://iris.oa.dev/#/job/<cluster>/<percent-encoded path>``.
     """
     if arg.startswith(("http://", "https://")):
         if "#" not in arg:
@@ -121,7 +122,11 @@ def parse_job_id(arg: str) -> str:
         fragment = arg.split("#", 1)[1]
         if not fragment.startswith("/job/"):
             raise ValueError(f"Unexpected fragment in URL: {fragment!r}")
-        decoded = urllib.parse.unquote(fragment[len("/job/") :])
+        route = fragment[len("/job/") :]
+        _cluster_id, separator, encoded_job_id = route.partition("/")
+        if not separator:
+            raise ValueError(f"Dashboard URL is missing its cluster coordinate: {fragment!r}")
+        decoded = urllib.parse.unquote(encoded_job_id)
         if not decoded.startswith("/"):
             raise ValueError(f"Decoded job id missing leading '/': {decoded!r}")
         return decoded.rstrip("/")

@@ -15,12 +15,29 @@ from iris.cli.resource_commands import (
     resource_key,
 )
 from iris.resources.endpoint import EndpointQuery
-from iris.resources.identity import ResourceKind
+from iris.resources.identity import ResourceKey, ResourceKind
+from iris.rpc.resource_client import ResourceRpcClient
 
 
 @click.group("endpoint")
 def endpoint() -> None:
     """Inspect Endpoints and mint capability links."""
+
+
+def _resolve_endpoint_reference(
+    client: ResourceRpcClient,
+    key: ResourceKey,
+    reference: str,
+) -> ResourceKey:
+    if not reference.startswith("/"):
+        return key
+    matches = client.resolve_endpoints(reference)
+    if not matches:
+        raise click.ClickException(f"Endpoint {reference!r} was not found")
+    if len(matches) > 1:
+        ids = ", ".join(sorted(detail.summary.endpoint_id for detail in matches))
+        raise click.ClickException(f"Endpoint name {reference!r} is ambiguous; use one of these IDs: {ids}")
+    return matches[0].summary.key
 
 
 @endpoint.command("list")
@@ -51,12 +68,17 @@ def endpoint_list(ctx: click.Context, prefix: str | None, task_id: str | None, l
 
 
 @endpoint.command("describe")
-@click.argument("endpoint_id")
+@click.argument("endpoint")
 @click.pass_context
-def endpoint_describe(ctx: click.Context, endpoint_id: str) -> None:
-    """Describe one Endpoint by its stable registration ID."""
+def endpoint_describe(ctx: click.Context, endpoint: str) -> None:
+    """Describe one Endpoint by name or stable registration ID."""
     with resource_client_for_ctx(ctx) as client:
-        detail = client.describe_endpoint(resource_key(ctx, ResourceKind.ENDPOINT, endpoint_id))
+        key = _resolve_endpoint_reference(
+            client,
+            resource_key(ctx, ResourceKind.ENDPOINT, endpoint),
+            endpoint,
+        )
+        detail = client.describe_endpoint(key)
     summary = detail.summary
     click.echo(f"Endpoint: {summary.endpoint_id}")
     click.echo(f"Name: {summary.name}")
@@ -71,13 +93,17 @@ def endpoint_describe(ctx: click.Context, endpoint_id: str) -> None:
 
 
 @endpoint.command("mint")
-@click.argument("endpoint_id")
+@click.argument("endpoint")
 @click.option("--ttl-hours", type=click.FloatRange(min=0.01), default=24.0, show_default=True)
 @click.pass_context
-def endpoint_mint(ctx: click.Context, endpoint_id: str, ttl_hours: float) -> None:
-    """Mint a time-limited capability link for one Endpoint."""
-    key = resource_key(ctx, ResourceKind.ENDPOINT, endpoint_id)
+def endpoint_mint(ctx: click.Context, endpoint: str, ttl_hours: float) -> None:
+    """Mint a time-limited capability link for one Endpoint name or ID."""
     with resource_client_for_ctx(ctx) as client:
+        key = _resolve_endpoint_reference(
+            client,
+            resource_key(ctx, ResourceKind.ENDPOINT, endpoint),
+            endpoint,
+        )
         detail = client.describe_endpoint(key)
         token = client.mint_endpoint_token(key, ttl=Duration.from_hours(ttl_hours))
     if token.capability_url:

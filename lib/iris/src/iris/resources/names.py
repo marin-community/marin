@@ -113,9 +113,16 @@ class JobName:
     def to_wire(self) -> str:
         return str(self)
 
-    def dashboard_url(self, base_url: str) -> str:
+    def job_dashboard_url(self, base_url: str, cluster_id: str) -> str:
         encoded = urllib.parse.quote(self.to_wire(), safe="")
-        return f"{base_url.rstrip('/')}/#/job/{encoded}"
+        cluster = urllib.parse.quote(cluster_id, safe="")
+        return f"{base_url.rstrip('/')}/#/job/{cluster}/{encoded}"
+
+    def task_dashboard_url(self, base_url: str, cluster_id: str) -> str:
+        self.require_task()
+        encoded = urllib.parse.quote(self.to_wire(), safe="")
+        cluster = urllib.parse.quote(cluster_id, safe="")
+        return f"{base_url.rstrip('/')}/#/task/{cluster}/{encoded}"
 
     @classmethod
     def from_wire(cls, value: str) -> "JobName":

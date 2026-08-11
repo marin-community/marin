@@ -23,11 +23,13 @@ import logging
 import os
 import re
 import sys
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
 from connectrpc.errors import ConnectError
+from finelog.client import LogClient, StatsError
 from iris.cli.connect import connect_controller, rpc_client
 from iris.client import IrisClient
 from iris.cluster.types import is_task_finished
@@ -288,8 +290,8 @@ def fetch_job_tree(client: IrisClient, job_id: str) -> list[dict] | None:
 def fetch_leaf_summaries(client: IrisClient, job_tree: list[dict]) -> list[dict]:
     """Fetch job summaries for every leaf job in the tree.
 
-    Per-task data (``memory_peak_mb``, ``error``, ``exit_code``) lives on each
-    job's own task array, which the job tree does not return.
+    Per-task failure data (``error`` and ``exit_code``) lives on each job's own
+    task array, which the job tree does not return.
     Leaves are jobs with ``has_children == false`` — those are the worker
     pools where the actual fan-out work runs. Coordinator jobs are skipped:
     their tasks are dispatcher-only and don't carry useful memory or error
@@ -366,21 +368,19 @@ def bucket_by_step(by_child: dict[str, int], parent_id: str) -> dict[str, int | 
     return by_step
 
 
-def aggregate_per_task_metrics(summaries: list[dict]) -> tuple[int, dict[str, int], int, int]:
+def aggregate_per_task_metrics(summaries: list[dict]) -> tuple[dict[str, int], int, int]:
     """Walk every task across all summaries and return cross-tree per-task metrics.
 
-    Returns ``(peak_worker_memory_mb, infra_failures, ooms, failed_shards)``,
-    aggregated across the launcher and every leaf worker job.
+    Returns ``(infra_failures, ooms, failed_shards)``, aggregated across the
+    launcher and every leaf worker job. Resource measurements are read from
+    finelog separately; the controller resource records intentionally contain
+    lifecycle decisions rather than time-series measurements.
     """
-    peak_memory = 0
     buckets: dict[str, int] = {b: 0 for b in FAILURE_BUCKETS}
     ooms = 0
     failed_shards = 0
     for summary in summaries:
         for task in summary.get("tasks") or []:
-            mem = int(task.get("memory_peak_mb") or 0)
-            if mem > peak_memory:
-                peak_memory = mem
             bucket = classify_task_failure(
                 state=task.get("state", ""),
                 exit_code=task.get("exit_code"),
@@ -393,7 +393,25 @@ def aggregate_per_task_metrics(summaries: list[dict]) -> tuple[int, dict[str, in
                 ooms += 1
             elif bucket == "application_failure":
                 failed_shards += 1
-    return peak_memory, buckets, ooms, failed_shards
+    return buckets, ooms, failed_shards
+
+
+def fetch_peak_worker_memory_mb(log_client: LogClient, job_id: str) -> int | None:
+    """Read the peak task memory measurement for a Job subtree from finelog."""
+    escaped = job_id.replace("\\", "\\\\").replace("'", "''").replace("%", "\\%").replace("_", "\\_")
+    sql = (
+        'SELECT MAX(memory_peak_mb) AS peak_worker_memory_mb FROM "iris.task" '
+        f"WHERE task_id LIKE '{escaped}/%' ESCAPE '\\'"
+    )
+    try:
+        result = log_client.query(sql, max_rows=1)
+        if result.num_rows != 1:
+            return None
+        value = result.column("peak_worker_memory_mb")[0].as_py()
+        return int(value) if value is not None else None
+    except (ConnectError, ConnectionError, OSError, TimeoutError, StatsError, KeyError, TypeError, ValueError) as exc:
+        logger.warning("finelog peak worker memory query failed: %s", exc)
+        return None
 
 
 def aggregate_job_tree(jobs: list[dict]) -> dict:
@@ -541,6 +559,7 @@ def build_report(
     summary: dict | None,
     job_tree: list[dict] | None,
     leaf_summaries: list[dict],
+    peak_worker_memory_mb: int | None,
     status: dict | None,
     workflow_env: dict[str, str | None],
 ) -> PerfReport:
@@ -551,8 +570,8 @@ def build_report(
     - ``iris job list --prefix``: per-step wall times (deterministic zephyr-*
       child names) and aggregated preemption / failure / task-state counts
       across the whole tree.
-    - per-leaf ``iris job summary``: per-task ``memory_peak_mb`` and ``error``
-      strings, which only live on the leaf workers, not on the parent.
+    - per-leaf Job resources: task failure details.
+    - finelog ``iris.task`` measurements: peak worker memory.
     """
     report = PerfReport(
         iris_job_id=job_id,
@@ -580,11 +599,13 @@ def build_report(
     # Per-task metrics across the launcher AND every leaf worker job.
     summaries_for_tasks = ([summary] if summary else []) + leaf_summaries
     if summaries_for_tasks:
-        report.peak_worker_memory_mb, report.infra_failures, report.ooms, report.failed_shards = (
-            aggregate_per_task_metrics(summaries_for_tasks)
-        )
+        report.infra_failures, report.ooms, report.failed_shards = aggregate_per_task_metrics(summaries_for_tasks)
+    if peak_worker_memory_mb is None:
+        report.warnings.append("finelog peak worker memory unavailable")
+    else:
+        report.peak_worker_memory_mb = peak_worker_memory_mb
     if not leaf_summaries:
-        report.warnings.append("no leaf summaries fetched; peak_worker_memory_mb/infra_failures reflect launcher only")
+        report.warnings.append("no leaf summaries fetched; infra_failures reflect launcher only")
 
     # Aggregate preemption / failure / task-state counts across the whole job
     # tree. Falls back to the parent-only summary fields when the tree is
@@ -725,6 +746,12 @@ def main(
         with (
             IrisClient.remote(endpoint.url, workspace=_REPO_ROOT, credentials=endpoint.credentials) as client,
             rpc_client(endpoint.url, endpoint.credentials) as controller,
+            closing(
+                LogClient.connect(
+                    f"{endpoint.url.rstrip('/')}/proxy/system.log-server",
+                    interceptors=endpoint.credentials.interceptors(),
+                )
+            ) as log_client,
         ):
             summary = fetch_job_summary(client, job_id)
             job_tree = fetch_job_tree(client, job_id)
@@ -736,6 +763,7 @@ def main(
                 summary=summary,
                 job_tree=job_tree,
                 leaf_summaries=leaf_summaries,
+                peak_worker_memory_mb=fetch_peak_worker_memory_mb(log_client, job_id),
                 status=status,
                 workflow_env=workflow_env,
             )

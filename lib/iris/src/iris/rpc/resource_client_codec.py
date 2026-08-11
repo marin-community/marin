@@ -416,7 +416,7 @@ def node_detail_from_proto(value: resource_pb2.NodeDetail) -> NodeDetail:
         address=value.address or None,
         attributes=tuple(_node_attribute(item) for item in value.attributes),
         recent_attempts=tuple(_attempt_summary_from_proto(item) for item in value.recent_attempts),
-        bootstrap_log_key=value.bootstrap_log_key or None,
+        bootstrap_logs=value.bootstrap_logs or None,
         source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
     )
 

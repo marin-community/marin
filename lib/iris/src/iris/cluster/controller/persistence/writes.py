@@ -35,6 +35,7 @@ from iris.cluster.controller.persistence.projections.endpoints import EndpointsP
 from iris.cluster.controller.persistence.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.persistence.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.persistence.schema import (
+    action_receipts_table,
     federated_jobs_table,
     federated_tasks_table,
     federation_changelog_table,
@@ -316,14 +317,18 @@ def insert_job_config(
     )
 
 
-@writes_to(jobs_table, cascades_into=(task_attempts_table, job_config_table, job_workdir_files_table))
+@writes_to(
+    jobs_table,
+    action_receipts_table,
+    cascades_into=(task_attempts_table, job_config_table, job_workdir_files_table),
+)
 def delete_job(tx: Tx, job_id: JobName, *, record_tombstone: bool = True) -> None:
     """Delete a job row and drop the per-job memos its cascade would strand.
 
     ``ON DELETE CASCADE`` removes the job's tasks, attempts, config, and workdir
-    files. Endpoints carry no FK to jobs (see migration 0048), so this removes them
-    explicitly through the projection, which keeps the in-memory endpoint cache in
-    sync as well as the row.
+    files. Endpoints and action receipts carry no FK to jobs, so this removes them
+    explicitly. Endpoint deletion flows through its projection to keep the cache in
+    sync; receipts have no in-memory projection.
 
     ``record_tombstone=False`` is for a deletion that immediately re-creates the
     job id for the same requester (a federated resubmission replacing a finished
@@ -337,6 +342,13 @@ def delete_job(tx: Tx, job_id: JobName, *, record_tombstone: bool = True) -> Non
     if record_tombstone:
         record_federation_change(tx, job_id, tombstone=True)
     tx.caches[EndpointsProjection].remove_by_job_ids(tx, [job_id])
+    escaped_job_id = str(job_id).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    tx.execute(
+        delete(action_receipts_table).where(
+            (action_receipts_table.c.target_id == str(job_id))
+            | action_receipts_table.c.target_id.like(f"{escaped_job_id}/%", escape="\\")
+        )
+    )
     tx.execute(delete(jobs_table).where(jobs_table.c.job_id == job_id))
     # The attempt-counts and run-template memos are keyed by job id and derived from
     # the cascaded rows. Drop them at this chokepoint — every job-row deletion flows

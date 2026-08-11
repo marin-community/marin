@@ -10,6 +10,7 @@ import { CUSTOM_PRESET, SINCE_PRESETS, type TimeZoneName, useTimeWindow } from '
 import { isFederated, type FetchLogsResponse, type LogEntry, type TaskAttempt } from '@/types/rpc'
 import { timestampMs, logLevelName, formatLogTime } from '@/utils/formatting'
 import { parseLogLinks } from '@/utils/logLinks'
+import { useBackends } from '@/composables/useBackends'
 import { groupNearbyIndices, highlightSegments, isExceptionEntry, type HighlightedSegment } from '@/utils/logSearch'
 
 const props = withDefaults(defineProps<{
@@ -26,6 +27,9 @@ const props = withDefaults(defineProps<{
   // we pass `cluster` through as a FetchLogs filter (see baseRequest). A local
   // row (or a context with no cluster) sends no filter and reads its own rows.
   cluster?: string
+  // Resource authority used when log text mentions another Task. This is
+  // independent of `cluster`, which selects the execution source in finelog.
+  authorityCluster?: string
 }>(), {
   maxHeight: '60vh',
 })
@@ -55,6 +59,8 @@ const FOLLOW_TAIL_SLACK_PX = 40
 
 const route = useRoute()
 const router = useRouter()
+const { clusterId } = useBackends()
+const linkClusterId = computed(() => props.authorityCluster || clusterId.value || undefined)
 
 type MatchScope = 'EXACT' | 'PREFIX' | 'REGEX'
 type WireMatchScope = 'MATCH_SCOPE_EXACT' | 'MATCH_SCOPE_PREFIX' | 'MATCH_SCOPE_REGEX'
@@ -209,7 +215,7 @@ const linkedRows = computed(() =>
     taskRef: showTaskLinks.value ? parseTaskFromKey(entry.key) : null,
     // proto3-JSON omits default scalars, so an empty log line arrives with
     // `data` absent (undefined); coalesce so matchAll() doesn't throw.
-    segments: parseLogLinks(entry.data ?? ''),
+    segments: parseLogLinks(entry.data ?? '', linkClusterId.value),
   })),
 )
 

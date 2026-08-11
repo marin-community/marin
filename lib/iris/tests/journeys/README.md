@@ -34,7 +34,7 @@ The 89 removed migration families map to these collected journeys:
 | Public service chronology | 10 | cancellation, hierarchy, public views, and worker lifecycle |
 | Reconcile chronology | 3 | worker lifecycle |
 | Federation handoff | 2 | federation happy path and execution-created subtree sync |
-| Administrative kick | 5 | operations |
+| Administrative action | 5 | resource actions |
 | Endpoint replacement | 1 | endpoints |
 | Dry-run mode | 2 | modes |
 | Cluster public reads | 6 | lifecycle, cancellation, and public views |

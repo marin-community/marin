@@ -55,6 +55,7 @@ def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
             finished_at=None,
             error_message="",
             pending_reason="warming workers",
+            exit_code=17,
         ),
         spec=cast(JobSpec, SimpleNamespace(name="evaluation")),
     )
@@ -162,7 +163,7 @@ def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
         "job": {
             "state": "JOB_STATE_RUNNING",
             "error": "",
-            "exit_code": 0,
+            "exit_code": 17,
             "started_at": {"epoch_ms": 20},
             "name": "evaluation",
             "status_message": "warming workers",

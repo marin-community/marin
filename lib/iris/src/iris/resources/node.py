@@ -93,5 +93,5 @@ class NodeDetail:
     address: str | None
     attributes: tuple[NodeAttribute, ...]
     recent_attempts: tuple[AttemptSummary, ...]
-    bootstrap_log_key: str | None
+    bootstrap_logs: str | None
     source_statuses: tuple[ResourceSourceStatus, ...]

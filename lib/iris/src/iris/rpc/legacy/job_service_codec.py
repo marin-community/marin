@@ -5,7 +5,7 @@
 
 from rigging.redaction import redact_value
 
-from iris.cluster.types import LOCAL_CLUSTER
+from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_TASK_STATES
 from iris.resources.job import (
     ContainerProfile,
     CoschedulingConfig,
@@ -202,4 +202,11 @@ def task_detail_to_legacy(
         result.started_at.CopyFrom(timestamp_to_proto(summary.started_at))
     if summary.finished_at is not None:
         result.finished_at.CopyFrom(timestamp_to_proto(summary.finished_at))
+    if summary.state == job_pb2.TASK_STATE_PENDING and detail.attempts:
+        previous = detail.attempts[-1]
+        if previous.state in TERMINAL_TASK_STATES:
+            result.pending_reason = (
+                f"Retrying (attempt {summary.current_attempt.attempt_number + 1 if summary.current_attempt else 1}, "
+                f"last: {task_state_friendly(previous.state)})"
+            )
     return result

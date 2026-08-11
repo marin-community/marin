@@ -1,16 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useResourceRpc } from '@/composables/useRpc'
+import { useLogServerStatsRpc, useResourceRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type { ResourceDescribeNodeResponse } from '@/types/rpc'
 import { formatBytes, formatTimestamp } from '@/utils/formatting'
+import { decodeArrowIpc } from '@/utils/arrow'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import SourceWarnings from '@/components/shared/SourceWarnings.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
+import LogViewer from '@/components/shared/LogViewer.vue'
+import ResourceGauge from '@/components/shared/ResourceGauge.vue'
+import Sparkline from '@/components/shared/Sparkline.vue'
 
 const NODE_REFRESH_MS = 10_000
 
@@ -24,12 +28,44 @@ const { data, loading, error, refresh } = useResourceRpc<ResourceDescribeNodeRes
 }))
 const node = computed(() => data.value?.node)
 
+interface QueryResponse { arrowIpc?: string }
+interface WorkerUsageRow {
+  cpu_pct?: number
+  mem_bytes?: number
+  mem_total_bytes?: number
+  disk_used_bytes?: number
+  disk_total_bytes?: number
+}
+
+function sqlString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+const { data: usageData, error: usageError, refresh: refreshUsage } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({
+    sql: `SELECT cpu_pct, mem_bytes, mem_total_bytes, disk_used_bytes, disk_total_bytes
+FROM "iris.worker"
+WHERE worker_id = ${sqlString(props.nodeId)}
+ORDER BY ts DESC
+LIMIT 60`,
+  }),
+)
+const usageRows = computed(() => decodeArrowIpc(usageData.value?.arrowIpc).rows as WorkerUsageRow[])
+const latestUsage = computed(() => usageRows.value[0])
+const cpuHistory = computed(() => usageRows.value.map(row => Number(row.cpu_pct ?? 0)).reverse())
+const memoryHistory = computed(() => usageRows.value.map(row => Number(row.mem_bytes ?? 0)).reverse())
+
+async function refreshPage() {
+  await Promise.all([refresh(), refreshUsage()])
+}
+
 function attributeValue(value: { stringValue?: string; integerValue?: string; floatValue?: number }): string {
   return value.stringValue ?? value.integerValue ?? String(value.floatValue ?? '')
 }
 
-onMounted(refresh)
-useAutoRefresh(refresh, NODE_REFRESH_MS)
+onMounted(refreshPage)
+useAutoRefresh(refreshPage, NODE_REFRESH_MS)
 </script>
 
 <template>
@@ -86,6 +122,43 @@ useAutoRefresh(refresh, NODE_REFRESH_MS)
         </dl>
       </section>
 
+      <section class="grid gap-4 lg:grid-cols-2">
+        <InfoCard title="Live Resources">
+          <div v-if="latestUsage" class="space-y-4">
+            <div class="flex items-center gap-3">
+              <div class="flex-1">
+                <ResourceGauge label="CPU" :used="Number(latestUsage.cpu_pct ?? 0)" :total="100" unit="%" />
+              </div>
+              <div class="w-24"><Sparkline :data="cpuHistory" /></div>
+            </div>
+            <div class="flex items-center gap-3">
+              <div class="flex-1">
+                <ResourceGauge
+                  label="Memory"
+                  :used="Number(latestUsage.mem_bytes ?? 0)"
+                  :total="Number(latestUsage.mem_total_bytes ?? 0)"
+                  unit="bytes"
+                />
+              </div>
+              <div class="w-24"><Sparkline :data="memoryHistory" /></div>
+            </div>
+            <ResourceGauge
+              label="Disk"
+              :used="Number(latestUsage.disk_used_bytes ?? 0)"
+              :total="Number(latestUsage.disk_total_bytes ?? 0)"
+              unit="bytes"
+            />
+          </div>
+          <div v-else-if="usageError" class="text-sm text-status-danger">{{ usageError }}</div>
+          <div v-else class="text-sm text-text-muted">No worker measurements recorded for this node.</div>
+        </InfoCard>
+
+        <InfoCard title="Bootstrap Logs">
+          <pre v-if="node.bootstrapLogs" class="max-h-80 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">{{ node.bootstrapLogs }}</pre>
+          <div v-else class="text-sm text-text-muted">No bootstrap logs recorded.</div>
+        </InfoCard>
+      </section>
+
       <section>
         <h3 class="mb-3 text-sm font-semibold uppercase tracking-wider text-text-secondary">Recent Attempts</h3>
         <EmptyState v-if="(node.recentAttempts ?? []).length === 0" message="No recent attempts" />
@@ -120,6 +193,11 @@ useAutoRefresh(refresh, NODE_REFRESH_MS)
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section>
+        <h3 class="mb-3 text-sm font-semibold uppercase tracking-wider text-text-secondary">Worker Daemon Logs</h3>
+        <LogViewer :worker-id="nodeId" :authority-cluster="clusterId" />
       </section>
     </div>
   </PageShell>

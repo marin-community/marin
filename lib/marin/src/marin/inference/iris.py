@@ -16,10 +16,10 @@ import requests
 from fray.client import JobHandle
 from fray.current_client import current_client
 from fray.types import ActorConfig, CpuConfig, Entrypoint, JobRequest, JobStatus
-from iris.client import IrisClient, iris_ctx
+from iris.client import iris_ctx
 from iris.client.job_info import get_job_info
 from iris.cluster.types import is_job_finished
-from iris.resources.endpoint import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, EndpointDetail, EndpointQuery
+from iris.resources.endpoint import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess
 from iris.resources.names import JobName
 from iris.rpc import job_pb2
 from rigging.connect import capability_path, proxy_path
@@ -114,7 +114,7 @@ class RemoteInferenceSession:
             tasks = current_job.tasks()
             if not tasks or any(task.state != job_pb2.TASK_STATE_RUNNING for task in tasks):
                 state = InferenceBackendState.RECOVERING
-        if state is InferenceBackendState.READY and not _endpoint_details(client, self.endpoint_name):
+        if state is InferenceBackendState.READY and not client.resolve_endpoints(self.endpoint_name):
             state = InferenceBackendState.RECOVERING
         return state
 
@@ -261,16 +261,11 @@ def _new_endpoint_identity() -> tuple[str, str]:
     return run_id, f"/serve/inference-{run_id}"
 
 
-def _endpoint_details(client: IrisClient, endpoint_name: str) -> list[EndpointDetail]:
-    page = client.list_endpoints(EndpointQuery(name_prefix=endpoint_name, page_size=100))
-    return [client.describe_endpoint(summary.key) for summary in page.items if summary.name == endpoint_name]
-
-
 def _capability_model(model: RunningModel, endpoint_name: str, capability_origin: str) -> RunningModel:
     client = iris_ctx().client
     if client is None:
         raise RuntimeError("Iris context has no client")
-    endpoints = _endpoint_details(client, endpoint_name)
+    endpoints = client.resolve_endpoints(endpoint_name)
     if not endpoints:
         raise RuntimeError(f"Endpoint {endpoint_name!r} is not registered")
     response = client.mint_endpoint_token(endpoints[0].summary.key, ttl=_CAPABILITY_TTL)
@@ -406,7 +401,7 @@ def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: floa
         raise RuntimeError("Iris context has no client")
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        endpoints = _endpoint_details(ctx.client, endpoint_name)
+        endpoints = ctx.client.resolve_endpoints(endpoint_name)
         if endpoints:
             return endpoints[0].address, dict(endpoints[0].metadata)
         if job.status().value in {"succeeded", "failed", "stopped"}:

@@ -306,7 +306,7 @@ A **capability URL** carries a scoped endpoint token in its path —
 credential (gist-style: if you have the link, it works). No auth header or cookie
 is needed. The native Iris listener lifts the token from the path and verifies
 that it is scoped to that endpoint and unexpired before forwarding. Mint one
-with `iris endpoints mint <name>` (or let `marin-serve
+with `iris endpoint mint <name>` (or let `marin-serve
 --access link` print the ready-to-use URL at launch).
 
 A federated capability uses

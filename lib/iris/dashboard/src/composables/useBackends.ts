@@ -38,6 +38,7 @@ function resolveScopeId(
 // Module-level state — shared across all callers.
 const backends = ref<BackendInfo[]>([])
 const capabilities = ref<string[]>([])
+const clusterId = ref('')
 // Federation peers this cluster can hand jobs off to. Populated from the
 // capacity resource (/auth/config carries backends but not peers). Empty on a
 // single-cluster deployment, so every peer-derived affordance stays inert.
@@ -68,6 +69,7 @@ export function useBackends() {
       const resp = await fetch('/auth/config')
       if (!resp.ok) return authDefaults
       const config = await resp.json() as {
+        cluster_id?: string
         provider?: string | null
         capabilities?: string[]
         backends?: Array<{ id: string; name?: string; capabilities?: string[] }>
@@ -77,6 +79,7 @@ export function useBackends() {
       // back to the legacy single-backend field so a pre-feature-PR controller
       // still gates tabs correctly.
       capabilities.value = config.capabilities ?? config.backend?.capabilities ?? []
+      clusterId.value = config.cluster_id ?? ''
       if (Array.isArray(config.backends) && config.backends.length > 0) {
         backends.value = config.backends.map(b => ({
           id: b.id,
@@ -139,6 +142,7 @@ export function useBackends() {
   return {
     backends,
     capabilities,
+    clusterId,
     peers,
     multiBackend,
     fetchConfig,

@@ -69,7 +69,9 @@ def device_from_proto(value: resource_pb2.DeviceConfig) -> CpuDevice | GpuDevice
         case "tpu":
             return TpuDevice(variant=value.tpu.variant, topology=value.tpu.topology, count=value.tpu.count)
         case _:
-            return None
+            if value.ByteSize() == 0:
+                return None
+            raise ValueError("device has no selected kind")
 
 
 def resource_spec_to_proto(value: ResourceSpec) -> resource_pb2.ResourceSpecProto:

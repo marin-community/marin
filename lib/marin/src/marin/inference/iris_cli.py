@@ -58,7 +58,6 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import is_job_finished
-from iris.resources.endpoint import EndpointDetail, EndpointQuery
 from iris.resources.execution import Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device, tpu_device
 from iris.rpc import job_pb2
 from rigging.config_discovery import find_project_root
@@ -226,11 +225,6 @@ def _resolve_chat_template(spec: str | None) -> str | None:
     return path.read_text()
 
 
-def _endpoint_details(client: IrisClient, endpoint_name: str) -> list[EndpointDetail]:
-    page = client.list_endpoints(EndpointQuery(name_prefix=endpoint_name, page_size=100))
-    return [client.describe_endpoint(summary.key) for summary in page.items if summary.name == endpoint_name]
-
-
 def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout_seconds: float) -> str:
     """Poll the controller registry until the endpoint registers; return its address."""
     deadline = time.monotonic() + timeout_seconds
@@ -241,7 +235,7 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
             )
         # The registry probe is the authenticated path to readiness; the controller
         # proxy itself is auth-gated and not pollable with a plain HTTP client.
-        endpoints = _endpoint_details(client, endpoint_name)
+        endpoints = client.resolve_endpoints(endpoint_name)
         if endpoints:
             return endpoints[0].address
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)
@@ -262,7 +256,7 @@ def _mint_and_print_capability_url(
     authorizes only this endpoint and expires after ``ttl_hours`` (clamped to the
     controller's maximum).
     """
-    endpoints = _endpoint_details(client, endpoint)
+    endpoints = client.resolve_endpoints(endpoint)
     if not endpoints:
         raise click.ClickException(f"Endpoint {endpoint!r} is not registered")
     resp = client.mint_endpoint_token(endpoints[0].summary.key, ttl=Duration.from_hours(ttl_hours))
@@ -609,9 +603,9 @@ def main(
             click.echo(f"  timeout      {timeout_hours:g}h")
             click.echo(f"  req timeout  {proxy_timeout:g}s  (per-request proxy budget)")
             if controller is None and cluster:
-                click.echo(f"  stop with    iris --cluster {cluster} job stop {job}")
+                click.echo(f"  cancel with  iris --cluster {cluster} job cancel {job}")
             else:
-                click.echo(f"  stop with    iris --controller-url {controller_url} job stop {job}")
+                click.echo(f"  cancel with  iris --controller-url {controller_url} job cancel {job}")
             click.echo("")
 
             if not wait:

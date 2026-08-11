@@ -3,6 +3,8 @@
 
 from typing import cast
 
+import pyarrow as pa
+from finelog.client import LogClient
 from iris.client import IrisClient
 from iris.resources.attempt import AttemptSummary
 from iris.resources.identity import AttemptIdentity, JobIdentity, ResourceKey, ResourceKind, TaskIdentity
@@ -104,3 +106,46 @@ def test_fetch_job_summary_batches_task_details_once_per_page() -> None:
         ["/owner/perf/0", "/owner/perf/1"],
         ["/owner/perf/2"],
     ]
+
+
+def test_peak_worker_memory_comes_from_task_measurements() -> None:
+    class FakeLogClient:
+        def query(self, sql: str, *, max_rows: int):
+            assert 'FROM "iris.task"' in sql
+            assert "task_id LIKE '/owner/perf/%'" in sql
+            assert max_rows == 1
+            return pa.table({"peak_worker_memory_mb": [73_421]})
+
+    peak = collect_perf_metrics.fetch_peak_worker_memory_mb(cast(LogClient, FakeLogClient()), "/owner/perf")
+    report = collect_perf_metrics.build_report(
+        job_id="/owner/perf",
+        summary=None,
+        job_tree=None,
+        leaf_summaries=[],
+        peak_worker_memory_mb=peak,
+        status=None,
+        workflow_env={},
+    )
+
+    assert report.peak_worker_memory_mb == 73_421
+    assert "finelog peak worker memory unavailable" not in report.warnings
+
+
+def test_missing_task_measurements_are_not_reported_as_zero_memory() -> None:
+    class FakeLogClient:
+        def query(self, sql: str, *, max_rows: int):
+            return pa.table({"peak_worker_memory_mb": [None]})
+
+    peak = collect_perf_metrics.fetch_peak_worker_memory_mb(cast(LogClient, FakeLogClient()), "/owner/perf")
+    report = collect_perf_metrics.build_report(
+        job_id="/owner/perf",
+        summary=None,
+        job_tree=None,
+        leaf_summaries=[],
+        peak_worker_memory_mb=peak,
+        status=None,
+        workflow_env={},
+    )
+
+    assert report.peak_worker_memory_mb == 0
+    assert "finelog peak worker memory unavailable" in report.warnings

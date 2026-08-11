@@ -1242,7 +1242,14 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
             [
                 WorkerTaskUpdates(
                     worker_id=wid,
-                    updates=[TaskUpdate(task_id=task_id, attempt_id=1, new_state=job_pb2.TASK_STATE_RUNNING)],
+                    updates=[
+                        TaskUpdate(
+                            task_id=task_id,
+                            attempt_id=1,
+                            new_state=job_pb2.TASK_STATE_RUNNING,
+                            container_id="container-1",
+                        )
+                    ],
                 )
             ],
             health=state._health,
@@ -1265,6 +1272,8 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
     assert len(attempts) == 2
     proto_uids = {a["attemptId"]: a.get("attemptUid") for a in attempts}
     assert proto_uids == db_uids
+    assert resp["task"]["workerAddress"] == "h1:8080"
+    assert resp["task"]["containerId"] == "container-1"
 
 
 def test_get_worker_status_by_worker_id(client, state):

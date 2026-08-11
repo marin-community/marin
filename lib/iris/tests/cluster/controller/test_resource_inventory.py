@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
-from iris.backends.protocol import BackendCapability
+from iris.backends.protocol import BackendCapability, DeviceCapacity
 from iris.backends.status import (
     AutoscalerStatus,
     BackendStatus,
@@ -38,6 +38,7 @@ from iris.resources.slice import SliceCapacityState, SliceLifecycle, SliceQuery
 from iris.resources.source import SourceState
 from iris.rpc import resource_pb2
 from iris.rpc.resource_service import ResourceServiceImpl
+from rigging.provenance import Provenance
 from rigging.timing import Timestamp
 from sqlalchemy import event
 
@@ -88,7 +89,9 @@ def _autoscaling_backend() -> Mock:
     backend.autoscaler = Mock()
     backend.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
     backend.advertised_attributes.return_value = {"device_variant": {"h100"}, "region": {"us-central1"}}
-    backend.resource_capacity.return_value = None
+    backend.resource_capacity.return_value = {
+        "h100": DeviceCapacity(free=2, total=8, held_by_band={3: 6}),
+    }
     autoscaler = AutoscalerStatus(
         last_evaluation=NOW,
         groups=(
@@ -213,6 +216,8 @@ def worker_resources(tmp_path: Path):
         last_heartbeat_ms=NOW.epoch_ms(),
     )
     backend = Mock()
+    backend.autoscaler = Mock()
+    backend.autoscaler.get_init_log.return_value = "worker bootstrap complete"
     backend.capabilities = frozenset({BackendCapability.WORKER_DAEMON})
     backend.status.return_value = BackendStatus(worker=WorkerFleetStatus())
     facade = Controller(
@@ -354,6 +359,13 @@ def test_worker_node_uses_normalized_capacity_slice_and_typed_attributes(worker_
                 device_variant="h100",
                 slice_id="slice-a",
                 md_disk_bytes=1_000,
+                md_provenance_json=Provenance(
+                    tree_hash="tree123",
+                    base_commit="commit456",
+                    dirty=False,
+                    branch="resource-model",
+                    built_by="builder",
+                ).to_json(),
             )
         )
         tx.execute(
@@ -391,10 +403,13 @@ def test_worker_node_uses_normalized_capacity_slice_and_typed_attributes(worker_
     )
     assert node.slice is not None and node.slice.key.resource_id == "slice-a"
     assert node.region == "us-east1"
-    assert [(attribute.key, attribute.string_value, attribute.integer_value) for attribute in detail.attributes] == [
-        ("rack", None, 7),
-        ("region", "us-east1", None),
-    ]
+    attributes = {attribute.key: attribute for attribute in detail.attributes}
+    assert attributes["rack"].integer_value == 7
+    assert attributes["region"].string_value == "us-east1"
+    assert attributes["provenance.tree_hash"].string_value == "tree123"
+    assert attributes["provenance.base_commit"].string_value == "commit456"
+    assert attributes["provenance.branch"].string_value == "resource-model"
+    assert detail.bootstrap_logs == "worker bootstrap complete"
 
 
 def test_slices_filter_page_and_describe_observed_membership(resources: Controller) -> None:
@@ -449,6 +464,9 @@ def test_capacity_resource_carries_backend_authored_fleet_and_routing_facts(reso
         "us-central1",
     )
     assert (group.current_demand, backend.routing.groups[0].launch) == (3, 1)
+    assert backend.availability.amounts == {"h100": 2}
+    assert backend.availability.total_amounts == {"h100": 8}
+    assert [(held.band, dict(held.amounts)) for held in backend.availability.held_by_band] == [(3, {"h100": 6})]
     assert capacity_slice.summary.running_task_count == 2
     assert capacity_slice.summary.capacity_state == resource_pb2.SLICE_CAPACITY_STATE_IN_USE
     assert capacity_slice.members[0].node.key.resource_id == "node-a"

@@ -23,6 +23,10 @@ def test_resource_user_summary_groups_active_work_and_limits_ordinary_users(jour
     assert users["alice"].task_state_counts == {"running": alice.tasks}
     assert users["idle-user"].job_state_counts == {}
     assert users["idle-user"].task_state_counts == {}
+    assert users["idle-user"].budget_configured
+    assert users["idle-user"].budget_limit == 10_000
+    assert users["idle-user"].max_band == job_pb2.PRIORITY_BAND_INTERACTIVE
+    assert not users["alice"].budget_configured
 
     with identity_scope(VerifiedIdentity(user_id="alice", role="user")):
         restricted = service.list_users(resource_pb2.ListUsersRequest(), None)

@@ -313,6 +313,7 @@ class ControllerDashboard:
         representative = backend_descriptor(self._service.provider)
         return JSONResponse(
             {
+                "cluster_id": self._service.cluster_id,
                 "auth_enabled": self._auth_provider is not None,
                 "provider": self._auth_provider,
                 # Union of every backend's capabilities gates which tabs the dashboard shows.

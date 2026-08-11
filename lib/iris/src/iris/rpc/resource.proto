@@ -439,6 +439,10 @@ message UserSummary {
   map<string, int32> task_state_counts = 2;
   map<string, int32> job_state_counts = 3;
   string role = 4;
+  int64 budget_limit = 5;
+  int64 budget_spent = 6;
+  int32 max_band = 7;
+  bool budget_configured = 8;
 }
 
 message ListUsersRequest {}
@@ -604,7 +608,7 @@ message NodeDetail {
   string address = 2;
   repeated NodeAttribute attributes = 3;
   repeated AttemptSummary recent_attempts = 4;
-  string bootstrap_log_key = 5;
+  string bootstrap_logs = 5;
   repeated ResourceSourceStatus source_statuses = 6;
 }
 
@@ -690,6 +694,12 @@ message CapacityResourceAvailability {
   iris.time.Timestamp observed_at = 2;
   map<string, int64> amounts = 3;
   map<string, int64> total_amounts = 4;
+  repeated CapacityBandAvailability held_by_band = 5;
+}
+
+message CapacityBandAvailability {
+  int32 band = 1;
+  map<string, int64> amounts = 2;
 }
 
 message CapacitySlice {

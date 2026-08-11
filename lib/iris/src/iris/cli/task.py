@@ -10,6 +10,7 @@ from iris.cli.resource_commands import (
     DEFAULT_ACTIVITY_LIMIT,
     DEFAULT_LOG_LINES,
     DEFAULT_RESOURCE_LIST_LIMIT,
+    LOG_LEVEL_NAMES,
     MAX_ACTIVITY_LIMIT,
     MAX_LOG_LINES,
     MAX_RESOURCE_LIST_LIMIT,
@@ -18,6 +19,7 @@ from iris.cli.resource_commands import (
     echo_activity,
     echo_logs,
     echo_source_warnings,
+    log_level,
     resource_key,
     task_state_name,
 )
@@ -122,12 +124,21 @@ def task_activity(ctx: click.Context, task_id: str, limit: int) -> None:
 @click.argument("task_id")
 @click.option("--tail", is_flag=True, help="Continue reading new log entries.")
 @click.option("--max-lines", type=click.IntRange(1, MAX_LOG_LINES), default=DEFAULT_LOG_LINES, show_default=True)
+@click.option("--level", type=click.Choice(LOG_LEVEL_NAMES), default="unknown", show_default=True)
+@click.option("--substring", default="", help="Only return entries containing this text.")
 @click.pass_context
-def task_logs(ctx: click.Context, task_id: str, tail: bool, max_lines: int) -> None:
+def task_logs(
+    ctx: click.Context,
+    task_id: str,
+    tail: bool,
+    max_lines: int,
+    level: str,
+    substring: str,
+) -> None:
     """Read logs for one exact Task incarnation."""
     with resource_client_for_ctx(ctx) as client:
         detail = client.describe_task(resource_key(ctx, ResourceKind.TASK, task_id))
-        query = LogQuery(max_lines=max_lines, tail=tail)
+        query = LogQuery(max_lines=max_lines, tail=tail, minimum_level=log_level(level), substring=substring)
         if tail:
             for entry in client.stream_task_logs(detail.summary.identity, query):
                 echo_logs((entry,))

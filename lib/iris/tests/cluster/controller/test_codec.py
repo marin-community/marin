@@ -14,6 +14,7 @@ import json
 from dataclasses import replace
 from datetime import date
 
+import pytest
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig
 from iris.cluster.constraints import Constraint, ConstraintMode, ConstraintOp
@@ -313,6 +314,18 @@ def test_omitted_gpu_count_defaults_once_across_wires_and_storage(state, mock_co
 
     assert detail.spec.resources.device == GpuDevice(variant="H100", count=1)
     assert reconstructed.resources.device == GpuDevice(variant="H100", count=1)
+
+
+@pytest.mark.parametrize(
+    ("message", "decoder"),
+    [
+        (resource_pb2.DeviceConfig.FromString(b"\x22\x00"), device_from_proto),
+        (job_pb2.DeviceConfig.FromString(b"\x22\x00"), legacy_device_from_proto),
+    ],
+)
+def test_unknown_nonempty_device_is_not_silently_dropped(message, decoder) -> None:
+    with pytest.raises(ValueError, match="device has no selected kind"):
+        decoder(message)
 
 
 def test_resource_spec_with_present_empty_device_decodes_device_less_across_wires() -> None:

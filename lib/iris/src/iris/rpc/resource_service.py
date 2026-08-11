@@ -63,6 +63,7 @@ from iris.resources.slice import (
 from iris.resources.source import Freshness, ResourceSourceStatus, SourceState
 from iris.resources.state import JobState, TaskState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
+from iris.resources.user import UserSummary
 from iris.rpc import iris_logging_pb2, resource_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, FEDERATION_PEER_ROLE, authorize_resource_owner
 from iris.rpc.federation_client import peer_connect_error
@@ -286,7 +287,27 @@ def _capacity_availability_to_proto(value: ResourceAvailability) -> resource_pb2
         observed_at=timestamp_to_proto(value.observed_at),
         amounts=value.amounts,
         total_amounts=value.total_amounts,
+        held_by_band=[
+            resource_pb2.CapacityBandAvailability(band=band, amounts=amounts)
+            for band, amounts in sorted(value.held_by_band.items())
+        ],
     )
+
+
+def _user_summary_to_proto(value: UserSummary) -> resource_pb2.UserSummary:
+    result = resource_pb2.UserSummary(
+        user_id=value.user_id,
+        task_state_counts={task_state_friendly(state): count for state, count in value.task_state_counts},
+        job_state_counts={job_state_friendly(state): count for state, count in value.job_state_counts},
+        role=value.role,
+        budget_spent=value.budget_spent,
+        budget_configured=value.budget_limit is not None,
+    )
+    if value.budget_limit is not None:
+        result.budget_limit = value.budget_limit
+    if value.max_band is not None:
+        result.max_band = value.max_band
+    return result
 
 
 def _capacity_scaling_group_to_proto(value: CapacityScalingGroup) -> resource_pb2.CapacityScalingGroup:
@@ -645,6 +666,8 @@ def _action_principal(resource_id: str) -> str:
     identity = get_verified_identity()
     if identity is None:
         return ANONYMOUS_ADMIN.user_id
+    if identity.role in {"admin", DASHBOARD_ROLE}:
+        return identity.user_id
     return authorize_resource_owner(owner).user_id
 
 
@@ -728,17 +751,7 @@ class ResourceServiceImpl:
         users = self._resources.list_users()
         if owner_id is not None:
             users = tuple(user for user in users if user.user_id == owner_id)
-        return resource_pb2.ListUsersResponse(
-            users=[
-                resource_pb2.UserSummary(
-                    user_id=user.user_id,
-                    task_state_counts={task_state_friendly(state): count for state, count in user.task_state_counts},
-                    job_state_counts={job_state_friendly(state): count for state, count in user.job_state_counts},
-                    role=user.role,
-                )
-                for user in users
-            ]
-        )
+        return resource_pb2.ListUsersResponse(users=[_user_summary_to_proto(user) for user in users])
 
     def describe_job(
         self, request: resource_pb2.DescribeJobRequest, _ctx: RequestContext
@@ -911,7 +924,7 @@ class ResourceServiceImpl:
             address=detail.address or "",
             attributes=[_node_attribute_to_proto(item) for item in detail.attributes],
             recent_attempts=[_attempt_summary_to_proto(item) for item in detail.recent_attempts],
-            bootstrap_log_key=detail.bootstrap_log_key or "",
+            bootstrap_logs=detail.bootstrap_logs or "",
             source_statuses=[_source_status_to_proto(status) for status in detail.source_statuses],
         )
         return resource_pb2.DescribeNodeResponse(node=result)

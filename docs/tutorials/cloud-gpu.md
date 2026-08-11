@@ -85,11 +85,11 @@ cluster-managed `iris-task-env` Kubernetes Secret.
 ## Watch the job
 
 ```bash
-uv run iris --cluster=marin job logs -f /<user>/<job-name>
-uv run iris --cluster=marin job summary /<user>/<job-name>
+uv run iris --cluster=marin job logs --tail /<user>/<job-name>
+uv run iris --cluster=marin job describe /<user>/<job-name>
 ```
 
-Logs are relayed from the CoreWeave peer. `job summary` reads the mirrored job
+Logs are relayed from the CoreWeave peer. `job describe` reads the mirrored job
 state and can be more current than a busy log stream.
 
 After the `dev` run finishes, check

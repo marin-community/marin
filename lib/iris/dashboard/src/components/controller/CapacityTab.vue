@@ -18,7 +18,7 @@ import type {
   ResourceSourceStatus,
   ResourceUserSummary,
 } from '@/types/rpc'
-import { formatRelativeTime, timestampMs } from '@/utils/formatting'
+import { formatBytes, formatRelativeTime, timestampMs } from '@/utils/formatting'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import SourceWarnings from '@/components/shared/SourceWarnings.vue'
@@ -53,6 +53,7 @@ const visibleBackends = computed(() => peerId.value && peerId.value !== LOCAL_CL
 const visiblePeers = computed(() => backendId.value
   ? []
   : peers.value.filter(peer => !peerId.value || (peerId.value !== LOCAL_CLUSTER && peer.peerId === peerId.value)))
+const kubernetesBackends = computed(() => visibleBackends.value.filter(backend => backend.kubernetes))
 
 interface GroupRow {
   key: string
@@ -212,6 +213,17 @@ function peerContact(peer: ResourceCapacityPeer): string {
   return value ? formatRelativeTime(value) : 'never'
 }
 
+function bandName(band: number): string {
+  return ({ 1: 'production', 2: 'interactive', 3: 'batch' } as Record<number, string>)[band] ?? `band ${band}`
+}
+
+function budgetLabel(user: ResourceUserSummary): string {
+  const limit = Number(user.budgetLimit ?? 0)
+  if (!user.budgetConfigured) return `${Number(user.budgetSpent ?? 0)} spent · cluster default`
+  if (limit === 0) return `${Number(user.budgetSpent ?? 0)} spent · unlimited`
+  return `${Number(user.budgetSpent ?? 0)} / ${limit} spent`
+}
+
 function applyFilter() {
   expandedGroups.value = new Set()
 }
@@ -291,6 +303,10 @@ useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
             <span v-for="(total, token) in backend.availability.totalAmounts" :key="token" class="mr-3">
               {{ token }}: {{ backend.availability.amounts?.[token] ?? '0' }} / {{ total }} free
             </span>
+            <div v-for="band in backend.availability.heldByBand ?? []" :key="band.band" class="mt-1">
+              {{ bandName(band.band) }} held:
+              {{ Object.entries(band.amounts ?? {}).map(([token, amount]) => `${amount} ${token}`).join(', ') || 'none' }}
+            </div>
           </div>
           <div v-if="backend.kubernetes" class="mt-3 border-t border-surface-border-subtle pt-3 text-xs text-text-muted">
             {{ backend.kubernetes.schedulableNodes ?? 0 }} / {{ backend.kubernetes.totalNodes ?? 0 }} schedulable nodes
@@ -305,6 +321,49 @@ useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
           <div class="mt-2 text-xs text-text-muted">Federation peer · last contact {{ peerContact(peer) }}</div>
           <div class="mt-3 text-sm">{{ peer.backends?.length ?? 0 }} backend{{ (peer.backends?.length ?? 0) === 1 ? '' : 's' }} · {{ peer.activeFederatedJobs ?? 0 }} active jobs</div>
           <RouterLink :to="{ path: '/', query: { cluster: peer.peerId } }" class="mt-3 inline-block text-sm text-accent hover:underline">View jobs</RouterLink>
+        </div>
+      </div>
+    </section>
+
+    <section v-if="kubernetesBackends.length" class="space-y-4">
+      <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary">Kubernetes Diagnostics</h3>
+      <div v-for="backend in kubernetesBackends" :key="backend.backendId" class="space-y-4 rounded border border-surface-border bg-surface p-4">
+        <div class="flex flex-wrap items-center gap-3 text-sm">
+          <span class="font-semibold">{{ backend.name || backend.backendId }}</span>
+          <span class="font-mono text-xs text-text-muted">{{ backend.kubernetes?.providerVersion || 'provider version unknown' }}</span>
+          <span class="text-text-muted">{{ backend.kubernetes?.allocatableCpu || '—' }} CPU · {{ backend.kubernetes?.allocatableMemory || '—' }} memory allocatable</span>
+        </div>
+
+        <div v-if="backend.kubernetes?.pools?.length" class="overflow-x-auto rounded border border-surface-border-subtle">
+          <table class="w-full text-left text-xs">
+            <thead><tr class="border-b border-surface-border text-text-secondary"><th class="px-3 py-2">Pool</th><th class="px-3 py-2">Instance</th><th class="px-3 py-2">Nodes</th><th class="px-3 py-2">Provisioning</th><th class="px-3 py-2">Capacity / quota</th></tr></thead>
+            <tbody><tr v-for="pool in backend.kubernetes.pools" :key="pool.name" class="border-b border-surface-border-subtle">
+              <td class="px-3 py-2 font-mono">{{ pool.name }}</td><td class="px-3 py-2">{{ pool.instanceType || '—' }}</td>
+              <td class="px-3 py-2">{{ pool.currentNodes ?? 0 }} current / {{ pool.targetNodes ?? 0 }} target</td>
+              <td class="px-3 py-2">{{ pool.queuedNodes ?? 0 }} queued · {{ pool.inProgressNodes ?? 0 }} in progress</td>
+              <td class="px-3 py-2">{{ pool.capacity || '—' }} / {{ pool.quota || '—' }}</td>
+            </tr></tbody>
+          </table>
+        </div>
+
+        <div v-if="backend.kubernetes?.pods?.length" class="overflow-x-auto rounded border border-surface-border-subtle">
+          <table class="w-full text-left text-xs">
+            <thead><tr class="border-b border-surface-border text-text-secondary"><th class="px-3 py-2">Pod / Task</th><th class="px-3 py-2">Phase</th><th class="px-3 py-2">Node</th><th class="px-3 py-2">Diagnostic</th><th class="px-3 py-2">Changed</th></tr></thead>
+            <tbody><tr v-for="pod in backend.kubernetes.pods" :key="pod.podName" class="border-b border-surface-border-subtle">
+              <td class="px-3 py-2"><div class="font-mono">{{ pod.podName }}</div><div class="font-mono text-text-muted">{{ pod.taskId || '—' }}</div></td>
+              <td class="px-3 py-2"><StatusBadge :status="pod.phase || 'unknown'" size="sm" /></td><td class="px-3 py-2 font-mono">{{ pod.nodeName || '—' }}</td>
+              <td class="max-w-xl px-3 py-2"><span class="font-semibold">{{ pod.reason || '—' }}</span><div class="text-text-muted">{{ pod.message }}</div></td>
+              <td class="px-3 py-2 text-text-muted">{{ formatRelativeTime(timestampMs(pod.lastTransition)) }}</td>
+            </tr></tbody>
+          </table>
+        </div>
+
+        <div v-if="backend.kubernetes?.nodes?.length" class="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          <div v-for="node in backend.kubernetes.nodes" :key="node.name" class="rounded border border-surface-border-subtle p-3 text-xs">
+            <div class="flex items-center justify-between gap-2"><span class="font-mono font-semibold">{{ node.name }}</span><StatusBadge :status="node.ready ? (node.schedulable ? 'ready' : 'unschedulable') : 'unavailable'" size="sm" /></div>
+            <div class="mt-2 text-text-muted">{{ node.statusSummary || 'No provider diagnostic' }}</div>
+            <div class="mt-2">{{ node.acceleratorCount ?? 0 }}× {{ node.acceleratorVariant || 'accelerator' }} · {{ formatBytes(Number(node.memoryBytes ?? 0)) }} · {{ node.runningPods ?? 0 }} pods</div>
+          </div>
         </div>
       </div>
     </section>
@@ -395,7 +454,7 @@ useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
       <h3 class="mb-3 text-sm font-semibold uppercase tracking-wider text-text-secondary">Users</h3>
       <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         <RouterLink v-for="user in users" :key="user.userId" :to="{ path: '/', query: { user: user.userId } }" class="flex items-center justify-between rounded border border-surface-border bg-surface px-3 py-2 text-sm hover:border-accent">
-          <span class="font-mono text-accent">{{ user.userId }}</span><span class="text-xs text-text-muted">{{ stateCount(user, 'running') }} running · {{ stateCount(user, 'pending', 'assigned', 'building', 'unschedulable') }} waiting</span>
+          <span class="font-mono text-accent">{{ user.userId }}</span><span class="text-right text-xs text-text-muted">{{ stateCount(user, 'running') }} running · {{ stateCount(user, 'pending', 'assigned', 'building', 'unschedulable') }} waiting<br />{{ budgetLabel(user) }}<span v-if="user.maxBand"> · max {{ bandName(user.maxBand) }}</span></span>
         </RouterLink>
       </div>
     </section>

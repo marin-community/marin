@@ -10,7 +10,7 @@ import click
 from iris.resources.action import ActionReceipt
 from iris.resources.activity import ActivityEntry
 from iris.resources.identity import AttemptLocator, ResourceKey, ResourceKind
-from iris.resources.log import LogEntry
+from iris.resources.log import LogEntry, LogLevel
 from iris.resources.source import ResourceSourceStatus, SourceState
 from iris.resources.state import JobState, TaskState
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
@@ -21,6 +21,7 @@ DEFAULT_ACTIVITY_LIMIT = 200
 MAX_ACTIVITY_LIMIT = 10_000
 DEFAULT_LOG_LINES = 1_000
 MAX_LOG_LINES = 100_000
+LOG_LEVEL_NAMES = tuple(level.name.lower() for level in LogLevel)
 
 
 def cluster_id(ctx: click.Context) -> str:
@@ -46,6 +47,10 @@ def attempt_locator(ctx: click.Context, value: str) -> AttemptLocator:
 
 def action_key(value: str | None) -> str:
     return value or uuid.uuid4().hex
+
+
+def log_level(value: str) -> LogLevel:
+    return LogLevel[value.upper()]
 
 
 def echo_action(receipt: ActionReceipt) -> None:

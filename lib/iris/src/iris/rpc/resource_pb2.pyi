@@ -706,7 +706,7 @@ class ListJobsResponse(_message.Message):
     def __init__(self, jobs: _Optional[_Iterable[_Union[JobSummary, _Mapping]]] = ..., page: _Optional[_Union[PageInfo, _Mapping]] = ...) -> None: ...
 
 class UserSummary(_message.Message):
-    __slots__ = ("user_id", "task_state_counts", "job_state_counts", "role")
+    __slots__ = ("user_id", "task_state_counts", "job_state_counts", "role", "budget_limit", "budget_spent", "max_band", "budget_configured")
     class TaskStateCountsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -725,11 +725,19 @@ class UserSummary(_message.Message):
     TASK_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
     JOB_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
     ROLE_FIELD_NUMBER: _ClassVar[int]
+    BUDGET_LIMIT_FIELD_NUMBER: _ClassVar[int]
+    BUDGET_SPENT_FIELD_NUMBER: _ClassVar[int]
+    MAX_BAND_FIELD_NUMBER: _ClassVar[int]
+    BUDGET_CONFIGURED_FIELD_NUMBER: _ClassVar[int]
     user_id: str
     task_state_counts: _containers.ScalarMap[str, int]
     job_state_counts: _containers.ScalarMap[str, int]
     role: str
-    def __init__(self, user_id: _Optional[str] = ..., task_state_counts: _Optional[_Mapping[str, int]] = ..., job_state_counts: _Optional[_Mapping[str, int]] = ..., role: _Optional[str] = ...) -> None: ...
+    budget_limit: int
+    budget_spent: int
+    max_band: int
+    budget_configured: bool
+    def __init__(self, user_id: _Optional[str] = ..., task_state_counts: _Optional[_Mapping[str, int]] = ..., job_state_counts: _Optional[_Mapping[str, int]] = ..., role: _Optional[str] = ..., budget_limit: _Optional[int] = ..., budget_spent: _Optional[int] = ..., max_band: _Optional[int] = ..., budget_configured: _Optional[bool] = ...) -> None: ...
 
 class ListUsersRequest(_message.Message):
     __slots__ = ()
@@ -998,20 +1006,20 @@ class NodeAttribute(_message.Message):
     def __init__(self, key: _Optional[str] = ..., string_value: _Optional[str] = ..., integer_value: _Optional[int] = ..., float_value: _Optional[float] = ...) -> None: ...
 
 class NodeDetail(_message.Message):
-    __slots__ = ("summary", "address", "attributes", "recent_attempts", "bootstrap_log_key", "source_statuses")
+    __slots__ = ("summary", "address", "attributes", "recent_attempts", "bootstrap_logs", "source_statuses")
     SUMMARY_FIELD_NUMBER: _ClassVar[int]
     ADDRESS_FIELD_NUMBER: _ClassVar[int]
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
     RECENT_ATTEMPTS_FIELD_NUMBER: _ClassVar[int]
-    BOOTSTRAP_LOG_KEY_FIELD_NUMBER: _ClassVar[int]
+    BOOTSTRAP_LOGS_FIELD_NUMBER: _ClassVar[int]
     SOURCE_STATUSES_FIELD_NUMBER: _ClassVar[int]
     summary: NodeSummary
     address: str
     attributes: _containers.RepeatedCompositeFieldContainer[NodeAttribute]
     recent_attempts: _containers.RepeatedCompositeFieldContainer[AttemptSummary]
-    bootstrap_log_key: str
+    bootstrap_logs: str
     source_statuses: _containers.RepeatedCompositeFieldContainer[ResourceSourceStatus]
-    def __init__(self, summary: _Optional[_Union[NodeSummary, _Mapping]] = ..., address: _Optional[str] = ..., attributes: _Optional[_Iterable[_Union[NodeAttribute, _Mapping]]] = ..., recent_attempts: _Optional[_Iterable[_Union[AttemptSummary, _Mapping]]] = ..., bootstrap_log_key: _Optional[str] = ..., source_statuses: _Optional[_Iterable[_Union[ResourceSourceStatus, _Mapping]]] = ...) -> None: ...
+    def __init__(self, summary: _Optional[_Union[NodeSummary, _Mapping]] = ..., address: _Optional[str] = ..., attributes: _Optional[_Iterable[_Union[NodeAttribute, _Mapping]]] = ..., recent_attempts: _Optional[_Iterable[_Union[AttemptSummary, _Mapping]]] = ..., bootstrap_logs: _Optional[str] = ..., source_statuses: _Optional[_Iterable[_Union[ResourceSourceStatus, _Mapping]]] = ...) -> None: ...
 
 class ListNodesRequest(_message.Message):
     __slots__ = ("query",)
@@ -1142,7 +1150,7 @@ class StringValues(_message.Message):
     def __init__(self, values: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class CapacityResourceAvailability(_message.Message):
-    __slots__ = ("version", "observed_at", "amounts", "total_amounts")
+    __slots__ = ("version", "observed_at", "amounts", "total_amounts", "held_by_band")
     class AmountsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -1161,11 +1169,28 @@ class CapacityResourceAvailability(_message.Message):
     OBSERVED_AT_FIELD_NUMBER: _ClassVar[int]
     AMOUNTS_FIELD_NUMBER: _ClassVar[int]
     TOTAL_AMOUNTS_FIELD_NUMBER: _ClassVar[int]
+    HELD_BY_BAND_FIELD_NUMBER: _ClassVar[int]
     version: int
     observed_at: _time_pb2.Timestamp
     amounts: _containers.ScalarMap[str, int]
     total_amounts: _containers.ScalarMap[str, int]
-    def __init__(self, version: _Optional[int] = ..., observed_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., amounts: _Optional[_Mapping[str, int]] = ..., total_amounts: _Optional[_Mapping[str, int]] = ...) -> None: ...
+    held_by_band: _containers.RepeatedCompositeFieldContainer[CapacityBandAvailability]
+    def __init__(self, version: _Optional[int] = ..., observed_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., amounts: _Optional[_Mapping[str, int]] = ..., total_amounts: _Optional[_Mapping[str, int]] = ..., held_by_band: _Optional[_Iterable[_Union[CapacityBandAvailability, _Mapping]]] = ...) -> None: ...
+
+class CapacityBandAvailability(_message.Message):
+    __slots__ = ("band", "amounts")
+    class AmountsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: int
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+    BAND_FIELD_NUMBER: _ClassVar[int]
+    AMOUNTS_FIELD_NUMBER: _ClassVar[int]
+    band: int
+    amounts: _containers.ScalarMap[str, int]
+    def __init__(self, band: _Optional[int] = ..., amounts: _Optional[_Mapping[str, int]] = ...) -> None: ...
 
 class CapacitySlice(_message.Message):
     __slots__ = ("summary", "members")

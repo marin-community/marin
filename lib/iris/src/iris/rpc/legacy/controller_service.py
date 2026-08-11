@@ -600,6 +600,11 @@ class LegacyControllerService:
             )
         )
 
+    @property
+    def cluster_id(self) -> str:
+        """Return the resource authority coordinate exposed by this controller."""
+        return self._controller.cluster_id
+
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get(bundle_id)
 
@@ -857,11 +862,22 @@ class LegacyControllerService:
             job = self._controller.describe_job(detail.summary.job.key)
         except ResourceNotFound as exc:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found") from exc
+        legacy_task = task_detail_to_legacy(detail, local_cluster_id=self._controller.cluster_id)
+        if detail.summary.current_attempt is not None:
+            attempt = self._controller.describe_attempt(
+                AttemptLocator(detail.summary.identity.key, detail.summary.current_attempt.attempt_number)
+            )
+            if attempt.runtime is not None:
+                legacy_task.container_id = attempt.runtime.container_id
+        if detail.summary.current_node is not None:
+            node = detail.summary.current_node
+            backend = self._runtime.backends.get(node.backend_id)
+            if backend is not None and BackendCapability.WORKER_DAEMON in backend.capabilities:
+                worker = self._worker_operations.worker(WorkerId(node.key.resource_id))
+                if worker is not None:
+                    legacy_task.worker_address = str(worker.address or "")
         return controller_pb2.Controller.GetTaskStatusResponse(
-            task=task_detail_to_legacy(
-                detail,
-                local_cluster_id=self._controller.cluster_id,
-            ),
+            task=legacy_task,
             job_resources=resource_spec_to_proto(job.spec.resources),
             root_cause_highlights=detail.root_cause_highlights,
         )

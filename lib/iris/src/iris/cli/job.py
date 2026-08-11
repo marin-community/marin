@@ -25,6 +25,7 @@ from iris.cli.connect import require_controller_url, resource_client_for_ctx
 from iris.cli.resource_commands import (
     DEFAULT_ACTIVITY_LIMIT,
     DEFAULT_LOG_LINES,
+    LOG_LEVEL_NAMES,
     MAX_ACTIVITY_LIMIT,
     MAX_LOG_LINES,
     action_key,
@@ -33,6 +34,7 @@ from iris.cli.resource_commands import (
     echo_logs,
     echo_source_warnings,
     job_state_name,
+    log_level,
     resource_key,
 )
 from iris.client import IrisClient
@@ -63,10 +65,12 @@ from iris.resources.execution import (
     gpu_device,
     tpu_device,
 )
-from iris.resources.identity import ResourceKind
+from iris.resources.identity import JobIdentity, ResourceKind
 from iris.resources.job import ContainerProfile, CoschedulingConfig, JobQuery, PriorityBand
 from iris.resources.log import LogQuery
 from iris.resources.state import JobState
+from iris.resources.task import TaskQuery
+from iris.rpc.resource_client import ResourceRpcClient
 
 logger = logging.getLogger(__name__)
 
@@ -737,14 +741,14 @@ def _submit_and_wait_job(
 
     logger.info(f"Job submitted: {job.job_id}")
     if dashboard_url:
-        logger.info(f"Dashboard: {job.job_id.dashboard_url(dashboard_url)}")
+        logger.info(f"Dashboard: {job.job_id.job_dashboard_url(dashboard_url, job.identity.key.cluster_id)}")
     click.echo(str(job.job_id))
 
     if not wait:
         return 0
 
     logger.info(
-        "Streaming logs (Ctrl+C to stop). If disconnected, reconnect with: iris job logs -f %s",
+        "Streaming logs (Ctrl+C to stop). If disconnected, reconnect with: iris job logs --tail %s",
         job.job_id,
     )
     try:
@@ -762,7 +766,7 @@ def _submit_and_wait_job(
         return 130
     except Exception:
         logger.warning(
-            "Connection lost; job %s is still running. Reconnect with: iris job logs -f %s",
+            "Connection lost; job %s is still running. Reconnect with: iris job logs --tail %s",
             job.job_id,
             job.job_id,
         )
@@ -1103,31 +1107,135 @@ def resource_job_activity(ctx: click.Context, job_id: str, limit: int) -> None:
     echo_source_warnings(page.source_statuses)
 
 
+def _stdin_targets(enabled: bool) -> tuple[str, ...]:
+    if not enabled:
+        return ()
+    return tuple(line.strip() for line in sys.stdin if line.strip())
+
+
+def _cancel_targets(
+    client: ResourceRpcClient,
+    ctx: click.Context,
+    job_ids: tuple[str, ...],
+    prefixes: tuple[str, ...],
+    limit: int,
+) -> tuple[JobIdentity, ...]:
+    targets: dict[str, JobIdentity] = {}
+    for job_id in job_ids:
+        detail = client.describe_job(resource_key(ctx, ResourceKind.JOB, job_id))
+        targets[detail.summary.identity.key.resource_id] = detail.summary.identity
+        if len(targets) > limit:
+            raise click.ClickException(f"Exact IDs matched more than --limit={limit} Jobs")
+    for prefix in dict.fromkeys(prefixes):
+        page_token: str | None = None
+        while True:
+            page = client.list_jobs(
+                JobQuery(
+                    job_id_prefix=prefix,
+                    page_size=min(500, limit + 1 - len(targets)),
+                    page_token=page_token,
+                )
+            )
+            for summary in page.items:
+                targets[summary.identity.key.resource_id] = summary.identity
+            if len(targets) > limit:
+                raise click.ClickException(f"Selection matched more than --limit={limit} Jobs")
+            page_token = page.next_page_token
+            if page_token is None:
+                break
+    return tuple(targets[key] for key in sorted(targets))
+
+
 @job.command("cancel")
-@click.argument("job_id")
+@click.argument("job_ids", nargs=-1)
+@click.option("--stdin", "read_stdin", is_flag=True, help="Read additional exact Job IDs, one per line.")
+@click.option("--prefix", "prefixes", multiple=True, help="Cancel every Job under this bounded ID prefix.")
+@click.option("--limit", type=click.IntRange(1, 10_000), default=1_000, show_default=True)
+@click.option("--dry-run", is_flag=True, help="Resolve and print exact Job incarnations without cancelling them.")
 @click.option("--idempotency-key")
 @click.pass_context
-def resource_cancel_job(ctx: click.Context, job_id: str, idempotency_key: str | None) -> None:
-    """Cancel one exact Job incarnation."""
+def resource_cancel_job(
+    ctx: click.Context,
+    job_ids: tuple[str, ...],
+    read_stdin: bool,
+    prefixes: tuple[str, ...],
+    limit: int,
+    dry_run: bool,
+    idempotency_key: str | None,
+) -> None:
+    """Cancel exact Job incarnations, optionally selected by a bounded prefix."""
+    exact_ids = (*job_ids, *_stdin_targets(read_stdin))
+    if not exact_ids and not prefixes:
+        raise click.UsageError("Provide at least one JOB_ID, --stdin, or --prefix")
     with resource_client_for_ctx(ctx) as client:
-        detail = client.describe_job(resource_key(ctx, ResourceKind.JOB, job_id))
-        receipt = client.cancel_job(
-            detail.summary.identity,
-            idempotency_key=action_key(idempotency_key),
-        )
-    echo_action(receipt)
+        targets = _cancel_targets(client, ctx, exact_ids, prefixes, limit)
+        if not targets:
+            raise click.ClickException("No Jobs matched")
+        if idempotency_key is not None and len(targets) != 1:
+            raise click.UsageError("--idempotency-key requires exactly one resolved Job")
+        for identity in targets:
+            if dry_run:
+                click.echo(f"{identity.key.resource_id}\t{identity.job_uid}")
+                continue
+            receipt = client.cancel_job(identity, idempotency_key=action_key(idempotency_key))
+            echo_action(receipt)
+
+
+@job.command("retry")
+@click.argument("job_ids", nargs=-1, required=True)
+@click.option("--dry-run", is_flag=True, help="Print retryable exact Attempts without preempting them.")
+@click.pass_context
+def resource_retry_jobs(ctx: click.Context, job_ids: tuple[str, ...], dry_run: bool) -> None:
+    """Preempt each current Attempt in the selected Jobs while keeping the Jobs active."""
+    with resource_client_for_ctx(ctx) as client:
+        for job_id in job_ids:
+            job_detail = client.describe_job(resource_key(ctx, ResourceKind.JOB, job_id))
+            query = TaskQuery(job=job_detail.summary.identity.key, page_size=500)
+            while True:
+                page = client.list_tasks(query)
+                for task_summary in page.items:
+                    current = task_summary.current_attempt
+                    if current is None:
+                        continue
+                    if dry_run:
+                        click.echo(
+                            f"{task_summary.identity.key.resource_id}:{current.attempt_number}\t{current.attempt_uid}"
+                        )
+                        continue
+                    receipt = client.retry_task(
+                        task_summary.identity,
+                        expected_attempt_uid=current.attempt_uid,
+                        idempotency_key=action_key(None),
+                    )
+                    echo_action(receipt)
+                if page.next_page_token is None:
+                    break
+                query = TaskQuery(
+                    job=job_detail.summary.identity.key,
+                    page_size=500,
+                    page_token=page.next_page_token,
+                )
 
 
 @job.command("logs")
 @click.argument("job_id")
 @click.option("--tail", is_flag=True, help="Continue reading new log entries.")
 @click.option("--max-lines", type=click.IntRange(1, MAX_LOG_LINES), default=DEFAULT_LOG_LINES, show_default=True)
+@click.option("--level", type=click.Choice(LOG_LEVEL_NAMES), default="unknown", show_default=True)
+@click.option("--substring", default="", help="Only return entries containing this text.")
 @click.pass_context
-def resource_job_logs(ctx: click.Context, job_id: str, tail: bool, max_lines: int) -> None:
+def resource_job_logs(
+    ctx: click.Context,
+    job_id: str,
+    tail: bool,
+    max_lines: int,
+    level: str,
+    substring: str,
+) -> None:
     """Read logs for one exact Job incarnation."""
     with resource_client_for_ctx(ctx) as client:
         detail = client.describe_job(resource_key(ctx, ResourceKind.JOB, job_id))
-        query = LogQuery(max_lines=max_lines, tail=tail)
+        query = LogQuery(max_lines=max_lines, tail=tail, minimum_level=log_level(level), substring=substring)
         if tail:
             for entry in client.stream_job_logs(detail.summary.identity, query):
                 echo_logs((entry,))

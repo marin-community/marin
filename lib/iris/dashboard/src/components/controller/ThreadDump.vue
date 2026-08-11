@@ -1,51 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { controllerRpcCall, workerRpcCall } from '@/composables/useRpc'
+import { controllerRpcCall } from '@/composables/useRpc'
 import PageShell from '@/components/layout/PageShell.vue'
 
 const route = useRoute()
 const router = useRouter()
-
-// Derive the RPC target from route params/path.
-// Backend target conventions (controller-facing):
-//   /system/controller           — the controller process itself
-//   /system/worker/<worker_id>   — a worker process (NOT a task on the worker)
-//   /<user>/<job>/<task_index>   — a user's task attempt
-const taskId = computed(() => (route.params.taskId as string) ?? '')
-const jobId = computed(() => (route.params.jobId as string) ?? '')
-const workerId = computed(() => (route.params.workerId as string) ?? '')
-
-const target = computed(() => {
-  if (route.path.startsWith('/system/controller')) return '/system/controller'
-  if (workerId.value) return `/system/worker/${workerId.value}`
-  return taskId.value
-})
-
-const displayTarget = computed(() => {
-  if (route.path.startsWith('/system/controller')) return 'Controller'
-  if (workerId.value) return `Worker: ${workerId.value}`
-  return taskId.value
-})
-
-// Use controllerRpcCall in controller dashboard, workerRpcCall in worker dashboard.
-// Worker dashboard routes set meta.rpc = 'worker'.
-const rpcCall = computed(() => {
-  return route.meta.rpc === 'worker' ? workerRpcCall : controllerRpcCall
-})
-
-const backTo = computed(() => {
-  if (jobId.value) return `/job/${encodeURIComponent(jobId.value)}`
-  if (workerId.value) return `/worker/${encodeURIComponent(workerId.value)}`
-  return '/'
-})
-
-const backLabel = computed(() => {
-  if (jobId.value) return 'Back'
-  if (workerId.value) return 'Worker'
-  if (route.path.startsWith('/system/controller')) return 'Dashboard'
-  return 'Back'
-})
 
 const threadDump = ref('')
 const loading = ref(false)
@@ -58,20 +18,15 @@ watch(includeLocals, (val) => {
 })
 
 async function fetchThreadDump() {
-  const t = target.value
-  if (!t) {
-    error.value = 'No target provided'
-    return
-  }
   loading.value = true
   error.value = null
   try {
     const body = {
-      target: t,
+      target: '/system/controller',
       durationSeconds: 10,
       profileType: { threads: { locals: includeLocals.value } },
     }
-    const resp = await rpcCall.value<{ profileData?: string; error?: string }>('ProfileTask', body)
+    const resp = await controllerRpcCall<{ profileData?: string; error?: string }>('ProfileTask', body)
     if (resp.error) {
       error.value = resp.error
       return
@@ -91,7 +46,7 @@ onMounted(fetchThreadDump)
 </script>
 
 <template>
-  <PageShell :title="`Thread Dump: ${displayTarget}`" :back-to="backTo" :back-label="backLabel">
+  <PageShell title="Thread Dump: Controller" back-to="/" back-label="Dashboard">
     <!-- Controls -->
     <div class="flex items-center gap-3 -mt-4 mb-4">
       <button

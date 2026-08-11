@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from iris.cluster.controller.persistence.pruning import prune_old_data
 from iris.resources.action import ActionKind, ActionResult, ActionState
-from iris.resources.errors import ResourceReplaced
+from iris.resources.errors import ResourceNotFound, ResourceReplaced
 from iris.rpc import job_pb2
+from rigging.timing import Duration
 
 
 def test_cancel_receipt_survives_restart_and_duplicate_request(journey):
@@ -22,6 +24,27 @@ def test_cancel_receipt_survives_restart_and_duplicate_request(journey):
     assert completed.state is ActionState.SUCCEEDED
     assert completed.result_code is ActionResult.SATISFIED
     assert journey.job(job).summary.state == job_pb2.JOB_STATE_KILLED
+
+
+def test_pruning_a_job_removes_its_action_receipts(journey):
+    job = journey.submit("pruned-action")
+    journey.settle()
+    receipt = journey.cancel_job(journey.job(job).summary.identity, idempotency_key="pruned-action")
+    completed = journey.settle_action(receipt)
+    journey.clock.advance(2 * 86_400)
+
+    result = prune_old_data(
+        journey.database,
+        journey.backends.values(),
+        job_retention=Duration.from_seconds(86_400),
+        worker_retention=Duration.from_seconds(86_400),
+        slice_retention=Duration.from_seconds(86_400),
+        pause_between_s=0,
+    )
+
+    assert result.jobs_deleted == 1
+    with pytest.raises(ResourceNotFound):
+        journey.action_receipt(completed.action_id)
 
 
 def test_retry_receipt_replaces_exact_attempt_and_survives_restart(journey):

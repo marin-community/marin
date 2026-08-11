@@ -351,10 +351,11 @@ Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"
 ### Selecting tasks before an action
 
 `iris query` is admin-only and read-only, so it is the safe surface for finding
-tasks. Resource actions are deliberately exact and do not consume bulk IDs from
-stdin. Inspect each selected Task with `iris task describe`, then use
-`iris task retry TASK_ID`, `iris attempt terminate TASK_ID:ATTEMPT_NUMBER`, or
-`iris job cancel JOB_ID` as appropriate.
+tasks. Task and Attempt actions are deliberately exact: inspect each selected
+Task with `iris task describe`, then use `iris task retry TASK_ID` or
+`iris attempt terminate TASK_ID:ATTEMPT_NUMBER`. Job cancellation can resolve a
+bounded set with repeated IDs, `--stdin`, or `--prefix`; use `--dry-run` to
+inspect the exact Job incarnations before acting.
 
 Canonical joins (the schema doesn't pre-wire these, so keep them here):
 

@@ -495,6 +495,10 @@ export interface ResourceUserSummary {
   taskStateCounts?: Record<string, number>
   jobStateCounts?: Record<string, number>
   role?: string
+  budgetLimit?: string
+  budgetSpent?: string
+  maxBand?: number
+  budgetConfigured?: boolean
 }
 
 export interface ResourceListUsersResponse {
@@ -551,7 +555,7 @@ export interface ResourceNodeDetail {
   address?: string
   attributes?: ResourceNodeAttribute[]
   recentAttempts?: ResourceAttemptSummary[]
-  bootstrapLogKey?: string
+  bootstrapLogs?: string
   sourceStatuses?: ResourceSourceStatus[]
 }
 
@@ -611,6 +615,7 @@ export interface ResourceCapacityAvailability {
   observedAt?: ProtoTimestamp
   amounts?: Record<string, string>
   totalAmounts?: Record<string, string>
+  heldByBand?: Array<{ band: number; amounts?: Record<string, string> }>
 }
 
 export interface ResourceCapacitySlice {
@@ -692,6 +697,32 @@ export interface ResourceCapacityKubernetesPool {
   quota?: string
 }
 
+export interface ResourceCapacityKubernetesPod {
+  podName: string
+  taskId?: string
+  phase?: string
+  reason?: string
+  message?: string
+  lastTransition?: ProtoTimestamp
+  nodeName?: string
+}
+
+export interface ResourceCapacityKubernetesNode {
+  name: string
+  ready?: boolean
+  schedulable?: boolean
+  statusSummary?: string
+  instanceType?: string
+  region?: string
+  acceleratorCount?: number
+  acceleratorVariant?: string
+  cpuMillicores?: string
+  memoryBytes?: string
+  diskBytes?: string
+  runningPods?: number
+  created?: string
+}
+
 export interface ResourceCapacityKubernetesStatus {
   namespace?: string
   totalNodes?: number
@@ -699,7 +730,9 @@ export interface ResourceCapacityKubernetesStatus {
   allocatableCpu?: string
   allocatableMemory?: string
   providerVersion?: string
+  pods?: ResourceCapacityKubernetesPod[]
   pools?: ResourceCapacityKubernetesPool[]
+  nodes?: ResourceCapacityKubernetesNode[]
 }
 
 export interface ResourceCapacityBackend {

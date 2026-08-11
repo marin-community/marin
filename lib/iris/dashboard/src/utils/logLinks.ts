@@ -44,23 +44,18 @@ function trimTrailingPunctuation(match: string): string {
   return match.replace(TRAILING_PUNCTUATION, '')
 }
 
-function jobIdOf(taskId: string): string {
-  const slash = taskId.lastIndexOf('/')
-  return slash > 0 ? taskId.slice(0, slash) : taskId
-}
-
 /** Router target for a task id, optionally pinned to a specific attempt. */
-export function taskAttemptRoute(taskId: string, attemptId?: string | number): string {
-  const base = `/job/${encodeURIComponent(jobIdOf(taskId))}/task/${encodeURIComponent(taskId)}`
+export function taskAttemptRoute(clusterId: string, taskId: string, attemptId?: string | number): string {
+  const base = `/task/${encodeURIComponent(clusterId)}/${encodeURIComponent(taskId)}`
   return attemptId !== undefined && attemptId !== '' ? `${base}?attempt=${attemptId}` : base
 }
 
-function taskTargetFromMatch(match: string): string {
+function taskTargetFromMatch(clusterId: string, match: string): string {
   const colon = match.lastIndexOf(':')
   if (colon > 0) {
-    return taskAttemptRoute(match.slice(0, colon), match.slice(colon + 1))
+    return taskAttemptRoute(clusterId, match.slice(0, colon), match.slice(colon + 1))
   }
-  return taskAttemptRoute(match)
+  return taskAttemptRoute(clusterId, match)
 }
 
 /** Cloud-console browser URL for a `gs://bucket/prefix` path. */
@@ -74,7 +69,7 @@ export function gcsConsoleUrl(uri: string): string {
  * URLs and `gs://` paths link out of the dashboard. Returns a single plain
  * segment when nothing matches.
  */
-export function parseLogLinks(text: string): LogSegment[] {
+export function parseLogLinks(text: string, clusterId?: string): LogSegment[] {
   const segments: LogSegment[] = []
   let last = 0
   for (const m of text.matchAll(TOKEN_RE)) {
@@ -90,9 +85,11 @@ export function parseLogLinks(text: string): LogSegment[] {
     } else if (groups.gcs) {
       segments.push({ text: matched, href: gcsConsoleUrl(matched) })
     } else if (groups.worker) {
-      segments.push({ text: matched, to: `/worker/${groups.worker}` })
+      segments.push({ text: matched, to: `/nodes?contains=${encodeURIComponent(groups.worker)}` })
+    } else if (clusterId) {
+      segments.push({ text: matched, to: taskTargetFromMatch(clusterId, matched) })
     } else {
-      segments.push({ text: matched, to: taskTargetFromMatch(matched) })
+      segments.push({ text: matched })
     }
     last = start + matched.length
   }

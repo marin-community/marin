@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useResourceRpc } from '@/composables/useRpc'
 import type { ResourceKey, ResourceListActivityResponse } from '@/types/rpc'
 import { formatRelativeTime, timestampMs } from '@/utils/formatting'
@@ -12,6 +12,7 @@ const { data, loading, error, refresh } = useResourceRpc<ResourceListActivityRes
 }))
 const entries = computed(() => data.value?.entries ?? [])
 onMounted(refresh)
+watch(() => props.attemptUid, refresh)
 </script>
 
 <template>

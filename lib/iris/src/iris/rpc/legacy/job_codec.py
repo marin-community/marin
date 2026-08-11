@@ -44,7 +44,9 @@ def device_from_proto(value: job_pb2.DeviceConfig) -> Device | None:
         case "tpu":
             return TpuDevice(value.tpu.variant, value.tpu.topology, value.tpu.count)
         case _:
-            return None
+            if value.ByteSize() == 0:
+                return None
+            raise ValueError("device has no selected kind")
 
 
 def gpu_count_from_proto(value: job_pb2.DeviceConfig) -> int:

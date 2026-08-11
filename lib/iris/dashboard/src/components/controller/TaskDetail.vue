@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { resourceRpcCall, useResourceRpc } from '@/composables/useRpc'
+import { resourceRpcCall, useLogServerStatsRpc, useResourceRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type {
   ResourceActionResponse,
   ResourceDescribeAttemptResponse,
+  ResourceDescribeJobResponse,
   ResourceDescribeTaskResponse,
   ResourceEndpointSummary,
   ResourceListEndpointsResponse,
 } from '@/types/rpc'
-import { formatDuration, formatTimestamp, timestampMs } from '@/utils/formatting'
+import { formatBytes, formatDuration, formatTimestamp, timestampMs } from '@/utils/formatting'
+import { decodeArrowIpc } from '@/utils/arrow'
+import { detailSql } from '@/utils/taskStatus'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -20,6 +23,12 @@ import LogViewer from '@/components/shared/LogViewer.vue'
 import EndpointLink from '@/components/shared/EndpointLink.vue'
 import ProfileLink from '@/components/shared/ProfileLink.vue'
 import SourceWarnings from '@/components/shared/SourceWarnings.vue'
+import ActivityTimeline from '@/components/shared/ActivityTimeline.vue'
+import ProfileButtons from '@/components/shared/ProfileButtons.vue'
+import { useAttemptProfileAction } from '@/composables/useProfileAction'
+import ResourceGauge from '@/components/shared/ResourceGauge.vue'
+import Sparkline from '@/components/shared/Sparkline.vue'
+import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 
 const TASK_REFRESH_MS = 10_000
 
@@ -34,6 +43,10 @@ const { data, loading, error, refresh } = useResourceRpc<ResourceDescribeTaskRes
   () => ({ task: key.value }),
 )
 const task = computed(() => data.value?.task)
+const { data: jobData, refresh: refreshJob } = useResourceRpc<ResourceDescribeJobResponse>(
+  'DescribeJob',
+  () => ({ job: task.value?.summary.job.key ?? { ...key.value, kind: 'RESOURCE_KIND_JOB' } }),
+)
 const selectedAttempt = ref<number | undefined>()
 const attemptNumber = computed(() => selectedAttempt.value ?? task.value?.summary.currentAttempt?.attemptNumber)
 const { data: attemptData, error: attemptError, refresh: refreshAttempt } =
@@ -44,13 +57,68 @@ const { data: endpointData, error: endpointError, refresh: refreshEndpoints } =
   useResourceRpc<ResourceListEndpointsResponse>('ListEndpoints', () => ({
     query: { task: key.value, page: { pageSize: 100 } },
   }))
+
+interface QueryResponse { arrowIpc?: string }
+interface UsageRow {
+  cpu_millicores?: number
+  memory_mb?: number
+  memory_peak_mb?: number
+  disk_mb?: number
+}
+interface StatusRow { status_text_detail_md?: string }
+
+function sqlString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+const { data: usageData, error: usageError, refresh: refreshUsage } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({
+    sql: attemptNumber.value === undefined
+      ? 'SELECT cpu_millicores, memory_mb, memory_peak_mb, disk_mb FROM "iris.task" WHERE false'
+      : `SELECT cpu_millicores, memory_mb, memory_peak_mb, disk_mb
+FROM "iris.task"
+WHERE task_id = ${sqlString(props.taskId)} AND attempt_id = ${attemptNumber.value}
+ORDER BY ts DESC
+LIMIT 60`,
+  }),
+)
+const { data: statusData, refresh: refreshStatus } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({ sql: detailSql(props.taskId) }),
+)
 const action = ref<ResourceActionResponse | null>(null)
 const actionError = ref<string | null>(null)
 const acting = ref(false)
 
 const summary = computed(() => task.value?.summary)
 const selected = computed(() => attemptData.value?.attempt)
+const { profiling, profile } = useAttemptProfileAction(
+  resourceRpcCall,
+  () => selected.value?.summary.identity,
+  () => `${props.taskId}:${attemptNumber.value ?? 0}`,
+)
 const endpoints = computed<ResourceEndpointSummary[]>(() => endpointData.value?.endpoints ?? [])
+const usageRows = computed(() => (
+  decodeArrowIpc(usageData.value?.arrowIpc).rows as UsageRow[]
+))
+const latestUsage = computed(() => usageRows.value[0])
+const cpuHistory = computed(() => usageRows.value.map(row => Number(row.cpu_millicores ?? 0) / 1_000).reverse())
+const memoryHistory = computed(() => usageRows.value.map(row => Number(row.memory_mb ?? 0)).reverse())
+const cpuUsed = computed(() => Number(latestUsage.value?.cpu_millicores ?? 0) / 1_000)
+const memoryUsed = computed(() => Number(latestUsage.value?.memory_mb ?? 0) * 1024 * 1024)
+const diskUsed = computed(() => Number(latestUsage.value?.disk_mb ?? 0) * 1024 * 1024)
+const memoryPeak = computed(() => Number(latestUsage.value?.memory_peak_mb ?? 0) * 1024 * 1024)
+const cpuLimit = computed(() => Number(jobData.value?.job?.spec.resources?.cpuMillicores ?? 0) / 1_000)
+const memoryLimit = computed(() => Number(jobData.value?.job?.spec.resources?.memoryBytes ?? 0))
+const diskLimit = computed(() => Number(jobData.value?.job?.spec.resources?.diskBytes ?? 0))
+const cpuGaugeLimit = computed(() => Math.max(cpuLimit.value, cpuUsed.value, 1))
+const memoryGaugeLimit = computed(() => Math.max(memoryLimit.value, memoryPeak.value, memoryUsed.value, 1))
+const diskGaugeLimit = computed(() => Math.max(diskLimit.value, diskUsed.value, 1))
+const detailedStatus = computed(() => {
+  const rows = decodeArrowIpc(statusData.value?.arrowIpc).rows as StatusRow[]
+  return rows[0]?.status_text_detail_md ?? ''
+})
 const backTo = computed(() => task.value
   ? {
       name: 'job-detail',
@@ -89,7 +157,7 @@ function nodeRoute() {
 
 async function refreshPage() {
   await refresh()
-  await refreshEndpoints()
+  await Promise.all([refreshJob(), refreshEndpoints(), refreshUsage(), refreshStatus()])
   if (attemptNumber.value !== undefined) await refreshAttempt()
 }
 
@@ -133,7 +201,7 @@ async function terminateAttempt() {
 
 async function selectAttempt(number: number) {
   selectedAttempt.value = number
-  await refreshAttempt()
+  await Promise.all([refreshAttempt(), refreshUsage()])
 }
 
 onMounted(refreshPage)
@@ -221,6 +289,30 @@ useAutoRefresh(refreshPage, TASK_REFRESH_MS)
         </InfoCard>
       </div>
 
+      <div class="grid gap-4 lg:grid-cols-2">
+        <InfoCard title="Live Resources">
+          <div v-if="latestUsage" class="space-y-4">
+            <div class="flex items-center gap-3">
+              <div class="flex-1"><ResourceGauge label="CPU" :used="cpuUsed" :total="cpuGaugeLimit" unit="cores" /></div>
+              <div class="w-24"><Sparkline :data="cpuHistory" /></div>
+            </div>
+            <div class="flex items-center gap-3">
+              <div class="flex-1"><ResourceGauge label="Memory" :used="memoryUsed" :total="memoryGaugeLimit" unit="bytes" /></div>
+              <div class="w-24"><Sparkline :data="memoryHistory" /></div>
+            </div>
+            <ResourceGauge label="Disk" :used="diskUsed" :total="diskGaugeLimit" unit="bytes" />
+            <div class="text-xs text-text-muted">Peak memory {{ formatBytes(memoryPeak) }}</div>
+          </div>
+          <div v-else-if="usageError" class="text-sm text-status-danger">{{ usageError }}</div>
+          <div v-else class="text-sm text-text-muted">No resource measurements recorded for this attempt.</div>
+        </InfoCard>
+
+        <InfoCard title="Task Status Detail">
+          <MarkdownRenderer v-if="detailedStatus" :content="detailedStatus" />
+          <div v-else class="text-sm text-text-muted">No detailed status reported.</div>
+        </InfoCard>
+      </div>
+
       <InfoCard v-if="endpoints.length || endpointError" title="Endpoints">
         <div v-if="endpointError" class="text-sm text-status-danger">{{ endpointError }}</div>
         <div v-else class="flex flex-wrap gap-3">
@@ -279,11 +371,16 @@ useAutoRefresh(refreshPage, TASK_REFRESH_MS)
         </dl>
         <div v-if="attemptError" class="mt-3 text-status-danger">{{ attemptError }}</div>
         <SourceWarnings :statuses="selected.sourceStatuses" />
+        <div class="mt-4">
+          <ProfileButtons :profiling="profiling" @profile="profile" />
+        </div>
       </section>
+
+      <ActivityTimeline :target="key" :attempt-uid="selected?.summary.identity.attemptUid" />
 
       <section>
         <h3 class="mb-3 text-sm font-semibold uppercase tracking-wider text-text-secondary">Logs</h3>
-        <LogViewer :task-id="taskId" :cluster="logCluster" />
+        <LogViewer :task-id="taskId" :cluster="logCluster" :authority-cluster="clusterId" />
       </section>
       <ProfileLink :source="taskId" />
     </div>

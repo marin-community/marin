@@ -243,7 +243,7 @@ def _job_dict(job: JobDetail) -> dict:
         {
             "state": job_pb2.JobState.Name(job.summary.state),
             "error": job.summary.error_message,
-            "exit_code": 0,
+            "exit_code": job.summary.exit_code or 0,
             "name": job.spec.name,
             "status_message": job.summary.pending_reason,
         },
