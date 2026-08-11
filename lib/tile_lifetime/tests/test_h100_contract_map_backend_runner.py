@@ -308,6 +308,32 @@ def test_runner_ncu_parser_accepts_exact_units_row_only_in_first_position(tmp_pa
 
 
 @pytest.mark.parametrize(
+    "identity",
+    (
+        "ID",
+        "Process ID",
+        "Process Name",
+        "Host Name",
+        "Kernel Name",
+        "Context",
+        "Stream",
+        "Block Size",
+        "Grid Size",
+        "Device",
+        "CC",
+    ),
+)
+def test_runner_ncu_parser_requires_every_units_row_identity_to_be_empty(tmp_path: Path, identity: str) -> None:
+    fieldnames, rows = _read_ncu_csv(_NCU_RAW_FIXTURE)
+    rows[0][identity] = "unexpected-identity"
+    output = tmp_path / "ncu.csv"
+    _write_ncu_rows(output, fieldnames, rows)
+
+    with pytest.raises(ValueError, match="first data row must be the exact units row"):
+        runner.parse_ncu_metrics(output)
+
+
+@pytest.mark.parametrize(
     ("metric", "unit"),
     (
         ("launch__block_size", "thread"),
@@ -366,6 +392,23 @@ def test_runner_ncu_parser_does_not_echo_profiler_rows(tmp_path: Path, missing_i
 
 def test_runner_ncu_parser_bounds_and_decodes_input_before_csv_parsing(tmp_path: Path) -> None:
     output = tmp_path / "ncu.csv"
+
+    fieldnames, rows = _read_ncu_csv(_NCU_RAW_FIXTURE)
+    padding_fields = tuple(f"opaque_padding_{index}" for index in range(9))
+    fieldnames.extend(padding_fields)
+    for field in padding_fields:
+        rows[0][field] = ""
+        rows[1][field] = ""
+    _write_ncu_rows(output, fieldnames, rows)
+    padding = (1 << 20) - output.stat().st_size
+    assert padding > 0
+    quotient, remainder = divmod(padding, len(padding_fields))
+    for index, field in enumerate(padding_fields):
+        rows[1][field] = "x" * (quotient + (index < remainder))
+    _write_ncu_rows(output, fieldnames, rows)
+    assert output.stat().st_size == 1 << 20
+    assert runner.parse_ncu_metrics(output)[0].name == "KernelA"
+
     output.write_bytes(b"\xff")
     with pytest.raises(ValueError, match="valid UTF-8"):
         runner.parse_ncu_metrics(output)
