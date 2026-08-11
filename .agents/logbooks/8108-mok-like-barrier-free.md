@@ -566,3 +566,25 @@ W&B: https://wandb.ai/marin-community/marin_moe/runs/mok-like-ab-mok-like-100-20
   ```
 
 - Acceptance: both tasks and coordinator terminal-successful; 25 finite losses and zero drops on every row; exact 4,800 forward and 4,800 backward handlers per process; forward staging zero; staged backward copy calls/bytes exact; slot one unused with maximum active slots one; zero generation, reuse, trim, or protocol anomalies across both processes. Score profile-free steps 10-24, report total and per-GPU throughput, mean step time, MFU, peak HBM, and weak-scale efficiency against the sealed four-GPU dropless score. Stop on deterministic topology, allocator, numerical, or protocol failure; do not resubmit.
+
+### 2026-08-11 10:45 PT - Two-node gate passes; one-rack gate prepared
+
+- Result: `/dlwh/mok-scale-003-v12-dropless-2node-25-20260811-1030-coord` and its two-task child succeeded without a retry, failure, or preemption. All 25 losses were finite through final loss 6.30623, and every row reported exactly zero dropped assignments.
+- Performance: profile-free steps 10-24 averaged 39,838.317 tokens/s total, 4,979.790 tokens/s/GPU, 13.17164 seconds, and 23.29634% MFU. This is 96.3934% weak-scale efficiency against twice the sealed four-GPU dropless score of 20,664.441 tokens/s. [W&B](https://wandb.ai/marin-community/marin_moe/runs/mok-scale-003-v12-dropless-2node-25-20260811-1030); [XProf](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fmok-scale-003-v12-dropless-2node-25-20260811-1030).
+- Runtime audit: both processes reported exactly 4,800 forward and 4,800 backward handlers. Forward staging was zero. Backward staged copies were exactly 19,200 calls and 7,741,007,462,400 bytes per process. Slot one was unused, maximum active slots was one, and generation, reuse, trim, and protocol anomalies were all zero. Process-zero peak HBM was 172.96-173.30 GiB/GPU; W&B did not retain process-one system telemetry.
+- Decision: promote to one rack. The 16-node request is one hard `nvlink.domain` gang, local EP4/DP16, global batch 1,024, 48 layers, and 25 updates. The same reviewed preset and attempt-zero contract apply. Ideal weak-scale throughput is 330,631.0488 tokens/s; 80% and 70% gates are 264,504.8390 and 231,441.7341 tokens/s.
+- Output identity: artifact `grug/moe-backend-comparison/mok_like/mok-scale-004-v12-dropless-1rack-25-20260811-1045/2026.08.11`; W&B id/name `mok-scale-004-v12-dropless-1rack-25-20260811-1045`, project `marin-community/marin_moe`, group `moe-backend-comparison-1rack`, resume `allow`. `initialize_from` is unset and this metrics gate has no final checkpoint.
+- Exact submission, with the secret value scrubbed:
+
+  ```bash
+  run_id="mok-scale-004-v12-dropless-1rack-25-20260811-1045"
+  .venv/bin/python -c 'import iris.cluster.platforms.k8s.service as service; from iris.cluster.platforms.types import find_free_port; service.find_free_port = lambda start=10000: find_free_port(); from iris.cli.main import main; main()' \
+    --config lib/iris/config/cw-us-east-08a.yaml job run --no-wait --enable-extra-resources \
+    --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 \
+    --job-name "${run_id}-coord" -e WANDB_API_KEY '<redacted>' -e WANDB_PROJECT marin_moe -- \
+    .venv/bin/python -m experiments.grug.moe_hero_ep.launch_mok_like \
+      --run-id "$run_id" --backend mok_like --num-steps 25 --num-nodes 16 \
+      --mok-like-preset promoted_dropless_v12 --version 2026.08.11 --run
+  ```
+
+- Acceptance: all 16 tasks terminal-successful; 25 finite zero-drop rows; exact 4,800 forward/backward handlers and storage-mode staging telemetry per process; slot one unused; zero protocol anomalies across all processes. Score steps 10-24 and require at least 80% weak-scale efficiency before allocating two racks. Stop on deterministic topology, allocator, numerical, or protocol failure; do not resubmit.
