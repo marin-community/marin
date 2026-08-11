@@ -47,3 +47,22 @@ author: Rafal Wojdyla
 - Output root: `s3://marin-us-east-02a/marin/datakit/embed/harrier-fuzzy-duplicates/`.
 - Result: Both Iris submissions succeeded.
 - Next action: Check startup state after 120 seconds, then monitor at a 15-minute cadence.
+
+### 2026-08-11 20:00 UTC - TEI port collisions
+
+- Status: Both roots are running, but the TEI pools are degraded.
+- Evidence: RNO has 74 failed descendants and 25 running descendants. East has repeated `Address already in use` errors.
+- Root cause: All TEI children bind fixed ports 8080 and 18080 on host-networked CoreWeave nodes.
+- Prior record: https://echo.oa.dev/wiki/66 documents the same host-global port failure class.
+- Decision: Request Iris task ports for TEI HTTP and metrics endpoints.
+- Recovery: Validate and push the fix. Then stop both degraded roots and relaunch the same partitions.
+- Output safety: Zephyr skips completed Parquet shards, so a relaunch can reuse valid output.
+
+### 2026-08-11 20:05 UTC - Allocated-port repair validated
+
+- Commit hash: `daa2275a0cb63ca5ffed9fb64d59394d777a31f8`.
+- Change: Fray forwards named port requests to Iris. Harrier TEI uses allocated HTTP and metrics ports.
+- Regression evidence: Both focused tests failed before the repair and passed after it.
+- Validation: Fray has 89 passing tests. Datakit has 248 passing tests and five expected failures.
+- Validation: Pre-commit and Pyrefly passed.
+- Next action: Push the repair, stop both degraded roots, and relaunch both partitions from the new SHA.
