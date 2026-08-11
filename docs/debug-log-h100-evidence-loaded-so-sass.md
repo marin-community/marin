@@ -61,13 +61,17 @@ unexpected names. Evidence construction rehashes both the shared library and
 its loaded-image SASS before producing kernel records. The separate cubin is
 still retained but is not used for loaded-image SASS.
 
-The focused repaired matrix passed 9 tests, and the complete runner module
-passed 49 tests on macOS without CUDA or a GPU. The broader package suite passed
-947 tests with one pre-existing snapshot test deselected because its committed
-checksum list names an ignored raw log absent from the exact checkout. The exact
-remote `.so` was ephemeral and unavailable after task termination. The repair
-proves that order-only differences no longer fail, but it does not prove that
-section order was the only mismatch in the third H100 attempt.
+The focused repaired matrix passed 10 tests, and the complete runner module
+passed 50 tests on macOS without CUDA or a GPU. A compile-boundary regression
+makes fake `cuobjdump` output depend on whether its final input is the loaded
+`.so` or the separately compiled cubin. The correct path passes, and an explicit
+`.so`-to-cubin mutation fails before artifact construction. The broader package
+suite passed 947 tests with one pre-existing snapshot test deselected because
+its committed checksum list names an ignored raw log absent from the exact
+checkout. The exact remote `.so` was ephemeral and unavailable after task
+termination. The repair proves that order-only differences no longer fail, but
+it does not prove that section order was the only mismatch in the third H100
+attempt.
 
 ## Future work
 

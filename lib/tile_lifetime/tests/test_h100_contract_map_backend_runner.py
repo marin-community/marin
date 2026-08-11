@@ -16,6 +16,9 @@ from typing import Any
 
 import pytest
 
+import tile_lifetime.contract_map_backend_resources as resources
+import tile_lifetime.cuda_toolchain as cuda_toolchain
+from tile_lifetime.contract_map_backend_resources import ContractMapCompilePlan, PtxasKernelResources
 from tile_lifetime.h100_contract_map_benchmark import (
     ArchitectureStatus,
     BackendVariant,
@@ -583,6 +586,90 @@ def test_generated_kernel_identity_is_exact_and_sass_binds_loaded_shared_object(
     lookalike = (_ncu_metric("generated_first_suffix"), metrics[1])
     with pytest.raises(ValueError, match="exactly once"):
         runner.generated_kernel_records(candidate, artifact, lookalike)
+
+
+def test_generated_compile_disassembles_authoritative_loaded_shared_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _runner_config(tmp_path)
+    kernel_name = "generated_kernel"
+    generated = SimpleNamespace(
+        source='extern "C" __global__ void generated_kernel() {}',
+        kernel_names=(kernel_name,),
+        physical_digest="a" * 64,
+    )
+    candidate = SimpleNamespace(
+        case=SimpleNamespace(case_id="case"),
+        backend=SimpleNamespace(value="shuttle_fast"),
+        generated=generated,
+    )
+    training = SimpleNamespace(generated_contract_map_candidates=lambda: (candidate,))
+    original_import_module = runner.importlib.import_module
+
+    def import_module(name: str) -> Any:
+        if name == "lib.tile_lifetime.benchmarks.h100_contract_map_backend_training":
+            return training
+        return original_import_module(name)
+
+    monkeypatch.setattr(runner.importlib, "import_module", import_module)
+
+    def compile_plan(
+        generated: Any, *, artifact_directory: Path, nvcc: Path, include_directory: Path
+    ) -> ContractMapCompilePlan:
+        del generated, nvcc, include_directory
+        source = artifact_directory / "candidate.cu"
+        shared = artifact_directory / "candidate.so"
+        ptx = artifact_directory / "candidate.ptx"
+        cubin = artifact_directory / "candidate.cubin"
+        cubin_sass = artifact_directory / "candidate.sass"
+        return ContractMapCompilePlan(
+            source_path=source,
+            shared_library_path=shared,
+            ptx_path=ptx,
+            cubin_path=cubin,
+            sass_path=cubin_sass,
+            shared_library_command=("nvcc", str(source), "-o", str(shared)),
+            ptx_command=("nvcc", str(source), "-o", str(ptx)),
+            cubin_command=("nvcc", str(source), "-o", str(cubin)),
+            sass_command=(str(config.tools.cuobjdump), "--dump-sass", str(cubin)),
+        )
+
+    monkeypatch.setattr(resources, "contract_map_compile_plan", compile_plan)
+    monkeypatch.setattr(
+        resources,
+        "parse_ptxas_kernel_resources",
+        lambda output, *, expected_kernel_names: (
+            PtxasKernelResources(
+                kernel_name=expected_kernel_names[0],
+                registers_per_thread=32,
+                spill_load_bytes=0,
+                spill_store_bytes=0,
+                stack_frame_bytes=0,
+                static_shared_bytes=0,
+            ),
+        ),
+    )
+    monkeypatch.setattr(cuda_toolchain, "cuda_toolkit_link_flags", lambda nvcc, *, runtime_search_path: ())
+    monkeypatch.setattr(cuda_toolchain, "cuda_toolkit_shared_library_link_flags", lambda nvcc, names: ())
+
+    disassembled_paths: list[Path] = []
+
+    def run_retained(command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+        if len(command) == 3 and command[1] == "--dump-sass":
+            target = Path(command[2])
+            disassembled_paths.append(target)
+            name = kernel_name if target.suffix == ".so" else "separate_cubin_kernel"
+            return subprocess.CompletedProcess(command, 0, f"Function : {name}\n/*0000*/ EXIT ;\n", "")
+        output = Path(command[-1])
+        output.write_bytes(f"compiled:{output.suffix}".encode())
+        return subprocess.CompletedProcess(command, 0, "ptxas output", "")
+
+    monkeypatch.setattr(runner, "_run_retained", run_retained)
+
+    (artifact,) = runner.compile_generated_candidates(config)
+
+    assert disassembled_paths == [Path(artifact.cubin_path), Path(artifact.shared_library_path)]
+    assert Path(artifact.loaded_image_sass_path).read_text() == f"Function : {kernel_name}\n/*0000*/ EXIT ;\n"
 
 
 @pytest.mark.parametrize(
