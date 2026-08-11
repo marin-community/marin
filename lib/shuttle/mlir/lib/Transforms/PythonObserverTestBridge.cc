@@ -60,7 +60,10 @@ void registerShuttleObserverTestBindings(nb::module_ &module) {
              nb::gil_scoped_release release;
              capture.close();
              return false;
-           });
+           },
+           nb::arg("exception_type").none(),
+           nb::arg("exception_value").none(),
+           nb::arg("traceback").none());
   bridge.def("subscribe", &subscribeShuttleObserverForTesting);
 }
 

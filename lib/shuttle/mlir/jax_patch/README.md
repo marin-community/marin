@@ -61,8 +61,9 @@ The expected output is one `jaxlib-0.10.1-cp312-*.whl`. Install that wheel,
 the matching JAX 0.10.1 source, and `lib/shuttle` into an isolated environment,
 then run `shuttle_jaxlib_acceptance.py` with an empty `--work-directory` and a
 `--report` path. The checked-in driver owns the two fresh persistent-cache
-workers and the separate cache-disabled concurrency/lifetime worker; the Iris
-runner must not replace those semantics with inline Python.
+workers, the cache-disabled concurrency/lifetime worker, and a cache-disabled
+context-manager worker that exercises normal and exceptional native capture
+teardown. The Iris runner must not replace those semantics with inline Python.
 
 Before building, run the pinned fixture-contract regression suite explicitly:
 

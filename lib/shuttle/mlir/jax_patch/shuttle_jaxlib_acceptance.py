@@ -37,7 +37,7 @@ from shuttle import Materialization, Numerics, Tuning, compiler_options
 JAX_VERSION = "0.10.1"
 JAXLIB_VERSION = "0.10.1"
 CACHE_HIT_EVENT = "/jax/compilation_cache/cache_hits"
-WORKER_MODES = ("baseline", "concurrency", "populate", "reuse")
+WORKER_MODES = ("baseline", "context_manager", "concurrency", "populate", "reuse")
 
 
 @dataclass(frozen=True)
@@ -58,6 +58,10 @@ class CacheHitCounter:
         del metadata
         if event == CACHE_HIT_EVENT:
             self.count += 1
+
+
+class ContextManagerProbe(Exception):
+    pass
 
 
 def tuning() -> Tuning:
@@ -287,6 +291,75 @@ def run_concurrency_worker(baseline_path: Path) -> dict[str, Any]:
     }
 
 
+def compile_after_close(numerics: Numerics, shapes: Sequence[tuple[int, ...]]) -> None:
+    arguments = fixed_inputs(shapes)
+    compiled = jax.jit(
+        reference_function,
+        compiler_options=compiler_options(numerics=numerics, tuning=tuning()),
+    )
+    ready(compiled(*arguments))
+
+
+def run_context_manager_worker(baseline_path: Path) -> dict[str, Any]:
+    configure_cache(None)
+    wrappers = make_wrappers(baseline_path)
+    bridge = bridge_module()
+
+    normal_capture = bridge.subscribe()
+    if not isinstance(normal_capture, bridge.Capture):
+        raise AssertionError("subscribe did not return the private native Capture binding")
+    with normal_capture as entered:
+        if entered is not normal_capture:
+            raise AssertionError("Capture.__enter__ did not return the same native object")
+        _, normal_output = compile_wrapper(wrappers[0])
+    normal_events = decoded_events(normal_capture)
+    normal_evidence = validate_event_group(
+        normal_events,
+        wrappers[0].numerics,
+        wrappers[0].fixture,
+    )
+    compile_after_close(Numerics.SOURCE_ORDERED, ((3, 2), (2, 6), (6, 4)))
+    if decoded_events(normal_capture) != normal_events:
+        raise AssertionError("normal context exit did not close the native capture")
+
+    exceptional_capture = bridge.subscribe()
+    if not isinstance(exceptional_capture, bridge.Capture):
+        raise AssertionError("subscribe did not return the private native Capture binding")
+    try:
+        with exceptional_capture as entered:
+            if entered is not exceptional_capture:
+                raise AssertionError("Capture.__enter__ did not return the same native object")
+            _, exceptional_output = compile_wrapper(wrappers[1])
+            raise ContextManagerProbe("probe exceptional context exit")
+    except ContextManagerProbe:
+        pass
+    else:
+        raise AssertionError("Capture.__exit__ suppressed the probe exception")
+    exceptional_events = decoded_events(exceptional_capture)
+    exceptional_evidence = validate_event_group(
+        exceptional_events,
+        wrappers[1].numerics,
+        wrappers[1].fixture,
+    )
+    compile_after_close(Numerics.FAST, ((4, 3), (3, 2), (2, 7)))
+    if decoded_events(exceptional_capture) != exceptional_events:
+        raise AssertionError("exceptional context exit did not close the native capture")
+
+    return {
+        "normal": {
+            "invocation": normal_evidence,
+            "output": normal_output,
+            "records_retained_after_close": True,
+        },
+        "exceptional": {
+            "invocation": exceptional_evidence,
+            "output": exceptional_output,
+            "exception_propagated": True,
+            "records_retained_after_close": True,
+        },
+    }
+
+
 def run_cache_worker(
     mode: str,
     cache_directory: Path,
@@ -377,6 +450,8 @@ def run_worker(arguments: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError(f"acceptance requires JAX/jaxlib {JAX_VERSION}; found {jax.__version__}/{jaxlib.__version__}")
     if arguments.worker == "baseline":
         return save_baselines(arguments.baseline)
+    if arguments.worker == "context_manager":
+        return run_context_manager_worker(arguments.baseline)
     if arguments.worker == "concurrency":
         return run_concurrency_worker(arguments.baseline)
     return run_cache_worker(
