@@ -4,6 +4,7 @@
 """Tests for the local affected-test runner."""
 
 import subprocess
+import sys
 from pathlib import Path
 
 from infra.ci.run_tests import PytestInvocation, local_invocations, worktree_diff
@@ -13,6 +14,18 @@ from infra.ci.select_tests import MatrixLeg, SelectionResult
 def _git(repo: Path, *args: str) -> str:
     result = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=True)
     return result.stdout.strip()
+
+
+def test_direct_script_entrypoint_resolves_workspace_imports() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+
+    subprocess.run(
+        [sys.executable, "infra/ci/run_tests.py", "--base-ref", "HEAD", "--dry-run"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
 
 
 def test_worktree_diff_includes_branch_local_and_untracked_changes(tmp_path: Path) -> None:

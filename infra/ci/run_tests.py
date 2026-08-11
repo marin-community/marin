@@ -20,6 +20,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from infra.ci.select_tests import RUST_SETUP_TAG, SelectionResult, select_changed_tests
 
 DEFAULT_BASE_REFS: tuple[str, ...] = ("origin/HEAD", "origin/main", "main")
