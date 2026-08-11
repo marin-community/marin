@@ -31,7 +31,7 @@ import time
 from collections.abc import Callable, Generator
 
 import fsspec
-from huggingface_hub import hf_hub_download, list_repo_files
+from huggingface_hub import hf_hub_download, list_repo_files, model_info
 from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, DistributedLease, LeaseLostError, create_lock
 from rigging.filesystem import marin_temp_bucket, url_to_fs
 
@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_COMPLETE_MARKER = ".cache_complete"
 """Marker written last after a full upload; its presence is the cache-hit signal."""
+
+HF_REVISION_FILENAME = ".cache_hf_revision"
+"""Cache-owned sidecar containing the Hugging Face commit used for the snapshot."""
 
 _LOCK_SUFFIX = ".lock"
 # How often losers re-check the completion marker while the winner populates.
@@ -124,12 +127,15 @@ def cache_hf_model(
 
     The easy path over :func:`cache_to_prefix`: streams the repo into the cache
     one file at a time (see :func:`_stream_hf_snapshot`), so the snapshot never
-    has to fit on local disk. Returns ``cache_path``.
+    has to fit on local disk. The caller chooses ``cache_path``; use
+    :func:`resolve_cached_model_path` when a branch or tag must be resolved and
+    included in the cache identity. Returns ``cache_path``.
 
     Args:
         cache_path: Destination prefix for the mirrored snapshot.
         model_id: HuggingFace repo id, e.g. ``Qwen/Qwen3-0.6B``.
-        revision: Optional git revision (branch, tag, or commit) to mirror.
+        revision: Optional git revision (branch, tag, or commit) to mirror and record in
+            :data:`HF_REVISION_FILENAME`.
         complete_marker: Filename written last to mark the cache complete.
         poll_interval: Seconds a blocked worker waits between marker re-checks.
     """
@@ -150,12 +156,11 @@ def resolve_cached_model_path(
 ) -> str:
     """Resolve *model* to a path to load it from, mirroring a HuggingFace repo to a TTL cache.
 
-    A bare HuggingFace repo id (optionally ``org/model@revision``) is mirrored once to a
-    region-local TTL bucket under a distributed lock and the cache path is returned, so later
-    loads of the same model read the snapshot from nearby storage instead of re-downloading
-    from HuggingFace. Object-store and local paths already name a loadable snapshot and are
-    returned unchanged, as is *model* when ``cache_ttl_days`` is non-positive (mirroring
-    disabled).
+    A bare HuggingFace repo id (optionally ``org/model@revision``) is resolved to an immutable
+    commit, then mirrored once to a region-local TTL bucket under a distributed lock. The commit
+    is part of the cache identity, so a branch or tag update produces a new snapshot. Object-store
+    and local paths already name a loadable snapshot and are returned unchanged, as is *model*
+    when ``cache_ttl_days`` is non-positive (mirroring disabled).
 
     Args:
         model: HuggingFace repo id (``org/model`` or ``org/model@revision``), or an
@@ -175,8 +180,14 @@ def resolve_cached_model_path(
     if cache_ttl_days <= 0 or not _is_hf_model_id(repo):
         return model
 
-    cache_path = marin_temp_bucket(cache_ttl_days, f"{cache_prefix}/{_cache_slug(model)}")
-    return cache_hf_model(cache_path, repo, revision=revision or None, complete_marker=complete_marker)
+    requested_revision = revision or None
+    resolved_revision = model_info(repo, revision=requested_revision).sha
+    if resolved_revision is None:
+        raise ValueError(f"Hugging Face did not return a commit SHA for {model!r}")
+
+    resolved_model = f"{repo}@{resolved_revision}"
+    cache_path = marin_temp_bucket(cache_ttl_days, f"{cache_prefix}/{_cache_slug(resolved_model)}")
+    return cache_hf_model(cache_path, repo, revision=resolved_revision, complete_marker=complete_marker)
 
 
 def _cache_slug(model: str) -> str:
@@ -211,6 +222,9 @@ def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str,
             fs.makedirs(remote_path.rsplit("/", 1)[0], exist_ok=True)
             fs.put_file(local_path, remote_path)
             os.remove(local_path)
+    if revision is not None:
+        with fs.open(f"{dest}/{HF_REVISION_FILENAME}", "w") as handle:
+            handle.write(revision)
 
 
 def _populate(fs: fsspec.AbstractFileSystem, cache_path: str, marker: str, populate: Populate) -> None:

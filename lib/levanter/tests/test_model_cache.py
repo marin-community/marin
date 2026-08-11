@@ -7,6 +7,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import fsspec
 
@@ -15,6 +16,7 @@ import pytest
 import levanter.model_cache as model_cache
 from levanter.model_cache import (
     DEFAULT_COMPLETE_MARKER,
+    HF_REVISION_FILENAME,
     cache_hf_model,
     cache_to_prefix,
     resolve_cached_model_path,
@@ -148,8 +150,17 @@ def test_resolve_keeps_distinct_refs_in_distinct_cache_dirs(monkeypatch):
     """Two refs that a lossy slug would collide (``org/model_a`` vs ``org/model@a``) must mirror
     to different cache dirs, so a hit on one never loads the other's snapshot."""
     mirrored: dict[str, tuple[str, str | None]] = {}
+    revisions = {
+        ("org/model_a", None): "a" * 40,
+        ("org/model", "a"): "b" * 40,
+    }
 
     monkeypatch.setattr(model_cache, "marin_temp_bucket", lambda ttl_days, prefix: f"gs://temp/{prefix}")
+    monkeypatch.setattr(
+        model_cache,
+        "model_info",
+        lambda model_id, *, revision=None: SimpleNamespace(sha=revisions[(model_id, revision)]),
+    )
 
     def fake_cache(cache_path, repo, *, revision=None, complete_marker):
         mirrored[cache_path] = (repo, revision)
@@ -161,5 +172,44 @@ def test_resolve_keeps_distinct_refs_in_distinct_cache_dirs(monkeypatch):
     b = resolve_cached_model_path("org/model@a", cache_ttl_days=7, cache_prefix="models")
 
     assert a != b
-    assert mirrored[a] == ("org/model_a", None)
-    assert mirrored[b] == ("org/model", "a")
+    assert mirrored[a] == ("org/model_a", revisions[("org/model_a", None)])
+    assert mirrored[b] == ("org/model", revisions[("org/model", "a")])
+
+
+def test_resolve_tracks_mutable_hf_revision(tmp_path, monkeypatch):
+    """A branch update produces a new cache snapshot pinned to the new commit."""
+    first_commit = "a" * 40
+    second_commit = "b" * 40
+    current_commit = first_commit
+    repo_files = ["config.json", "generation_config.json", "tokenizer_config.json"]
+
+    def fake_model_info(model_id, *, revision=None):
+        assert model_id == "org/model"
+        assert revision is None
+        return SimpleNamespace(sha=current_commit)
+
+    def fake_list_repo_files(model_id, revision=None):
+        assert model_id == "org/model"
+        return repo_files
+
+    def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
+        assert model_id == "org/model"
+        local_path = Path(local_dir, filename)
+        local_path.write_text(revision or "unpinned")
+        return str(local_path)
+
+    monkeypatch.setattr(model_cache, "model_info", fake_model_info)
+    monkeypatch.setattr(model_cache, "list_repo_files", fake_list_repo_files)
+    monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
+    monkeypatch.setattr(model_cache, "marin_temp_bucket", lambda ttl_days, prefix: str(tmp_path / prefix))
+
+    first_path = resolve_cached_model_path("org/model", cache_ttl_days=7, cache_prefix="models")
+    current_commit = second_commit
+    second_path = resolve_cached_model_path("org/model", cache_ttl_days=7, cache_prefix="models")
+
+    assert first_path != second_path
+    assert Path(first_path, HF_REVISION_FILENAME).read_text() == first_commit
+    assert Path(second_path, HF_REVISION_FILENAME).read_text() == second_commit
+    for filename in repo_files:
+        assert Path(first_path, filename).read_text() == first_commit
+        assert Path(second_path, filename).read_text() == second_commit
