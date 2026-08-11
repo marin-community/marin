@@ -929,7 +929,19 @@ def test_runner_ncu_sass_fixed_columns_public_words_reject_attached_lookalikes()
     assert isinstance(fixed_columns, dict)
     assert fixed_columns["columns"][0][-2:] == [False, False]
     assert fixed_columns["columns"][1][-2:] == [False, False]
+    assert fixed_columns["columns"][1][1] == 8
     assert fixed_columns["columns"][1][3] == 2
+
+
+def test_runner_ncu_sass_fixed_columns_trim_ascii_space_on_both_sides() -> None:
+    record = _ncu_sass_fixed_column_row(("  alpha  ", "", "", "", "", ""))
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(_ncu_sass_export((_NCU_KERNEL_A, (record,))), (_NCU_KERNEL_A,))
+
+    fixed_columns = _ncu_sass_structure(failure.value)["fixed_columns"]
+    assert isinstance(fixed_columns, dict)
+    assert fixed_columns["columns"][0][1:5] == [5, [0, 0, 5, 0, 0, 0], 0, 1]
 
 
 def test_runner_ncu_sass_fixed_columns_use_the_reviewed_byte_boundaries() -> None:
