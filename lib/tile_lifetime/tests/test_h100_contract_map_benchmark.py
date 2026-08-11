@@ -638,12 +638,42 @@ def test_real_algebra_uses_each_predeclared_output_floor(role: str, limit: float
     assert f"limit={limit}" in str(error.value)
 
 
-def test_source_ordered_ulp_metrics_remain_hard_acceptance_gates() -> None:
+@pytest.mark.parametrize(
+    ("field", "value", "maximum"),
+    (("maximum_ulp_distance", 2, 2), ("mean_ulp_distance", 0.06, 1)),
+)
+def test_source_ordered_ulp_metrics_remain_hard_acceptance_gates(field: str, value: float, maximum: int) -> None:
     payload = _complete_result_evidence()
     payload["identity"]["backend"] = BackendVariant.SHUTTLE_SOURCE_ORDERED.value
-    payload["numerical"]["outputs"]["forward"]["maximum_ulp_distance"] = 2
+    output = payload["numerical"]["outputs"]["forward"]
+    output["maximum_ulp_distance"] = maximum
+    output[field] = value
 
-    with pytest.raises(ValueError, match="metric=maximum_ulp_distance"):
+    with pytest.raises(ValueError, match=rf"metric={field}"):
+        validate_result_evidence(payload)
+
+
+def test_real_algebra_repeat_ulp_is_diagnostic_when_absolute_drift_passes() -> None:
+    payload = _complete_result_evidence()
+    drift = payload["numerical"]["outputs"]["forward"]["pairwise_drift"][0]
+    drift["maximum_ulp_distance"] = 30000
+    drift["mean_ulp_distance"] = 20.0
+
+    validate_result_evidence(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "maximum"),
+    (("maximum_ulp_distance", 1, 1), ("mean_ulp_distance", 0.01, 1)),
+)
+def test_source_ordered_repeat_ulp_remains_a_hard_gate(field: str, value: float, maximum: int) -> None:
+    payload = _complete_result_evidence()
+    payload["identity"]["backend"] = BackendVariant.SHUTTLE_SOURCE_ORDERED.value
+    drift = payload["numerical"]["outputs"]["forward"]["pairwise_drift"][0]
+    drift["maximum_ulp_distance"] = maximum
+    drift[field] = value
+
+    with pytest.raises(ValueError, match=rf"pairwise_drift\[0:1\].{field}"):
         validate_result_evidence(payload)
 
 

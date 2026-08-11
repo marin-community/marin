@@ -25,15 +25,18 @@ from tile_lifetime.contract_map_backend_resources import ContractMapCompilePlan,
 from tile_lifetime.h100_contract_map_benchmark import (
     ArchitectureStatus,
     BackendVariant,
+    MeasurementBoundary,
     default_h100_contract_map_benchmark_plan,
+    validate_backend_numerical_evidence,
 )
 
 runner = importlib.import_module("lib.tile_lifetime.benchmarks.h100_contract_map_backend_runner")
 
 
 def test_output_numerical_evidence_counts_nonfinite_positions_once_and_keeps_finite_metrics() -> None:
-    observed = np.asarray([1.0, np.inf], dtype=bfloat16)
-    repeats = ((observed,), (observed,), (observed,))
+    nonfinite = np.asarray([1.0, np.inf], dtype=bfloat16)
+    finite = np.asarray([1.0, 2.0], dtype=bfloat16)
+    repeats = ((nonfinite,), (finite,), (finite,))
 
     evidence = runner._output_numerical_evidence(0, repeats, np.asarray([1.0, 2.0], dtype=np.float64))
 
@@ -49,6 +52,41 @@ def test_output_numerical_evidence_rejects_shape_mismatch_before_broadcasting() 
 
     with pytest.raises(ValueError, match="identical shapes"):
         runner._output_numerical_evidence(0, repeats, np.zeros((1, 2), dtype=np.float64))
+
+
+@pytest.mark.parametrize("bad_repeat", (1, 2))
+@pytest.mark.parametrize("bad_value", (np.nan, np.inf))
+def test_output_numerical_evidence_counts_nonfinite_values_in_every_repeat(bad_repeat: int, bad_value: float) -> None:
+    finite = np.asarray([1.0, 2.0], dtype=bfloat16)
+    nonfinite = np.asarray([1.0, bad_value], dtype=bfloat16)
+    repeats = [finite.copy() for _ in range(3)]
+    repeats[bad_repeat] = nonfinite
+
+    evidence = runner._output_numerical_evidence(
+        0, tuple((repeat,) for repeat in repeats), np.asarray([1.0, 2.0], dtype=np.float64)
+    )
+
+    assert evidence["nonfinite_values"] == 1
+    outputs = {role: evidence for role in ("forward", "dx", "dw0", "dw1")}
+    case = default_h100_contract_map_benchmark_plan().cases[0]
+    with pytest.raises(ValueError, match="metric=nonfinite_values"):
+        validate_backend_numerical_evidence(
+            BackendVariant.ORDINARY_XLA,
+            outputs,
+            case_id=case.case_id,
+            measurement_boundary=MeasurementBoundary.LOGICAL_TRAINING_STEP,
+        )
+
+
+@pytest.mark.parametrize("bad_repeat", (1, 2))
+def test_output_numerical_evidence_rejects_non_bfloat16_later_repeat(bad_repeat: int) -> None:
+    repeats = [np.asarray([1.0, 2.0], dtype=bfloat16) for _ in range(3)]
+    repeats[bad_repeat] = np.asarray([1.0, 2.0], dtype=np.float32)
+
+    with pytest.raises(TypeError, match=rf"repeat {bad_repeat} must have BF16 dtype"):
+        runner._output_numerical_evidence(
+            0, tuple((repeat,) for repeat in repeats), np.asarray([1.0, 2.0], dtype=np.float64)
+        )
 
 
 def _ncu_sass_export(*sections: tuple[str, tuple[str, ...]]) -> str:

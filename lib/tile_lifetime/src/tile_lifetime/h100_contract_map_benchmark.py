@@ -958,8 +958,8 @@ def _validate_numerical_output(
             )
             repeat_mean_ulp_limit = 0.0 if floor.repeatability is RepeatabilityMode.BITWISE else floor.mean_ulp_distance
             for field, value, limit in (
-                ("maximum_ulp_distance", drift.maximum_ulp_distance, repeat_maximum_ulp_limit),
                 ("mean_ulp_distance", drift.mean_ulp_distance, repeat_mean_ulp_limit),
+                ("maximum_ulp_distance", drift.maximum_ulp_distance, repeat_maximum_ulp_limit),
             ):
                 if value > limit:
                     raise _numerical_floor_error(
