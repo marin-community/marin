@@ -121,6 +121,11 @@ class Glm52LaunchConfig:
     server: ServerConfig
     fleet: GpuFleet = H100_FLEET
     object_store_endpoint: str | None = None
+    # The serving gang's scheduling band. Batch by default — a long-lived server
+    # should yield to interactive work — but a campaign whose driver runs at
+    # interactive priority raises its server to match, so a queued gang does not
+    # stall a driver that already holds its slot.
+    priority_band: int = job_pb2.PRIORITY_BAND_BATCH
 
 
 def _ray_worker_port_args(*excluded_ports: int) -> list[str]:
@@ -390,7 +395,7 @@ def submit_glm52(ctx, launch: Glm52LaunchConfig):
         replicas=fleet.replicas,
         timeout=Duration.from_hours(RUN_TIMEOUT_HOURS),
         max_retries_failure=0,
-        priority_band=job_pb2.PRIORITY_BAND_BATCH,
+        priority_band=launch.priority_band,
     )
 
 

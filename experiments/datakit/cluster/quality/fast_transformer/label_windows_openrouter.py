@@ -25,7 +25,7 @@ import os
 import random
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -193,17 +193,28 @@ def _labeled_keys(chunk_dir: str) -> set[str]:
     return done
 
 
+def consolidate_chunks(chunk_dir: str) -> pa.Table:
+    """One table from every checkpoint chunk written so far."""
+    tables = []
+    for path in StoragePath(f"{chunk_dir}/*.parquet").glob():
+        with StoragePath(str(path)).open("rb") as fh:
+            tables.append(pq.read_table(fh))
+    return pa.concat_tables(tables) if tables else pa.Table.from_pylist([])
+
+
 def label_with_checkpoints(
-    client: httpx.Client,
-    model: str,
+    label_chunk: Callable[[Sequence[dict], list[str]], list[dict]],
     rows: Sequence[dict],
     *,
-    concurrency: int,
     chunk_size: int,
-    label_batch: str,
     out: str,
 ) -> pa.Table:
-    """Label every window in chunks, checkpointing each chunk before the next."""
+    """Label every window in chunks, checkpointing each chunk before the next.
+
+    ``label_chunk`` labels one batch of rows, appending samples of unusable
+    replies to the list it is passed. The serving path lives entirely inside it,
+    so the OpenRouter and self-hosted vLLM drivers share this loop.
+    """
     chunk_dir = _chunk_dir(out)
     already = _labeled_keys(chunk_dir)
     if already:
@@ -214,7 +225,8 @@ def label_with_checkpoints(
     written = len(already)
     for start in range(0, len(pending), chunk_size):
         batch = pending[start : start + chunk_size]
-        labeled = label_rows(client, model, batch, concurrency, label_batch, rejects)
+        began = time.monotonic()
+        labeled = label_chunk(batch, rejects)
         if len(labeled) < len(batch) * MIN_CHUNK_SUCCESS:
             raise RuntimeError(
                 f"label_windows: only {len(labeled)}/{len(batch)} of a chunk succeeded — treating this as an "
@@ -226,22 +238,16 @@ def label_with_checkpoints(
             with StoragePath(path).open("wb") as fh:
                 pq.write_table(pa.Table.from_pylist(labeled), fh)
             written += len(labeled)
-        cost = sum(r["cost"] for r in labeled)
         logger.info(
-            "label_windows: %d/%d attempted, %d labeled so far, chunk cost $%.4f",
+            "label_windows: %d/%d attempted, %d labeled so far, %.2f windows/s",
             start + len(batch),
             len(pending),
             written,
-            cost,
+            len(batch) / max(time.monotonic() - began, 1e-9),
         )
     for sample in rejects[:MAX_LOGGED_REJECTS]:
         logger.warning("label_windows: unusable reply: %s", sample)
-
-    tables = []
-    for path in StoragePath(f"{chunk_dir}/*.parquet").glob():
-        with StoragePath(str(path)).open("rb") as fh:
-            tables.append(pq.read_table(fh))
-    return pa.concat_tables(tables) if tables else pa.Table.from_pylist([])
+    return consolidate_chunks(chunk_dir)
 
 
 def run_stats(table: pa.Table, attempted: int) -> dict:
@@ -290,15 +296,11 @@ def main() -> None:
         timeout=httpx.Timeout(REQUEST_TIMEOUT),
         limits=limits,
     ) as client:
-        table = label_with_checkpoints(
-            client,
-            args.model,
-            rows,
-            concurrency=args.concurrency,
-            chunk_size=args.chunk_size,
-            label_batch=args.label_batch,
-            out=args.out,
-        )
+
+        def label_chunk(batch: Sequence[dict], rejects: list[str]) -> list[dict]:
+            return label_rows(client, args.model, batch, args.concurrency, args.label_batch, rejects)
+
+        table = label_with_checkpoints(label_chunk, rows, chunk_size=args.chunk_size, out=args.out)
 
     with StoragePath(args.out).open("wb") as fh:
         pq.write_table(table, fh)
