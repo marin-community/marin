@@ -851,6 +851,13 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
     if _NCU_SASS_FAILURE_PATTERN.search(source):
         raise ValueError("Nsight Compute SASS export contains a warning, error, or unavailable source")
 
+    lines = source.splitlines()
+    for line_number, line in enumerate(lines, start=1):
+        if len(line) > _MAX_NCU_SASS_LINE_CHARS:
+            raise ValueError(f"Nsight Compute SASS export line {line_number} exceeds its reviewed bound")
+    if not lines or lines[0] != _NCU_SASS_SEPARATOR:
+        raise ValueError("Nsight Compute SASS export omits its exact line-1 table separator")
+
     sections: list[NcuSassKernel] = []
     current_name: str | None = None
     instructions: list[NcuSassInstruction] = []
@@ -869,9 +876,7 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
         header_seen = False
         separator_seen = False
 
-    for line_number, line in enumerate(source.splitlines(), start=1):
-        if len(line) > _MAX_NCU_SASS_LINE_CHARS:
-            raise ValueError(f"Nsight Compute SASS export line {line_number} exceeds its reviewed bound")
+    for line_number, line in enumerate(lines[1:], start=2):
         section = _NCU_SASS_SECTION_PATTERN.fullmatch(line)
         if section is not None:
             finish_section()
