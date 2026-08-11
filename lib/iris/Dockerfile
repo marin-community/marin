@@ -328,16 +328,19 @@ RUN set -eux; \
 
 ENV CUDA_HOME=/usr/local/cuda-13.2
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
-ENV NVDISASM_PATH="${CUDA_HOME}/bin/nvdisasm"
+ENV NVDISASM_PATH="${CUDA_HOME}/bin"
 
 # Exercise the runner's exact compiler/disassembler dependency without loading
 # a driver or querying a device. cuobjdump delegates SASS decoding to nvdisasm.
 RUN set -eux; \
     printf '%s\n' 'extern "C" __global__ void h100_evidence_smoke(int *output) { if (threadIdx.x == 0) *output = 1; }' \
       > /tmp/h100-evidence-smoke.cu; \
-    nvcc -arch=sm_90a --cubin /tmp/h100-evidence-smoke.cu -o /tmp/h100-evidence-smoke.cubin; \
-    cuobjdump --dump-sass /tmp/h100-evidence-smoke.cubin > /tmp/h100-evidence-cuobjdump.sass; \
-    nvdisasm /tmp/h100-evidence-smoke.cubin > /tmp/h100-evidence-nvdisasm.sass; \
+    "${CUDA_HOME}/bin/nvcc" -arch=sm_90a --cubin \
+      /tmp/h100-evidence-smoke.cu -o /tmp/h100-evidence-smoke.cubin; \
+    env PATH=/usr/bin:/bin NVDISASM_PATH="${CUDA_HOME}/bin" \
+      "${CUDA_HOME}/bin/cuobjdump" --dump-sass /tmp/h100-evidence-smoke.cubin \
+      > /tmp/h100-evidence-cuobjdump.sass; \
+    "${CUDA_HOME}/bin/nvdisasm" /tmp/h100-evidence-smoke.cubin > /tmp/h100-evidence-nvdisasm.sass; \
     grep -Fq h100_evidence_smoke /tmp/h100-evidence-cuobjdump.sass; \
     grep -Fq h100_evidence_smoke /tmp/h100-evidence-nvdisasm.sass; \
     grep -Eq '/\\*[[:xdigit:]]+\\*/.*[A-Z][A-Z0-9.]+' /tmp/h100-evidence-cuobjdump.sass; \
