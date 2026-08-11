@@ -505,6 +505,36 @@ def test_runner_ncu_sass_parser_rejects_missing_or_mutated_table_separator(repla
 
 
 @pytest.mark.parametrize(
+    "header",
+    ("", " Address Source", "Address Source ", "Address  Source", "Address\tSource", "address Source"),
+)
+def test_runner_ncu_sass_parser_rejects_missing_or_nonliteral_header(header: str) -> None:
+    source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+    with pytest.raises(ValueError):
+        runner.parse_ncu_sass(source.replace("Address Source", header), ("KernelA",))
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        "Address Source\nAddress Source",
+        _NCU_SASS_SEPARATOR + "\nAddress Source",
+    ),
+)
+def test_runner_ncu_sass_parser_rejects_duplicate_or_misplaced_header(replacement: str) -> None:
+    source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+    with pytest.raises(ValueError, match=r"misplaced|unrecognized"):
+        runner.parse_ncu_sass(source.replace("Address Source", replacement), ("KernelA",))
+
+
+@pytest.mark.parametrize("separator", (" " + _NCU_SASS_SEPARATOR, _NCU_SASS_SEPARATOR + " "))
+def test_runner_ncu_sass_parser_rejects_separator_outer_whitespace(separator: str) -> None:
+    source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+    with pytest.raises(ValueError):
+        runner.parse_ncu_sass(source.replace(_NCU_SASS_SEPARATOR, separator), ("KernelA",))
+
+
+@pytest.mark.parametrize(
     "source",
     (
         _NCU_SASS_SEPARATOR + "\n" + _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))),
@@ -535,6 +565,34 @@ def test_runner_ncu_sass_file_boundary_is_bounded_and_nonleaking(tmp_path: Path)
         stream.write(b"x")
     with pytest.raises(ValueError, match="bounded regular file"):
         runner._parse_ncu_sass_file(path, ("KernelA",))
+
+
+def test_runner_ncu_sass_accepts_exact_file_and_line_bounds(tmp_path: Path) -> None:
+    path = tmp_path / "ncu-sass.txt"
+    source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+    source = " " * 1024 + "\n" + source
+    assert runner.parse_ncu_sass(source, ("KernelA",))[0].name == "KernelA"
+
+    remaining = (1 << 20) - len(source.encode())
+    padding: list[str] = []
+    while remaining:
+        width = min(1024, max(0, remaining - 1))
+        padding.append(" " * width + "\n")
+        remaining -= width + 1
+    path.write_text(source + "".join(padding))
+    assert path.stat().st_size == 1 << 20
+    assert runner._parse_ncu_sass_file(path, ("KernelA",))[0].name == "KernelA"
+
+    path.write_bytes(b"\xff")
+    with pytest.raises(ValueError, match="valid UTF-8"):
+        runner._parse_ncu_sass_file(path, ("KernelA",))
+
+    path.write_bytes(_ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))).encode() + b"\x00")
+    with pytest.raises(ValueError, match="reviewed text bound"):
+        runner._parse_ncu_sass_file(path, ("KernelA",))
+
+    with pytest.raises(ValueError, match="line 1 exceeds"):
+        runner.parse_ncu_sass(" " * 1025 + "\n" + source, ("KernelA",))
 
 
 def test_runner_ncu_sass_spills_are_read_only_from_validated_instruction_rows(tmp_path: Path) -> None:
