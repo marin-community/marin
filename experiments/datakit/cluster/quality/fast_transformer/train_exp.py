@@ -103,7 +103,21 @@ def donor_embedding_table(donor: str) -> np.ndarray:
     raise RuntimeError(f"no donor repo reachable for {donor}") from last_error
 
 
-def pca_project(table: np.ndarray, dim: int, target_std: float = EMBED_INIT_STD) -> np.ndarray:
+def pca_basis(table: np.ndarray, dim: int, skip_top: int = 0) -> np.ndarray:
+    """Leading principal directions of the donor table, as columns [donor_dim, dim].
+
+    ``skip_top`` drops that many leading components first, so ``skip_top=1``
+    builds the basis from components 2..dim+1 (PC1 of an embedding table is
+    typically a token-frequency direction rather than a semantic one).
+    """
+    x = table.astype(np.float64)
+    x -= x.mean(axis=0)
+    cov = x.T @ x / len(x)
+    _, eigvecs = np.linalg.eigh(cov)
+    return eigvecs[:, ::-1][:, skip_top : skip_top + dim]
+
+
+def pca_project(table: np.ndarray, dim: int, target_std: float = EMBED_INIT_STD, skip_top: int = 0) -> np.ndarray:
     """PCA-project donor rows to ``dim`` and rescale to the cold-start init std.
 
     The rescale matters: donor tables have per-dim scales far from the 0.02 the
@@ -112,10 +126,45 @@ def pca_project(table: np.ndarray, dim: int, target_std: float = EMBED_INIT_STD)
     """
     x = table.astype(np.float64)
     x -= x.mean(axis=0)
-    cov = x.T @ x / len(x)
-    _, eigvecs = np.linalg.eigh(cov)
-    proj = x @ eigvecs[:, ::-1][:, :dim]
+    proj = x @ pca_basis(table, dim, skip_top)
     return (proj * (target_std / proj.std())).astype(np.float32)
+
+
+# The clean_gemma_embeddings notebook keeps first-whitened rows with norms in
+# (0.0701, 0.1156) on gemma-2-2b, whose expected whitened row norm is
+# sqrt(2304/256000) = 0.0949. The same band, relative to sqrt(dim/rows), is
+# dimension-free and transfers to other donor tables.
+CLEAN_NORM_BAND = (0.739, 1.218)
+
+
+def clean_whiten(table: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The clean_gemma_embeddings recipe: whiten, drop junk rows by norm, re-whiten.
+
+    Steps, following the notebook: center and SVD-whiten (``u @ vt``, all
+    singular values -> 1); keep rows whose whitened norm falls inside the
+    typical band (junk tokens sit at the extremes); re-center and re-whiten the
+    survivors. Returns ``(whitened rows [kept, dim] float32, kept row indices)``
+    so dropped rows can keep their cold-start init.
+    """
+    x = table.astype(np.float64)
+    x -= x.mean(axis=0)
+    u, _, vt = np.linalg.svd(x, full_matrices=False)
+    w = u @ vt
+    expected = (w.shape[1] / w.shape[0]) ** 0.5
+    norms = np.linalg.norm(w, axis=1)
+    kept = np.flatnonzero((norms > CLEAN_NORM_BAND[0] * expected) & (norms < CLEAN_NORM_BAND[1] * expected))
+    w = w[kept]
+    w -= w.mean(axis=0)
+    u, _, vt = np.linalg.svd(w, full_matrices=False)
+    logger.info(
+        "clean_whiten: kept %d of %d donor rows (norm band %.4f..%.4f around %.4f)",
+        len(kept),
+        len(table),
+        CLEAN_NORM_BAND[0] * expected,
+        CLEAN_NORM_BAND[1] * expected,
+        expected,
+    )
+    return (u @ vt).astype(np.float32), kept
 
 
 def warm_start(model: FastTransformer, donor_rows: np.ndarray, remap: dict[int, int]) -> FastTransformer:

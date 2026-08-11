@@ -24,6 +24,7 @@ def _separable_embeddings(n_per_class: int, dim: int = 64, seed: int = 0):
         y.extend([cls] * n_per_class)
     return np.concatenate(rows), np.array(y)
 
+
 def test_fit_separates_types_and_survives_save_load(tmp_path):
     raw, y = _separable_embeddings(700)
     x = embedding_matrix(raw)

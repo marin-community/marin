@@ -143,6 +143,7 @@ def train_regressor(
     hp: TrainHParams,
     tr_doc_embed: np.ndarray | None = None,
     val_doc_embed: np.ndarray | None = None,
+    params_filter=None,
 ):
     """Train any ``(ids, doc_embed, key, inference) -> logits`` model on the
     MSE-on-sigmoid regression objective.
@@ -152,8 +153,10 @@ def train_regressor(
     < 15, so running the full epoch cap wastes most of the trial). Data-parallel
     across all chips; ``hp.remat`` gradient-checkpoints the forward for long
     context. ``tr_doc_embed`` / ``val_doc_embed`` ride along row-for-row when the
-    model takes a per-document embedding. Returns ``(best_model, best_epoch,
-    train_seconds)``.
+    model takes a per-document embedding. ``params_filter`` is a bool pytree
+    selecting the trainable leaves (default: every inexact array); deselected
+    leaves such as a frozen donor table receive neither gradients nor weight
+    decay. Returns ``(best_model, best_epoch, train_seconds)``.
     """
     key = jax.random.PRNGKey(hp.seed)
     ndev, replicated, batch_shard = data_parallel_shardings()
@@ -171,19 +174,22 @@ def train_regressor(
         optax.clip_by_global_norm(hp.grad_clip),
         optax.adamw(schedule, weight_decay=hp.weight_decay),
     )
+    if params_filter is None:
+        params_filter = jax.tree_util.tree_map(eqx.is_inexact_array, model)
     model = jax.device_put(model, replicated)
-    opt_state = jax.device_put(optimizer.init(eqx.filter(model, eqx.is_inexact_array)), replicated)
+    diff, static = eqx.partition(model, params_filter)
+    opt_state = jax.device_put(optimizer.init(diff), replicated)
     forward = eqx.filter_checkpoint(_forward) if hp.remat else _forward
 
     @eqx.filter_jit
-    def step(model, opt_state, ids, doc_embed, targets, step_key):
-        def loss_fn(m):
-            preds = jax.nn.sigmoid(forward(m, ids, doc_embed, step_key))
+    def step(diff, static, opt_state, ids, doc_embed, targets, step_key):
+        def loss_fn(d):
+            preds = jax.nn.sigmoid(forward(eqx.combine(d, static), ids, doc_embed, step_key))
             return jnp.mean((preds - targets) ** 2)
 
-        loss, grads = eqx.filter_value_and_grad(loss_fn)(model)
-        updates, opt_state = optimizer.update(grads, opt_state, eqx.filter(model, eqx.is_inexact_array))
-        return eqx.apply_updates(model, updates), opt_state, loss
+        loss, grads = eqx.filter_value_and_grad(loss_fn)(diff)
+        updates, opt_state = optimizer.update(grads, opt_state, diff)
+        return eqx.apply_updates(diff, updates), opt_state, loss
 
     rng = np.random.default_rng(hp.seed)
     best_val_rho, best_model, best_epoch, no_improve = -2.0, model, 0, 0
@@ -197,9 +203,10 @@ def train_regressor(
             ids = jax.device_put(jnp.asarray(tr_ids[batch]), batch_shard)
             emb = None if tr_doc_embed is None else jax.device_put(jnp.asarray(tr_doc_embed[batch]), batch_shard)
             targets = jax.device_put(jnp.asarray(tr_scores[batch]), batch_shard)
-            model, opt_state, loss = step(model, opt_state, ids, emb, targets, step_key)
+            diff, opt_state, loss = step(diff, static, opt_state, ids, emb, targets, step_key)
         if epoch % hp.eval_every != 0 and epoch != hp.epochs - 1:
             continue
+        model = eqx.combine(diff, static)
         # Reuse the (memory-sized) training batch for eval -- token-level encoders
         # at long context can't fit the default inference batch's O(T^2) attention.
         val_rho = spearman_rho(

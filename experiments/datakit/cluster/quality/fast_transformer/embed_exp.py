@@ -25,8 +25,11 @@ embedded sample. Three arms plus a control, all sharing one split:
 
 The non-probe arms compose with the embedding-table and trunk levers that
 :mod:`train_exp` studied separately: ``--tokenizer`` swaps the tokenizer,
-``--init-embed`` warm-starts the embedding table from a donor model,
-``--gigatoken`` tokenizes with the gigatoken Rust backend behind an exact
+``--init-embed`` warm-starts the embedding table from a donor model with
+``--embed-treatment`` selecting the donor treatment (fixed PCA; clean+whiten
+per the clean_gemma_embeddings recipe; PCA from components 2..embed_dim+1; or
+a frozen donor table behind a learned projection initialized at the PCA
+solution), ``--gigatoken`` tokenizes with the gigatoken Rust backend behind an exact
 token-id parity gate against the HF tokenizer, and
 ``--hidden-dim/--num-layers/--num-heads/--pool-window/--mlp-ratio`` size the
 trunk (defaults reproduce the deployed config). ``--domain-mlp`` types every
@@ -94,10 +97,13 @@ from experiments.datakit.cluster.quality.fast_transformer.train import (
     train_regressor,
 )
 from experiments.datakit.cluster.quality.fast_transformer.train_exp import (
+    EMBED_INIT_STD,
     EVAL_FRAC,
     TRAIN_SEED,
+    clean_whiten,
     donor_embedding_table,
     full_vocab_remap,
+    pca_basis,
     pca_project,
     warm_start,
 )
@@ -115,6 +121,9 @@ FLAT_STD = 0.03
 RIDGE_ALPHAS = (0.1, 1.0, 10.0, 100.0)
 MLP_HIDDEN = 256
 ARMS = ("probe", "control", "head", "token")
+# Donor-embedding treatments for --init-embed warm starts. "pca" is the
+# original fixed PCA down-projection; the others vary only that step.
+TREATMENTS = ("pca", "clean-whiten", "drop-top-pc", "learned-proj")
 PARITY_DOCS_PER_SOURCE = 16
 
 
@@ -225,6 +234,63 @@ def report_arm(
     )
 
 
+def apply_embed_treatment(
+    model: FastTransformer,
+    config: FastTransformerConfig,
+    treatment: str,
+    donor: np.ndarray,
+    remap: dict[int, int],
+) -> tuple[FastTransformer, object | None]:
+    """Warm-start the token embedding per the requested donor treatment.
+
+    Returns ``(model, params_filter)``; the filter is non-None only for
+    ``learned-proj``, whose frozen donor table must be masked out of the
+    optimizer (no gradients and, crucially, no weight decay).
+    """
+    if treatment == "pca":
+        return warm_start(model, pca_project(donor, config.embed_dim), remap), None
+    if treatment == "drop-top-pc":
+        # PCA to embed_dim from components 2..embed_dim+1: PC1 is projected out
+        # and the basis is the next embed_dim components.
+        return warm_start(model, pca_project(donor, config.embed_dim, skip_top=1), remap), None
+    if treatment == "clean-whiten":
+        cleaned, kept = clean_whiten(donor)
+        projected = np.zeros((len(donor), config.embed_dim), dtype=np.float32)
+        projected[kept] = pca_project(cleaned, config.embed_dim)
+        kept_mask = np.zeros(len(donor), dtype=bool)
+        kept_mask[kept] = True
+        # Rows the cleaning dropped keep their cold-start init, like any token
+        # the donor lacks.
+        clean_remap = {r: d for r, d in remap.items() if r < len(donor) and kept_mask[r]}
+        return warm_start(model, projected, clean_remap), None
+    # learned-proj: frozen centered donor rows behind a learnable projection
+    # initialized at the PCA solution, so training starts at the pca arm's warm
+    # start and differs only in what is trainable (the 640x256 projection
+    # instead of the full 262K x 256 table).
+    centered = (donor - donor.mean(axis=0)).astype(np.float32)
+    table = np.zeros((config.vocab_size, donor.shape[1]), dtype=np.float32)
+    raw = np.fromiter(remap.keys(), dtype=np.int64, count=len(remap))
+    dense = np.fromiter(remap.values(), dtype=np.int64, count=len(remap))
+    keep = raw < len(donor)
+    table[dense[keep]] = centered[raw[keep]]
+    basis = pca_basis(donor, config.embed_dim)
+    scale = EMBED_INIT_STD / (centered.astype(np.float64) @ basis).std()
+    model = eqx.tree_at(
+        lambda m: (m.donor_embed, m.donor_proj),
+        model,
+        (jnp.asarray(table), jnp.asarray((basis * scale).astype(np.float32))),
+    )
+    params_filter = jax.tree_util.tree_map(eqx.is_inexact_array, model)
+    params_filter = eqx.tree_at(lambda m: m.donor_embed, params_filter, replace=False)
+    logger.info(
+        "learned-proj: froze %d donor rows behind a trainable %dx%d projection",
+        int(keep.sum()),
+        donor.shape[1],
+        config.embed_dim,
+    )
+    return model, params_filter
+
+
 def fit_ridge(x: np.ndarray, y: np.ndarray, alphas=RIDGE_ALPHAS, val_frac: float = 0.1, seed: int = TRAIN_SEED):
     """Closed-form ridge with the alpha chosen on an internal validation split."""
     rng = np.random.default_rng(seed)
@@ -254,6 +320,7 @@ def main() -> None:
     p.add_argument("--name", default=None, help="artifact stem (fusion/control arms)")
     p.add_argument("--tokenizer", default=TOKENIZER)
     p.add_argument("--init-embed", choices=["none", "e5", "gemma"], default="none")
+    p.add_argument("--embed-treatment", choices=TREATMENTS, default="pca", help="donor treatment for --init-embed")
     p.add_argument("--gigatoken", action="store_true", help="tokenize with gigatoken (exact-parity gated)")
     p.add_argument("--domain-mlp", default=None, help="domain_mlp npz; adds per-type tables keyed by its predictions")
     p.add_argument("--baseline-model-dir", default=None, help="text-only pooled scorer reported on the same holdout")
@@ -326,6 +393,9 @@ def main() -> None:
     tr_pack = pack(tr_raw, remap, target[tr_idx], MAX_TOKENS)
     ev_pack = pack(ev_raw, remap, target[ev_idx], MAX_TOKENS)
 
+    donor = donor_embedding_table(args.init_embed) if args.init_embed != "none" else None
+    if args.embed_treatment != "pca" and donor is None:
+        raise ValueError(f"--embed-treatment {args.embed_treatment} requires --init-embed")
     config = FastTransformerConfig(
         vocab_size=vocab,
         max_tokens=MAX_TOKENS,
@@ -340,17 +410,20 @@ def main() -> None:
         mlp_ratio=args.mlp_ratio,
         doc_embed_dim=0 if args.arm == "control" else EMBED_DIM,
         doc_embed_super_token=args.arm == "token",
+        frozen_donor_dim=donor.shape[1] if args.embed_treatment == "learned-proj" else 0,
     )
     model = FastTransformer(config, key=jr.PRNGKey(hp.seed))
-    if args.init_embed != "none":
-        donor = donor_embedding_table(args.init_embed)
-        model = warm_start(model, pca_project(donor, config.embed_dim), remap)
+    params_filter = None
+    if donor is not None:
+        model, params_filter = apply_embed_treatment(model, config, args.embed_treatment, donor, remap)
     logger.info(
-        "arm %s: tokenizer=%s vocab=%d init=%s gigatoken=%s trunk d=%d L=%d h=%d w=%d mlp=%d (%.0fK flops/token)",
+        "arm %s: tokenizer=%s vocab=%d init=%s treatment=%s gigatoken=%s trunk d=%d L=%d h=%d w=%d mlp=%d "
+        "(%.0fK flops/token)",
         args.arm,
         args.tokenizer,
         vocab,
         args.init_embed,
+        args.embed_treatment,
         args.gigatoken,
         config.hidden_dim,
         config.num_layers,
@@ -376,6 +449,7 @@ def main() -> None:
         hp,
         tr_doc_embed=None if tr_emb is None else tr_emb[fit_i],
         val_doc_embed=None if tr_emb is None else tr_emb[val_i],
+        params_filter=params_filter,
     )
     preds = predict(best, ev_pack.ids, doc_embed=emb[ev_idx] if use_emb else None)
     logger.info("arm %s: best_epoch=%d train_seconds=%.0f", args.arm, best_epoch, seconds)

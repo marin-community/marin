@@ -74,6 +74,13 @@ class FastTransformerConfig:
     # it; the head-side skip connection is present in both cases.
     doc_embed_dim: int = 0
     doc_embed_super_token: bool = False
+    # Frozen donor embedding: when > 0 the token embedding is a frozen
+    # [vocab, frozen_donor_dim] donor table read through a learned projection to
+    # embed_dim, replacing the trainable [vocab, embed_dim] table. The donor
+    # rows are filled in by the caller, and must be excluded from optimization
+    # via ``train_regressor``'s ``params_filter`` (the forward also
+    # stop-gradients them, but weight decay is only stopped by the filter).
+    frozen_donor_dim: int = 0
 
     def __post_init__(self) -> None:
         if self.max_tokens % self.pool_window != 0:
@@ -114,6 +121,11 @@ class FastTransformerConfig:
         per_layer = attn_proj + attn_scores + mlp
         head = 2 * d  # final linear to scalar
         total = proj + self.num_layers * per_layer + head
+        if self.frozen_donor_dim:
+            # Training-time cost only: at deployment the frozen donor table and
+            # the learned projection fold into one [vocab, embed_dim] table,
+            # recovering the base model's inference cost.
+            total += 2 * self.frozen_donor_dim * self.embed_dim * t
         return total / t
 
 
@@ -193,7 +205,9 @@ class TransformerLayer(eqx.Module):
 
 class FastTransformer(eqx.Module):
     config: FastTransformerConfig = eqx.field(static=True)
-    embed: Array  # [vocab, E]
+    embed: Array | None  # [vocab, E]; None when a frozen donor table replaces it
+    donor_embed: Array | None  # [vocab, frozen_donor_dim] frozen donor rows
+    donor_proj: Array | None  # [frozen_donor_dim, E], learned
     bigram_embed: Array | None  # [bigram_buckets, E], or None when disabled
     pool_query: Array  # [E]
     proj_w: Array  # [pool_out_dim, D]
@@ -219,7 +233,16 @@ class FastTransformer(eqx.Module):
         # any retrain of an existing arm) is unchanged when doc embeddings are off.
         kdoc_proj, kdoc_type = jax.random.split(jax.random.fold_in(key, 7))
         self.config = config
-        self.embed = jax.random.normal(ke, (config.vocab_size, config.embed_dim)) * 0.02
+        if config.frozen_donor_dim:
+            self.embed = None
+            # Zeros, not random: the caller fills the donor rows, and tokens the
+            # donor lacks (reserved ids, tail specials) then embed to zero.
+            self.donor_embed = jnp.zeros((config.vocab_size, config.frozen_donor_dim))
+            self.donor_proj = _glorot(jax.random.fold_in(key, 8), (config.frozen_donor_dim, config.embed_dim))
+        else:
+            self.embed = jax.random.normal(ke, (config.vocab_size, config.embed_dim)) * 0.02
+            self.donor_embed = None
+            self.donor_proj = None
         # Zero init keeps the side table a no-op at the start of training; each
         # bucket then learns a residual on top of the unigram embedding.
         self.bigram_embed = jnp.zeros((config.bigram_buckets, config.embed_dim)) if config.bigram_buckets else None
@@ -318,7 +341,13 @@ class FastTransformer(eqx.Module):
                 f"{'is missing' if doc_embed is None else 'was passed'}; the two must agree"
             )
         mask = (ids != PAD_ID).astype(jnp.float32)  # [b, t]
-        emb = jnp.take(self.embed, ids, axis=0)  # [b, t, e]
+        if cfg.frozen_donor_dim:
+            # stop_gradient guards the gather; the optimizer-side params_filter is
+            # still required so weight decay cannot erode the frozen table.
+            donor = jnp.take(jax.lax.stop_gradient(self.donor_embed), ids, axis=0)
+            emb = _matmul(donor, self.donor_proj)  # [b, t, e]
+        else:
+            emb = jnp.take(self.embed, ids, axis=0)  # [b, t, e]
         if self.bigram_embed is not None:
             emb = emb + self._bigram_side(ids)
 
