@@ -363,6 +363,15 @@ def test_h100_evidence_sass_validator_rejects_unusable_cuobjdump_output(tmp_path
         NVDISASM_SASS.replace(".section        .text.h100_evidence_smoke", ".section        .text.wrong"),
         NVDISASM_SASS.replace("        .global         h100_evidence_smoke\n", ""),
         NVDISASM_SASS.replace("\nh100_evidence_smoke:\n", "\n"),
+        NVDISASM_SASS.replace(".text.h100_evidence_smoke:\n", ""),
+        NVDISASM_SASS.replace(
+            "h100_evidence_smoke:\n.text.h100_evidence_smoke:\n",
+            ".text.h100_evidence_smoke:\nh100_evidence_smoke:\n",
+        ),
+        NVDISASM_SASS.replace(
+            ".text.h100_evidence_smoke:\n",
+            ".text.h100_evidence_smoke:\n.text.h100_evidence_smoke:\n",
+        ),
         NVDISASM_SASS.replace(".global         h100_evidence_smoke", ".global         different_kernel"),
         NVDISASM_SASS.replace(
             "        .global         h100_evidence_smoke\n",

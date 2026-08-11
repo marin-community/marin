@@ -66,15 +66,21 @@ def _nvdisasm_function_body(lines: tuple[str, ...], expected_kernel: str) -> tup
         if function_type is not None and function_type.group("name") != expected_kernel:
             raise ValueError("nvdisasm found another function before the expected label")
 
+    text_label_index = label_index + 1
+    if text_label_index >= len(lines):
+        raise ValueError("nvdisasm expected function has no text label")
+    text_label = NVDISASM_TEXT_LABEL.fullmatch(lines[text_label_index])
+    if text_label is None or text_label.group("name") != expected_kernel:
+        raise ValueError("nvdisasm expected text label does not immediately follow its function label")
+
     body = []
-    for line in lines[label_index + 1 :]:
+    for line in lines[text_label_index + 1 :]:
         if NVDISASM_SECTION.fullmatch(line) is not None or NVDISASM_GLOBAL.fullmatch(line) is not None:
             break
         if NVDISASM_FUNCTION_TYPE.fullmatch(line) is not None:
             break
-        text_label = NVDISASM_TEXT_LABEL.fullmatch(line)
-        if text_label is not None and text_label.group("name") != expected_kernel:
-            break
+        if NVDISASM_TEXT_LABEL.fullmatch(line) is not None:
+            raise ValueError("nvdisasm function body contains an unexpected text label")
         body.append(line)
     return tuple(body)
 
