@@ -237,8 +237,8 @@ _SASS_OPCODE_BASES = frozenset(
     }
 )
 _NCU_SASS_SECTION_PATTERN = re.compile(r"^\s*Kernel Name\s*:\s*(?P<name>.+?)\s*$")
-_NCU_SASS_HEADER_PATTERN = re.compile(r"^\s*Address\s+Source\s*$")
-_NCU_SASS_SEPARATOR_PATTERN = re.compile(r"^\s*-{18} -{60}(?: -{6}){4}\s*$")
+_NCU_SASS_HEADER = "Address Source"
+_NCU_SASS_SEPARATOR = "------------------ " + "-" * 60 + " ------ ------ ------ ------"
 _NCU_SASS_INSTRUCTION_PATTERN = re.compile(
     r"^\s*(?:/\*)?(?P<address>(?:0x)?[0-9A-Fa-f]{4,16})(?:\*/)?(?:\s+|\s*:\s*)"
     r"(?:@!?P[0-9]+(?:\.[A-Z0-9_]+)?\s+)?(?P<mnemonic>[A-Z][A-Z0-9_]*(?:\.[A-Z0-9_]+)*)\b"
@@ -879,12 +879,12 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
             continue
         if not line.strip():
             continue
-        if _NCU_SASS_HEADER_PATTERN.fullmatch(line):
+        if line == _NCU_SASS_HEADER:
             if current_name is None or header_seen or separator_seen or instructions:
                 raise ValueError(f"misplaced Nsight Compute SASS header at line {line_number}")
             header_seen = True
             continue
-        if _NCU_SASS_SEPARATOR_PATTERN.fullmatch(line):
+        if line == _NCU_SASS_SEPARATOR:
             if current_name is None or not header_seen or separator_seen or instructions:
                 raise ValueError(f"misplaced Nsight Compute SASS separator at line {line_number}")
             separator_seen = True
