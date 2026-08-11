@@ -2431,25 +2431,25 @@ def run_coordinator(config: RunnerConfig) -> Path:
     for case in plan.cases:
         case_directory = config.artifact_directory / "cases" / case.case_id
         case_directory.mkdir(parents=True)
-        compile_records = {
-            backend.value: _run_cache_protocol(
+        canonical_preparations = {
+            backend.value: _prepare_canonical_cache(
                 config,
                 case.case_id,
                 backend.value,
                 generated_manifest,
-                case_directory / "cache" / backend.value,
+                case_directory / "canonical" / backend.value,
             )
             for backend in BackendVariant
         }
         canonical_cache_root = case_directory / "canonical_cache_snapshot"
         canonical_cache_snapshot = _merge_canonical_target_snapshots(
-            tuple(Path(compile_records[backend.value]["canonical_cache_root"]) for backend in BackendVariant),
+            tuple(Path(canonical_preparations[backend.value]["canonical_cache_root"]) for backend in BackendVariant),
             canonical_cache_root,
         )
         canonical_cache_contract = _write_worker_cache_contract(
             case_directory / "canonical_cache_contract.json",
             canonical_cache_root,
-            {backend.value: compile_records[backend.value]["compile"][0] for backend in BackendVariant},
+            {backend.value: canonical_preparations[backend.value]["record"] for backend in BackendVariant},
         )
         case_result, trace_records = _run_profiled_case(
             config,
@@ -2459,6 +2459,18 @@ def run_coordinator(config: RunnerConfig) -> Path:
             canonical_cache_root,
             canonical_cache_contract,
         )
+        compile_records = {
+            backend.value: _run_cache_protocol(
+                config,
+                case.case_id,
+                backend.value,
+                generated_manifest,
+                case_directory / "cache" / backend.value,
+                Path(canonical_preparations[backend.value]["canonical_cache_root"]),
+                canonical_preparations[backend.value]["record"],
+            )
+            for backend in BackendVariant
+        }
         ncu_records = {
             backend.value: _run_ncu_profile(
                 config,
@@ -2497,7 +2509,7 @@ def run_coordinator(config: RunnerConfig) -> Path:
             trace_summary,
             final_hlo_by_backend,
             case_directory,
-            case_directory / "cache" / BackendVariant.ORDINARY_XLA.value / "compile_dump_0",
+            case_directory / "canonical" / BackendVariant.ORDINARY_XLA.value / "canonical_dump",
         )
         case_payloads = []
         for backend in BackendVariant:
@@ -2828,14 +2840,24 @@ def validated_cache_protocol_identity(
     cold_records: Sequence[Mapping[str, Any]],
     hit_records: Sequence[Mapping[str, Any]],
     *,
+    canonical_record: Mapping[str, Any] | None = None,
     case_id: str,
     backend: str,
     required_processes: int,
 ) -> str:
     """Bind fresh compile samples and cloned cache hits to one canonical entry."""
-    groups = {"compile": compile_records, "cold": cold_records, "hit": hit_records}
+    if canonical_record is None:
+        if not compile_records:
+            raise ValueError("cache protocol requires a canonical record or fresh compile sample")
+        canonical_record = compile_records[0]
+    groups = {
+        "canonical": (canonical_record,),
+        "compile": compile_records,
+        "cold": cold_records,
+        "hit": hit_records,
+    }
     for name, records in groups.items():
-        if len(records) != required_processes:
+        if name != "canonical" and len(records) != required_processes:
             raise ValueError(f"cache protocol requires {required_processes} {name} roots")
     if re.fullmatch(r"[a-z0-9_]{1,128}", case_id) is None:
         raise ValueError("cache identity diagnostic requires a canonical case id")
@@ -2883,27 +2905,28 @@ def validated_cache_protocol_identity(
             expected_events = dict(
                 zip(
                     _CACHE_EVENT_NAMES,
-                    (1, 0, 1) if phase == "compile" else (1, 1, 0),
+                    (1, 0, 1) if phase in {"canonical", "compile"} else (1, 1, 0),
                     strict=True,
                 )
             )
             if events != expected_events:
                 raise ValueError(f"cache protocol {phase}[{index}] has invalid public cache events")
             partition = partitions.setdefault((cache_key, executable_identity), f"class_{len(partitions)}")
-            roots.append(
-                (
-                    phase,
-                    index,
-                    partition,
-                    file_count,
-                    total_bytes,
-                    hashlib.sha256(final_hlo.encode()).hexdigest(),
+            if phase != "canonical":
+                roots.append(
+                    (
+                        phase,
+                        index,
+                        partition,
+                        file_count,
+                        total_bytes,
+                        hashlib.sha256(final_hlo.encode()).hexdigest(),
+                    )
                 )
-            )
-    canonical_key = str(compile_records[0]["persistent_cache_key"])
-    canonical_executable = str(compile_records[0]["persistent_cache_serialized_executable_sha256"])
-    canonical_entry = str(compile_records[0]["persistent_cache_entry_sha256"])
-    canonical_root = str(compile_records[0]["persistent_cache_root_identity"])
+    canonical_key = str(canonical_record["persistent_cache_key"])
+    canonical_executable = str(canonical_record["persistent_cache_serialized_executable_sha256"])
+    canonical_entry = str(canonical_record["persistent_cache_entry_sha256"])
+    canonical_root = str(canonical_record["persistent_cache_root_identity"])
     keys = {str(record["persistent_cache_key"]) for records in groups.values() for record in records}
     cached_executables = {
         str(record["persistent_cache_serialized_executable_sha256"])
@@ -2931,6 +2954,7 @@ def validated_cache_protocol_identity(
             "case_id": case_id,
             "class_fields": _CACHE_DIAGNOSTIC_CLASS_FIELDS,
             "classes": classes,
+            "canonical_equality_partition": partitions[(canonical_key, canonical_executable)],
             "expected_cached_equality_partitions": 1,
             "fresh_compile_equality_partitions": len(
                 {
@@ -2944,7 +2968,7 @@ def validated_cache_protocol_identity(
             "observed_equality_partitions": len(partitions),
             "root_fields": _CACHE_DIAGNOSTIC_ROOT_FIELDS,
             "roots": roots,
-            "schema_version": 2,
+            "schema_version": 3,
         }
         serialized = json.dumps(diagnostic, sort_keys=True, separators=(",", ":"))
         message = (
@@ -2964,11 +2988,11 @@ def validated_executable_hlo(
     cache_protocol: Mapping[str, Any],
     profile_worker_hlo: str,
 ) -> str:
-    """Bind every canonical-cache consumer to compile[0]'s exact executable HLO."""
+    """Bind every canonical-cache consumer to the setup worker's exact executable HLO."""
     compile_records = tuple(cache_protocol["compile"])
     if not compile_records:
         raise ValueError(f"{backend} executable evidence has no compile worker")
-    authoritative = str(compile_records[0]["final_hlo"])
+    authoritative = str(cache_protocol.get("canonical", compile_records[0])["final_hlo"])
     observed = [case_worker_hlo, profile_worker_hlo]
     for group in ("cold", "hit"):
         observed.extend(str(record["final_hlo"]) for record in cache_protocol[group])
@@ -2990,7 +3014,7 @@ def validate_measurement_cache_consumers(
         raise ValueError("case worker cache evidence does not cover exactly every backend")
     expected_events = dict(zip(_CACHE_EVENT_NAMES, (1, 1, 0), strict=True))
     for backend, protocol in cache_protocols.items():
-        canonical = protocol["compile"][0]
+        canonical = protocol["canonical"]
         for role, evidence in (
             ("case", case_evidence[backend]),
             ("profile", profile_workers[backend].persistent_cache),
@@ -3078,12 +3102,50 @@ def _run_profiled_case(
     return result, parse_nsys_sqlite(sqlite_path, expected_ranges, report_path=report)
 
 
+def _prepare_canonical_cache(
+    config: RunnerConfig,
+    case_id: str,
+    backend: str,
+    generated_manifest: Path,
+    directory: Path,
+) -> dict[str, Any]:
+    directory.mkdir(parents=True)
+    populated_root = directory / "populated_root"
+    result_path = directory / "canonical.json"
+    command = _worker_base_command(
+        config,
+        worker=WorkerMode.COMPILE,
+        case_id=case_id,
+        backend=backend,
+        generated_manifest=generated_manifest,
+        json_output=result_path,
+        cache_kind="canonical",
+    )
+    record = _run_worker_command(
+        command,
+        environment=_worker_environment(directory / "canonical_dump", populated_root),
+        json_output=result_path,
+    )
+    expected_events = dict(zip(_CACHE_EVENT_NAMES, (1, 0, 1), strict=True))
+    if record.get("persistent_cache_events") != expected_events:
+        raise ValueError(f"canonical cache preparation did not prove one public miss for {case_id}/{backend}")
+    sealed_root = directory / "sealed_root"
+    snapshot = _seal_canonical_target_snapshot(populated_root, sealed_root, record)
+    return {
+        "canonical_cache_root": str(sealed_root),
+        "canonical_cache_root_identity": snapshot.root_identity,
+        "record": record,
+    }
+
+
 def _run_cache_protocol(
     config: RunnerConfig,
     case_id: str,
     backend: str,
     generated_manifest: Path,
     directory: Path,
+    canonical_cache_root: Path,
+    canonical_record: Mapping[str, Any],
 ) -> dict[str, Any]:
     from tile_lifetime.h100_contract_map_benchmark import default_h100_contract_map_benchmark_plan  # noqa: PLC0415
 
@@ -3109,16 +3171,14 @@ def _run_cache_protocol(
                 json_output=result,
             )
         )
-    canonical_root = directory / "canonical_target_snapshot"
-    canonical_snapshot = _seal_canonical_target_snapshot(
-        directory / "compile_roots" / "0",
-        canonical_root,
-        compile_records[0],
-    )
+    canonical_root = canonical_cache_root
+    canonical_snapshot = _persistent_cache_snapshot(_persistent_cache_files(canonical_root))
+    if canonical_snapshot.root_identity != canonical_record.get("persistent_cache_root_identity"):
+        raise ValueError(f"canonical cache root identity differs for {case_id}/{backend}")
     cache_contract = _write_worker_cache_contract(
         directory / "canonical_cache_contract.json",
         canonical_root,
-        {backend: compile_records[0]},
+        {backend: canonical_record},
     )
     cold_records = []
     hit_records = []
@@ -3171,11 +3231,13 @@ def _run_cache_protocol(
         compile_records,
         cold_records,
         hit_records,
+        canonical_record=canonical_record,
         case_id=case_id,
         backend=backend,
         required_processes=protocol.compile_processes,
     )
     return {
+        "canonical": canonical_record,
         "canonical_cache_root": str(canonical_root),
         "canonical_cache_root_identity": canonical_snapshot.root_identity,
         "compile": compile_records,
@@ -3655,7 +3717,7 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--generated-manifest", type=Path)
     parser.add_argument("--json-output", type=Path)
     parser.add_argument("--cache-contract", type=Path)
-    parser.add_argument("--cache-kind", choices=("none", "compile", "cold", "hit"), default="none")
+    parser.add_argument("--cache-kind", choices=("none", "canonical", "compile", "cold", "hit"), default="none")
     return parser.parse_args(argv)
 
 
