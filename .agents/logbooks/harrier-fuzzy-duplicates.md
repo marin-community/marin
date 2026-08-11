@@ -113,3 +113,12 @@ author: Rafal Wojdyla
 - Output root: `s3://marin-us-east-02a/marin/datakit/embed/harrier-fuzzy-duplicates/`.
 - Result: Both v3 Iris submissions succeeded.
 - Next action: Verify nonzero TEI ports, service registration, source-job startup, and error-free logs.
+
+### 2026-08-11 20:26 UTC - First sources completed
+
+- East result: `agenttrove_e27f2c9e` completed all 43 shards. The source step succeeded in 6 minutes and 52 seconds.
+- RNO result: `biocorpus_41bbbae7` completed all 27 shards. The source step succeeded.
+- Current work: East started `cp/biodiversity_23880f3b`. RNO started `climblab-ja_edc88cea` and reached 112 of 1,787 output shards.
+- Service health: Both 96-worker TEI pools use distinct nonzero ports. Logs show successful requests and no port collisions, HTTP 429 responses, connection failures, dead workers, or memory errors.
+- Result: Each region has written and sealed its first complete source artifact.
+- Next action: Continue 15-minute monitoring. Post only major changes to issue #8162.
