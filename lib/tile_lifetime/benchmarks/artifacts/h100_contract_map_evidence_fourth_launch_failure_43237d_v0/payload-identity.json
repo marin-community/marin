@@ -1,0 +1,25 @@
+{
+  "bundle": {
+    "bytes": 1085399,
+    "sha256": "6b7a919b078f964828cd9e8088ad5f3eb9a8abcbee0a915a02803614ef89d2d1"
+  },
+  "capsule": {
+    "archive_bytes": 1089414,
+    "archive_sha256": "d3995d1646c12bc4ba209b69617400407aed4414bfc6da26efe5ebf638a80ed4",
+    "expanded_bytes": 4963276,
+    "member_count": 152
+  },
+  "launcher": {
+    "bytes": 28343,
+    "sha256": "9c479abf75bd151a734762cf2dfd0ce542c4f059f85e67e4745d12dc474b1f63"
+  },
+  "manifest": {
+    "bytes": 29484,
+    "sha256": "0103bec37f863b5118324b21f9426923371482264b9e96cc4e1a652174f8aa21"
+  },
+  "schema_version": 1,
+  "source": {
+    "commit": "43237d5ea8a68c814d7b4d2356365fffe8fe765a",
+    "tree": "1911a4efde3eac57f0ebb471a45395697edb1d7b"
+  }
+}

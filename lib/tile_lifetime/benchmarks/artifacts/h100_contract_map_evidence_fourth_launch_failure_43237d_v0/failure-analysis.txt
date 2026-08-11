@@ -1,0 +1,28 @@
+Observed boundary
+=================
+
+1. The task command authenticated the transported launcher and manifest with
+   trusted image `sha256sum` before invoking Python.
+2. The command selected `/opt/h100-evidence-runtime/bin/python` both to execute
+   the launcher and as the launcher's required `--runtime-python` value.
+3. The launcher restored the exact 152-member source capsule. The runner then
+   passed its manifest/import audit, exact one-H100 compute-capability check,
+   and executable/tool identity checks.
+4. `run_coordinator` completed `compile_generated_candidates` before entering
+   `_run_profiled_case`. That function returns only after every SOURCE_ORDERED
+   and FAST candidate has compiled its shared library, PTX, and cubin, and
+   after both the retained cubin and authoritative loaded shared library have
+   passed exact six-kernel SASS topology validation.
+5. The first profiled-case subprocess asked Nsight Systems 2026.1.3 to use
+   `--capture-range=cudaProfilerApi --stop-on-range-end=true`. Nsight rejected
+   the latter option before starting the worker application.
+
+The task output is therefore positive evidence for the all-candidate compile
+and loaded-image validation control-flow boundary, not for durable remote
+retention of those temporary files. The task's ephemeral artifact directory
+was not exported after failure.
+
+No case worker, generated or ordinary-XLA kernel execution, numerical check,
+timing schedule, Nsight Compute profile, Nsight Systems trace, or evidence
+acceptance occurred. The controller recorded one failed attempt with
+`max_retries_failure=0`; no retry or relaunch was performed.
