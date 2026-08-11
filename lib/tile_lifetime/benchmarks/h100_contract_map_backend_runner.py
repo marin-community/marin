@@ -971,11 +971,12 @@ def _ncu_sass_metric_labels_match(line: str, column_widths: tuple[int, ...]) -> 
     columns = _ncu_sass_selected_columns(line, column_widths)
     if columns is None or any(column != b" " * len(column) for column in columns[:2]):
         return False
-    return all(
-        len(column) == _NCU_SASS_METRIC_LABEL_COLUMN_BYTES
-        and all(value == ord("_") or ord("a") <= value <= ord("z") for value in column)
-        and any(ord("a") <= value <= ord("z") for value in column)
-        for column in columns[2:]
+    fragments = tuple(column for column in columns[2:] if column != b" " * len(column))
+    return bool(fragments) and all(
+        len(fragment) == _NCU_SASS_METRIC_LABEL_COLUMN_BYTES
+        and all(value == ord("_") or ord("a") <= value <= ord("z") for value in fragment)
+        and any(ord("a") <= value <= ord("z") for value in fragment)
+        for fragment in fragments
     )
 
 

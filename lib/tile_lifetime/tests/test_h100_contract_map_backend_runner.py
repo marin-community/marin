@@ -556,6 +556,7 @@ def test_runner_ncu_parser_bounds_and_decodes_input_before_csv_parsing(tmp_path:
         "fixed-column-record",
         "wide-fixed-column-record",
         "repeated-metric-labels",
+        "sparse-metric-labels",
         "invalid-metric-labels",
         "over-cap-metric-labels",
         "wide-address-close-private",
@@ -631,6 +632,22 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
                     _ncu_sass_metric_labels_row(
                         separator_widths,
                         columns=("", "", "abcde_", "_fghij", "kl_mno", "pqrst_"),
+                    ),
+                ),
+                separator_widths,
+            )
+        elif variant == "sparse-metric-labels":
+            source = _ncu_sass_with_metric_label_rows(
+                source,
+                (
+                    _ncu_sass_metric_labels_row(separator_widths),
+                    _ncu_sass_metric_labels_row(
+                        separator_widths,
+                        columns=("", "", "abcde_", "_fghij", "kl_mno", "pqrst_"),
+                    ),
+                    _ncu_sass_metric_labels_row(
+                        separator_widths,
+                        columns=("", "", "", "uvwxy_", "za__bc", "de__fg"),
                     ),
                 ),
                 separator_widths,
@@ -1793,6 +1810,50 @@ def test_runner_ncu_sass_parser_accepts_opaque_metric_labels_at_any_underscore_p
 
 
 @pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+@pytest.mark.parametrize("blank_label_index", (2, 3, 4, 5))
+def test_runner_ncu_sass_parser_accepts_independently_blank_metric_label_columns(
+    separator_widths: tuple[int, ...],
+    blank_label_index: int,
+) -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=separator_widths,
+    )
+    columns = ["", "", "abcde_", "fg__hi", "jk__lm", "nopqr_"]
+    columns[blank_label_index] = ""
+    sparse_row = _ncu_sass_metric_labels_row(separator_widths, columns=tuple(columns))
+
+    parsed = runner.parse_ncu_sass(
+        _ncu_sass_with_metric_label_rows(
+            source,
+            (_ncu_sass_metric_labels_row(separator_widths), sparse_row),
+            separator_widths,
+        ),
+        (_NCU_KERNEL_A,),
+    )
+
+    assert parsed[0].name == _NCU_KERNEL_A
+
+
+@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+def test_runner_ncu_sass_parser_rejects_all_blank_metric_label_row(
+    separator_widths: tuple[int, ...],
+) -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=separator_widths,
+    ).replace(
+        _ncu_sass_metric_labels_row(separator_widths),
+        _ncu_sass_metric_labels_row(separator_widths, columns=("", "", "", "", "", "")),
+    )
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 5
+
+
+@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
 @pytest.mark.parametrize("row_count", (1, 9))
 def test_runner_ncu_sass_parser_accepts_reviewed_metric_label_row_count_bounds(
     separator_widths: tuple[int, ...],
@@ -1846,8 +1907,8 @@ def test_runner_ncu_sass_parser_requires_bounded_metric_label_rows_between_heade
 @pytest.mark.parametrize("label_index", (2, 3, 4, 5))
 @pytest.mark.parametrize(
     "bad_label",
-    ("", "______", "Ab_cd_", "a1_cd_", "ab-cd_", "ab.cd_", "ab$cd_"),
-    ids=("blank", "no-lowercase", "uppercase", "digit", "hyphen", "dot", "dollar"),
+    ("______", "Ab_cd_", "a1_cd_", "ab-cd_", "ab.cd_", "ab$cd_"),
+    ids=("no-lowercase", "uppercase", "digit", "hyphen", "dot", "dollar"),
 )
 def test_runner_ncu_sass_parser_rejects_nonopaque_metric_label_characters(
     separator_widths: tuple[int, ...],

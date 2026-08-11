@@ -359,3 +359,31 @@ columns, altered gaps, and labels after the separator. The production NCU
 subprocess boundary exercises both repeated-row acceptance and over-limit
 rejection. No image build, GPU execution, v31 submission, retry, or relaunch
 was performed for this source repair.
+
+## V31 independently exhausted metric-label columns
+
+The single v31 task used source
+`f6a0a9143c3238e1883875ffbbb944d641874738`. It selected the 107-byte layout
+and accepted the kernel identity, identity-table close, fixed-column header,
+and two opaque metric-label rows. The first rejection was line 7. Its bounded
+diagnostic reports empty identity columns and an independently empty first
+metric column. The remaining metric columns contain one six-byte fragment
+each: five lowercase letters and one underscore in the first, then four
+lowercase letters and two underscores in each of the other two. The
+observation does not expose the private letters or their order.
+
+The parser now permits each metric column in an opaque label row to contain
+either six ASCII spaces or one six-byte lowercase-ASCII/underscore fragment
+with at least one lowercase byte. At least one of the four metric columns must
+contain a fragment in every row. The selected width and five exact ASCII-space
+gaps remain mandatory. The existing one-to-nine row limit caps each column at
+nine fragments, or 54 padded bytes, from the longest requested 49-byte metric.
+The parser still retains only the row count and emits no private label value.
+
+Behavioral tests exercise every metric column independently blank under both
+reviewed widths, the exact v31 three-fragment shape through the NCU subprocess
+boundary, and all-four-columns blank rejection. Existing tests retain the
+zero- and ten-row bounds, selected-width binding, gap checks, invalid fragment
+characters, labels after the separator, and per-section state reset. No image
+build, GPU execution, v32 submission, retry, or relaunch was performed for
+this source repair.
