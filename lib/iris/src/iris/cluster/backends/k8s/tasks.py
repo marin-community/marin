@@ -2559,7 +2559,12 @@ class K8sTaskProvider:
 
         try:
             if profile_type.HasField("threads"):
-                data = capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
+                data = capture_threads(
+                    dispatch,
+                    pid="1",
+                    include_locals=profile_type.threads.locals,
+                    include_native=profile_type.threads.native,
+                )
             elif profile_type.HasField("cpu"):
                 data = capture_cpu(dispatch, profile_type.cpu, duration, pid="1")
             elif profile_type.HasField("memory"):
