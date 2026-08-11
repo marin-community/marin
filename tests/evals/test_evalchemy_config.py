@@ -158,13 +158,15 @@ def test_no_extra_gen_kwargs_leaves_gen_kwargs_at_budget_only():
 
 
 def test_build_command_chat_route_needs_template_and_generation():
-    config = _payload(_config(apply_chat_template=True))
+    template = "{{ bos_token }}{% for message in messages %}{{ message.content }}{% endfor %}"
+    config = _payload(_config(apply_chat_template=True, chat_template=template))
     generative, mcq = config["tasks"][1], config["tasks"][0]
 
     # A generation task of a chat-template model runs through the chat API...
     cmd = build_command(config, generative, "/tmp/out", "/opt/py", None)
     assert cmd[cmd.index("--model") + 1] == "local-chat-completions"
     assert "--apply_chat_template" in cmd
+    assert cmd[cmd.index("--chat_template") + 1] == template
     assert "base_url=http://10.0.0.1:30000/v1/chat/completions" in build_model_args(config, True, None)
 
     # ...but a loglikelihood (MCQ) task always uses completions: chat endpoints cannot echo prompt
@@ -172,6 +174,7 @@ def test_build_command_chat_route_needs_template_and_generation():
     cmd = build_command(config, mcq, "/tmp/out", "/opt/py", None)
     assert cmd[cmd.index("--model") + 1] == "local-completions"
     assert "--apply_chat_template" not in cmd
+    assert "--chat_template" not in cmd
 
 
 def test_completion_only_pins_completions_route_and_forwards_unsafe_code():

@@ -81,6 +81,7 @@ class EvalchemyDefinition:
             apply_chat_template=(
                 model.apply_chat_template if source.apply_chat_template is None else source.apply_chat_template
             ),
+            chat_template=model.serve.chat_template,
             max_gen_toks=(
                 model.generation.max_gen_toks if model.generation.max_gen_toks is not None else config.max_gen_toks
             ),

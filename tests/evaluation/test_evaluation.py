@@ -457,6 +457,33 @@ def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
     assert evalchemy.apply_chat_template is True
 
 
+def test_model_chat_template_reaches_evalchemy_executor(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    model = replace(
+        models()["qwen3-8b"],
+        serve=replace(models()["qwen3-8b"].serve, chat_template="{{ bos_token }}{{ messages[0].content }}"),
+    )
+    spec = LaunchSpec(
+        model=model,
+        evals=("math500",),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    executor = batch.evaluations[0].executor
+    assert isinstance(executor, EvalchemyExecutor)
+    assert executor.config.chat_template == model.serve.chat_template
+
+
 def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     first = replace(

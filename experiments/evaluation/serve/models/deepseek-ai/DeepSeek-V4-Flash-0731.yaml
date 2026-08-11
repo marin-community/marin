@@ -11,6 +11,29 @@ serve:
   max_model_len: 32768
   max_num_batched_tokens: 32768
   max_num_seqs: 32
+  # DeepSeek V4 intentionally ships a Python encoder instead of tokenizer Jinja. This is the
+  # equivalent chat/thinking encoding for Evalchemy's text-only OpenAI messages.
+  chat_template: >-
+    {%- if enable_thinking is not defined %}{% set enable_thinking = true %}{% endif -%}
+    {{- bos_token -}}
+    {%- for message in messages -%}
+      {%- if message['role'] == 'system' -%}
+        {{- message['content'] -}}
+      {%- elif message['role'] == 'user' -%}
+        {{- '<｜User｜>' + message['content'] -}}
+      {%- elif message['role'] == 'assistant' -%}
+        {{- '<｜Assistant｜>' -}}
+        {%- if message.get('reasoning_content') -%}
+          {{- '<think>' + message['reasoning_content'] + '</think>' -}}
+        {%- else -%}
+          {{- '</think>' -}}
+        {%- endif -%}
+        {{- (message['content'] or '') + eos_token -}}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- if add_generation_prompt -%}
+      {{- '<｜Assistant｜>' + ('<think>' if enable_thinking else '</think>') -}}
+    {%- endif -%}
   vllm_extra_args:
   - --enable-prefix-caching
   - --kv-cache-dtype

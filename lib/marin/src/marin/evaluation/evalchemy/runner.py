@@ -100,6 +100,7 @@ class EvalchemyRunConfig:
     name: str
     tasks: tuple[EvalTaskConfig, ...]
     apply_chat_template: bool = False
+    chat_template: str | None = None
     max_gen_toks: int = DEFAULT_MAX_GEN_TOKS
     max_eval_instances: int | None = None
     num_concurrent: int = DEFAULT_NUM_CONCURRENT
@@ -151,6 +152,7 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             ],
             "out_path": output_dir,
             "apply_chat_template": config.apply_chat_template,
+            "chat_template": config.chat_template,
             "max_gen_toks": config.max_gen_toks,
             "extra_gen_kwargs": dict(config.extra_gen_kwargs),
             "max_eval_instances": config.max_eval_instances,
