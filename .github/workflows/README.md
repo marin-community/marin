@@ -67,7 +67,7 @@ then waits up to one hour for the four required main checks before squash
 merging. A failure or timeout leaves the pull request open and makes the
 scheduled workflow red.
 
-The app key is an environment secret released only to protected branches; a
+The app key is an environment secret released only to `main`; a
 pull-request workflow cannot receive it. The GitHub Pulumi stack gives only this
 app a review-rule bypass. Required CI is in a separate ruleset with no bypass
 actor and is bound to the GitHub Actions integration, so the app cannot merge a

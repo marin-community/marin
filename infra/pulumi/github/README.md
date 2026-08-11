@@ -43,8 +43,8 @@ managed Pulumi resources.
 `Ops - External Dependency Update` uses a private, repository-scoped GitHub App instead of the
 shared Nightshift app. The app may write repository contents and pull requests; it has no webhook,
 OAuth, administration, or organization permissions. Its private key is available only through the
-`external-runtime-updater` Actions environment, whose deployment policy accepts protected branches
-and rejects pull-request branches. Pulumi makes that app the only integration that bypasses the
+`external-runtime-updater` Actions environment, whose deployment policy accepts only `main` and
+rejects pull-request branches. Pulumi makes that app the only integration that bypasses the
 one-review rule. A separate ruleset has no bypass actors and requires GitHub Actions' own
 `marin-integration`, `marin-lint`, `rust-checks`, and `unit-tests` check runs before any pull request
 can merge; matching context names from another integration do not satisfy it.
@@ -53,8 +53,10 @@ GitHub App registration and initial installation require an organization owner t
 GitHub. GitHub does not expose that confirmation through the Pulumi provider. Bootstrap the app
 once before enabling the stack resource:
 
-1. Run `pulumi up` once with `externalRuntimeUpdater.enabled: false`. This creates the protected
-   Actions environment needed to seal and hold the app key.
+1. Run `pulumi up` once with the checked-in `bootstrapIssue: 8146` settings. This creates the
+   main-only Actions environment needed to seal and hold the app key. The issue number makes the
+   incomplete state visible in Pulumi output; keep this pull request in draft until step 5 replaces
+   the bootstrap object.
 2. Open the [preconfigured organization app registration](https://github.com/organizations/marin-community/settings/apps/new?name=marin-external-runtime-updater&description=Advances%20Marin%27s%20immutable%20external%20runtime%20pins&url=https%3A%2F%2Fgithub.com%2Fmarin-community%2Fmarin&public=false&webhook_active=false&contents=write&pull_requests=write),
    verify that only Contents and Pull requests have read/write access, and create the private app.
 3. Generate a private key on the app's General page. Install the app on `marin-community`, selecting
@@ -78,7 +80,6 @@ once before enabling the stack resource:
 
    ```yaml
    marin-github:externalRuntimeUpdater:
-     enabled: true
      repository: marin-community/marin
      appId: 123456
      appSlug: marin-external-runtime-updater

@@ -85,21 +85,7 @@ jobs:
           uv run config/update-external.py --summary-file "$PR_BODY"
           cat "$PR_BODY" >> "$GITHUB_STEP_SUMMARY"
 
-          changed=$(git diff --name-only)
-          unexpected=$(comm -23 \
-            <(printf '%s\n' "$changed" | sed '/^$/d' | sort) \
-            <(printf '%s\n' \
-              config/external/MarinSkyRL/uv.lock \
-              config/external/evalchemy/uv.lock \
-              config/external/harbor/uv.lock \
-              lib/marin/src/marin/external_dependencies.py \
-              pyproject.toml \
-              uv.lock | sort))
-          if [[ -n "$unexpected" ]]; then
-            echo "Unexpected files changed by config/update-external.py:"
-            echo "$unexpected"
-            exit 1
-          fi
+          changed=$(python scripts/ci/external_runtime_update.py changed-files)
 
           if [[ -z "$changed" ]]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -120,13 +106,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            config/external/MarinSkyRL/uv.lock \
-            config/external/evalchemy/uv.lock \
-            config/external/harbor/uv.lock \
-            lib/marin/src/marin/external_dependencies.py \
-            pyproject.toml \
-            uv.lock
+          git add --update
           git commit -m "$TITLE"
 
           if [[ "$FORCE_PUSH" == "true" ]]; then
@@ -161,7 +141,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          python scripts/ci/external_runtime_update.py \
+          python scripts/ci/external_runtime_update.py merge \
             --pr "${{ steps.pull-request.outputs.pr_url }}" \
             --repository "$GITHUB_REPOSITORY" \
             --app-slug "${{ vars.EXTERNAL_RUNTIME_UPDATER_APP_SLUG }}" \

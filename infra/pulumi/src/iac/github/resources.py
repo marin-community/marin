@@ -28,7 +28,7 @@ class CredentialResourcePlan:
     resource_id: str
 
 
-def _repository_name(organization: str, repository: str) -> str:
+def repository_name(organization: str, repository: str) -> str:
     prefix = f"{organization}/"
     if not repository.startswith(prefix):
         raise ValueError(f"repository {repository!r} is not owned by {organization!r}")
@@ -48,11 +48,11 @@ def credential_resource_plans(manifest: CredentialManifest) -> tuple[CredentialR
         if isinstance(credential, OrganizationCredential):
             resource_id = credential.name
         elif isinstance(credential, RepositoryCredential):
-            repository = _repository_name(manifest.organization, credential.repository)
+            repository = repository_name(manifest.organization, credential.repository)
             resource_id = f"{repository}:{credential.name}"
         else:
             assert isinstance(credential, EnvironmentCredential)
-            repository = _repository_name(manifest.organization, credential.repository)
+            repository = repository_name(manifest.organization, credential.repository)
             resource_id = f"{repository}:{quote(credential.environment, safe='')}:{credential.name}"
         plans.append(
             CredentialResourcePlan(

@@ -5,6 +5,7 @@
 
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -30,7 +31,16 @@ BUILTIN_ACTIONS_SECRETS = frozenset({"GITHUB_TOKEN"})
 SECRET_REFERENCE = re.compile(r"\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)")
 
 
-def _workflow_job_environments(path: Path) -> tuple[tuple[int, int, str], ...]:
+@dataclass(frozen=True)
+class WorkflowJobEnvironment:
+    """A one-based, half-open workflow job line range and its environment."""
+
+    start_line: int
+    end_line: int
+    name: str
+
+
+def _workflow_job_environments(path: Path) -> tuple[WorkflowJobEnvironment, ...]:
     document = yaml.compose(path.read_text())
     if not isinstance(document, yaml.MappingNode):
         return ()
@@ -44,7 +54,7 @@ def _workflow_job_environments(path: Path) -> tuple[tuple[int, int, str], ...]:
     )
     if jobs is None:
         return ()
-    ranges: list[tuple[int, int, str]] = []
+    ranges: list[WorkflowJobEnvironment] = []
     for _, job in jobs.value:
         if not isinstance(job, yaml.MappingNode):
             continue
@@ -57,7 +67,13 @@ def _workflow_job_environments(path: Path) -> tuple[tuple[int, int, str], ...]:
             None,
         )
         if environment is not None:
-            ranges.append((job.start_mark.line + 1, job.end_mark.line + 1, environment.value))
+            ranges.append(
+                WorkflowJobEnvironment(
+                    start_line=job.start_mark.line + 1,
+                    end_line=job.end_mark.line + 1,
+                    name=environment.value,
+                )
+            )
     return tuple(ranges)
 
 
@@ -73,7 +89,7 @@ def discover_secret_references(repo_root: Path) -> dict[str, tuple[SecretReferen
                 continue
             for match in SECRET_REFERENCE.finditer(line):
                 environment = next(
-                    (name for start, end, name in job_environments if start <= line_number < end),
+                    (job.name for job in job_environments if job.start_line <= line_number < job.end_line),
                     None,
                 )
                 references[match.group(1)].append(

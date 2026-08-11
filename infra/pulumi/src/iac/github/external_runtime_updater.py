@@ -9,16 +9,21 @@ from dataclasses import dataclass
 import pulumi
 import pulumi_github as github
 
-REQUIRED_MAIN_CHECKS = ("marin-integration", "marin-lint", "rust-checks", "unit-tests")
-GITHUB_ACTIONS_APP_ID = 15368
-UPDATER_ENVIRONMENT = "external-runtime-updater"
+from iac.github.resources import repository_name
+from scripts.ci.external_runtime_policy import GITHUB_ACTIONS_APP_ID, REQUIRED_CHECKS
+
 APP_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-DEFAULT_BRANCH_CONDITIONS = github.RepositoryRulesetConditionsArgs(
-    ref_name=github.RepositoryRulesetConditionsRefNameArgs(
-        excludes=[],
-        includes=["~DEFAULT_BRANCH", "refs/heads/main"],
-    )
-)
+UPDATER_ENVIRONMENT = "external-runtime-updater"
+UPDATER_BRANCH = "main"
+
+
+@dataclass(frozen=True)
+class ExternalRuntimeUpdaterBootstrap:
+    """Owner-tracked configuration before the GitHub App exists."""
+
+    organization: str
+    repository: str
+    issue: int
 
 
 @dataclass(frozen=True)
@@ -35,22 +40,53 @@ class ExternalRuntimeUpdaterConfig:
     review_ruleset_id: int
 
 
+@dataclass(frozen=True)
+class RequiredCheckPlan:
+    context: str
+    integration_id: int
+
+
+@dataclass(frozen=True)
+class ExternalRuntimeUpdaterPlan:
+    repository: str
+    environment: str
+    deployment_branch: str
+    installation_import: str
+    review_ruleset_import: str
+    review_bypass_actor_id: int
+    required_ci_bypass_actor_ids: tuple[int, ...]
+    required_checks: tuple[RequiredCheckPlan, ...]
+
+
+def _positive_int(settings: dict[str, object], name: str) -> int:
+    value = settings[name]
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"externalRuntimeUpdater.{name} must be a positive integer")
+    return value
+
+
 def external_runtime_updater_config(
     *,
     organization: str,
     settings: dict[str, object],
-) -> ExternalRuntimeUpdaterConfig | None:
-    """Validate stack settings, returning ``None`` for the bootstrap state."""
-    enabled = settings.get("enabled")
-    if not isinstance(enabled, bool):
-        raise ValueError("externalRuntimeUpdater.enabled must be a boolean")
-    if not enabled:
-        return None
+) -> ExternalRuntimeUpdaterBootstrap | ExternalRuntimeUpdaterConfig:
+    """Validate either the owner-tracked bootstrap or active app settings."""
+    repository = settings.get("repository")
+    if not isinstance(repository, str):
+        raise ValueError("externalRuntimeUpdater.repository must be a string")
+    repository_name(organization, repository)
+    if "bootstrapIssue" in settings:
+        if set(settings) != {"bootstrapIssue", "repository"}:
+            raise ValueError("bootstrap settings accept only bootstrapIssue and repository")
+        return ExternalRuntimeUpdaterBootstrap(
+            organization=organization,
+            repository=repository,
+            issue=_positive_int(settings, "bootstrapIssue"),
+        )
     expected_keys = {
         "actionsKeyId",
         "appId",
         "appSlug",
-        "enabled",
         "encryptedPrivateKey",
         "installationId",
         "repository",
@@ -62,15 +98,6 @@ def external_runtime_updater_config(
             f"{sorted(expected_keys)!r}; found {sorted(settings)!r}"
         )
 
-    def positive_int(name: str) -> int:
-        value = settings[name]
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise ValueError(f"externalRuntimeUpdater.{name} must be a positive integer")
-        return value
-
-    repository = settings["repository"]
-    if not isinstance(repository, str):
-        raise ValueError("externalRuntimeUpdater.repository must be a string")
     app_slug = settings["appSlug"]
     if not isinstance(app_slug, str) or APP_SLUG.fullmatch(app_slug) is None:
         raise ValueError("externalRuntimeUpdater.appSlug must be a lowercase GitHub App slug")
@@ -83,65 +110,84 @@ def external_runtime_updater_config(
     return ExternalRuntimeUpdaterConfig(
         organization=organization,
         repository=repository,
-        app_id=positive_int("appId"),
+        app_id=_positive_int(settings, "appId"),
         app_slug=app_slug,
-        installation_id=positive_int("installationId"),
+        installation_id=_positive_int(settings, "installationId"),
         actions_key_id=actions_key_id,
         encrypted_private_key=encrypted_private_key,
-        review_ruleset_id=positive_int("reviewRulesetId"),
+        review_ruleset_id=_positive_int(settings, "reviewRulesetId"),
     )
 
 
-def _repository_name(organization: str, repository: str) -> str:
-    prefix = f"{organization}/"
-    if not repository.startswith(prefix):
-        raise ValueError(f"repository {repository!r} is not owned by {organization!r}")
-    return repository.removeprefix(prefix)
+def external_runtime_updater_plan(config: ExternalRuntimeUpdaterConfig) -> ExternalRuntimeUpdaterPlan:
+    """Compute the app's repository imports and non-overlapping merge rules."""
+    repository = repository_name(config.organization, config.repository)
+    return ExternalRuntimeUpdaterPlan(
+        repository=repository,
+        environment=UPDATER_ENVIRONMENT,
+        deployment_branch=UPDATER_BRANCH,
+        installation_import=f"{config.installation_id}:{repository}",
+        review_ruleset_import=f"{repository}:{config.review_ruleset_id}",
+        review_bypass_actor_id=config.app_id,
+        required_ci_bypass_actor_ids=(),
+        required_checks=tuple(
+            RequiredCheckPlan(context=context, integration_id=GITHUB_ACTIONS_APP_ID) for context in REQUIRED_CHECKS
+        ),
+    )
+
+
+def _default_branch_conditions() -> github.RepositoryRulesetConditionsArgs:
+    return github.RepositoryRulesetConditionsArgs(
+        ref_name=github.RepositoryRulesetConditionsRefNameArgs(
+            excludes=[],
+            includes=["~DEFAULT_BRANCH", "refs/heads/main"],
+        )
+    )
 
 
 def register_external_runtime_updater(
     config: ExternalRuntimeUpdaterConfig,
-    environment: pulumi.CustomResource,
+    deployment_policy: pulumi.CustomResource,
 ) -> tuple[pulumi.CustomResource, ...]:
     """Register the app installation, credentials, and layered main-branch rules."""
-    repository = _repository_name(config.organization, config.repository)
+    plan = external_runtime_updater_plan(config)
     installation = github.AppInstallationRepository(
         "external-runtime-updater-installation",
         installation_id=str(config.installation_id),
-        repository=repository,
-        opts=pulumi.ResourceOptions(import_=f"{config.installation_id}:{repository}"),
+        repository=plan.repository,
+        opts=pulumi.ResourceOptions(import_=plan.installation_import),
     )
     app_id = github.ActionsVariable(
         "external-runtime-updater-app-id",
-        repository=repository,
+        repository=plan.repository,
         variable_name="EXTERNAL_RUNTIME_UPDATER_APP_ID",
         value=str(config.app_id),
     )
     app_slug = github.ActionsVariable(
         "external-runtime-updater-app-slug",
-        repository=repository,
+        repository=plan.repository,
         variable_name="EXTERNAL_RUNTIME_UPDATER_APP_SLUG",
         value=config.app_slug,
     )
     private_key = github.ActionsEnvironmentSecret(
         "external-runtime-updater-private-key",
-        repository=repository,
-        environment=UPDATER_ENVIRONMENT,
+        repository=plan.repository,
+        environment=plan.environment,
         secret_name="EXTERNAL_RUNTIME_UPDATER_PRIVATE_KEY",
         key_id=config.actions_key_id,
         value_encrypted=config.encrypted_private_key,
-        opts=pulumi.ResourceOptions(depends_on=[environment]),
+        opts=pulumi.ResourceOptions(depends_on=[deployment_policy]),
     )
     review_ruleset = github.RepositoryRuleset(
         "protect-main",
-        repository=repository,
+        repository=plan.repository,
         name="protect main",
         target="branch",
         enforcement="active",
-        conditions=DEFAULT_BRANCH_CONDITIONS,
+        conditions=_default_branch_conditions(),
         bypass_actors=[
             github.RepositoryRulesetBypassActorArgs(
-                actor_id=config.app_id,
+                actor_id=plan.review_bypass_actor_id,
                 actor_type="Integration",
                 bypass_mode="pull_request",
             )
@@ -160,25 +206,25 @@ def register_external_runtime_updater(
         ),
         opts=pulumi.ResourceOptions(
             depends_on=[installation],
-            import_=f"{repository}:{config.review_ruleset_id}",
+            import_=plan.review_ruleset_import,
         ),
     )
     required_ci_ruleset = github.RepositoryRuleset(
         "require-main-ci",
-        repository=repository,
+        repository=plan.repository,
         name="require main CI",
         target="branch",
         enforcement="active",
-        conditions=DEFAULT_BRANCH_CONDITIONS,
+        conditions=_default_branch_conditions(),
         rules=github.RepositoryRulesetRulesArgs(
             required_status_checks=github.RepositoryRulesetRulesRequiredStatusChecksArgs(
                 do_not_enforce_on_create=False,
                 required_checks=[
                     github.RepositoryRulesetRulesRequiredStatusChecksRequiredCheckArgs(
-                        context=context,
-                        integration_id=GITHUB_ACTIONS_APP_ID,
+                        context=check.context,
+                        integration_id=check.integration_id,
                     )
-                    for context in REQUIRED_MAIN_CHECKS
+                    for check in plan.required_checks
                 ],
                 strict_required_status_checks_policy=False,
             )
@@ -187,16 +233,27 @@ def register_external_runtime_updater(
     return installation, app_id, app_slug, private_key, review_ruleset, required_ci_ruleset
 
 
-def register_external_runtime_updater_environment(organization: str, repository: str) -> pulumi.CustomResource:
-    """Create the protected environment that releases the app key only on main."""
-    repository_name = _repository_name(organization, repository)
-    return github.RepositoryEnvironment(
+def register_external_runtime_updater_environment(
+    organization: str,
+    repository: str,
+) -> tuple[pulumi.CustomResource, pulumi.CustomResource]:
+    """Create the environment and restrict it to the main branch."""
+    normalized_repository = repository_name(organization, repository)
+    environment = github.RepositoryEnvironment(
         "external-runtime-updater-environment",
-        repository=repository_name,
+        repository=normalized_repository,
         environment=UPDATER_ENVIRONMENT,
         can_admins_bypass=False,
         deployment_branch_policy=github.RepositoryEnvironmentDeploymentBranchPolicyArgs(
-            custom_branch_policies=False,
-            protected_branches=True,
+            custom_branch_policies=True,
+            protected_branches=False,
         ),
     )
+    deployment_policy = github.RepositoryEnvironmentDeploymentPolicy(
+        "external-runtime-updater-main-policy",
+        repository=normalized_repository,
+        environment=UPDATER_ENVIRONMENT,
+        branch_pattern=UPDATER_BRANCH,
+        opts=pulumi.ResourceOptions(depends_on=[environment]),
+    )
+    return environment, deployment_policy

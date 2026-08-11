@@ -5,7 +5,8 @@ config:
   marin-github:repositories:
     - marin-community/marin
   marin-github:externalRuntimeUpdater:
-    enabled: false
+    repository: marin-community/marin
+    bootstrapIssue: 8146
   marin-github:credentials:
     - name: CLAUDE_CODE_OAUTH_TOKEN
       scope: organization

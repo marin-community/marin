@@ -12,20 +12,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
-EXPECTED_BASE_BRANCH = "main"
-EXPECTED_HEAD_BRANCH = "automation/external-dependencies"
-EXPECTED_TITLE = "[dependencies] Advance external runtimes"
-EXPECTED_FILES = frozenset(
-    {
-        "config/external/MarinSkyRL/uv.lock",
-        "config/external/evalchemy/uv.lock",
-        "config/external/harbor/uv.lock",
-        "lib/marin/src/marin/external_dependencies.py",
-        "pyproject.toml",
-        "uv.lock",
-    }
+from scripts.ci.external_runtime_policy import (
+    EXPECTED_BASE_BRANCH,
+    EXPECTED_FILES,
+    EXPECTED_HEAD_BRANCH,
+    EXPECTED_TITLE,
+    REQUIRED_CHECKS,
 )
-REQUIRED_CHECKS = ("marin-integration", "marin-lint", "rust-checks", "unit-tests")
 
 
 @dataclass(frozen=True)
@@ -58,13 +51,29 @@ class MergeDecision(StrEnum):
     DONE = "done"
 
 
-def validate_pull_request(
+@dataclass(frozen=True)
+class CheckRow:
+    name: str
+    bucket: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> "CheckRow":
+        if not isinstance(payload, dict):
+            raise ValueError(f"GitHub returned a non-object check row: {payload!r}")
+        name = payload.get("name")
+        bucket = payload.get("bucket")
+        if not isinstance(name, str) or not isinstance(bucket, str):
+            raise ValueError(f"GitHub returned an invalid check row: {payload!r}")
+        return cls(name=name, bucket=bucket)
+
+
+def validated_pull_request(
     pull_request: PullRequestSnapshot,
     *,
     expected_app_slug: str,
     expected_head_sha: str,
-) -> None:
-    """Reject a pull request that is not exactly the generated update boundary."""
+) -> PullRequestSnapshot:
+    """Return a pull request after verifying the generated update boundary."""
     expected_author = f"app/{expected_app_slug}"
     if pull_request.author != expected_author:
         raise ValueError(f"unexpected pull request author {pull_request.author!r}; expected {expected_author!r}")
@@ -81,16 +90,25 @@ def validate_pull_request(
     unexpected_files = sorted(set(pull_request.files) - EXPECTED_FILES)
     if unexpected_files:
         raise ValueError(f"pull request contains unexpected files: {unexpected_files}")
+    return pull_request
 
 
-def evaluate_required_checks(rows: Iterable[dict], *, required: tuple[str, ...]) -> RequiredCheckGate:
+def validate_changed_files(files: Iterable[str]) -> tuple[str, ...]:
+    """Return sorted changed files after enforcing the generator allowlist."""
+    changed = tuple(sorted(set(files)))
+    unexpected = tuple(file for file in changed if file not in EXPECTED_FILES)
+    if unexpected:
+        raise ValueError(f"external dependency update changed unexpected files: {list(unexpected)}")
+    return changed
+
+
+def evaluate_required_checks(rows: Iterable[CheckRow], *, required: tuple[str, ...]) -> RequiredCheckGate:
     """Classify the latest required GitHub check rows."""
     check_buckets: dict[str, str] = {}
     for row in rows:
-        name = row["name"]
-        if name in check_buckets:
-            raise ValueError(f"GitHub returned duplicate check rows for {name!r}")
-        check_buckets[name] = row["bucket"]
+        if row.name in check_buckets:
+            raise ValueError(f"GitHub returned duplicate check rows for {row.name!r}")
+        check_buckets[row.name] = row.bucket
     missing = tuple(name for name in required if name not in check_buckets)
     pending = tuple(name for name in required if check_buckets.get(name) == "pending")
     failing = tuple(
@@ -139,7 +157,7 @@ def pull_request_snapshot(pr: str, repository: str) -> PullRequestSnapshot:
     )
 
 
-def required_check_rows(pr: str, repository: str) -> list[dict]:
+def required_check_rows(pr: str, repository: str) -> tuple[CheckRow, ...]:
     """Read GitHub's latest rollup row for every check on a pull request."""
     result = subprocess.run(
         ["gh", "pr", "checks", pr, "--repo", repository, "--json", "name,bucket"],
@@ -147,10 +165,21 @@ def required_check_rows(pr: str, repository: str) -> list[dict]:
         text=True,
     )
     if not result.stdout.strip():
-        return []
+        return ()
     rows = json.loads(result.stdout)
     assert isinstance(rows, list)
-    return rows
+    return tuple(CheckRow.from_json(row) for row in rows)
+
+
+def changed_worktree_files() -> tuple[str, ...]:
+    """Read and validate files changed by the external dependency generator."""
+    result = subprocess.run(
+        ["git", "diff", "--name-only"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return validate_changed_files(result.stdout.splitlines())
 
 
 def merge_when_green(
@@ -165,8 +194,11 @@ def merge_when_green(
     """Wait for the fixed required checks, then merge with the dedicated app token."""
     deadline = time.monotonic() + timeout
     while True:
-        snapshot = pull_request_snapshot(pr, repository)
-        validate_pull_request(snapshot, expected_app_slug=app_slug, expected_head_sha=expected_head_sha)
+        snapshot = validated_pull_request(
+            pull_request_snapshot(pr, repository),
+            expected_app_slug=app_slug,
+            expected_head_sha=expected_head_sha,
+        )
         checks = evaluate_required_checks(required_check_rows(pr, repository), required=REQUIRED_CHECKS)
         decision = evaluate_merge(snapshot.state, checks)
         if decision is MergeDecision.DONE:
@@ -194,17 +226,23 @@ def merge_when_green(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--pr", required=True)
-    parser.add_argument("--repository", required=True)
-    parser.add_argument("--app-slug", required=True)
-    parser.add_argument("--expected-head-sha", required=True)
-    parser.add_argument("--timeout", type=float, default=3600)
-    parser.add_argument("--poll-interval", type=float, default=30)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("changed-files", help="validate and print generator changes")
+    merge = subparsers.add_parser("merge", help="wait for required checks and merge")
+    merge.add_argument("--pr", required=True)
+    merge.add_argument("--repository", required=True)
+    merge.add_argument("--app-slug", required=True)
+    merge.add_argument("--expected-head-sha", required=True)
+    merge.add_argument("--timeout", type=float, default=3600)
+    merge.add_argument("--poll-interval", type=float, default=30)
     return parser
 
 
 def main() -> None:
     args = _parser().parse_args()
+    if args.command == "changed-files":
+        print("\n".join(changed_worktree_files()))
+        return
     merge_when_green(
         pr=args.pr,
         repository=args.repository,
