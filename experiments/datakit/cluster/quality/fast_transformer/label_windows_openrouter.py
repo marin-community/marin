@@ -97,6 +97,10 @@ def ask_oracle(client: httpx.Client, model: str, row: dict) -> dict:
             "max_tokens": MAX_OUTPUT_TOKENS,
             "temperature": 0.0,
             "usage": {"include": True},
+            # Cheapest provider first: the same 300-window batch measured $0.69/1k
+            # on the default routing's cheap provider and $1.03/1k (list price) on
+            # another, a 1.5x swing the campaign budget should not float on.
+            "provider": {"sort": "price"},
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": window_user_content(row)},
@@ -134,6 +138,7 @@ def label_window(client: httpx.Client, model: str, row: dict, rejects: list[str]
         "prompt_tokens": int(usage.get("prompt_tokens") or 0),
         "completion_tokens": int(usage.get("completion_tokens") or 0),
         "cost": float(usage.get("cost") or 0.0),
+        "provider": str(reply.get("provider") or ""),
     }
 
 
@@ -159,6 +164,7 @@ def label_rows(
             "prompt_tokens": verdict["prompt_tokens"],
             "completion_tokens": verdict["completion_tokens"],
             "cost": verdict["cost"],
+            "provider": verdict["provider"],
         }
         for row, verdict in zip(rows, verdicts, strict=True)
         if verdict is not None
