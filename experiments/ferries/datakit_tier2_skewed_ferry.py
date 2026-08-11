@@ -12,10 +12,8 @@ smoke ferry doesn't cover.
 
 The download step uses ``download_hf_step`` so it cache-hits on a region-local
 staged copy when one exists at ``$MARIN_PREFIX/raw/<...>``, and falls back to a
-fresh HuggingFace download otherwise. We default ``MARIN_PREFIX`` to the
-region-local stable marin bucket (e.g. ``gs://marin-us-central1``); pipeline
-outputs go to absolute TTL paths under ``marin_temp_bucket(ttl_days=1)`` to
-avoid polluting stable storage with per-run CI data.
+fresh HuggingFace download otherwise. Iris supplies the region-local stable
+prefix; pipeline outputs use absolute one-day TTL paths.
 """
 
 import json
@@ -152,14 +150,7 @@ def _write_status(status: str, prefix: str) -> None:
 
 def main() -> None:
     configure_logging()
-    # Pin MARIN_PREFIX to the region-local stable marin bucket so the download
-    # step's relative override_output_path cache-hits on the staged copy when
-    # one exists for the iris-picked region. Pipeline outputs are routed to
-    # absolute TTL paths in build_steps().
-    if not os.environ.get("MARIN_PREFIX"):
-        os.environ["MARIN_PREFIX"] = marin_prefix()
-
-    prefix = os.environ["MARIN_PREFIX"]
+    prefix = marin_prefix()
     logger.info("MARIN_PREFIX=%s", prefix)
     logger.info("HF source: %s @ %s", HF_DATASET_ID, HF_REVISION)
     run_id = os.environ["SMOKE_RUN_ID"]

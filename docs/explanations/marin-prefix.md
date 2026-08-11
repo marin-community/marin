@@ -64,3 +64,27 @@ When running Marin in a distributed setup (e.g., across multiple nodes via Iris)
 *   **Points to the same shared storage location for all workers:** Using a local path like `/tmp/marin_output` on each machine will result in data being scattered and inaccessible, not a unified output. You must use a shared filesystem (like NFS) or a cloud storage solution (S3, GCS) for distributed runs.
 
 Choosing a suitable shared storage solution is crucial for the successful execution and reproducibility of your experiments in a distributed setting.
+
+## GCS region checks for Iris jobs
+
+An Iris worker derives a region-local `MARIN_PREFIX` when the job does not set
+one. This lets an unpinned coordinator run wherever Iris has capacity without
+moving its default storage to another GCP region.
+
+An explicit GCS `MARIN_PREFIX`, supplied with `iris job run -e` or the `env`
+section of `.marin.yaml`, requires `--region` or `--zone`. Before submission,
+Iris reads the bucket location and rejects the job unless every requested region
+matches it. This check happens before the root job or any child job is submitted.
+
+```bash
+uv run iris --cluster=marin job run \
+  --region us-central1 \
+  -e MARIN_PREFIX gs://marin-us-central1/my-run \
+  -- python experiments/my_pipeline.py
+```
+
+Use `--allow-cross-region` only for an intentional transfer. It sets
+`MARIN_I_WILL_PAY_FOR_ALL_FEES=1` in the job, logs the prefix and placement, and
+emits an `iris.job.cross_region_override` telemetry event. Passing the same
+environment variable with `-e` is equivalent. Local and S3 prefixes are not
+part of this GCS launch check.

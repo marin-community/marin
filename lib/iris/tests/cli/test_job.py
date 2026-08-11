@@ -3,6 +3,9 @@
 
 """Tests for iris.cli.job — validation, placement policy, and bulk actions."""
 
+import json
+import threading
+
 import pytest
 from click.testing import CliRunner
 from connectrpc.code import Code
@@ -31,6 +34,8 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2 as _job_pb2
+from rigging import telemetry
+from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
 
 
 def _make_config_with_zones(zones: list[str]) -> IrisClusterConfig:
@@ -107,6 +112,175 @@ def test_job_run_accepts_unconstrained_placement_with_cluster_metadata(recorded_
     result = _run_cli([], config=config)
     assert result.exit_code == 0, result.output
     assert len(recorded_job_submissions) == 1
+
+
+def test_job_run_explicit_gcs_prefix_requires_pinned_placement(recorded_job_submissions):
+    result = _run_cli(["-e", "MARIN_PREFIX", "gs://marin-us-central1/runs"])
+
+    assert result.exit_code != 0
+    assert "MARIN_PREFIX" in result.output
+    assert "--region" in result.output
+    assert recorded_job_submissions == []
+
+
+def test_job_run_explicit_gcs_prefix_accepts_matching_region(monkeypatch, recorded_job_submissions):
+    monkeypatch.setattr("iris.cli.job.get_bucket_location", lambda _path: "us-central1", raising=False)
+
+    result = _run_cli(["-e", "MARIN_PREFIX", "gs://marin-us-central1/runs", "--region", "us-central1"])
+
+    assert result.exit_code == 0, result.output
+    assert len(recorded_job_submissions) == 1
+
+
+def test_job_run_explicit_gcs_prefix_rejects_mismatched_region(monkeypatch, recorded_job_submissions):
+    monkeypatch.setattr("iris.cli.job.get_bucket_location", lambda _path: "us-central1", raising=False)
+
+    result = _run_cli(["-e", "MARIN_PREFIX", "gs://marin-us-central1/runs", "--region", "us-central2"])
+
+    assert result.exit_code != 0
+    assert "gs://marin-us-central1/runs" in result.output
+    assert "us-central1" in result.output
+    assert "us-central2" in result.output
+    assert recorded_job_submissions == []
+
+
+def test_job_run_explicit_gcs_prefix_rejects_any_mismatched_candidate(monkeypatch, recorded_job_submissions):
+    monkeypatch.setattr("iris.cli.job.get_bucket_location", lambda _path: "us-central1", raising=False)
+
+    result = _run_cli(
+        [
+            "-e",
+            "MARIN_PREFIX",
+            "gs://marin-us-central1/runs",
+            "--region",
+            "us-central1",
+            "--region",
+            "us-central2",
+        ]
+    )
+
+    assert result.exit_code != 0
+    assert "us-central2" in result.output
+    assert recorded_job_submissions == []
+
+
+def test_job_run_explicit_gcs_prefix_accepts_matching_zone(monkeypatch, recorded_job_submissions):
+    monkeypatch.setattr("iris.cli.job.get_bucket_location", lambda _path: "us-central1", raising=False)
+    config = _make_config_with_zones(["us-central1-a"])
+
+    result = _run_cli(
+        ["-e", "MARIN_PREFIX", "gs://marin-us-central1/runs", "--zone", "us-central1-a"],
+        config=config,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(recorded_job_submissions) == 1
+
+
+def test_job_run_allow_cross_region_submits_mismatch(
+    monkeypatch, recorded_job_submissions, caplog: pytest.LogCaptureFixture
+):
+    class AcceptedResponse:
+        status_code = 200
+
+        def __init__(self, batch_id: str):
+            self.batch_id = batch_id
+            self.headers: dict[str, str] = {}
+
+        def json(self) -> dict[str, str]:
+            return {"batch_id": self.batch_id, "status": "accepted"}
+
+    class RecordingTransport:
+        def __init__(self):
+            self.requests: list[bytes] = []
+            self.accepted = threading.Event()
+
+        def post(self, _endpoint, body: bytes, batch_id: str, _timeout):
+            self.requests.append(body)
+            self.accepted.set()
+            return AcceptedResponse(batch_id)
+
+        def close(self) -> None:
+            pass
+
+    telemetry.shutdown(0.01)
+    transport = RecordingTransport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    telemetry.configure(
+        endpoint="http://finelog.test/v1/telemetry",
+        service="iris-cli-test",
+        retry_initial=0.001,
+        retry_maximum=0.002,
+    )
+    monkeypatch.setattr("iris.cli.job.get_bucket_location", lambda _path: "us-central1", raising=False)
+
+    try:
+        with caplog.at_level("WARNING", logger="iris.cli.job"):
+            result = _run_cli(
+                [
+                    "-e",
+                    "MARIN_PREFIX",
+                    "gs://marin-us-central1/runs",
+                    "--region",
+                    "us-central2",
+                    "--allow-cross-region",
+                ]
+            )
+
+        assert transport.accepted.wait(1)
+    finally:
+        telemetry.shutdown(1)
+
+    assert result.exit_code == 0, result.output
+    assert len(recorded_job_submissions) == 1
+    environment = recorded_job_submissions[0]["environment"]
+    assert environment.env_vars[MARIN_CROSS_REGION_OVERRIDE_ENV] == "1"
+    assert any("gs://marin-us-central1/runs" in record.message for record in caplog.records)
+    records = [record for request in transport.requests for record in json.loads(request)["records"]]
+    event = next(record for record in records if record["name"] == "iris.job.cross_region_override")
+    assert event["body"] == {
+        "bucket_region": "us-central1",
+        "marin_prefix": "gs://marin-us-central1/runs",
+        "override_source": "--allow-cross-region",
+        "requested_regions": "us-central2",
+    }
+
+
+def test_job_run_override_environment_submits_mismatch(
+    monkeypatch, recorded_job_submissions, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr("iris.cli.job.get_bucket_location", lambda _path: "us-central1", raising=False)
+
+    with caplog.at_level("WARNING", logger="iris.cli.job"):
+        result = _run_cli(
+            [
+                "-e",
+                "MARIN_PREFIX",
+                "gs://marin-us-central1/runs",
+                "-e",
+                MARIN_CROSS_REGION_OVERRIDE_ENV,
+                "approved",
+                "--region",
+                "us-central2",
+            ]
+        )
+
+    assert result.exit_code == 0, result.output
+    assert len(recorded_job_submissions) == 1
+    assert any(MARIN_CROSS_REGION_OVERRIDE_ENV in record.message for record in caplog.records)
+
+
+def test_job_run_explicit_gcs_prefix_fails_when_bucket_region_is_unknown(monkeypatch, recorded_job_submissions):
+    def region_lookup_fails(_path: str) -> str:
+        raise PermissionError("bucket metadata denied")
+
+    monkeypatch.setattr("iris.cli.job.get_bucket_location", region_lookup_fails, raising=False)
+
+    result = _run_cli(["-e", "MARIN_PREFIX", "gs://private-bucket/runs", "--region", "us-central1"])
+
+    assert result.exit_code != 0
+    assert "Could not determine the GCS bucket region" in result.output
+    assert recorded_job_submissions == []
 
 
 # ---------------------------------------------------------------------------

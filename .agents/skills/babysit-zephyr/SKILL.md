@@ -37,6 +37,10 @@ Get the run command from the user. Typical pattern:
 uv run iris --config lib/iris/config/marin.yaml job run --region <REGION> --no-wait -- python <SCRIPT>
 ```
 
+Leave `MARIN_PREFIX` unset when placement should float; Iris derives a
+region-local prefix on the worker. If the launch explicitly passes a GCS
+`MARIN_PREFIX`, `iris job run` requires a matching `--region` or `--zone`.
+
 The entrypoint container defaults to 1GB memory. For long-running pipelines that accumulate state (GCS clients, logging), increase with `--memory`:
 ```bash
 uv run iris --config lib/iris/config/marin.yaml job run --region <REGION> --memory 5GB --no-wait -- python <SCRIPT>

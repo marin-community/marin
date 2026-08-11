@@ -4,7 +4,7 @@
 """Datakit smoke ferry: end-to-end download → normalize → dedup → consolidate → tokenize.
 
 Runs against the FineWeb-Edu ``sample/10BT`` subset using the StepSpec DAG runner.
-Output paths are placed under ``$MARIN_PREFIX/datakit-smoke/$SMOKE_RUN_ID/...``.
+Output paths are placed under a region-local one-day temp prefix.
 """
 
 import json
@@ -39,9 +39,7 @@ from rigging.timing import log_time
 logger = logging.getLogger(__name__)
 
 
-def build_steps(run_id: str) -> list[StepSpec]:
-    base = f"datakit-smoke/{run_id}"
-
+def build_steps(base: str) -> list[StepSpec]:
     # Filtered download — restrict to the sample/10BT subset so we don't pull
     # the entire fineweb-edu repo (TBs). Per-run isolated under $base/download.
     downloaded = download_hf_step(
@@ -147,17 +145,14 @@ def _write_status(status: str, marin_prefix: str) -> None:
 
 def main() -> None:
     configure_logging()
-    if not os.environ.get("MARIN_PREFIX"):
-        os.environ["MARIN_PREFIX"] = marin_temp_bucket(ttl_days=1)
-
-    marin_prefix = os.environ["MARIN_PREFIX"]
-    logger.info("MARIN_PREFIX defaulted to %s", marin_prefix)
     run_id = os.environ["SMOKE_RUN_ID"]
+    output_prefix = marin_temp_bucket(ttl_days=1, prefix=f"datakit-smoke/{run_id}")
+    logger.info("Output prefix: %s", output_prefix)
 
-    _write_status("running", marin_prefix)
+    _write_status("running", output_prefix)
     with log_time("Datakit ferry total wall time"):
-        StepRunner().run(build_steps(run_id))
-    _write_status("succeeded", marin_prefix)
+        StepRunner().run(build_steps(output_prefix))
+    _write_status("succeeded", output_prefix)
 
 
 if __name__ == "__main__":

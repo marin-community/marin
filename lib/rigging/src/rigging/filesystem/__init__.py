@@ -66,6 +66,7 @@ from rigging.filesystem.cross_region import (
     is_cross_region_url,
     mirror_budget,
     record_transfer,
+    regions_match,
     reset_mirror_budget,
     set_mirror_budget,
 )

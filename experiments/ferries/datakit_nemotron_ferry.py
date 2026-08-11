@@ -8,8 +8,7 @@ tokenize. The first step is verification-only: it confirms the ``quality=high``
 subtree of the Nemotron-CC dump is already staged at ``NEMOTRON_RAW_PATH`` and
 refuses to initiate a Common Crawl download.
 
-Pipeline outputs land under ``$MARIN_PREFIX/datakit-nemotron-smoke/$SMOKE_RUN_ID/...``;
-``MARIN_PREFIX`` defaults to a region-local temp bucket with 1-day TTL.
+Pipeline outputs land under a region-local one-day temp prefix.
 """
 
 import json
@@ -76,9 +75,7 @@ def _verify_nemotron_quality_present(output_path: str) -> None:
     logger.info("Nemotron-CC %s confirmed at %s (e.g. %s)", NEMOTRON_QUALITY_DIR, quality_dir, sample[0])
 
 
-def build_steps(run_id: str) -> list[StepSpec]:
-    base = f"datakit-nemotron-smoke/{run_id}"
-
+def build_steps(base: str) -> list[StepSpec]:
     # Verify-only raw step. Uses an absolute override so it points at the
     # pre-staged dump regardless of MARIN_PREFIX.
     download = StepSpec(
@@ -187,22 +184,19 @@ def _write_status(status: str, marin_prefix: str) -> None:
 
 def main() -> None:
     configure_logging()
-    if not os.environ.get("MARIN_PREFIX"):
-        os.environ["MARIN_PREFIX"] = marin_temp_bucket(ttl_days=1)
-
-    marin_prefix = os.environ["MARIN_PREFIX"]
-    logger.info("MARIN_PREFIX defaulted to %s", marin_prefix)
     run_id = os.environ["SMOKE_RUN_ID"]
+    output_prefix = marin_temp_bucket(ttl_days=1, prefix=f"datakit-nemotron-smoke/{run_id}")
+    logger.info("Output prefix: %s", output_prefix)
 
     # Guard against accidental cross-region reads of the multi-TB raw dump.
     region = region_from_metadata()
     if region:
         check_path_in_region("nemotron_raw", NEMOTRON_RAW_PATH, region)
 
-    _write_status("running", marin_prefix)
+    _write_status("running", output_prefix)
     with log_time("Datakit nemotron ferry total wall time"):
-        StepRunner().run(build_steps(run_id))
-    _write_status("succeeded", marin_prefix)
+        StepRunner().run(build_steps(output_prefix))
+    _write_status("succeeded", output_prefix)
 
 
 if __name__ == "__main__":

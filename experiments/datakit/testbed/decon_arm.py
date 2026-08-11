@@ -25,14 +25,13 @@ Submit on iris (us-central1, same region as the sample — no egress):
 
 import argparse
 import logging
-import os
 
 from fray.types import ResourceConfig
 from marin.datakit.decon import DropSetSource, all_source_drop_sets_step, build_eval_bloom_step, decon_step
 from marin.datakit.sources import all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import marin_prefix
+from rigging.filesystem import check_path_in_region, marin_prefix
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.decontam.config import (
@@ -49,7 +48,7 @@ from experiments.datakit.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
 
 logger = logging.getLogger(__name__)
 
-STAGING_PREFIX = "gs://marin-us-central1"
+STAGING_REGION = "us-central1"
 _SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 
 # Bloom sizing mirrors experiments/datakit/reference_pipeline.py.
@@ -169,8 +168,8 @@ def build_testbed_decon_steps(
 
 
 def main() -> None:
-    os.environ.setdefault("MARIN_PREFIX", STAGING_PREFIX)
     configure_logging(logging.INFO)
+    check_path_in_region("MARIN_PREFIX", marin_prefix(), STAGING_REGION)
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", nargs="*", default=None, help="restrict decon to these source names (smoke)")
     ap.add_argument(

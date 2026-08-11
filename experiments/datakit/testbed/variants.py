@@ -12,6 +12,11 @@ tokenizes the deduped output, and trains.
 The whole pipeline (ferry → minhash → fuzzy_dups → consolidate → tokenize
 → weights → train) lives in one ``StepSpec`` graph that :class:`StepRunner`
 walks, scheduling each step once its dependencies are satisfied.
+
+Submit in the staging region::
+
+    uv run iris --cluster=marin job run --region us-central1 -- \\
+        python experiments/datakit/testbed/variants.py
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from marin.processing.classification.deduplication.fuzzy_dups import (
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
 from marin.processing.tokenize.tokenize import TokenizedCache
+from rigging.filesystem import check_path_in_region, marin_prefix
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.testbed.mixture import tokenized_bucket_weights_step
@@ -45,7 +51,7 @@ from experiments.datasets.uncheatable import uncheatable_datasets
 
 logger = logging.getLogger(__name__)
 
-STAGING_PREFIX = "gs://marin-us-central1"
+STAGING_REGION = "us-central1"
 TARGET_TOTAL_TOKENS_B = 1000.0
 MAX_STEP_CONCURRENCY = 20
 
@@ -185,7 +191,7 @@ def dedup(
 
 def main() -> None:
     """Build the fuzzy-dedup DAG and run it."""
-    os.environ.setdefault("MARIN_PREFIX", STAGING_PREFIX)
+    check_path_in_region("MARIN_PREFIX", marin_prefix(), STAGING_REGION)
 
     tokenizer = TESTBED_TOKENIZER
     run_id = "fuzzy_dedup"
