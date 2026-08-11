@@ -122,3 +122,11 @@ author: Rafal Wojdyla
 - Service health: Both 96-worker TEI pools use distinct nonzero ports. Logs show successful requests and no port collisions, HTTP 429 responses, connection failures, dead workers, or memory errors.
 - Result: Each region has written and sealed its first complete source artifact.
 - Next action: Continue 15-minute monitoring. Post only major changes to issue #8162.
+
+### 2026-08-11 20:38 UTC - Routine health check
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- East progress: Three source jobs succeeded. The fourth source job is running.
+- RNO progress: One source job succeeded. `climblab-ja_edc88cea` reached 1,131 of 1,787 output shards with live workers and no dead workers.
+- Error scan: No port collisions, HTTP 429 responses, connection failures, tracebacks, or memory errors.
+- Next action: Continue the 15-minute check cadence.
