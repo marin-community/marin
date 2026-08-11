@@ -136,3 +136,27 @@ production profiler boundary.
 
 No image build, GPU execution, v23 submission, or relaunch was performed for
 this source-only diagnostic change.
+
+## V23 line-1 separator-width observation
+
+The single v23 task used source
+`c7874a8fa8194772dfbe55827d9c2e8be0a14154`. It authenticated the launcher and
+manifest, reached the NCU SASS parser, and failed once at the line-1 separator
+gate. The bounded diagnostic reports 108 UTF-8 bytes, 103 hyphens, five ASCII
+spaces, six non-whitespace tokens, and a maximum token width of 61 bytes. It
+contains no raw line or adjacent record. The aggregate does not independently
+prove every group width or their order.
+
+The parser admits only the previously reviewed separator widths
+`(18, 60, 6, 6, 6, 6)` and the new closed width tuple
+`(18, 61, 6, 6, 6, 6)`, each joined by one ASCII space. The tuple selected at
+line 1 fixes the exact separator literal for the remainder of that export, so
+mixing the 107- and 108-byte forms fails. The existing fixed-width kernel row,
+`Address Source` header, and instruction grammar remain unchanged; a later row
+that differs under the 108-byte layout still fails with the bounded aggregate
+diagnostic.
+
+Behavioral tests run both accepted forms through the parser and NCU subprocess
+boundary. They reject other group counts, widths, orders, gaps, mixed separator
+forms, and a widened kernel row. No image build, GPU execution, v24 submission,
+or relaunch was performed for this source repair.

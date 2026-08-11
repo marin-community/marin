@@ -239,8 +239,15 @@ _SASS_OPCODE_BASES = frozenset(
 )
 _NCU_SASS_SECTION_PATTERN = re.compile(r"^Kernel Name {8}(?P<name>[A-Za-z_][A-Za-z0-9_]{25}) {62}$")
 _NCU_SASS_HEADER = "Address Source"
-_NCU_SASS_SEPARATOR = "------------------ " + "-" * 60 + " ------ ------ ------ ------"
-_NCU_SASS_COLUMN_WIDTHS = tuple(len(group) for group in _NCU_SASS_SEPARATOR.split(" "))
+_NCU_SASS_SEPARATOR_WIDTH_OPTIONS = (
+    (18, 60, 6, 6, 6, 6),
+    (18, 61, 6, 6, 6, 6),
+)
+_NCU_SASS_SEPARATORS = {
+    " ".join("-" * width for width in widths): widths for widths in _NCU_SASS_SEPARATOR_WIDTH_OPTIONS
+}
+_NCU_SASS_SEPARATOR = " ".join("-" * width for width in _NCU_SASS_SEPARATOR_WIDTH_OPTIONS[0])
+_NCU_SASS_COLUMN_WIDTHS = _NCU_SASS_SEPARATOR_WIDTH_OPTIONS[0]
 _NCU_SASS_COLUMN_ASCII_CLASS_FIELDS = ("control", "digit", "lowercase", "punctuation", "uppercase", "whitespace")
 _NCU_SASS_COLUMN_FIELDS = (
     "index",
@@ -920,7 +927,7 @@ def _ncu_sass_line_structure(line: str) -> dict[str, object]:
             "header": line == _NCU_SASS_HEADER,
             "instruction": _NCU_SASS_INSTRUCTION_PATTERN.match(line) is not None,
             "section": _NCU_SASS_SECTION_PATTERN.fullmatch(line) is not None,
-            "separator": line == _NCU_SASS_SEPARATOR,
+            "separator": line in _NCU_SASS_SEPARATORS,
             "status": _NCU_SASS_STATUS_PATTERN.fullmatch(line) is not None,
         },
         "public_vocabulary": {word: word in public_words for word in _NCU_SASS_PUBLIC_WORDS},
@@ -1011,8 +1018,16 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
     for line_number, line in enumerate(lines, start=1):
         if len(line) > _MAX_NCU_SASS_LINE_CHARS:
             raise ValueError(f"Nsight Compute SASS export line {line_number} exceeds its reviewed bound")
-    if not lines or lines[0] != _NCU_SASS_SEPARATOR:
+    selected_separator_widths = _NCU_SASS_SEPARATORS.get(lines[0]) if lines else None
+    if selected_separator_widths is None:
         raise _unrecognized_ncu_sass_record(1, lines[0] if lines else "")
+    selected_separator_utf8_bytes = sum(selected_separator_widths) + len(selected_separator_widths) - 1
+    selected_separator = " ".join("-" * width for width in selected_separator_widths)
+    if len(selected_separator.encode("ascii")) != selected_separator_utf8_bytes:
+        raise AssertionError("reviewed Nsight Compute separator widths do not cover the selected record")
+
+    def is_selected_separator(line: str) -> bool:
+        return len(line.encode("utf-8")) == selected_separator_utf8_bytes and line == selected_separator
 
     sections: list[NcuSassKernel] = []
     current_name: str | None = None
@@ -1036,7 +1051,7 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
 
     for line_number, line in enumerate(lines[1:], start=2):
         if current_name is not None and not identity_separator_seen:
-            if line != _NCU_SASS_SEPARATOR:
+            if not is_selected_separator(line):
                 raise ValueError(
                     f"Nsight Compute SASS kernel identity table omits its exact close at line {line_number}"
                 )
@@ -1054,7 +1069,7 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
                 raise ValueError(f"misplaced Nsight Compute SASS header at line {line_number}")
             header_seen = True
             continue
-        if line == _NCU_SASS_SEPARATOR:
+        if is_selected_separator(line):
             if current_name is None or not header_seen or separator_seen or instructions:
                 raise ValueError(f"misplaced Nsight Compute SASS separator at line {line_number}")
             separator_seen = True
