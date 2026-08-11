@@ -468,6 +468,12 @@ def check_json(files: list[pathlib.Path], fix: bool) -> int:
     return _record("JSON formatter", 0)
 
 
+# Patch/diff files are verbatim artifacts (e.g. a vendored upstream patch): their
+# context lines carry significant trailing whitespace and the bytes must stay exact to
+# keep applying, so the whitespace/newline normalizers skip them.
+_VERBATIM_SUFFIXES = frozenset({".patch", ".diff"})
+
+
 def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
@@ -476,6 +482,8 @@ def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
     buf = io.StringIO()
 
     for file_path in files:
+        if file_path.suffix in _VERBATIM_SUFFIXES:
+            continue
         try:
             with open(file_path) as f:
                 lines = f.readlines()
@@ -517,6 +525,8 @@ def check_eof_newline(files: list[pathlib.Path], fix: bool) -> int:
     buf = io.StringIO()
 
     for file_path in files:
+        if file_path.suffix in _VERBATIM_SUFFIXES:
+            continue
         if file_path.stat().st_size == 0:
             continue
 
