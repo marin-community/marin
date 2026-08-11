@@ -1,0 +1,14 @@
+h100_contract_map_source_payload.py: OK
+h100-evidence-source-manifest.json: OK
+Traceback (most recent call last):
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3829, in <module>
+    main()
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3811, in main
+    output = run_coordinator(
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2527, in run_coordinator
+    backend.value: _run_ncu_profile(
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3378, in _run_ncu_profile
+    parse_ncu_sass(sass_source_path.read_text(), tuple(metric.name for metric in metrics))
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 873, in parse_ncu_sass
+    raise ValueError(f"unrecognized Nsight Compute SASS export line: {line!r}")
+ValueError: unrecognized Nsight Compute SASS export line: '------------------ ------------------------------------------------------------ ------ ------ ------ ------'

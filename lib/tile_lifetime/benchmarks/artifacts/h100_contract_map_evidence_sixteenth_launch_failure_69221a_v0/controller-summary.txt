@@ -1,0 +1,11 @@
+job_id=/dlwh/shuttle-h100-contract-map-evidence-69221a9-v16
+state=failed
+task_count=1
+failed_tasks=1
+task_exit_code=1
+task_duration_seconds=211.15
+failure_retries=0
+preemptions=0
+first_failure=ValueError: unrecognized Nsight Compute SASS export line
+accepted_bundle=false
+relaunch=false
