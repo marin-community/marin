@@ -344,8 +344,9 @@ def _mlp_probe_preds(emb: np.ndarray, target: np.ndarray, tr: np.ndarray, ev: np
         updates, opt_state = optimizer.update(grads, opt_state, eqx.filter(model, eqx.is_inexact_array))
         return eqx.apply_updates(model, updates), opt_state, loss
 
-    best_rho, best_model, stale = -2.0, model, 0
+    best_rho, best_model, stale, stopped_at = -2.0, model, 0, 0
     for epoch in range(40):
+        stopped_at = epoch
         ep = rng.permutation(len(fi))
         for s in range(0, len(ep), 1024):
             batch = fi[ep[s : s + 1024]]
@@ -357,7 +358,7 @@ def _mlp_probe_preds(emb: np.ndarray, target: np.ndarray, tr: np.ndarray, ev: np
             stale += 1
         if stale >= 2:
             break
-    logger.info("mlp probe: best val_rho=%+.4f (epoch cap 40, stopped at %d)", best_rho, epoch)
+    logger.info("mlp probe: best val_rho=%+.4f (epoch cap 40, stopped at %d)", best_rho, stopped_at)
     return np.asarray(jax.nn.sigmoid(best_model(jnp.asarray(emb[ev]))))
 
 
