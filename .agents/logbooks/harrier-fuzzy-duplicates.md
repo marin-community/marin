@@ -138,3 +138,11 @@ author: Rafal Wojdyla
 - RNO progress: Two source jobs succeeded. `common_corpus-english_0e1cf2c4` reached 5,838 of 8,018 join-side tasks with 32 live workers and no dead workers.
 - Error scan: No port collisions, HTTP 429 responses, connection failures, tracebacks, or memory errors.
 - Next action: Continue the 15-minute check cadence.
+
+### 2026-08-11 21:09 UTC - Routine health check
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- East progress: Five source jobs succeeded. `docx-corpus-en_1223b38b` is pending. This is the first check with that pending state.
+- RNO progress: Two source jobs succeeded. `common_corpus-english_0e1cf2c4` entered its output stage and reached 184 of 8,018 shards with 32 live workers and no dead workers.
+- Error scan: No port collisions, HTTP 429 responses, connection failures, tracebacks, or memory errors.
+- Next action: Continue the 15-minute check cadence. Escalate if the East pending state lasts 30 minutes.
