@@ -25,6 +25,6 @@ serve:
   - --gpu-memory-utilization
   - "0.83"
 generation:
-  max_gen_toks: 8192
+  max_gen_toks: 16384
   extra_gen_kwargs:
     skip_special_tokens: "false"
