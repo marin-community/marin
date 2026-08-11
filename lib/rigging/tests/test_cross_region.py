@@ -171,6 +171,10 @@ class _FakeGCSFS:
     def get(self, rpath, lpath, recursive=False, **kwargs) -> None:
         pass
 
+    def find(self, path: str) -> list[str]:
+        prefix = path.rstrip("/") + "/"
+        return [name for name in self._files if name.startswith(prefix)]
+
     def exists(self, path: str) -> bool:
         return path in self._files
 
@@ -242,6 +246,17 @@ def test_guarded_fs_all_read_methods_charge_budget(budget, method, args):
     guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _: True, budget=budget)
     getattr(guarded, method)(*args)
     assert budget.bytes_used == 100
+
+
+def test_guarded_fs_recursive_get_charges_each_child(budget):
+    fs = _FakeGCSFS()
+    fs.add_file("remote-bucket/cache/first.bin", b"x" * 400)
+    fs.add_file("remote-bucket/cache/second.bin", b"x" * 500)
+
+    guarded = CrossRegionGuardedFS(fs, cross_region_checker=lambda _: True, budget=budget)
+    guarded.get("remote-bucket/cache", "/tmp/local", recursive=True)
+
+    assert budget.bytes_used == 900
 
 
 def test_guarded_fs_delegates_non_read_methods():
