@@ -316,7 +316,10 @@ def run(
         rows = rows[:limit]
     logger.info("label_windows_vllm: %d windows in the set", len(rows))
 
-    pending = [r for r in rows if window_key(r) not in _labeled_keys(_chunk_dir(out))]
+    # Hoisted: the comprehension's filter runs per row, and _labeled_keys is an
+    # S3 glob plus a read of every checkpoint chunk.
+    already = _labeled_keys(_chunk_dir(out))
+    pending = [r for r in rows if window_key(r) not in already]
     if not pending:
         logger.info("label_windows_vllm: nothing pending, consolidating existing checkpoints")
         table = consolidate_chunks(_chunk_dir(out))
