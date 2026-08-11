@@ -6,6 +6,7 @@ import functools
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
@@ -19,6 +20,7 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from jax._src import config as jax_config
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -30,7 +32,7 @@ from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
-from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -131,6 +133,10 @@ class GrugEvalConfig:
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
+    # For expert-parallel runs, also evaluate under the dropless local backend on an
+    # expert-collapsed mesh, logging a separate `eval_dropless` macro loss alongside the
+    # as-trained (with-drop) eval. No-op when the mesh has no expert parallelism.
+    dropless_eval: bool = False
 
 
 @dataclass(frozen=True)
@@ -198,6 +204,37 @@ def build_train_loader(
     )
 
 
+def _reshard_tree_to_mesh(tree, mesh: Mesh):
+    """Move each array leaf onto ``mesh``, preserving its PartitionSpec.
+
+    The train and eval meshes name the same axes (only the ``expert``/``data`` sizes differ), so a
+    leaf's PartitionSpec is valid on both; ``jax.device_put`` performs the cross-mesh transfer. The
+    model's own ``reshard`` calls fix the exact layout inside the forward, so any valid placement on
+    the target mesh suffices here. Non-array leaves pass through.
+    """
+
+    def move(leaf):
+        if not isinstance(leaf, jax.Array):
+            return leaf
+        spec = leaf.sharding.spec if isinstance(leaf.sharding, NamedSharding) else P()
+        return jax.device_put(leaf, NamedSharding(mesh, spec))
+
+    return jax.tree.map(move, tree)
+
+
+def _to_dropless_local(model: Transformer) -> Transformer:
+    """Swap the scanned block's MoE expert backend to the dropless local ``sonic_cute`` path.
+
+    ``implementation``/``expert_chunks`` are static fields shared across the whole stacked block,
+    so one replacement covers every layer. The forward reads ``self.expert_mlp.implementation``
+    (not the model config), so this alone routes the eval dropless. Must run on an expert-collapsed
+    mesh: the local backend raises when the mesh expert axis is larger than one.
+    """
+    expert_mlp = model.stacked_blocks.stacked.mlp.expert_mlp
+    dropless = dataclasses.replace(expert_mlp, implementation="sonic_cute", expert_chunks=1)
+    return eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.expert_mlp, model, dropless)
+
+
 def build_tagged_evaluator(
     *,
     data_config: LmDataConfig,
@@ -205,6 +242,7 @@ def build_tagged_evaluator(
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
     mp: jmp.Policy,
+    model_transform: Callable[[Transformer], Transformer] | None = None,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
@@ -229,6 +267,8 @@ def build_tagged_evaluator(
         # every eval raises `TypeError: ... supports only bf16/fp16, got float32` on Blackwell. The
         # reference attention path takes float32, which hid this on H100.
         model = mp.cast_to_compute(model)
+        if model_transform is not None:
+            model = model_transform(model)
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
         per_pos_loss = model.next_token_loss(
@@ -611,6 +651,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         eval_cfg = config.eval
         evaluator = None
+        dropless_evaluator = None
+        dropless_eval_mesh = None
         if eval_cfg is not None:
             evaluator = build_tagged_evaluator(
                 data_config=config.data,
@@ -619,6 +661,28 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 eval_cfg=eval_cfg,
                 mp=trainer.mp,
             )
+            # Expert-parallel runs drop tokens over capacity; a second evaluator scores the same
+            # weights dropless under the local backend on an expert-collapsed mesh (expert folded
+            # into `data`), which the local backend requires. FSDP runs already have expert=1.
+            if eval_cfg.dropless_eval and mesh.shape["expert"] > 1:
+                dropless_eval_mesh = compact_grug_mesh(
+                    expert_axis_size=1,
+                    replica_axis_size=mesh.shape["replica_dcn"],
+                    model_axis_size=mesh.shape["model"],
+                )
+                # Build under the eval mesh so every constant the evaluator captures at construction
+                # (e.g. `log2e`, the byte-per-token table, output shardings) is bound to the eval mesh
+                # rather than the ambient train mesh; otherwise those leak a train-mesh aval into the
+                # eval jit and fail the explicit-mesh check.
+                with set_mesh(dropless_eval_mesh):
+                    dropless_evaluator = build_tagged_evaluator(
+                        data_config=config.data,
+                        max_seq_len=config.model.max_seq_len,
+                        mesh=dropless_eval_mesh,
+                        eval_cfg=eval_cfg,
+                        mp=trainer.mp,
+                        model_transform=_to_dropless_local,
+                    )
 
         # `trainer.num_train_steps` sizes the schedule; this bounds the run. Progress and the loop
         # both use it so a head-of-schedule run reports against the steps it will actually take.
@@ -667,6 +731,27 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     ),
                     every=interval,
                 )
+                if dropless_evaluator is not None and dropless_eval_mesh is not None:
+                    # The training loop runs under `set_mesh(mesh)` (expert-parallel). The dropless
+                    # evaluator runs under the expert-collapsed mesh, so the model params -- sharded on
+                    # the train mesh -- must be resharded onto the eval mesh before its eval jit (JAX
+                    # does not auto-reshard across explicit meshes), then the local backend sees
+                    # expert=1. PGLE is disabled for the eval module as in `cb_tagged_evaluate`.
+                    dropless_prefix = f"{eval_cfg.prefix}_dropless"
+
+                    def dropless_eval_hook(
+                        step, *args, _mesh=dropless_eval_mesh, _ev=dropless_evaluator, _prefix=dropless_prefix, **kwargs
+                    ):
+                        step_count = int(step.step)
+                        if step_count < 0:
+                            return
+                        with set_mesh(_mesh):
+                            model = _reshard_tree_to_mesh(step.model, _mesh)
+                            with jax_config.enable_pgle(False):
+                                log_dict = eval_model(_ev, model, prefix=_prefix)
+                            levanter.tracker.log(log_dict, step=step_count)
+
+                    state_callbacks.add_hook(dropless_eval_hook, every=interval)
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
