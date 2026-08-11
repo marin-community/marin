@@ -421,7 +421,16 @@ def _task_env_vars(launch: Glm52LaunchConfig) -> dict[str, str]:
     return env
 
 
-def submit_glm52(ctx, launch: Glm52LaunchConfig, name: str = "vllm"):
+def submit_glm52(ctx, launch: Glm52LaunchConfig, name: str = "vllm", max_retries_failure: int = 0):
+    """Submit the serving gang.
+
+    ``max_retries_failure`` defaults to 0 for a directly-addressed server, whose
+    driver resolves the endpoint once and should fail fast with it. A brokered
+    pool passes a generous count instead: a preempted head leaves its gang-mate
+    racing ``ray start`` against a dead GCS, which lands as a task *failure*,
+    and in an elastic pool a retried gang is capacity regained while an
+    unretried one is capacity lost for the whole run.
+    """
     fleet = launch.fleet
     return ctx.client.submit(
         entrypoint=Entrypoint.from_callable(_serve_glm52, launch),
@@ -440,7 +449,7 @@ def submit_glm52(ctx, launch: Glm52LaunchConfig, name: str = "vllm"):
         coscheduling=CoschedulingConfig(group_by=fleet.coscheduling_level),
         replicas=fleet.replicas,
         timeout=Duration.from_hours(RUN_TIMEOUT_HOURS),
-        max_retries_failure=0,
+        max_retries_failure=max_retries_failure,
         priority_band=launch.priority_band,
     )
 

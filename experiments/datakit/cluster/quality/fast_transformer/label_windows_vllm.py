@@ -241,7 +241,7 @@ def _label_through_pool(
                     broker=broker, max_in_flight=gang_in_flight, request_timeout=WORKER_REQUEST_TIMEOUT
                 ),
             )
-            gang_jobs.append(submit_glm52(ctx, launch, name=f"vllm-g{gang}"))
+            gang_jobs.append(submit_glm52(ctx, launch, name=f"vllm-g{gang}", max_retries_failure=5))
 
         concurrency = min(num_gangs * gang_in_flight, DRIVER_MAX_CONCURRENCY)
         with serve_inference_proxy(
