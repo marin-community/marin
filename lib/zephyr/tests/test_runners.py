@@ -206,12 +206,9 @@ def finelog_server(tmp_path):
 )
 def test_finelog_stats_count_columnar_rows_and_buffer_bytes(local_client, tmp_path, finelog_server, monkeypatch, batch):
     """Columnar batches contribute their logical rows and buffers to stage throughput."""
-    writers: list[StatsWriter] = []
 
-    def make_writer(url: str | None = None) -> StatsWriter:
-        writer = StatsWriter(LogClient.connect(finelog_server))
-        writers.append(writer)
-        return writer
+    def make_writer(_url: str | None = None) -> StatsWriter:
+        return StatsWriter(LogClient.connect(finelog_server))
 
     monkeypatch.setattr(StatsWriter, "connect", staticmethod(make_writer))
 
@@ -220,9 +217,6 @@ def test_finelog_stats_count_columnar_rows_and_buffer_bytes(local_client, tmp_pa
         ctx.execute(Dataset.from_list([batch]).map(lambda item: item))
     finally:
         ctx.shutdown()
-        for writer in writers:
-            with suppress(Exception):
-                writer.close()
 
     query_client = LogClient.connect(finelog_server)
     try:
