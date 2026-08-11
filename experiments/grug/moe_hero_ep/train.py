@@ -374,20 +374,28 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
 
 
-def _optimizer_state_to_memory_kind(tree, memory_kind: str):
-    """Move named-sharded optimizer arrays to a JAX memory kind, keeping MTP state on device.
+# Optimizer state kept resident in HBM rather than offloaded to pinned host. Both are fully
+# replicated (P(None, None)) and collapse their NamedSharding to a mesh-less GSPMDSharding on the
+# pinned-host round-trip, which the mover then cannot bring back to device -- the jitted step then
+# asserts a memory-kind mismatch. `mtp_modules` state is negligible; `token_embed`'s Adam state is
+# ~6 GiB (versus ~28 GiB total), a cheap price to keep the offload path working when MTP adds a
+# second gradient path through the embedding.
+_OFFLOAD_EXEMPT_PARAM_PATHS = ("mtp_modules", "token_embed")
 
-    The MTP modules' optimizer state is a tiny fraction of the total (one extra block versus the
-    full layer stack), so it is not worth offloading. It is also fragile to offload: a
-    trivially-replicated ``mtp_depth``-length stack axis collapses its NamedSharding to a
-    mesh-less GSPMDSharding under the pinned-host round-trip, which the mover then cannot bring
-    back to device. Keep MTP state resident on device and offload only the main-model state.
+
+def _optimizer_state_to_memory_kind(tree, memory_kind: str):
+    """Move named-sharded optimizer arrays to a JAX memory kind, keeping the exempt state on device.
+
+    Offloads only the main-model state. State for the parameters in ``_OFFLOAD_EXEMPT_PARAM_PATHS``
+    stays resident on device: their fully-replicated optimizer arrays collapse to a mesh-less
+    GSPMDSharding under the pinned-host round-trip and cannot be brought back.
     """
 
     def _move(path, leaf):
         if not isinstance(leaf, jax.Array):
             return leaf
-        if "mtp_modules" in jax.tree_util.keystr(path):
+        path_str = jax.tree_util.keystr(path)
+        if any(exempt in path_str for exempt in _OFFLOAD_EXEMPT_PARAM_PATHS):
             return leaf
         sharding = jax.typeof(leaf).sharding
         mesh = getattr(sharding, "mesh", None)
