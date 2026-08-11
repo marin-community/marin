@@ -14,7 +14,8 @@ import numpy as np
 from iris.client import iris_ctx
 from rigging.timing import Deadline, ExponentialBackoff
 
-REQUEST_BATCH_SIZE = 8
+from experiments.datakit.embeddings.harrier.config import TEI_REQUEST_BATCH_SIZE
+
 REQUEST_CONCURRENCY = 16
 REQUEST_MAX_ATTEMPTS = 32
 ENDPOINT_READY_TIMEOUT = 600
@@ -81,7 +82,9 @@ class TeiEmbeddingClient:
             return np.empty((0, self.embedding_dim), dtype=np.float32)
 
         endpoint_urls = self._endpoint_urls()
-        batches = [texts[start : start + REQUEST_BATCH_SIZE] for start in range(0, len(texts), REQUEST_BATCH_SIZE)]
+        batches = [
+            texts[start : start + TEI_REQUEST_BATCH_SIZE] for start in range(0, len(texts), TEI_REQUEST_BATCH_SIZE)
+        ]
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(REQUEST_CONCURRENCY, len(batches))) as executor:
             futures = [
                 executor.submit(self._request, endpoint_urls, index, batch) for index, batch in enumerate(batches)

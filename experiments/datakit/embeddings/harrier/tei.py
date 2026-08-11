@@ -28,7 +28,7 @@ from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 from rigging.timing import Deadline
 
-from experiments.datakit.embeddings.harrier.tei_client import REQUEST_BATCH_SIZE
+from experiments.datakit.embeddings.harrier.config import TEI_REQUEST_BATCH_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ def run_tei_service(config: TeiServiceConfig) -> None:
                 "--max-batch-requests",
                 str(TEI_MAX_BATCH_REQUESTS),
                 "--max-client-batch-size",
-                str(REQUEST_BATCH_SIZE),
+                str(TEI_REQUEST_BATCH_SIZE),
                 "--tokenization-workers",
                 str(TEI_TOKENIZATION_WORKERS),
                 "--prometheus-port",
