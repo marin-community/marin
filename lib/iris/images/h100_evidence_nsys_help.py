@@ -4,11 +4,16 @@
 """Validate the Nsight Systems profile option used by H100 evidence runs."""
 
 import argparse
+import hashlib
+import json
 import re
 import sys
 from pathlib import Path
 
 MAX_HELP_BYTES = 1 << 20
+MAX_OPTION_BLOCK_BYTES = 1024
+MAX_FAILURE_MESSAGE_CHARS = 4096
+FAILURE_DIAGNOSTIC_SCHEMA = "iris.h100_evidence_nsys_help_failure.v1"
 OPTION_DECLARATION = re.compile(r"^\s*(?:-[A-Za-z0-9],\s+)?--(?P<name>[a-z0-9][a-z0-9-]*)(?:[ =].*)?$")
 POSSIBLE_VALUES = re.compile(
     r"Possible values\s*(?:are|:)\s*(?P<values>.*?)(?:\.\s|\.$)",
@@ -78,8 +83,7 @@ def validate_nsys_profile_help(text: str) -> tuple[tuple[str, ...], tuple[str, .
     return capture_values, graph_values
 
 
-def validate_file(path: Path) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Read and validate one bounded UTF-8 nsys profile help artifact."""
+def _read_help_file(path: Path) -> str:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"help artifact must be a regular file: {path}")
     if path.stat().st_size > MAX_HELP_BYTES:
@@ -89,10 +93,80 @@ def validate_file(path: Path) -> tuple[tuple[str, ...], tuple[str, ...]]:
     if len(payload) > MAX_HELP_BYTES:
         raise ValueError(f"help artifact exceeds {MAX_HELP_BYTES} bytes")
     try:
-        text = payload.decode("utf-8")
+        return payload.decode("utf-8")
     except UnicodeDecodeError as error:
         raise ValueError("help artifact is not UTF-8") from error
-    return validate_nsys_profile_help(text)
+
+
+def validate_file(path: Path) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Read and validate one bounded UTF-8 nsys profile help artifact."""
+    return validate_nsys_profile_help(_read_help_file(path))
+
+
+def _diagnostic_option_block(text: str, option: str) -> dict[str, object]:
+    try:
+        block = _option_block(text, option)
+    except ValueError:
+        return {
+            "available": False,
+            "bytes": 0,
+            "reason": "exact_option_block_unavailable",
+            "sha256": None,
+        }
+    payload = block.encode("utf-8")
+    record: dict[str, object] = {
+        "available": len(payload) <= MAX_OPTION_BLOCK_BYTES,
+        "bytes": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
+    if len(payload) <= MAX_OPTION_BLOCK_BYTES:
+        record["text"] = block
+    else:
+        record["reason"] = f"exceeds_{MAX_OPTION_BLOCK_BYTES}_byte_bound"
+    return record
+
+
+def _failure_diagnostic(text: str) -> dict[str, object]:
+    return {
+        "blocks": {
+            option: _diagnostic_option_block(text, option) for option in ("capture-range-end", "cuda-graph-trace")
+        },
+        "schema": FAILURE_DIAGNOSTIC_SCHEMA,
+    }
+
+
+def _without_block_text(diagnostic: dict[str, object]) -> dict[str, object]:
+    blocks = diagnostic["blocks"]
+    assert isinstance(blocks, dict)
+    bounded_blocks: dict[str, object] = {}
+    for option, value in blocks.items():
+        assert isinstance(value, dict)
+        record = {key: field for key, field in value.items() if key != "text"}
+        if "text" in value:
+            record["available"] = False
+            record["reason"] = f"omitted_to_fit_{MAX_FAILURE_MESSAGE_CHARS}_character_bound"
+        bounded_blocks[option] = record
+    return {"blocks": bounded_blocks, "schema": FAILURE_DIAGNOSTIC_SCHEMA}
+
+
+def _validation_failure_message(text: str, error: ValueError) -> str:
+    prefix = f"nsys profile help validation failed: {error}"
+    diagnostic = _failure_diagnostic(text)
+    serialized = json.dumps(diagnostic, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    message = f"{prefix} diagnostic={serialized}"
+    if len(f"{message}\n") <= MAX_FAILURE_MESSAGE_CHARS:
+        return message
+
+    serialized = json.dumps(
+        _without_block_text(diagnostic),
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    message = f"{prefix} diagnostic={serialized}"
+    if len(f"{message}\n") <= MAX_FAILURE_MESSAGE_CHARS:
+        return message
+    return "nsys profile help validation failed: bounded diagnostic could not be serialized"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -100,9 +174,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("artifact", type=Path)
     args = parser.parse_args(argv)
     try:
-        capture_values, graph_values = validate_file(args.artifact)
+        text = _read_help_file(args.artifact)
     except (OSError, ValueError) as error:
         print(f"nsys profile help validation failed: {error}", file=sys.stderr)
+        return 1
+    try:
+        capture_values, graph_values = validate_nsys_profile_help(text)
+    except ValueError as error:
+        print(_validation_failure_message(text, error), file=sys.stderr)
         return 1
     print(
         "nsys profile help validation passed: "
