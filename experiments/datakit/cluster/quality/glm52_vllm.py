@@ -26,6 +26,7 @@ resolve a cached weight path instead of each pulling 756 GB from Hugging Face.
 
 import logging
 import os
+import random
 import shutil
 import socket
 import subprocess
@@ -35,9 +36,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import fsspec
+import httpx
 import psutil
 from iris.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
@@ -69,6 +73,7 @@ ENDPOINT_TIMEOUT = 3 * 3600
 RUN_TIMEOUT_HOURS = 30 * 24
 RAY_PORT = "ray"
 HTTP_PORT = "http"
+SEED_PORT = "seed"
 # How long a worker rests after its raylet exits before re-resolving the head.
 WORKER_REJOIN_DELAY = 15.0
 
@@ -86,6 +91,21 @@ WEIGHTS_FILL_SPACE_MARGIN = 64 * 2**30
 # The head reads gang-mate cache states after Ray is up, by which point every
 # worker registered its state long ago; this only bounds a stuck registry read.
 WEIGHTS_STATE_TIMEOUT = 300.0
+
+# Nodes serve their weight cache to peers over HTTP, per file: a filling node
+# lands each file atomically (temp + rename) and can therefore seed every file
+# it already holds while its own fill continues. Two shared endpoint names give
+# peers the two facts they need — ``SWARM`` members may hold any subset (fetch
+# falls back on 404), ``SEED`` members hold the complete snapshot. Peers fetch
+# each file from random swarm members at datacenter rates and fall back to the
+# bucket, so the cross-region link serves roughly one copy of each byte for a
+# whole cold fleet, and nodes fetching in per-node random order keep the
+# fallback misses decorrelated (an approximation of rarest-first).
+WEIGHTS_SWARM_ENDPOINT = f"glm52-weights-swarm-{MODEL_REVISION[:8]}"
+WEIGHTS_SEED_ENDPOINT = f"glm52-weights-seed-{MODEL_REVISION[:8]}"
+SEED_FETCH_TIMEOUT = 600.0
+# How many swarm members to try for one file before the bucket.
+SEED_TRIES_PER_FILE = 2
 
 
 @dataclass(frozen=True)
@@ -178,6 +198,12 @@ class Glm52LaunchConfig:
     # endpoint is still registered for observability, but requests arrive by
     # lease rather than by address.
     broker_worker: BrokerWorkerConfig | None = None
+    # Whether this gang's nodes fill their local weight cache after serving.
+    # A cold fleet must not fill everywhere at once — 64 nodes each mirroring
+    # 756 GB is a bigger cross-region herd than the weight streams themselves —
+    # so a large pool fills only its first-generation nodes and later tranches
+    # spread from those.
+    fill_weights_cache: bool = True
 
 
 def _node_weights_dir() -> Path:
@@ -192,16 +218,85 @@ def _weights_state_endpoint(launch: "Glm52LaunchConfig", task_index: int) -> str
     return f"{launch.vllm_endpoint}-weights-{task_index}"
 
 
-def _fill_node_weights_cache(weights: str) -> None:
-    """Mirror the bucket snapshot onto node NVMe, marker last.
+def _endpoint_urls(ctx, name: str) -> list[str]:
+    """Every URL registered under *name*, or empty when none (or on a registry error)."""
+    try:
+        result = ctx.resolver.resolve(name)
+    except Exception:
+        logger.warning("glm52_vllm: resolving %s failed", name, exc_info=True)
+        return []
+    if result.is_empty:
+        return []
+    return [endpoint.url for endpoint in result.endpoints]
 
-    One serving task holds the node (the gang requests nearly all of it), so no
-    cross-process locking: a crashed fill leaves files without the marker and
-    the next fill re-fetches whatever sizes disagree.
+
+def _download_from_seed(seed_url: str, relative: str, destination: Path, expected_size: int) -> None:
+    partial = destination.with_name(destination.name + ".part")
+    with httpx.stream("GET", f"{seed_url}/{relative}", timeout=SEED_FETCH_TIMEOUT) as response:
+        response.raise_for_status()
+        with open(partial, "wb") as sink:
+            for chunk in response.iter_bytes():
+                sink.write(chunk)
+    actual = partial.stat().st_size
+    if actual != expected_size:
+        partial.unlink(missing_ok=True)
+        raise OSError(f"seed sent {actual} bytes for {relative}, expected {expected_size}")
+    partial.rename(destination)
+
+
+# The node's one seed server port, started at most once per task. Guarded by
+# _SEED_LOCK: the sync serve path and the background fill can race to start it.
+_SEED_PORT_STARTED: list[int] = []
+_SEED_LOCK = threading.Lock()
+
+
+def _serve_swarm(ctx, host: str) -> int:
+    """Serve this node's cache directory to peers and join the swarm.
+
+    Started before the fill, not after: files land atomically, so peers can
+    fetch whatever subset this node already holds while the fill continues
+    (404s fall back). The registration is deliberately never exited — it lives
+    for the rest of the task and the controller drops it with the task attempt.
+    The cache itself outlives the task on the node's NVMe.
+    """
+    with _SEED_LOCK:
+        if _SEED_PORT_STARTED:
+            return _SEED_PORT_STARTED[0]
+        target = _node_weights_dir()
+        target.mkdir(parents=True, exist_ok=True)
+        port = _reserve_port(host, ctx.get_port(SEED_PORT))
+        handler = partial(SimpleHTTPRequestHandler, directory=str(target))
+        server = ThreadingHTTPServer((host, port), handler)
+        threading.Thread(target=server.serve_forever, name="glm52-weights-swarm", daemon=True).start()
+        ctx.registry.registered(WEIGHTS_SWARM_ENDPOINT, f"http://{host}:{port}").__enter__()
+        _SEED_PORT_STARTED.append(port)
+        logger.info("glm52_vllm: joined the weights swarm at http://%s:%d", host, port)
+        return port
+
+
+def _register_complete_seed(ctx, host: str) -> None:
+    """Advertise this node as holding the complete snapshot."""
+    port = _serve_swarm(ctx, host)
+    ctx.registry.registered(WEIGHTS_SEED_ENDPOINT, f"http://{host}:{port}").__enter__()
+    logger.info("glm52_vllm: seeding the complete snapshot at http://%s:%d", host, port)
+
+
+def _fill_node_weights_cache(ctx, host: str, weights: str) -> None:
+    """Mirror the snapshot onto node NVMe through the swarm, and seed it after.
+
+    File names and sizes come from the bucket listing (authoritative and
+    cheap). Each file is fetched from up to ``SEED_TRIES_PER_FILE`` random
+    swarm members — any of which may hold only a subset — before falling back
+    to the bucket, and files are fetched in per-node random order so
+    simultaneous fills pull different files from the bucket and trade the rest
+    among themselves. Marker written last. One serving task holds the node, so
+    no cross-process locking: a crashed fill leaves files without the marker
+    and the next fill re-fetches whatever sizes disagree.
     """
     target = _node_weights_dir()
     marker = target / WEIGHTS_MARKER
     if marker.exists():
+        _register_complete_seed(ctx, host)
         return
     fs = fsspec.filesystem("s3")
     prefix = weights.removeprefix("s3://").rstrip("/")
@@ -216,17 +311,33 @@ def _fill_node_weights_cache(weights: str) -> None:
             total / 2**30,
         )
         return
+    _serve_swarm(ctx, host)
+    peers = [url for url in _endpoint_urls(ctx, WEIGHTS_SWARM_ENDPOINT) if f"//{host}:" not in url]
+    logger.info("glm52_vllm: filling node weights cache (%d swarm peers, bucket fallback)", len(peers))
     began = time.monotonic()
+    seed_errors = [0]
 
     def fetch(path: str) -> None:
-        destination = target / path[len(prefix) + 1 :]
+        relative = path[len(prefix) + 1 :]
+        destination = target / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if destination.exists() and destination.stat().st_size == int(files[path].get("size") or 0):
+        expected = int(files[path].get("size") or 0)
+        if destination.exists() and destination.stat().st_size == expected:
             return
+        for peer in random.sample(peers, min(SEED_TRIES_PER_FILE, len(peers))):
+            try:
+                _download_from_seed(peer, relative, destination, expected)
+                return
+            except Exception as failure:
+                seed_errors[0] += 1
+                if seed_errors[0] <= 3:
+                    logger.info("glm52_vllm: swarm fetch of %s from %s failed (%r)", relative, peer, failure)
         fs.get_file(path, str(destination))
 
+    ordered = list(files)
+    random.shuffle(ordered)
     with ThreadPoolExecutor(WEIGHTS_FILL_THREADS) as pool:
-        list(pool.map(fetch, sorted(files)))
+        list(pool.map(fetch, ordered))
     marker.touch()
     elapsed = time.monotonic() - began
     logger.info(
@@ -236,14 +347,18 @@ def _fill_node_weights_cache(weights: str) -> None:
         total / 2**30 / max(elapsed, 1e-9),
         target,
     )
+    _register_complete_seed(ctx, host)
 
 
-def _fill_cache_after_serving(launch: "Glm52LaunchConfig", weights: str) -> None:
+def _fill_cache_after_serving(ctx, host: str, launch: "Glm52LaunchConfig", weights: str) -> None:
     """Fill this node's weight cache in the background once inference is up.
 
     Waiting on the served endpoint keeps the fill off the critical path: the
-    cross-region stream that loads the engine finishes before the cache copy
-    starts competing for the NIC.
+    stream that loads the engine finishes before the cache copy starts
+    competing for the NIC. Without any swarm to lean on the fill is a pure
+    cross-region snapshot, so it runs only where the launch allows it (the
+    pool's first wave, whose simultaneous fills form the seed swarm); once any
+    peer is up the fill mostly costs the datacenter network and always runs.
     """
     if _node_weights_ready():
         return
@@ -251,7 +366,10 @@ def _fill_cache_after_serving(launch: "Glm52LaunchConfig", weights: str) -> None
     def fill() -> None:
         try:
             wait_for_endpoint_url(launch.vllm_endpoint, timeout=ENDPOINT_TIMEOUT)
-            _fill_node_weights_cache(weights)
+            if not launch.fill_weights_cache and not _endpoint_urls(ctx, WEIGHTS_SWARM_ENDPOINT):
+                logger.info("glm52_vllm: skipping background fill: no swarm and WAN fills disabled for this gang")
+                return
+            _fill_node_weights_cache(ctx, host, weights)
         except Exception:
             logger.warning("glm52_vllm: node weights cache fill failed", exc_info=True)
 
@@ -445,7 +563,7 @@ def _run_vllm(
         )
         with ctx.registry.registered(launch.vllm_endpoint, base_url):
             compilation_cache.publish()
-            _fill_cache_after_serving(launch, weights)
+            _fill_cache_after_serving(ctx, host, launch, weights)
             if launch.broker_worker is not None:
                 _pull_from_broker(launch, base_url, process)
             return_code = process.wait()
@@ -587,12 +705,28 @@ def _serve_glm52(launch: Glm52LaunchConfig) -> None:
     environment["GLOO_SOCKET_IFNAME"] = _network_interface(host)
     compilation_cache = _prepare_compilation_cache(launch, environment)
     environment = compilation_cache.environment()
+
+    # A warm node seeds peers immediately. A cold node fills synchronously
+    # first when some peer holds the complete snapshot — a datacenter copy plus
+    # a local load beats streaming the weights cross-region, and it makes this
+    # node the next seed. A swarm with only partial members is not worth
+    # blocking on: the missing files would come from the bucket at stream speed
+    # anyway, so serve from the bucket and let the background fill use the
+    # swarm for whatever it does hold.
+    if _node_weights_ready():
+        _register_complete_seed(ctx, host)
+    elif _endpoint_urls(ctx, WEIGHTS_SEED_ENDPOINT):
+        try:
+            _fill_node_weights_cache(ctx, host, prepare_model_cache())
+        except Exception:
+            logger.warning("glm52_vllm: synchronous seed fill failed; serving from the bucket", exc_info=True)
+
     if info.task_index == 0:
         _serve_ray_head(ctx, host, vllm_command, ray_command, environment, launch, compilation_cache)
         return
     state = "local" if _node_weights_ready() else "remote"
     with ctx.registry.registered(_weights_state_endpoint(launch, info.task_index), state):
-        _fill_cache_after_serving(launch, prepare_model_cache())
+        _fill_cache_after_serving(ctx, host, launch, prepare_model_cache())
         _serve_ray_worker(host, launch, ray_command, environment)
 
 
@@ -637,7 +771,7 @@ def submit_glm52(ctx, launch: Glm52LaunchConfig, name: str = "vllm", max_retries
             setup_scripts=[default_setup_script(packages=["marin-core"])],
             env_vars=_task_env_vars(launch),
         ),
-        ports=[RAY_PORT, HTTP_PORT],
+        ports=[RAY_PORT, HTTP_PORT, SEED_PORT],
         coscheduling=CoschedulingConfig(group_by=fleet.coscheduling_level),
         replicas=fleet.replicas,
         timeout=Duration.from_hours(RUN_TIMEOUT_HOURS),

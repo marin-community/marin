@@ -38,8 +38,11 @@ bringing up any GPU at all.
 import argparse
 import json
 import logging
+import math
 import os
 import random
+import threading
+import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
@@ -78,6 +81,7 @@ from experiments.datakit.cluster.quality.fast_transformer.label_with_glm52 impor
 from experiments.datakit.cluster.quality.fast_transformer.rubric import SYSTEM_PROMPT
 from experiments.datakit.cluster.quality.glm52_vllm import (
     MODEL,
+    WEIGHTS_SEED_ENDPOINT,
     BrokerWorkerConfig,
     Glm52LaunchConfig,
     ServerConfig,
@@ -123,6 +127,15 @@ BROKER_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="8g", disk="20g", preempti
 # single Python process holding many thousands of mostly-blocked threads costs
 # more. The broker's queue, not the sender count, is what keeps engines fed.
 DRIVER_MAX_CONCURRENCY = 4_096
+# Gangs per submission wave. Weight streaming measured ~0.5 GB/s per gang alone
+# and ~6-7 GB/s aggregate across the shared cross-region path, so a wave of 12
+# saturates the link without the all-at-once herd that left a 24-gang fleet
+# collectively unloaded for an hour. The next wave launches when half the
+# submitted gangs serve, or on timeout — whichever comes first.
+DEFAULT_WAVE_SIZE = 12
+WAVE_READY_FRACTION = 0.5
+WAVE_TIMEOUT = 2_400.0
+WAVE_POLL = 60.0
 
 
 def _expand_globs(patterns: Sequence[str]) -> list[str]:
@@ -204,6 +217,7 @@ def _label_through_pool(
     num_gangs: int,
     interactive_gangs: int,
     gang_in_flight: int,
+    wave_size: int,
     chunk_size: int,
     label_batch: str,
     fleet_name: str,
@@ -222,9 +236,12 @@ def _label_through_pool(
         actor_config=ActorConfig(max_task_retries=0, priority=job_pb2.PRIORITY_BAND_INTERACTIVE),
     )
     gang_jobs = []
+    jobs_lock = threading.Lock()
+    stop_waves = threading.Event()
     try:
         broker = broker_group.wait_ready(count=1, timeout=BROKER_READY_TIMEOUT)[0]
-        for gang in range(num_gangs):
+
+        def submit_gang(gang: int) -> None:
             # The first ``interactive_gangs`` gangs guarantee forward progress;
             # the rest ride the batch band, joining the pool whenever the
             # scheduler admits them and rejoining after preemption (gang
@@ -240,8 +257,48 @@ def _label_through_pool(
                 broker_worker=BrokerWorkerConfig(
                     broker=broker, max_in_flight=gang_in_flight, request_timeout=WORKER_REQUEST_TIMEOUT
                 ),
+                # The first wave's simultaneous background fills form the seed
+                # swarm (their per-file trades keep the cross-region cost near
+                # one snapshot); later waves fill through the swarm regardless.
+                fill_weights_cache=gang < wave_size,
             )
-            gang_jobs.append(submit_glm52(ctx, launch, name=f"vllm-g{gang}", max_retries_failure=5))
+            job = submit_glm52(ctx, launch, name=f"vllm-g{gang}", max_retries_failure=5)
+            with jobs_lock:
+                gang_jobs.append(job)
+
+        def endpoint_count(name: str) -> int:
+            try:
+                result = ctx.resolver.resolve(name)
+            except Exception:
+                return 0
+            return 0 if result.is_empty else len(result.endpoints)
+
+        def serving_count(submitted: int) -> int:
+            return sum(1 for g in range(submitted) if endpoint_count(f"{VLLM_ENDPOINT}-{run_id}-g{g}") > 0)
+
+        def submit_waves() -> None:
+            # Wave 1 saturates the shared cross-region path; each further wave
+            # launches once the fleet shows capacity to absorb it — half the
+            # submitted gangs serving, two complete seeds (which make later
+            # bring-ups a datacenter copy), or the timeout, whichever is first.
+            submitted = 0
+            while submitted < num_gangs and not stop_waves.is_set():
+                size = min(wave_size, num_gangs - submitted)
+                for gang in range(submitted, submitted + size):
+                    submit_gang(gang)
+                submitted += size
+                logger.info("label_windows_vllm: submitted %d/%d gangs", submitted, num_gangs)
+                if submitted >= num_gangs:
+                    return
+                deadline = time.monotonic() + WAVE_TIMEOUT
+                needed = max(1, math.ceil(submitted * WAVE_READY_FRACTION))
+                while not stop_waves.is_set() and time.monotonic() < deadline:
+                    if serving_count(submitted) >= needed or endpoint_count(WEIGHTS_SEED_ENDPOINT) >= 2:
+                        break
+                    stop_waves.wait(WAVE_POLL)
+
+        waves = threading.Thread(target=submit_waves, name="gang-waves", daemon=True)
+        waves.start()
 
         concurrency = min(num_gangs * gang_in_flight, DRIVER_MAX_CONCURRENCY)
         with serve_inference_proxy(
@@ -278,7 +335,10 @@ def _label_through_pool(
     finally:
         # Never let a teardown failure mask the real error, but never leave a
         # GPU gang or the broker running either.
-        for job in gang_jobs:
+        stop_waves.set()
+        with jobs_lock:
+            remaining = list(gang_jobs)
+        for job in remaining:
             try:
                 job.terminate()
             except Exception:
@@ -298,6 +358,7 @@ def run(
     num_gangs: int,
     interactive_gangs: int,
     gang_in_flight: int,
+    wave_size: int,
     chunk_size: int,
     label_batch: str,
     limit: int | None,
@@ -334,6 +395,7 @@ def run(
             num_gangs=num_gangs,
             interactive_gangs=interactive_gangs,
             gang_in_flight=gang_in_flight,
+            wave_size=wave_size,
             chunk_size=chunk_size,
             label_batch=label_batch,
             fleet_name=fleet_name,
@@ -376,6 +438,12 @@ def main() -> None:
         default=DEFAULT_GANG_IN_FLIGHT,
         help="requests each gang's pull worker keeps in flight",
     )
+    parser.add_argument(
+        "--wave-size",
+        type=int,
+        default=DEFAULT_WAVE_SIZE,
+        help="gangs submitted per wave; sized to saturate the shared cross-region path without a herd",
+    )
     parser.add_argument("--label-batch", default=DEFAULT_LABEL_BATCH)
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE, help="windows per checkpoint")
     parser.add_argument("--max-model-len", type=int, default=DEFAULT_MAX_MODEL_LEN)
@@ -412,6 +480,7 @@ def main() -> None:
         num_gangs=args.num_gangs,
         interactive_gangs=args.interactive_gangs if args.interactive_gangs is not None else args.num_gangs,
         gang_in_flight=args.gang_in_flight,
+        wave_size=args.wave_size,
         chunk_size=args.chunk_size,
         label_batch=args.label_batch,
         limit=args.limit,
