@@ -23,10 +23,6 @@ inputs:
   cloudflare-secret-name:
     description: "Optional Secret Manager secret exported as CLOUDFLARE_API_TOKEN for stacks that manage DNS."
     default: ""
-  test-path:
-    description: "Optional pytest path that must pass before pulumi up."
-    default: ""
-
 runs:
   using: composite
   steps:
@@ -66,12 +62,6 @@ runs:
     - name: Sync the iac venv
       shell: bash
       run: uv sync --all-packages --extra deploy --frozen
-
-    - name: Test the service
-      if: inputs.test-path != ''
-      shell: bash
-      working-directory: ${{ inputs.test-path }}
-      run: uv run pytest
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4

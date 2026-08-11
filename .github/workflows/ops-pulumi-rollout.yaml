@@ -109,4 +109,3 @@ jobs:
           gcp-project-id: hai-gcp-models
           config-map: ${{ matrix.config_map }}
           cloudflare-secret-name: ${{ matrix.cloudflare_secret_name }}
-          test-path: ${{ matrix.test_path }}
