@@ -11,7 +11,7 @@ author: dlwh
 - Goal: Apply CODA's producer-epilogue idea to the Grug RMS-GatedNorm reverse pass and measure training throughput on GB200.
 - Primary metrics: Forward and gradient error, compile time, steady-state kernel time, training tokens/s, step time, MFU, and peak HBM.
 - Constraints: Preserve the stock BF16 forward exactly; compare identical shapes, dtype, seed, and compiler flags; validate both a serial same-node control and the production 64-GPU shape.
-- Coordinating issue/PR: Pending publication.
+- Coordinating issue/PR: [#8152](https://github.com/marin-community/marin/issues/8152).
 
 ## Current TL;DR
 
