@@ -505,10 +505,13 @@ def test_nsys_profile_help_failure_emits_only_scoped_graph_token_lines(tmp_path:
     ("replacement", "graph_occurrences", "node_occurrences"),
     (
         ("      graph then graph then node.\n", 2, 1),
+        ("      graph then node then graph.\n", 2, 1),
+        ("      graph then node then node.\n", 1, 2),
         ("      node then graph.\n", 1, 1),
+        ("      node only.\n", 0, 1),
         ("      graph only.\n", 1, 0),
     ),
-    ids=("duplicate-graph", "reordered", "missing-node"),
+    ids=("duplicate-graph", "trailing-graph", "duplicate-node", "reordered", "missing-graph", "missing-node"),
 )
 def test_nsys_profile_help_failure_marks_ambiguous_graph_tokens_unavailable(
     tmp_path: Path,
@@ -562,12 +565,21 @@ def test_nsys_profile_help_failure_graph_declaration_bound_is_fail_closed(tmp_pa
     assert "token_lines" not in context
 
 
-def test_nsys_profile_help_failure_graph_context_total_bound_is_fail_closed(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("graph_line_bytes", "available"),
+    ((MAX_GRAPH_DIAGNOSTIC_LINE_BYTES - 2, True), (MAX_GRAPH_DIAGNOSTIC_LINE_BYTES - 1, False)),
+    ids=("exact-total-bound", "one-past-total-bound"),
+)
+def test_nsys_profile_help_failure_graph_context_total_bound_is_fail_closed(
+    tmp_path: Path,
+    graph_line_bytes: int,
+    available: bool,
+) -> None:
     declaration = "  --cuda-graph-trace " + "d" * (MAX_GRAPH_DIAGNOSTIC_LINE_BYTES - 21)
-    graph_line = "      graph " + "g" * (MAX_GRAPH_DIAGNOSTIC_LINE_BYTES - 13)
+    graph_line = "      graph " + "g" * (graph_line_bytes - 12)
     node_line = "      node " + "n" * (MAX_GRAPH_DIAGNOSTIC_LINE_BYTES - 11)
     assert len(declaration.encode()) == MAX_GRAPH_DIAGNOSTIC_LINE_BYTES
-    assert len(graph_line.encode()) == MAX_GRAPH_DIAGNOSTIC_LINE_BYTES - 1
+    assert len(graph_line.encode()) == graph_line_bytes
     assert len(node_line.encode()) == MAX_GRAPH_DIAGNOSTIC_LINE_BYTES
     help_text = PROFILE_HELP.replace(
         "  --cuda-graph-trace arg (=graph)\n"
@@ -578,7 +590,40 @@ def test_nsys_profile_help_failure_graph_context_total_bound_is_fail_closed(tmp_
 
     context = _failure_diagnostic(_validate(tmp_path, help_text.encode()))["cuda_graph_context"]
 
+    assert context["available"] is available
+    assert context["bytes"] == MAX_GRAPH_DIAGNOSTIC_BYTES + (0 if available else 1)
+    if available:
+        assert [line["text"] for line in context["token_lines"]] == [graph_line, node_line]
+    else:
+        assert context["reason"] == "context_exceeds_1536_byte_bound"
+        assert "token_lines" not in context
+
+
+def test_nsys_profile_help_failure_graph_escape_fallback_omits_available_lines(tmp_path: Path) -> None:
+    graph_line = "      graph " + "\x01" * 500
+    node_line = "      node " + "\x01" * 501
+    assert len(graph_line.encode()) == MAX_GRAPH_DIAGNOSTIC_LINE_BYTES
+    assert len(node_line.encode()) == MAX_GRAPH_DIAGNOSTIC_LINE_BYTES
+    declaration = "  --cuda-graph-trace arg (=graph)"
+    help_text = PROFILE_HELP.replace(
+        "  --cuda-graph-trace arg (=graph)\n"
+        "      Select CUDA Graph activity granularity. Possible values are 'graph' and\n"
+        "      'node'.\n",
+        f"{declaration}\n{graph_line}\n{node_line}\n",
+    ).replace("usage: nsys profile", "usage: --stop-on-range-end nsys profile")
+
+    result = _validate(tmp_path, help_text.encode())
+
+    diagnostic = _failure_diagnostic(result)
+    context = diagnostic["cuda_graph_context"]
+    expected_context = f"{declaration}\n{graph_line}\n{node_line}"
     assert context["available"] is False
-    assert context["bytes"] == MAX_GRAPH_DIAGNOSTIC_BYTES + 1
-    assert context["reason"] == "context_exceeds_1536_byte_bound"
+    assert context["reason"] == "omitted_to_fit_4096_character_bound"
+    assert context["bytes"] == len(expected_context.encode())
+    assert context["sha256"] == hashlib.sha256(expected_context.encode()).hexdigest()
+    assert context["graph_occurrences"] == 1
+    assert context["node_occurrences"] == 1
+    assert "text" not in context["declaration"]
     assert "token_lines" not in context
+    assert len(result.stderr) <= MAX_FAILURE_MESSAGE_CHARS
+    assert "\\u0001" not in result.stderr
