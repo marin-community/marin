@@ -401,22 +401,34 @@ def test_runner_ncu_sass_parser_rejects_unverifiable_exports(
 
 def _write_nsys_trace_database(database_path: Path, *, include_memcpy_table: bool) -> None:
     with sqlite3.connect(database_path) as database:
-        database.execute("CREATE TABLE NVTX_EVENTS (start INTEGER, end INTEGER, text TEXT)")
+        database.execute(
+            "CREATE TABLE NVTX_EVENTS "
+            "(start INTEGER, end INTEGER, eventType INTEGER, text TEXT, globalTid INTEGER, "
+            "endGlobalTid INTEGER, domainId INTEGER, eventId INTEGER PRIMARY KEY)"
+        )
         database.execute("CREATE TABLE StringIds (id INTEGER, value TEXT)")
         database.execute("CREATE TABLE TARGET_INFO_GPU (id INTEGER, name TEXT)")
         database.execute(
             "CREATE TABLE CUPTI_ACTIVITY_KIND_KERNEL "
-            "(start INTEGER, end INTEGER, demangledName INTEGER, deviceId INTEGER)"
+            "(start INTEGER, end INTEGER, demangledName INTEGER, deviceId INTEGER, correlationId INTEGER, "
+            "graphNodeId INTEGER)"
+        )
+        database.execute(
+            "CREATE TABLE CUPTI_ACTIVITY_KIND_RUNTIME "
+            "(start INTEGER, end INTEGER, eventClass INTEGER, globalTid INTEGER, correlationId INTEGER)"
         )
         if include_memcpy_table:
             database.execute(
                 "CREATE TABLE CUPTI_ACTIVITY_KIND_MEMCPY "
                 "(start INTEGER, end INTEGER, bytes INTEGER, copyKind INTEGER)"
             )
-        database.execute("INSERT INTO NVTX_EVENTS VALUES (100, 400, 'contract_map.steady.0.ordinary_xla')")
+        database.execute(
+            "INSERT INTO NVTX_EVENTS VALUES (100, 400, 59, 'contract_map.steady.0.ordinary_xla', 1234, 1234, 0, 1)"
+        )
         database.execute("INSERT INTO StringIds VALUES (7, 'fusion_kernel')")
         database.execute("INSERT INTO TARGET_INFO_GPU VALUES (0, 'NVIDIA H100')")
-        database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (150, 250, 7, 0)")
+        database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (150, 250, 7, 0, 11, NULL)")
+        database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_RUNTIME VALUES (120, 140, 0, 1234, 11)")
 
 
 def test_runner_nsys_parser_attributes_kernel_and_copy_activity_to_exact_ranges(tmp_path: Path) -> None:
@@ -507,7 +519,8 @@ def test_runner_nsys_parser_rejects_missing_memcpy_without_complete_cuda_trace_p
         elif mutation == "unknown-kernel-device":
             database.execute("UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET deviceId = 1")
         elif mutation == "dangling-kernel-name":
-            database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (160, 240, 999, 0)")
+            database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (160, 240, 999, 0, 12, NULL)")
+            database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_RUNTIME VALUES (125, 135, 0, 1234, 12)")
         elif mutation == "ambiguous-kernel-name":
             database.execute("INSERT INTO StringIds VALUES (7, 'ambiguous_kernel')")
         elif mutation == "wrong-schedule":
@@ -532,6 +545,188 @@ def test_runner_nsys_parser_rejects_corrupt_or_wrong_activity_schema(tmp_path: P
         database.execute("CREATE TABLE CUPTI_ACTIVITY_KIND_MEMCPY (start INTEGER, end INTEGER, bytes INTEGER)")
     with pytest.raises(ValueError, match="omits start, end, bytes, or copyKind"):
         runner.parse_nsys_sqlite(wrong_schema_path, ("contract_map.steady.0.ordinary_xla",))
+
+
+def _nsys_failure_diagnostic(error: pytest.ExceptionInfo[ValueError]) -> dict[str, Any]:
+    marker = " diagnostic="
+    message = str(error.value)
+    assert marker in message
+    return json.loads(message.split(marker, maxsplit=1)[1])
+
+
+def test_runner_nsys_no_kernel_diagnostic_is_bounded_and_classifies_exact_intervals(tmp_path: Path) -> None:
+    database_path = tmp_path / "trace.sqlite"
+    report_path = tmp_path / "trace.nsys-rep"
+    report_path.write_bytes(b"synthetic report")
+    _write_nsys_trace_database(database_path, include_memcpy_table=False)
+    with sqlite3.connect(database_path) as database:
+        database.execute("DELETE FROM CUPTI_ACTIVITY_KIND_KERNEL")
+        database.execute("DELETE FROM CUPTI_ACTIVITY_KIND_RUNTIME")
+        database.executemany(
+            "INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (?, ?, 7, 0, ?, NULL)",
+            (
+                (50, 100, 20),
+                (90, 110, 21),
+                (390, 410, 22),
+                (400, 425, 23),
+            ),
+        )
+        database.executemany(
+            "INSERT INTO CUPTI_ACTIVITY_KIND_RUNTIME VALUES (?, ?, 0, 1234, ?)",
+            (
+                (40, 45, 20),
+                (80, 85, 21),
+                (380, 385, 22),
+                (410, 415, 23),
+            ),
+        )
+        database.execute(
+            "CREATE TABLE CUPTI_ACTIVITY_KIND_GRAPH_TRACE "
+            "(start INTEGER, end INTEGER, deviceId INTEGER, correlationId INTEGER, graphId INTEGER, "
+            "graphExecId INTEGER)"
+        )
+        database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_GRAPH_TRACE VALUES (150, 250, 0, 30, 1, 2)")
+
+    with pytest.raises(ValueError, match="contains no associated CUDA kernels") as error:
+        runner.parse_nsys_sqlite(
+            database_path,
+            ("contract_map.steady.0.ordinary_xla",),
+            report_path=report_path,
+        )
+
+    assert len(str(error.value)) <= runner._MAX_NSYS_NO_KERNEL_DIAGNOSTIC_CHARS
+    diagnostic = _nsys_failure_diagnostic(error)
+    assert diagnostic["range"] == {
+        "domain_id": 0,
+        "duration_ns": 300,
+        "end_global_tid": 1234,
+        "end_ns": 400,
+        "event_type": 59,
+        "global_tid": 1234,
+        "name": "contract_map.steady.0.ordinary_xla",
+        "start_ns": 100,
+    }
+    assert diagnostic["kernels"]["interval_counts"] == {
+        "after": 1,
+        "before": 1,
+        "contained": 0,
+        "overlap": 2,
+    }
+    assert diagnostic["kernels"]["nearest_previous_end_offset_ns"] == 0
+    assert diagnostic["kernels"]["nearest_next_start_offset_ns"] == 0
+    assert diagnostic["kernels"]["row_count"] == 4
+    assert diagnostic["kernels"]["unique_name_count"] == 1
+    assert diagnostic["graph_trace"]["interval_counts"]["contained"] == 1
+    assert diagnostic["graph_trace"]["row_count"] == 1
+    assert diagnostic["runtime_correlation"]["associated_kernel_count"] == 0
+    assert diagnostic["runtime_correlation"]["resolved_kernel_count"] == 4
+    assert diagnostic["runtime_correlation"]["same_thread_contained_count"] == 1
+    assert diagnostic["sqlite"]["sha256"] == hashlib.sha256(database_path.read_bytes()).hexdigest()
+    assert diagnostic["report"]["sha256"] == hashlib.sha256(report_path.read_bytes()).hexdigest()
+    assert diagnostic["profile_args"] == [
+        "--trace=cuda,nvtx",
+        "--cuda-graph-trace=node",
+        "--capture-range=cudaProfilerApi",
+        "--capture-range-end=stop",
+    ]
+    assert diagnostic["export_args"] == ["--type=sqlite", "--lazy=true"]
+    assert "fusion_kernel" not in str(error.value)
+
+
+def test_runner_nsys_no_kernel_diagnostic_rejects_empty_retained_report(tmp_path: Path) -> None:
+    database_path = tmp_path / "trace.sqlite"
+    report_path = tmp_path / "trace.nsys-rep"
+    report_path.touch()
+    _write_nsys_trace_database(database_path, include_memcpy_table=False)
+    with sqlite3.connect(database_path) as database:
+        database.execute("UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET start = 500, end = 600")
+        database.execute("UPDATE CUPTI_ACTIVITY_KIND_RUNTIME SET start = 450, end = 475")
+
+    with pytest.raises(ValueError, match="retained Nsight Systems artifact is empty"):
+        runner.parse_nsys_sqlite(
+            database_path,
+            ("contract_map.steady.0.ordinary_xla",),
+            report_path=report_path,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("missing-runtime-table", "omits required trace tables"),
+        ("dangling-correlation", "does not resolve exactly once"),
+        ("ambiguous-correlation", "does not resolve exactly once"),
+        ("wrong-runtime-thread", "contains no associated CUDA kernels"),
+        ("runtime-outside-range", "contains no associated CUDA kernels"),
+    ),
+)
+def test_runner_nsys_parser_rejects_unassociated_kernel_activity(tmp_path: Path, mutation: str, message: str) -> None:
+    database_path = tmp_path / "trace.sqlite"
+    _write_nsys_trace_database(database_path, include_memcpy_table=True)
+    with sqlite3.connect(database_path) as database:
+        if mutation == "missing-runtime-table":
+            database.execute("DROP TABLE CUPTI_ACTIVITY_KIND_RUNTIME")
+        elif mutation == "dangling-correlation":
+            database.execute("UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET correlationId = 999")
+        elif mutation == "ambiguous-correlation":
+            database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_RUNTIME VALUES (125, 135, 0, 1234, 11)")
+        elif mutation == "wrong-runtime-thread":
+            database.execute("UPDATE CUPTI_ACTIVITY_KIND_RUNTIME SET globalTid = 5678")
+        elif mutation == "runtime-outside-range":
+            database.execute("UPDATE CUPTI_ACTIVITY_KIND_RUNTIME SET start = 10, end = 20")
+        else:
+            raise AssertionError(f"unhandled mutation: {mutation}")
+
+    with pytest.raises(ValueError, match=message):
+        runner.parse_nsys_sqlite(database_path, ("contract_map.steady.0.ordinary_xla",))
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("wrong-event-type", "push/pop range"),
+        ("wrong-domain", "default NVTX domain"),
+        ("cross-thread-range", "same thread"),
+        ("overlapping-ranges", "strict source order"),
+    ),
+)
+def test_runner_nsys_parser_rejects_invalid_range_clock_or_order(tmp_path: Path, mutation: str, message: str) -> None:
+    database_path = tmp_path / "trace.sqlite"
+    _write_nsys_trace_database(database_path, include_memcpy_table=True)
+    expected = ("contract_map.steady.0.ordinary_xla",)
+    with sqlite3.connect(database_path) as database:
+        if mutation == "wrong-event-type":
+            database.execute("UPDATE NVTX_EVENTS SET eventType = 60")
+        elif mutation == "wrong-domain":
+            database.execute("UPDATE NVTX_EVENTS SET domainId = 1")
+        elif mutation == "cross-thread-range":
+            database.execute("UPDATE NVTX_EVENTS SET endGlobalTid = 5678")
+        elif mutation == "overlapping-ranges":
+            database.execute(
+                "INSERT INTO NVTX_EVENTS VALUES "
+                "(350, 500, 59, 'contract_map.steady.1.ordinary_xla', 1234, 1234, 0, 2)"
+            )
+            expected = (
+                "contract_map.steady.0.ordinary_xla",
+                "contract_map.steady.1.ordinary_xla",
+            )
+        else:
+            raise AssertionError(f"unhandled mutation: {mutation}")
+
+    with pytest.raises(ValueError, match=message):
+        runner.parse_nsys_sqlite(database_path, expected)
+
+
+def test_runner_nsys_parser_rejects_equal_start_kernel_order_as_ambiguous(tmp_path: Path) -> None:
+    database_path = tmp_path / "trace.sqlite"
+    _write_nsys_trace_database(database_path, include_memcpy_table=True)
+    with sqlite3.connect(database_path) as database:
+        database.execute("INSERT INTO StringIds VALUES (8, 'second_kernel')")
+        database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (150, 240, 8, 0, 12, 5)")
+        database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_RUNTIME VALUES (125, 145, 0, 1234, 12)")
+
+    with pytest.raises(ValueError, match="equal start timestamps"):
+        runner.parse_nsys_sqlite(database_path, ("contract_map.steady.0.ordinary_xla",))
 
 
 @pytest.mark.parametrize(
@@ -567,8 +762,13 @@ def test_runner_profiles_cuda_range_with_supported_nsys_end_policy(
     def reject_after_inspecting_command(command, **kwargs):
         arguments = tuple(str(value) for value in command)
         assert arguments[:2] == (str(config.tools.nsys), "profile")
-        assert "--trace=cuda,nvtx" in arguments
-        assert "--capture-range=cudaProfilerApi" in arguments
+        profile_policy = arguments[arguments.index("--force-overwrite=true") + 1 : arguments.index("--output")]
+        assert profile_policy == (
+            "--trace=cuda,nvtx",
+            "--cuda-graph-trace=node",
+            "--capture-range=cudaProfilerApi",
+            "--capture-range-end=stop",
+        )
         assert [value for value in arguments if value.startswith("--capture-range-end")] == ["--capture-range-end=stop"]
         assert not any(value.startswith("--stop-on-range-end") for value in arguments)
         assert arguments[-2:] == ("worker", "--case")
@@ -595,6 +795,7 @@ def test_runner_profile_boundary_explicitly_binds_lazy_export_to_cuda_trace_prov
         arguments = tuple(str(value) for value in command)
         assert arguments[:2] == (str(config.tools.nsys), "profile")
         assert [value for value in arguments if value.startswith("--trace=")] == ["--trace=cuda,nvtx"]
+        assert [value for value in arguments if value.startswith("--cuda-graph-trace=")] == ["--cuda-graph-trace=node"]
         assert arguments[-2:] == ("worker", "--case")
         result_path.write_text(
             json.dumps(
@@ -608,6 +809,7 @@ def test_runner_profile_boundary_explicitly_binds_lazy_export_to_cuda_trace_prov
                 }
             )
         )
+        (case_directory / "steady_trace.nsys-rep").write_bytes(b"synthetic retained report")
         return subprocess.CompletedProcess(arguments, 0, "", "")
 
     def successful_lazy_export(command):

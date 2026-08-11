@@ -19,6 +19,9 @@ usage: nsys profile [<args>] [application] [<application args>]
       are 'none', 'stop', 'stop-shutdown', 'repeat[:N][:mode]', and
       'repeat-shutdown:N[:mode]'. If 'stop', collection stops and the target
       application continues running.
+  --cuda-graph-trace arg (=graph)
+      Select CUDA Graph activity granularity. Possible values are 'graph' and
+      'node'.
   --cuda-backtrace arg (=false)
       Collect CUDA backtraces.
 """
@@ -40,6 +43,7 @@ def test_nsys_profile_help_accepts_unique_stop_policy(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "capture-range-end=none,stop,stop-shutdown,repeat[:N][:mode],repeat-shutdown:N[:mode]" in result.stdout
+    assert "cuda-graph-trace=graph,node" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -63,6 +67,39 @@ def test_nsys_profile_help_accepts_unique_stop_policy(tmp_path: Path) -> None:
     ids=("missing", "duplicate-option", "missing-stop", "duplicate-stop", "duplicate-value-list", "obsolete-option"),
 )
 def test_nsys_profile_help_rejects_missing_or_ambiguous_policy(tmp_path: Path, help_text: str) -> None:
+    result = _validate(tmp_path, help_text.encode())
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.startswith("nsys profile help validation failed:")
+
+
+@pytest.mark.parametrize(
+    "help_text",
+    (
+        PROFILE_HELP.replace(
+            "  --cuda-graph-trace arg (=graph)\n"
+            "      Select CUDA Graph activity granularity. Possible values are 'graph' and\n"
+            "      'node'.\n",
+            "",
+        ),
+        PROFILE_HELP.replace(
+            "  --cuda-backtrace arg (=false)\n",
+            "  --cuda-graph-trace arg (=graph)\n"
+            "      Possible values are 'graph' and 'node'.\n"
+            "  --cuda-backtrace arg (=false)\n",
+        ),
+        PROFILE_HELP.replace("Possible values are 'graph' and\n      'node'.", "Possible values are 'graph'."),
+        PROFILE_HELP.replace(
+            "Possible values are 'graph' and\n      'node'.", "Possible values are 'graph', 'node', and 'node'."
+        ),
+        PROFILE_HELP.replace(
+            "Possible values are 'graph' and\n      'node'.", "Possible values are 'graph', 'node', and 'future'."
+        ),
+    ),
+    ids=("missing", "duplicate-option", "missing-node", "duplicate-node", "unknown-value"),
+)
+def test_nsys_profile_help_rejects_missing_or_ambiguous_cuda_graph_policy(tmp_path: Path, help_text: str) -> None:
     result = _validate(tmp_path, help_text.encode())
 
     assert result.returncode == 1
