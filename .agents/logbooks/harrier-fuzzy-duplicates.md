@@ -146,3 +146,11 @@ author: Rafal Wojdyla
 - RNO progress: Two source jobs succeeded. `common_corpus-english_0e1cf2c4` entered its output stage and reached 184 of 8,018 shards with 32 live workers and no dead workers.
 - Error scan: No port collisions, HTTP 429 responses, connection failures, tracebacks, or memory errors.
 - Next action: Continue the 15-minute check cadence. Escalate if the East pending state lasts 30 minutes.
+
+### 2026-08-11 21:25 UTC - Routine health check
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- East progress: Six source jobs succeeded. The prior pending state cleared. `eai-taxonomy-code-w-dclm_39527a3d` reached 2,753 of 5,872 join-side tasks with 32 live workers and no dead workers.
+- RNO progress: Two source jobs succeeded. `common_corpus-english_0e1cf2c4` reached 455 of 8,018 output shards with 32 live workers and no dead workers.
+- Retry check: RNO reports 59 one-time shard retries. The count stayed unchanged for at least five minutes. No matching exception, timeout, request, connection, or memory error was present.
+- Next action: Continue the 15-minute check cadence. Track whether the RNO retry count grows.
