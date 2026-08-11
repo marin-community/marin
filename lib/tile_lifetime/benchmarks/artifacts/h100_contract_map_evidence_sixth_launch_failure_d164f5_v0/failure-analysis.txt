@@ -1,0 +1,47 @@
+Observed boundary
+=================
+
+1. Trusted image `sha256sum` authenticated the transported launcher and
+   manifest before Python execution.
+2. The task selected `/opt/h100-evidence-runtime/bin/python` for the launcher
+   and its required `--runtime-python` value.
+3. `run_coordinator` reached `_run_profiled_case`. Its control flow requires
+   the capsule audit, H100/tool preflight, generated compilation, and exact
+   retained loaded-shared-library topology validation to finish first.
+4. Nsight Systems 2026.1.3 accepted `--capture-range-end=stop`, launched the
+   first case worker, and printed `Processing events...` after worker exit.
+5. The worker executed ordinary XLA three times for the first reviewed case
+   before rejecting the forward output. Timing had not started.
+
+Exact first failure
+===================
+
+Case: contract_map_9836cdbed389db24
+Backend: ordinary_xla
+Boundary: logical_training_step
+Output: forward
+Reference: real_algebra_fp64
+Metric: mean_ulp_distance
+Measured: 8.55948121645796
+Immutable limit: 0.25
+Maximum absolute error: 0.001953989267349243
+Mean absolute error: 0.0003520350146573037
+Maximum ULP distance: 29298
+Nonfinite values: 0
+Repeat count: 3
+Repeat identities equal: true
+Maximum pairwise absolute, mean absolute, maximum ULP, and mean ULP drift: 0
+
+Evidence limit
+==============
+
+The failure is a direct H100 measurement for the first ordinary-XLA forward
+output. It contains no array values or repeat content hashes. The values match
+the prior CPU JAX 0.10.1 reproduction, but no conclusion about the remaining
+outputs, cases, or generated backends follows because validation stopped at
+the first rejected metric.
+
+Nsight Systems did not complete a report. Nsight Compute, cache protocol,
+steady timing, and the final 24-record evidence bundle were not reached. The
+job had one failed attempt, no preemptions, zero configured failure retries,
+and was not relaunched.
