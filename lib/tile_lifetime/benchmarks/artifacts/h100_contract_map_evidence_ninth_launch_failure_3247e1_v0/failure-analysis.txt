@@ -1,0 +1,44 @@
+Observed boundary
+=================
+
+1. Trusted image `sha256sum` authenticated the transported launcher and
+   manifest before Python execution.
+2. The task selected `/opt/h100-evidence-runtime/bin/python` for the launcher
+   and its required `--runtime-python` value.
+3. `run_coordinator` reached `_run_profiled_case`. Its control flow requires
+   the capsule audit, H100/tool preflight, generated compilation, and exact
+   retained loaded-shared-library topology validation to finish first.
+4. The case worker returned successfully and produced `case_result.json`.
+   Its control flow requires all three backend numerical gates, warmup, the
+   counterbalanced steady schedule, balanced NVTX ranges, and CUDA profiler
+   stop to finish first.
+5. The outer `nsys profile` command returned successfully, the report existed,
+   and `nsys export --type=sqlite` returned successfully. Otherwise
+   `_run_profiled_case` would have raised before `parse_nsys_sqlite`.
+6. The exported database reached `parse_nsys_sqlite`, which found the required
+   tables other than `CUPTI_ACTIVITY_KIND_MEMCPY` and rejected the schema before
+   it read ranges, kernels, copies, or produced an accepted trace record.
+
+Exact first failure
+===================
+
+Exception: ValueError: Nsight Systems SQLite export omits CUPTI tables:
+('CUPTI_ACTIVITY_KIND_MEMCPY',)
+
+The failed container's temporary `steady_trace.sqlite` was not exported from
+Iris. The controller log records only the missing-table tuple, so the complete
+table inventory and metadata values are unavailable and are not reconstructed
+in this artifact.
+
+Evidence limit
+==============
+
+The control-flow boundary establishes completion of the first case worker and
+successful generation/export of its Nsight Systems report. The parser rejected
+the database before constructing any accepted `TraceRange`, so no per-range
+kernel, copy, or timing evidence was accepted.
+
+Cache protocol workers, Nsight Compute, artifact retention, the remaining
+cases, and the final 24-record bundle were not reached. The job had one failed
+attempt, no preemptions, zero configured failure retries, and was not
+relaunched.

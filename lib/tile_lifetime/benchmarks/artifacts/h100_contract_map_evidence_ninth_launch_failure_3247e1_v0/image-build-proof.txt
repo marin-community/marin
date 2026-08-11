@@ -1,0 +1,24 @@
+Workflow run: https://github.com/marin-community/marin/actions/runs/31474704085
+Workflow job: https://github.com/marin-community/marin/actions/runs/31474704085/job/93725621141
+Event: workflow_dispatch
+Head SHA: 3247e17d6c0f0fbf7263b5aee7891d209c978ac9
+Run attempt: 1
+Run conclusion: success
+Build job: h100-evidence-image / build-h100-evidence-image
+Build job conclusion: success
+Created: 2026-08-11T08:46:31Z
+Completed: 2026-08-11T08:49:21Z
+
+The five legacy image jobs were skipped. The sole H100 evidence image job
+validated the Docker context, exact CUDA/Nsight package manifest, sm_90a
+compile, closed cuobjdump and nvdisasm SASS parsers, the Nsight Systems 2026.1.3
+CLI contract, the production NVTX module under Nsight Systems, and the absolute
+frozen Python runtime smokes before pushing.
+
+Image:
+ghcr.io/marin-community/iris-task-h100-evidence:3247e17d6c0f0fbf7263b5aee7891d209c978ac9
+
+OCI digest: sha256:1543d62f4537773d09a1d7968139665d4f01b4b193412ea71f9f98a9a7f21e45
+
+Immutable reference used by the task:
+ghcr.io/marin-community/iris-task-h100-evidence:3247e17d6c0f0fbf7263b5aee7891d209c978ac9@sha256:1543d62f4537773d09a1d7968139665d4f01b4b193412ea71f9f98a9a7f21e45
