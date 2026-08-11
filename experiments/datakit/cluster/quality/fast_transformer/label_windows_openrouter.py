@@ -57,12 +57,38 @@ RETRYABLE_STATUS = (408, 429, 500, 502, 503, 520, 524)
 
 WINDOW_COLUMNS = ["id", "source", "window", "token_start", "token_end", "text"]
 
+# Framing notices for windows cut from inside a document, phrased like the
+# rubric's excerpt marker: harness slicing, not corpus damage. Without them the
+# grader reads an abrupt start as truncation and marks genuine mid-document text
+# invalid. Begin windows and short documents keep the original framing — their
+# window starts where the document does.
+WINDOW_NOTICES = {
+    "middle": (
+        "[This is a window from the MIDDLE of a longer document; it may begin and end "
+        "mid-sentence. Judge the text shown on its own merits and never mark it invalid, "
+        "or lower its quality, merely for starting or ending abruptly.]"
+    ),
+    "end": (
+        "[This is a window from the END of a longer document; it may begin mid-sentence. "
+        "Judge the text shown on its own merits and never mark it invalid, or lower its "
+        "quality, merely for starting abruptly.]"
+    ),
+}
+
 
 def window_key(row: dict) -> str:
     return f"{row['id']}\t{row['window']}"
 
 
-def ask_oracle(client: httpx.Client, model: str, text: str) -> dict:
+def window_user_content(row: dict) -> str:
+    """The request's user message: the window in the document tag, with the
+    position notice above it for middle/end windows."""
+    document = f'<document index="0">\n{row["text"]}\n</document>'
+    notice = WINDOW_NOTICES.get(row["window"])
+    return f"{notice}\n{document}" if notice else document
+
+
+def ask_oracle(client: httpx.Client, model: str, row: dict) -> dict:
     """One window's raw completion JSON. Raises on anything worth another attempt."""
     response = client.post(
         "/chat/completions",
@@ -73,7 +99,7 @@ def ask_oracle(client: httpx.Client, model: str, text: str) -> dict:
             "usage": {"include": True},
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f'<document index="0">\n{text}\n</document>'},
+                {"role": "user", "content": window_user_content(row)},
             ],
         },
     )
@@ -88,7 +114,7 @@ def label_window(client: httpx.Client, model: str, row: dict, rejects: list[str]
     reply = None
     for attempt in range(MAX_ATTEMPTS):
         try:
-            reply = ask_oracle(client, model, row["text"])
+            reply = ask_oracle(client, model, row)
             break
         except (httpx.HTTPError, KeyError, IndexError, ValueError) as failure:
             if attempt == MAX_ATTEMPTS - 1:

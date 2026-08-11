@@ -57,6 +57,12 @@ For each document decide:
    "[Excerpt ends here ...]" marker. That is this harness shortening the document,
    NOT damage in the source: judge the text shown on its own merits and never mark a
    document invalid, or lower its quality, for ending at that marker.
+   A document may also arrive as a WINDOW from the middle or end of a longer
+   document, announced by a bracketed "[This is a window from the ...]" notice
+   above it; such a window may begin or end mid-sentence. That too is the harness
+   slicing the document, NOT damage in the source: judge the text shown on its own
+   merits and never mark a window invalid, or lower its quality, merely for
+   starting or ending abruptly.
 3. quality: integer 1-5, judged AS AN EXAMPLE OF ITS TYPE:
    5 = excellent: the best work of its kind. Concretely, per type:
        prose — a clear, informative, well-structured article that teaches something;

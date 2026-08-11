@@ -11,6 +11,7 @@ from experiments.datakit.cluster.quality.fast_transformer.bme_windows import (
     doc_windows,
 )
 from experiments.datakit.cluster.quality.fast_transformer.data import load_tokenizer
+from experiments.datakit.cluster.quality.fast_transformer.label_windows_openrouter import window_user_content
 from experiments.datakit.cluster.quality.fast_transformer.label_with_glm52 import _parse_verdict
 
 
@@ -18,6 +19,17 @@ def test_parse_verdict_keeps_the_why_field():
     reply = '</think>\n{"idx": 0, "content_type": "code", "valid": true, "quality": 4, "why": "clean helper"}'
     verdict = _parse_verdict(reply)
     assert verdict == {"quality": 4, "content_type": "code", "valid": True, "why": "clean helper"}
+
+
+def test_middle_and_end_windows_carry_a_position_notice_and_begin_does_not():
+    begin = window_user_content({"window": "begin", "text": "doc text"})
+    assert begin == '<document index="0">\ndoc text\n</document>'
+    for position, phrase in (("middle", "MIDDLE"), ("end", "END")):
+        content = window_user_content({"window": position, "text": "doc text"})
+        assert content.startswith(f"[This is a window from the {phrase}")
+        # The notice frames the document rather than contaminating it: the text
+        # inside the tag stays the window's own.
+        assert content.endswith('<document index="0">\ndoc text\n</document>')
 
 
 @pytest.mark.data_integration
