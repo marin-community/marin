@@ -620,3 +620,8 @@ W&B: https://wandb.ai/marin-community/marin_moe/runs/mok-like-ab-mok-like-100-20
 
 - Status: after 31m58s, all 16 tasks remained scheduling-gated with zero failures, preemptions, logs, or partial GPU allocation. The scheduler's feasible fit improved from 2 of 16 tasks to 10 of 16 tasks as occupied capacity cleared.
 - Decision: keep the single interactive request pending. Do not submit a competing gang or change its resources; begin the numerical and throughput gate only after all 16 tasks co-schedule on one complete rack slice.
+
+### 2026-08-11 12:24 PT - One-rack feasible fit returns to two tasks
+
+- Status: after 1h03m38s, the feasible hard-topology fit fell from 10 of 16 tasks back to 2 of 16 as other capacity was occupied. All 16 tasks remained scheduling-gated with zero failures, preemptions, logs, or partial allocation.
+- Decision: continue the same pending request. The changing fit confirms an external capacity wait; no resource or launcher change is indicated.
