@@ -1966,7 +1966,7 @@ def _run_profiled_case(
         "--force-overwrite=true",
         "--trace=cuda,nvtx",
         "--capture-range=cudaProfilerApi",
-        "--stop-on-range-end=true",
+        "--capture-range-end=stop",
         "--output",
         str(report_base),
         *worker,
