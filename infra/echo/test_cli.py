@@ -3,6 +3,7 @@
 
 """Behavior tests for Echo CLI federation."""
 
+import io
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
@@ -36,6 +37,8 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
         return [remote_result]
 
     monkeypatch.setattr(cli, "request", fake_request)
+    clock = iter((10.0, 11.234))
+    monkeypatch.setattr(cli.time, "perf_counter", lambda: next(clock))
     args = cli.build_parser().parse_args(["search", "FAILED_PRECONDITION", "--domain", "file", "--domain", "pr"])
     args.func(args)
 
@@ -47,8 +50,10 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
         )
     ]
     output = capsys.readouterr().out
+    assert "1 result in 1.23s" in output
     assert cli.SEARCH_DETAIL_INSTRUCTION in output
     assert "L42 raise FAILED_PRECONDITION" in output
+    assert "feedback --query FAILED_PRECONDITION --grade '<id>=<0-10>'" in output
 
 
 def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
@@ -108,3 +113,44 @@ def test_get_fetches_full_detail_by_search_result_id(monkeypatch):
     args.func(args)
 
     assert calls == [("GET", "/repository-files/lib/iris/OPS.md", {})]
+
+
+def test_feedback_submits_replayable_grades_and_stdin_note(monkeypatch, capsys):
+    calls = []
+
+    def fake_request(method, path, **options):
+        calls.append((method, path, options))
+        return {"id": 17}
+
+    monkeypatch.setattr(cli, "request", fake_request)
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO("Wiki result was unrelated.\n"))
+    args = cli.build_parser().parse_args(
+        [
+            "feedback",
+            "--query",
+            "how do I deploy Iris?",
+            "--grade",
+            "wiki:123=0",
+            "--grade",
+            "file:lib/iris/OPS.md=10",
+        ]
+    )
+    args.func(args)
+
+    assert calls == [
+        (
+            "POST",
+            "/feedback",
+            {
+                "body": {
+                    "query": "how do I deploy Iris?",
+                    "grades": [
+                        {"result_id": "wiki:123", "grade": 0},
+                        {"result_id": "file:lib/iris/OPS.md", "grade": 10},
+                    ],
+                    "note": "Wiki result was unrelated.",
+                }
+            },
+        )
+    ]
+    assert capsys.readouterr().out == "recorded feedback #17\n"

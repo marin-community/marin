@@ -13,7 +13,7 @@ The dataset is intentionally varied: several models across version cohorts, all 
 dashboard's views all have something to render. It is deterministic (fixed timestamps and values) so
 regenerating it produces byte-stable records.
 
-Run: ``python infra/evaldash/src/fixtures.py <dest>`` (with ``lib/marin/src`` on ``PYTHONPATH``).
+Run: ``python -m infra.evaldash.src.fixtures <dest>`` (with ``lib/marin/src`` on ``PYTHONPATH``).
 """
 
 from __future__ import annotations

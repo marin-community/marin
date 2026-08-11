@@ -17,9 +17,8 @@ Test helper modules under a test tree participate in the graph too, so a test th
 reaches source code only through a shared helper is still selected.
 
 Usage:
-    python infra/ci/select_tests.py --base-ref <SHA>                   # pull request
-    python infra/ci/select_tests.py --base-ref <SHA> --run-all-tests   # push to main
-    python infra/ci/select_tests.py --run-all-tests                    # manual run
+    python infra/ci/select_tests.py --base-ref <SHA>  # pull request or push
+    python infra/ci/select_tests.py --run-all-tests   # scheduled or manual run
 """
 
 import argparse
@@ -58,8 +57,6 @@ class SourceRoot:
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES),
     SourceRoot("experiments", "."),
-    # The evaldash server is not a package: its tests import it by repo-root path
-    # (``infra.evaldash.src.metrics``), so the repo root is its import root.
     SourceRoot("infra/evaldash/src", "."),
 )
 
@@ -127,16 +124,34 @@ RUST_SETUP_TAG = "rust"
 SOURCE_BUILD_TIMEOUT = 30
 DEFAULT_LEG_TIMEOUT = 15
 
-# Suites that cannot be import-selected: each drives a whole subsystem (accelerator
-# kernels, a browser-driven smoke test) rather than a set of importable modules, so
-# path prefixes gate them. A locked dependency change moves the accelerator runtime
-# out from under all of them.
+# Suites that cannot be import-selected because they drive a non-Python subsystem.
+# Levanter's accelerator lanes use the ordinary import-selected Levanter files below;
+# only the browser smoke remains a directory-triggered suite.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
-    "levanter-torch": ("lib/levanter/", "lib/haliax/", *DEPENDENCY_MANIFESTS),
-    "levanter-tpu": ("lib/levanter/", "lib/haliax/", *DEPENDENCY_MANIFESTS),
     "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
 }
+
+LEVANTER_ACCELERATOR_TRIGGERS: tuple[str, ...] = (
+    "lib/levanter/",
+    "lib/haliax/",
+    "infra/ci/select_tests.py",
+    ".github/workflows/unified-unit.yaml",
+    *DEPENDENCY_MANIFESTS,
+)
+
+# These files are intentionally absent from the TPU command today. Keep the selection
+# rule next to the selector so an affected-file TPU run does not start only to collect
+# zero runnable tests.
+TPU_IGNORED_TEST_PATHS: frozenset[str] = frozenset(
+    {
+        "lib/levanter/tests/test_audio.py",
+        "lib/levanter/tests/test_new_cache.py",
+        "lib/levanter/tests/test_hf_checkpoints.py",
+        "lib/levanter/tests/test_hf_gpt2_serialize.py",
+        "lib/levanter/tests/test_gdn_layer.py",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +286,20 @@ def is_test_module(filename: str) -> bool:
     installed in the lane's environment.
     """
     return (filename.startswith("test_") or filename.endswith("_test.py")) and filename.endswith(".py")
+
+
+def has_static_test_items(path: Path) -> bool:
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            return True
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            if any(
+                isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name.startswith("test_")
+                for method in node.body
+            ):
+                return True
+    return False
 
 
 def _test_tree(scope: str, repo_root: Path) -> dict[str, Path]:
@@ -410,10 +439,13 @@ def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
                 # tests that own this file are not missed.
                 if not is_test_module(PurePosixPath(filepath).name):
                     forced.add(scope)
-                elif (repo_root / filepath).exists():
-                    # A test deleted by this diff still shows up in git's output; passing
-                    # it to pytest would abort the run before a single test executes.
+                elif (repo_root / filepath).exists() and has_static_test_items(repo_root / filepath):
                     direct_tests[scope].append(filepath)
+                elif (repo_root / filepath).exists():
+                    # Helpers named test_*.py satisfy pytest's file convention but do not
+                    # own test items. Their importers are not recoverable from a direct
+                    # file selection, so run the scope that consumes the helper.
+                    forced.add(scope)
                 break
 
             if filepath in (f"lib/{scope}/conftest.py", f"lib/{scope}/pyproject.toml"):
@@ -436,6 +468,59 @@ def extra_suites(changed_files: list[str]) -> list[str]:
         for suite, prefixes in EXTRA_SUITE_TRIGGERS.items()
         if any(filepath.startswith(prefix) for prefix in prefixes for filepath in changed_files)
     )
+
+
+def _node_has_torch_marker(node: ast.AST) -> bool:
+    return any(
+        (isinstance(child, ast.Name) and child.id == "skip_if_no_torch")
+        or (isinstance(child, ast.Attribute) and child.attr == "torch")
+        for child in ast.walk(node)
+    )
+
+
+def torch_membership_for_test_file(path: Path) -> tuple[bool, bool]:
+    """Return whether a test file contains torch and non-torch tests.
+
+    The Levanter helper ``skip_if_no_torch`` applies ``pytest.mark.torch``. The
+    selector cannot import test modules because its job intentionally installs no test
+    dependencies, so inspect decorators and module-level ``pytestmark`` assignments.
+    Unknown/dynamically generated test shapes conservatively enter both lanes.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
+    module_is_torch = any(
+        isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "pytestmark" for target in node.targets)
+        and _node_has_torch_marker(node.value)
+        for node in tree.body
+    )
+
+    has_torch = module_is_torch
+    has_non_torch = False
+    found_test = False
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            found_test = True
+            is_torch = module_is_torch or any(_node_has_torch_marker(decorator) for decorator in node.decorator_list)
+            has_torch |= is_torch
+            has_non_torch |= not is_torch
+            continue
+
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            class_is_torch = module_is_torch or any(
+                _node_has_torch_marker(decorator) for decorator in node.decorator_list
+            )
+            for method in node.body:
+                if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name.startswith("test_"):
+                    found_test = True
+                    is_torch = class_is_torch or any(
+                        _node_has_torch_marker(decorator) for decorator in method.decorator_list
+                    )
+                    has_torch |= is_torch
+                    has_non_torch |= not is_torch
+
+    if not found_test:
+        return True, True
+    return has_torch, has_non_torch
 
 
 # ---------------------------------------------------------------------------
@@ -568,6 +653,53 @@ def full_matrix(repo_root: Path, source_build_scopes: set[str]) -> list[dict[str
     return legs
 
 
+def selected_scope_test_paths(matrix: list[dict[str, str | int]], scope: str) -> list[str]:
+    """Return the unique pytest paths selected for one scope across all matrix shards."""
+    package = UV_PACKAGE[scope]
+    return sorted({path for leg in matrix if leg["package"] == package for path in str(leg["test_paths"]).split()})
+
+
+def accelerator_suite_test_paths(
+    changed_files: list[str],
+    matrix: list[dict[str, str | int]],
+    repo_root: Path,
+    *,
+    force: bool = False,
+) -> dict[str, list[str]]:
+    """Return affected Levanter tests split by accelerator lane."""
+    is_triggered = force or any(
+        filepath.startswith(prefix) for prefix in LEVANTER_ACCELERATOR_TRIGGERS for filepath in changed_files
+    )
+    if not is_triggered:
+        return {}
+
+    selected = selected_scope_test_paths(matrix, "levanter")
+    if not selected:
+        return {}
+
+    torch_paths: list[str] = []
+    tpu_paths: list[str] = []
+    for test_path in selected:
+        if test_path == TEST_DIR["levanter"]:
+            torch_paths.append(test_path)
+            tpu_paths.append(test_path)
+            continue
+
+        path = repo_root / test_path
+        has_torch, has_non_torch = torch_membership_for_test_file(path)
+        if has_torch:
+            torch_paths.append(test_path)
+        if has_non_torch and test_path not in TPU_IGNORED_TEST_PATHS:
+            tpu_paths.append(test_path)
+
+    suites: dict[str, list[str]] = {}
+    if torch_paths:
+        suites["levanter-torch"] = torch_paths
+    if tpu_paths:
+        suites["levanter-tpu"] = tpu_paths
+    return suites
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -590,17 +722,19 @@ def main() -> None:
     # Without a base ref there is no diff to inspect, so conservatively build every native
     # extension from source and run the out-of-band suites too.
     if args.base_ref is None:
+        matrix = full_matrix(repo_root, set(NATIVE_CRATE_DIR))
+        suite_test_paths = accelerator_suite_test_paths([], matrix, repo_root, force=True)
         result = {
             "reason": "run-all-tests",
-            "matrix": full_matrix(repo_root, set(NATIVE_CRATE_DIR)),
-            "suites": sorted(EXTRA_SUITE_TRIGGERS),
+            "matrix": matrix,
+            "suites": sorted((*EXTRA_SUITE_TRIGGERS, *suite_test_paths)),
+            "suite_test_paths": suite_test_paths,
         }
         print(json.dumps(result, indent=2))
         return
 
     changed = git_changed_files(args.base_ref, repo_root)
     classification = classify(changed, repo_root)
-    suites = extra_suites(changed)
 
     # The scopes whose native extension's Rust changed build it from source; every other
     # leg installs the prebuilt wheel. This is independent of full vs. diff-driven runs: a
@@ -622,7 +756,19 @@ def main() -> None:
             repo_root,
         )
 
-    print(json.dumps({"reason": reason, "matrix": matrix, "suites": suites}, indent=2))
+    suite_test_paths = accelerator_suite_test_paths(changed, matrix, repo_root)
+    suites = sorted((*extra_suites(changed), *suite_test_paths))
+    print(
+        json.dumps(
+            {
+                "reason": reason,
+                "matrix": matrix,
+                "suites": suites,
+                "suite_test_paths": suite_test_paths,
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

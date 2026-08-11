@@ -6,11 +6,14 @@
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from infra.ci.select_tests import (
     MIN_FILES_PER_SHARD,
     SCOPES,
     SHARD_COUNT,
     UV_PACKAGE,
+    accelerator_suite_test_paths,
     classify,
     compute_matrix,
     dependencies_by_test_file,
@@ -20,6 +23,7 @@ from infra.ci.select_tests import (
     matrix_leg,
     scope_legs,
     shard_files,
+    torch_membership_for_test_file,
 )
 
 
@@ -36,6 +40,11 @@ def select_matrix(changed_files: list[str], repo_root: Path) -> list[dict[str, s
         source_build_scopes,
         repo_root,
     )
+
+
+def select_accelerator_paths(changed_files: list[str], repo_root: Path) -> dict[str, list[str]]:
+    matrix = select_matrix(changed_files, repo_root)
+    return accelerator_suite_test_paths(changed_files, matrix, repo_root)
 
 
 def write(repo_root: Path, relative: str, body: str = "") -> Path:
@@ -168,14 +177,15 @@ def test_deleted_test_module_is_not_handed_to_pytest(tmp_path: Path) -> None:
 
 
 def test_changed_helper_module_forces_full_scope(tmp_path: Path) -> None:
-    """A changed non-collectable .py under tests/ runs the full scope, not the file itself."""
+    """A changed helper under tests/ runs the full scope, even when named test_*.py."""
+    write(tmp_path, "lib/iris/tests/test_utils.py", "def helper():\n    pass\n")
     result = classify(
-        ["lib/iris/tests/e2e/gang_jax_smoke_workload.py", "lib/iris/tests/cluster/test_types.py"],
+        ["lib/iris/tests/e2e/gang_jax_smoke_workload.py", "lib/iris/tests/test_utils.py"],
         tmp_path,
     )
 
     assert result.forced == {"iris"}
-    assert result.direct_tests == {}, "the changed test module does not exist on disk"
+    assert result.direct_tests == {}
 
 
 def test_conftest_and_package_metadata_force_full_scope(tmp_path: Path) -> None:
@@ -204,21 +214,194 @@ def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:
     assert classify(["experiments/grug/moe/model.py"], tmp_path).src_modules == {"experiments.grug.moe.model"}
 
 
+def test_evaldash_source_maps_to_dotted_module(tmp_path: Path) -> None:
+    write(tmp_path, "infra/evaldash/src/metrics.py")
+    assert classify(["infra/evaldash/src/metrics.py"], tmp_path).src_modules == {"infra.evaldash.src.metrics"}
+
+
+def _write_evaldash_workspace(repo_root: Path) -> None:
+    """An evaldash package and the tests that import it."""
+    write(repo_root, "infra/evaldash/src/metrics.py", "def build_matrix():\n    pass\n")
+    write(repo_root, "infra/evaldash/src/samples.py", "def fetch_samples():\n    pass\n")
+    write(repo_root, "infra/evaldash/src/fixtures.py", "def build_fixtures():\n    pass\n")
+    write(
+        repo_root,
+        "infra/evaldash/src/server.py",
+        "from infra.evaldash.src import samples\nfrom infra.evaldash.src.metrics import build_matrix\n",
+    )
+    write(
+        repo_root, "tests/evaluation/test_evaldash_metrics.py", "from infra.evaldash.src.metrics import build_matrix\n"
+    )
+    write(
+        repo_root,
+        "tests/evaluation/test_evaldash_local_store.py",
+        "from infra.evaldash.src import fixtures, server\n",
+    )
+
+
+@pytest.mark.parametrize(
+    ("changed_file", "selected_test"),
+    [
+        ("infra/evaldash/src/metrics.py", "tests/evaluation/test_evaldash_metrics.py"),
+        ("infra/evaldash/src/server.py", "tests/evaluation/test_evaldash_local_store.py"),
+    ],
+    ids=["metrics", "server"],
+)
+def test_evaldash_change_selects_importing_test(tmp_path: Path, changed_file: str, selected_test: str) -> None:
+    _write_evaldash_workspace(tmp_path)
+
+    matrix = select_matrix([changed_file], tmp_path)
+
+    assert selected_test in leg_paths(matrix, "marin")
+
+
 def test_extra_suites_follow_the_owning_package_directory() -> None:
-    """Accelerator and browser suites drive whole subsystems, so directory membership gates them."""
+    """Only suites without importable test dependencies use directory triggers."""
     assert extra_suites(["lib/iris/dashboard/src/App.vue"]) == ["iris-e2e-smoke"]
-    assert extra_suites(["lib/haliax/src/haliax/core.py"]) == ["levanter-torch", "levanter-tpu"]
-    assert extra_suites(["lib/levanter/tests/test_attention.py"]) == ["levanter-torch", "levanter-tpu"]
+    assert extra_suites(["lib/haliax/src/haliax/core.py"]) == []
+    assert extra_suites(["lib/levanter/tests/test_attention.py"]) == []
     assert extra_suites(["lib/zephyr/src/zephyr/writers.py"]) == []
     assert extra_suites(["docs/index.md"]) == []
-    assert extra_suites(["uv.lock"]) == ["iris-e2e-smoke", "levanter-torch", "levanter-tpu"]
+    assert extra_suites(["uv.lock"]) == ["iris-e2e-smoke"]
 
 
-def test_selector_changes_do_not_wake_the_accelerator_suites() -> None:
-    """A broad trigger reruns every unit test, but the TPU runner is serialized and scarce:
-    only a dependency or in-package change can move what those suites exercise."""
+def _levanter_accelerator_workspace(repo_root: Path) -> None:
+    write(repo_root, "lib/haliax/src/haliax/__init__.py", '"""haliax."""\n')
+    write(repo_root, "lib/haliax/src/haliax/core.py", "X = 1\n")
+    write(repo_root, "lib/levanter/src/levanter/__init__.py", '"""levanter."""\n')
+    write(repo_root, "lib/levanter/src/levanter/model.py", "from haliax.core import X\n")
+    write(repo_root, "lib/levanter/src/levanter/unrelated.py", "Y = 2\n")
+    write(
+        repo_root,
+        "lib/levanter/tests/test_model.py",
+        """\
+        from levanter.model import X
+        from test_utils import skip_if_no_torch
+
+        def test_cpu():
+            assert X == 1
+
+        @skip_if_no_torch
+        def test_torch():
+            assert X == 1
+        """,
+    )
+    write(
+        repo_root,
+        "lib/levanter/tests/test_unrelated.py",
+        "from levanter.unrelated import Y\n\ndef test_unrelated():\n    assert Y == 2\n",
+    )
+
+
+@pytest.mark.parametrize(
+    "changed_file",
+    ["lib/levanter/src/levanter/model.py", "lib/haliax/src/haliax/core.py"],
+)
+def test_accelerator_suites_reuse_import_selected_levanter_files(tmp_path: Path, changed_file: str) -> None:
+    _levanter_accelerator_workspace(tmp_path)
+
+    paths = select_accelerator_paths([changed_file], tmp_path)
+
+    expected = ["lib/levanter/tests/test_model.py"]
+    assert paths == {"levanter-torch": expected, "levanter-tpu": expected}
+
+
+def test_accelerator_suites_split_torch_and_non_torch_files(tmp_path: Path) -> None:
+    write(tmp_path, "lib/levanter/src/levanter/__init__.py")
+    write(tmp_path, "lib/levanter/src/levanter/core.py", "X = 1\n")
+    write(
+        tmp_path,
+        "lib/levanter/tests/test_torch_only.py",
+        """\
+        from levanter.core import X
+        from test_utils import skip_if_no_torch
+
+        @skip_if_no_torch
+        def test_torch():
+            assert X == 1
+        """,
+    )
+    write(
+        tmp_path,
+        "lib/levanter/tests/test_cpu_only.py",
+        """\
+        from levanter.core import X
+
+        def test_cpu():
+            assert X == 1
+        """,
+    )
+
+    paths = select_accelerator_paths(["lib/levanter/src/levanter/core.py"], tmp_path)
+
+    assert paths == {
+        "levanter-torch": ["lib/levanter/tests/test_torch_only.py"],
+        "levanter-tpu": ["lib/levanter/tests/test_cpu_only.py"],
+    }
+
+
+def test_tpu_ignored_file_does_not_start_an_accelerator_suite(tmp_path: Path) -> None:
+    write(tmp_path, "lib/levanter/tests/test_new_cache.py", "def test_cache():\n    pass\n")
+
+    assert select_accelerator_paths(["lib/levanter/tests/test_new_cache.py"], tmp_path) == {}
+
+
+def test_docs_only_levanter_change_does_not_start_accelerator_suites(tmp_path: Path) -> None:
+    _levanter_accelerator_workspace(tmp_path)
+
+    assert select_accelerator_paths(["lib/levanter/docs/index.md"], tmp_path) == {}
+
+
+def test_torch_membership_handles_module_and_class_markers(tmp_path: Path) -> None:
+    module_marked = write(
+        tmp_path,
+        "test_module.py",
+        """\
+        import pytest
+        pytestmark = pytest.mark.torch
+
+        def test_one():
+            pass
+        """,
+    )
+    mixed = write(
+        tmp_path,
+        "test_mixed.py",
+        """\
+        import pytest
+
+        class TestParity:
+            @pytest.mark.torch
+            def test_torch(self):
+                pass
+
+            def test_cpu(self):
+                pass
+        """,
+    )
+
+    assert torch_membership_for_test_file(module_marked) == (True, False)
+    assert torch_membership_for_test_file(mixed) == (True, True)
+
+
+def test_selector_changes_are_broad_without_waking_the_browser_suite() -> None:
     assert classify(["infra/ci/select_tests.py"], Path("/unused")).broad
     assert extra_suites(["infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"]) == []
+
+
+@pytest.mark.parametrize("changed_file", ["infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"])
+def test_selector_and_workflow_changes_run_full_accelerator_suites(tmp_path: Path, changed_file: str) -> None:
+    _levanter_accelerator_workspace(tmp_path)
+
+    paths = select_accelerator_paths([changed_file], tmp_path)
+
+    assert paths == {
+        "levanter-torch": ["lib/levanter/tests/test_model.py"],
+        "levanter-tpu": [
+            "lib/levanter/tests/test_model.py",
+            "lib/levanter/tests/test_unrelated.py",
+        ],
+    }
 
 
 def test_only_pytest_collectable_modules_are_selectable(tmp_path: Path) -> None:
