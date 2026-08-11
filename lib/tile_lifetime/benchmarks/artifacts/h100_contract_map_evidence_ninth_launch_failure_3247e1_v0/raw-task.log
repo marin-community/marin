@@ -1,0 +1,17 @@
+[08:57:14] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 | h100_contract_map_source_payload.py: OK
+[08:57:14] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 | h100-evidence-source-manifest.json: OK
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 | Traceback (most recent call last):
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2727, in <module>
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 |     main()
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2709, in main
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 |     output = run_coordinator(
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 |              ^^^^^^^^^^^^^^^^
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1779, in run_coordinator
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 |     case_result, trace_records = _run_profiled_case(
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 |                                  ^^^^^^^^^^^^^^^^^^^
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2138, in _run_profiled_case
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 |     return result, parse_nsys_sqlite(sqlite_path, expected_ranges)
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 787, in parse_nsys_sqlite
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 |     raise ValueError(f"Nsight Systems SQLite export omits CUPTI tables: {tuple(sorted(required - tables))}")
+[08:58:39] task=/dlwh/shuttle-h100-contract-map-evidence-3247e17-v9/0 | ValueError: Nsight Systems SQLite export omits CUPTI tables: ('CUPTI_ACTIVITY_KIND_MEMCPY',)
