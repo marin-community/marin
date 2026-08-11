@@ -23,6 +23,18 @@ embedded sample. Three arms plus a control, all sharing one split:
   on it. Not bit-identical at start: an attendable zero-value token still
   redistributes softmax mass (~0.6 max pre-sigmoid logit shift at init).
 
+The non-probe arms compose with the embedding-table and trunk levers that
+:mod:`train_exp` studied separately: ``--tokenizer`` swaps the tokenizer,
+``--init-embed`` warm-starts the embedding table from a donor model,
+``--gigatoken`` tokenizes with the gigatoken Rust backend behind an exact
+token-id parity gate against the HF tokenizer, and
+``--hidden-dim/--num-layers/--num-heads/--pool-window/--mlp-ratio`` size the
+trunk (defaults reproduce the deployed config). ``--domain-mlp`` types every
+document from its stored embedding (:mod:`domain_mlp`) and adds per-type
+tables keyed by that prediction; ``--baseline-model-dir`` scores a deployed
+text-only model on the identical holdout rows so the arm's tables read as
+deltas against it.
+
 Split discipline: the holdout is the *id set* of the rows ``train.py`` holds
 out of the original 87,948-row label parquet (seed 0, 1/7). The join against
 the 50M sample keeps ~92% of labels; rows whose id is in that holdout set are
@@ -42,6 +54,7 @@ silently scoring without the embedding.
 
 import argparse
 import logging
+import time
 
 import equinox as eqx
 import jax
@@ -55,9 +68,23 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 from scipy import stats
 
-from experiments.datakit.cluster.quality.fast_transformer.data import NUM_RESERVED, encode_texts, pack
+from experiments.datakit.cluster.quality.fast_transformer import domain_mlp
+from experiments.datakit.cluster.quality.fast_transformer.data import (
+    NUM_RESERVED,
+    encode_texts,
+    encode_texts_fast,
+    pack,
+)
+from experiments.datakit.cluster.quality.fast_transformer.gate_model import source_signal
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict
+from experiments.datakit.cluster.quality.fast_transformer.joined_labels import (
+    DEFAULT_JOINED,
+    EMBED_DIM,
+    embedding_matrix,
+    load_joined,
+)
 from experiments.datakit.cluster.quality.fast_transformer.model import FastTransformer, FastTransformerConfig
+from experiments.datakit.cluster.quality.fast_transformer.scorer import load_pooled_scorer, score_bme
 from experiments.datakit.cluster.quality.fast_transformer.train import (
     DEPLOY_CONFIG,
     MAX_TOKENS,
@@ -66,15 +93,18 @@ from experiments.datakit.cluster.quality.fast_transformer.train import (
     _save_scorer,
     train_regressor,
 )
-from experiments.datakit.cluster.quality.fast_transformer.train_exp import EVAL_FRAC, TRAIN_SEED, full_vocab_remap
+from experiments.datakit.cluster.quality.fast_transformer.train_exp import (
+    EVAL_FRAC,
+    TRAIN_SEED,
+    donor_embedding_table,
+    full_vocab_remap,
+    pca_project,
+    warm_start,
+)
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_JOINED = (
-    "s3://marin-us-east-02a/marin/user/muchanem/quality_v2/glm52_labels_88k-x-harrier-oss-v1-0.6b-50m-text-v1"
-)
 DEFAULT_LABELS = "s3://marin-us-east-02a/marin/user/rav/quality_v2/glm52_labels_88k.parquet"
-EMBED_DIM = 1024
 # Group-support floors for the per-group Spearman tables. Types are large;
 # sources run ~150-300 holdout rows each, so the source floor is lower.
 MIN_TYPE_LABELS = 300
@@ -85,16 +115,7 @@ FLAT_STD = 0.03
 RIDGE_ALPHAS = (0.1, 1.0, 10.0, 100.0)
 MLP_HIDDEN = 256
 ARMS = ("probe", "control", "head", "token")
-
-JOINED_COLUMNS = [
-    "id",
-    "text",
-    "embedding",
-    "glm52_source",
-    "glm52_content_type",
-    "glm52_quality",
-    "glm52_score_normalized",
-]
+PARITY_DOCS_PER_SOURCE = 16
 
 
 def holdout_id_set(labels_path: str) -> set[str]:
@@ -105,58 +126,43 @@ def holdout_id_set(labels_path: str) -> set[str]:
     return {ids[i] for i in perm[: max(1, int(len(ids) * EVAL_FRAC))]}
 
 
-def _walk_parquet(root: str, max_depth: int = 5) -> list[str]:
-    """Every ``*.parquet`` under ``root``, via single-level globs only (a recursive
-    glob HeadObjects the prefix, which the CW store answers with a 400). The join
-    mirrors each source's own layout, so shard depth varies from 1 to 3."""
-    shards: list[str] = []
-    dirs = [root.rstrip("/")]
-    for _ in range(max_depth):
-        next_dirs: list[str] = []
-        for d in dirs:
-            for entry in sorted(str(m) for m in StoragePath(f"{d}/*").glob()):
-                if entry.endswith(".parquet"):
-                    shards.append(entry)
-                else:
-                    # Descending into a non-directory just globs to nothing, so no
-                    # name heuristic (source dirs like `numinamath-1.5` carry dots).
-                    next_dirs.append(entry)
-        dirs = next_dirs
-        if not dirs:
-            break
-    return shards
+def check_gigatoken_parity(tokenizer_name: str, texts: list[str], sources: np.ndarray) -> None:
+    """Fail loudly unless gigatoken reproduces the HF tokenizer's ids exactly.
 
-
-def load_joined(joined_dir: str) -> dict[str, list]:
-    """All joined label rows, deduplicated by id."""
-    root = joined_dir.rstrip("/")
-    shards = _walk_parquet(f"{root}/outputs")
-    if not shards:
-        raise ValueError(f"no parquet shards under {root}/outputs/")
-    out: dict[str, list] = {c: [] for c in JOINED_COLUMNS}
-    seen: set[str] = set()
-    dupes = 0
-    for shard in shards:
-        with StoragePath(shard).open("rb") as fh:
-            table = pq.ParquetFile(fh).read(columns=JOINED_COLUMNS)
-        rows = {c: table.column(c).to_pylist() for c in JOINED_COLUMNS}
-        for i, doc_id in enumerate(rows["id"]):
-            if doc_id in seen:
-                dupes += 1
-                continue
-            seen.add(doc_id)
-            for c in JOINED_COLUMNS:
-                out[c].append(rows[c][i])
-    logger.info("joined labels: %d rows from %d shards (%d duplicate ids dropped)", len(out["id"]), len(shards), dupes)
-    return out
-
-
-def embedding_matrix(raw: list) -> np.ndarray:
-    """int8 rows -> float32, L2-normalized (recovers direction; drops the
-    quantization scale, which carries no per-document information)."""
-    x = np.asarray(raw, dtype=np.float32)
-    norms = np.linalg.norm(x, axis=1, keepdims=True)
-    return x / np.maximum(norms, 1e-6)
+    The sample spans every source in the corpus, so tokenizer-hostile content
+    (CJK, LaTeX, tool logs) is represented rather than just prose.
+    """
+    rng = np.random.default_rng(TRAIN_SEED)
+    sample: list[int] = []
+    for name in sorted(set(sources.tolist())):
+        idx = np.flatnonzero(sources == name)
+        sample.extend(rng.choice(idx, size=min(PARITY_DOCS_PER_SOURCE, len(idx)), replace=False).tolist())
+    docs = [texts[i] for i in sample]
+    # Warm both tokenizer caches so the timing below measures encoding, not loading.
+    encode_texts(tokenizer_name, ["warmup"], MAX_TOKENS)
+    encode_texts_fast(tokenizer_name, ["warmup"], MAX_TOKENS)
+    t0 = time.time()
+    hf_ids = encode_texts(tokenizer_name, docs, MAX_TOKENS)
+    t1 = time.time()
+    fast_ids = encode_texts_fast(tokenizer_name, docs, MAX_TOKENS)
+    t2 = time.time()
+    mismatched = [i for i, (a, b) in enumerate(zip(hf_ids, fast_ids, strict=True)) if list(a) != list(b)]
+    if mismatched:
+        first = mismatched[0]
+        raise ValueError(
+            f"gigatoken diverges from the HF tokenizer on {len(mismatched)}/{len(docs)} sampled documents; "
+            f"first mismatch: source={sources[sample[first]]!r} "
+            f"hf={hf_ids[first][:8]}... gigatoken={fast_ids[first][:8]}..."
+        )
+    logger.info(
+        "gigatoken parity: %d/%d documents identical across %d sources (hf %.2fs, gigatoken %.2fs, %.1fx)",
+        len(docs),
+        len(docs),
+        len(set(sources.tolist())),
+        t1 - t0,
+        t2 - t1,
+        (t1 - t0) / max(t2 - t1, 1e-9),
+    )
 
 
 def grouped_spearman(preds: np.ndarray, quality: np.ndarray, groups: np.ndarray, min_n: int) -> dict[str, float]:
@@ -173,8 +179,20 @@ def grouped_spearman(preds: np.ndarray, quality: np.ndarray, groups: np.ndarray,
     return out
 
 
-def report_arm(name: str, preds: np.ndarray, quality: np.ndarray, types: np.ndarray, sources: np.ndarray) -> None:
-    """The holdout table one arm contributes; grep for ``EMBED_EXP`` to harvest."""
+def report_arm(
+    name: str,
+    preds: np.ndarray,
+    quality: np.ndarray,
+    types: np.ndarray,
+    sources: np.ndarray,
+    domains: np.ndarray | None = None,
+) -> None:
+    """The holdout table one arm contributes; grep for ``EMBED_EXP`` to harvest.
+
+    ``type`` rows are keyed by the oracle's own content type; ``mlp_domain``
+    rows (when a domain typer is given) by the embedding-MLP prediction, which
+    is what inference-side calibration would have.
+    """
     overall = float(stats.spearmanr(preds, quality).statistic)
     by_type = grouped_spearman(preds, quality, types, MIN_TYPE_LABELS)
     by_source = grouped_spearman(preds, quality, sources, MIN_SOURCE_LABELS)
@@ -183,6 +201,10 @@ def report_arm(name: str, preds: np.ndarray, quality: np.ndarray, types: np.ndar
     logger.info("EMBED_EXP %s overall_rho=%+.4f", name, overall)
     for type_name in sorted(by_type):
         logger.info("EMBED_EXP %s type %-14s %+.3f", name, type_name, by_type[type_name])
+    if domains is not None:
+        by_domain = grouped_spearman(preds, quality, domains, MIN_TYPE_LABELS)
+        for domain_name in sorted(by_domain):
+            logger.info("EMBED_EXP %s mlp_domain %-14s %+.3f", name, domain_name, by_domain[domain_name])
     logger.info(
         "EMBED_EXP %s source_rho mean=%+.3f median=%+.3f min=%+.3f (%d sources)",
         name,
@@ -191,6 +213,7 @@ def report_arm(name: str, preds: np.ndarray, quality: np.ndarray, types: np.ndar
         float(np.min(list(by_source.values()))),
         len(by_source),
     )
+    logger.info("EMBED_EXP %s source_signal=%+.3f", name, source_signal(preds, quality, sources))
     logger.info(
         "EMBED_EXP %s per-source pred std mean=%.4f min=%.4f flat(<%.2f)=%d/%d",
         name,
@@ -229,12 +252,26 @@ def main() -> None:
     p.add_argument("--arm", required=True, choices=ARMS)
     p.add_argument("--out-dir", default=None, help="artifact dir (fusion/control arms)")
     p.add_argument("--name", default=None, help="artifact stem (fusion/control arms)")
+    p.add_argument("--tokenizer", default=TOKENIZER)
+    p.add_argument("--init-embed", choices=["none", "e5", "gemma"], default="none")
+    p.add_argument("--gigatoken", action="store_true", help="tokenize with gigatoken (exact-parity gated)")
+    p.add_argument("--domain-mlp", default=None, help="domain_mlp npz; adds per-type tables keyed by its predictions")
+    p.add_argument("--baseline-model-dir", default=None, help="text-only pooled scorer reported on the same holdout")
+    p.add_argument("--hidden-dim", type=int, default=DEPLOY_CONFIG["hidden_dim"])
+    p.add_argument("--num-layers", type=int, default=DEPLOY_CONFIG["num_layers"])
+    p.add_argument("--num-heads", type=int, default=DEPLOY_CONFIG["num_heads"])
+    p.add_argument("--pool-window", type=int, default=DEPLOY_CONFIG["pool_window"])
+    p.add_argument("--mlp-ratio", type=int, default=4, help="transformer MLP expansion ratio")
+    p.add_argument("--epochs", type=int, default=None, help="override the epoch cap (smoke runs)")
+    p.add_argument("--limit", type=int, default=0, help="use only the first N joined rows (0 = all; smoke runs)")
     args = p.parse_args()
     configure_logging(logging.INFO)
     configure_coreweave_s3()
 
     holdout_ids = holdout_id_set(args.labels)
     joined = load_joined(args.joined_dir)
+    if args.limit:
+        joined = {c: v[: args.limit] for c, v in joined.items()}
     is_eval = np.array([doc_id in holdout_ids for doc_id in joined["id"]])
     quality = np.array(joined["glm52_quality"], dtype=float)
     target = np.array(joined["glm52_score_normalized"], dtype=np.float32)
@@ -249,25 +286,43 @@ def main() -> None:
         len(holdout_ids),
     )
 
+    domains = None
+    if args.domain_mlp:
+        typer, typer_labels = domain_mlp.load(args.domain_mlp)
+        domains = domain_mlp.predict(typer, typer_labels, joined["embedding"])
+        logger.info("domain_mlp typing: agreement with oracle content types %.3f", float((domains == types).mean()))
+
     tr, ev = ~is_eval, is_eval
+    ev_domains = domains[ev] if domains is not None else None
     if args.arm == "probe":
         w = fit_ridge(emb[tr], target[tr])
         ridge_preds = np.concatenate([emb[ev], np.ones((int(ev.sum()), 1), dtype=np.float32)], axis=1) @ w
-        report_arm("probe_ridge", ridge_preds, quality[ev], types[ev], sources[ev])
+        report_arm("probe_ridge", ridge_preds, quality[ev], types[ev], sources[ev], ev_domains)
         mlp_preds = _mlp_probe_preds(emb, target, tr, ev)
-        report_arm("probe_mlp", mlp_preds, quality[ev], types[ev], sources[ev])
+        report_arm("probe_mlp", mlp_preds, quality[ev], types[ev], sources[ev], ev_domains)
         return
 
     if args.arm in ("head", "token") and (not args.out_dir or not args.name):
         raise ValueError("fusion arms need --out-dir and --name")
 
     texts = [t or "" for t in joined["text"]]
-    hp = TrainHParams(seed=TRAIN_SEED)
-    remap = full_vocab_remap(TOKENIZER)
-    vocab = len(remap) + NUM_RESERVED
+    hp = TrainHParams(seed=TRAIN_SEED) if args.epochs is None else TrainHParams(seed=TRAIN_SEED, epochs=args.epochs)
     tr_idx, ev_idx = np.flatnonzero(tr), np.flatnonzero(ev)
-    tr_raw = encode_texts(TOKENIZER, [texts[i] for i in tr_idx], MAX_TOKENS)
-    ev_raw = encode_texts(TOKENIZER, [texts[i] for i in ev_idx], MAX_TOKENS)
+
+    if args.baseline_model_dir:
+        # Scored before training so a broken baseline path fails in minutes, and
+        # bme-windowed exactly as the deployed scoring path (gate_model) runs it.
+        baseline_preds = score_bme(load_pooled_scorer(args.baseline_model_dir), [texts[i] for i in ev_idx])
+        report_arm("baseline", baseline_preds, quality[ev], types[ev], sources[ev], ev_domains)
+
+    encode = encode_texts
+    if args.gigatoken:
+        check_gigatoken_parity(args.tokenizer, texts, sources)
+        encode = encode_texts_fast
+    remap = full_vocab_remap(args.tokenizer)
+    vocab = len(remap) + NUM_RESERVED
+    tr_raw = encode(args.tokenizer, [texts[i] for i in tr_idx], MAX_TOKENS)
+    ev_raw = encode(args.tokenizer, [texts[i] for i in ev_idx], MAX_TOKENS)
     tr_pack = pack(tr_raw, remap, target[tr_idx], MAX_TOKENS)
     ev_pack = pack(ev_raw, remap, target[ev_idx], MAX_TOKENS)
 
@@ -276,11 +331,34 @@ def main() -> None:
         max_tokens=MAX_TOKENS,
         dropout=0.1,
         final_pool="mean",
+        embed_dim=DEPLOY_CONFIG["embed_dim"],
+        pool_kind=DEPLOY_CONFIG["pool_kind"],
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
+        num_heads=args.num_heads,
+        pool_window=args.pool_window,
+        mlp_ratio=args.mlp_ratio,
         doc_embed_dim=0 if args.arm == "control" else EMBED_DIM,
         doc_embed_super_token=args.arm == "token",
-        **DEPLOY_CONFIG,
     )
     model = FastTransformer(config, key=jr.PRNGKey(hp.seed))
+    if args.init_embed != "none":
+        donor = donor_embedding_table(args.init_embed)
+        model = warm_start(model, pca_project(donor, config.embed_dim), remap)
+    logger.info(
+        "arm %s: tokenizer=%s vocab=%d init=%s gigatoken=%s trunk d=%d L=%d h=%d w=%d mlp=%d (%.0fK flops/token)",
+        args.arm,
+        args.tokenizer,
+        vocab,
+        args.init_embed,
+        args.gigatoken,
+        config.hidden_dim,
+        config.num_layers,
+        config.num_heads,
+        config.pool_window,
+        config.mlp_ratio,
+        config.flops_per_token() / 1e3,
+    )
 
     # Internal train/val split for model selection, mirroring train.fit.
     rng = np.random.default_rng(hp.seed)
@@ -301,9 +379,9 @@ def main() -> None:
     )
     preds = predict(best, ev_pack.ids, doc_embed=emb[ev_idx] if use_emb else None)
     logger.info("arm %s: best_epoch=%d train_seconds=%.0f", args.arm, best_epoch, seconds)
-    report_arm(args.arm, preds, quality[ev], types[ev], sources[ev])
+    report_arm(args.arm, preds, quality[ev], types[ev], sources[ev], ev_domains)
     if args.out_dir and args.name:
-        _save_scorer(best, remap, TOKENIZER, config, args.out_dir, args.name)
+        _save_scorer(best, remap, args.tokenizer, config, args.out_dir, args.name)
 
 
 def _mlp_probe_preds(emb: np.ndarray, target: np.ndarray, tr: np.ndarray, ev: np.ndarray) -> np.ndarray:
