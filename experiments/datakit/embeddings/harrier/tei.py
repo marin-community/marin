@@ -38,6 +38,8 @@ TEI_IMAGE = (
 )
 TEI_PORT_NAME = "http"
 TEI_PROMETHEUS_PORT_NAME = "metrics"
+TEI_FALLBACK_PORT_START = 12_000
+TEI_FALLBACK_PORT_END = 14_000
 TEI_MAX_BATCH_TOKENS = 131_072
 TEI_MAX_BATCH_REQUESTS = 2_048
 TEI_TOKENIZATION_WORKERS = 4
@@ -52,6 +54,18 @@ class TeiServiceConfig:
     endpoint_name: str
     model_archive: str
     max_input_tokens: int
+    fallback_port: int
+    fallback_prometheus_port: int
+
+
+def _fallback_port_pair(run_id: str, instances: int, index: int) -> tuple[int, int]:
+    port_count = instances * 2
+    available_port_count = TEI_FALLBACK_PORT_END - TEI_FALLBACK_PORT_START
+    block_count = available_port_count // port_count
+    if block_count == 0:
+        raise ValueError(f"TEI pool of {instances} instances does not fit in the fallback port range")
+    block_start = TEI_FALLBACK_PORT_START + int(run_id, 16) % block_count * port_count
+    return block_start + index * 2, block_start + index * 2 + 1
 
 
 def _download_model(config: TeiServiceConfig, root: Path) -> Path:
@@ -90,8 +104,8 @@ def run_tei_service(config: TeiServiceConfig) -> None:
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("TEI service must run inside an Iris job")
-    port = job_info.ports[TEI_PORT_NAME]
-    prometheus_port = job_info.ports[TEI_PROMETHEUS_PORT_NAME]
+    port = job_info.ports[TEI_PORT_NAME] or config.fallback_port
+    prometheus_port = job_info.ports[TEI_PROMETHEUS_PORT_NAME] or config.fallback_prometheus_port
 
     configure_logging()
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -164,6 +178,7 @@ def tei_service_pool(
     jobs: list[JobHandle] = []
     try:
         for index in range(instances):
+            fallback_port, fallback_prometheus_port = _fallback_port_pair(run_id, instances, index)
             jobs.append(
                 client.submit(
                     JobRequest(
@@ -175,6 +190,8 @@ def tei_service_pool(
                                     endpoint_name=endpoint_name,
                                     model_archive=model_archive,
                                     max_input_tokens=max_input_tokens,
+                                    fallback_port=fallback_port,
+                                    fallback_prometheus_port=fallback_prometheus_port,
                                 ),
                             ),
                         ),

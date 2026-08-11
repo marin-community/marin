@@ -47,7 +47,14 @@ def test_select_document_separates_fuzzy_duplicates_from_retained_documents():
     )
 
 
-def test_tei_service_uses_iris_allocated_ports(monkeypatch):
+@pytest.mark.parametrize(
+    ("allocated_ports", "fallback_ports", "expected_ports"),
+    [
+        ({"http": 12_001, "metrics": 12_002}, (13_001, 13_002), (12_001, 12_002)),
+        ({"http": 0, "metrics": 0}, (13_001, 13_002), (13_001, 13_002)),
+    ],
+)
+def test_tei_service_selects_usable_ports(monkeypatch, allocated_ports, fallback_ports, expected_ports):
     process = MagicMock()
     process.poll.return_value = 0
     process.wait.return_value = 0
@@ -57,7 +64,7 @@ def test_tei_service_uses_iris_allocated_ports(monkeypatch):
     monkeypatch.setattr(
         tei,
         "get_job_info",
-        lambda: SimpleNamespace(advertise_host="worker.example", ports={"http": 12_001, "metrics": 12_002}),
+        lambda: SimpleNamespace(advertise_host="worker.example", ports=allocated_ports),
     )
     monkeypatch.setattr(tei, "iris_ctx", lambda: SimpleNamespace(registry=registry))
     monkeypatch.setattr(tei, "configure_logging", lambda: None)
@@ -66,15 +73,33 @@ def test_tei_service_uses_iris_allocated_ports(monkeypatch):
     wait_until_ready = MagicMock()
     monkeypatch.setattr(tei, "_wait_until_ready", wait_until_ready)
 
-    config = tei.TeiServiceConfig(endpoint_name="tei-endpoint", model_archive="model.tar", max_input_tokens=8_192)
+    config = tei.TeiServiceConfig(
+        endpoint_name="tei-endpoint",
+        model_archive="model.tar",
+        max_input_tokens=8_192,
+        fallback_port=fallback_ports[0],
+        fallback_prometheus_port=fallback_ports[1],
+    )
     with pytest.raises(RuntimeError, match="TEI exited with code 0"):
         tei.run_tei_service(config)
 
     command = tei.subprocess.Popen.call_args.args[0]
-    assert command[command.index("--port") + 1] == "12001"
-    assert command[command.index("--prometheus-port") + 1] == "12002"
-    wait_until_ready.assert_called_once_with(process, 12_001)
-    registry.registered.assert_called_once_with("tei-endpoint", "http://worker.example:12001", {"backend": "tei"})
+    assert command[command.index("--port") + 1] == str(expected_ports[0])
+    assert command[command.index("--prometheus-port") + 1] == str(expected_ports[1])
+    wait_until_ready.assert_called_once_with(process, expected_ports[0])
+    registry.registered.assert_called_once_with(
+        "tei-endpoint", f"http://worker.example:{expected_ports[0]}", {"backend": "tei"}
+    )
+
+
+def test_tei_fallback_ports_are_unique_within_a_pool():
+    ports = {
+        port for index in range(96) for port in tei._fallback_port_pair(run_id="1234abcd", instances=96, index=index)
+    }
+
+    assert len(ports) == 192
+    assert min(ports) >= tei.TEI_FALLBACK_PORT_START
+    assert max(ports) < tei.TEI_FALLBACK_PORT_END
 
 
 def test_tei_client_retries_against_refreshed_endpoints(monkeypatch):
