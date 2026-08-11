@@ -50,9 +50,11 @@ model at all.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
+import re
 import subprocess
 import time
 from collections.abc import Callable, Iterable, Sequence
@@ -312,6 +314,27 @@ def _strip_code_fence(text: str) -> str:
     return text.strip()
 
 
+_VERDICT_RE = re.compile(r'\{[^{}]*"intruder"\s*:\s*\d+[^{}]*\}', re.S)
+
+
+def _parse_verdict(content: str) -> IntruderVerdict:
+    """The verdict JSON in ``content``, tolerating prose or echoed text around it.
+
+    Some API models (claude-haiku-4.5 in particular) prepend text before the JSON
+    object despite the prompt. The answer itself is unchanged — only its framing —
+    so fall back to the last ``{...}`` block that carries an ``"intruder"`` key
+    rather than abstaining on framing.
+    """
+    text = _strip_code_fence(content)
+    try:
+        return IntruderVerdict.model_validate_json(text)
+    except ValueError:
+        matches = _VERDICT_RE.findall(text)
+        if not matches:
+            raise
+        return IntruderVerdict.model_validate_json(matches[-1])
+
+
 @dataclass
 class ClaudeCliPanelist:
     """A :class:`Panelist` backed by one headless ``claude -p`` invocation per vote.
@@ -397,6 +420,9 @@ def default_panel(size: int = DEFAULT_PANEL_SIZE, model: str | None = None) -> l
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_KEY_ENV = "OR_INTRUDER_key"
 OPENROUTER_TIMEOUT = 120.0
+# Reasoning models spend completion tokens on hidden thinking before the verdict
+# JSON; a tight cap truncates the reply mid-thought and voids the seat.
+OPENROUTER_MAX_COMPLETION_TOKENS = 8000
 
 
 @dataclass
@@ -455,14 +481,21 @@ class OpenRouterPanelist:
                     {"role": "system", "content": INTRUDER_SYSTEM_PROMPT},
                     {"role": "user", "content": user},
                 ],
+                "max_tokens": OPENROUTER_MAX_COMPLETION_TOKENS,
                 "temperature": 0.0,
             },
             timeout=self.timeout,
         )
         if response.status_code != 200:
             raise RuntimeError(f"{self.name}: OpenRouter {response.status_code}: {response.text[:200]}")
-        content = response.json()["choices"][0]["message"]["content"]
-        verdict = IntruderVerdict.model_validate_json(_strip_code_fence(content))
+        body = response.json()
+        # OpenRouter reports some provider failures inside a 200 body.
+        if "error" in body:
+            raise RuntimeError(f"{self.name}: OpenRouter error: {json.dumps(body['error'])[:200]}")
+        content = body["choices"][0]["message"].get("content") or ""
+        if not content.strip():
+            raise RuntimeError(f"{self.name}: empty completion")
+        verdict = _parse_verdict(content)
         index = verdict.intruder - 1
         if not 0 <= index < DOCS_PER_TRIAL:
             raise ValueError(f"{self.name} returned out-of-range intruder index {verdict.intruder}")
