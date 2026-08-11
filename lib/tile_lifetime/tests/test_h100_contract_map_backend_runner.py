@@ -528,7 +528,9 @@ def test_runner_ncu_sass_parser_rejects_duplicate_or_misplaced_header(replacemen
 
 
 def test_runner_ncu_sass_parser_rejects_header_before_kernel_section() -> None:
-    source = "Address Source\n" + _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+    source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))).replace(
+        "Kernel Name: KernelA\nAddress Source", "Address Source\nKernel Name: KernelA"
+    )
     with pytest.raises(ValueError, match="misplaced"):
         runner.parse_ncu_sass(source, ("KernelA",))
 
