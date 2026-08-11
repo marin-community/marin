@@ -277,8 +277,11 @@ def _capped_chunk_shape(local_shape: tuple[int, ...], itemsize: int, max_chunk_b
     Only even axes are halved, so the result always divides ``local_shape`` and every
     writer's region stays a whole number of chunks. An array whose axes are all odd keeps
     its full shape as one chunk.
+
+    A zero-length axis becomes a chunk of 1: zarr3 requires positive chunk dimensions, and
+    such an array has no data to place in the grid anyway.
     """
-    chunk = list(local_shape)
+    chunk = [max(size, 1) for size in local_shape]
     while math.prod(chunk) * itemsize > max_chunk_bytes:
         divisible = [axis for axis, size in enumerate(chunk) if size % 2 == 0]
         if not divisible:

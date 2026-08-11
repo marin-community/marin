@@ -239,6 +239,7 @@ def test_a_staging_budget_smaller_than_one_shard_still_completes():
         ((64, 16), 4, 1024, (16, 16)),  # halve the largest even axis until it fits
         ((3, 5), 4, 1, (3, 5)),  # nothing divides: one chunk, cap exceeded
         ((), 4, 1024, ()),  # scalar
+        ((0, 16), 4, 1024, (1, 16)),  # zarr3 rejects a zero-length chunk dimension
     ],
 )
 def test_capped_chunk_shape_stays_a_divisor(local_shape, itemsize, max_bytes, expected):
@@ -393,3 +394,18 @@ def test_host_arrays_without_a_sharding_roundtrip():
         restored = tree_deserialize_leaves_tensorstore(tmpdir, {"w": jnp.zeros(10, dtype=jnp.float32)})
 
     np.testing.assert_array_equal(np.asarray(restored["w"]), source["w"])
+
+
+def test_arrays_with_a_zero_length_axis_roundtrip():
+    """An empty array still needs a positive chunk grid, which zarr3 enforces on creation."""
+    with use_test_mesh():
+        source = {"empty": jnp.zeros((0, 16), dtype=jnp.float32), "w": jnp.arange(8, dtype=jnp.float32)}
+
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(tmpdir, source)
+            restored = tree_deserialize_leaves_tensorstore(
+                tmpdir, {key: jnp.zeros_like(value) for key, value in source.items()}
+            )
+
+        assert restored["empty"].shape == (0, 16)
+        np.testing.assert_array_equal(np.asarray(restored["w"]), np.asarray(source["w"]))
