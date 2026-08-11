@@ -729,8 +729,14 @@ def test_runner_ncu_sass_line_structure_rejects_status_pattern_lookalikes(record
     assert record not in str(failure.value)
 
 
-def test_runner_ncu_sass_line_structure_public_words_require_exact_ascii_tokens() -> None:
-    record = "Kernel_Private Name1 Address2 source Sectioned functional"
+@pytest.mark.parametrize(
+    "record",
+    (
+        "Kernel_Private Name1 Address2 source Sectioned functional",
+        "_Kernel 0Name \N{LATIN SMALL LETTER E WITH ACUTE}Address _Source 1Section 2Function",
+    ),
+)
+def test_runner_ncu_sass_line_structure_public_words_require_exact_standalone_tokens(record: str) -> None:
 
     with pytest.raises(ValueError) as failure:
         runner.parse_ncu_sass(_ncu_sass_export(("KernelA", (record,))), ("KernelA",))
