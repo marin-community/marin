@@ -23,12 +23,81 @@ COMMENT_PREFIX = re.compile(r"^\s*/\*")
 ENCODING_CONTINUATION = re.compile(r"^\s*/\*\s*0x[0-9A-Fa-f]{16,32}\s*\*/\s*$")
 CUOBJDUMP_FUNCTION = re.compile(r"^\s*Function\s*:\s*(?P<name>[A-Za-z_.$][A-Za-z0-9_.$]*)\s*$")
 NVDISASM_GLOBAL = re.compile(r"^\s*\.global\s+(?P<name>[A-Za-z_.$][A-Za-z0-9_.$]*)\s*$")
+NVDISASM_SECTION = re.compile(r"^\s*\.section\s+(?P<name>\.[A-Za-z0-9_.$]+)(?:\s*,.*)?$")
+NVDISASM_FUNCTION_TYPE = re.compile(r"^\s*\.type\s+(?P<name>[A-Za-z_.$][A-Za-z0-9_.$]*)\s*,\s*@function\s*$")
+NVDISASM_TEXT_LABEL = re.compile(r"^\s*\.text\.(?P<name>[A-Za-z_.$][A-Za-z0-9_.$]*):\s*$")
 
 
 @dataclass(frozen=True)
 class InstructionRecord:
     address: int
     mnemonic: str
+
+
+def _nvdisasm_function_body(lines: tuple[str, ...], expected_kernel: str) -> tuple[str, ...]:
+    global_indices = tuple(
+        index
+        for index, line in enumerate(lines)
+        if (match := NVDISASM_GLOBAL.fullmatch(line)) is not None and match.group("name") == expected_kernel
+    )
+    label = re.compile(rf"^\s*{re.escape(expected_kernel)}:\s*$")
+    label_indices = tuple(index for index, line in enumerate(lines) if label.fullmatch(line) is not None)
+    if len(global_indices) != 1 or len(label_indices) != 1:
+        raise ValueError("nvdisasm output must contain one exact expected global and function label")
+
+    global_index = global_indices[0]
+    label_index = label_indices[0]
+    if label_index <= global_index:
+        raise ValueError("nvdisasm expected function label does not follow its global")
+
+    sections = tuple(
+        (index, match.group("name"))
+        for index, line in enumerate(lines[:global_index])
+        if (match := NVDISASM_SECTION.fullmatch(line)) is not None
+    )
+    expected_section = f".text.{expected_kernel}"
+    if not sections or sections[-1][1] != expected_section:
+        raise ValueError(f"nvdisasm expected global is not in section {expected_section}")
+
+    for line in lines[global_index + 1 : label_index]:
+        if NVDISASM_SECTION.fullmatch(line) is not None or NVDISASM_GLOBAL.fullmatch(line) is not None:
+            raise ValueError("nvdisasm expected global and function label are in different scopes")
+        function_type = NVDISASM_FUNCTION_TYPE.fullmatch(line)
+        if function_type is not None and function_type.group("name") != expected_kernel:
+            raise ValueError("nvdisasm found another function before the expected label")
+
+    body = []
+    for line in lines[label_index + 1 :]:
+        if NVDISASM_SECTION.fullmatch(line) is not None or NVDISASM_GLOBAL.fullmatch(line) is not None:
+            break
+        if NVDISASM_FUNCTION_TYPE.fullmatch(line) is not None:
+            break
+        text_label = NVDISASM_TEXT_LABEL.fullmatch(line)
+        if text_label is not None and text_label.group("name") != expected_kernel:
+            break
+        body.append(line)
+    return tuple(body)
+
+
+def _instruction_records(lines: tuple[str, ...], *, allow_encoding_continuations: bool) -> tuple[InstructionRecord, ...]:
+    records = []
+    previous_was_instruction = False
+    for line in lines:
+        match = INSTRUCTION.fullmatch(line)
+        if match is not None:
+            records.append(InstructionRecord(address=int(match.group("address"), 16), mnemonic=match.group("mnemonic")))
+            previous_was_instruction = True
+            continue
+        if ENCODING_CONTINUATION.fullmatch(line) is not None:
+            if not allow_encoding_continuations or not previous_was_instruction:
+                raise ValueError("unexpected standalone instruction encoding")
+            previous_was_instruction = False
+            continue
+        if COMMENT_PREFIX.match(line) is not None:
+            raise ValueError(f"malformed address-bearing instruction record: {line!r}")
+        previous_was_instruction = False
+
+    return tuple(records)
 
 
 def validate_sass(text: str, *, output_format: str, expected_kernel: str) -> tuple[InstructionRecord, ...]:
@@ -42,36 +111,17 @@ def validate_sass(text: str, *, output_format: str, expected_kernel: str) -> tup
     if DIAGNOSTIC.search(text) is not None:
         raise ValueError("output contains a warning or error diagnostic")
 
-    lines = text.splitlines()
+    lines = tuple(text.splitlines())
     if output_format == "cuobjdump":
         names = tuple(match.group("name") for line in lines if (match := CUOBJDUMP_FUNCTION.fullmatch(line)))
         if names != (expected_kernel,):
             raise ValueError(f"cuobjdump functions differ from expected kernel: {sorted(names)!r}")
+        records = _instruction_records(lines, allow_encoding_continuations=True)
     elif output_format == "nvdisasm":
-        names = tuple(match.group("name") for line in lines if (match := NVDISASM_GLOBAL.fullmatch(line)))
-        if names != (expected_kernel,) or lines.count(f"{expected_kernel}:") != 1:
-            raise ValueError(f"nvdisasm symbols differ from expected kernel: {sorted(names)!r}")
+        body = _nvdisasm_function_body(lines, expected_kernel)
+        records = _instruction_records(body, allow_encoding_continuations=False)
     else:
         raise ValueError(f"unsupported SASS output format: {output_format}")
-
-    records = []
-    previous_was_instruction = False
-    for line in lines:
-        match = INSTRUCTION.fullmatch(line)
-        if match is not None:
-            records.append(InstructionRecord(address=int(match.group("address"), 16), mnemonic=match.group("mnemonic")))
-            previous_was_instruction = True
-            continue
-        if ENCODING_CONTINUATION.fullmatch(line) is not None:
-            if output_format != "cuobjdump" or not previous_was_instruction:
-                raise ValueError("unexpected standalone instruction encoding")
-            previous_was_instruction = False
-            continue
-        if COMMENT_PREFIX.match(line) is not None:
-            raise ValueError(f"malformed address-bearing instruction record: {line!r}")
-        previous_was_instruction = False
-
-    records = tuple(records)
     if not records:
         raise ValueError("output contains no address-bearing instruction records")
     addresses = tuple(record.address for record in records)

@@ -91,10 +91,45 @@ output for both tools. It also executes the previous double-escaped grep
 pattern and confirms that it rejects the same valid `cuobjdump` text accepted
 by the validator.
 
+## Scoped nvdisasm repair
+
+[Workflow run 31447297229](https://github.com/marin-community/marin/actions/runs/31447297229)
+built exact source `298e090a961c90b5857c4f86424ea4546571a706` with
+`image_set=h100-evidence`. All five legacy image jobs were skipped, and only
+job `93644153924` ran.
+
+The build again matched every closed package size and digest. The `sm_90a`
+compile, poisoned-`PATH` `cuobjdump --dump-sass`, and direct `nvdisasm` calls
+succeeded. The closed `cuobjdump` validation accepted 24 instructions. The
+first failure was the `nvdisasm` validation rejecting this real addressed data
+record before the expected function:
+
+```text
+/*0000*/ \t.byte\t0xff, 0xff, 0xff, 0xff, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff
+```
+
+The record belongs to nvdisasm's pre-function data, not the
+`.text.h100_evidence_smoke` instruction body. The parser had classified every
+address comment in the file as an instruction candidate, so it rejected the
+valid data directive before reaching the exact function label.
+
+The build stopped at step 4 of 6. The absolute Python CUDA-library probe,
+CPU-only JAX import probe, image push, registry inspection, and OCI digest were
+not reached. No image was published. The downloaded raw job log was 89,407
+bytes with SHA-256
+`22e2094101073b952da4c80a2b21f00cfa9937b73ff7980102fdcf58931643d0`.
+
+The nvdisasm validator now locates one exact expected `.global`, verifies its
+exact function label and `.text.<kernel>` section, and validates addressed
+records only within that function body. A following section or function closes
+the body. Addressed data outside the body is ignored; malformed addressed
+records inside it still fail. Missing or duplicate anchors, a wrong text
+section, and instructions found only in a trailing function also fail.
+
 ## Validation boundary
 
-This checkpoint contains source, local policy-test evidence, and the failed
-image-build evidence above. It does not include a workflow rerun, published
+This checkpoint contains source, local policy-test evidence, and the two failed
+image-build records above. It does not include another workflow run, published
 image, OCI digest, GPU query, or H100 relaunch. A future immutable image build
-must pass the repaired compile/disassembly smoke and the two remaining runtime
+must pass the scoped compile/disassembly smoke and the two remaining runtime
 probes before it can be considered for another reviewed launch.

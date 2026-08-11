@@ -36,16 +36,23 @@ CUOBJDUMP_SASS = """\
         /*0010*/              @!P0 S2R R9, SR_TID.X ;            /* 0x0000000000097919 */
                                                                  /* 0x000e2e0000002100 */
 """
-NVDISASM_SASS = """\
+NVDISASM_BODY = """\
+        /*0000*/                   LDC R1, c[0x0][0x37c] ;
+        /*0010*/                   S2R R9, SR_TID.X ;
+"""
+NVDISASM_SASS = (
+    """\
+        .section        .nv.constant0.h100_evidence_smoke,"a",@progbits
+        /*0000*/ \t.byte\t0xff, 0xff, 0xff, 0xff, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff
         .section        .text.h100_evidence_smoke,"ax",@progbits
         .sectioninfo    @"SHI_REGISTERS=6"
         .global         h100_evidence_smoke
         .type           h100_evidence_smoke,@function
 h100_evidence_smoke:
 .text.h100_evidence_smoke:
-        /*0000*/                   LDC R1, c[0x0][0x37c] ;
-        /*0010*/                   S2R R9, SR_TID.X ;
 """
+    + NVDISASM_BODY
+)
 
 EXPECTED_PACKAGES = {
     "cuda-cccl-13-2_13.2.86-1_amd64.deb",
@@ -303,6 +310,24 @@ def test_h100_evidence_sass_validator_accepts_addressed_kernel_instructions(tmp_
     }
 
 
+def test_h100_evidence_nvdisasm_validator_ignores_trailing_function_body(tmp_path):
+    trailing = (
+        NVDISASM_SASS
+        + """\
+        .section        .text.trailing,"ax",@progbits
+        .global         trailing
+        .type           trailing,@function
+trailing:
+.text.trailing:
+        /*0000*/ \t.byte\t0xff, 0xff, 0xff, 0xff
+"""
+    )
+    result = _run_sass_validator(tmp_path, output_format="nvdisasm", text=trailing)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["instruction_count"] == 2
+
+
 @pytest.mark.parametrize(
     "sass",
     (
@@ -328,13 +353,33 @@ def test_h100_evidence_sass_validator_rejects_unusable_cuobjdump_output(tmp_path
 @pytest.mark.parametrize(
     "sass",
     (
-        ".global h100_evidence_smoke\nh100_evidence_smoke:\nplain text without instructions\n",
-        ".global h100_evidence_smoke\nh100_evidence_smoke:\n/*0000*/ MOV R1, R2 ;\n/*0010*/ not SASS\n",
+        NVDISASM_SASS.replace(NVDISASM_BODY, "plain text without instructions\n"),
+        NVDISASM_SASS.replace(
+            NVDISASM_BODY,
+            "        /*0000*/ MOV R1, R2 ;\n        /*0010*/ not SASS\n",
+        ),
+        NVDISASM_SASS.replace(NVDISASM_BODY, "        /*0000*/ .byte 0xff, 0xff\n"),
         "warning: source unavailable\n" + NVDISASM_SASS,
-        ".global different_kernel\nh100_evidence_smoke:\n/*0000*/ MOV R1, R2 ;\n",
-        ".global h100_evidence_smoke\n.global h100_evidence_smoke\nh100_evidence_smoke:\n/*0000*/ MOV R1, R2 ;\n",
-        ".global h100_evidence_smoke\nh100_evidence_smoke:\nh100_evidence_smoke:\n/*0000*/ MOV R1, R2 ;\n",
-        ".global h100_evidence_smoke\nh100_evidence_smoke:\n/*0010*/ MOV R1, R2 ;\n/*0000*/ EXIT ;\n",
+        NVDISASM_SASS.replace(".section        .text.h100_evidence_smoke", ".section        .text.wrong"),
+        NVDISASM_SASS.replace("        .global         h100_evidence_smoke\n", ""),
+        NVDISASM_SASS.replace("\nh100_evidence_smoke:\n", "\n"),
+        NVDISASM_SASS.replace(".global         h100_evidence_smoke", ".global         different_kernel"),
+        NVDISASM_SASS.replace(
+            "        .global         h100_evidence_smoke\n",
+            "        .global         h100_evidence_smoke\n        .global         h100_evidence_smoke\n",
+        ),
+        NVDISASM_SASS.replace("\nh100_evidence_smoke:\n", "\nh100_evidence_smoke:\nh100_evidence_smoke:\n"),
+        NVDISASM_SASS.replace(
+            NVDISASM_BODY,
+            "        /*0010*/ MOV R1, R2 ;\n        /*0000*/ EXIT ;\n",
+        ),
+        NVDISASM_SASS.replace(NVDISASM_BODY, "plain text without instructions\n")
+        + """\
+        .section        .text.trailing,"ax",@progbits
+        .global         trailing
+trailing:
+        /*0000*/ MOV R1, R2 ;
+""",
     ),
 )
 def test_h100_evidence_sass_validator_rejects_unusable_nvdisasm_output(tmp_path, sass):
