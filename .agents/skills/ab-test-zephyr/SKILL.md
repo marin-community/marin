@@ -1,13 +1,13 @@
 ---
 name: ab-test-zephyr
-description: Run controlled Zephyr benchmarks on pre-normalized data and compare per-stage Finelog CPU, elapsed-time, and memory stats. Use for ad hoc comparisons and PR performance gates with one control and one or more treatments.
+description: Run a Zephyr control and treatment on pre-normalized data and compare per-stage Finelog CPU, elapsed-time, and memory stats. Use for ad hoc comparisons and PR performance gates; add named treatments only when requested.
 ---
 
 # A/B Test Zephyr Changes
 
 Use one workflow for ad hoc comparisons and PR performance gates:
 
-1. Run one control and one or more treatments with
+1. Run one control and one treatment with
    `experiments.datakit.zephyr_benchmark` on the same pre-normalized sample.
 2. Collect every execution's `zephyr.stage` rows from Finelog.
 3. Compare CPU, elapsed time, and memory per stage.
@@ -49,12 +49,8 @@ Keep CPU and elapsed time as separate outcomes:
 - CPU lower and elapsed higher: cheaper and slower.
 - Wall-only change from one control/treatment comparison: inconclusive until
   repeated under comparable scheduling conditions.
-
-A 100B shared-pool treatment reduced the through-MinHash span 28.72x while
-total CPU fell 1.23%. A separate bounded-token-batching treatment reduced
-summed stage elapsed 27.26% while CPU rose 5.59%. Report topology and batching
-changes as latency/compute tradeoffs; do not describe their wall-time gains as
-equivalent per-core efficiency gains.
+- Topology or batching change: report the latency/compute tradeoff; do not
+  describe wall-time gains as equivalent per-core efficiency gains.
 
 Do not apply fixed wall-time thresholds to every benchmark. Calibrate CPU/item
 and elapsed thresholds from same-code repeats for the selected sample and pool
@@ -76,6 +72,11 @@ matching control. Do not compare a standalone benchmark treatment with a
 differently shaped ferry baseline.
 
 ### New runs
+
+Default to one control at the branch/PR merge base and one treatment at the
+branch/PR head. Add treatments only when the requester explicitly names each
+additional commit or configuration. Record a stable name plus the exact SHA and
+configuration difference for every extra arm; do not infer or invent arms.
 
 For a PR, read the diff and select the smallest stage range that exercises the
 changed behavior:
@@ -108,7 +109,7 @@ git worktree add --detach "$WORKTREE_ROOT/treatment" "$TREATMENT_SHA"
 Record both SHAs. If the experiment changes configuration without changing
 code, use two worktrees or commits that preserve the exact control and
 treatment configurations. Add one detached worktree per additional treatment
-SHA or configuration.
+SHA or configuration explicitly requested.
 
 ## Launch the download-free benchmark
 
@@ -168,9 +169,9 @@ Record this workload fingerprint for every arm:
 - run tag
 
 Use fresh run tags so no arm cache-hits. One matching control can be reused for
-multiple treatments launched in the same scheduling window. If the decision
-depends on elapsed time, interleave additional control trials among the
-treatments to measure scheduling noise.
+explicitly requested treatments launched in the same scheduling window. If the
+decision depends on elapsed time, interleave additional control trials among
+the treatments to measure scheduling noise.
 
 Delegate monitoring to `babysit-zephyr`. A failed or preempted arm is evidence
 about infrastructure reliability, not a performance verdict. Diagnose repeated
