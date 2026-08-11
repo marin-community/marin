@@ -141,7 +141,7 @@ def test_test_helper_module_propagates_source_changes(tmp_path: Path) -> None:
     write(tmp_path, "lib/iris/src/iris/__init__.py")
     write(tmp_path, "lib/iris/src/iris/scheduler.py", "SCHED = 1\n")
     write(tmp_path, "lib/iris/tests/support.py", "from iris.scheduler import SCHED\n")
-    write(tmp_path, "lib/iris/tests/test_via_helper.py", "from tests.support import SCHED\n")
+    write(tmp_path, "lib/iris/tests/test_via_helper.py", "from lib.iris.tests.support import SCHED\n")
     write(tmp_path, "lib/iris/tests/test_relative_helper.py", "from .support import SCHED\n")
     write(tmp_path, "lib/iris/tests/test_direct.py", "def test_x():\n    pass\n")
 

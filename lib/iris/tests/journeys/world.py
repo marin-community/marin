@@ -22,7 +22,13 @@ from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Timestamp
-from tests.journeys.backend import BackendEvent, ScriptedObservation, ScriptedTaskBackend, UnavailableTaskBackend
+
+from lib.iris.tests.journeys.backend import (
+    BackendEvent,
+    ScriptedObservation,
+    ScriptedTaskBackend,
+    UnavailableTaskBackend,
+)
 
 
 @dataclass(frozen=True, slots=True)

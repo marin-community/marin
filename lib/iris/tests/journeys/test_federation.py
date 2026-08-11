@@ -5,7 +5,8 @@
 
 import pytest
 from iris.rpc import job_pb2
-from tests.journeys.federation import PEER_ID, FederationJourney
+
+from lib.iris.tests.journeys.federation import PEER_ID, FederationJourney
 
 
 @pytest.fixture

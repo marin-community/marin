@@ -13,7 +13,8 @@ from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, identity_scope
-from tests.journeys.world import JobRef, JourneyWorld, TaskRef
+
+from lib.iris.tests.journeys.world import JobRef, JourneyWorld, TaskRef
 
 PARENT_CLUSTER_ID = "journey-parent"
 PEER_ID = "peer-b"

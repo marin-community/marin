@@ -22,7 +22,7 @@ from rigging.server_auth import (
 )
 from rigging.testing import MockVerifier
 
-from tests.conftest import _make_controller_only_config
+from lib.iris.tests.conftest import _make_controller_only_config
 
 
 def _quick():
