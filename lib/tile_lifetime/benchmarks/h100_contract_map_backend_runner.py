@@ -251,7 +251,7 @@ _NCU_SASS_FAILURE_PATTERN = re.compile(
 _NCU_SASS_STATUS_PATTERN = re.compile(
     r'^==PROF== (?:(?:Connected to|Disconnected from) process [0-9]+(?: \(.+\))?|Profiling ".+"(?: .*)?)$'
 )
-_NCU_SASS_PUBLIC_WORD_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+_NCU_SASS_PUBLIC_WORD_PATTERN = re.compile(r"\w+")
 _NCU_SASS_PUBLIC_WORDS = ("Kernel", "Name", "Address", "Source", "Section", "Function")
 _MAX_NCU_SASS_BYTES = 1 << 20
 _MAX_NCU_SASS_LINE_CHARS = 1024
