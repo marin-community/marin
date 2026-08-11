@@ -1,0 +1,19 @@
+h100_contract_map_source_payload.py: OK
+h100-evidence-source-manifest.json: OK
+Traceback (most recent call last):
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 4054, in <module>
+    main()
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 4036, in main
+    output = run_coordinator(
+             ^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2752, in run_coordinator
+    backend.value: _run_ncu_profile(
+                   ^^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3603, in _run_ncu_profile
+    _parse_ncu_sass_file(sass_source_path, tuple(metric.name for metric in metrics))
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1117, in _parse_ncu_sass_file
+    return parse_ncu_sass(source, expected_names)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1083, in parse_ncu_sass
+    raise _unrecognized_ncu_sass_record(line_number, line)
+ValueError: unrecognized Nsight Compute SASS export record: {"line_number":4,"line_sha256":"58054c2cd3279060ec6f8ebc28c8ff6aeac5d743ec53f346774a3c5ae122b988","line_structure":{"ascii_classes":{"control":0,"digit":0,"lowercase":35,"punctuation":0,"uppercase":2,"whitespace":71},"delimiters":{"colon":0,"comma":0,"hyphen":0,"pipe":0},"leading_spaces":0,"non_ascii_codepoints":0,"public_patterns":{"header":false,"instruction":false,"section":false,"separator":false,"status":false},"public_vocabulary":{"Address":true,"Function":false,"Kernel":false,"Name":false,"Section":false,"Source":true},"spaces":71,"tabs":0,"token_count":6,"token_max_utf8_bytes":7,"trailing_spaces":0},"line_utf8_bytes":108}
