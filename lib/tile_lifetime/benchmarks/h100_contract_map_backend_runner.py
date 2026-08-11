@@ -857,11 +857,15 @@ def _nsys_kernels(database: sqlite3.Connection) -> tuple[tuple[int, int, str, in
         raise ValueError("CUPTI kernel table omits start, end, device, or kernel-name identity")
     query = (
         f"SELECT kernel.start, kernel.end, strings.value, kernel.deviceId "
-        f"FROM CUPTI_ACTIVITY_KIND_KERNEL AS kernel JOIN StringIds AS strings "
+        f"FROM CUPTI_ACTIVITY_KIND_KERNEL AS kernel LEFT JOIN StringIds AS strings "
         f"ON kernel.{name_column} = strings.id ORDER BY kernel.start"
     )
     records = []
-    for start, end, name, device_id in database.execute(query):
+    rows = tuple(database.execute(query))
+    kernel_count = database.execute("SELECT COUNT(*) FROM CUPTI_ACTIVITY_KIND_KERNEL").fetchone()[0]
+    if type(kernel_count) is not int or len(rows) != kernel_count:
+        raise ValueError("CUPTI kernel identities do not resolve exactly once through StringIds")
+    for start, end, name, device_id in rows:
         if (
             type(start) is not int
             or type(end) is not int
@@ -1949,7 +1953,7 @@ def run_coordinator(config: RunnerConfig) -> Path:
         raise AssertionError("dense Contract/Map execution must not admit FA4 or Grug comparators")
     audit_imported_local_modules(config)
     bundle = {
-        "schema": "shuttle.h100_contract_map_executed_bundle.v3",
+        "schema": "shuttle.h100_contract_map_executed_bundle.v4",
         "architecture_status": ArchitectureStatus.NONCONFORMING.value,
         "source_sha": config.source_sha,
         "source_tree": config.source_tree,
@@ -2372,6 +2376,8 @@ def merge_trace_timing(plan: Any, case_result: Mapping[str, Any], traces: tuple[
             "device_to_device_bytes": 0,
             "host_to_device_count": 0,
             "host_to_device_bytes": 0,
+            "device_to_host_count": 0,
+            "device_to_host_bytes": 0,
             "unexpected_copy_count": 0,
         }
         for backend in BackendVariant
@@ -2417,6 +2423,8 @@ def merge_trace_timing(plan: Any, case_result: Mapping[str, Any], traces: tuple[
             copies["device_to_device_bytes"] += trace.device_to_device_bytes
             copies["host_to_device_count"] += trace.host_to_device_count
             copies["host_to_device_bytes"] += trace.host_to_device_bytes
+            copies["device_to_host_count"] += trace.device_to_host_count
+            copies["device_to_host_bytes"] += trace.device_to_host_bytes
             copies["unexpected_copy_count"] += (
                 trace.unexpected_copy_count
                 + trace.device_to_device_count

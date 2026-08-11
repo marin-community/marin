@@ -375,9 +375,9 @@ copies only when the same database contains nonempty
 device. An absent kernel table, empty kernel activity, invalid GPU identity,
 schedule mismatch, malformed schema, ambiguous kernel identity, launch-order
 drift, substring-only kernel match, or any steady-state CUDA copy aborts the
-run. H2D, D2H, and D2D activity retains closed count and byte accounting before
-the no-copy gate. Three independent compile workers and three paired cold/hit
-cache roots retain compile,
+run. Result-evidence schema v4 retains closed H2D, D2H, and D2D count and byte
+accounting before the no-copy gate. Three independent compile workers and three
+paired cold/hit cache roots retain compile,
 first-execution, and cache samples. A cache pair must preserve its content
 identity, and all nine isolated compile, cold, and hit roots must converge to
 the same identity. Their final optimized HLO must also equal the timing and

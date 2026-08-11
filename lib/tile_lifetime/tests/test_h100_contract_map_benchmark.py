@@ -119,6 +119,8 @@ def _complete_result_evidence() -> dict[str, Any]:
             "device_to_device_bytes": 0,
             "host_to_device_count": 0,
             "host_to_device_bytes": 0,
+            "device_to_host_count": 0,
+            "device_to_host_bytes": 0,
             "unexpected_copy_count": 0,
         },
         "logical_boundary": {
@@ -233,6 +235,8 @@ def test_staging_manifest_is_structural_and_records_every_counterbalanced_order(
     serialized = json.dumps(manifest, sort_keys=True)
     schedule = manifest["steady_state_schedule"]
 
+    assert manifest["schema"] == "shuttle.h100_contract_map_backend_evidence.v4"
+    assert manifest["result_evidence_schema"]["schema"] == "shuttle.h100_contract_map_result_evidence.v4"
     assert manifest["kind"] == "staged_plan_no_gpu_evidence"
     assert not manifest["execution_allowed"]
     assert len(manifest["counterbalanced_orders"]) == 6
@@ -438,7 +442,7 @@ def test_result_evidence_schema_names_all_24_required_records() -> None:
     schema = result_evidence_schema()
     required_records = schema["required_result_records"]
 
-    assert schema["schema"] == "shuttle.h100_contract_map_result_evidence.v3"
+    assert schema["schema"] == "shuttle.h100_contract_map_result_evidence.v4"
     assert len(required_records) == 24
     assert required_records == [
         {"case_id": case.case_id, "backend": backend.value, "measurement_boundary": boundary.value}
@@ -691,6 +695,18 @@ def test_result_evidence_rejects_unexpected_physical_copy() -> None:
     payload["copies"]["unexpected_copy_count"] = 1
 
     with pytest.raises(ValueError, match="unexpected_copy_count must be zero"):
+        validate_result_evidence(payload)
+
+
+def test_result_evidence_requires_closed_device_to_host_copy_accounting() -> None:
+    payload = _complete_result_evidence()
+    payload["copies"]["device_to_host_bytes"] = -1
+
+    with pytest.raises(ValueError, match=r"copies.device_to_host_bytes must be a nonnegative integer"):
+        validate_result_evidence(payload)
+
+    del payload["copies"]["device_to_host_count"]
+    with pytest.raises(ValueError, match=r"copies is missing required evidence fields.*device_to_host_count"):
         validate_result_evidence(payload)
 
 
