@@ -30,6 +30,7 @@ _NVCC_PREPEND_FLAGS_ENV_VAR = "NVCC_PREPEND_FLAGS"
 _CUDA_HOME_ENV_VAR = "CUDA_HOME"
 _CUDA_COMPAT_DIRECTORY = "marin-deep-gemm-cuda"
 _CCCL_HEADER_NAMESPACES = ("cuda", "cub", "nv", "thrust")
+_CUDA_LINKER_LIBRARY_NAMES = ("libcudart.so", "libnvrtc.so")
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,21 @@ def _link_cccl_headers(source: Path, destination: Path) -> None:
         if destination_entry.exists():
             raise RuntimeError(f"CUDA CCCL compatibility path is not a symlink: {destination_entry}")
         destination_entry.symlink_to(source_entry, target_is_directory=True)
+
+
+def _link_unversioned_shared_library(directory: Path, library_name: str) -> None:
+    candidates = sorted(directory.glob(f"{library_name}.*"), key=lambda path: (len(path.name), path.name))
+    if not candidates:
+        raise RuntimeError(f"Packaged CUDA toolkit is missing {library_name}")
+    source = candidates[0]
+    destination = directory / library_name
+    if destination.is_symlink():
+        if destination.resolve() != source.resolve():
+            raise RuntimeError(f"Conflicting CUDA linker compatibility link: {destination}")
+        return
+    if destination.exists():
+        raise RuntimeError(f"CUDA linker compatibility path is not a symlink: {destination}")
+    destination.symlink_to(source.name)
 
 
 def deep_gemm_cuda_environment(
@@ -176,6 +192,8 @@ def deep_gemm_cuda_environment(
     _link_directory_entries(cuda_nvrtc_root / "lib", compatibility_lib)
     _link_directory_entries(curand_root / "lib", compatibility_lib)
     _link_directory_entries(cublas_root / "lib", compatibility_lib)
+    for library_name in _CUDA_LINKER_LIBRARY_NAMES:
+        _link_unversioned_shared_library(compatibility_lib, library_name)
 
     compatibility_nvvm = compatibility_home / "nvvm"
     compiler_nvvm = compiler_root / "nvvm"

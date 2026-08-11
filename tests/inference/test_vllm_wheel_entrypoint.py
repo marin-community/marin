@@ -259,6 +259,9 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     assert (compatibility_home / "lib64" / "libcudart.so.12").resolve() == (
         cuda_runtime_root / "lib" / "libcudart.so.12"
     ).resolve()
+    assert (compatibility_home / "lib64" / "libcudart.so").resolve() == (
+        cuda_runtime_root / "lib" / "libcudart.so.12"
+    ).resolve()
     assert (compatibility_home / "lib64" / "libcublas.so.12").resolve() == (
         cublas_root / "lib" / "libcublas.so.12"
     ).resolve()
@@ -266,6 +269,9 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
         curand_root / "lib" / "libcurand.so.10"
     ).resolve()
     assert (compatibility_home / "lib64" / "libnvrtc.so.12").resolve() == (
+        cuda_nvrtc_root / "lib" / "libnvrtc.so.12"
+    ).resolve()
+    assert (compatibility_home / "lib64" / "libnvrtc.so").resolve() == (
         cuda_nvrtc_root / "lib" / "libnvrtc.so.12"
     ).resolve()
 
