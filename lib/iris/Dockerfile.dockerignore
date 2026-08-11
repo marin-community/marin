@@ -35,7 +35,9 @@
 !lib/iris/pyproject.toml
 !lib/iris/images/h100-evidence-debian12-amd64.sha256
 !lib/iris/images/h100_evidence_nsys_help.py
+!lib/iris/images/h100_evidence_nvtx_smoke.py
 !lib/iris/images/h100_evidence_sass_smoke.py
+!lib/tile_lifetime/src/tile_lifetime/nvtx_range.py
 !lib/iris/src/
 !lib/iris/config/
 !lib/iris/dashboard/package.json

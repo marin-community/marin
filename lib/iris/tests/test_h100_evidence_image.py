@@ -18,6 +18,7 @@ DOCKERFILE = REPO_ROOT / "lib" / "iris" / "Dockerfile"
 DOCKERIGNORE = REPO_ROOT / "lib" / "iris" / "Dockerfile.dockerignore"
 PACKAGE_MANIFEST = REPO_ROOT / "lib" / "iris" / "images" / "h100-evidence-debian12-amd64.sha256"
 NSYS_HELP_VALIDATOR = REPO_ROOT / "lib" / "iris" / "images" / "h100_evidence_nsys_help.py"
+NVTX_SMOKE = REPO_ROOT / "lib" / "iris" / "images" / "h100_evidence_nvtx_smoke.py"
 SASS_VALIDATOR = REPO_ROOT / "lib" / "iris" / "images" / "h100_evidence_sass_smoke.py"
 H100_IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-h100-evidence-image.yaml"
 BROAD_IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-docker-images.yaml"
@@ -25,6 +26,7 @@ ROOT_PYPROJECT = REPO_ROOT / "pyproject.toml"
 TILE_LIFETIME_PYPROJECT = REPO_ROOT / "lib" / "tile_lifetime" / "pyproject.toml"
 UV_LOCK = REPO_ROOT / "uv.lock"
 H100_RUNNER = REPO_ROOT / "lib" / "tile_lifetime" / "benchmarks" / "h100_contract_map_backend_runner.py"
+NVTX_RANGE = REPO_ROOT / "lib" / "tile_lifetime" / "src" / "tile_lifetime" / "nvtx_range.py"
 BACKEND_RESOURCES = REPO_ROOT / "lib" / "tile_lifetime" / "src" / "tile_lifetime" / "contract_map_backend_resources.py"
 NVIDIA_DEBIAN12_AMD64_REPOSITORY = "https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64"
 
@@ -293,6 +295,37 @@ def test_h100_evidence_image_validates_the_pinned_nsys_profile_contract():
     dockerignore = DOCKERIGNORE.read_text()
     assert _docker_context_includes(validator_source, dockerignore)
     assert not _docker_context_includes(validator_source, dockerignore.replace(f"!{validator_source}\n", ""))
+
+
+def test_h100_evidence_image_profiles_the_exact_runner_nvtx_range_without_a_device_query():
+    target = _docker_stage("task-h100-evidence")
+    smoke = target.split("# Exercise the runner's exact ctypes NVTX range", maxsplit=1)[1].split(
+        "# Exercise the runner's exact compiler/disassembler dependency", maxsplit=1
+    )[0]
+    module_source = NVTX_RANGE.relative_to(REPO_ROOT).as_posix()
+    harness_source = NVTX_SMOKE.relative_to(REPO_ROOT).as_posix()
+
+    assert f"source={module_source},target=/tmp/h100-evidence-nvtx-range.py,ro" in smoke
+    assert f"source={harness_source},target=/tmp/h100-evidence-nvtx-smoke.py,ro" in smoke
+    assert "env NSYS_NVTX_PROFILER_REGISTER_ONLY=0" in smoke
+    assert "/usr/local/bin/nsys profile --force-overwrite=true --trace=nvtx" in smoke
+    assert "--capture-range=nvtx --capture-range-end=stop" in smoke
+    assert "--nvtx-capture=h100-evidence-nvtx-smoke" in smoke
+    assert "h100-evidence-nvtx-smoke.py emit" in smoke
+    assert '--library "${CUDA_HOME}/lib64/libnvToolsExt.so"' in smoke
+    assert "/usr/local/bin/nsys export --force-overwrite=true --type=sqlite" in smoke
+    assert "h100-evidence-nvtx-smoke.py validate" in smoke
+    assert "test -s /tmp/h100-evidence-nvtx.nsys-rep" in smoke
+    assert "nvidia-smi" not in smoke
+    assert "cudaProfiler" not in smoke
+    assert f"COPY {module_source}" not in target
+    assert f"COPY {harness_source}" not in target
+
+    dockerignore = DOCKERIGNORE.read_text()
+    for source in (module_source, harness_source):
+        assert (REPO_ROOT / source).read_bytes()
+        assert _docker_context_includes(source, dockerignore)
+        assert not _docker_context_includes(source, dockerignore.replace(f"!{source}\n", ""))
 
 
 def test_h100_evidence_image_executes_the_runner_cubin_disassembly_closure():

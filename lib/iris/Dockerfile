@@ -340,6 +340,32 @@ RUN --mount=type=bind,source=lib/iris/images/h100_evidence_nsys_help.py,target=/
       /tmp/h100-evidence-nsys-profile-help.txt; \
     rm -f /tmp/h100-evidence-nsys-profile-help.txt
 
+# Exercise the runner's exact ctypes NVTX range under the pinned profiler.
+# The module and harness are build-only bind mounts. This records no CUDA work
+# and neither loads a driver nor queries a device.
+RUN --mount=type=bind,source=lib/tile_lifetime/src/tile_lifetime/nvtx_range.py,target=/tmp/h100-evidence-nvtx-range.py,ro \
+    --mount=type=bind,source=lib/iris/images/h100_evidence_nvtx_smoke.py,target=/tmp/h100-evidence-nvtx-smoke.py,ro \
+    set -eux; \
+    env NSYS_NVTX_PROFILER_REGISTER_ONLY=0 \
+      /usr/local/bin/nsys profile --force-overwrite=true --trace=nvtx \
+      --capture-range=nvtx --capture-range-end=stop \
+      --nvtx-capture=h100-evidence-nvtx-smoke \
+      --output /tmp/h100-evidence-nvtx \
+      /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py emit \
+        --module /tmp/h100-evidence-nvtx-range.py \
+        --library "${CUDA_HOME}/lib64/libnvToolsExt.so" \
+        --output /tmp/h100-evidence-nvtx-result.json \
+        --name h100-evidence-nvtx-smoke; \
+    test -s /tmp/h100-evidence-nvtx.nsys-rep; \
+    /usr/local/bin/nsys export --force-overwrite=true --type=sqlite \
+      --output /tmp/h100-evidence-nvtx.sqlite /tmp/h100-evidence-nvtx.nsys-rep; \
+    /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py validate \
+      --result /tmp/h100-evidence-nvtx-result.json \
+      --sqlite /tmp/h100-evidence-nvtx.sqlite \
+      --name h100-evidence-nvtx-smoke; \
+    rm -f /tmp/h100-evidence-nvtx-result.json /tmp/h100-evidence-nvtx.nsys-rep \
+      /tmp/h100-evidence-nvtx.sqlite
+
 # Exercise the runner's exact compiler/disassembler dependency without loading
 # a driver or querying a device. cuobjdump delegates SASS decoding to nvdisasm.
 RUN --mount=type=bind,source=lib/iris/images/h100_evidence_sass_smoke.py,target=/tmp/h100-evidence-sass-smoke.py,ro \
