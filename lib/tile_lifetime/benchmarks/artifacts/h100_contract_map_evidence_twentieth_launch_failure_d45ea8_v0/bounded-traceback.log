@@ -1,0 +1,16 @@
+h100_contract_map_source_payload.py: OK
+h100-evidence-source-manifest.json: OK
+Traceback (most recent call last):
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3950, in <module>
+    main()
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3932, in main
+    output = run_coordinator(
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2648, in run_coordinator
+    backend.value: _run_ncu_profile(
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3499, in _run_ncu_profile
+    _parse_ncu_sass_file(sass_source_path, tuple(metric.name for metric in metrics))
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1013, in _parse_ncu_sass_file
+    return parse_ncu_sass(source, expected_names)
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 974, in parse_ncu_sass
+    raise ValueError(f"misplaced Nsight Compute SASS separator at line {line_number}")
+ValueError: misplaced Nsight Compute SASS separator at line 3

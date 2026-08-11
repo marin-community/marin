@@ -1,0 +1,11 @@
+job_id=/dlwh/shuttle-h100-contract-map-evidence-d45ea8f-v20
+state=failed
+task_count=1
+failed_tasks=1
+task_exit_code=1
+task_duration_seconds=214.61
+failure_retries=0
+preemptions=0
+first_failure=ValueError: misplaced Nsight Compute SASS separator at line 3
+accepted_bundle=false
+relaunch=false
