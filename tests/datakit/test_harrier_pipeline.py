@@ -1,14 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import io
 import json
 import urllib.error
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
-from experiments.datakit.embeddings.harrier import tei_client
+from experiments.datakit.embeddings.harrier import tei, tei_client
 from experiments.datakit.embeddings.harrier.pipeline import EmbeddingDocumentSet, select_document
 
 EMBEDDING_DIM = 4
@@ -41,6 +45,36 @@ def test_select_document_separates_fuzzy_duplicates_from_retained_documents():
     assert (
         select_document(duplicate, {"is_cluster_canonical": False}, EmbeddingDocumentSet.FUZZY_DUPLICATES) == duplicate
     )
+
+
+def test_tei_service_uses_iris_allocated_ports(monkeypatch):
+    process = MagicMock()
+    process.poll.return_value = 0
+    process.wait.return_value = 0
+    registry = MagicMock()
+    registry.registered.return_value = contextlib.nullcontext()
+
+    monkeypatch.setattr(
+        tei,
+        "get_job_info",
+        lambda: SimpleNamespace(advertise_host="worker.example", ports={"http": 12_001, "metrics": 12_002}),
+    )
+    monkeypatch.setattr(tei, "iris_ctx", lambda: SimpleNamespace(registry=registry))
+    monkeypatch.setattr(tei, "configure_logging", lambda: None)
+    monkeypatch.setattr(tei, "_download_model", lambda _config, _root: Path("/model"))
+    monkeypatch.setattr(tei.subprocess, "Popen", MagicMock(return_value=process))
+    wait_until_ready = MagicMock()
+    monkeypatch.setattr(tei, "_wait_until_ready", wait_until_ready)
+
+    config = tei.TeiServiceConfig(endpoint_name="tei-endpoint", model_archive="model.tar", max_input_tokens=8_192)
+    with pytest.raises(RuntimeError, match="TEI exited with code 0"):
+        tei.run_tei_service(config)
+
+    command = tei.subprocess.Popen.call_args.args[0]
+    assert command[command.index("--port") + 1] == "12001"
+    assert command[command.index("--prometheus-port") + 1] == "12002"
+    wait_until_ready.assert_called_once_with(process, 12_001)
+    registry.registered.assert_called_once_with("tei-endpoint", "http://worker.example:12001", {"backend": "tei"})
 
 
 def test_tei_client_retries_against_refreshed_endpoints(monkeypatch):

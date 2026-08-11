@@ -676,6 +676,7 @@ class FrayIrisClient:
                 name=request.name,
                 resources=iris_resources,
                 environment=iris_environment,
+                ports=request.ports or None,
                 constraints=iris_constraints if iris_constraints else None,
                 coscheduling=coscheduling,
                 replicas=replicas,

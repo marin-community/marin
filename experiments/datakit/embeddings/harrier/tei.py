@@ -36,8 +36,8 @@ TEI_IMAGE = (
     "ghcr.io/huggingface/text-embeddings-inference:hopper-latest@"
     "sha256:45dd59a35a1ee98cc5c56548bbd3c9cccf418724b83606b9ae4a11bcfeadb52f"
 )
-TEI_PORT = 8080
-TEI_PROMETHEUS_PORT = 18_080
+TEI_PORT_NAME = "http"
+TEI_PROMETHEUS_PORT_NAME = "metrics"
 TEI_MAX_BATCH_TOKENS = 131_072
 TEI_MAX_BATCH_REQUESTS = 2_048
 TEI_TOKENIZATION_WORKERS = 4
@@ -72,13 +72,13 @@ def _download_model(config: TeiServiceConfig, root: Path) -> Path:
     return model_path
 
 
-def _wait_until_ready(process: subprocess.Popen[bytes]) -> None:
+def _wait_until_ready(process: subprocess.Popen[bytes], port: int) -> None:
     deadline = Deadline.from_seconds(TEI_READY_TIMEOUT)
     while True:
         if process.poll() is not None:
             raise RuntimeError(f"TEI exited with code {process.returncode}")
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{TEI_PORT}/health", timeout=5):
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5):
                 return
         except urllib.error.URLError:
             deadline.raise_if_expired("TEI did not become healthy")
@@ -90,6 +90,8 @@ def run_tei_service(config: TeiServiceConfig) -> None:
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("TEI service must run inside an Iris job")
+    port = job_info.ports[TEI_PORT_NAME]
+    prometheus_port = job_info.ports[TEI_PROMETHEUS_PORT_NAME]
 
     configure_logging()
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -100,7 +102,7 @@ def run_tei_service(config: TeiServiceConfig) -> None:
                 "--model-id",
                 str(model_path),
                 "--port",
-                str(TEI_PORT),
+                str(port),
                 "--max-batch-tokens",
                 str(TEI_MAX_BATCH_TOKENS),
                 "--max-batch-requests",
@@ -110,14 +112,14 @@ def run_tei_service(config: TeiServiceConfig) -> None:
                 "--tokenization-workers",
                 str(TEI_TOKENIZATION_WORKERS),
                 "--prometheus-port",
-                str(TEI_PROMETHEUS_PORT),
+                str(prometheus_port),
                 "--payload-limit",
                 str(TEI_PAYLOAD_LIMIT),
             ]
         )
         try:
-            _wait_until_ready(process)
-            address = f"http://{job_info.advertise_host}:{TEI_PORT}"
+            _wait_until_ready(process, port)
+            address = f"http://{job_info.advertise_host}:{port}"
             with iris_ctx().registry.registered(config.endpoint_name, address, {"backend": "tei"}):
                 return_code = process.wait()
                 raise RuntimeError(f"TEI exited with code {return_code}")
@@ -188,6 +190,7 @@ def tei_service_pool(
                             docker_image=TEI_IMAGE,
                             setup_scripts=[_setup_script()],
                         ),
+                        ports=[TEI_PORT_NAME, TEI_PROMETHEUS_PORT_NAME],
                         max_retries_failure=3,
                         max_retries_preemption=10,
                     )

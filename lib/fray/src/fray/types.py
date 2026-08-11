@@ -697,6 +697,7 @@ class JobRequest:
         entrypoint: Job entrypoint (command-line or callable)
         resources: Resource requirements per replica
         environment: Environment configuration (dependencies, env vars)
+        ports: Iris task ports to allocate by name
         replicas: Gang-scheduled replicas (e.g. TPU slices for multislice training)
         processes_per_task: GPU processes to run inside each task (default 1). When
             > 1, fray composes the ``iris.hooks.multigpu_main`` supervisor into the command
@@ -713,6 +714,7 @@ class JobRequest:
     entrypoint: Entrypoint
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     environment: EnvironmentConfig | None = None
+    ports: list[str] = field(default_factory=list)
     replicas: int | None = None
     processes_per_task: int = 1
     max_retries_failure: int = 0
