@@ -33,4 +33,4 @@ the controller did not expose an independently retained bundle identifier in
 the terminal evidence collected here.
 
 This was one submission with `max_retries=0`. No retry, relaunch, source edit,
-device query, or post-failure GPU action was performed.
+or post-failure GPU action was performed.
