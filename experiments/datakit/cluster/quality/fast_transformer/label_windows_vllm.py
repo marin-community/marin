@@ -12,11 +12,27 @@ submits the two-node GLM-5.2-FP8 server as a child, resolves its endpoint by
 name, and terminates it on the way out.
 
 The campaign fans the window set across independent driver jobs, each with its
-own server gang. ``--partition``/``--num-partitions`` assign rows by a
-deterministic hash of the document id, so partitions are disjoint, stable across
-resubmissions, and keep a document's windows together. Chunked checkpoints under
-``<out>.chunks/`` resume by ``(id, window)``; a partition whose windows are all
-checkpointed already skips bringing up a server at all.
+own server gang, and the design separates work assignment from completion state
+so the fan-out can be rescaled at any time:
+
+* **Assignment** — the window set is cut into ``--num-partitions`` fine slices
+  by a deterministic hash of the document id (disjoint, stable across
+  resubmissions, and a document's windows stay together), and each driver takes
+  the ``--partitions`` slices it is handed. Slicing finer than the driver count
+  (64 slices across 16 drivers, say) leaves headroom: scaling to more drivers
+  later is just dealing the same slices into more hands.
+* **Completion** — every driver shares one ``--out`` and therefore one
+  ``<out>.chunks/`` checkpoint store, resumed by ``(id, window)`` against the
+  union of all chunks (chunk files are uuid-suffixed, so concurrent writers
+  never collide). Re-sharding or adding windows never relabels anything: only
+  windows absent from the shared store are pending. A driver whose assignment
+  is fully checkpointed skips bringing up a server at all.
+
+Fan-out drivers run with ``--chunks-only`` and write no final parquet — with a
+shared store, a mid-campaign consolidation would publish other partitions'
+half-finished state under the final name. When every partition has finished,
+one cheap run *without* the flag (its pending set is empty, so no server) folds
+the store into the labels parquet and stats.
 """
 
 import argparse
@@ -157,7 +173,7 @@ def run(
     out: str,
     server: ServerConfig,
     run_id: str,
-    partition: int,
+    partitions: Sequence[int],
     num_partitions: int,
     concurrency: int,
     chunk_size: int,
@@ -165,18 +181,20 @@ def run(
     limit: int | None,
     fleet_name: str,
     object_store_endpoint: str | None,
+    chunks_only: bool,
 ) -> None:
     ctx = iris_ctx()
     if ctx is None or ctx.client is None:
         raise RuntimeError("window labeling must run inside an Iris job so it can submit the GLM-5.2 server")
 
-    rows = [r for r in _read_windows(_expand_globs(windows)) if partition_index(r["id"], num_partitions) == partition]
+    assigned = frozenset(partitions)
+    rows = [r for r in _read_windows(_expand_globs(windows)) if partition_index(r["id"], num_partitions) in assigned]
     # A stable shuffle so --limit draws a representative smoke rather than one
     # shard's head, and so a full run's chunks mix sources evenly.
     random.Random(0).shuffle(rows)
     if limit:
         rows = rows[:limit]
-    logger.info("label_windows_vllm: partition %d/%d holds %d windows", partition, num_partitions, len(rows))
+    logger.info("label_windows_vllm: slices %s of %d hold %d windows", sorted(assigned), num_partitions, len(rows))
 
     pending = [r for r in rows if window_key(r) not in _labeled_keys(_chunk_dir(out))]
     if not pending:
@@ -213,6 +231,15 @@ def run(
             except Exception:
                 logger.warning("label_windows_vllm: failed to terminate the GLM-5.2 server job", exc_info=True)
 
+    if chunks_only:
+        # The store is shared: consolidating mid-campaign would publish other
+        # drivers' half-finished state under the final name. Report and stop.
+        logger.info(
+            "label_windows_vllm: chunks-only run done, %d windows assigned, %d labels in the shared store",
+            len(rows),
+            table.num_rows,
+        )
+        return
     with StoragePath(out).open("wb") as fh:
         pq.write_table(table, fh)
     stats = {
@@ -231,9 +258,13 @@ def run(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--windows", required=True, nargs="+", help="windows parquet path(s) or glob(s)")
-    parser.add_argument("--out", required=True, help="parquet path for this partition's window labels")
-    parser.add_argument("--partition", type=int, required=True, help="which id-hash partition this driver labels")
-    parser.add_argument("--num-partitions", type=int, default=8)
+    parser.add_argument(
+        "--out",
+        required=True,
+        help="final labels parquet path; every fan-out driver shares it (and its .chunks/ store)",
+    )
+    parser.add_argument("--partitions", type=int, required=True, nargs="+", help="id-hash slices this driver labels")
+    parser.add_argument("--num-partitions", type=int, default=64, help="how many slices the id hash cuts")
     parser.add_argument("--run-id", required=True, help="unique tag for this run's server endpoints")
     parser.add_argument("--label-batch", default=DEFAULT_LABEL_BATCH)
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
@@ -241,6 +272,11 @@ def main() -> None:
     parser.add_argument("--max-model-len", type=int, default=DEFAULT_MAX_MODEL_LEN)
     parser.add_argument("--max-num-seqs", type=int, default=DEFAULT_MAX_NUM_SEQS)
     parser.add_argument("--limit", type=int, default=None, help="label only the first N windows (smoke runs)")
+    parser.add_argument(
+        "--chunks-only",
+        action="store_true",
+        help="write checkpoint chunks but no final parquet (fan-out drivers sharing --out)",
+    )
     # gb200 is the shape this stack is verified on; the H100 path currently fails
     # in FlashInfer's SM90 JIT link.
     parser.add_argument("--fleet", choices=sorted(FLEETS), default="gb200", help="GPU shape to serve on")
@@ -255,8 +291,9 @@ def main() -> None:
     )
     args = parser.parse_args()
     configure_logging(logging.INFO)
-    if not 0 <= args.partition < args.num_partitions:
-        raise ValueError(f"--partition {args.partition} outside [0, {args.num_partitions})")
+    bad = [p for p in args.partitions if not 0 <= p < args.num_partitions]
+    if bad:
+        raise ValueError(f"--partitions {bad} outside [0, {args.num_partitions})")
     if args.object_store_endpoint:
         # The pod arrives with FSSPEC_S3/AWS_ENDPOINT_URL pointing at its
         # node-local LOTA endpoint; rebuild the process-wide config against the
@@ -271,7 +308,7 @@ def main() -> None:
         out=args.out,
         server=ServerConfig(max_model_len=args.max_model_len, max_num_seqs=args.max_num_seqs),
         run_id=args.run_id,
-        partition=args.partition,
+        partitions=args.partitions,
         num_partitions=args.num_partitions,
         concurrency=args.concurrency,
         chunk_size=args.chunk_size,
@@ -279,6 +316,7 @@ def main() -> None:
         limit=args.limit,
         fleet_name=args.fleet,
         object_store_endpoint=args.object_store_endpoint,
+        chunks_only=args.chunks_only,
     )
 
 
