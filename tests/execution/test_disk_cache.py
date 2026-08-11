@@ -3,20 +3,31 @@
 
 import json
 import os
+import threading
 from functools import cache
 from pathlib import Path
 
 import cloudpickle
-from marin.execution.artifact import read_artifact, write_artifact
+import marin.execution.step_runner as step_runner_module
+import marin.execution.step_status as step_status_module
+import pytest
+from fray.types import ResourceConfig
+from marin.execution.artifact import read_artifact, read_record, write_artifact
 from marin.execution.disk_cache import disk_cache
 from marin.execution.step_runner import check_cache, run_step
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_status import (
+    STATUS_FAILED,
     STATUS_SUCCESS,
     StatusFile,
+    StepLeaseLostError,
     distributed_lock,
+    get_status_path,
 )
 from pydantic import BaseModel
+from rigging.cancellation import current_cancellation_token
+from rigging.filesystem.distributed_lock import LeaseLostError
+from rigging.timing import ExponentialBackoff
 
 
 def _make_fn():
@@ -180,6 +191,187 @@ def test_run_step_with_cache_and_lock(tmp_path: Path):
     # Second run: cache hit, should not re-execute
     run_step(spec)
     assert call_count == 1
+
+
+def test_run_step_waits_for_winner_after_lease_loss(tmp_path: Path, monkeypatch):
+    """A losing worker does not overwrite the winner's terminal status."""
+    monkeypatch.setattr(step_status_module, "HEARTBEAT_INTERVAL", 0.01)
+    call_count = 0
+
+    def lose_lease(output_path: str) -> dict[str, str]:
+        nonlocal call_count
+        call_count += 1
+        token = current_cancellation_token()
+        assert token is not None
+
+        Path(f"{get_status_path(output_path)}.lock").unlink()
+        winner = StatusFile(output_path, "winner")
+        assert winner.try_acquire_lock()
+        assert token.wait(timeout=5.0)
+        write_artifact({"owner": "winner"}, output_path)
+        winner.write_status(STATUS_SUCCESS)
+        winner.release_lock()
+        return {"owner": "loser"}
+
+    spec = StepSpec(name="lose-lease", output_path_prefix=tmp_path.as_posix(), fn=lose_lease)
+
+    run_step(spec)
+
+    assert call_count == 1
+    assert StatusFile(spec.output_path, "check").status == STATUS_SUCCESS
+    record = read_record(spec.output_path)
+    assert record is not None
+    assert record.result == {"owner": "winner"}
+
+
+def test_run_step_local_job_does_not_save_after_lease_loss(tmp_path: Path, monkeypatch):
+    """A local job does not save its result after its step loses the lease."""
+    monkeypatch.setattr(step_status_module, "HEARTBEAT_INTERVAL", 0.01)
+    started = threading.Event()
+
+    def lose_lease(_output_path: str) -> dict[str, str]:
+        token = current_cancellation_token()
+        assert token is not None
+        started.set()
+        assert token.wait(timeout=5.0)
+        return {"owner": "loser"}
+
+    spec = StepSpec(
+        name="local-job-lease-loss",
+        output_path_prefix=tmp_path.as_posix(),
+        fn=lose_lease,
+        resources=ResourceConfig.with_cpu(cpu=1, ram="1g"),
+    )
+
+    def complete_as_winner() -> None:
+        assert started.wait(timeout=5.0)
+        Path(f"{get_status_path(spec.output_path)}.lock").unlink()
+        winner = StatusFile(spec.output_path, "winner")
+        assert winner.try_acquire_lock()
+        write_artifact({"owner": "winner"}, spec.output_path)
+        winner.write_status(STATUS_SUCCESS)
+        winner.release_lock()
+
+    winner_thread = threading.Thread(target=complete_as_winner)
+    winner_thread.start()
+    run_step(spec)
+    winner_thread.join(timeout=5.0)
+
+    assert not winner_thread.is_alive()
+    assert StatusFile(spec.output_path, "check").status == STATUS_SUCCESS
+    record = read_record(spec.output_path)
+    assert record is not None
+    assert record.result == {"owner": "winner"}
+
+
+def test_run_step_retries_transient_final_lease_refresh(tmp_path: Path, monkeypatch):
+    original_refresh = StatusFile.refresh_lock
+    refresh_count = 0
+
+    def transient_refresh(status_file: StatusFile) -> None:
+        nonlocal refresh_count
+        refresh_count += 1
+        if refresh_count == 1:
+            raise OSError("temporary storage error")
+        original_refresh(status_file)
+
+    monkeypatch.setattr(StatusFile, "refresh_lock", transient_refresh)
+    monkeypatch.setattr(
+        step_runner_module,
+        "STEP_LEASE_REFRESH_BACKOFF",
+        ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0),
+    )
+    spec = StepSpec(
+        name="transient-final-refresh",
+        output_path_prefix=tmp_path.as_posix(),
+        fn=lambda _: {"value": 1},
+    )
+
+    run_step(spec)
+
+    assert refresh_count == 2
+    assert StatusFile(spec.output_path, "check").status == STATUS_SUCCESS
+
+
+def test_step_heartbeat_retries_transient_refresh_error(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(step_status_module, "HEARTBEAT_INTERVAL", 0.01)
+    original_refresh = StatusFile.refresh_lock
+    second_refresh = threading.Event()
+    refresh_count = 0
+
+    def transient_refresh(status_file: StatusFile) -> None:
+        nonlocal refresh_count
+        refresh_count += 1
+        if refresh_count == 1:
+            raise OSError("temporary storage error")
+        second_refresh.set()
+        original_refresh(status_file)
+
+    def wait_for_recovered_heartbeat(_output_path: str) -> dict[str, int]:
+        assert second_refresh.wait(timeout=5.0)
+        return {"value": 1}
+
+    monkeypatch.setattr(StatusFile, "refresh_lock", transient_refresh)
+    spec = StepSpec(
+        name="transient-heartbeat-refresh",
+        output_path_prefix=tmp_path.as_posix(),
+        fn=wait_for_recovered_heartbeat,
+    )
+
+    run_step(spec)
+
+    assert refresh_count >= 3
+    assert StatusFile(spec.output_path, "check").status == STATUS_SUCCESS
+
+
+def test_run_step_treats_nested_lease_loss_as_step_failure(tmp_path: Path):
+    def fail_nested_lock(_output_path: str) -> None:
+        raise LeaseLostError("nested lock lost")
+
+    spec = StepSpec(name="nested-lock-loss", output_path_prefix=tmp_path.as_posix(), fn=fail_nested_lock)
+
+    with pytest.raises(LeaseLostError, match="nested lock lost"):
+        run_step(spec)
+
+    assert StatusFile(spec.output_path, "check").status == STATUS_FAILED
+
+
+def test_run_step_does_not_retry_nested_step_lease_loss(tmp_path: Path):
+    nested_output_path = (tmp_path / "nested").as_posix()
+    call_count = 0
+
+    def fail_nested_step_lock(_output_path: str) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count > 1:
+            raise AssertionError("run_step retried after a nested lease loss")
+        raise StepLeaseLostError(nested_output_path, "nested lock lost")
+
+    spec = StepSpec(name="nested-step-lock-loss", output_path_prefix=tmp_path.as_posix(), fn=fail_nested_step_lock)
+
+    with pytest.raises(StepLeaseLostError, match="nested lock lost"):
+        run_step(spec)
+
+    assert call_count == 1
+    assert StatusFile(spec.output_path, "check").status == STATUS_FAILED
+
+
+def test_should_run_waits_for_active_holder_before_accepting_success(tmp_path: Path, monkeypatch):
+    output_path = (tmp_path / "mutable").as_posix()
+    holder = StatusFile(output_path, "winner")
+    holder.write_status(STATUS_SUCCESS)
+    assert holder.try_acquire_lock()
+    released = False
+
+    def release_holder(_seconds: float) -> None:
+        nonlocal released
+        released = True
+        holder.release_lock()
+
+    monkeypatch.setattr(step_status_module, "sleep", release_holder)
+
+    assert not step_status_module.should_run(StatusFile(output_path, "loser"), "mutable")
+    assert released
 
 
 def test_functools_cache_with_disk_cache(tmp_path: Path, monkeypatch):

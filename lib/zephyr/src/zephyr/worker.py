@@ -9,6 +9,7 @@ import time
 import traceback
 from collections.abc import Callable, Hashable
 from contextlib import suppress
+from dataclasses import dataclass
 
 from fray.actor import ActorFuture, ActorHandle, current_actor
 from rigging.timing import ExponentialBackoff, RateLimiter
@@ -33,6 +34,12 @@ logger = logging.getLogger(__name__)
 RPC_POLL_INTERVAL = 0.5
 REGISTER_WARN_AFTER = 60.0
 PULL_TASK_WARN_AFTER = 30.0
+
+
+@dataclass(frozen=True)
+class _ActiveRunner:
+    execution_id: str
+    runner: StageRunner
 
 
 def _format_worker_status_md(active_tasks: int, stage: str) -> tuple[str, str]:
@@ -67,7 +74,9 @@ class ZephyrWorker:
         self._last_reported_counters: dict[str, CounterEntry] = {}
         # Runners and sub-IDs for currently active slots — written by _stage_manager,
         # read (snapshotted) by heartbeat thread.
-        self._active_runners: list[StageRunner] = []
+        self._active_runners: list[_ActiveRunner] = []
+        # Keep cancellation tombstones because a pulled task can still be in transit.
+        self._cancelled_executions: set[str] = set()
         self._active_task_count: int = 0
         self._current_stage_name: str = ""
 
@@ -230,7 +239,10 @@ class ZephyrWorker:
 
             runner = self._stage_runner_factory()
             with self._resources_lock:
-                self._active_runners.append(runner)
+                self._active_runners.append(_ActiveRunner(work.execution_id, runner))
+                execution_cancelled = work.execution_id in self._cancelled_executions
+            if execution_cancelled:
+                runner.cancel()
             self._active_task_count += 1
             self._current_stage_name = work.task.stage_name
 
@@ -284,6 +296,19 @@ class ZephyrWorker:
         """Tombstone one table and release its values."""
         self._memory_store.destroy(table_id)
 
+    def cancel_execution(self, execution_id: str) -> None:
+        """Cancel active shard runners for one execution."""
+        with self._resources_lock:
+            self._cancelled_executions.add(execution_id)
+            runners = [active.runner for active in self._active_runners if active.execution_id == execution_id]
+        for runner in runners:
+            runner.cancel()
+
+    def release_execution(self, execution_id: str) -> None:
+        """Release cancellation state after all execution tasks finish."""
+        with self._resources_lock:
+            self._cancelled_executions.discard(execution_id)
+
     def _task_thread(
         self,
         work: PullTask,
@@ -307,7 +332,12 @@ class ZephyrWorker:
                 work.stage_generation,
             ).result()
         except Exception:
-            logger.error("Worker %s error on shard %d", self._worker_id, task.shard_idx, exc_info=True)
+            with self._resources_lock:
+                execution_cancelled = work.execution_id in self._cancelled_executions
+            if execution_cancelled:
+                logger.info("Worker %s cancelled shard %d", self._worker_id, task.shard_idx)
+            else:
+                logger.error("Worker %s error on shard %d", self._worker_id, task.shard_idx, exc_info=True)
             self._coordinator.report_error.remote(
                 self._worker_id,
                 work.execution_id,
@@ -319,8 +349,7 @@ class ZephyrWorker:
         finally:
             with self._resources_lock:
                 self._available = self._available + task.cost
-                if runner in self._active_runners:
-                    self._active_runners.remove(runner)
+                self._active_runners = [active for active in self._active_runners if active.runner is not runner]
             self._active_task_count = max(0, self._active_task_count - 1)
             self._task_completed_event.set()
 
@@ -340,7 +369,7 @@ class ZephyrWorker:
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
         """Aggregate live counters from all active runners; return None if unchanged."""
         with self._resources_lock:
-            runners = list(self._active_runners)
+            runners = [active.runner for active in self._active_runners]
         current, _ = merge_counter_entries((name, entry) for r in runners for name, entry in r.live_counters().items())
         if current == self._last_reported_counters:
             return None

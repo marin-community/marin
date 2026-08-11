@@ -25,6 +25,7 @@ from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
 from iris.client.client import get_iris_ctx
+from rigging.cancellation import current_cancellation_token
 from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_bucket
 from rigging.timing import ExponentialBackoff
 
@@ -32,6 +33,7 @@ from zephyr.coordinator import (
     MAX_CONCURRENT_PIPELINES,
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
+    WORKER_CANCELLATION_TIMEOUT,
     ZephyrCoordinator,
     ZephyrExecutionResult,
     _cleanup_execution,
@@ -68,6 +70,8 @@ V = TypeVar("V")
 # Keep a Zephyr worker actor group below the practical Iris/Kubernetes control-plane
 # ceiling. Additional shards are pulled by these long-lived replicas.
 MAX_IRIS_WORKER_REPLICAS = 1_000
+EXECUTION_ABORT_TIMEOUT = 15.0
+EXECUTION_RELEASE_TIMEOUT = WORKER_CANCELLATION_TIMEOUT + 5.0
 
 
 def _generate_execution_id() -> str:
@@ -561,18 +565,34 @@ class ZephyrContext:
     ) -> ZephyrExecutionResult:
         """Run one plan on an existing coordinator and read its stored result."""
         result_path = _execution_result_path(self.chunk_storage_prefix, execution_id)
+        operation = coordinator.run_pipeline.submit(
+            plan,
+            execution_id,
+            ZephyrTaskResources.from_resource_config(map_task_resources),
+            ZephyrTaskResources.from_resource_config(reduce_task_resources),
+        )
+        cancellation_token = current_cancellation_token()
+        remove_callback = None
+        if cancellation_token is not None:
+            remove_callback = cancellation_token.add_callback(
+                lambda reason: coordinator.abort_execution.remote(execution_id, reason).result(
+                    timeout=EXECUTION_ABORT_TIMEOUT
+                )
+            )
         try:
-            coordinator.run_pipeline.submit(
-                plan,
-                execution_id,
-                ZephyrTaskResources.from_resource_config(map_task_resources),
-                ZephyrTaskResources.from_resource_config(reduce_task_resources),
-            ).result()
+            operation.result()
+            if cancellation_token is not None and cancellation_token.cancelled:
+                reason = cancellation_token.reason
+                assert reason is not None
+                raise ZephyrWorkerError(reason)
         except Exception:
             payload = _try_read_coordinator_result(result_path)
             if isinstance(payload, Exception):
                 raise payload from None
             raise
+        finally:
+            if remove_callback is not None:
+                remove_callback()
 
         payload = _read_coordinator_result(result_path)
         if isinstance(payload, Exception):
@@ -626,7 +646,7 @@ class ZephyrContext:
                 )
             finally:
                 with suppress(Exception):
-                    coordinator.release_execution.remote(execution_id).result(timeout=10.0)
+                    coordinator.release_execution.remote(execution_id).result(timeout=EXECUTION_RELEASE_TIMEOUT)
 
         assert state is _ContextState.NEW
         tasks_per_worker = min(

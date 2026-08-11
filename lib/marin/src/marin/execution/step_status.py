@@ -22,6 +22,7 @@ from time import sleep
 from typing import TypeVar
 
 from iris.cluster.client.job_info import get_job_info
+from rigging.cancellation import CancellationToken, cancellation_scope
 from rigging.filesystem import prefix_join, url_to_fs
 from rigging.filesystem.distributed_lock import (
     HEARTBEAT_INTERVAL,
@@ -180,13 +181,14 @@ def should_run(
 
     while True:
         status = status_file.status
-        active_lock_holder = status_file.active_lock_holder() if status == STATUS_RUNNING else None
+        should_check_holder = status == STATUS_RUNNING or (status == STATUS_SUCCESS and not force_rerun)
+        active_lock_holder = status_file.active_lock_holder() if should_check_holder else None
 
         if log_once and active_lock_holder is None:
             logger.info(f"[{wid}] Status {step_name}: {status}")
             log_once = False
 
-        if status == STATUS_SUCCESS and not force_rerun:
+        if status == STATUS_SUCCESS and not force_rerun and active_lock_holder is None:
             logger.info(f"[{wid}] Step {step_name} has already succeeded.")
             return False
 
@@ -195,7 +197,7 @@ def should_run(
                 logger.info(f"[{wid}] Force running {step_name}, previous status: {status}")
             else:
                 raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
-        elif status == STATUS_RUNNING and active_lock_holder is not None:
+        elif active_lock_holder is not None:
             if wait_log_limiter.should_run():
                 logger.info(
                     "[%s] Status %s: %s. Another worker holds the active lock (owner=%s). "
@@ -238,6 +240,14 @@ class StepAlreadyDone(Exception):
     """Raised by ``step_lock`` / ``distributed_lock`` when the step has already succeeded."""
 
 
+class StepLeaseLostError(LeaseLostError):
+    """The current step lost its distributed lease."""
+
+    def __init__(self, output_path: str, reason: str):
+        super().__init__(reason)
+        self.output_path = output_path
+
+
 @contextlib.contextmanager
 def step_lock(
     output_path: str, step_label: str, *, force_run_failed: bool = True, force_rerun: bool = False
@@ -249,6 +259,9 @@ def step_lock(
     writes inside the context do not release the lock; this context manager owns
     release ordering so the heartbeat is stopped first.
 
+    A lease loss cancels the context-local token so registered work can stop
+    before this context exits.
+
     Raises ``StepAlreadyDone`` if another worker completed the step
     while we waited for the lock. ``force_rerun`` rebuilds over an existing
     success (mutable ``dev`` artifacts).
@@ -259,7 +272,7 @@ def step_lock(
 
     # Start heartbeat — LeaseLostError is fatal and signals the main thread.
     stop_event = Event()
-    lease_lost_event = Event()
+    cancellation_token = CancellationToken()
 
     def _heartbeat():
         while not stop_event.wait(HEARTBEAT_INTERVAL):
@@ -267,19 +280,24 @@ def step_lock(
                 status_file.refresh_lock()
             except LeaseLostError:
                 logger.error("Lease lost for %s — step must terminate", output_path, exc_info=True)
-                lease_lost_event.set()
+                cancellation_token.cancel(f"Lease lost during execution of {output_path}")
                 return
+            except Exception as error:
+                logger.warning("Failed to refresh the lease for %s; the heartbeat will retry: %s", output_path, error)
 
     heartbeat_thread = Thread(target=_heartbeat, daemon=True)
     heartbeat_thread.start()
 
     try:
-        yield status_file
+        with cancellation_scope(cancellation_token):
+            yield status_file
     finally:
         stop_event.set()
         heartbeat_thread.join(timeout=5)
-        if lease_lost_event.is_set():
-            raise LeaseLostError(f"Lease was lost during execution of {output_path}")
+        if cancellation_token.cancelled:
+            reason = cancellation_token.reason
+            assert reason is not None
+            raise StepLeaseLostError(output_path, reason)
         status_file.release_lock()
 
 

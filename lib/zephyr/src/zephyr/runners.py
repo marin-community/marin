@@ -77,6 +77,26 @@ flushes its counters.
 Matches the parent's heartbeat cadence so each beat reads at most one stale
 snapshot before a fresh flush lands.
 """
+SUBPROCESS_TERMINATE_TIMEOUT = 5.0
+
+
+def _kill_process_after_timeout(process: sp.Popen) -> None:
+    try:
+        process.wait(timeout=SUBPROCESS_TERMINATE_TIMEOUT)
+    except sp.TimeoutExpired:
+        with suppress(ProcessLookupError):
+            process.kill()
+
+
+def _terminate_process(process: sp.Popen) -> None:
+    with suppress(ProcessLookupError):
+        process.terminate()
+    threading.Thread(
+        target=_kill_process_after_timeout,
+        args=(process,),
+        daemon=True,
+        name=f"zephyr-kill-{process.pid}",
+    ).start()
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +380,7 @@ class InlineRunner:
 
     def __init__(self) -> None:
         self._ctx: _InProcessWorkerContext | None = None
+        self._cancelled = threading.Event()
 
     def execute(
         self,
@@ -367,6 +388,8 @@ class InlineRunner:
         chunk_prefix: str,
         execution_id: str,
     ) -> tuple[TaskResult, dict[str, CounterEntry]]:
+        if self._cancelled.is_set():
+            raise RuntimeError("Stage runner was cancelled")
         ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name, task_memory_bytes=task.cost.memory)
         self._ctx = ctx
         worker_token = _worker_ctx_var.set(ctx)
@@ -387,6 +410,10 @@ class InlineRunner:
         ctx = self._ctx
         return dict(ctx._counters) if ctx is not None else {}
 
+    def cancel(self) -> None:
+        """Prevent new work from starting; an active call completes."""
+        self._cancelled.set()
+
 
 # ---------------------------------------------------------------------------
 # SubprocessRunner — opt-in isolation
@@ -406,6 +433,9 @@ class SubprocessRunner:
 
     def __init__(self) -> None:
         self._counter_file: str | None = None
+        self._cancelled = threading.Event()
+        self._process: sp.Popen | None = None
+        self._process_lock = threading.Lock()
 
     def execute(
         self,
@@ -413,6 +443,8 @@ class SubprocessRunner:
         chunk_prefix: str,
         execution_id: str,
     ) -> tuple[TaskResult, dict[str, CounterEntry]]:
+        if self._cancelled.is_set():
+            raise RuntimeError("Stage runner was cancelled")
         finelog_url = StatsWriter.resolve_url()  # Requires Iris context, so called here and passed to subprocess
         with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
             cloudpickle.dump((task, chunk_prefix, execution_id, finelog_url), f)
@@ -421,6 +453,7 @@ class SubprocessRunner:
             result_file = f.name
         counter_file = f"{result_file}.counters"
         self._counter_file = counter_file
+        process: sp.Popen | None = None
 
         try:
             # ``-u`` keeps the child's stdout/stderr unbuffered so any
@@ -429,7 +462,7 @@ class SubprocessRunner:
             child_env = os.environ.copy()
             child_env["POLARS_MAX_THREADS"] = str(max(1, math.ceil(task.cost.cpu)))
             with tempfile.TemporaryDirectory(prefix=f"zephyr-external-sort-{task.shard_idx:04d}-") as sort_dir:
-                proc = sp.run(
+                process = sp.Popen(
                     [
                         sys.executable,
                         "-u",
@@ -443,17 +476,24 @@ class SubprocessRunner:
                     stdout=sys.stdout,
                     stderr=sys.stderr,
                 )
+                with self._process_lock:
+                    self._process = process
+                    if self._cancelled.is_set():
+                        _terminate_process(process)
+                returncode = process.wait()
 
-            if proc.returncode != 0:
+            if self._cancelled.is_set():
+                raise RuntimeError(f"Subprocess for shard {task.shard_idx} was cancelled")
+            if returncode != 0:
                 # Linux OOM-killer sends SIGKILL → returncode == -9. Distinguish
                 # so callers/retries can react to memory pressure specifically.
-                if proc.returncode == -signal.SIGKILL:
+                if returncode == -signal.SIGKILL:
                     raise MemoryError(
                         f"Subprocess for shard {task.shard_idx} was killed by SIGKILL "
-                        f"(returncode {proc.returncode}); most likely OOM-killed by the kernel."
+                        f"(returncode {returncode}); most likely OOM-killed by the kernel."
                     )
                 raise RuntimeError(
-                    f"Subprocess for shard {task.shard_idx} exited with code {proc.returncode}; "
+                    f"Subprocess for shard {task.shard_idx} exited with code {returncode}; "
                     "see worker stderr above for the faulthandler traceback."
                 )
 
@@ -470,6 +510,9 @@ class SubprocessRunner:
 
             return result_or_error, dict(child_counters)
         finally:
+            with self._process_lock:
+                if self._process is process:
+                    self._process = None
             self._counter_file = None
             for p in (task_file, result_file, counter_file, f"{counter_file}.tmp"):
                 with suppress(FileNotFoundError):
@@ -488,3 +531,11 @@ class SubprocessRunner:
         except Exception:
             logger.warning("Failed to read counter file %s", cf, exc_info=True)
             return {}
+
+    def cancel(self) -> None:
+        """Terminate the active shard subprocess."""
+        self._cancelled.set()
+        with self._process_lock:
+            process = self._process
+            if process is not None and process.poll() is None:
+                _terminate_process(process)

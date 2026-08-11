@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import cloudpickle
-from fray.actor import ActorGroup, ActorHandle, current_actor
+from fray.actor import ActorFuture, ActorGroup, ActorHandle, current_actor
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
@@ -47,6 +47,7 @@ MAX_SHARD_FAILURES = 3
 MAX_SHARD_INFRA_FAILURES = 20
 MAX_STATUS_TEXT_LENGTH = 1000
 MAX_CONCURRENT_PIPELINES = 16
+WORKER_CANCELLATION_TIMEOUT = 10.0
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
 
 _SNAPSHOT_ATTRIBUTES = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
@@ -73,6 +74,32 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
                 exec_dir.rmtree()
             except Exception as e:
                 logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
+
+
+def _wait_for_worker_calls(
+    execution_id: str,
+    futures: dict[str, ActorFuture],
+    *,
+    action: str,
+) -> None:
+    deadline = time.monotonic() + WORKER_CANCELLATION_TIMEOUT
+    failures: list[tuple[str, Exception]] = []
+    for worker_id, future in futures.items():
+        try:
+            future.result(timeout=max(0.0, deadline - time.monotonic()))
+        except Exception as error:
+            failures.append((worker_id, error))
+
+    if failures:
+        sample = ", ".join(f"{worker_id}: {type(error).__name__}: {error}" for worker_id, error in failures[:3])
+        logger.warning(
+            "[%s] Failed to %s on %d of %d workers (%s)",
+            execution_id,
+            action,
+            len(failures),
+            len(futures),
+            sample,
+        )
 
 
 class WorkerState(enum.StrEnum):
@@ -165,6 +192,8 @@ class _PipelineExecution:
     task_error_attempts: dict[int, int] = field(default_factory=dict)
     task_infra_attempts: dict[int, int] = field(default_factory=dict)
     fatal_error: str | None = None
+    cancellation_reason: str | None = None
+    cancellation_worker_ids: set[str] = field(default_factory=set)
     shard_errors: dict[int, list[str]] = field(default_factory=dict)
     # Set when a stage may have completed (result, failure, or abort) so
     # ``_wait_for_stage`` wakes immediately instead of sleeping out its backoff.
@@ -306,6 +335,7 @@ class ZephyrCoordinator:
         # Pipeline executions keyed by execution_id, insertion-ordered. All
         # per-pipeline state lives in the _PipelineExecution values.
         self._executions: dict[str, _PipelineExecution] = {}
+        self._cancelled_executions: dict[str, str] = {}
         self._worker_resources = worker_resources
         # Set by a pool that will not receive more pipelines. Such a pool can
         # hand SHUTDOWN to workers that go idle during the last stage's tail,
@@ -900,6 +930,12 @@ class ZephyrCoordinator:
                 )
                 return
 
+            if run.cancellation_reason is not None:
+                run.in_flight.pop(shard_idx, None)
+                self._clear_worker_inflight_counters(worker_id, counter_snapshot.generation)
+                run.stage_done.set()
+                return
+
             if shard_idx in run.results:
                 # Iris retries a transient actor RPC failure, so a result whose
                 # reply was lost arrives twice with the same attempt. Counting
@@ -975,6 +1011,14 @@ class ZephyrCoordinator:
                 )
                 return
 
+            if run.cancellation_reason is not None:
+                run.in_flight.pop(shard_idx, None)
+                existing = self._worker_counters.get(worker_id)
+                if existing is not None:
+                    self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
+                run.stage_done.set()
+                return
+
             self._assert_in_flight_consistent(run, worker_id, shard_idx)
             self._record_shard_failure(run, shard_idx, worker_id, ShardFailureKind.TASK, error_info)
 
@@ -1048,10 +1092,17 @@ class ZephyrCoordinator:
     def _fatal_error_locked(self) -> str | None:
         if self._pool_error is not None:
             return self._pool_error
-        return next((r.fatal_error for r in self._executions.values() if r.fatal_error), None)
+        return next(
+            (
+                run.fatal_error
+                for run in self._executions.values()
+                if run.fatal_error and run.cancellation_reason is None
+            ),
+            None,
+        )
 
     def get_fatal_error(self) -> str | None:
-        """Pool-level error if any, else the first execution's fatal error."""
+        """Return the pool error or the first non-cancellation execution error."""
         with self._lock:
             return self._fatal_error_locked()
 
@@ -1070,6 +1121,33 @@ class ZephyrCoordinator:
                     run.fatal_error = reason
                 run.stage_done.set()
 
+    def abort_execution(self, execution_id: str, reason: str) -> None:
+        """Abort one execution and cancel its active shard runners."""
+        with self._lock:
+            run = self._executions.get(execution_id)
+            if run is None:
+                self._cancelled_executions[execution_id] = reason
+                return
+            if run.done:
+                return
+            run.cancellation_reason = reason
+            if run.fatal_error is None:
+                run.fatal_error = reason
+            run.task_queue.clear()
+            worker_ids = {entry.worker_id for entry in run.in_flight.values()}
+            run.cancellation_worker_ids.update(worker_ids)
+            worker_handles = {
+                worker_id: self._worker_handles[worker_id]
+                for worker_id in worker_ids
+                if worker_id in self._worker_handles
+            }
+            run.stage_done.set()
+
+        cancellation_futures = {
+            worker_id: handle.cancel_execution.remote(execution_id) for worker_id, handle in worker_handles.items()
+        }
+        _wait_for_worker_calls(execution_id, cancellation_futures, action="cancel active runners")
+
     def _start_stage(
         self,
         run: _PipelineExecution,
@@ -1080,6 +1158,8 @@ class ZephyrCoordinator:
     ) -> None:
         """Load a new stage's tasks into the execution's queue."""
         with self._lock:
+            if run.cancellation_reason is not None:
+                raise ZephyrWorkerError(run.cancellation_reason)
             run.start_stage(stage_name, current_stage_index, tasks, is_last_stage=is_last_stage)
             run.progress_time_seconds = time.time()
 
@@ -1167,6 +1247,9 @@ class ZephyrCoordinator:
                 raise ZephyrWorkerError("Coordinator is shut down and cannot accept new pipelines")
             if self._pool_error is not None:
                 raise ZephyrWorkerError(f"Coordinator pool failed: {self._pool_error}")
+            cancellation_reason = self._cancelled_executions.pop(execution_id, None)
+            if cancellation_reason is not None:
+                raise ZephyrWorkerError(cancellation_reason)
             existing = self._executions.get(execution_id)
             if existing is not None:
                 run = existing
@@ -1196,7 +1279,7 @@ class ZephyrCoordinator:
         try:
             shards = _build_source_shards(plan.source_items)
             if not shards:
-                self._persist_result(result_path, ZephyrExecutionResult(results=[], counters={}))
+                self._persist_success(run, result_path, ZephyrExecutionResult(results=[], counters={}))
                 return None
 
             last_worker_stage_idx = max(
@@ -1231,7 +1314,7 @@ class ZephyrCoordinator:
 
             with self._lock:
                 counters = {name: entry.value for name, entry in run.merged_counters().items()}
-            self._persist_result(result_path, ZephyrExecutionResult(results=flat_result, counters=counters))
+            self._persist_success(run, result_path, ZephyrExecutionResult(results=flat_result, counters=counters))
             return None
         except Exception as e:
             # Persist the normalized exception so the driver can recover the
@@ -1254,12 +1337,23 @@ class ZephyrCoordinator:
     def release_execution(self, execution_id: str) -> None:
         """Release terminal state and delete storage after all tasks drain."""
         with self._lock:
+            self._cancelled_executions.pop(execution_id, None)
             run = self._executions.get(execution_id)
             if run is None:
                 return
             if not run.done:
                 raise RuntimeError(f"Execution {execution_id} is still active")
             self._executions.pop(execution_id, None)
+            worker_handles = {
+                worker_id: self._worker_handles[worker_id]
+                for worker_id in run.cancellation_worker_ids
+                if worker_id in self._worker_handles
+            }
+
+        release_futures = {
+            worker_id: handle.release_execution.remote(execution_id) for worker_id, handle in worker_handles.items()
+        }
+        _wait_for_worker_calls(execution_id, release_futures, action="release cancellation state")
 
         if run.storage_cleanup_safe:
             _cleanup_execution(self._chunk_prefix, execution_id)
@@ -1314,6 +1408,23 @@ class ZephyrCoordinator:
         """
         ensure_parent_dir(result_path)
         StoragePath(result_path).write_bytes(cloudpickle.dumps(payload))
+
+    def _persist_success(
+        self,
+        run: _PipelineExecution,
+        result_path: str,
+        result: "ZephyrExecutionResult",
+    ) -> None:
+        """Persist a result only if cancellation did not reach the result boundary."""
+        self._raise_if_execution_cancelled(run)
+        self._persist_result(result_path, result)
+        self._raise_if_execution_cancelled(run)
+
+    def _raise_if_execution_cancelled(self, run: _PipelineExecution) -> None:
+        with self._lock:
+            reason = run.cancellation_reason
+        if reason is not None:
+            raise ZephyrWorkerError(reason)
 
     def _run_worker_stage(
         self,

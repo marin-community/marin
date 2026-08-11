@@ -6,13 +6,17 @@
 import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 
 import polars as pl
 import pytest
+import zephyr.execution as execution_module
 from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
 from fray.types import ResourceConfig
+from rigging.cancellation import CancellationToken, cancellation_scope
+from rigging.timing import Duration, ExponentialBackoff
 from zephyr import counters, runners
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext, ZephyrWorkerError
@@ -186,6 +190,47 @@ def test_subprocess_runner_isolates_native_crash(local_client, tmp_path):
     rendered = str(exc_info.value)
     assert "Shard 0" in rendered
     assert "exited with code 139" in rendered or "failed" in rendered
+
+
+def test_subprocess_cancellation_keeps_shared_pool_available(local_client, tmp_path, monkeypatch):
+    """Cancellation stops one subprocess pipeline without stopping the shared pool."""
+    monkeypatch.setattr(execution_module, "_generate_execution_id", lambda: "reused-execution")
+    marker = tmp_path / "started"
+    gate = tmp_path / "gate"
+    os.mkfifo(gate)
+
+    def wait_for_gate(value: int) -> int:
+        marker.touch()
+        with open(gate, "rb") as stream:
+            stream.read(1)
+        return value
+
+    token = CancellationToken()
+    ctx = _ctx(local_client, tmp_path, stage_runner_factory=lambda: SubprocessRunner())
+
+    def run_blocked_pipeline() -> None:
+        with cancellation_scope(token):
+            ctx.execute(Dataset.from_list([1]).map(wait_for_gate))
+
+    with ctx, ThreadPoolExecutor(max_workers=1) as executor:
+        blocked = executor.submit(run_blocked_pipeline)
+        try:
+            assert ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
+                marker.exists,
+                timeout=Duration.from_seconds(10),
+            )
+
+            token.cancel("step lease lost")
+
+            with pytest.raises(ZephyrWorkerError, match="step lease lost"):
+                blocked.result(timeout=10)
+            assert ctx.execute(Dataset.from_list([2]).map(lambda value: value * 3)).results == [6]
+        finally:
+            gate_fd = os.open(gate, os.O_RDWR | os.O_NONBLOCK)
+            try:
+                os.write(gate_fd, b"x")
+            finally:
+                os.close(gate_fd)
 
 
 @pytest.fixture()

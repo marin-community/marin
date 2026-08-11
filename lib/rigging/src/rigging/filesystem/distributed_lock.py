@@ -31,7 +31,7 @@ from dataclasses import asdict, dataclass
 import botocore.config
 import botocore.session
 from botocore.exceptions import ClientError
-from google.api_core.exceptions import NotFound
+from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 
 from rigging.filesystem.storage_path import StoragePath
@@ -61,8 +61,8 @@ class Lease:
 
 
 def default_worker_id() -> str:
-    """Return a unique holder ID for the current host and thread."""
-    return f"{os.uname()[1]}-{threading.get_ident()}"
+    """Return a unique holder ID for the current host, process, and thread."""
+    return f"{os.uname()[1]}-{os.getpid()}-{threading.get_ident()}"
 
 
 def _is_local_path(path: str) -> bool:
@@ -154,7 +154,10 @@ class DistributedLease(abc.ABC):
         """
         generation, lock_data = self._read_with_generation()
         if lock_data and lock_data.worker_id == self.worker_id:
-            self._write(Lease(self.worker_id, time.time()), generation)
+            try:
+                self._write(Lease(self.worker_id, time.time()), generation)
+            except FileExistsError as error:
+                raise LeaseLostError(f"Lease lost while refreshing {self.lock_path}") from error
         elif lock_data is None:
             raise LeaseLostError(f"Lease lost: lock file {self.lock_path} disappeared — another worker likely took over")
         else:
@@ -224,7 +227,10 @@ class GcsLease(DistributedLease):
         bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(blob_path)
-        blob.upload_from_string(json.dumps(asdict(lease)), if_generation_match=if_generation_match)
+        try:
+            blob.upload_from_string(json.dumps(asdict(lease)), if_generation_match=if_generation_match)
+        except PreconditionFailed as error:
+            raise FileExistsError(f"Conditional write failed for {self.lock_path}") from error
 
     def _delete(self) -> None:
         client = storage.Client()
