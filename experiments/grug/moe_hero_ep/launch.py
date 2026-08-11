@@ -109,6 +109,7 @@ def build_hero_run(
     mtp_step_decay_fraction: float = 0.9,
     flavor: str = "ep",
     eval_every: int = 0,
+    offload_opt_state: bool = HERO_OFFLOAD_OPT_STATE,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
     watch_interval: int = HERO_WATCH_INTERVAL,
@@ -195,7 +196,7 @@ def build_hero_run(
         log_every=1,
         ema_beta=None,
         z_loss_weight=1e-4,
-        offload_opt_state=HERO_OFFLOAD_OPT_STATE,
+        offload_opt_state=offload_opt_state,
         watch_mode=watch_mode,
         # The default offloaded optimizer state has a known memory-kind mismatch during restore.
         save_checkpoints=save_checkpoints,
@@ -419,6 +420,12 @@ def build_hero_run(
     help="Run the paloma suite every N steps. 0 disables eval (throughput-only run).",
 )
 @click.option(
+    "--offload-opt-state/--no-offload-opt-state",
+    default=HERO_OFFLOAD_OPT_STATE,
+    show_default=True,
+    help="Keep MuonH optimizer state on pinned host memory. Off keeps it in HBM (fits at 1 rack).",
+)
+@click.option(
     "--watch-interval",
     type=click.IntRange(min=0),
     default=HERO_WATCH_INTERVAL,
@@ -471,6 +478,7 @@ def main(
     mtp_weight_schedule: str,
     mtp_step_decay_fraction: float,
     flavor: str,
+    offload_opt_state: bool,
     save_checkpoints: bool,
     checkpoint_minutes: float,
     eval_every: int,
@@ -497,6 +505,7 @@ def main(
         mtp_weight_schedule=mtp_weight_schedule,
         mtp_step_decay_fraction=mtp_step_decay_fraction,
         flavor=flavor,
+        offload_opt_state=offload_opt_state,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
         eval_every=eval_every,
