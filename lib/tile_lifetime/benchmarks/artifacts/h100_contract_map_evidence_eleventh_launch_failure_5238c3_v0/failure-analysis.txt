@@ -1,0 +1,40 @@
+Observed boundary
+=================
+
+1. Trusted image `sha256sum` authenticated the transported launcher and
+   manifest before Python execution.
+2. The task selected `/opt/h100-evidence-runtime/bin/python` for the launcher
+   and its required `--runtime-python` value.
+3. `run_coordinator` reached the first case's `_run_profiled_case`. Returning
+   from that function requires the three-backend numerical gates, warmup,
+   24-row counterbalanced steady schedule, balanced NVTX ranges, Nsight Systems
+   profile, SQLite export, and strict range/kernel attribution to finish.
+4. The following ordinary-XLA `_run_cache_protocol` produced three independent
+   compile records and three paired cold/hit records. Each cold/hit pair passed
+   its immediate identity-equality gate. Control then reached
+   `validated_cache_protocol_identity` with all nine records.
+5. The nine identities formed more than one equality class. The validator
+   preserved the reviewed exact-convergence rule and rejected the protocol.
+
+Exact first failure
+===================
+
+Case: `contract_map_9836cdbed389db24`
+Backend: `ordinary_xla`
+
+Exception: `ValueError: all compile, cold, and hit roots must converge to one
+cache content identity`
+
+The failed container's temporary cache roots and worker JSON records were not
+exported from Iris. The controller log contains no per-root identity, cache
+file count, byte total, or final-HLO hash. This artifact does not classify the
+mismatch as semantic nondeterminism, phase-owned metadata, or hashing scope.
+
+Evidence limit
+==============
+
+No accepted cache protocol returned to `run_coordinator`. Nsight Compute,
+retained backend artifacts, the source-ordered and fast cache protocols, the
+remaining three cases, and final bundle publication were not reached. The job
+had one failed attempt, no preemptions, zero configured failure retries, and
+was not relaunched.

@@ -1,0 +1,33 @@
+{
+  "bundle_id": "62964bc0b4917703d4d183b66a4aec63c6e2ca6e1dd0397bc655925700caf108",
+  "container_profile": "CONTAINER_PROFILE_DEFAULT",
+  "entrypoint": {
+    "run_command": {
+      "argv": [
+        "/bin/sh",
+        "-ceu",
+        "echo \"9c479abf75bd151a734762cf2dfd0ce542c4f059f85e67e4745d12dc474b1f63  h100_contract_map_source_payload.py\" | sha256sum --check --strict; echo \"044f1509e6ea9dbbe8f54b127e287e9c7f208e534b02316a0c727f7bd0444ee7  h100-evidence-source-manifest.json\" | sha256sum --check --strict; exec /opt/h100-evidence-runtime/bin/python h100_contract_map_source_payload.py run --workspace /app --launcher-sha256 9c479abf75bd151a734762cf2dfd0ce542c4f059f85e67e4745d12dc474b1f63 --manifest-sha256 044f1509e6ea9dbbe8f54b127e287e9c7f208e534b02316a0c727f7bd0444ee7 --source-sha 5238c39e7a506b919fc803046de4a9dc2c29d02f --source-tree 9f8e9e06cfc76055dee55d5a1a34d82d71878377 --artifact-directory /tmp/shuttle-h100-contract-map-evidence-5238c39-v11 --require-jax-version 0.10.1 --runtime-python /opt/h100-evidence-runtime/bin/python"
+      ]
+    }
+  },
+  "job_id": "/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11",
+  "max_retries_failure": 0,
+  "max_retries_preemption": 1000,
+  "max_task_failures": 0,
+  "priority_band": "PRIORITY_BAND_INTERACTIVE",
+  "resources": {
+    "cpu_millicores": 8000,
+    "device": {
+      "gpu": {
+        "count": 1,
+        "variant": "H100"
+      }
+    },
+    "disk_bytes": 107374182400,
+    "memory_bytes": 68719476736
+  },
+  "setup_commands": [],
+  "submitted_at": "2026-08-11T12:27:41.852Z",
+  "task_image": "ghcr.io/marin-community/iris-task-h100-evidence:5238c39e7a506b919fc803046de4a9dc2c29d02f@sha256:2efa83fbf8f2073a4175eef919a9f0c6c2db435d7c1ec9ed79017e1ea0d10cef",
+  "timeout_ms": 14400000
+}
