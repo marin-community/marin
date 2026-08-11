@@ -33,7 +33,7 @@ from collections.abc import Callable, Generator
 import fsspec
 from huggingface_hub import hf_hub_download, list_repo_files, model_info
 from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, DistributedLease, LeaseLostError, create_lock
-from rigging.filesystem import marin_temp_bucket, url_to_fs
+from rigging.filesystem import marin_temp_bucket, prefix_join, url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ DEFAULT_COMPLETE_MARKER = ".cache_complete"
 """Marker written last after a full upload; its presence is the cache-hit signal."""
 
 HF_REVISION_FILENAME = ".cache_hf_revision"
-"""Cache-owned sidecar containing the Hugging Face commit used for the snapshot."""
+"""Cache-owned sidecar containing the Hugging Face revision used for the snapshot."""
 
 _LOCK_SUFFIX = ".lock"
 # How often losers re-check the completion marker while the winner populates.
@@ -223,7 +223,7 @@ def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str,
             fs.put_file(local_path, remote_path)
             os.remove(local_path)
     if revision is not None:
-        with fs.open(f"{dest}/{HF_REVISION_FILENAME}", "w") as handle:
+        with fs.open(prefix_join(dest, HF_REVISION_FILENAME), "w") as handle:
             handle.write(revision)
 
 

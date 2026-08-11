@@ -190,6 +190,7 @@ def test_resolve_tracks_mutable_hf_revision(tmp_path, monkeypatch):
 
     def fake_list_repo_files(model_id, revision=None):
         assert model_id == "org/model"
+        assert revision == current_commit
         return repo_files
 
     def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
@@ -201,7 +202,7 @@ def test_resolve_tracks_mutable_hf_revision(tmp_path, monkeypatch):
     monkeypatch.setattr(model_cache, "model_info", fake_model_info)
     monkeypatch.setattr(model_cache, "list_repo_files", fake_list_repo_files)
     monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
-    monkeypatch.setattr(model_cache, "marin_temp_bucket", lambda ttl_days, prefix: str(tmp_path / prefix))
+    monkeypatch.setattr(model_cache, "marin_temp_bucket", lambda _ttl_days, prefix: str(tmp_path / prefix))
 
     first_path = resolve_cached_model_path("org/model", cache_ttl_days=7, cache_prefix="models")
     current_commit = second_commit
