@@ -64,6 +64,19 @@ _CACHE_EVENT_NAMES = (
     "/jax/compilation_cache/cache_hits",
     "/jax/compilation_cache/cache_misses",
 )
+_CACHE_DIAGNOSTIC_CLASS_FIELDS = (
+    "equality_partition",
+    "cache_key_digest",
+    "serialized_executable_sha256",
+)
+_CACHE_DIAGNOSTIC_ROOT_FIELDS = (
+    "phase",
+    "index",
+    "equality_partition",
+    "persistent_cache_file_count",
+    "persistent_cache_total_bytes",
+    "final_hlo_sha256",
+)
 _NSYS_RELEVANT_TABLES = (
     "CUDA_GRAPH_EVENTS",
     "CUDA_GRAPH_NODE_EVENTS",
@@ -2603,33 +2616,30 @@ def validated_cache_protocol_identity(
                 raise ValueError(f"cache protocol {phase}[{index}] has invalid public cache events")
             partition = partitions.setdefault((cache_key, executable_identity), f"class_{len(partitions)}")
             roots.append(
-                {
-                    "cached_compile_time": compile_time,
-                    "equality_partition": partition,
-                    "final_hlo_sha256": hashlib.sha256(final_hlo.encode()).hexdigest(),
-                    "index": index,
-                    "persistent_cache_file_count": file_count,
-                    "persistent_cache_root_identity": root_identity,
-                    "persistent_cache_total_bytes": total_bytes,
-                    "phase": phase,
-                }
+                (
+                    phase,
+                    index,
+                    partition,
+                    file_count,
+                    total_bytes,
+                    hashlib.sha256(final_hlo.encode()).hexdigest(),
+                )
             )
     if len(partitions) != 1:
-        classes = {
-            label: {
-                "cache_key_digest": cache_key.removeprefix("jit_step-"),
-                "serialized_executable_sha256": executable_identity,
-            }
+        classes = [
+            (label, cache_key.removeprefix("jit_step-"), executable_identity)
             for (cache_key, executable_identity), label in partitions.items()
-        }
+        ]
         diagnostic = {
             "backend": backend,
             "case_id": case_id,
+            "class_fields": _CACHE_DIAGNOSTIC_CLASS_FIELDS,
             "classes": classes,
             "expected_equality_partitions": 1,
             "observed_equality_partitions": len(partitions),
+            "root_fields": _CACHE_DIAGNOSTIC_ROOT_FIELDS,
             "roots": roots,
-            "schema_version": 1,
+            "schema_version": 2,
         }
         serialized = json.dumps(diagnostic, sort_keys=True, separators=(",", ":"))
         message = (

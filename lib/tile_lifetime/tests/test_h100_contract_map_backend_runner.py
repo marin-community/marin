@@ -1674,9 +1674,13 @@ def test_cache_protocol_failure_reports_closed_nine_root_equality_partition() ->
     diagnostic = json.loads(str(raised.value).split("diagnostic=", 1)[1])
     assert diagnostic["case_id"] == "contract_map_9836cdbed389db24"
     assert diagnostic["backend"] == "ordinary_xla"
+    assert diagnostic["schema_version"] == 2
     assert diagnostic["expected_equality_partitions"] == 1
     assert diagnostic["observed_equality_partitions"] == 2
-    assert tuple(f"{root['phase']}[{root['index']}]" for root in diagnostic["roots"]) == (
+    root_fields = diagnostic["root_fields"]
+    roots = tuple(dict(zip(root_fields, root, strict=True)) for root in diagnostic["roots"])
+    classes = tuple(dict(zip(diagnostic["class_fields"], record, strict=True)) for record in diagnostic["classes"])
+    assert tuple(f"{root['phase']}[{root['index']}]" for root in roots) == (
         "compile[0]",
         "compile[1]",
         "compile[2]",
@@ -1687,7 +1691,7 @@ def test_cache_protocol_failure_reports_closed_nine_root_equality_partition() ->
         "hit[1]",
         "hit[2]",
     )
-    assert tuple(root["equality_partition"] for root in diagnostic["roots"]) == (
+    assert tuple(root["equality_partition"] for root in roots) == (
         "class_0",
         "class_1",
         "class_0",
@@ -1698,17 +1702,16 @@ def test_cache_protocol_failure_reports_closed_nine_root_equality_partition() ->
         "class_0",
         "class_0",
     )
-    assert diagnostic["roots"][1] == {
-        "cached_compile_time": 7,
+    assert roots[1] == {
         "equality_partition": "class_1",
         "final_hlo_sha256": hashlib.sha256(b"changed HLO").hexdigest(),
         "index": 1,
         "persistent_cache_file_count": 3,
-        "persistent_cache_root_identity": "c" * 64,
         "persistent_cache_total_bytes": 200,
         "phase": "compile",
     }
-    assert diagnostic["classes"]["class_1"] == {
+    assert classes[1] == {
+        "equality_partition": "class_1",
         "cache_key_digest": "a" * 64,
         "serialized_executable_sha256": executable_b,
     }
@@ -1754,6 +1757,89 @@ def test_run_cache_protocol_propagates_bounded_root_diagnostic_from_production_b
     assert len(diagnostic["roots"]) == 9
     assert "private HLO" not in message
     assert "/secret/cache" not in message
+
+
+def test_cache_protocol_nine_distinct_roots_emit_complete_diagnostic_under_bound() -> None:
+    records = {
+        phase: tuple(
+            _cache_root_record(
+                f"{phase_index * 3 + index + 1:x}" * 64,
+                cache_key_digest=f"{phase_index * 3 + index + 10:x}"[-1] * 64,
+                phase=phase,
+                final_hlo="private\x00HLO\U0001f680/path/" + ("x" * 10_000) + str(index),
+                file_count=2**63 - 1,
+                total_bytes=2**63 - 1,
+            )
+            for index in range(3)
+        )
+        for phase_index, phase in enumerate(("compile", "cold", "hit"))
+    }
+
+    with pytest.raises(ValueError) as raised:
+        runner.validated_cache_protocol_identity(
+            records["compile"],
+            records["cold"],
+            records["hit"],
+            case_id="c" * 128,
+            backend="b" * 64,
+            required_processes=3,
+        )
+
+    message = str(raised.value)
+    diagnostic = json.loads(message.split("diagnostic=", 1)[1])
+    assert 3_000 < len(message) <= runner._MAX_CACHE_IDENTITY_DIAGNOSTIC_CHARS
+    assert diagnostic["case_id"] == "c" * 128
+    assert diagnostic["backend"] == "b" * 64
+    assert diagnostic["observed_equality_partitions"] == 9
+    assert len(diagnostic["classes"]) == 9
+    assert len(diagnostic["roots"]) == 9
+    assert "private" not in message
+    assert "\\u0000" not in message
+    assert "\\ud83d" not in message
+
+
+def test_run_cache_protocol_maximal_reachable_partition_emits_bounded_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _runner_config(tmp_path)
+    phase_counts = {"compile": 0, "cold": 0, "hit": 0}
+
+    def worker_command(*args, cache_kind: str, **kwargs) -> tuple[str, str]:
+        return "worker", cache_kind
+
+    def worker_result(command, **kwargs):
+        phase = command[1]
+        index = phase_counts[phase]
+        phase_counts[phase] += 1
+        class_index = index + (0 if phase == "compile" else 3)
+        return _cache_root_record(
+            f"{class_index + 1:x}" * 64,
+            cache_key_digest=f"{class_index + 10:x}"[-1] * 64,
+            phase=phase,
+            final_hlo="private\x00HLO\U0001f680/" + ("x" * 10_000),
+            file_count=2**63 - 1,
+            total_bytes=2**63 - 1,
+            root_identity=f"{index + 1:x}" * 64,
+        )
+
+    monkeypatch.setattr(runner, "_worker_base_command", worker_command)
+    monkeypatch.setattr(runner, "run_timed_compile_worker_command", worker_result)
+
+    with pytest.raises(ValueError) as raised:
+        runner._run_cache_protocol(
+            config,
+            "c" * 128,
+            "b" * 64,
+            tmp_path / "generated.json",
+            tmp_path / "cache_protocol",
+        )
+
+    message = str(raised.value)
+    diagnostic = json.loads(message.split("diagnostic=", 1)[1])
+    assert len(message) <= runner._MAX_CACHE_IDENTITY_DIAGNOSTIC_CHARS
+    assert diagnostic["observed_equality_partitions"] == 6
+    assert len(diagnostic["roots"]) == 9
+    assert "private" not in message
 
 
 def test_run_cache_protocol_rejects_cold_hit_root_byte_change_before_semantic_merge(
