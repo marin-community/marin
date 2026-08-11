@@ -176,8 +176,11 @@ _NCU_KERNEL_A = "ordinary_xla_kernel_nam_00"
 _NCU_KERNEL_B = "ordinary_xla_kernel_nam_01"
 
 
-def _ncu_sass_kernel_row(name: str) -> str:
-    return f"Kernel Name        {name}{' ' * 62}"
+def _ncu_sass_kernel_row(
+    name: str,
+    separator_widths: tuple[int, ...] = _NCU_SASS_COLUMN_WIDTHS,
+) -> str:
+    return f"Kernel Name        {name}{' ' * (separator_widths[1] + 2)}"
 
 
 def _ncu_sass_export(
@@ -189,7 +192,7 @@ def _ncu_sass_export(
     for name, instructions in sections:
         lines.extend(
             (
-                _ncu_sass_kernel_row(name),
+                _ncu_sass_kernel_row(name, separator_widths),
                 separator,
                 "Address Source",
                 separator,
@@ -550,13 +553,11 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         elif variant == "private-line1":
             source = private_line1 + "\n" + source
         elif variant == "missing-identity-close":
-            source = source.replace(
-                _ncu_sass_kernel_row(_NCU_KERNEL_A) + "\n" + _NCU_SASS_SEPARATOR + "\n",
-                _ncu_sass_kernel_row(_NCU_KERNEL_A) + "\n",
-                1,
-            )
+            row = _ncu_sass_kernel_row(_NCU_KERNEL_A, separator_widths)
+            separator = _ncu_sass_separator(separator_widths)
+            source = source.replace(row + "\n" + separator + "\n", row + "\n", 1)
         elif variant == "unrecognized-record":
-            section = _ncu_sass_kernel_row(_NCU_KERNEL_A)
+            section = _ncu_sass_kernel_row(_NCU_KERNEL_A, separator_widths)
             source = source.replace(section, "public-unknown-record\n" + section)
         elif variant == "fixed-column-record":
             source = source.replace(
@@ -1292,8 +1293,18 @@ def test_runner_ncu_sass_parser_requires_exact_top_level_separator_at_line_one(s
     assert _ncu_sass_diagnostic(failure.value)["line_number"] == 1
 
 
-@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
-def test_runner_ncu_sass_parser_accepts_each_reviewed_separator_width(separator_widths: tuple[int, ...]) -> None:
+@pytest.mark.parametrize(
+    ("separator_widths", "row_utf8_bytes", "trailing_spaces"),
+    (
+        (_NCU_SASS_COLUMN_WIDTHS, 107, 62),
+        (_NCU_SASS_WIDE_COLUMN_WIDTHS, 108, 63),
+    ),
+)
+def test_runner_ncu_sass_parser_accepts_each_reviewed_separator_width(
+    separator_widths: tuple[int, ...],
+    row_utf8_bytes: int,
+    trailing_spaces: int,
+) -> None:
     source = _ncu_sass_export(
         (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
         separator_widths=separator_widths,
@@ -1302,6 +1313,9 @@ def test_runner_ncu_sass_parser_accepts_each_reviewed_separator_width(separator_
     parsed = runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
     assert parsed[0].name == _NCU_KERNEL_A
+    identity_row = source.splitlines()[1]
+    assert len(identity_row.encode("utf-8")) == row_utf8_bytes
+    assert identity_row == "Kernel Name" + " " * 8 + _NCU_KERNEL_A + " " * trailing_spaces
 
 
 @pytest.mark.parametrize(
@@ -1361,19 +1375,60 @@ def test_runner_ncu_sass_parser_rejects_mixed_separator_widths(
         runner.parse_ncu_sass("\n".join(lines) + "\n", (_NCU_KERNEL_A,))
 
 
-def test_runner_ncu_sass_parser_does_not_relax_kernel_row_for_wide_separator() -> None:
+@pytest.mark.parametrize(
+    ("selected_widths", "row_widths"),
+    (
+        (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS),
+        (_NCU_SASS_WIDE_COLUMN_WIDTHS, _NCU_SASS_COLUMN_WIDTHS),
+    ),
+)
+def test_runner_ncu_sass_parser_rejects_kernel_row_for_other_selected_width(
+    selected_widths: tuple[int, ...],
+    row_widths: tuple[int, ...],
+) -> None:
     source = _ncu_sass_export(
         (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
-        separator_widths=_NCU_SASS_WIDE_COLUMN_WIDTHS,
+        separator_widths=selected_widths,
     )
-    source = source.replace(_ncu_sass_kernel_row(_NCU_KERNEL_A), _ncu_sass_kernel_row(_NCU_KERNEL_A) + " ")
+    source = source.replace(
+        _ncu_sass_kernel_row(_NCU_KERNEL_A, selected_widths),
+        _ncu_sass_kernel_row(_NCU_KERNEL_A, row_widths),
+    )
 
     with pytest.raises(ValueError) as failure:
         runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
     diagnostic = _ncu_sass_diagnostic(failure.value)
     assert diagnostic["line_number"] == 2
-    assert diagnostic["line_utf8_bytes"] == 108
+    assert diagnostic["line_utf8_bytes"] == len(_ncu_sass_separator(row_widths).encode("ascii"))
+
+
+@pytest.mark.parametrize("selected_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+@pytest.mark.parametrize("mutation", ("short-trailing", "long-trailing", "redistributed-internal"))
+def test_runner_ncu_sass_parser_rejects_selected_kernel_row_padding_mutations(
+    selected_widths: tuple[int, ...],
+    mutation: str,
+) -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=selected_widths,
+    )
+    row = _ncu_sass_kernel_row(_NCU_KERNEL_A, selected_widths)
+    trailing_padding = selected_widths[1] + 2
+    if mutation == "short-trailing":
+        changed = row[:-1]
+    elif mutation == "long-trailing":
+        changed = row + " "
+    elif mutation == "redistributed-internal":
+        changed = "Kernel Name" + " " * 9 + _NCU_KERNEL_A + " " * (trailing_padding - 1)
+    else:
+        raise AssertionError(f"unhandled mutation {mutation!r}")
+    source = source.replace(row, changed)
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 2
 
 
 def test_runner_ncu_sass_parser_rejects_duplicate_top_level_separator() -> None:

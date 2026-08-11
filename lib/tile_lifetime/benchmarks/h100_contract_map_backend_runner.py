@@ -237,7 +237,6 @@ _SASS_OPCODE_BASES = frozenset(
         "YIELD",
     }
 )
-_NCU_SASS_SECTION_PATTERN = re.compile(r"^Kernel Name {8}(?P<name>[A-Za-z_][A-Za-z0-9_]{25}) {62}$")
 _NCU_SASS_HEADER = "Address Source"
 _NCU_SASS_SEPARATOR_WIDTH_OPTIONS = (
     (18, 60, 6, 6, 6, 6),
@@ -245,6 +244,10 @@ _NCU_SASS_SEPARATOR_WIDTH_OPTIONS = (
 )
 _NCU_SASS_SEPARATORS = {
     " ".join("-" * width for width in widths): widths for widths in _NCU_SASS_SEPARATOR_WIDTH_OPTIONS
+}
+_NCU_SASS_SECTION_PATTERNS = {
+    widths: re.compile(rf"^Kernel Name {{8}}(?P<name>[A-Za-z_][A-Za-z0-9_]{{25}}) {{{widths[1] + 2}}}$")
+    for widths in _NCU_SASS_SEPARATOR_WIDTH_OPTIONS
 }
 _NCU_SASS_SEPARATOR = " ".join("-" * width for width in _NCU_SASS_SEPARATOR_WIDTH_OPTIONS[0])
 _NCU_SASS_COLUMN_WIDTHS = _NCU_SASS_SEPARATOR_WIDTH_OPTIONS[0]
@@ -926,7 +929,7 @@ def _ncu_sass_line_structure(line: str) -> dict[str, object]:
         "public_patterns": {
             "header": line == _NCU_SASS_HEADER,
             "instruction": _NCU_SASS_INSTRUCTION_PATTERN.match(line) is not None,
-            "section": _NCU_SASS_SECTION_PATTERN.fullmatch(line) is not None,
+            "section": any(pattern.fullmatch(line) is not None for pattern in _NCU_SASS_SECTION_PATTERNS.values()),
             "separator": line in _NCU_SASS_SEPARATORS,
             "status": _NCU_SASS_STATUS_PATTERN.fullmatch(line) is not None,
         },
@@ -1023,6 +1026,7 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
         raise _unrecognized_ncu_sass_record(1, lines[0] if lines else "")
     selected_separator_utf8_bytes = sum(selected_separator_widths) + len(selected_separator_widths) - 1
     selected_separator = " ".join("-" * width for width in selected_separator_widths)
+    selected_section_pattern = _NCU_SASS_SECTION_PATTERNS[selected_separator_widths]
     if len(selected_separator.encode("ascii")) != selected_separator_utf8_bytes:
         raise AssertionError("reviewed Nsight Compute separator widths do not cover the selected record")
 
@@ -1057,7 +1061,7 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
                 )
             identity_separator_seen = True
             continue
-        section = _NCU_SASS_SECTION_PATTERN.fullmatch(line)
+        section = selected_section_pattern.fullmatch(line)
         if section is not None:
             finish_section()
             current_name = normalize_cuda_kernel_name(section.group("name"))
