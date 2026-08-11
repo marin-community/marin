@@ -163,8 +163,13 @@ def grouped_spearman(preds: np.ndarray, quality: np.ndarray, groups: np.ndarray,
     out = {}
     for name in sorted(set(groups.tolist())):
         mask = groups == name
-        if int(mask.sum()) >= min_n:
-            out[name] = float(stats.spearmanr(preds[mask], quality[mask]).statistic)
+        if int(mask.sum()) < min_n:
+            continue
+        rho = float(stats.spearmanr(preds[mask], quality[mask]).statistic)
+        # A constant input (a scorer flat on a group, or a single-level group)
+        # yields nan; drop it rather than poisoning the summary stats.
+        if np.isfinite(rho):
+            out[name] = rho
     return out
 
 
