@@ -1,0 +1,17 @@
+[12:28:53] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 | h100_contract_map_source_payload.py: OK
+[12:28:53] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 | h100-evidence-source-manifest.json: OK
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 | Traceback (most recent call last):
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3100, in <module>
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 |     main()
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3082, in main
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 |     output = run_coordinator(
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 |              ^^^^^^^^^^^^^^^^
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2154, in run_coordinator
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 |     backend.value: _run_cache_protocol(
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 |                    ^^^^^^^^^^^^^^^^^^^^
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2576, in _run_cache_protocol
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 |     identity = validated_cache_protocol_identity(
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2428, in validated_cache_protocol_identity
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 |     raise ValueError("all compile, cold, and hit roots must converge to one cache content identity")
+[12:31:16] task=/dlwh/shuttle-h100-contract-map-evidence-5238c39-v11/0 | ValueError: all compile, cold, and hit roots must converge to one cache content identity
