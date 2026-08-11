@@ -288,6 +288,20 @@ def is_test_module(filename: str) -> bool:
     return (filename.startswith("test_") or filename.endswith("_test.py")) and filename.endswith(".py")
 
 
+def has_static_test_items(path: Path) -> bool:
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            return True
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            if any(
+                isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name.startswith("test_")
+                for method in node.body
+            ):
+                return True
+    return False
+
+
 def _test_tree(scope: str, repo_root: Path) -> dict[str, Path]:
     """Every .py under a scope's test directory, keyed by the name it imports itself as.
 
@@ -425,10 +439,13 @@ def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
                 # tests that own this file are not missed.
                 if not is_test_module(PurePosixPath(filepath).name):
                     forced.add(scope)
-                elif (repo_root / filepath).exists():
-                    # A test deleted by this diff still shows up in git's output; passing
-                    # it to pytest would abort the run before a single test executes.
+                elif (repo_root / filepath).exists() and has_static_test_items(repo_root / filepath):
                     direct_tests[scope].append(filepath)
+                elif (repo_root / filepath).exists():
+                    # Helpers named test_*.py satisfy pytest's file convention but do not
+                    # own test items. Their importers are not recoverable from a direct
+                    # file selection, so run the scope that consumes the helper.
+                    forced.add(scope)
                 break
 
             if filepath in (f"lib/{scope}/conftest.py", f"lib/{scope}/pyproject.toml"):

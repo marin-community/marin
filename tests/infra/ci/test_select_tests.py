@@ -177,14 +177,15 @@ def test_deleted_test_module_is_not_handed_to_pytest(tmp_path: Path) -> None:
 
 
 def test_changed_helper_module_forces_full_scope(tmp_path: Path) -> None:
-    """A changed non-collectable .py under tests/ runs the full scope, not the file itself."""
+    """A changed helper under tests/ runs the full scope, even when named test_*.py."""
+    write(tmp_path, "lib/iris/tests/test_utils.py", "def helper():\n    pass\n")
     result = classify(
-        ["lib/iris/tests/e2e/gang_jax_smoke_workload.py", "lib/iris/tests/cluster/test_types.py"],
+        ["lib/iris/tests/e2e/gang_jax_smoke_workload.py", "lib/iris/tests/test_utils.py"],
         tmp_path,
     )
 
     assert result.forced == {"iris"}
-    assert result.direct_tests == {}, "the changed test module does not exist on disk"
+    assert result.direct_tests == {}
 
 
 def test_conftest_and_package_metadata_force_full_scope(tmp_path: Path) -> None:
