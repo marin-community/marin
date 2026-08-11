@@ -148,6 +148,25 @@ def test_contract_map_generator_covers_all_reviewed_shapes_with_distinct_policie
         assert source_ordered.program.semantic_fingerprint != fast.program.semantic_fingerprint
 
 
+@pytest.mark.parametrize("policy", tuple(ContractMapNumericalPolicy))
+def test_contract_map_fused_reverse_preserves_hidden_adjoint_bfloat16_boundary(
+    policy: ContractMapNumericalPolicy,
+) -> None:
+    program = build_contract_map_backend_program(
+        rows=5,
+        reduction=8,
+        features=4,
+        scalar_expression=sigmoid_product_expression(),
+        numerical_policy=policy,
+    )
+
+    source = generate_cuda_contract_map_backend_ffi(program).source
+
+    assert "const __nv_bfloat16 hidden_adjoint_boundary = __float2bfloat16_rn(accumulator);" in source
+    assert "generated_phi_vjp(z, __bfloat162float(hidden_adjoint_boundary))" in source
+    assert "generated_phi_vjp(z, accumulator)" not in source
+
+
 def test_contract_map_scalar_mutation_changes_forward_and_derived_reverse() -> None:
     baseline = build_contract_map_backend_program(
         rows=5,

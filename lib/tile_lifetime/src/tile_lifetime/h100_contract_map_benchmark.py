@@ -98,6 +98,14 @@ class UlpAcceptanceMode(StrEnum):
     DIAGNOSTIC_ONLY = "diagnostic_only"
 
 
+class NumericalFloorError(ValueError):
+    """A numerical rejection retaining the failed logical output role."""
+
+    def __init__(self, message: str, *, output_name: str):
+        super().__init__(message)
+        self.output_name = output_name
+
+
 @dataclass(frozen=True)
 class StructuralCase:
     """Anonymous two-Contract/Map shape with no workload identity."""
@@ -754,7 +762,7 @@ def _numerical_floor_error(
     measured: float | int | bool,
     limit: float | int | bool,
     summary: _NumericalOutputSummary,
-) -> ValueError:
+) -> NumericalFloorError:
     prefix = (
         "immutable bitwise-repeatability floor exceeded"
         if floor_kind == "bitwise-repeatability"
@@ -783,8 +791,11 @@ def _numerical_floor_error(
     )
     diagnostic = f"{prefix}: " + " ".join(f"{name}={value}" for name, value in fields)
     if len(diagnostic) > _MAX_NUMERICAL_DIAGNOSTIC_CHARS:
-        return ValueError("numerical floor diagnostic exceeded the closed 1024-character bound")
-    return ValueError(diagnostic)
+        return NumericalFloorError(
+            "numerical floor diagnostic exceeded the closed 1024-character bound",
+            output_name=output_name,
+        )
+    return NumericalFloorError(diagnostic, output_name=output_name)
 
 
 def _validate_numerical_output(
