@@ -74,9 +74,9 @@ The pinned-help tests cover missing, duplicated, incomplete, repeated, and
 unknown CUDA Graph option values. No image build, workflow dispatch, GPU query,
 evidence launch, retry, or relaunch was performed for this source repair.
 
-The focused runner, pinned-help, and image-policy suites passed 155 tests. The
-broader H100 numerical, benchmark, capsule, and image matrix passed 354 tests.
-The full tile-lifetime suite passed 1,032 of 1,033 tests. Its sole failure is
+The focused runner, pinned-help, and image-policy suites passed 160 tests. The
+broader H100 numerical, benchmark, capsule, and image matrix passed 359 tests.
+The full tile-lifetime suite passed 1,035 of 1,036 tests. Its sole failure is
 the pre-existing ignored raw snapshot
 `stateful_scan_generated_h100/raw/mutation_per_key_r1_b1_t64_h32_k128_v128_bv32.stdout.log`,
 which is named by that artifact's `SHA256SUMS` but absent from a normal Git

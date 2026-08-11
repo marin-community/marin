@@ -62,9 +62,21 @@ def test_nsys_profile_help_accepts_unique_stop_policy(tmp_path: Path) -> None:
             "      application continues running.\n",
             "      application continues running. Possible values are 'none', 'stop', and 'stop-shutdown'.\n",
         ),
+        PROFILE_HELP.replace(
+            "'repeat-shutdown:N[:mode]'",
+            "'repeat-shutdown:N[:mode]', and future",
+        ),
         PROFILE_HELP + "  --stop-on-range-end arg (=true)\n",
     ),
-    ids=("missing", "duplicate-option", "missing-stop", "duplicate-stop", "duplicate-value-list", "obsolete-option"),
+    ids=(
+        "missing",
+        "duplicate-option",
+        "missing-stop",
+        "duplicate-stop",
+        "duplicate-value-list",
+        "unquoted-future-value",
+        "obsolete-option",
+    ),
 )
 def test_nsys_profile_help_rejects_missing_or_ambiguous_policy(tmp_path: Path, help_text: str) -> None:
     result = _validate(tmp_path, help_text.encode())
@@ -96,8 +108,11 @@ def test_nsys_profile_help_rejects_missing_or_ambiguous_policy(tmp_path: Path, h
         PROFILE_HELP.replace(
             "Possible values are 'graph' and\n      'node'.", "Possible values are 'graph', 'node', and 'future'."
         ),
+        PROFILE_HELP.replace(
+            "Possible values are 'graph' and\n      'node'.", "Possible values are 'graph', 'node', and future."
+        ),
     ),
-    ids=("missing", "duplicate-option", "missing-node", "duplicate-node", "unknown-value"),
+    ids=("missing", "duplicate-option", "missing-node", "duplicate-node", "unknown-value", "unquoted-future"),
 )
 def test_nsys_profile_help_rejects_missing_or_ambiguous_cuda_graph_policy(tmp_path: Path, help_text: str) -> None:
     result = _validate(tmp_path, help_text.encode())
