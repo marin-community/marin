@@ -14,8 +14,8 @@ provides an IAP-gated HTTP interface and browser dashboard.
   embeddings, timestamps, attribution, and deliberate-reference counters. Search
   indexes the prose fields and can filter by tags.
 - `work_log` is an append-only agent logbook with one row per distilled milestone.
-- `search_feedback` records the query, IAP-authenticated caller, and optional note for
-  one agent judgment. `search_feedback_grades` stores its result IDs and 0–10 grades.
+- `search_feedback` records the query, IAP-authenticated caller, and short overall
+  explanation. `search_feedback_grades` stores its result IDs and 0–10 grades.
 
 ## CLI
 
@@ -105,8 +105,9 @@ reranking, and response decoding: the time the caller waited for Echo.
 Submit useful or poor results with `feedback`. Repeat `--grade <result-id>=<0-10>` for
 the results you evaluated, where 0 means irrelevant and 10 means directly useful to the
 task. The exact query makes each judgment replayable against a future search version.
-An optional short note is read from stdin; a note-only submission can describe an empty
-or globally poor result set.
+A short overall explanation is required on stdin. Capture the result set's gestalt
+without restating each score. An explanation without grades can describe an empty or
+globally poor result set.
 
 The scheduled sync checks GitHub at most once per hour. An unchanged head only advances
 the check time. A new head uses GitHub's compare API to delete, fetch, and re-embed
@@ -197,8 +198,8 @@ uses the existing wiki and activity detail endpoints plus
 `GET /api/repository-files/{path}` for complete indexed files.
 
 `POST /api/feedback` accepts an exact query, up to 20 unique result grades from 0 through
-10, and an optional note of at most 2,000 characters. At least one grade or note is
-required. The API attributes feedback to the IAP-authenticated caller.
+10, and a required overall explanation of at most 2,000 characters. Grades may be empty
+when the search returns no useful results. The API attributes feedback to the IAP-authenticated caller.
 
 The dashboard is a Vue single-page app served from the same origin, with client-side
 routes at `/` (search), `/wiki` (recently updated notes), `/wiki/<id>` (a note), and

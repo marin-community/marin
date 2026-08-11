@@ -14,7 +14,7 @@ CREATE TABLE search_feedback (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
     author TEXT NOT NULL,
     query TEXT NOT NULL,
-    note TEXT,
+    note TEXT NOT NULL,
     PRIMARY KEY (id)
 );
 CREATE INDEX idx_search_feedback_created_at ON search_feedback (created_at DESC);

@@ -219,14 +219,29 @@ def test_search_feedback_rejects_out_of_range_grade(client_with):
     harness = client_with([])
     response = harness.client.post(
         "/api/feedback",
-        json={"query": "scheduler", "grades": [{"result_id": "wiki:123", "grade": 11}]},
+        json={
+            "query": "scheduler",
+            "grades": [{"result_id": "wiki:123", "grade": 11}],
+            "note": "The result looked relevant.",
+        },
     )
 
     assert response.status_code == 422
     assert harness.engine.executions == []
 
 
-def test_search_feedback_accepts_note_for_empty_result_set(client_with):
+def test_search_feedback_requires_overall_explanation(client_with):
+    harness = client_with([])
+    response = harness.client.post(
+        "/api/feedback",
+        json={"query": "scheduler", "grades": [{"result_id": "wiki:123", "grade": 5}]},
+    )
+
+    assert response.status_code == 422
+    assert harness.engine.executions == []
+
+
+def test_search_feedback_accepts_explanation_for_empty_result_set(client_with):
     row = make_row(
         id=18,
         created_at=datetime(2026, 8, 11, tzinfo=UTC),

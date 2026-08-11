@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import PurePosixPath
-from typing import Annotated, Any, Literal, Protocol, Self
+from typing import Annotated, Any, Literal, Protocol
 from urllib.parse import quote
 
 import dashboard as echo_dashboard
@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, R
 from fastembed import TextEmbedding
 from fastembed.rerank.cross_encoder import TextCrossEncoder
 from google.cloud.sql.connector import Connector
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 SOURCES = ("github", "discord")
 KINDS = ("issue", "pr", "comment", "message")
@@ -219,7 +219,7 @@ class SearchFeedbackGrade(BaseModel):
 class SearchFeedbackCreate(BaseModel):
     query: str = Field(min_length=1, max_length=search_feedback.MAX_QUERY_CHARACTERS)
     grades: list[SearchFeedbackGrade] = Field(default_factory=list, max_length=search_feedback.MAX_GRADES)
-    note: str | None = Field(None, max_length=search_feedback.MAX_NOTE_CHARACTERS)
+    note: str = Field(min_length=1, max_length=search_feedback.MAX_NOTE_CHARACTERS)
 
     @field_validator("query")
     @classmethod
@@ -239,14 +239,11 @@ class SearchFeedbackCreate(BaseModel):
 
     @field_validator("note")
     @classmethod
-    def normalize_note(cls, note: str | None) -> str | None:
-        return (note.strip() or None) if note is not None else None
-
-    @model_validator(mode="after")
-    def require_judgment(self) -> Self:
-        if not self.grades and self.note is None:
-            raise ValueError("provide at least one grade or a note")
-        return self
+    def normalize_note(cls, note: str) -> str:
+        note = note.strip()
+        if not note:
+            raise ValueError("note must not be blank")
+        return note
 
 
 class SearchFeedbackEntry(SearchFeedbackCreate):

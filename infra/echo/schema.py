@@ -182,7 +182,7 @@ search_feedback = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("author", Text, nullable=False),
     Column("query", Text, nullable=False),
-    Column("note", Text),
+    Column("note", Text, nullable=False),
     Index("idx_search_feedback_created_at", text("created_at DESC")),
 )
 

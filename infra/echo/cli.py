@@ -214,7 +214,8 @@ def cmd_search(args: argparse.Namespace) -> None:
     print_search_results(results)
     print(
         "Feedback: uv run infra/echo/cli.py feedback "
-        f"--query {shlex.quote(args.query)} --grade '<id>=<{search_feedback.MIN_GRADE}-{search_feedback.MAX_GRADE}>'"
+        f"--query {shlex.quote(args.query)} --grade '<id>=<{search_feedback.MIN_GRADE}-{search_feedback.MAX_GRADE}>' "
+        "<<< 'brief overall assessment'"
     )
 
 
@@ -233,8 +234,8 @@ def feedback_note() -> str | None:
 
 def cmd_feedback(args: argparse.Namespace) -> None:
     note = feedback_note()
-    if not args.grade and note is None:
-        raise SystemExit("provide at least one --grade or a note on stdin")
+    if note is None:
+        raise SystemExit("provide a short overall explanation on stdin")
     entry = response_object(
         request(
             "POST",
@@ -401,7 +402,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=feedback_grade,
         default=[],
         metavar=f"<result-id>=<{search_feedback.MIN_GRADE}-{search_feedback.MAX_GRADE}>",
-        help="grade one result; repeat as needed (an optional note is read from stdin)",
+        help="grade one result; repeat as needed (a short overall explanation is read from stdin)",
     )
     feedback.set_defaults(func=cmd_feedback)
 

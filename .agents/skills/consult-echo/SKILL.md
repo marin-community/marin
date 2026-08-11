@@ -42,12 +42,14 @@ submit a compact judgment using the exact query and printed result IDs:
 
 ```bash
 uv run infra/echo/cli.py feedback --query "stalled TPU collective" \
-  --grade wiki:123=0 --grade file:lib/iris/OPS.md=10
+  --grade wiki:123=0 --grade file:lib/iris/OPS.md=10 \
+  <<< "The file result answered the task; wiki results were off-topic."
 ```
 
 Use 0 for an irrelevant result and 10 for one that directly changes or answers the
-task. Grade only results you evaluated. Add a short stdin note only when the grades do
-not explain the failure; note-only feedback is valid for an empty result set.
+task. Grade only results you evaluated. Always add a short stdin explanation of the
+overall result quality without restating each score. Explanation-only feedback is valid
+for an empty result set.
 
 Use `grep` for exact strings in GitHub or Discord activity, with `--source` or
 `--kind` when needed:
