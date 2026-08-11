@@ -588,3 +588,24 @@ W&B: https://wandb.ai/marin-community/marin_moe/runs/mok-like-ab-mok-like-100-20
   ```
 
 - Acceptance: all 16 tasks terminal-successful; 25 finite zero-drop rows; exact 4,800 forward/backward handlers and storage-mode staging telemetry per process; slot one unused; zero protocol anomalies across all processes. Score steps 10-24 and require at least 80% weak-scale efficiency before allocating two racks. Stop on deterministic topology, allocator, numerical, or protocol failure; do not resubmit.
+
+### 2026-08-11 11:20 PT - One-rack request reduced to 96 CPUs per node
+
+- Capacity result: the original 120-CPU request remained `BUILDING` for 30m45s with all 16 tasks scheduling-gated and no GPU allocation or logs. Kueue reported that the hard `multinode-nvlink-ib` topology could fit only 2 of 16 pods; 194 of 201 nodes were excluded solely by the CPU request. There were zero failures and preemptions.
+- Evidence for the adjustment: the completed two-node run's 120-CPU process-zero allocation averaged 1.136% host CPU and peaked at 1.698%. Commit `37a0634cba` requests 96 CPUs per four-GB200 task and adds the resource contract to the scale-plan test; 84 focused tests and the required checks passed. GPU count, memory, data, model, mesh, optimizer, XLA graph, and numerical settings are unchanged.
+- Decision: stop the unallocated 120-CPU gang and launch a new attempt-zero run from the pushed 96-CPU snapshot. The new identity prevents W&B or artifact lineage from mixing with the pending request.
+- Output identity: artifact `grug/moe-backend-comparison/mok_like/mok-scale-005-v12-dropless-1rack-cpu96-25-20260811-1120/2026.08.11`; W&B id/name `mok-scale-005-v12-dropless-1rack-cpu96-25-20260811-1120`, project `marin-community/marin_moe`, group `moe-backend-comparison-1rack`, resume `allow`.
+- Exact submission, with the secret value scrubbed:
+
+  ```bash
+  run_id="mok-scale-005-v12-dropless-1rack-cpu96-25-20260811-1120"
+  .venv/bin/python -c 'import iris.cluster.platforms.k8s.service as service; from iris.cluster.platforms.types import find_free_port; service.find_free_port = lambda start=10000: find_free_port(); from iris.cli.main import main; main()' \
+    --config lib/iris/config/cw-us-east-08a.yaml job run --no-wait --enable-extra-resources \
+    --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 \
+    --job-name "${run_id}-coord" -e WANDB_API_KEY '<redacted>' -e WANDB_PROJECT marin_moe -- \
+    .venv/bin/python -m experiments.grug.moe_hero_ep.launch_mok_like \
+      --run-id "$run_id" --backend mok_like --num-steps 25 --num-nodes 16 \
+      --mok-like-preset promoted_dropless_v12 --version 2026.08.11 --run
+  ```
+
+- Acceptance remains the exact 16-process numerical/runtime audit and at least 80% weak-scale efficiency. A second capacity wait is not a training failure; report its exact fit/exclusion state without changing the cluster.
