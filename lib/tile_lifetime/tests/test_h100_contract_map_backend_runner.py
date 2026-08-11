@@ -14,8 +14,10 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
+import numpy as np
 import pytest
 
+import tile_lifetime.contract_map_backend as contract_map_backend
 import tile_lifetime.contract_map_backend_resources as resources
 import tile_lifetime.cuda_toolchain as cuda_toolchain
 from tile_lifetime.contract_map_backend_resources import ContractMapCompilePlan, PtxasKernelResources
@@ -323,6 +325,72 @@ def test_runner_profiles_cuda_range_with_supported_nsys_end_policy(
 
     with pytest.raises(RuntimeError, match="synthetic nsys refusal"):
         runner._run_profiled_case(config, "case-id", generated_manifest, case_directory)
+
+
+def test_runner_numerical_failure_reports_logical_training_step_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    case = default_h100_contract_map_benchmark_plan().cases[0]
+    value = np.zeros((1,), dtype=np.float32)
+    outputs = (value, value, value, value)
+    source_candidate = SimpleNamespace(program=object())
+    context = runner._WorkerCaseContext(
+        case=case,
+        inputs=(value, value, value, value),
+        candidates={BackendVariant.SHUTTLE_SOURCE_ORDERED.value: source_candidate},
+        artifacts={},
+        libraries=(),
+    )
+    executables = {backend.value: lambda *args, outputs=outputs: outputs for backend in BackendVariant}
+    monkeypatch.setattr(runner, "_real_algebra_reference", lambda *args: outputs)
+    monkeypatch.setattr(
+        contract_map_backend,
+        "execute_contract_map_source_ordered_forward",
+        lambda *args: SimpleNamespace(output=value),
+    )
+    monkeypatch.setattr(
+        contract_map_backend,
+        "execute_contract_map_source_ordered_reverse",
+        lambda *args: SimpleNamespace(
+            input_adjoint=value,
+            first_weight_adjoint=value,
+            second_weight_adjoint=value,
+        ),
+    )
+
+    def numerical_output(index: int, repeats: Any, reference: Any) -> dict[str, Any]:
+        mean_ulp_distance = 1.0 if index == 0 else 0.0
+        maximum_ulp_distance = 1 if index == 0 else 0
+        return {
+            "maximum_absolute_error": 0.0,
+            "mean_absolute_error": 0.0,
+            "maximum_ulp_distance": maximum_ulp_distance,
+            "mean_ulp_distance": mean_ulp_distance,
+            "nonfinite_values": 0,
+            "repeat_hashes": ["a" * 64, "a" * 64, "a" * 64],
+            "pairwise_drift": [
+                {
+                    "left_repeat_index": left,
+                    "right_repeat_index": right,
+                    "maximum_absolute_error": 0.0,
+                    "mean_absolute_error": 0.0,
+                    "maximum_ulp_distance": 0,
+                    "mean_ulp_distance": 0.0,
+                }
+                for left, right in ((0, 1), (0, 2), (1, 2))
+            ],
+        }
+
+    monkeypatch.setattr(runner, "_output_numerical_evidence", numerical_output)
+    jax = SimpleNamespace(block_until_ready=lambda values: None)
+
+    with pytest.raises(ValueError) as error:
+        runner._numerical_evidence(context, executables, jax=jax)
+
+    diagnostic = str(error.value)
+    assert f"case={case.case_id}" in diagnostic
+    assert "backend=ordinary_xla" in diagnostic
+    assert "boundary=logical_training_step" in diagnostic
+    assert "output=forward" in diagnostic
+    assert "metric=mean_ulp_distance" in diagnostic
 
 
 def test_runner_merges_device_and_logical_timings_only_for_exact_copy_free_schedule() -> None:
