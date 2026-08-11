@@ -375,10 +375,19 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
 
 
 def _optimizer_state_to_memory_kind(tree, memory_kind: str):
-    """Move named-sharded optimizer arrays to a JAX memory kind."""
+    """Move named-sharded optimizer arrays to a JAX memory kind, keeping MTP state on device.
 
-    def _move(leaf):
+    The MTP modules' optimizer state is a tiny fraction of the total (one extra block versus the
+    full layer stack), so it is not worth offloading. It is also fragile to offload: a
+    trivially-replicated ``mtp_depth``-length stack axis collapses its NamedSharding to a
+    mesh-less GSPMDSharding under the pinned-host round-trip, which the mover then cannot bring
+    back to device. Keep MTP state resident on device and offload only the main-model state.
+    """
+
+    def _move(path, leaf):
         if not isinstance(leaf, jax.Array):
+            return leaf
+        if "mtp_modules" in jax.tree_util.keystr(path):
             return leaf
         sharding = jax.typeof(leaf).sharding
         mesh = getattr(sharding, "mesh", None)
@@ -387,7 +396,7 @@ def _optimizer_state_to_memory_kind(tree, memory_kind: str):
             return leaf
         return jax.device_put(leaf, sharding.with_memory_kind(memory_kind))
 
-    return jax.tree.map(_move, tree)
+    return jax.tree_util.tree_map_with_path(_move, tree)
 
 
 def initial_state(
