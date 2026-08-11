@@ -528,6 +528,7 @@ def test_runner_ncu_parser_bounds_and_decodes_input_before_csv_parsing(tmp_path:
         "unrecognized-record",
         "fixed-column-record",
         "wide-fixed-column-record",
+        "wide-address-close-private",
     ),
 )
 def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
@@ -558,7 +559,7 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         arguments = tuple(str(value) for value in command)
         separator_widths = (
             _NCU_SASS_WIDE_COLUMN_WIDTHS
-            if variant in ("wide-separator", "wide-fixed-column-record")
+            if variant in ("wide-separator", "wide-fixed-column-record", "wide-address-close-private")
             else _NCU_SASS_COLUMN_WIDTHS
         )
         source = _ncu_sass_export(
@@ -584,6 +585,14 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
                     column_widths=separator_widths,
                 ),
             )
+        elif variant == "wide-address-close-private":
+            lines = source.splitlines()
+            lines[4] = _ncu_sass_fixed_column_row(
+                ("Address", "private", "Source", "secret", "hidden", "opaque"),
+                column_widths=separator_widths,
+            )
+            lines[5] = "adjacent-private-token"
+            source = "\n".join(lines) + "\n"
         Path(arguments[arguments.index("--log-file") + 1]).write_text(source)
         return subprocess.CompletedProcess(arguments, 0, "", "")
 
@@ -682,6 +691,20 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         )
         assert fixed_columns["column_widths"] == list(expected_widths)
         assert fixed_columns["gap_single_ascii_space"] == [True] * 5
+        return
+    if variant == "wide-address-close-private":
+        with pytest.raises(ValueError) as failure:
+            runner._run_ncu_profile(*arguments)
+        diagnostic = _ncu_sass_diagnostic(failure.value)
+        assert diagnostic["line_number"] == 5
+        structure = diagnostic["line_structure"]
+        assert isinstance(structure, dict)
+        fixed_columns = structure["fixed_columns"]
+        assert isinstance(fixed_columns, dict)
+        assert fixed_columns["column_widths"] == list(_NCU_SASS_WIDE_COLUMN_WIDTHS)
+        message = str(failure.value)
+        for private in ("private", "secret", "hidden", "opaque", "adjacent-private-token", environment_token):
+            assert private not in message
         return
 
     evidence = runner._run_ncu_profile(*arguments)
@@ -1454,6 +1477,65 @@ def test_runner_ncu_sass_parser_rejects_mixed_separator_widths(
 
     with pytest.raises(ValueError):
         runner.parse_ncu_sass("\n".join(lines) + "\n", (_NCU_KERNEL_A,))
+
+
+@pytest.mark.parametrize("selected_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+@pytest.mark.parametrize(
+    ("mutation", "public_pattern"),
+    (
+        ("other-separator", "separator"),
+        ("instruction", "instruction"),
+        ("header", "header"),
+        ("blank", None),
+        ("private", None),
+    ),
+)
+def test_runner_ncu_sass_address_close_mismatch_uses_selected_width_diagnostic(
+    selected_widths: tuple[int, ...],
+    mutation: str,
+    public_pattern: str | None,
+) -> None:
+    other_widths = (
+        _NCU_SASS_WIDE_COLUMN_WIDTHS if selected_widths == _NCU_SASS_COLUMN_WIDTHS else _NCU_SASS_COLUMN_WIDTHS
+    )
+    private_values = ("private", "secret", "hidden", "opaque")
+    if mutation == "other-separator":
+        replacement = _ncu_sass_separator(other_widths)
+    elif mutation == "instruction":
+        replacement = "0000000000000000 MOV R1, R2"
+    elif mutation == "header":
+        replacement = _ncu_sass_header_row(selected_widths)
+    elif mutation == "blank":
+        replacement = ""
+    elif mutation == "private":
+        replacement = _ncu_sass_fixed_column_row(
+            ("Address", "private", "Source", "secret", "hidden", "opaque"),
+            column_widths=selected_widths,
+        )
+    else:
+        raise AssertionError(f"unhandled mutation {mutation!r}")
+    lines = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=selected_widths,
+    ).splitlines()
+    lines[4] = replacement
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass("\n".join(lines) + "\n", (_NCU_KERNEL_A,))
+
+    diagnostic = _ncu_sass_diagnostic(failure.value)
+    assert diagnostic["line_number"] == 5
+    assert diagnostic["line_sha256"] == hashlib.sha256(replacement.encode("utf-8")).hexdigest()
+    structure = diagnostic["line_structure"]
+    assert isinstance(structure, dict)
+    patterns = structure["public_patterns"]
+    assert isinstance(patterns, dict)
+    assert {name for name, matched in patterns.items() if matched} == ({public_pattern} if public_pattern else set())
+    assert ("fixed_columns" in structure) is (
+        len(replacement.encode("utf-8")) == sum(selected_widths) + len(selected_widths) - 1
+    )
+    for private in private_values:
+        assert private not in str(failure.value)
 
 
 @pytest.mark.parametrize(
