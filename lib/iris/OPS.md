@@ -201,6 +201,11 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
 - **`SchedulingGated` on every task means the gang is queued**, not broken — Kueue
   admits a gang all at once, so a busy cluster holds all of it. Same-band jobs
   queue behind each other rather than preempting.
+- **`--timeout` covers the queue wait, and killing the coordinator kills the
+  gang.** A contested fleet can hold a gang for hours before admitting it; when
+  the coordinator's deadline passes, its children are torn down mid-run (the
+  tasks report `killed` with a preemption each). Size the timeout for wait plus
+  run, not run alone.
 
 Object storage is not readable from a workstation with no cluster credentials
 (`NoCredentialsError` against `s3://marin-us-east-02a`). Validate a job's output
