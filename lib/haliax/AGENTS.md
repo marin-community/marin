@@ -46,7 +46,8 @@ repository. Follow these notes when implementing new features or fixing bugs.
 
 ## Testing
 
-* Tests are executed with `pytest`. The default workflow runs ` XLA_FLAGS=--xla_force_host_platform_device_count=8 PYTHONPATH=tests:src:. uv run pytest tests`.
+* Run `python3 -m infra.ci.run_tests` from the repository root for tests affected by the current branch and working tree.
+* Run the full safe Haliax suite with `XLA_FLAGS=--xla_force_host_platform_device_count=8 uv run --package marin-haliax --group test pytest lib/haliax/tests`.
 * In general, never relax tolerances in floating point tests unless specifically discussed with the
   team. Use `assert_allclose` with appropriate tolerances for numerical comparisons. We typically use
   1e-4 for more complex modules, and 1e-5 for simpler ones.

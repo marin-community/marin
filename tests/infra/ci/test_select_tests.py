@@ -15,31 +15,21 @@ from infra.ci.select_tests import (
     UV_PACKAGE,
     accelerator_suite_test_paths,
     classify,
-    compute_matrix,
     dependencies_by_test_file,
     extra_suites,
     full_matrix,
     is_test_module,
     matrix_leg,
     scope_legs,
+    select_changed_tests,
     shard_files,
     torch_membership_for_test_file,
 )
 
 
 def select_matrix(changed_files: list[str], repo_root: Path) -> list[dict[str, str | int]]:
-    """Mirror the diff-driven branch of select_tests.main without git."""
-    classification = classify(changed_files, repo_root)
-    source_build_scopes = set(classification.native_changed)
-    if classification.broad:
-        return full_matrix(repo_root, source_build_scopes)
-    return compute_matrix(
-        classification.src_modules,
-        classification.direct_tests,
-        classification.forced,
-        source_build_scopes,
-        repo_root,
-    )
+    """Return the selector's diff-driven matrix without invoking git."""
+    return select_changed_tests(changed_files, repo_root).matrix
 
 
 def select_accelerator_paths(changed_files: list[str], repo_root: Path) -> dict[str, list[str]]:
@@ -196,7 +186,13 @@ def test_conftest_and_package_metadata_force_full_scope(tmp_path: Path) -> None:
 
 
 def test_classify_broad_triggers(tmp_path: Path) -> None:
-    for path in ("uv.lock", "pyproject.toml", "infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"):
+    for path in (
+        "uv.lock",
+        "pyproject.toml",
+        "infra/ci/run_tests.py",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+    ):
         assert classify([path], tmp_path).broad, path
 
     ignored = classify(["docs/index.md", "lib/iris/docs/coreweave.md"], tmp_path)
@@ -510,7 +506,9 @@ def test_broad_trigger_runs_every_scope() -> None:
     assert matrix_leg("marin", []) == {
         "label": "marin",
         "package": "marin-core",
+        "python": "3.12",
         "extras": "--extra cpu --extra dedup",
+        "pytest_args": "--durations=5 -n auto --dist=worksteal --tb=short",
         "test_paths": "tests",
         "setup": "",
         "timeout": 15,

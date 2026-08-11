@@ -29,7 +29,10 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 ## Development
 
 ```bash
-# Unit tests
+# Tests affected by the current branch and working tree
+python3 -m infra.ci.run_tests
+
+# Full safe Iris unit suite
 uv run --package marin-iris --group test pytest --tb=short lib/iris/tests/
 ```
 

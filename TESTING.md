@@ -8,16 +8,30 @@ reviewing tests, read root `AGENTS.md`, this file, the nearest module
 
 ## Running Tests Locally
 
-Run the safe default suite with:
+Run the safe tests affected by the current branch and working tree with:
 
 ```bash
-uv run pytest
+python3 -m infra.ci.run_tests
 ```
+
+The runner compares committed, staged, unstaged, and untracked files with the
+branch point from `origin/main`. It uses `infra/ci/select_tests.py` to find test
+files that transitively import changed modules, then runs one pytest process per
+affected package with the same uv extras and xdist flags as unified unit CI.
+Use `--dry-run` to inspect the commands, `--all` to run every safe unit-test
+scope, or `--base-ref <ref>` when the branch targets another ref. Extra pytest
+arguments follow `--`, for example `python3 -m infra.ci.run_tests -- -x`.
 
 The repository defaults exclude `slow`, `integration`, `data_integration`,
 `cluster`, `requires_cluster`, `docker`, and `manual` tests. The same exclusions
-apply when passing a test path, for example `uv run pytest tests/foo/` or
-`uv run pytest lib/iris/tests/`.
+apply to a direct path:
+
+```bash
+uv run --package marin-iris --group test pytest lib/iris/tests/cluster/controller/test_service.py
+```
+
+Use a direct path for the narrow edit-test loop; use the affected-test runner
+before handing off a change.
 
 Do not pass a partial marker expression such as `-m "not slow"` for routine
 local testing. Pytest replaces the configured expression instead of combining

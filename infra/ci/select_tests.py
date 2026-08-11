@@ -67,6 +67,7 @@ BROAD_TRIGGERS: frozenset[str] = frozenset(
     {
         "uv.lock",
         "pyproject.toml",
+        "infra/ci/run_tests.py",
         "infra/ci/select_tests.py",
         "scripts/rust_mode.py",
         ".github/workflows/unified-unit.yaml",
@@ -90,6 +91,15 @@ UV_PACKAGE: dict[str, str] = {
 UV_EXTRAS: dict[str, list[str]] = {
     "marin": ["cpu", "dedup"],
 }
+
+PYTHON_VERSION = "3.12"
+PYTEST_ARGS: tuple[str, ...] = (
+    "--durations=5",
+    "-n",
+    "auto",
+    "--dist=worksteal",
+    "--tb=short",
+)
 
 TEST_DIR: dict[str, str] = {
     **{scope: f"lib/{scope}/tests" for scope in UV_PACKAGE if scope != "marin"},
@@ -546,7 +556,9 @@ def matrix_leg(
     return {
         "label": label,
         "package": UV_PACKAGE[scope],
+        "python": PYTHON_VERSION,
         "extras": " ".join(f"--extra {extra}" for extra in UV_EXTRAS.get(scope, [])),
+        "pytest_args": " ".join(PYTEST_ARGS),
         "test_paths": " ".join(tests) if tests else TEST_DIR[scope],
         "setup": RUST_SETUP_TAG if source_build else "",
         "timeout": SOURCE_BUILD_TIMEOUT if source_build else DEFAULT_LEG_TIMEOUT,
@@ -613,9 +625,10 @@ def compute_matrix(
 ) -> list[dict[str, str | int]]:
     """Compute the test matrix.
 
-    Returns a list of matrix legs. Each leg has a label, package (uv name), extras,
-    test_paths, and a source-build ``setup``/``timeout``. An empty tests list means run the
-    full suite directory; a scope may fan out into several sharded legs.
+    Returns a list of matrix legs. Each leg has a label, package (uv name), Python
+    version, uv extras, pytest arguments, test paths, and a source-build
+    ``setup``/``timeout``. An empty tests list means run the full suite directory;
+    a scope may fan out into several sharded legs.
     ``source_build_scopes`` are the scopes whose legs must build the native extension from
     source.
     """
@@ -700,6 +713,55 @@ def accelerator_suite_test_paths(
     return suites
 
 
+@dataclass(frozen=True)
+class SelectionResult:
+    """Selected CI matrix legs and out-of-band suites for a set of changed files."""
+
+    reason: str
+    matrix: list[dict[str, str | int]]
+    suites: list[str]
+    suite_test_paths: dict[str, list[str]]
+
+
+def select_changed_tests(
+    changed_files: list[str],
+    repo_root: Path,
+    *,
+    run_all_tests: bool = False,
+) -> SelectionResult:
+    """Select tests from repo-relative changed paths.
+
+    This is the shared diff-to-plan boundary used by CI and the local test runner.
+    Native source changes retain their source-build tag even when another change
+    forces the full unit matrix.
+    """
+    classification = classify(changed_files, repo_root)
+    source_build_scopes = set(classification.native_changed)
+
+    if run_all_tests:
+        reason, matrix = "run-all-tests", full_matrix(repo_root, source_build_scopes)
+    elif classification.broad:
+        reason, matrix = "broad-trigger", full_matrix(repo_root, source_build_scopes)
+    else:
+        reason = "diff-driven"
+        matrix = compute_matrix(
+            classification.src_modules,
+            classification.direct_tests,
+            classification.forced,
+            source_build_scopes,
+            repo_root,
+        )
+
+    suite_test_paths = accelerator_suite_test_paths(changed_files, matrix, repo_root)
+    suites = sorted((*extra_suites(changed_files), *suite_test_paths))
+    return SelectionResult(
+        reason=reason,
+        matrix=matrix,
+        suites=suites,
+        suite_test_paths=suite_test_paths,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -724,48 +786,20 @@ def main() -> None:
     if args.base_ref is None:
         matrix = full_matrix(repo_root, set(NATIVE_CRATE_DIR))
         suite_test_paths = accelerator_suite_test_paths([], matrix, repo_root, force=True)
-        result = {
-            "reason": "run-all-tests",
-            "matrix": matrix,
-            "suites": sorted((*EXTRA_SUITE_TRIGGERS, *suite_test_paths)),
-            "suite_test_paths": suite_test_paths,
-        }
-        print(json.dumps(result, indent=2))
+        selection = SelectionResult(
+            reason="run-all-tests",
+            matrix=matrix,
+            suites=sorted((*EXTRA_SUITE_TRIGGERS, *suite_test_paths)),
+            suite_test_paths=suite_test_paths,
+        )
+        print(json.dumps(selection.__dict__, indent=2))
         return
 
     changed = git_changed_files(args.base_ref, repo_root)
-    classification = classify(changed, repo_root)
-
-    # The scopes whose native extension's Rust changed build it from source; every other
-    # leg installs the prebuilt wheel. This is independent of full vs. diff-driven runs: a
-    # broad trigger (e.g. a uv.lock bump) runs the whole matrix but keeps every leg on the
-    # fast prebuilt-wheel path.
-    source_build_scopes = set(classification.native_changed)
-
-    if args.run_all_tests:
-        reason, matrix = "run-all-tests", full_matrix(repo_root, source_build_scopes)
-    elif classification.broad:
-        reason, matrix = "broad-trigger", full_matrix(repo_root, source_build_scopes)
-    else:
-        reason = "diff-driven"
-        matrix = compute_matrix(
-            classification.src_modules,
-            classification.direct_tests,
-            classification.forced,
-            source_build_scopes,
-            repo_root,
-        )
-
-    suite_test_paths = accelerator_suite_test_paths(changed, matrix, repo_root)
-    suites = sorted((*extra_suites(changed), *suite_test_paths))
+    selection = select_changed_tests(changed, repo_root, run_all_tests=args.run_all_tests)
     print(
         json.dumps(
-            {
-                "reason": reason,
-                "matrix": matrix,
-                "suites": suites,
-                "suite_test_paths": suite_test_paths,
-            },
+            selection.__dict__,
             indent=2,
         )
     )

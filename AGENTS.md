@@ -66,13 +66,16 @@ working tree. See the `consult-echo` skill for the complete workflow.
 - Do not replace it with `uv run pre-commit ...`!
 
 # Type checking (also done by pre-commit.py)
-uv run pyrefly
-- Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
+uv run pyrefly check
+- Keep type hints passing under `uv run pyrefly check`; configuration lives in `pyproject.toml`.
 
-# Safe local test suite
-uv run pytest
-- Pytest's repository defaults exclude slow, integration, data-integration,
-  live-cluster, Docker, and manual tests. Keep those defaults for local runs.
+# Safe tests affected by the current branch and working tree
+python3 -m infra.ci.run_tests
+- The runner compares committed, staged, unstaged, and untracked changes with
+  the merge base of `origin/main`, selects transitive import dependents, and
+  uses each package's uv test group plus the unified CI xdist settings.
+- Use `--dry-run` to inspect the plan, `--all` for every safe unit-test scope,
+  and `--base-ref <ref>` when the branch targets something other than main.
 
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
@@ -82,7 +85,9 @@ uv run pytest
   follow-up materially changes the design or scope.
 ```
 
-- Python >=3.12. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
+- Python >=3.12. Use `uv run` for entry points; the stdlib-only local test
+  runner uses `python3 -m infra.ci.run_tests` so it can select a package before
+  uv installs that package's test dependencies.
 - Do not replace pytest's default marker expression with a partial expression
   such as `-m "not slow"`; `-m` overrides the whole default and can select live
   cluster tests. Run excluded markers only when the user or a dedicated task
