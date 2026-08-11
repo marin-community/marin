@@ -27,6 +27,7 @@ import stat
 import subprocess
 import sys
 import time
+import zlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from enum import StrEnum
@@ -51,6 +52,18 @@ _NSYS_PROFILE_ARGS = (
 _NSYS_EXPORT_ARGS = ("--type=sqlite", f"--lazy={_NSYS_EXPORT_LAZY}")
 _MAX_NSYS_NO_KERNEL_DIAGNOSTIC_CHARS = 4096
 _MAX_CACHE_IDENTITY_DIAGNOSTIC_CHARS = 4096
+_MAX_PERSISTENT_CACHE_ENTRY_BYTES = 256 * 1024 * 1024
+_MAX_PERSISTENT_CACHE_FILES = 1024
+_MAX_PERSISTENT_CACHE_ROOT_BYTES = 1024 * 1024 * 1024
+_MAX_SERIALIZED_EXECUTABLE_BYTES = 1024 * 1024 * 1024
+_CACHE_COMPRESSION = "zlib"
+_CACHE_FILE_PATTERN = re.compile(r"(?P<key>.+-[0-9a-f]{64})-cache")
+_TARGET_CACHE_FILE_PATTERN = re.compile(r"(?P<key>jit_step-[0-9a-f]{64})-cache")
+_CACHE_EVENT_NAMES = (
+    "/jax/compilation_cache/compile_requests_use_cache",
+    "/jax/compilation_cache/cache_hits",
+    "/jax/compilation_cache/cache_misses",
+)
 _NSYS_RELEVANT_TABLES = (
     "CUDA_GRAPH_EVENTS",
     "CUDA_GRAPH_NODE_EVENTS",
@@ -65,6 +78,10 @@ _NSYS_RELEVANT_TABLES = (
 _OUTPUT_NAMES = ("forward", "dx", "dw0", "dw1")
 _MAX_NUMERICAL_WORST_PAIR_DIAGNOSTIC_CHARS = 2048
 _CACHE_ENVIRONMENT = {
+    "JAX_COMPILATION_CACHE_CHECK_CONTENTS": "false",
+    "JAX_COMPILATION_CACHE_INCLUDE_METADATA_IN_KEY": "false",
+    "JAX_COMPILATION_CACHE_MAX_SIZE": "-1",
+    "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES": "none",
     "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": "0",
     "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": "-1",
 }
@@ -1533,8 +1550,110 @@ def _compiled_backend(context: _WorkerCaseContext, backend: str, *, jax: Any) ->
     return compiled, compile_done_monotonic_ns
 
 
+@dataclass(frozen=True)
+class _PersistentCacheTarget:
+    cache_key: str
+    compile_time: int
+    compressed_entry_sha256: str
+    serialized_executable_sha256: str
+
+
+def _require_pinned_cache_compression_runtime() -> None:
+    if sys.version_info[:2] != (3, 12):
+        raise RuntimeError("H100 cache evidence requires the pinned Python 3.12 zlib cache runtime")
+    try:
+        importlib.metadata.version("zstandard")
+    except importlib.metadata.PackageNotFoundError:
+        return
+    raise RuntimeError("H100 cache evidence requires zstandard to be absent")
+
+
+def _bounded_file_bytes(path: Path, *, maximum_bytes: int) -> bytes:
+    metadata = path.stat(follow_symlinks=False)
+    if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+        raise RuntimeError("persistent-cache entry must be a regular file")
+    if not 0 < metadata.st_size <= maximum_bytes:
+        raise RuntimeError("persistent-cache entry has an invalid bounded size")
+    with path.open("rb") as stream:
+        payload = stream.read(maximum_bytes + 1)
+    if len(payload) != metadata.st_size or len(payload) > maximum_bytes:
+        raise RuntimeError("persistent-cache entry changed or exceeded its reviewed bound")
+    return payload
+
+
+def _persistent_cache_target(cache_directory: Path) -> tuple[_PersistentCacheTarget, tuple[tuple[str, bytes], ...]]:
+    entries = tuple(itertools.islice(cache_directory.iterdir(), _MAX_PERSISTENT_CACHE_FILES + 1))
+    if not entries:
+        raise RuntimeError("compile worker produced no persistent-cache artifact")
+    if len(entries) > _MAX_PERSISTENT_CACHE_FILES:
+        raise RuntimeError("unbounded JAX persistent cache exceeds its reviewed file-count bound")
+    entries = tuple(sorted(entries, key=lambda path: path.name))
+    if any(path.is_symlink() or not stat.S_ISREG(path.stat(follow_symlinks=False).st_mode) for path in entries):
+        raise RuntimeError("unbounded JAX persistent cache must contain only flat regular cache entries")
+    cache_files: list[tuple[str, bytes]] = []
+    target_names = []
+    total_bytes = 0
+    for path in entries:
+        if _CACHE_FILE_PATTERN.fullmatch(path.name) is None:
+            raise RuntimeError("unbounded JAX persistent cache contains an unexpected entry")
+        payload = _bounded_file_bytes(path, maximum_bytes=_MAX_PERSISTENT_CACHE_ENTRY_BYTES)
+        total_bytes += len(payload)
+        if total_bytes > _MAX_PERSISTENT_CACHE_ROOT_BYTES:
+            raise RuntimeError("unbounded JAX persistent cache exceeds its reviewed total-byte bound")
+        cache_files.append((path.name, payload))
+        if _TARGET_CACHE_FILE_PATTERN.fullmatch(path.name) is not None:
+            target_names.append(path.name)
+    if len(target_names) != 1:
+        raise RuntimeError("persistent cache must contain exactly one jit_step target entry")
+
+    target_name = target_names[0]
+    compressed = next(payload for name, payload in cache_files if name == target_name)
+    try:
+        decompressor = zlib.decompressobj()
+        executable_and_time = decompressor.decompress(compressed, _MAX_SERIALIZED_EXECUTABLE_BYTES + 5)
+    except zlib.error as error:
+        raise RuntimeError("jit_step cache entry is not the pinned zlib cache format") from error
+    if not decompressor.eof or decompressor.unused_data or decompressor.unconsumed_tail:
+        raise RuntimeError("jit_step cache entry is not one complete bounded zlib stream")
+    if not 4 < len(executable_and_time) <= _MAX_SERIALIZED_EXECUTABLE_BYTES + 4:
+        raise RuntimeError("jit_step cache entry has an invalid decompressed size")
+    match = _TARGET_CACHE_FILE_PATTERN.fullmatch(target_name)
+    assert match is not None
+    return (
+        _PersistentCacheTarget(
+            cache_key=match.group("key"),
+            compile_time=int.from_bytes(executable_and_time[:4], byteorder="big"),
+            compressed_entry_sha256=hashlib.sha256(compressed).hexdigest(),
+            serialized_executable_sha256=hashlib.sha256(executable_and_time[4:]).hexdigest(),
+        ),
+        tuple(cache_files),
+    )
+
+
+def _compile_with_cache_events(
+    context: _WorkerCaseContext,
+    backend: str,
+    *,
+    jax: Any,
+) -> tuple[Any, int, dict[str, int]]:
+    event_counts = {name: 0 for name in _CACHE_EVENT_NAMES}
+
+    def listener(event: str, **metadata: str | int) -> None:
+        del metadata
+        if event in event_counts:
+            event_counts[event] += 1
+
+    jax.monitoring.register_event_listener(listener)
+    try:
+        compiled, compile_done_monotonic_ns = _compiled_backend(context, backend, jax=jax)
+    finally:
+        jax.monitoring.unregister_event_listener(listener)
+    return compiled, compile_done_monotonic_ns, event_counts
+
+
 def _run_compile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *, jax: Any) -> dict[str, Any]:
-    compiled, compile_done_monotonic_ns = _compiled_backend(context, args.backend, jax=jax)
+    _require_pinned_cache_compression_runtime()
+    compiled, compile_done_monotonic_ns, cache_events = _compile_with_cache_events(context, args.backend, jax=jax)
     started = time.perf_counter_ns()
     output = compiled(*context.inputs)
     jax.block_until_ready(output)
@@ -1542,22 +1661,30 @@ def _run_compile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *
     cache_directory = Path(os.environ.get("JAX_COMPILATION_CACHE_DIR", ""))
     if not cache_directory.is_dir():
         raise RuntimeError("compile worker requires an existing isolated JAX_COMPILATION_CACHE_DIR")
-    cache_files = tuple(sorted(path for path in cache_directory.rglob("*") if path.is_file()))
-    if not cache_files:
-        raise RuntimeError("compile worker produced no persistent-cache artifact")
-    identity = hashlib.sha256()
-    for path in cache_files:
-        identity.update(str(path.relative_to(cache_directory)).encode())
-        identity.update(bytes.fromhex(file_sha256(path)))
+    target, cache_files = _persistent_cache_target(cache_directory)
+    root_identity = hashlib.sha256()
+    for name, payload in cache_files:
+        root_identity.update(name.encode())
+        root_identity.update(hashlib.sha256(payload).digest())
+    contract_identity = hashlib.sha256()
+    contract_identity.update(target.cache_key.encode())
+    contract_identity.update(bytes.fromhex(target.serialized_executable_sha256))
     return {
         "case_id": args.case_id,
         "backend": args.backend,
         "cache_kind": args.cache_kind,
         "compile_done_monotonic_ns": compile_done_monotonic_ns,
         "first_execution_ns": first_execution_ns,
-        "persistent_cache_identity": identity.hexdigest(),
+        "persistent_cache_compression": _CACHE_COMPRESSION,
+        "persistent_cache_compile_time": target.compile_time,
+        "persistent_cache_entry_sha256": target.compressed_entry_sha256,
         "persistent_cache_file_count": len(cache_files),
-        "persistent_cache_total_bytes": sum(path.stat().st_size for path in cache_files),
+        "persistent_cache_identity": contract_identity.hexdigest(),
+        "persistent_cache_key": target.cache_key,
+        "persistent_cache_root_identity": root_identity.hexdigest(),
+        "persistent_cache_serialized_executable_sha256": target.serialized_executable_sha256,
+        "persistent_cache_total_bytes": sum(len(payload) for _, payload in cache_files),
+        "persistent_cache_events": cache_events,
         "final_hlo": compiled.as_text(),
     }
 
@@ -2419,7 +2546,7 @@ def validated_cache_protocol_identity(
     backend: str,
     required_processes: int,
 ) -> str:
-    """Require every declared isolated root to converge to one cache identity."""
+    """Require one target key/executable identity and the declared public cache events."""
     groups = {"compile": compile_records, "cold": cold_records, "hit": hit_records}
     for name, records in groups.items():
         if len(records) != required_processes:
@@ -2429,13 +2556,34 @@ def validated_cache_protocol_identity(
     if re.fullmatch(r"[a-z0-9_]{1,64}", backend) is None:
         raise ValueError("cache identity diagnostic requires a canonical backend")
 
-    partitions: dict[str, str] = {}
+    partitions: dict[tuple[str, str], str] = {}
     roots = []
     for phase, records in groups.items():
         for index, record in enumerate(records):
+            compression = record.get("persistent_cache_compression")
+            if compression != _CACHE_COMPRESSION:
+                raise ValueError(f"cache protocol {phase}[{index}] has an invalid compression contract")
+            cache_key = record.get("persistent_cache_key")
+            if not isinstance(cache_key, str) or _TARGET_CACHE_FILE_PATTERN.fullmatch(f"{cache_key}-cache") is None:
+                raise ValueError(f"cache protocol {phase}[{index}] has an invalid target cache key")
+            executable_identity = record.get("persistent_cache_serialized_executable_sha256")
+            if not isinstance(executable_identity, str) or re.fullmatch(r"[0-9a-f]{64}", executable_identity) is None:
+                raise ValueError(f"cache protocol {phase}[{index}] has an invalid serialized executable identity")
             identity = record.get("persistent_cache_identity")
             if not isinstance(identity, str) or re.fullmatch(r"[0-9a-f]{64}", identity) is None:
                 raise ValueError(f"cache protocol {phase}[{index}] has an invalid content identity")
+            expected_identity = hashlib.sha256(cache_key.encode() + bytes.fromhex(executable_identity)).hexdigest()
+            if identity != expected_identity:
+                raise ValueError(f"cache protocol {phase}[{index}] has an inconsistent content identity")
+            entry_identity = record.get("persistent_cache_entry_sha256")
+            root_identity = record.get("persistent_cache_root_identity")
+            if not isinstance(entry_identity, str) or re.fullmatch(r"[0-9a-f]{64}", entry_identity) is None:
+                raise ValueError(f"cache protocol {phase}[{index}] has an invalid compressed entry identity")
+            if not isinstance(root_identity, str) or re.fullmatch(r"[0-9a-f]{64}", root_identity) is None:
+                raise ValueError(f"cache protocol {phase}[{index}] has an invalid root identity")
+            compile_time = record.get("persistent_cache_compile_time")
+            if type(compile_time) is not int or not 0 <= compile_time <= 2**32 - 1:
+                raise ValueError(f"cache protocol {phase}[{index}] has an invalid cached compile time")
             file_count = record.get("persistent_cache_file_count")
             total_bytes = record.get("persistent_cache_total_bytes")
             if type(file_count) is not int or not 0 < file_count <= 2**63 - 1:
@@ -2445,23 +2593,39 @@ def validated_cache_protocol_identity(
             final_hlo = record.get("final_hlo")
             if not isinstance(final_hlo, str) or not final_hlo.strip():
                 raise ValueError(f"cache protocol {phase}[{index}] has an invalid final HLO")
-            partition = partitions.setdefault(identity, f"class_{len(partitions)}")
+            events = record.get("persistent_cache_events")
+            expected_events = {
+                _CACHE_EVENT_NAMES[0]: 1,
+                _CACHE_EVENT_NAMES[1]: int(phase == "hit"),
+                _CACHE_EVENT_NAMES[2]: int(phase != "hit"),
+            }
+            if events != expected_events:
+                raise ValueError(f"cache protocol {phase}[{index}] has invalid public cache events")
+            partition = partitions.setdefault((cache_key, executable_identity), f"class_{len(partitions)}")
             roots.append(
                 {
+                    "cached_compile_time": compile_time,
                     "equality_partition": partition,
                     "final_hlo_sha256": hashlib.sha256(final_hlo.encode()).hexdigest(),
                     "index": index,
                     "persistent_cache_file_count": file_count,
-                    "persistent_cache_identity": identity,
+                    "persistent_cache_root_identity": root_identity,
                     "persistent_cache_total_bytes": total_bytes,
                     "phase": phase,
-                    "role": f"{phase}[{index}]",
                 }
             )
     if len(partitions) != 1:
+        classes = {
+            label: {
+                "cache_key_digest": cache_key.removeprefix("jit_step-"),
+                "serialized_executable_sha256": executable_identity,
+            }
+            for (cache_key, executable_identity), label in partitions.items()
+        }
         diagnostic = {
             "backend": backend,
             "case_id": case_id,
+            "classes": classes,
             "expected_equality_partitions": 1,
             "observed_equality_partitions": len(partitions),
             "roots": roots,
@@ -2474,7 +2638,8 @@ def validated_cache_protocol_identity(
         if len(message) > _MAX_CACHE_IDENTITY_DIAGNOSTIC_CHARS:
             raise AssertionError("cache identity diagnostic exceeds its reviewed bound")
         raise ValueError(message)
-    return next(iter(partitions))
+    cache_key, executable_identity = next(iter(partitions))
+    return hashlib.sha256(cache_key.encode() + bytes.fromhex(executable_identity)).hexdigest()
 
 
 def validated_executable_hlo(
@@ -2617,8 +2782,8 @@ def _run_cache_protocol(
             environment=_worker_environment(directory / f"hit_dump_{index}", root),
             json_output=hit_result,
         )
-        if cold["persistent_cache_identity"] != hit["persistent_cache_identity"]:
-            raise ValueError(f"persistent cache content identity changed between cold and hit for {case_id}/{backend}")
+        if cold["persistent_cache_root_identity"] != hit["persistent_cache_root_identity"]:
+            raise ValueError(f"persistent cache root changed between cold and hit for {case_id}/{backend}")
         cold_records.append(cold)
         hit_records.append(hit)
     identity = validated_cache_protocol_identity(

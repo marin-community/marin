@@ -377,11 +377,19 @@ schedule mismatch, malformed schema, ambiguous kernel identity, launch-order
 drift, substring-only kernel match, or any steady-state CUDA copy aborts the
 run. Result-evidence schema v4 retains closed H2D, D2H, and D2D count and byte
 accounting before the no-copy gate. Three independent compile workers and three
-paired cold/hit cache roots retain compile,
-first-execution, and cache samples. A cache pair must preserve its content
-identity, and all nine isolated compile, cold, and hit roots must converge to
-the same identity. Their final optimized HLO must also equal the timing and
-profile worker HLO before their evidence can be merged.
+paired cold/hit cache roots retain compile, first-execution, and cache samples:
+nine records over six physical roots. The runner disables JAX's auxiliary
+root-relative XLA caches and pins the unbounded flat-file cache mode. It
+identifies exactly one `jit_step-<SHA256>-cache` target entry in each record.
+The exact target cache key and SHA-256 of the serialized executable must match
+across all nine records. The executable digest removes only JAX 0.10.1's
+documented four-byte big-endian cached compile-time prefix after bounded zlib
+decompression. The compressed entry and whole-root identities remain
+diagnostics, while each cold/hit pair must preserve its complete path-and-byte
+root identity. Public JAX monitoring must report one request and one write
+event for each compile or cold record, and one request and one hit for each hit
+record. Their final optimized HLO must still equal the timing and profile
+worker HLO before their evidence can be merged.
 
 Each compile sample begins on the coordinator's monotonic clock immediately
 before spawning its isolated worker. The worker records the same host monotonic
