@@ -1,7 +1,7 @@
 name: glm-5.2-awq-int4
 location: cyankiwi/GLM-5.2-AWQ-INT4
 revision: 956f4d228e36c95f66a80058fe64b69af67360ca
-tokenizer: AaronEllisBloor/glm-5.2-nvfp4-nvidia-v2-tokenizer
+tokenizer: laion/glm-5.2-eval-tokenizer
 apply_chat_template: true
 resource_hint:
   gpu:
