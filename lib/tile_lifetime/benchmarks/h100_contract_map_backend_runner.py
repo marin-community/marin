@@ -29,7 +29,7 @@ import sys
 import time
 import zlib
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -334,6 +334,7 @@ class NcuProfileEvidence:
     sass_source_path: str
     sass_source_sha256: str
     final_hlo: str
+    persistent_cache: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1571,6 +1572,13 @@ class _PersistentCacheTarget:
     serialized_executable_sha256: str
 
 
+@dataclass(frozen=True)
+class _PersistentCacheSnapshot:
+    root_identity: str
+    file_count: int
+    total_bytes: int
+
+
 def _require_pinned_cache_compression_runtime() -> None:
     if sys.version_info[:2] != (3, 12):
         raise RuntimeError("H100 cache evidence requires the pinned Python 3.12 zlib cache runtime")
@@ -1594,7 +1602,7 @@ def _bounded_file_bytes(path: Path, *, maximum_bytes: int) -> bytes:
     return payload
 
 
-def _persistent_cache_target(cache_directory: Path) -> tuple[_PersistentCacheTarget, tuple[tuple[str, bytes], ...]]:
+def _persistent_cache_files(cache_directory: Path) -> tuple[tuple[str, bytes], ...]:
     entries = tuple(itertools.islice(cache_directory.iterdir(), _MAX_PERSISTENT_CACHE_FILES + 1))
     if not entries:
         raise RuntimeError("compile worker produced no persistent-cache artifact")
@@ -1604,7 +1612,6 @@ def _persistent_cache_target(cache_directory: Path) -> tuple[_PersistentCacheTar
     if any(path.is_symlink() or not stat.S_ISREG(path.stat(follow_symlinks=False).st_mode) for path in entries):
         raise RuntimeError("unbounded JAX persistent cache must contain only flat regular cache entries")
     cache_files: list[tuple[str, bytes]] = []
-    target_names = []
     total_bytes = 0
     for path in entries:
         if _CACHE_FILE_PATTERN.fullmatch(path.name) is None:
@@ -1614,10 +1621,45 @@ def _persistent_cache_target(cache_directory: Path) -> tuple[_PersistentCacheTar
         if total_bytes > _MAX_PERSISTENT_CACHE_ROOT_BYTES:
             raise RuntimeError("unbounded JAX persistent cache exceeds its reviewed total-byte bound")
         cache_files.append((path.name, payload))
-        if _TARGET_CACHE_FILE_PATTERN.fullmatch(path.name) is not None:
-            target_names.append(path.name)
+    return tuple(cache_files)
+
+
+def _persistent_cache_snapshot(cache_files: Sequence[tuple[str, bytes]]) -> _PersistentCacheSnapshot:
+    if not cache_files:
+        raise RuntimeError("persistent cache snapshot must be nonempty")
+    root_identity = hashlib.sha256()
+    for name, payload in cache_files:
+        encoded_name = name.encode()
+        root_identity.update(len(encoded_name).to_bytes(4, byteorder="big"))
+        root_identity.update(encoded_name)
+        root_identity.update(hashlib.sha256(payload).digest())
+    return _PersistentCacheSnapshot(
+        root_identity=root_identity.hexdigest(),
+        file_count=len(cache_files),
+        total_bytes=sum(len(payload) for _, payload in cache_files),
+    )
+
+
+def _persistent_cache_target(
+    cache_directory: Path,
+    expected_cache_key: str | None = None,
+) -> tuple[_PersistentCacheTarget, tuple[tuple[str, bytes], ...]]:
+    cache_files = _persistent_cache_files(cache_directory)
+    target_names = tuple(
+        name
+        for name, _ in cache_files
+        if _TARGET_CACHE_FILE_PATTERN.fullmatch(name) is not None
+        and (expected_cache_key is None or name == f"{expected_cache_key}-cache")
+    )
     if len(target_names) != 1:
-        raise RuntimeError("persistent cache must contain exactly one jit_step target entry")
+        qualifier = "" if expected_cache_key is None else " matching the expected key"
+        raise RuntimeError(f"persistent cache must contain exactly one jit_step target entry{qualifier}")
+    if expected_cache_key is None:
+        all_target_names = tuple(
+            name for name, _ in cache_files if _TARGET_CACHE_FILE_PATTERN.fullmatch(name) is not None
+        )
+        if len(all_target_names) != 1:
+            raise RuntimeError("persistent cache must contain exactly one jit_step target entry")
 
     target_name = target_names[0]
     compressed = next(payload for name, payload in cache_files if name == target_name)
@@ -1639,7 +1681,7 @@ def _persistent_cache_target(cache_directory: Path) -> tuple[_PersistentCacheTar
             compressed_entry_sha256=hashlib.sha256(compressed).hexdigest(),
             serialized_executable_sha256=hashlib.sha256(executable_and_time[4:]).hexdigest(),
         ),
-        tuple(cache_files),
+        cache_files,
     )
 
 
@@ -1664,8 +1706,91 @@ def _compile_with_cache_events(
     return compiled, compile_done_monotonic_ns, event_counts
 
 
+def _load_worker_cache_contract(args: argparse.Namespace) -> dict[str, Any] | None:
+    path = getattr(args, "cache_contract", None)
+    if path is None:
+        return None
+    payload = json.loads(path.read_text())
+    if not isinstance(payload, dict) or set(payload) != {"backends", "schema_version", "snapshot"}:
+        raise ValueError("worker cache contract has an invalid closed schema")
+    if payload["schema_version"] != 1:
+        raise ValueError("worker cache contract has an unsupported schema version")
+    snapshot = payload["snapshot"]
+    if not isinstance(snapshot, dict) or set(snapshot) != {"file_count", "root_identity", "total_bytes"}:
+        raise ValueError("worker cache contract has an invalid snapshot schema")
+    if not isinstance(payload["backends"], dict) or not payload["backends"]:
+        raise ValueError("worker cache contract must contain backend identities")
+    return payload
+
+
+def _validated_worker_cache_snapshot(
+    cache_directory: Path,
+    contract: Mapping[str, Any],
+) -> tuple[tuple[str, bytes], ...]:
+    files = _persistent_cache_files(cache_directory)
+    observed = _persistent_cache_snapshot(files)
+    expected = contract["snapshot"]
+    if (
+        expected.get("root_identity") != observed.root_identity
+        or expected.get("file_count") != observed.file_count
+        or expected.get("total_bytes") != observed.total_bytes
+    ):
+        raise ValueError("worker persistent-cache snapshot differs from its sealed source")
+    return files
+
+
+def _cache_hit_executable(
+    args: argparse.Namespace,
+    context: _WorkerCaseContext,
+    backend: str,
+    contract: Mapping[str, Any],
+    *,
+    jax: Any,
+) -> tuple[Any, dict[str, Any]]:
+    expected = contract["backends"].get(backend)
+    if not isinstance(expected, dict) or set(expected) != {
+        "cache_key",
+        "compressed_entry_sha256",
+        "final_hlo_sha256",
+        "serialized_executable_sha256",
+    }:
+        raise ValueError(f"worker cache contract omits a closed identity for {backend}")
+    cache_directory = Path(os.environ.get("JAX_COMPILATION_CACHE_DIR", ""))
+    if not cache_directory.is_dir():
+        raise RuntimeError("cached worker requires an existing isolated JAX_COMPILATION_CACHE_DIR")
+    _validated_worker_cache_snapshot(cache_directory, contract)
+    compiled, _, events = _compile_with_cache_events(context, backend, jax=jax)
+    files = _validated_worker_cache_snapshot(cache_directory, contract)
+    target, _ = _persistent_cache_target(cache_directory, str(expected["cache_key"]))
+    if (
+        target.serialized_executable_sha256 != expected["serialized_executable_sha256"]
+        or target.compressed_entry_sha256 != expected["compressed_entry_sha256"]
+    ):
+        raise ValueError(f"cached worker loaded a noncanonical serialized executable for {backend}")
+    final_hlo = compiled.as_text()
+    if hashlib.sha256(final_hlo.encode()).hexdigest() != expected["final_hlo_sha256"]:
+        raise ValueError(f"cached worker final HLO differs from the canonical executable for {backend}")
+    expected_events = dict(zip(_CACHE_EVENT_NAMES, (1, 1, 0), strict=True))
+    if events != expected_events:
+        raise ValueError(f"cached worker did not prove one public persistent-cache hit for {backend}")
+    snapshot = _persistent_cache_snapshot(files)
+    return compiled, {
+        "persistent_cache_entry_sha256": target.compressed_entry_sha256,
+        "persistent_cache_events": events,
+        "persistent_cache_key": target.cache_key,
+        "persistent_cache_root_identity": snapshot.root_identity,
+        "persistent_cache_serialized_executable_sha256": target.serialized_executable_sha256,
+    }
+
+
 def _run_compile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *, jax: Any) -> dict[str, Any]:
     _require_pinned_cache_compression_runtime()
+    cache_contract = _load_worker_cache_contract(args)
+    if cache_contract is not None:
+        _validated_worker_cache_snapshot(
+            Path(os.environ.get("JAX_COMPILATION_CACHE_DIR", "")),
+            cache_contract,
+        )
     compiled, compile_done_monotonic_ns, cache_events = _compile_with_cache_events(context, args.backend, jax=jax)
     started = time.perf_counter_ns()
     output = compiled(*context.inputs)
@@ -1674,11 +1799,20 @@ def _run_compile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *
     cache_directory = Path(os.environ.get("JAX_COMPILATION_CACHE_DIR", ""))
     if not cache_directory.is_dir():
         raise RuntimeError("compile worker requires an existing isolated JAX_COMPILATION_CACHE_DIR")
-    target, cache_files = _persistent_cache_target(cache_directory)
-    root_identity = hashlib.sha256()
-    for name, payload in cache_files:
-        root_identity.update(name.encode())
-        root_identity.update(hashlib.sha256(payload).digest())
+    expected_cache_key = None
+    if cache_contract is not None:
+        expected_backend = cache_contract["backends"].get(args.backend)
+        if not isinstance(expected_backend, dict):
+            raise ValueError(f"worker cache contract omits {args.backend}")
+        expected_cache_key = str(expected_backend.get("cache_key"))
+        _validated_worker_cache_snapshot(cache_directory, cache_contract)
+    target, cache_files = _persistent_cache_target(cache_directory, expected_cache_key)
+    snapshot = _persistent_cache_snapshot(cache_files)
+    if cache_contract is not None and (
+        target.serialized_executable_sha256 != expected_backend.get("serialized_executable_sha256")
+        or target.compressed_entry_sha256 != expected_backend.get("compressed_entry_sha256")
+    ):
+        raise ValueError("compile worker cached consumer differs from its canonical executable")
     contract_identity = hashlib.sha256()
     contract_identity.update(target.cache_key.encode())
     contract_identity.update(bytes.fromhex(target.serialized_executable_sha256))
@@ -1694,7 +1828,7 @@ def _run_compile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *
         "persistent_cache_file_count": len(cache_files),
         "persistent_cache_identity": contract_identity.hexdigest(),
         "persistent_cache_key": target.cache_key,
-        "persistent_cache_root_identity": root_identity.hexdigest(),
+        "persistent_cache_root_identity": snapshot.root_identity,
         "persistent_cache_serialized_executable_sha256": target.serialized_executable_sha256,
         "persistent_cache_total_bytes": sum(len(payload) for _, payload in cache_files),
         "persistent_cache_events": cache_events,
@@ -1703,7 +1837,10 @@ def _run_compile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *
 
 
 def _run_profile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *, jax: Any) -> dict[str, Any]:
-    compiled, _ = _compiled_backend(context, args.backend, jax=jax)
+    contract = _load_worker_cache_contract(args)
+    if contract is None:
+        raise ValueError("profile worker requires a sealed persistent-cache contract")
+    compiled, cache_evidence = _cache_hit_executable(args, context, args.backend, contract, jax=jax)
     jax.block_until_ready(compiled(*context.inputs))
     with _NvtxRange("contract_map.profile", args.nvcc):
         output = compiled(*context.inputs)
@@ -1712,6 +1849,7 @@ def _run_profile_worker(args: argparse.Namespace, context: _WorkerCaseContext, *
         "case_id": args.case_id,
         "backend": args.backend,
         "profiled": True,
+        "persistent_cache": cache_evidence,
         "final_hlo": compiled.as_text(),
     }
 
@@ -1722,10 +1860,15 @@ def _run_case_worker(args: argparse.Namespace, context: _WorkerCaseContext, *, j
         default_h100_contract_map_benchmark_plan,
     )
 
+    contract = _load_worker_cache_contract(args)
+    if contract is None:
+        raise ValueError("case worker requires a sealed persistent-cache contract")
     executables = {}
+    cache_evidence = {}
     for backend in BackendVariant:
-        executable, _ = _compiled_backend(context, backend.value, jax=jax)
+        executable, evidence = _cache_hit_executable(args, context, backend.value, contract, jax=jax)
         executables[backend.value] = executable
+        cache_evidence[backend.value] = evidence
 
     numerical = _numerical_evidence(context, executables, jax=jax)
     warmups: dict[str, list[int]] = {backend.value: [] for backend in BackendVariant}
@@ -1764,6 +1907,7 @@ def _run_case_worker(args: argparse.Namespace, context: _WorkerCaseContext, *, j
     final_hlo = {backend: executable.as_text() for backend, executable in executables.items()}
     return {
         "case_id": args.case_id,
+        "persistent_cache": cache_evidence,
         "final_hlo": final_hlo,
         "numerical": numerical,
         "warmup_samples_ns": warmups,
@@ -2287,12 +2431,6 @@ def run_coordinator(config: RunnerConfig) -> Path:
     for case in plan.cases:
         case_directory = config.artifact_directory / "cases" / case.case_id
         case_directory.mkdir(parents=True)
-        case_result, trace_records = _run_profiled_case(
-            config,
-            case.case_id,
-            generated_manifest,
-            case_directory,
-        )
         compile_records = {
             backend.value: _run_cache_protocol(
                 config,
@@ -2303,6 +2441,24 @@ def run_coordinator(config: RunnerConfig) -> Path:
             )
             for backend in BackendVariant
         }
+        canonical_cache_root = case_directory / "canonical_cache_snapshot"
+        canonical_cache_snapshot = _merge_canonical_target_snapshots(
+            tuple(Path(compile_records[backend.value]["canonical_cache_root"]) for backend in BackendVariant),
+            canonical_cache_root,
+        )
+        canonical_cache_contract = _write_worker_cache_contract(
+            case_directory / "canonical_cache_contract.json",
+            canonical_cache_root,
+            {backend.value: compile_records[backend.value]["compile"][0] for backend in BackendVariant},
+        )
+        case_result, trace_records = _run_profiled_case(
+            config,
+            case.case_id,
+            generated_manifest,
+            case_directory,
+            canonical_cache_root,
+            canonical_cache_contract,
+        )
         ncu_records = {
             backend.value: _run_ncu_profile(
                 config,
@@ -2310,9 +2466,19 @@ def run_coordinator(config: RunnerConfig) -> Path:
                 backend.value,
                 generated_manifest,
                 case_directory / "ncu" / backend.value,
+                canonical_cache_root,
+                canonical_cache_contract,
             )
             for backend in BackendVariant
         }
+        if _persistent_cache_snapshot(_persistent_cache_files(canonical_cache_root)) != canonical_cache_snapshot:
+            raise ValueError("canonical case cache snapshot changed during measurement-worker reads")
+        validate_measurement_cache_consumers(
+            compile_records,
+            case_result,
+            ncu_records,
+            canonical_root_identity=canonical_cache_snapshot.root_identity,
+        )
         final_hlo_by_backend = {
             backend.value: validated_executable_hlo(
                 backend.value,
@@ -2379,6 +2545,11 @@ def run_coordinator(config: RunnerConfig) -> Path:
                         "source_tree": config.source_tree,
                         "source_capsule_manifest_sha256": config.source_capsule_manifest_sha256,
                         "persistent_cache_identity": compiled["persistent_cache_identity"],
+                        "canonical_cache_root_identity": canonical_cache_snapshot.root_identity,
+                        "fresh_compile_serialized_executable_sha256": compiled[
+                            "fresh_compile_serialized_executable_sha256"
+                        ],
+                        "fresh_compile_final_hlo_sha256": compiled["fresh_compile_final_hlo_sha256"],
                     },
                     "numerical": case_result["numerical"][backend.value],
                     "timing": timing,
@@ -2393,7 +2564,7 @@ def run_coordinator(config: RunnerConfig) -> Path:
         raise AssertionError("dense Contract/Map execution must not admit FA4 or Grug comparators")
     audit_imported_local_modules(config)
     bundle = {
-        "schema": "shuttle.h100_contract_map_executed_bundle.v4",
+        "schema": "shuttle.h100_contract_map_executed_bundle.v5",
         "architecture_status": ArchitectureStatus.NONCONFORMING.value,
         "source_sha": config.source_sha,
         "source_tree": config.source_tree,
@@ -2446,6 +2617,7 @@ def _worker_base_command(
     generated_manifest: Path,
     json_output: Path,
     cache_kind: str = "none",
+    cache_contract: Path | None = None,
 ) -> tuple[str, ...]:
     return (
         sys.executable,
@@ -2470,6 +2642,7 @@ def _worker_base_command(
         config.require_jax_version,
         "--cache-kind",
         cache_kind,
+        *(("--cache-contract", str(cache_contract)) if cache_contract is not None else ()),
         *(
             (
                 "--source-tree",
@@ -2502,6 +2675,106 @@ def _worker_environment(dump_directory: Path, cache_directory: Path | None = Non
         environment["JAX_COMPILATION_CACHE_DIR"] = str(cache_directory.resolve())
         environment.update(_CACHE_ENVIRONMENT)
     return environment
+
+
+def _write_cache_snapshot(destination: Path, files: Sequence[tuple[str, bytes]]) -> _PersistentCacheSnapshot:
+    if destination.exists():
+        raise ValueError("persistent-cache snapshot destination must be fresh")
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    if temporary.exists():
+        raise ValueError("persistent-cache snapshot temporary destination must be fresh")
+    temporary.mkdir(parents=True)
+    for name, payload in files:
+        if _CACHE_FILE_PATTERN.fullmatch(name) is None or Path(name).name != name:
+            raise ValueError("persistent-cache snapshot has an invalid closed member name")
+        (temporary / name).write_bytes(payload)
+    written = _persistent_cache_files(temporary)
+    if tuple(written) != tuple(files):
+        raise ValueError("persistent-cache snapshot changed while being written")
+    snapshot = _persistent_cache_snapshot(written)
+    temporary.replace(destination)
+    return snapshot
+
+
+def _seal_canonical_target_snapshot(
+    source: Path,
+    destination: Path,
+    record: Mapping[str, Any],
+) -> _PersistentCacheSnapshot:
+    cache_key = record["persistent_cache_key"]
+    target, files = _persistent_cache_target(source, cache_key)
+    source_snapshot = _persistent_cache_snapshot(files)
+    if (
+        target.serialized_executable_sha256 != record["persistent_cache_serialized_executable_sha256"]
+        or target.compressed_entry_sha256 != record["persistent_cache_entry_sha256"]
+        or source_snapshot.root_identity != record["persistent_cache_root_identity"]
+        or source_snapshot.file_count != record["persistent_cache_file_count"]
+        or source_snapshot.total_bytes != record["persistent_cache_total_bytes"]
+    ):
+        raise ValueError("canonical cache root changed after its compile worker")
+    return _write_cache_snapshot(destination, files)
+
+
+def _merge_canonical_target_snapshots(
+    sources: Sequence[Path],
+    destination: Path,
+) -> _PersistentCacheSnapshot:
+    if not sources:
+        raise ValueError("canonical cache merge requires at least one backend snapshot")
+    merged = dict(_persistent_cache_files(sources[0]))
+    for source in sources[1:]:
+        files = _persistent_cache_files(source)
+        targets = tuple(
+            (name, payload) for name, payload in files if _TARGET_CACHE_FILE_PATTERN.fullmatch(name) is not None
+        )
+        if len(targets) != 1:
+            raise ValueError("canonical backend snapshot must contain exactly one target entry")
+        for name, payload in targets:
+            previous = merged.setdefault(name, payload)
+            if previous != payload:
+                raise ValueError("canonical target snapshots collide with different bytes")
+    return _write_cache_snapshot(destination, tuple(sorted(merged.items())))
+
+
+def _clone_cache_snapshot(source: Path, destination: Path) -> _PersistentCacheSnapshot:
+    files = _persistent_cache_files(source)
+    source_snapshot = _persistent_cache_snapshot(files)
+    cloned = _write_cache_snapshot(destination, files)
+    if cloned != source_snapshot:
+        raise ValueError("cloned persistent-cache snapshot differs from its source")
+    return cloned
+
+
+def _write_worker_cache_contract(
+    path: Path,
+    snapshot_directory: Path,
+    canonical_records: Mapping[str, Mapping[str, Any]],
+) -> Path:
+    files = _persistent_cache_files(snapshot_directory)
+    snapshot = _persistent_cache_snapshot(files)
+    backends = {}
+    for backend, record in canonical_records.items():
+        backends[backend] = {
+            "cache_key": record["persistent_cache_key"],
+            "compressed_entry_sha256": record["persistent_cache_entry_sha256"],
+            "final_hlo_sha256": hashlib.sha256(str(record["final_hlo"]).encode()).hexdigest(),
+            "serialized_executable_sha256": record["persistent_cache_serialized_executable_sha256"],
+        }
+    expected_targets = {f"{record['cache_key']}-cache" for record in backends.values()}
+    actual_targets = {name for name, _ in files if _TARGET_CACHE_FILE_PATTERN.fullmatch(name) is not None}
+    if len(expected_targets) != len(backends) or actual_targets != expected_targets:
+        raise ValueError("canonical cache snapshot does not contain one distinct target for every backend")
+    payload = {
+        "backends": backends,
+        "schema_version": 1,
+        "snapshot": {
+            "file_count": snapshot.file_count,
+            "root_identity": snapshot.root_identity,
+            "total_bytes": snapshot.total_bytes,
+        },
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return path
 
 
 def _run_worker_command(
@@ -2559,7 +2832,7 @@ def validated_cache_protocol_identity(
     backend: str,
     required_processes: int,
 ) -> str:
-    """Require one target key/executable identity and the declared public cache events."""
+    """Bind fresh compile samples and cloned cache hits to one canonical entry."""
     groups = {"compile": compile_records, "cold": cold_records, "hit": hit_records}
     for name, records in groups.items():
         if len(records) != required_processes:
@@ -2607,11 +2880,13 @@ def validated_cache_protocol_identity(
             if not isinstance(final_hlo, str) or not final_hlo.strip():
                 raise ValueError(f"cache protocol {phase}[{index}] has an invalid final HLO")
             events = record.get("persistent_cache_events")
-            expected_events = {
-                _CACHE_EVENT_NAMES[0]: 1,
-                _CACHE_EVENT_NAMES[1]: int(phase == "hit"),
-                _CACHE_EVENT_NAMES[2]: int(phase != "hit"),
-            }
+            expected_events = dict(
+                zip(
+                    _CACHE_EVENT_NAMES,
+                    (1, 0, 1) if phase == "compile" else (1, 1, 0),
+                    strict=True,
+                )
+            )
             if events != expected_events:
                 raise ValueError(f"cache protocol {phase}[{index}] has invalid public cache events")
             partition = partitions.setdefault((cache_key, executable_identity), f"class_{len(partitions)}")
@@ -2625,7 +2900,28 @@ def validated_cache_protocol_identity(
                     hashlib.sha256(final_hlo.encode()).hexdigest(),
                 )
             )
-    if len(partitions) != 1:
+    canonical_key = str(compile_records[0]["persistent_cache_key"])
+    canonical_executable = str(compile_records[0]["persistent_cache_serialized_executable_sha256"])
+    canonical_entry = str(compile_records[0]["persistent_cache_entry_sha256"])
+    canonical_root = str(compile_records[0]["persistent_cache_root_identity"])
+    keys = {str(record["persistent_cache_key"]) for records in groups.values() for record in records}
+    cached_executables = {
+        str(record["persistent_cache_serialized_executable_sha256"])
+        for phase in ("cold", "hit")
+        for record in groups[phase]
+    }
+    cached_entries = {
+        str(record["persistent_cache_entry_sha256"]) for phase in ("cold", "hit") for record in groups[phase]
+    }
+    cached_roots = {
+        str(record["persistent_cache_root_identity"]) for phase in ("cold", "hit") for record in groups[phase]
+    }
+    if (
+        keys != {canonical_key}
+        or cached_executables != {canonical_executable}
+        or cached_entries != {canonical_entry}
+        or cached_roots != {canonical_root}
+    ):
         classes = [
             (label, cache_key.removeprefix("jit_step-"), executable_identity)
             for (cache_key, executable_identity), label in partitions.items()
@@ -2635,7 +2931,16 @@ def validated_cache_protocol_identity(
             "case_id": case_id,
             "class_fields": _CACHE_DIAGNOSTIC_CLASS_FIELDS,
             "classes": classes,
-            "expected_equality_partitions": 1,
+            "expected_cached_equality_partitions": 1,
+            "fresh_compile_equality_partitions": len(
+                {
+                    (
+                        str(record["persistent_cache_key"]),
+                        str(record["persistent_cache_serialized_executable_sha256"]),
+                    )
+                    for record in compile_records
+                }
+            ),
             "observed_equality_partitions": len(partitions),
             "root_fields": _CACHE_DIAGNOSTIC_ROOT_FIELDS,
             "roots": roots,
@@ -2643,13 +2948,13 @@ def validated_cache_protocol_identity(
         }
         serialized = json.dumps(diagnostic, sort_keys=True, separators=(",", ":"))
         message = (
-            "all compile, cold, and hit roots must converge to one cache content identity " f"diagnostic={serialized}"
+            "all roots must share one target key and every cloned cache consumer must use the canonical executable "
+            f"diagnostic={serialized}"
         )
         if len(message) > _MAX_CACHE_IDENTITY_DIAGNOSTIC_CHARS:
             raise AssertionError("cache identity diagnostic exceeds its reviewed bound")
         raise ValueError(message)
-    cache_key, executable_identity = next(iter(partitions))
-    return hashlib.sha256(cache_key.encode() + bytes.fromhex(executable_identity)).hexdigest()
+    return hashlib.sha256(canonical_key.encode() + bytes.fromhex(canonical_executable)).hexdigest()
 
 
 def validated_executable_hlo(
@@ -2659,17 +2964,54 @@ def validated_executable_hlo(
     cache_protocol: Mapping[str, Any],
     profile_worker_hlo: str,
 ) -> str:
-    """Bind timed, profiled, and cache-worker evidence to one exact executable HLO."""
+    """Bind every canonical-cache consumer to compile[0]'s exact executable HLO."""
     compile_records = tuple(cache_protocol["compile"])
     if not compile_records:
         raise ValueError(f"{backend} executable evidence has no compile worker")
     authoritative = str(compile_records[0]["final_hlo"])
     observed = [case_worker_hlo, profile_worker_hlo]
-    for group in ("compile", "cold", "hit"):
+    for group in ("cold", "hit"):
         observed.extend(str(record["final_hlo"]) for record in cache_protocol[group])
     if not authoritative.strip() or any(value != authoritative for value in observed):
-        raise ValueError(f"{backend} final HLO differs across compile, cache, timing, or profile workers")
+        raise ValueError(f"{backend} canonical final HLO differs across cache, timing, or profile workers")
     return authoritative
+
+
+def validate_measurement_cache_consumers(
+    cache_protocols: Mapping[str, Mapping[str, Any]],
+    case_worker: Mapping[str, Any],
+    profile_workers: Mapping[str, NcuProfileEvidence],
+    *,
+    canonical_root_identity: str,
+) -> None:
+    expected_backends = tuple(cache_protocols)
+    case_evidence = case_worker.get("persistent_cache")
+    if not isinstance(case_evidence, dict) or set(case_evidence) != set(expected_backends):
+        raise ValueError("case worker cache evidence does not cover exactly every backend")
+    expected_events = dict(zip(_CACHE_EVENT_NAMES, (1, 1, 0), strict=True))
+    for backend, protocol in cache_protocols.items():
+        canonical = protocol["compile"][0]
+        for role, evidence in (
+            ("case", case_evidence[backend]),
+            ("profile", profile_workers[backend].persistent_cache),
+        ):
+            if not isinstance(evidence, dict) or set(evidence) != {
+                "persistent_cache_entry_sha256",
+                "persistent_cache_events",
+                "persistent_cache_key",
+                "persistent_cache_root_identity",
+                "persistent_cache_serialized_executable_sha256",
+            }:
+                raise ValueError(f"{role} worker has malformed cache evidence for {backend}")
+            if (
+                evidence["persistent_cache_events"] != expected_events
+                or evidence["persistent_cache_entry_sha256"] != canonical["persistent_cache_entry_sha256"]
+                or evidence["persistent_cache_key"] != canonical["persistent_cache_key"]
+                or evidence["persistent_cache_serialized_executable_sha256"]
+                != canonical["persistent_cache_serialized_executable_sha256"]
+                or evidence["persistent_cache_root_identity"] != canonical_root_identity
+            ):
+                raise ValueError(f"{role} worker did not execute the canonical cached executable for {backend}")
 
 
 def _run_profiled_case(
@@ -2677,6 +3019,8 @@ def _run_profiled_case(
     case_id: str,
     generated_manifest: Path,
     directory: Path,
+    cache_source: Path,
+    cache_contract: Path,
 ) -> tuple[dict[str, Any], tuple[TraceRange, ...]]:
     result_path = directory / "case_result.json"
     worker = _worker_base_command(
@@ -2686,7 +3030,12 @@ def _run_profiled_case(
         backend="all",
         generated_manifest=generated_manifest,
         json_output=result_path,
+        cache_contract=cache_contract,
     )
+    worker_cache = directory / "case_worker_cache"
+    source_snapshot = _persistent_cache_snapshot(_persistent_cache_files(cache_source))
+    if _clone_cache_snapshot(cache_source, worker_cache) != source_snapshot:
+        raise ValueError("case worker cache clone differs from its canonical source")
     report_base = directory / "steady_trace"
     command = (
         str(config.tools.nsys),
@@ -2702,10 +3051,12 @@ def _run_profiled_case(
         check=False,
         capture_output=True,
         text=True,
-        env=_worker_environment(directory / "xla_dump"),
+        env=_worker_environment(directory / "xla_dump", worker_cache),
     )
     if completed.returncode != 0 or not result_path.is_file():
         raise RuntimeError(f"Nsight Systems case worker failed: {command}: {completed.stdout}\n{completed.stderr}")
+    if _persistent_cache_snapshot(_persistent_cache_files(worker_cache)) != source_snapshot:
+        raise ValueError("case worker changed its cloned canonical cache snapshot")
     report = report_base.with_suffix(".nsys-rep")
     sqlite_path = directory / "steady_trace.sqlite"
     export = (
@@ -2758,10 +3109,24 @@ def _run_cache_protocol(
                 json_output=result,
             )
         )
+    canonical_root = directory / "canonical_target_snapshot"
+    canonical_snapshot = _seal_canonical_target_snapshot(
+        directory / "compile_roots" / "0",
+        canonical_root,
+        compile_records[0],
+    )
+    cache_contract = _write_worker_cache_contract(
+        directory / "canonical_cache_contract.json",
+        canonical_root,
+        {backend: compile_records[0]},
+    )
     cold_records = []
     hit_records = []
     for index in range(protocol.persistent_cache_cold_processes):
         root = directory / "paired_roots" / str(index)
+        cloned = _clone_cache_snapshot(canonical_root, root)
+        if cloned != canonical_snapshot:
+            raise ValueError(f"persistent cache clone differs for {case_id}/{backend}")
         cold_result = directory / f"cold_{index}.json"
         cold_command = _worker_base_command(
             config,
@@ -2771,6 +3136,7 @@ def _run_cache_protocol(
             generated_manifest=generated_manifest,
             json_output=cold_result,
             cache_kind="cold",
+            cache_contract=cache_contract,
         )
         cold = run_timed_compile_worker_command(
             cold_command,
@@ -2786,6 +3152,7 @@ def _run_cache_protocol(
             generated_manifest=generated_manifest,
             json_output=hit_result,
             cache_kind="hit",
+            cache_contract=cache_contract,
         )
         hit = run_timed_compile_worker_command(
             hit_command,
@@ -2794,8 +3161,12 @@ def _run_cache_protocol(
         )
         if cold["persistent_cache_root_identity"] != hit["persistent_cache_root_identity"]:
             raise ValueError(f"persistent cache root changed between cold and hit for {case_id}/{backend}")
+        if cold["persistent_cache_root_identity"] != canonical_snapshot.root_identity:
+            raise ValueError(f"persistent cache clone changed from its canonical snapshot for {case_id}/{backend}")
         cold_records.append(cold)
         hit_records.append(hit)
+    if _persistent_cache_snapshot(_persistent_cache_files(canonical_root)) != canonical_snapshot:
+        raise ValueError(f"canonical persistent cache snapshot changed during cloned reads for {case_id}/{backend}")
     identity = validated_cache_protocol_identity(
         compile_records,
         cold_records,
@@ -2805,8 +3176,16 @@ def _run_cache_protocol(
         required_processes=protocol.compile_processes,
     )
     return {
+        "canonical_cache_root": str(canonical_root),
+        "canonical_cache_root_identity": canonical_snapshot.root_identity,
         "compile": compile_records,
         "cold": cold_records,
+        "fresh_compile_final_hlo_sha256": [
+            hashlib.sha256(str(record["final_hlo"]).encode()).hexdigest() for record in compile_records
+        ],
+        "fresh_compile_serialized_executable_sha256": [
+            record["persistent_cache_serialized_executable_sha256"] for record in compile_records
+        ],
         "hit": hit_records,
         "persistent_cache_identity": identity,
     }
@@ -2818,6 +3197,8 @@ def _run_ncu_profile(
     backend: str,
     generated_manifest: Path,
     directory: Path,
+    cache_source: Path,
+    cache_contract: Path,
 ) -> NcuProfileEvidence:
     directory.mkdir(parents=True)
     result = directory / "profile_worker.json"
@@ -2831,7 +3212,12 @@ def _run_ncu_profile(
         backend=backend,
         generated_manifest=generated_manifest,
         json_output=result,
+        cache_contract=cache_contract,
     )
+    worker_cache = directory / "profile_worker_cache"
+    source_snapshot = _persistent_cache_snapshot(_persistent_cache_files(cache_source))
+    if _clone_cache_snapshot(cache_source, worker_cache) != source_snapshot:
+        raise ValueError("profile worker cache clone differs from its canonical source")
     command = (
         str(config.tools.ncu),
         "--force-overwrite",
@@ -2853,10 +3239,12 @@ def _run_ncu_profile(
         check=False,
         capture_output=True,
         text=True,
-        env=_worker_environment(directory / "xla_dump"),
+        env=_worker_environment(directory / "xla_dump", worker_cache),
     )
     if completed.returncode != 0 or not result.is_file() or not csv_path.is_file() or not report_path.is_file():
         raise RuntimeError(f"Nsight Compute worker failed: {command}: {completed.stdout}\n{completed.stderr}")
+    if _persistent_cache_snapshot(_persistent_cache_files(worker_cache)) != source_snapshot:
+        raise ValueError("profile worker changed its cloned canonical cache snapshot")
     source_export = (
         str(config.tools.ncu),
         "--import",
@@ -2880,6 +3268,7 @@ def _run_ncu_profile(
         report_sha256=file_sha256(report_path),
         sass_source_path=str(sass_source_path),
         sass_source_sha256=file_sha256(sass_source_path),
+        persistent_cache=dict(worker_result["persistent_cache"]),
         final_hlo=str(worker_result["final_hlo"]),
     )
 
@@ -3265,6 +3654,7 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--backend")
     parser.add_argument("--generated-manifest", type=Path)
     parser.add_argument("--json-output", type=Path)
+    parser.add_argument("--cache-contract", type=Path)
     parser.add_argument("--cache-kind", choices=("none", "compile", "cold", "hit"), default="none")
     return parser.parse_args(argv)
 

@@ -155,6 +155,9 @@ def _complete_result_evidence() -> dict[str, Any]:
             "compiler_flags": ["--enable_shuttle"],
             "source_sha": _CANONICAL_REVISION,
             "persistent_cache_identity": "cache-root-a",
+            "canonical_cache_root_identity": "a" * 64,
+            "fresh_compile_serialized_executable_sha256": ["b" * 64, "c" * 64, "d" * 64],
+            "fresh_compile_final_hlo_sha256": ["e" * 64, "f" * 64, "1" * 64],
         },
         "numerical": {
             "reviewed_floors_sha256": REVIEWED_NUMERICAL_FLOORS_SHA256,
@@ -236,7 +239,7 @@ def test_staging_manifest_is_structural_and_records_every_counterbalanced_order(
     schedule = manifest["steady_state_schedule"]
 
     assert manifest["schema"] == "shuttle.h100_contract_map_backend_evidence.v4"
-    assert manifest["result_evidence_schema"]["schema"] == "shuttle.h100_contract_map_result_evidence.v4"
+    assert manifest["result_evidence_schema"]["schema"] == "shuttle.h100_contract_map_result_evidence.v5"
     assert manifest["kind"] == "staged_plan_no_gpu_evidence"
     assert not manifest["execution_allowed"]
     assert len(manifest["counterbalanced_orders"]) == 6
@@ -442,7 +445,7 @@ def test_result_evidence_schema_names_all_24_required_records() -> None:
     schema = result_evidence_schema()
     required_records = schema["required_result_records"]
 
-    assert schema["schema"] == "shuttle.h100_contract_map_result_evidence.v4"
+    assert schema["schema"] == "shuttle.h100_contract_map_result_evidence.v5"
     assert len(required_records) == 24
     assert required_records == [
         {"case_id": case.case_id, "backend": backend.value, "measurement_boundary": boundary.value}

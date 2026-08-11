@@ -428,7 +428,16 @@ RESULT_EVIDENCE_SECTIONS = (
     ),
     EvidenceSectionSchema(
         "provenance",
-        ("command", "environment", "compiler_flags", "source_sha", "persistent_cache_identity"),
+        (
+            "command",
+            "environment",
+            "compiler_flags",
+            "source_sha",
+            "persistent_cache_identity",
+            "canonical_cache_root_identity",
+            "fresh_compile_serialized_executable_sha256",
+            "fresh_compile_final_hlo_sha256",
+        ),
     ),
     EvidenceSectionSchema(
         "numerical",
@@ -1037,7 +1046,7 @@ def result_evidence_schema() -> dict[str, Any]:
     """Return the immutable result schema before any benchmark execution."""
     plan = default_h100_contract_map_benchmark_plan()
     return {
-        "schema": "shuttle.h100_contract_map_result_evidence.v4",
+        "schema": "shuttle.h100_contract_map_result_evidence.v5",
         "required_sections": [section.name for section in RESULT_EVIDENCE_SECTIONS],
         "sections": [asdict(section) for section in RESULT_EVIDENCE_SECTIONS],
         "nested_records": {
@@ -1161,6 +1170,20 @@ def validate_result_evidence(payload: Mapping[str, Any]) -> None:
     source_sha = provenance["source_sha"]
     _require_lowercase_hex_digest(source_sha, _GIT_SHA_LENGTH, "provenance.source_sha")
     _require_nonempty_string(provenance["persistent_cache_identity"], "provenance.persistent_cache_identity")
+    _require_lowercase_hex_digest(
+        provenance["canonical_cache_root_identity"],
+        _SHA256_LENGTH,
+        "provenance.canonical_cache_root_identity",
+    )
+    for field in ("fresh_compile_serialized_executable_sha256", "fresh_compile_final_hlo_sha256"):
+        values = provenance[field]
+        if (
+            not isinstance(values, list)
+            or len(values) != default_h100_contract_map_benchmark_plan().timing.compile_processes
+        ):
+            raise ValueError(f"provenance.{field} must retain every fresh compile sample")
+        for index, value in enumerate(values):
+            _require_lowercase_hex_digest(value, _SHA256_LENGTH, f"provenance.{field}[{index}]")
 
     numerical = _mapping(payload["numerical"], "numerical")
     if numerical["reviewed_floors_sha256"] != REVIEWED_NUMERICAL_FLOORS_SHA256:
