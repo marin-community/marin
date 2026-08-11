@@ -110,6 +110,11 @@ _NCU_METRICS = (
     "launch__occupancy_limit_warps",
     "sm__warps_active.avg.pct_of_peak_sustained_active",
 )
+_NCU_SASS_METRIC_LABEL_COLUMN_BYTES = 6
+_MAX_NCU_SASS_METRIC_LABEL_ROWS = max(
+    (len(metric.encode("ascii")) + _NCU_SASS_METRIC_LABEL_COLUMN_BYTES - 1) // _NCU_SASS_METRIC_LABEL_COLUMN_BYTES
+    for metric in _NCU_METRICS
+)
 _NCU_IDENTITY_FIELDS = (
     "ID",
     "Process ID",
@@ -967,7 +972,9 @@ def _ncu_sass_metric_labels_match(line: str, column_widths: tuple[int, ...]) -> 
     if columns is None or any(column != b" " * len(column) for column in columns[:2]):
         return False
     return all(
-        len(column) == 6 and column.count(b"_") == 2 and sum(ord("a") <= value <= ord("z") for value in column) == 4
+        len(column) == _NCU_SASS_METRIC_LABEL_COLUMN_BYTES
+        and all(value == ord("_") or ord("a") <= value <= ord("z") for value in column)
+        and any(ord("a") <= value <= ord("z") for value in column)
         for column in columns[2:]
     )
 
@@ -1091,17 +1098,17 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
     instructions: list[NcuSassInstruction] = []
     identity_separator_seen = False
     header_seen = False
-    metric_labels_seen = False
+    metric_label_row_count = 0
     separator_seen = False
 
     def finish_section() -> None:
-        nonlocal current_name, instructions, identity_separator_seen, header_seen, metric_labels_seen, separator_seen
+        nonlocal current_name, instructions, identity_separator_seen, header_seen, metric_label_row_count, separator_seen
         if current_name is None:
             return
         if (
             not identity_separator_seen
             or not header_seen
-            or not metric_labels_seen
+            or not 1 <= metric_label_row_count <= _MAX_NCU_SASS_METRIC_LABEL_ROWS
             or not separator_seen
             or not instructions
         ):
@@ -1111,7 +1118,7 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
         instructions = []
         identity_separator_seen = False
         header_seen = False
-        metric_labels_seen = False
+        metric_label_row_count = 0
         separator_seen = False
 
     for line_number, line in enumerate(lines[1:], start=2):
@@ -1127,15 +1134,17 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
                 raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)
             header_seen = True
             continue
-        if current_name is not None and not metric_labels_seen:
-            if not _ncu_sass_metric_labels_match(line, selected_separator_widths):
-                raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)
-            metric_labels_seen = True
-            continue
         if current_name is not None and not separator_seen:
-            if not is_selected_separator(line):
+            if is_selected_separator(line):
+                if metric_label_row_count == 0:
+                    raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)
+                separator_seen = True
+                continue
+            if metric_label_row_count >= _MAX_NCU_SASS_METRIC_LABEL_ROWS or not _ncu_sass_metric_labels_match(
+                line, selected_separator_widths
+            ):
                 raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)
-            separator_seen = True
+            metric_label_row_count += 1
             continue
         section = selected_section_pattern.fullmatch(line)
         if section is not None:

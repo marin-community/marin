@@ -220,6 +220,19 @@ def _ncu_sass_export(
     return "\n".join(lines) + "\n"
 
 
+def _ncu_sass_with_metric_label_rows(
+    source: str,
+    rows: tuple[str, ...],
+    separator_widths: tuple[int, ...] = _NCU_SASS_COLUMN_WIDTHS,
+) -> str:
+    assert rows
+    return source.replace(
+        _ncu_sass_metric_labels_row(separator_widths) + "\n",
+        "\n".join(rows) + "\n",
+        1,
+    )
+
+
 def _ncu_sass_fixed_column_row(
     columns: tuple[str, ...],
     gaps: tuple[bytes, ...] = (b" ",) * 5,
@@ -542,7 +555,9 @@ def test_runner_ncu_parser_bounds_and_decodes_input_before_csv_parsing(tmp_path:
         "unrecognized-record",
         "fixed-column-record",
         "wide-fixed-column-record",
+        "repeated-metric-labels",
         "invalid-metric-labels",
+        "over-cap-metric-labels",
         "wide-address-close-private",
     ),
 )
@@ -605,8 +620,26 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
                 _ncu_sass_metric_labels_row(separator_widths),
                 _ncu_sass_metric_labels_row(
                     separator_widths,
-                    columns=("", "", "abcde_", "e_f_gh", "ij__kl", "mnop__"),
+                    columns=("", "", "______", "e_f_gh", "ij__kl", "mnop__"),
                 ),
+            )
+        elif variant == "repeated-metric-labels":
+            source = _ncu_sass_with_metric_label_rows(
+                source,
+                (
+                    _ncu_sass_metric_labels_row(separator_widths),
+                    _ncu_sass_metric_labels_row(
+                        separator_widths,
+                        columns=("", "", "abcde_", "_fghij", "kl_mno", "pqrst_"),
+                    ),
+                ),
+                separator_widths,
+            )
+        elif variant == "over-cap-metric-labels":
+            source = _ncu_sass_with_metric_label_rows(
+                source,
+                (_ncu_sass_metric_labels_row(separator_widths),) * 10,
+                separator_widths,
             )
         elif variant == "wide-address-close-private":
             lines = source.splitlines()
@@ -723,9 +756,16 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         assert (
             diagnostic["line_sha256"]
             == hashlib.sha256(
-                _ncu_sass_metric_labels_row(columns=("", "", "abcde_", "e_f_gh", "ij__kl", "mnop__")).encode()
+                _ncu_sass_metric_labels_row(columns=("", "", "______", "e_f_gh", "ij__kl", "mnop__")).encode()
             ).hexdigest()
         )
+        return
+    if variant == "over-cap-metric-labels":
+        with pytest.raises(ValueError) as failure:
+            runner._run_ncu_profile(*arguments)
+        diagnostic = _ncu_sass_diagnostic(failure.value)
+        assert diagnostic["line_number"] == 14
+        assert diagnostic["line_sha256"] == hashlib.sha256(_ncu_sass_metric_labels_row().encode()).hexdigest()
         return
     if variant == "wide-address-close-private":
         with pytest.raises(ValueError) as failure:
@@ -1734,6 +1774,10 @@ def test_runner_ncu_sass_parser_accepts_opaque_metric_labels_at_any_underscore_p
         separator_widths,
         columns=("", "", "ab_cd_", "_efg_h", "ij_kl_", "__mnop"),
     )
+    boundary_labels = _ncu_sass_metric_labels_row(
+        separator_widths,
+        columns=("", "", "abcdef", "a_____", "__a___", "_____a"),
+    )
     first_source = _ncu_sass_export(
         (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
         separator_widths=separator_widths,
@@ -1743,11 +1787,39 @@ def test_runner_ncu_sass_parser_accepts_opaque_metric_labels_at_any_underscore_p
     assert runner.parse_ncu_sass(first_source, (_NCU_KERNEL_A,)) == runner.parse_ncu_sass(
         second_source, (_NCU_KERNEL_A,)
     )
+    assert runner.parse_ncu_sass(first_source, (_NCU_KERNEL_A,)) == runner.parse_ncu_sass(
+        first_source.replace(first_labels, boundary_labels), (_NCU_KERNEL_A,)
+    )
 
 
 @pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
-@pytest.mark.parametrize("mutation", ("missing", "duplicate", "after-separator", "before-header"))
-def test_runner_ncu_sass_parser_requires_one_metric_label_row_between_header_and_separator(
+@pytest.mark.parametrize("row_count", (1, 9))
+def test_runner_ncu_sass_parser_accepts_reviewed_metric_label_row_count_bounds(
+    separator_widths: tuple[int, ...],
+    row_count: int,
+) -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=separator_widths,
+    )
+    observed_four_lowercase = _ncu_sass_metric_labels_row(separator_widths)
+    observed_five_lowercase = _ncu_sass_metric_labels_row(
+        separator_widths,
+        columns=("", "", "abcde_", "_fghij", "kl_mno", "pqrst_"),
+    )
+    rows = tuple((observed_four_lowercase, observed_five_lowercase)[index % 2] for index in range(row_count))
+
+    parsed = runner.parse_ncu_sass(
+        _ncu_sass_with_metric_label_rows(source, rows, separator_widths),
+        (_NCU_KERNEL_A,),
+    )
+
+    assert parsed[0].name == _NCU_KERNEL_A
+
+
+@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+@pytest.mark.parametrize("mutation", ("missing", "over-cap", "after-separator", "before-header"))
+def test_runner_ncu_sass_parser_requires_bounded_metric_label_rows_between_header_and_separator(
     separator_widths: tuple[int, ...],
     mutation: str,
 ) -> None:
@@ -1757,10 +1829,10 @@ def test_runner_ncu_sass_parser_requires_one_metric_label_row_between_header_and
     ).splitlines()
     if mutation == "missing":
         del lines[4]
-    elif mutation == "duplicate":
-        lines.insert(5, lines[4])
+    elif mutation == "over-cap":
+        lines[5:5] = [lines[4]] * 9
     elif mutation == "after-separator":
-        lines[4], lines[5] = lines[5], lines[4]
+        lines.insert(6, lines[4])
     elif mutation == "before-header":
         lines[3], lines[4] = lines[4], lines[3]
     else:
@@ -1774,8 +1846,8 @@ def test_runner_ncu_sass_parser_requires_one_metric_label_row_between_header_and
 @pytest.mark.parametrize("label_index", (2, 3, 4, 5))
 @pytest.mark.parametrize(
     "bad_label",
-    ("", "abcde_", "abc___", "Ab_cd_", "a1_cd_", "ab-cd_", "ab.cd_", "ab$cd_"),
-    ids=("blank", "one-underscore", "three-underscores", "uppercase", "digit", "hyphen", "dot", "dollar"),
+    ("", "______", "Ab_cd_", "a1_cd_", "ab-cd_", "ab.cd_", "ab$cd_"),
+    ids=("blank", "no-lowercase", "uppercase", "digit", "hyphen", "dot", "dollar"),
 )
 def test_runner_ncu_sass_parser_rejects_nonopaque_metric_label_characters(
     separator_widths: tuple[int, ...],
@@ -1917,6 +1989,39 @@ def test_runner_ncu_sass_parser_rejects_metric_labels_for_other_selected_width(
 
     diagnostic = _ncu_sass_diagnostic(failure.value)
     assert diagnostic["line_number"] == 5
+    structure = diagnostic["line_structure"]
+    assert isinstance(structure, dict)
+    assert "fixed_columns" not in structure
+
+
+@pytest.mark.parametrize(
+    ("selected_widths", "row_widths"),
+    (
+        (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS),
+        (_NCU_SASS_WIDE_COLUMN_WIDTHS, _NCU_SASS_COLUMN_WIDTHS),
+    ),
+)
+def test_runner_ncu_sass_parser_rejects_mixed_width_repeated_metric_labels(
+    selected_widths: tuple[int, ...],
+    row_widths: tuple[int, ...],
+) -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=selected_widths,
+    )
+    rows = (
+        _ncu_sass_metric_labels_row(selected_widths),
+        _ncu_sass_metric_labels_row(row_widths, columns=("", "", "abcde_", "fghij_", "klmno_", "pqrst_")),
+    )
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(
+            _ncu_sass_with_metric_label_rows(source, rows, selected_widths),
+            (_NCU_KERNEL_A,),
+        )
+
+    diagnostic = _ncu_sass_diagnostic(failure.value)
+    assert diagnostic["line_number"] == 6
     structure = diagnostic["line_structure"]
     assert isinstance(structure, dict)
     assert "fixed_columns" not in structure
