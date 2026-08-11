@@ -66,6 +66,10 @@ def test_nsys_profile_help_accepts_unique_stop_policy(tmp_path: Path) -> None:
             "'repeat-shutdown:N[:mode]'",
             "'repeat-shutdown:N[:mode]', and future",
         ),
+        PROFILE_HELP.replace(
+            "'repeat-shutdown:N[:mode]'",
+            "'repeat-shutdown:N[:mode]', and 'future'",
+        ),
         PROFILE_HELP + "  --stop-on-range-end arg (=true)\n",
     ),
     ids=(
@@ -75,6 +79,7 @@ def test_nsys_profile_help_accepts_unique_stop_policy(tmp_path: Path) -> None:
         "duplicate-stop",
         "duplicate-value-list",
         "unquoted-future-value",
+        "quoted-future-value",
         "obsolete-option",
     ),
 )
