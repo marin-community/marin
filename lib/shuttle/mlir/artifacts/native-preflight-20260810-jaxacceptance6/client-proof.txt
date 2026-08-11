@@ -1,0 +1,11 @@
+Iris client source: /private/tmp/marin-iris-current.JoCV0V
+Iris client revision: eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb
+Iris client executable: /private/tmp/marin-iris-current.JoCV0V/.venv/bin/iris
+Cluster config: /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml
+Cluster config sha256: aa754a96b975d5e8889ad229100430462aed3b0ff752ff40ab63fea0615bb44e
+Client-root CoreWeave store metadata sha256: b85b7cf024f56e567f44324ad67f0df16b77d80df347eda08edc2494aa6024ed
+Client-root pyproject marker sha256: ca558c8cdb900b8871865568c2e2594b5a0778235c084a5ea0afe9240a1f6a76
+
+The payload was submitted from the child payload directory. Store metadata
+remained in its parent client root and was absent from the config-free workspace
+zip.

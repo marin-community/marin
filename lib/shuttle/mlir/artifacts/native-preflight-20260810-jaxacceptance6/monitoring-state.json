@@ -1,0 +1,11 @@
+{
+  "job_id": "/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6",
+  "config": "/private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml",
+  "submitted_utc": "2026-08-11T01:20:46.431000+00:00",
+  "finished_utc": "2026-08-11T02:01:22.710000+00:00",
+  "state": "succeeded",
+  "exit_code": 0,
+  "restart_count": 0,
+  "failure_count": 0,
+  "preemption_count": 0
+}

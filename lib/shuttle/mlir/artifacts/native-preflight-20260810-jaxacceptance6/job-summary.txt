@@ -1,0 +1,9 @@
+I20260810 19:07:00 8418467456 iris.cluster.config Loading config from /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml
+I20260810 19:07:00 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260810 19:07:01 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10004 -> iris-controller-svc:10000
+Job: /dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6 (/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance6)
+State: succeeded  exit=0  failures=0  preemptions=0
+Tasks: 1/1 completed  succeeded=1
+
+  TASK  STATE        EXIT  DURATION                      PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  succeeded       0  40 minutes and 28.74 seconds  -           -

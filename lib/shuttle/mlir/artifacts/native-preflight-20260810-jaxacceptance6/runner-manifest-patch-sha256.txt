@@ -1,0 +1,6 @@
+fe46ef6982df9c578bd9eadb8886de5a5cf81bb24d00ed124e6c2cd9f84e21c2  lib/shuttle/mlir/artifacts/native-preflight-20260810-jaxacceptance6/run_jax_acceptance_preflight.sh
+e7b3dfceed9672bad4a2022f1879ee7d310c28afd7e5e11871670ad2a2563114  lib/shuttle/mlir/artifacts/native-preflight-20260810-jaxacceptance6/manifest.env
+b4e9f7cf2a49c42957cf24f16b43a1e0ead0a7e25d664629a841a5dbb0c7dbf9  lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch
+e4f3121f3123d7e2ee781cc5ee92f1ddeb0df662b6702d37615bcae821ecbc99  lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch
+1e8b1400ee05bf8c8037277046113e1f1b1fae5ef56077899b7e853855e3424e  lib/shuttle/mlir/jax_patch/0001-link-shuttle-xla-registry-adapter.patch
+c4d5bc4aaa4b72ee7e2ecb44d28719be99da8defcf01ebd107308df41cb71942  lib/shuttle/mlir/jax_patch/0002-add-acceptance-observer-bridge.patch
