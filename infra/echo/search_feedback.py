@@ -11,6 +11,8 @@ MAX_QUERY_CHARACTERS = 2_000
 MAX_NOTE_CHARACTERS = 2_000
 MAX_RESULT_ID_CHARACTERS = 4_096
 MAX_GRADES = search_config.RERANK_MAX_CANDIDATES
+MIN_GRADE = search_config.SEARCH_FEEDBACK_MIN_GRADE
+MAX_GRADE = search_config.SEARCH_FEEDBACK_MAX_GRADE
 
 
 def checked_result_id(value: str) -> str:
@@ -33,12 +35,12 @@ class FeedbackGrade:
     def from_spec(cls, value: str) -> "FeedbackGrade":
         result_id, separator, grade_text = value.rpartition("=")
         if not separator:
-            raise ValueError("must be <result-id>=<0-10>")
+            raise ValueError(f"must be <result-id>=<{MIN_GRADE}-{MAX_GRADE}>")
         checked_result_id(result_id)
         try:
             grade = int(grade_text)
         except ValueError as error:
-            raise ValueError("grade must be an integer from 0 through 10") from error
-        if not 0 <= grade <= 10:
-            raise ValueError("grade must be an integer from 0 through 10")
+            raise ValueError(f"grade must be an integer from {MIN_GRADE} through {MAX_GRADE}") from error
+        if not MIN_GRADE <= grade <= MAX_GRADE:
+            raise ValueError(f"grade must be an integer from {MIN_GRADE} through {MAX_GRADE}")
         return cls(result_id=result_id, grade=grade)

@@ -5,7 +5,10 @@
 
 import sqlalchemy
 
-DDL = """
+MIN_GRADE = 0
+MAX_GRADE = 10
+
+DDL = f"""
 CREATE TABLE search_feedback (
     id BIGINT GENERATED ALWAYS AS IDENTITY,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
@@ -21,7 +24,7 @@ CREATE TABLE search_feedback_grades (
     result_id TEXT NOT NULL,
     grade SMALLINT NOT NULL,
     PRIMARY KEY (feedback_id, result_id),
-    CONSTRAINT search_feedback_grades_range CHECK (grade BETWEEN 0 AND 10)
+    CONSTRAINT search_feedback_grades_range CHECK (grade BETWEEN {MIN_GRADE} AND {MAX_GRADE})
 );
 CREATE INDEX idx_search_feedback_grades_result_id ON search_feedback_grades (result_id);
 

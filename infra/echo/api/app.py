@@ -208,7 +208,7 @@ class SearchConfiguration(BaseModel):
 
 class SearchFeedbackGrade(BaseModel):
     result_id: str = Field(min_length=1, max_length=search_feedback.MAX_RESULT_ID_CHARACTERS)
-    grade: int = Field(ge=0, le=10)
+    grade: int = Field(ge=search_feedback.MIN_GRADE, le=search_feedback.MAX_GRADE)
 
     @field_validator("result_id")
     @classmethod

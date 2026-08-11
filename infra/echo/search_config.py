@@ -19,6 +19,8 @@ FEDERATED_SUMMARY_CHARACTERS = 240
 SearchDomain = Literal["wiki", "file", "discord", "pr", "issue"]
 SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "discord", "pr", "issue")
 DEFAULT_SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "pr", "issue")
+SEARCH_FEEDBACK_MIN_GRADE = 0
+SEARCH_FEEDBACK_MAX_GRADE = 10
 SEARCH_DOMAIN_LABELS: Mapping[SearchDomain, str] = MappingProxyType(
     {
         "wiki": "Wiki",

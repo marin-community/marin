@@ -12,7 +12,7 @@ the state tables hold sync watermarks.
 """
 
 from pgvector.sqlalchemy import Vector
-from search_config import TEXT_SEARCH_CONFIG
+from search_config import SEARCH_FEEDBACK_MAX_GRADE, SEARCH_FEEDBACK_MIN_GRADE, TEXT_SEARCH_CONFIG
 from sqlalchemy import (
     ARRAY,
     BigInteger,
@@ -192,7 +192,10 @@ search_feedback_grades = Table(
     Column("feedback_id", BigInteger, ForeignKey("search_feedback.id", ondelete="CASCADE"), primary_key=True),
     Column("result_id", Text, primary_key=True),
     Column("grade", SmallInteger, nullable=False),
-    CheckConstraint("grade BETWEEN 0 AND 10", name="search_feedback_grades_range"),
+    CheckConstraint(
+        f"grade BETWEEN {SEARCH_FEEDBACK_MIN_GRADE} AND {SEARCH_FEEDBACK_MAX_GRADE}",
+        name="search_feedback_grades_range",
+    ),
     Index("idx_search_feedback_grades_result_id", "result_id"),
 )
 

@@ -212,7 +212,10 @@ def cmd_search(args: argparse.Namespace) -> None:
     noun = "result" if len(results) == 1 else "results"
     print(f"{len(results)} {noun} in {elapsed:.2f}s")
     print_search_results(results)
-    print("Feedback: uv run infra/echo/cli.py feedback " f"--query {shlex.quote(args.query)} --grade '<id>=<0-10>'")
+    print(
+        "Feedback: uv run infra/echo/cli.py feedback "
+        f"--query {shlex.quote(args.query)} --grade '<id>=<{search_feedback.MIN_GRADE}-{search_feedback.MAX_GRADE}>'"
+    )
 
 
 def feedback_grade(value: str) -> search_feedback.FeedbackGrade:
@@ -397,7 +400,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         type=feedback_grade,
         default=[],
-        metavar="<result-id>=<0-10>",
+        metavar=f"<result-id>=<{search_feedback.MIN_GRADE}-{search_feedback.MAX_GRADE}>",
         help="grade one result; repeat as needed (an optional note is read from stdin)",
     )
     feedback.set_defaults(func=cmd_feedback)
