@@ -42,6 +42,17 @@ def _match_named_sharding_to_params(updates, params):
     return jax.tree.map(match_sharding, updates, params, is_leaf=lambda x: x is None)
 
 
+def _pin_sharding(x, ref):
+    """Reshard ``x`` to ``ref``'s named sharding so a following norm reduces correctly.
+
+    ``new_param`` is a computed intermediate; leaving it with an SPMD-inferred sharding lets the sharded
+    ``norm(new_param)`` over-count and collapse the tensor (issue #8073). This reshard is a same-layout
+    no-op at runtime.
+    """
+    sharding = _target_named_sharding(ref)
+    return jax.sharding.reshard(x, sharding) if sharding is not None else x
+
+
 def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float):
     """MuonH hyperball step: move along the orthogonalized direction, then project back to the
     parameter's Frobenius sphere (scale-invariant update)."""
@@ -53,16 +64,20 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
         if not hasattr(param, "ndim"):
             return update
         if param.ndim == 2:
-            param_norm = jnp.linalg.norm(param)
-            update_norm = jnp.linalg.norm(update)
+            # jnp.linalg.norm over a sharded matrix mis-lowers under SPMD and over-counts (issue #8073);
+            # sum-of-squares in float32 plus a same-layout reshard of the intermediate reduces correctly.
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param.astype(jnp.float32))))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update.astype(jnp.float32))))
             new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
-            new_param_norm = jnp.linalg.norm(new_param)
+            new_param = _pin_sharding(new_param, param)
+            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param.astype(jnp.float32))))
             return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
         axes = tuple(range(1, param.ndim))
         param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
         update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
         new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+        new_param = _pin_sharding(new_param, param)  # correct the sharded norm reduction (issue #8073)
         new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
         return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
