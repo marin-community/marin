@@ -21,7 +21,11 @@
       {"conclusion": "success", "name": "Verify Docker build context inputs", "number": 4},
       {"conclusion": "success", "name": "Set up Docker Buildx", "number": 5},
       {"conclusion": "success", "name": "Login to GitHub Container Registry", "number": 6},
-      {"conclusion": "failure", "name": "Build and push H100 evidence image", "number": 7}
+      {"conclusion": "failure", "name": "Build and push H100 evidence image", "number": 7},
+      {"conclusion": "success", "name": "Post Login to GitHub Container Registry", "number": 12},
+      {"conclusion": "success", "name": "Post Set up Docker Buildx", "number": 13},
+      {"conclusion": "success", "name": "Post Checkout selected ref", "number": 14},
+      {"conclusion": "success", "name": "Complete job", "number": 15}
     ],
     "url": "https://github.com/marin-community/marin/actions/runs/31483568727/job/93753742685"
   },
