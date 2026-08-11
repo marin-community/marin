@@ -167,6 +167,45 @@ iris job stop --prefix /user/job-prefix # all jobs with this ID prefix
 iris job summary /user/job-name         # per-task state, exit, duration, peak memory
 ```
 
+The subcommands are `list` and `summary`. There is no `job ls` and no `job info`.
+
+### Submitting a GPU gang from a workstation
+
+`--cluster cw-*` connects the CLI straight to that cluster's controller, which
+needs a `kubectl port-forward` the read-only CoreWeave token cannot open — it
+fails after a 90s timeout even though plain `kubectl get` works. Submit and
+query through the hub instead, which federates the job to the peer:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive \
+  --cpu 2 --memory 8GB --disk 32GB --timeout 7200 \
+  --job-name my-run-coord \
+  -e WANDB_API_KEY "$WANDB_API_KEY" -e IRIS_PORT_JAX 32731 \
+  -- python -m experiments.<launcher> --run-id my-run --dp-racks 1 --run
+```
+
+- **The GPU gang is not this job.** The submitted job is a small CPU coordinator
+  that runs an experiment launcher; the launcher dispatches the accelerator gang
+  via Fray as a child job at `<coord-job-id>/<gang-name>`. Pass `--cpu`/`--memory`
+  for the coordinator alone and let the launcher size the gang.
+- **The working tree ships with the job.** `job run` bundles the current
+  workspace, so uncommitted and branch-only code runs as-is. The submit log
+  prints the bundle size.
+- **`IRIS_PORT_JAX` must be unique per concurrent gang.** Rank 0 binds and
+  registers it for the JAX coordinator, and the default is shared cluster-wide.
+- **Only `task_env` reaches the container.** Each cluster config's `defaults.task_env`
+  carries `MARIN_PREFIX` and the object-store credentials, and nothing else.
+  `WANDB_API_KEY` is not among them: pass it, or set `WANDB_MODE=disabled` for a
+  run whose metrics do not matter.
+- **`SchedulingGated` on every task means the gang is queued**, not broken — Kueue
+  admits a gang all at once, so a busy cluster holds all of it. Same-band jobs
+  queue behind each other rather than preempting.
+
+Object storage is not readable from a workstation with no cluster credentials
+(`NoCredentialsError` against `s3://marin-us-east-02a`). Validate a job's output
+from a small job on the same cluster.
+
 For machine-readable job data, use the Iris Python client (`IrisClient`) directly.
 
 ### `job run` gotchas
