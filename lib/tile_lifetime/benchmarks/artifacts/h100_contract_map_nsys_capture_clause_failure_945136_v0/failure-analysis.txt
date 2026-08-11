@@ -1,0 +1,33 @@
+Observed boundary
+=================
+
+1. The workflow checked out exact source
+   945136d32807420c882f0d10bb1c833ee22dfbe5 and resolved the same full SHA.
+2. Manual input image_set=h100-evidence ran the sole non-matrix H100 reusable
+   job. iris-tags, iris-images, iris-manifests, finelog-image, and
+   marin-tpu-ci-images were skipped.
+3. The Docker context preflight passed, and BuildKit reached the pinned
+   task-h100-evidence Nsight Systems help smoke.
+4. The validator rejected capture-range-end before image export. Its v2
+   diagnostic emitted only the exact target possible-values clause.
+5. The capture-range-end clause is 103 UTF-8 bytes with SHA-256
+   5bb600baaef1460ea40efd622d1abe1ca29136bec4ff39aa65fb9e830afedf28:
+
+   Possible values are 'none', 'stop', 'stop-shutdown',
+   'repeat[:N][:mode]' or 'repeat-shutdown:N'[:mode].
+
+Exact first failure
+===================
+
+nsys profile help validation failed: --capture-range-end possible values
+contain unrecognized syntax
+
+Evidence limit
+==============
+
+The diagnostic could not locate one unique cuda-graph-trace possible-values
+clause. This artifact does not justify changing that option's grammar.
+
+The remaining image smokes, image export, OCI digest validation, and registry
+inspection did not run. No retry, rerun, image deletion, GPU query, or H100
+evidence job occurred.

@@ -1,0 +1,17 @@
+{
+  "clauses": {
+    "capture-range-end": {
+      "available": true,
+      "bytes": 103,
+      "sha256": "5bb600baaef1460ea40efd622d1abe1ca29136bec4ff39aa65fb9e830afedf28",
+      "text": "Possible values are 'none', 'stop', 'stop-shutdown', 'repeat[:N][:mode]' or 'repeat-shutdown:N'[:mode]."
+    },
+    "cuda-graph-trace": {
+      "available": false,
+      "bytes": 0,
+      "reason": "unique_possible_values_clause_unavailable",
+      "sha256": null
+    }
+  },
+  "schema": "iris.h100_evidence_nsys_help_failure.v2"
+}
