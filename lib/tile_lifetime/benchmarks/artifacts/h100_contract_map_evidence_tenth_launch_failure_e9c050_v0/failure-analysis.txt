@@ -16,8 +16,8 @@ Observed boundary
    --type=sqlite --lazy=true` returned successfully. Otherwise
    `_run_profiled_case` would have raised before `parse_nsys_sqlite`.
 6. `parse_nsys_sqlite` admitted the required table schema, exact NVTX schedule,
-   complete kernel-name resolution, and the missing-empty-memcpy-table rule.
-   It rejected the first required range because no parsed CUDA kernel satisfied
+   complete kernel-name resolution, and the applicable memcpy-table path. It
+   rejected the first required range because no parsed CUDA kernel satisfied
    `range_start <= kernel_start` and `kernel_end <= range_end`.
 
 Exact first failure
