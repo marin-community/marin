@@ -1,0 +1,42 @@
+Observed boundary
+=================
+
+1. Trusted image `sha256sum` authenticated the launcher and manifest before
+   Python execution.
+2. The capsule restored exact source commit 41cd8512b7333525d22c57b9f1c8d4d789f270a8
+   and the runner completed its imported-module audit.
+3. Returning from the first case's `_run_profiled_case` requires all three
+   numerical gates, warmup, the 24-row steady schedule, balanced NVTX ranges,
+   Nsight Systems profile/export, and strict range/kernel attribution to pass.
+4. The first ordinary-XLA `_run_cache_protocol` produced three compile records
+   and three paired cold/hit records. Every immediate cold/hit identity check
+   passed before the nine-root validator ran.
+5. The validator emitted nine fixed records and rejected six identity classes.
+
+Diagnostic interpretation
+=========================
+
+- All nine roots contain 10 files.
+- compile[0] has final-HLO hash e2d67305... and 41,481 bytes.
+- compile[1] has final-HLO hash f4c35b30... and 45,823 bytes.
+- compile[2] has the same f4c35b30... HLO hash and 45,820 bytes, but a distinct
+  content identity from compile[1].
+- cold/hit pair 0 is exact at HLO d31d053f... and 46,790 bytes.
+- cold/hit pair 1 is exact at HLO 99c1b776... and 40,729 bytes.
+- cold/hit pair 2 is exact at HLO 81625114... and 41,984 bytes.
+
+The same-phase compile roots differ, so phase alone does not explain the
+identity split. The compile[1]/compile[2] HLO equality shows that final-HLO text
+alone does not determine the whole-root content identity. The evidence does not
+expose cache file names or per-file identities, so it cannot distinguish target
+executable bytes from unrelated cache entries or metadata.
+
+Evidence limit
+==============
+
+No accepted ordinary-XLA cache protocol returned to the coordinator. Nsight
+Compute, retained backend artifacts, the source-ordered and fast cache
+protocols, the remaining three cases, and final bundle publication were not
+reached. The job had one failed attempt, no preemptions, zero configured failure
+retries, and was not relaunched.
+
