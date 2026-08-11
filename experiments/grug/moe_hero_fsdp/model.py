@@ -9,6 +9,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 
 import dataclasses
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Literal
 
 import equinox as eqx
@@ -30,6 +31,10 @@ except ModuleNotFoundError:
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug._moe.common import _CHECKPOINT_DISPATCH_OUTPUT, _zero_dropped_assignments
+from levanter.grug._moe.rms_gated_norm import (
+    exact_gated_norm_up_reverse,
+    exact_rms_backward_consumer_reference,
+)
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -88,6 +93,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 RematMode = Literal["recompute_all", "save_moe", "offload_moe"]
 SmallParamSharding = Literal["replicated", "fsdp"]
+RmsGatedNormImplementation = Literal["xla", "quack_coda"]
 
 
 def _small_param_spec(sharding: SmallParamSharding, *, shard_dim: int) -> P:
@@ -189,6 +195,8 @@ class GrugModelConfig:
     with the other FSDP gradients; the forward gathers the weight back to replicated."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
+    rms_gated_norm_implementation: RmsGatedNormImplementation = "xla"
+    """Implementation for the RMSNorm followed by rank-128 GatedNorm boundary."""
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -223,6 +231,8 @@ class GrugModelConfig:
             raise ValueError("expert_chunks must be positive")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
+        if self.rms_gated_norm_implementation not in ("xla", "quack_coda"):
+            raise ValueError(f"unsupported RMS-GatedNorm implementation {self.rms_gated_norm_implementation!r}")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -300,6 +310,7 @@ class GrugModelConfig:
             sconv=bool(_hf_config_attr(hf_config, ("sconv",), False)),
             sconv_kernel=int(_hf_config_attr(hf_config, ("sconv_kernel",), 4)),
             sconv_sites=tuple(_hf_config_attr(hf_config, ("sconv_sites",), ("k", "v", "attn", "mlp"))),
+            rms_gated_norm_implementation=_hf_config_attr(hf_config, ("rms_gated_norm_implementation",), "xla"),
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
@@ -336,6 +347,7 @@ class GrugModelConfig:
             "sconv": self.sconv,
             "sconv_kernel": self.sconv_kernel,
             "sconv_sites": list(self.sconv_sites),
+            "rms_gated_norm_implementation": self.rms_gated_norm_implementation,
             "grugmoe_attention_mode": "production",
             GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
         }
@@ -617,6 +629,174 @@ class GatedNorm(eqx.Module):
         gate_hidden = jax.nn.silu(gate_hidden)
         gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, w_up))
         return x * gate.astype(x.dtype)
+
+
+def coda_rms_gated_norm_reference(
+    x: jax.Array,
+    norm_weight: jax.Array,
+    w_down: jax.Array,
+    w_up: jax.Array,
+    eps: float,
+) -> jax.Array:
+    """Reference for the CODA-style delayed inverse-RMS scale.
+
+    The inverse-RMS row scalar commutes through the down projection and is
+    applied to its FP32 accumulator before SiLU. The smaller norm gain is folded
+    into the down-projection weight. The final normalized gated activation is
+    formed once, without materializing RMSNorm(x).
+    """
+    output, _ = _coda_rms_gated_norm_reference_with_residuals(x, norm_weight, w_down, w_up, eps)
+    return output
+
+
+def _coda_rms_gated_norm_reference_with_residuals(
+    x: jax.Array,
+    norm_weight: jax.Array,
+    w_down: jax.Array,
+    w_up: jax.Array,
+    eps: float,
+) -> tuple[jax.Array, tuple[jax.Array, ...]]:
+    x_flat = x.reshape((-1, x.shape[-1]))
+    inverse_rms = jax.lax.rsqrt(jnp.mean(jnp.square(x_flat.astype(jnp.float32)), axis=-1) + eps)
+    scaled_w_down = (norm_weight[:, None] * w_down).astype(x.dtype)
+    gate_hidden_acc = jnp.einsum(
+        "...d,dr->...r",
+        x_flat,
+        scaled_w_down,
+        preferred_element_type=jnp.float32,
+    )
+    gate_preactivation = gate_hidden_acc * inverse_rms[..., None]
+    gate_hidden = jax.nn.silu(gate_preactivation).astype(x.dtype)
+    gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, w_up))
+    gate = gate.astype(x.dtype)
+    normalized = (x_flat.astype(jnp.float32) * norm_weight * inverse_rms[..., None]).astype(x.dtype)
+    output = (normalized * gate).reshape(x.shape)
+    residuals = (x, norm_weight, w_down, w_up, inverse_rms, gate_preactivation, gate_hidden, gate)
+    return output, residuals
+
+
+def _quack_coda_rms_gated_norm_impl(
+    x: jax.Array,
+    norm_weight: jax.Array,
+    w_down: jax.Array,
+    w_up: jax.Array,
+    eps: float,
+) -> jax.Array:
+    output, _ = _quack_coda_rms_gated_norm_exact_forward(x, norm_weight, w_down, w_up, eps)
+    return output
+
+
+def _quack_coda_rms_gated_norm_exact_forward(x, norm_weight, w_down, w_up, eps):
+    """Run the stock BF16 forward while retaining exact reverse-mode residuals."""
+    x_flat = x.reshape((-1, x.shape[-1]))
+    inverse_rms = jax.lax.rsqrt(jnp.mean(jnp.square(x_flat.astype(jnp.float32)), axis=-1) + eps)
+    normalized = (x_flat.astype(jnp.float32) * inverse_rms[:, None] * norm_weight).astype(x.dtype)
+    gate_preactivation = jnp.einsum("td,dr->tr", normalized, w_down)
+    silu_sigmoid = jax.nn.sigmoid(gate_preactivation)
+    gate_hidden = gate_preactivation * silu_sigmoid
+    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
+    output = (normalized * gate).reshape(x.shape)
+    residuals = (
+        x,
+        norm_weight,
+        w_down,
+        w_up,
+        inverse_rms,
+        normalized,
+        gate_preactivation,
+        silu_sigmoid,
+        gate_hidden,
+        gate,
+    )
+    return output, residuals
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(4,))
+def _quack_coda_rms_gated_norm(
+    x: jax.Array,
+    norm_weight: jax.Array,
+    w_down: jax.Array,
+    w_up: jax.Array,
+    eps: float,
+) -> jax.Array:
+    return _quack_coda_rms_gated_norm_impl(x, norm_weight, w_down, w_up, eps)
+
+
+def _quack_coda_rms_gated_norm_fwd(x, norm_weight, w_down, w_up, eps):
+    return _quack_coda_rms_gated_norm_exact_forward(x, norm_weight, w_down, w_up, eps)
+
+
+def _quack_coda_rms_gated_norm_bwd(eps, residuals, output_cotangent):
+    from levanter.grug._moe.quack_rms_cute import (  # noqa: PLC0415
+        quack_coda_rms_backward_producer,
+        quack_silu_backward_gemm,
+    )
+
+    del eps
+    x, norm_weight, w_down, w_up, inverse_rms, normalized, gate_preactivation, _, _, _ = residuals
+    x_flat = x.reshape((-1, x.shape[-1]))
+    direct_cotangent, gate_accumulator_cotangent, w_up_cotangent = exact_gated_norm_up_reverse(
+        output_cotangent, residuals
+    )
+    gate_preactivation_cotangent, _ = quack_silu_backward_gemm(
+        gate_accumulator_cotangent,
+        w_up,
+        gate_preactivation,
+    )
+    w_down_cotangent = jnp.einsum("td,tr->dr", normalized, gate_preactivation_cotangent)
+    unweighted_cotangent, row_dot_partial = quack_coda_rms_backward_producer(
+        gate_preactivation_cotangent,
+        w_down,
+        direct_cotangent,
+        x_flat,
+        norm_weight,
+        inverse_rms,
+    )
+    normalized_x = x_flat.astype(jnp.float32) * inverse_rms[:, None]
+    row_dot = jnp.sum(row_dot_partial, axis=-1)
+    norm_weight_cotangent = jnp.sum(unweighted_cotangent.astype(jnp.float32) * normalized_x, axis=0).astype(
+        norm_weight.dtype
+    )
+    x_cotangent = exact_rms_backward_consumer_reference(
+        unweighted_cotangent,
+        row_dot,
+        x_flat,
+        norm_weight,
+        inverse_rms,
+    ).reshape(x.shape)
+    norm_weight_cotangent = jax.lax.psum(norm_weight_cotangent, axis_name=_BATCH_AXES)
+    w_down_cotangent = jax.lax.psum(w_down_cotangent, axis_name=_BATCH_AXES)
+    w_up_cotangent = jax.lax.psum(w_up_cotangent, axis_name=_BATCH_AXES)
+    return x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent
+
+
+_quack_coda_rms_gated_norm.defvjp(_quack_coda_rms_gated_norm_fwd, _quack_coda_rms_gated_norm_bwd)
+
+
+def rms_gated_norm(
+    x: jax.Array,
+    rms: RMSNorm,
+    gated: GatedNorm,
+    implementation: RmsGatedNormImplementation,
+) -> jax.Array:
+    """Apply the RMSNorm-GatedNorm boundary with an explicit implementation."""
+    if implementation == "xla":
+        return gated(rms(x))
+
+    x = reshard(x, _batch_spec())
+    norm_weight = reshard(rms.weight, P(None))
+    w_down = reshard(gated.w_down, P(None, None))
+    w_up = reshard(gated.w_up, P(None, None))
+
+    def _local(local_x, local_norm_weight, local_w_down, local_w_up):
+        return _quack_coda_rms_gated_norm(local_x, local_norm_weight, local_w_down, local_w_up, rms.eps)
+
+    return shard_map(
+        _local,
+        mesh=get_abstract_mesh(),
+        in_specs=(P(_BATCH_AXES, None, None), P(None), P(None, None), P(None, None)),
+        out_specs=P(_BATCH_AXES, None, None),
+    )(x, norm_weight, w_down, w_up)
 
 
 class DenseMLP(eqx.Module):
@@ -903,12 +1083,13 @@ class Block(eqx.Module):
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
 
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        norm_implementation = self.attn.cfg.rms_gated_norm_implementation
+        attn_in = rms_gated_norm(x, self.rms_attn, self.attn_gated_norm, norm_implementation)
         attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        mlp_in = rms_gated_norm(x, self.rms_mlp, self.mlp_gated_norm, norm_implementation)
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             for shared_expert in self.shared:
@@ -992,7 +1173,12 @@ class Transformer(eqx.Module):
 
         cfg = self.config
         hidden = _embedding_gather(self.token_embed, token_ids)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        hidden = rms_gated_norm(
+            hidden,
+            self.embed_norm,
+            self.embed_gated_norm,
+            cfg.rms_gated_norm_implementation,
+        )
 
         # Local layers use a sliding window; every global_every-th layer is full causal.
         segment_ids = None
@@ -1064,7 +1250,12 @@ class Transformer(eqx.Module):
             "qb_beta_per_layer": stacked_router_stats["qb_beta"],
             "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
         }
-        hidden = self.final_gated_norm(self.final_norm(hidden))
+        hidden = rms_gated_norm(
+            hidden,
+            self.final_norm,
+            self.final_gated_norm,
+            cfg.rms_gated_norm_implementation,
+        )
         return hidden, router_metrics
 
     @named_call
@@ -1227,8 +1418,11 @@ __all__ = [
     "MoEMLP",
     "MoeActivation",
     "RMSNorm",
+    "RmsGatedNormImplementation",
     "ShortConv",
     "Transformer",
+    "coda_rms_gated_norm_reference",
     "debug_mesh_and_token_pspec",
     "grugmoe_inference_state_dict",
+    "rms_gated_norm",
 ]

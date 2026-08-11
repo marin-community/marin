@@ -32,7 +32,12 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem import prefix_join
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
-from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, RematMode, SmallParamSharding
+from experiments.grug.moe_hero_fsdp.model import (
+    GrugModelConfig,
+    RematMode,
+    RmsGatedNormImplementation,
+    SmallParamSharding,
+)
 from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_fsdp.train import (
     GrugAblationSweepConfig,
@@ -163,24 +168,26 @@ def _hero_run_config(
     )
 
 
-def _hero_resources(dp_racks: int) -> ResourceConfig:
+def _hero_resources(dp_racks: int, num_nodes: int | None = None) -> ResourceConfig:
     return ResourceConfig.with_gpu(
         "GB200",
         count=HERO_GPUS_PER_TASK,
         cpu=120,
         ram="850g",
         disk="1t",
-        replicas=HERO_NODES_PER_RACK * dp_racks,
+        replicas=num_nodes if num_nodes is not None else HERO_NODES_PER_RACK * dp_racks,
     )
 
 
-def _validate_hero_args(run_id: str, dp_racks: int, num_steps: int) -> None:
+def _validate_hero_args(run_id: str, dp_racks: int, num_steps: int, num_nodes: int | None = None) -> None:
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if dp_racks <= 0:
         raise ValueError(f"dp_racks must be positive, got {dp_racks}")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
+    if num_nodes is not None and num_nodes <= 0:
+        raise ValueError(f"num_nodes must be positive, got {num_nodes}")
 
 
 @dataclass(frozen=True)
@@ -204,6 +211,8 @@ class HeroOverrides:
     small_param_sharding: SmallParamSharding | None = None
     remat_mode: RematMode | None = None
     ce_b_block_size: int | None = None
+    rms_gated_norm_implementation: RmsGatedNormImplementation | None = None
+    num_experts: int | None = None
 
 
 def apply_hero_overrides(model: GrugModelConfig, overrides: HeroOverrides) -> GrugModelConfig:
@@ -225,10 +234,11 @@ def _hero_run_parts(
     num_steps: int,
     save_checkpoints: bool,
     version: str | None,
+    num_nodes: int | None = None,
     batch_size: int | None = None,
     overrides: HeroOverrides = HeroOverrides(),
 ) -> _HeroRunParts:
-    _validate_hero_args(run_id, dp_racks, num_steps)
+    _validate_hero_args(run_id, dp_racks, num_steps, num_nodes)
     batch_size = batch_size if batch_size is not None else dp_racks * HERO_FSDP_BATCH_SIZE
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
     model = apply_hero_overrides(model, overrides)
@@ -249,7 +259,7 @@ def _hero_run_parts(
             replica_axis_size=dp_racks,
             sharding_dump_path=None,
         ),
-        train_resources=_hero_resources(dp_racks),
+        train_resources=_hero_resources(dp_racks, num_nodes),
         name=name,
         version=resolve_version(name, version),
         slim=_slimpajama_6b_dataset(),
@@ -354,6 +364,7 @@ def build_hero_sweep_run(
     steps_per_arm: int,
     arms: Sequence[HeroSweepArm],
     priority: int,
+    num_nodes: int | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build one allocation that runs ``arms`` back to back.
@@ -364,11 +375,19 @@ def build_hero_sweep_run(
 
     ``priority`` is the Iris band for the training gang. It rides as a runtime arg, so rescheduling
     the same arms at a different band reuses the cached result rather than rebuilding.
+
+    ``num_nodes`` overrides the rack-derived replica count for sub-rack diagnostics. It does not
+    change the compact mesh axes, which continue to derive from ``dp_racks``.
     """
     if not arms:
         raise ValueError("a sweep needs at least one arm")
     parts = _hero_run_parts(
-        run_id=run_id, dp_racks=dp_racks, num_steps=steps_per_arm, save_checkpoints=False, version=version
+        run_id=run_id,
+        dp_racks=dp_racks,
+        num_steps=steps_per_arm,
+        save_checkpoints=False,
+        version=version,
+        num_nodes=num_nodes,
     )
     wandb_project = parts.wandb_project
     grug_trainer = parts.grug_trainer
@@ -491,6 +510,12 @@ def build_hero_sweep_run(
     default=None,
     help="Global batch in sequences. Unset derives it as dp_racks x 1024. Must divide the device count.",
 )
+@click.option(
+    "--rms-gated-norm-implementation",
+    type=click.Choice(["xla", "quack_coda"]),
+    default=None,
+    help="RMSNorm-GatedNorm boundary implementation. Unset keeps the hero value.",
+)
 @build_options
 def main(
     run_id: str,
@@ -506,6 +531,7 @@ def main(
     remat_mode: RematMode | None,
     ce_b_block_size: int | None,
     batch_size: int | None,
+    rms_gated_norm_implementation: RmsGatedNormImplementation | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -521,6 +547,7 @@ def main(
             small_param_sharding=small_param_sharding,
             remat_mode=remat_mode,
             ce_b_block_size=ce_b_block_size,
+            rms_gated_norm_implementation=rms_gated_norm_implementation,
         ),
         batch_size=batch_size,
     )
