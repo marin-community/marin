@@ -1,0 +1,37 @@
+Observed boundary
+=================
+
+1. Workflow attempt 1 checked out exact source
+   cd4a3d64f56a273d8a8acacf961befd65987a33c and resolved the same full SHA.
+2. The manual `image_set=h100-evidence` dispatch ran the sole non-matrix H100
+   reusable job. `iris-tags`, `iris-images`, `iris-manifests`, `finelog-image`,
+   and `marin-tpu-ci-images` were skipped.
+3. The Docker context preflight passed. BuildKit mounted
+   `lib/iris/images/h100_evidence_nsys_help.py` into stage
+   `task-h100-evidence`, proving that the Dockerfile-specific context included
+   the newly reviewed validator.
+4. The pinned CUDA 13.2, Nsight Compute 2026.1.1, and Nsight Systems 2026.1.3
+   packages downloaded with their declared sizes and hashes. Their tool-version
+   checks passed.
+5. The first image contract smoke ran `nsys profile --help` and invoked the
+   validator with the frozen absolute Python runtime. The validator rejected
+   the real capture-range-end possible-values syntax. BuildKit stopped before
+   the remaining image smokes or image export.
+
+Exact first failure
+===================
+
+nsys profile help validation failed: --capture-range-end possible values
+contain unrecognized syntax
+
+The retained log does not print the redirected help artifact, so this snapshot
+does not infer which exact punctuation or line structure differed from the
+representative local fixture.
+
+Evidence limit
+==============
+
+The CUDA SASS, production NVTX, absolute-runtime/import, and final image smokes
+did not run. BuildKit did not export the full-SHA image or produce an OCI
+digest, and the workflow's independent registry inspection did not run. No
+workflow retry, rerun, image deletion, GPU query, or H100 evidence job occurred.
