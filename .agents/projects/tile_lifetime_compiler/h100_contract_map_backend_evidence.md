@@ -365,11 +365,19 @@ mistaken for a spill instruction.
 
 Nsight Compute must report the closed launch, register, shared-memory,
 occupancy-limit, and achieved-occupancy metric set for every launch. Nsight
-Systems must export `NVTX_EVENTS`, `StringIds`,
-`CUPTI_ACTIVITY_KIND_KERNEL`, and `CUPTI_ACTIVITY_KIND_MEMCPY` tables. Missing
-tables, ambiguous kernel identities, launch-order drift, substring-only kernel
-matches, or any steady-state CUDA copy aborts the run. Three independent
-compile workers and three paired cold/hit cache roots retain compile,
+Systems profiles with the exact `cuda,nvtx` trace set and exports SQLite with
+`--lazy=true`. [NVIDIA's 2026.1 exporter contract](https://archive.docs.nvidia.com/nsight-systems/2026.1/UserGuide/index.html#cli-export-command-switch-options)
+creates a lazy table only when it contains data, so an omitted
+`CUPTI_ACTIVITY_KIND_MEMCPY` table means zero
+copies only when the same database contains nonempty
+`CUPTI_ACTIVITY_KIND_KERNEL` activity, exact scheduled `NVTX_EVENTS`, valid
+`StringIds`, and nonempty `TARGET_INFO_GPU` identities covering every kernel's
+device. An absent kernel table, empty kernel activity, invalid GPU identity,
+schedule mismatch, malformed schema, ambiguous kernel identity, launch-order
+drift, substring-only kernel match, or any steady-state CUDA copy aborts the
+run. H2D, D2H, and D2D activity retains closed count and byte accounting before
+the no-copy gate. Three independent compile workers and three paired cold/hit
+cache roots retain compile,
 first-execution, and cache samples. A cache pair must preserve its content
 identity, and all nine isolated compile, cold, and hit roots must converge to
 the same identity. Their final optimized HLO must also equal the timing and
