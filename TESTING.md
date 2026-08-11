@@ -25,6 +25,12 @@ with it, which can select live-cluster or integration tests. Dedicated CI jobs
 run the excluded suites; opt into one locally only when the user or the relevant
 module guide explicitly requests it.
 
+Tests run from the repository root have a 60-second per-test timeout, including
+fixture setup and teardown. On POSIX, pytest-timeout first interrupts the test
+with `SIGALRM`; if the test suppresses that failure, the test process exits five
+seconds later. Give a legitimately longer test an explicit
+`@pytest.mark.timeout(...)` value instead of increasing the repository default.
+
 ## Core Rule
 
 A test must fail when behavior is wrong. It should not fail only because an
