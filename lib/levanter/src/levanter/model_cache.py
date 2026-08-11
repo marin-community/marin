@@ -44,6 +44,7 @@ HF_REVISION_FILENAME = ".cache_hf_revision"
 """Cache-owned sidecar containing the Hugging Face revision used for the snapshot."""
 
 _LOCK_SUFFIX = ".lock"
+_HF_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 # How often losers re-check the completion marker while the winner populates.
 _DEFAULT_POLL_INTERVAL = 10.0
 
@@ -160,7 +161,8 @@ def resolve_cached_model_path(
     commit, then mirrored once to a region-local TTL bucket under a distributed lock. The commit
     is part of the cache identity, so a branch or tag update produces a new snapshot. Object-store
     and local paths already name a loadable snapshot and are returned unchanged, as is *model*
-    when ``cache_ttl_days`` is non-positive (mirroring disabled).
+    when ``cache_ttl_days`` is non-positive (mirroring disabled). An explicit 40-character commit
+    is used directly, so an existing cache remains loadable without contacting Hugging Face.
 
     Args:
         model: HuggingFace repo id (``org/model`` or ``org/model@revision``), or an
@@ -181,9 +183,12 @@ def resolve_cached_model_path(
         return model
 
     requested_revision = revision or None
-    resolved_revision = model_info(repo, revision=requested_revision).sha
-    if resolved_revision is None:
-        raise ValueError(f"Hugging Face did not return a commit SHA for {model!r}")
+    if requested_revision is not None and _HF_COMMIT_PATTERN.fullmatch(requested_revision):
+        resolved_revision = requested_revision.lower()
+    else:
+        resolved_revision = model_info(repo, revision=requested_revision).sha
+        if resolved_revision is None:
+            raise ValueError(f"Hugging Face did not return a commit SHA for {model!r}")
 
     resolved_model = f"{repo}@{resolved_revision}"
     cache_path = marin_temp_bucket(cache_ttl_days, f"{cache_prefix}/{_cache_slug(resolved_model)}")

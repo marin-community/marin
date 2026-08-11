@@ -146,6 +146,36 @@ def test_resolve_disabled_ttl_skips_mirror(monkeypatch):
     assert resolve_cached_model_path("org/model", cache_ttl_days=0, cache_prefix="models") == "org/model"
 
 
+def test_resolve_pinned_commit_skips_hf_lookup(tmp_path, monkeypatch):
+    """An immutable ref can use an existing cache while Hugging Face is unavailable."""
+    commit = "a" * 40
+
+    def fake_list_repo_files(model_id, revision=None):
+        assert model_id == "org/model"
+        assert revision == commit
+        return ["config.json"]
+
+    def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
+        assert model_id == "org/model"
+        local_path = Path(local_dir, filename)
+        local_path.write_text(revision or "unpinned")
+        return str(local_path)
+
+    monkeypatch.setattr(model_cache, "model_info", lambda *args, **kwargs: pytest.fail("must not query HF"))
+    monkeypatch.setattr(model_cache, "list_repo_files", fake_list_repo_files)
+    monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
+    monkeypatch.setattr(model_cache, "marin_temp_bucket", lambda _ttl_days, prefix: str(tmp_path / prefix))
+
+    first = resolve_cached_model_path(f"org/model@{commit}", cache_ttl_days=7, cache_prefix="models")
+    monkeypatch.setattr(model_cache, "list_repo_files", lambda *_args, **_kwargs: pytest.fail("cache miss"))
+    monkeypatch.setattr(model_cache, "hf_hub_download", lambda *_args, **_kwargs: pytest.fail("cache miss"))
+    second = resolve_cached_model_path(f"org/model@{commit}", cache_ttl_days=7, cache_prefix="models")
+
+    assert first == second
+    assert Path(second, "config.json").read_text() == commit
+    assert Path(second, HF_REVISION_FILENAME).read_text() == commit
+
+
 def test_resolve_keeps_distinct_refs_in_distinct_cache_dirs(monkeypatch):
     """Two refs that a lossy slug would collide (``org/model_a`` vs ``org/model@a``) must mirror
     to different cache dirs, so a hit on one never loads the other's snapshot."""
