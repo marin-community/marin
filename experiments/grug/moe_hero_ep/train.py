@@ -374,37 +374,31 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
 
 
-# Optimizer state kept resident in HBM rather than offloaded to pinned host. Both are fully
-# replicated (P(None, None)) and collapse their NamedSharding to a mesh-less GSPMDSharding on the
-# pinned-host round-trip, which the mover then cannot bring back to device -- the jitted step then
-# asserts a memory-kind mismatch. `mtp_modules` state is negligible; `token_embed`'s Adam state is
-# ~6 GiB (versus ~28 GiB total), a cheap price to keep the offload path working when MTP adds a
-# second gradient path through the embedding.
-_OFFLOAD_EXEMPT_PARAM_PATHS = ("mtp_modules", "token_embed")
-
-
 def _optimizer_state_to_memory_kind(tree, memory_kind: str):
-    """Move named-sharded optimizer arrays to a JAX memory kind, keeping the exempt state on device.
+    """Move sharded optimizer arrays to a JAX memory kind, keeping replicated state on device.
 
-    Offloads only the main-model state. State for the parameters in ``_OFFLOAD_EXEMPT_PARAM_PATHS``
-    stays resident on device: their fully-replicated optimizer arrays collapse to a mesh-less
-    GSPMDSharding under the pinned-host round-trip and cannot be brought back.
+    Fully-replicated optimizer arrays (``token_embed``, norm gains, router, gated norms, MTP
+    norms) collapse their NamedSharding to a mesh-less GSPMDSharding on the pinned-host round-trip
+    and cannot be brought back to device, so the jitted step asserts a memory-kind mismatch. They
+    are cheap -- dominated by ``token_embed``'s ~6 GiB Adam state -- so keep them resident on
+    device and offload only the genuinely sharded state (attention, expert, and shared weights),
+    which is the bulk and keeps its NamedSharding across the round-trip.
     """
 
-    def _move(path, leaf):
-        if not isinstance(leaf, jax.Array):
-            return leaf
-        path_str = jax.tree_util.keystr(path)
-        if any(exempt in path_str for exempt in _OFFLOAD_EXEMPT_PARAM_PATHS):
+    def _move(leaf):
+        if not isinstance(leaf, jax.Array) or leaf.ndim == 0:
             return leaf
         sharding = jax.typeof(leaf).sharding
         mesh = getattr(sharding, "mesh", None)
         if mesh is None or len(getattr(mesh, "axis_names", ())) == 0:
-            # Scalar optimizer metadata carries no named mesh and is negligible in HBM.
+            # Scalar metadata or an already-collapsed replicated array: leave it in place.
             return leaf
+        spec = getattr(sharding, "spec", None)
+        if spec is None or all(axis is None for axis in spec):
+            return leaf  # fully replicated -- keep on device (collapses under offload otherwise)
         return jax.device_put(leaf, sharding.with_memory_kind(memory_kind))
 
-    return jax.tree_util.tree_map_with_path(_move, tree)
+    return jax.tree.map(_move, tree)
 
 
 def initial_state(
