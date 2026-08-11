@@ -29,6 +29,7 @@ _DEEP_GEMM_NVRTC_ENV_VAR = "DG_JIT_USE_NVRTC"
 _NVCC_PREPEND_FLAGS_ENV_VAR = "NVCC_PREPEND_FLAGS"
 _CUDA_HOME_ENV_VAR = "CUDA_HOME"
 _CUDA_COMPAT_DIRECTORY = "marin-deep-gemm-cuda"
+_CCCL_HEADER_NAMESPACES = ("cuda", "cub", "nv", "thrust")
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,22 @@ def _link_directory_entries(source: Path, destination: Path) -> None:
         if destination_entry.exists():
             raise RuntimeError(f"CUDA compatibility path is not a symlink: {destination_entry}")
         destination_entry.symlink_to(source_entry, target_is_directory=source_entry.is_dir())
+
+
+def _link_cccl_headers(source: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for namespace in _CCCL_HEADER_NAMESPACES:
+        source_entry = source / namespace
+        if not source_entry.is_dir():
+            continue
+        destination_entry = destination / namespace
+        if destination_entry.is_symlink():
+            if destination_entry.resolve() != source_entry.resolve():
+                raise RuntimeError(f"Conflicting CUDA CCCL compatibility link: {destination_entry}")
+            continue
+        if destination_entry.exists():
+            raise RuntimeError(f"CUDA CCCL compatibility path is not a symlink: {destination_entry}")
+        destination_entry.symlink_to(source_entry, target_is_directory=True)
 
 
 def deep_gemm_cuda_environment(nvidia_roots: tuple[Path, ...], temporary_root: Path) -> dict[str, str]:
@@ -138,7 +155,7 @@ def deep_gemm_cuda_environment(nvidia_roots: tuple[Path, ...], temporary_root: P
     compatibility_lib = compatibility_home / "lib64"
 
     _link_directory_entries(cuda_runtime_root / "include", compatibility_include)
-    _link_directory_entries(cccl_root, compatibility_include)
+    _link_cccl_headers(cccl_root, compatibility_include)
     _link_directory_entries(cuda_nvrtc_root / "include", compatibility_include)
     _link_directory_entries(curand_root / "include", compatibility_include)
     _link_directory_entries(cublas_root / "include", compatibility_include)

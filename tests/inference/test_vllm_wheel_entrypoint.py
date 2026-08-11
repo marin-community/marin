@@ -198,6 +198,7 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     (cccl_root / "nv" / "target").touch()
     (cccl_root / "cuda" / "std").mkdir(parents=True)
     (cccl_root / "cuda" / "std" / "type_traits").touch()
+    (cccl_root / "__init__.py").touch()
     cublas_root = nvidia_root / "cublas"
     (cublas_root / "include").mkdir(parents=True)
     (cublas_root / "include" / "cublasLt.h").touch()
@@ -215,6 +216,7 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     (cuda_nvrtc_root / "lib" / "libnvrtc.so.12").touch()
     curand_root = nvidia_root / "curand"
     (curand_root / "include").mkdir(parents=True)
+    (curand_root / "include" / "__init__.py").touch()
     (curand_root / "include" / "curand_kernel.h").touch()
     (curand_root / "lib").mkdir()
     (curand_root / "lib" / "libcurand.so.10").touch()
@@ -233,6 +235,7 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
         cccl_root / "cuda" / "std" / "type_traits"
     ).resolve()
     assert (compatibility_include / "cccl").resolve() == cccl_root.resolve()
+    assert (compatibility_include / "__init__.py").resolve() == (curand_root / "include" / "__init__.py").resolve()
     assert (compatibility_include / "cublasLt.h").resolve() == (cublas_root / "include" / "cublasLt.h").resolve()
     assert (compatibility_include / "curand_kernel.h").resolve() == (
         curand_root / "include" / "curand_kernel.h"
