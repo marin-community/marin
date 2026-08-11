@@ -1,21 +1,18 @@
 ---
 name: ab-test-zephyr
-description: Run paired Zephyr benchmarks on pre-normalized data and compare per-stage Finelog CPU, elapsed-time, and memory stats. Use for ad hoc comparisons and PR performance gates.
+description: Run controlled Zephyr benchmarks on pre-normalized data and compare per-stage Finelog CPU, elapsed-time, and memory stats. Use for ad hoc comparisons and PR performance gates with one control and one or more treatments.
 ---
 
 # A/B Test Zephyr Changes
 
 Use one workflow for ad hoc comparisons and PR performance gates:
 
-1. Run control and treatment with
+1. Run one control and one or more treatments with
    `experiments.datakit.zephyr_benchmark` on the same pre-normalized sample.
 2. Collect every execution's `zephyr.stage` rows from Finelog.
 3. Compare CPU, elapsed time, and memory per stage.
 4. Publish the workload fingerprint, data-equivalence checks, infrastructure
    noise, and result in one report.
-
-The benchmark starts after corpus download. Do not include Hugging Face download
-time in a Zephyr performance result.
 
 ## Signals
 
@@ -36,8 +33,8 @@ The coordinator writes one `zephyr.stage` row per completed stage and
 `cpu_time_total` is the sum of process user and system CPU-seconds across
 completed shards. It is the default signal for code efficiency because worker
 count and queue delay do not directly change it. Normalize it as CPU-seconds
-per item or byte when the two runs processed slightly different amounts of
-data.
+per item or byte when a control and treatment processed slightly different
+amounts of data.
 
 `elapsed` measures a stage barrier. It captures startup, I/O, concurrency, and
 straggler behavior that CPU time misses. It also moves with worker availability,
@@ -50,14 +47,14 @@ Keep CPU and elapsed time as separate outcomes:
   compute cost.
 - CPU higher and elapsed lower: faster and more expensive.
 - CPU lower and elapsed higher: cheaper and slower.
-- Wall-only change from one pair: inconclusive until repeated under comparable
-  scheduling conditions.
+- Wall-only change from one control/treatment comparison: inconclusive until
+  repeated under comparable scheduling conditions.
 
-[PR #7888](https://github.com/marin-community/marin/pull/7888) illustrates the
-distinction. Shared pooling reduced the through-MinHash span 28.72x while total
-CPU fell 1.23%; bounded token batching reduced summed stage elapsed 27.26% while
-CPU rose 5.59%. The [Echo record](https://echo.oa.dev/wiki/77) preserves the
-workloads and validation details.
+A 100B shared-pool treatment reduced the through-MinHash span 28.72x while
+total CPU fell 1.23%. A separate bounded-token-batching treatment reduced
+summed stage elapsed 27.26% while CPU rose 5.59%. Report topology and batching
+changes as latency/compute tradeoffs; do not describe their wall-time gains as
+equivalent per-core efficiency gains.
 
 Do not apply fixed wall-time thresholds to every benchmark. Calibrate CPU/item
 and elapsed thresholds from same-code repeats for the selected sample and pool
@@ -69,13 +66,13 @@ a regression regardless of CPU time.
 ### Existing runs
 
 Start at [Collect execution IDs](#collect-execution-ids) when control and
-treatment jobs already exist. Confirm that both runs used the same immutable
-sample, stage range, sources, worker resources, concurrency, parallelism,
-cluster, region, and priority.
+treatment jobs already exist. Confirm that the control and every treatment used
+the same immutable sample, stage range, sources, worker resources, concurrency,
+parallelism, cluster, region, and priority.
 
 A scheduled baseline is usable only when its report contains the same workload
 fingerprint and its Finelog execution IDs remain queryable. Otherwise, launch a
-paired control. Do not compare a standalone benchmark treatment with a
+matching control. Do not compare a standalone benchmark treatment with a
 differently shaped ferry baseline.
 
 ### New runs
@@ -94,9 +91,10 @@ Confirm the sample size, pool shape, stage range, cluster, and expected cost
 before launching an expensive or production-scale comparison. Run local Zephyr
 and Datakit tests before paying for remote workers.
 
-## Prepare paired worktrees
+## Prepare worktrees
 
-For a PR, use the merge base as the control and the PR head as the treatment:
+For a PR, use the merge base as the control and the PR head as the first
+treatment:
 
 ```bash
 git fetch origin main
@@ -109,15 +107,33 @@ git worktree add --detach "$WORKTREE_ROOT/treatment" "$TREATMENT_SHA"
 
 Record both SHAs. If the experiment changes configuration without changing
 code, use two worktrees or commits that preserve the exact control and
-treatment configurations.
+treatment configurations. Add one detached worktree per additional treatment
+SHA or configuration.
 
 ## Launch the download-free benchmark
 
 `experiments.datakit.zephyr_benchmark` accepts an existing normalized sample
 and routes outputs to a seven-day temporary prefix. Use an immutable,
-region-local sample. All arguments except `--run-tag` must match between arms.
-Use `--target-cluster=<CLUSTER>` for a federated CoreWeave sample or
-`--region=<REGION>` for a GCP sample.
+region-local sample. All arguments except `--run-tag` must match across the
+control and treatments.
+
+Set exactly one data-locality argument before launching:
+
+```bash
+# For s3://marin-us-east-02a/...:
+COREWEAVE_CLUSTER=cw-us-east-02a
+DATA_LOCALITY_ARGS=(--target-cluster "$COREWEAVE_CLUSTER")
+
+# For gs://marin-us-central2/..., replace the two lines above with:
+# GCP_REGION=us-central2
+# DATA_LOCALITY_ARGS=(--region "$GCP_REGION")
+```
+
+Set the cluster or region from the actual sample prefix; the values above are
+examples. If the mapping is unknown, stop before launching. The benchmark
+passes `source_prefix` to `marin_temp_bucket`, which keeps temporary outputs
+with the sample. Do not override the output location or launch compute in a
+different region.
 
 Launch each arm from its worktree:
 
@@ -125,7 +141,7 @@ Launch each arm from its worktree:
 cd <CONTROL_OR_TREATMENT_WORKTREE>
 uv run iris --config=lib/iris/config/marin.yaml job run --no-wait \
   --job-name zephyr-ab-<RUN_TAG>-<ARM> \
-  <PLACEMENT_FLAG> --memory=2G --disk=5G --cpu=1 --extra=cpu \
+  "${DATA_LOCALITY_ARGS[@]}" --memory=2G --disk=5G --cpu=1 --extra=cpu \
   --priority batch \
   -- python -m experiments.datakit.zephyr_benchmark \
     --sample-prefix <NORMALIZED_SAMPLE_PREFIX> \
@@ -141,19 +157,20 @@ uv run iris --config=lib/iris/config/marin.yaml job run --no-wait \
     --dedup-max-parallelism <SHARDS>
 ```
 
-Record this workload fingerprint for both arms:
+Record this workload fingerprint for every arm:
 
 - commit SHA and Iris job ID
 - sample prefix and source selection
 - first and last stage
 - pool workers, CPU, RAM, and disk
 - maximum concurrent pipelines and dedup parallelism
-- Iris cluster, target region, priority, and preemptibility
+- Iris controller, data-local target cluster or region, priority, and preemptibility
 - run tag
 
-Use fresh run tags so neither arm cache-hits. Launch the arms close together. If
-the decision depends on elapsed time, alternate at least two trials per arm
-when cost permits: control, treatment, control, treatment.
+Use fresh run tags so no arm cache-hits. One matching control can be reused for
+multiple treatments launched in the same scheduling window. If the decision
+depends on elapsed time, interleave additional control trials among the
+treatments to measure scheduling noise.
 
 Delegate monitoring to `babysit-zephyr`. A failed or preempted arm is evidence
 about infrastructure reliability, not a performance verdict. Diagnose repeated
@@ -162,7 +179,8 @@ failures with `debug`.
 ## Collect execution IDs
 
 A benchmark job can run many Zephyr pipelines on one shared pool. Collect every
-`YYYYMMDD-HHMMSS-<hex>` execution ID from the root job and descendant logs:
+`YYYYMMDD-HHMMSS-<hex>` execution ID from the control and each treatment's root
+job and descendant logs:
 
 ```bash
 uv run iris --cluster marin job logs <IRIS_JOB_ID> \
@@ -192,7 +210,8 @@ Every expected row must have `status = 'END'`. A `FAILED` row invalidates that
 arm. Missing rows usually mean an execution ID was omitted or Finelog emission
 failed; resolve the gap before reporting a pass.
 
-Aggregate all executions in each arm, then compare by `stage_name`:
+Aggregate all executions in the control and one treatment, then compare by
+`stage_name`:
 
 ```sql
 WITH tagged AS (
@@ -232,18 +251,21 @@ WHERE b.arm = 'control' AND t.arm = 'treatment'
 ORDER BY cpu_delta DESC;
 ```
 
-Use this SQL as the Finelog query body after replacing each ID placeholder with
-comma-separated, single-quoted execution IDs. Keep the raw query output with
-the report.
+Use this SQL once per treatment, reusing the same control IDs. Replace each ID
+placeholder with comma-separated, single-quoted execution IDs. Keep each raw
+query output with the report. Keep repeated trials separate; do not merge
+different variants or unequal trial counts into one ID set.
 
 ## Validate comparability
 
 Before interpreting deltas:
 
-1. Confirm the workload fingerprints match except for SHA, arm, and run tag.
+1. Confirm the control and treatment workload fingerprints match except for
+   SHA, arm, and run tag.
 2. Confirm each stage has matching `items` and `bytes_processed`, within a
    fraction of a percent. Explain and normalize any accepted mismatch.
-3. Confirm both arms completed the same execution and stage set.
+3. Confirm the control and treatment completed the same execution and stage
+   set.
 4. Inspect `iris job summary <IRIS_JOB_ID>` for OOMs and peak task memory.
 5. Check job logs for retries, preemptions, hardware faults, and stragglers.
 6. Run the change's semantic validation separately. Matching item counts do not
@@ -265,11 +287,11 @@ Verdict: pass | regression | tradeoff | inconclusive
 
 Workload: <sample, stage range, sources, pool shape, concurrency, cluster>
 Control: <sha>, <job>, <execution count>
-Treatment: <sha>, <job>, <execution count>
+Treatments: <name, sha, job, and execution count for each>
 
-| Stage | CPU control | CPU treatment | CPU change | Elapsed control | Elapsed treatment | Elapsed change | Peak memory change |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| ... | ... | ... | ... | ... | ... | ... | ... |
+| Treatment | Stage | CPU control | CPU treatment | CPU change | Elapsed control | Elapsed treatment | Elapsed change | Peak memory change |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| ... | ... | ... | ... | ... | ... | ... | ... | ... |
 
 Data check: <items and bytes comparison>
 Infrastructure: <preemptions, retries, failures, stragglers, or none>
@@ -277,14 +299,16 @@ Interpretation: <efficiency result, latency result, and any tradeoff>
 ```
 
 Lead with CPU change, then elapsed time and memory. State whether elapsed time
-came from one pair or repeated alternating trials. Label summed stage elapsed
-as such. Iris launcher duration and summed task wall time may help diagnose
-queueing or topology, but they do not replace the Finelog stage metrics.
+came from one control/treatment comparison or repeated interleaved trials.
+Label summed stage elapsed as such. Iris launcher duration and summed task wall
+time may help diagnose queueing or topology, but they do not replace the
+Finelog stage metrics.
 
 ## Clean up
 
 Remove temporary worktrees after preserving the SHAs, job IDs, execution IDs,
-workload fingerprint, and Finelog output:
+workload fingerprints, and Finelog output. Repeat the treatment command for
+each additional worktree:
 
 ```bash
 git worktree remove "$WORKTREE_ROOT/control"
@@ -295,7 +319,8 @@ Benchmark outputs expire under their seven-day temporary prefix.
 
 ## Related guidance
 
-- `babysit-zephyr` monitors the paired jobs through terminal state.
+- `babysit-zephyr` monitors every control and treatment job through terminal
+  state.
 - `debug` investigates repeated failures or unexplained infrastructure churn.
 - `lib/zephyr/OPS.md` documents coordinator queries and straggler diagnosis.
 - `lib/iris/OPS.md` documents job summaries, task attempts, and Finelog access.
