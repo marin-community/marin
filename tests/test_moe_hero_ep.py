@@ -589,6 +589,86 @@ def test_latent_moe_flops_replace_routed_width_and_add_projections():
     assert latent_flops - full_width_flops == expected_delta
 
 
+def _mtp_config(
+    mtp_depth=0,
+    mtp_weight_schedule="constant",
+    mtp_loss_weight=0.3,
+    mtp_loss_weight_final=0.3,
+    mtp_step_decay_fraction=0.9,
+):
+    return model.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_shared_experts=1,
+        num_experts=4,
+        num_experts_per_token=1,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        head_dim=8,
+        max_seq_len=8,
+        sliding_window=4,
+        global_every=2,
+        capacity_factor=1.0,
+        initializer_std=0.5 / math.sqrt(32),
+        qk_mult=1.3,
+        attention_implementation="reference",
+        moe_implementation="fixed_all_to_all",
+        report_capacity_overflow=True,
+        mtp_depth=mtp_depth,
+        mtp_weight_schedule=mtp_weight_schedule,
+        mtp_loss_weight=mtp_loss_weight,
+        mtp_loss_weight_final=mtp_loss_weight_final,
+        mtp_step_decay_fraction=mtp_step_decay_fraction,
+    )
+
+
+def test_mtp_depth_zero_leaves_the_model_unchanged():
+    # mtp_depth == 0 must add no modules and no loss term, so the model is byte-for-byte a no-MTP run.
+    cfg = _mtp_config(mtp_depth=0)
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    with set_mesh(mesh):
+        built = model.Transformer.init(cfg, key=jax.random.key(0))
+    assert built.mtp_modules == ()
+
+
+def test_mtp_depth_one_builds_a_forward_and_a_scalar_loss():
+    cfg = _mtp_config(mtp_depth=1)
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    tokens = jax.ShapeDtypeStruct((1, 8), jnp.int32)
+    weight = jax.ShapeDtypeStruct((1, 8), jnp.float32)
+    with set_mesh(mesh):
+        built = model.Transformer.init(cfg, key=jax.random.key(0))
+        assert len(built.mtp_modules) == 1
+        out = jax.eval_shape(lambda t: built(t)[0], tokens)
+        loss = jax.eval_shape(
+            lambda t, w: built.next_token_loss(t, w, reduction="mean", mtp_progress=0.5),
+            tokens,
+            weight,
+        )
+    assert out.shape == (1, 8, cfg.hidden_dim)
+    assert loss.shape == ()
+
+
+def test_mtp_weight_at_follows_the_selected_schedule():
+    constant = _mtp_config(mtp_weight_schedule="constant", mtp_loss_weight=0.3, mtp_loss_weight_final=0.1)
+    np.testing.assert_allclose(float(constant.mtp_weight_at(0.0)), 0.3)
+    np.testing.assert_allclose(float(constant.mtp_weight_at(1.0)), 0.3)
+
+    linear = _mtp_config(mtp_weight_schedule="linear", mtp_loss_weight=0.3, mtp_loss_weight_final=0.1)
+    np.testing.assert_allclose(float(linear.mtp_weight_at(0.0)), 0.3)
+    np.testing.assert_allclose(float(linear.mtp_weight_at(0.5)), 0.2)
+    np.testing.assert_allclose(float(linear.mtp_weight_at(1.0)), 0.1)
+
+    step = _mtp_config(
+        mtp_weight_schedule="step", mtp_loss_weight=0.3, mtp_loss_weight_final=0.1, mtp_step_decay_fraction=0.9
+    )
+    np.testing.assert_allclose(float(step.mtp_weight_at(0.5)), 0.3)
+    np.testing.assert_allclose(float(step.mtp_weight_at(0.95)), 0.1)
+
+
 class _TinyWatchModel(eqx.Module):
     weight: jax.Array
 
@@ -601,8 +681,9 @@ class _TinyWatchModel(eqx.Module):
         reduction,
         logsumexp_weight,
         return_router_metrics,
+        mtp_progress=0.0,
     ):
-        del mask, reduction, logsumexp_weight, return_router_metrics
+        del mask, reduction, logsumexp_weight, return_router_metrics, mtp_progress
         error = self.weight * tokens.astype(self.weight.dtype) - loss_weight
         return jnp.mean(error**2), {}
 
@@ -655,8 +736,8 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
         pending_qb_betas=jnp.zeros((1, 1)),
     )
 
-    def loss_and_grads(current_params, batch, mp, z_loss):
-        del batch, mp, z_loss
+    def loss_and_grads(current_params, batch, mp, z_loss, mtp_progress=0.0):
+        del batch, mp, z_loss, mtp_progress
         loss = current_params.weight**2
         grads = _TinyWatchModel(weight=2 * current_params.weight)
         metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
@@ -668,6 +749,7 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
         optimizer,
         jmp.get_policy("params=float32,compute=float32,output=float32"),
         z_loss_weight=0,
+        num_train_steps=10,
         ema_beta=None,
         watch_config=WatchConfig(interval=10),
     )

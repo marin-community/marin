@@ -430,7 +430,7 @@ def _drop_metrics(
     }
 
 
-def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
+def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, mtp_progress: jax.Array | float = 0.0):
     def loss_fn(model):
         compute_params = mp.cast_to_compute(model)
         return compute_params.next_token_loss(
@@ -440,6 +440,7 @@ def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
             reduction="mean",
             logsumexp_weight=z_loss,
             return_router_metrics=True,
+            mtp_progress=mtp_progress,
         )
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
@@ -484,6 +485,7 @@ def _make_train_step(
     mp: jmp.Policy,
     *,
     z_loss_weight: float,
+    num_train_steps: int,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
@@ -508,7 +510,9 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
-        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
+        # MTP loss weight follows training progress; a no-MTP model ignores this (mtp_depth == 0).
+        mtp_progress = jnp.asarray(state.step, dtype=jnp.float32) / num_train_steps
+        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss, mtp_progress)
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = (
             _optimizer_state_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
@@ -584,6 +588,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         optimizer,
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
+        num_train_steps=trainer.num_train_steps,
         ema_beta=config.trainer.ema_beta,
         watch_config=inline_watch_config,
         offload_opt_state=config.trainer.offload_opt_state,

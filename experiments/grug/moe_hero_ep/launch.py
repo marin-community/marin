@@ -102,6 +102,11 @@ def build_hero_run(
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
+    mtp_depth: int = 0,
+    mtp_loss_weight: float = 0.3,
+    mtp_loss_weight_final: float = 0.3,
+    mtp_weight_schedule: str = "constant",
+    mtp_step_decay_fraction: float = 0.9,
     flavor: str = "ep",
     eval_every: int = 0,
     save_checkpoints: bool = False,
@@ -171,6 +176,11 @@ def build_hero_run(
         model,
         moe_implementation=moe_implementation,
         expert_chunks=1,
+        mtp_depth=mtp_depth,
+        mtp_loss_weight=mtp_loss_weight,
+        mtp_loss_weight_final=mtp_loss_weight_final,
+        mtp_weight_schedule=mtp_weight_schedule,
+        mtp_step_decay_fraction=mtp_step_decay_fraction,
     )
     # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
     # already allocated and the workspace is built. Reject it here instead.
@@ -347,6 +357,41 @@ def build_hero_run(
     help="LatentMoE: run routed experts at this width. Divides all-to-all traffic by hidden/latent.",
 )
 @click.option(
+    "--mtp-depth",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="DeepSeek-V3 Multi-Token Prediction modules. 0 disables MTP (byte-for-byte unchanged model).",
+)
+@click.option(
+    "--mtp-loss-weight",
+    type=click.FloatRange(min=0),
+    default=0.3,
+    show_default=True,
+    help="Initial weight lambda on the averaged MTP cross-entropy.",
+)
+@click.option(
+    "--mtp-loss-weight-final",
+    type=click.FloatRange(min=0),
+    default=0.3,
+    show_default=True,
+    help="Final MTP weight for the linear/step schedules; equal to --mtp-loss-weight holds it constant.",
+)
+@click.option(
+    "--mtp-weight-schedule",
+    type=click.Choice(["constant", "linear", "step"]),
+    default="constant",
+    show_default=True,
+    help="How the MTP weight moves over training progress p = step / num_train_steps.",
+)
+@click.option(
+    "--mtp-step-decay-fraction",
+    type=click.FloatRange(min=0, max=1),
+    default=0.9,
+    show_default=True,
+    help="Progress fraction at which the 'step' schedule drops to --mtp-loss-weight-final.",
+)
+@click.option(
     "--flavor",
     type=click.Choice(sorted(FLAVORS)),
     default="ep",
@@ -420,6 +465,11 @@ def main(
     intermediate_dim: int | None,
     capacity_factor: float | None,
     latent_dim: int | None,
+    mtp_depth: int,
+    mtp_loss_weight: float,
+    mtp_loss_weight_final: float,
+    mtp_weight_schedule: str,
+    mtp_step_decay_fraction: float,
     flavor: str,
     save_checkpoints: bool,
     checkpoint_minutes: float,
@@ -441,6 +491,11 @@ def main(
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
+        mtp_depth=mtp_depth,
+        mtp_loss_weight=mtp_loss_weight,
+        mtp_loss_weight_final=mtp_loss_weight_final,
+        mtp_weight_schedule=mtp_weight_schedule,
+        mtp_step_decay_fraction=mtp_step_decay_fraction,
         flavor=flavor,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
