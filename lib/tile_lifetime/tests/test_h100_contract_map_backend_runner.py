@@ -164,6 +164,12 @@ def test_worst_pair_failure_diagnostic_rejects_oversized_serialization() -> None
 
 
 _NCU_SASS_SEPARATOR = "------------------ " + "-" * 60 + " ------ ------ ------ ------"
+_NCU_KERNEL_A = "ordinary_xla_kernel_nam_00"
+_NCU_KERNEL_B = "ordinary_xla_kernel_nam_01"
+
+
+def _ncu_sass_kernel_row(name: str) -> str:
+    return f"Kernel Name        {name}{' ' * 62}"
 
 
 def _ncu_sass_export(*sections: tuple[str, tuple[str, ...]]) -> str:
@@ -171,7 +177,7 @@ def _ncu_sass_export(*sections: tuple[str, tuple[str, ...]]) -> str:
     for name, instructions in sections:
         lines.extend(
             (
-                f"Kernel Name: {name}",
+                _ncu_sass_kernel_row(name),
                 "Address Source",
                 _NCU_SASS_SEPARATOR,
             )
@@ -479,7 +485,8 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         arguments = tuple(str(value) for value in command)
         assert arguments[0] == str(config.tools.ncu)
         assert "--page=raw" in arguments
-        Path(arguments[arguments.index("--log-file") + 1]).write_bytes(_NCU_RAW_FIXTURE.read_bytes())
+        raw_metrics = _NCU_RAW_FIXTURE.read_text().replace(",KernelA,", f",{_NCU_KERNEL_A},")
+        Path(arguments[arguments.index("--log-file") + 1]).write_text(raw_metrics)
         Path(arguments[arguments.index("--export") + 1]).write_bytes(b"exact-ncu-report")
         output = Path(arguments[arguments.index("--json-output") + 1])
         output.write_text(json.dumps({"persistent_cache": {}, "final_hlo": "exact-final-hlo"}))
@@ -487,11 +494,12 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
 
     def export_sass(command: Any) -> subprocess.CompletedProcess[str]:
         arguments = tuple(str(value) for value in command)
-        source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+        source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
         if variant == "missing-top-level":
             source = source.split("\n", maxsplit=1)[1]
         elif variant == "unrecognized-record":
-            source = source.replace("Kernel Name: KernelA", "public-unknown-record\nKernel Name: KernelA")
+            section = _ncu_sass_kernel_row(_NCU_KERNEL_A)
+            source = source.replace(section, "public-unknown-record\n" + section)
         Path(arguments[arguments.index("--log-file") + 1]).write_text(source)
         return subprocess.CompletedProcess(arguments, 0, "", "")
 
@@ -558,19 +566,83 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
 
     evidence = runner._run_ncu_profile(*arguments)
 
-    assert tuple(metric.name for metric in evidence.metrics) == ("KernelA",)
+    assert tuple(metric.name for metric in evidence.metrics) == (_NCU_KERNEL_A,)
     assert evidence.metrics[0].registers_per_thread == 48
     assert evidence.final_hlo == "exact-final-hlo"
     assert evidence.report_sha256 == hashlib.sha256(b"exact-ncu-report").hexdigest()
 
 
 def test_runner_ncu_sass_parser_requires_valid_instruction_rows_for_exact_kernel_sections() -> None:
-    fixture = Path(__file__).parent / "fixtures/h100_contract_map_ncu_sass.txt"
-    records = runner.parse_ncu_sass(fixture.read_text(), ("KernelA", "KernelB"))
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2", "0000000000000010 EXIT")),
+        (_NCU_KERNEL_B, ("0000000000000020 FFMA R3, R4, R5, R6",)),
+    )
+    records = runner.parse_ncu_sass(source, (_NCU_KERNEL_A, _NCU_KERNEL_B))
 
-    assert tuple(record.name for record in records) == ("KernelA", "KernelB")
+    assert tuple(record.name for record in records) == (_NCU_KERNEL_A, _NCU_KERNEL_B)
     assert tuple(instruction.mnemonic for instruction in records[0].instructions) == ("MOV", "EXIT")
     assert records[1].instructions == (runner.NcuSassInstruction(address=0x20, mnemonic="FFMA"),)
+
+
+def test_runner_ncu_sass_parser_accepts_exact_colonless_padded_kernel_identity() -> None:
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
+
+    records = runner.parse_ncu_sass(source, (f"void {_NCU_KERNEL_A}()",))
+
+    assert records[0].name == _NCU_KERNEL_A
+    section = source.splitlines()[1]
+    assert len(section.encode("utf-8")) == 107
+    assert section == "Kernel Name" + " " * 8 + _NCU_KERNEL_A + " " * 62
+
+
+@pytest.mark.parametrize(
+    "section",
+    (
+        "Kernel Name" + " " * 8 + _NCU_KERNEL_A + " " * 61,
+        "Kernel Name" + " " * 8 + _NCU_KERNEL_A + " " * 63,
+        "Kernel  Name" + " " * 7 + _NCU_KERNEL_A + " " * 62,
+        "Kernel Name" + " " * 9 + _NCU_KERNEL_A + " " * 61,
+        "Name Kernel" + " " * 8 + _NCU_KERNEL_A + " " * 62,
+        "KernelName" + " " * 9 + _NCU_KERNEL_A + " " * 62,
+        "Kernel Name:" + " " * 7 + _NCU_KERNEL_A + " " * 62,
+        "Kernel Name" + " " * 8 + _NCU_KERNEL_A.replace("_", "-", 1) + " " * 62,
+        "Kernel Name" + " " * 8 + "0" + _NCU_KERNEL_A[1:] + " " * 62,
+        "Kernel Name" + " " * 7 + "extra " + _NCU_KERNEL_A + " " * 57,
+        "Kernel Name" + " " * 8 + _NCU_KERNEL_A[:-1] + " " * 62,
+        "Kernel Name" + " " * 8 + _NCU_KERNEL_A + "x" + " " * 62,
+    ),
+    ids=(
+        "106-bytes",
+        "108-bytes",
+        "first-gap-distribution",
+        "trailing-padding-distribution",
+        "word-order",
+        "word-lookalike",
+        "colon-form",
+        "invalid-name-character",
+        "invalid-name-prefix",
+        "extra-token",
+        "name-too-short",
+        "name-too-long",
+    ),
+)
+def test_runner_ncu_sass_parser_rejects_kernel_identity_row_mutations(section: str) -> None:
+    source = "\n".join(
+        (
+            _NCU_SASS_SEPARATOR,
+            section,
+            "Address Source",
+            _NCU_SASS_SEPARATOR,
+            "0000000000000000 MOV R1, R2",
+            "",
+        )
+    )
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    diagnostic = _ncu_sass_diagnostic(failure.value)
+    assert diagnostic["line_number"] == 2
 
 
 @pytest.mark.parametrize(
@@ -586,10 +658,10 @@ def test_runner_ncu_sass_parser_requires_valid_instruction_rows_for_exact_kernel
     ids=("512-bytes", "513-bytes", "escape-expansion", "private-token", "control", "unicode"),
 )
 def test_runner_ncu_sass_unrecognized_record_diagnostic_is_metadata_only(record: str) -> None:
-    source = _ncu_sass_export(("KernelA", (record,)))
+    source = _ncu_sass_export((_NCU_KERNEL_A, (record,)))
 
     with pytest.raises(ValueError) as failure:
-        runner.parse_ncu_sass(source, ("KernelA",))
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
     record_bytes = record.encode("utf-8")
     diagnostic = _ncu_sass_diagnostic(failure.value)
@@ -617,7 +689,7 @@ def test_runner_ncu_sass_line_structure_counts_boundary_and_escape_classes(
     record: str, expected: dict[str, int]
 ) -> None:
     with pytest.raises(ValueError) as failure:
-        runner.parse_ncu_sass(_ncu_sass_export(("KernelA", (record,))), ("KernelA",))
+        runner.parse_ncu_sass(_ncu_sass_export((_NCU_KERNEL_A, (record,))), (_NCU_KERNEL_A,))
 
     structure = _ncu_sass_structure(failure.value)
     ascii_classes = structure["ascii_classes"]
@@ -633,7 +705,7 @@ def test_runner_ncu_sass_line_structure_is_closed_aggregate_metadata() -> None:
     record = "  Address Source:\tKernel,Name|Section-Function  "
 
     with pytest.raises(ValueError) as failure:
-        runner.parse_ncu_sass(_ncu_sass_export(("KernelA", (record,))), ("KernelA",))
+        runner.parse_ncu_sass(_ncu_sass_export((_NCU_KERNEL_A, (record,))), (_NCU_KERNEL_A,))
 
     diagnostic = _ncu_sass_diagnostic(failure.value)
     assert diagnostic["line_structure"] == {
@@ -685,11 +757,11 @@ def test_runner_ncu_sass_line_structure_reports_only_closed_public_patterns(reco
         + "\n"
         + record
         + "\n"
-        + _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))).split("\n", maxsplit=1)[1]
+        + _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))).split("\n", maxsplit=1)[1]
     )
 
     with pytest.raises(ValueError) as failure:
-        runner.parse_ncu_sass(source, ("KernelA",))
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
     patterns = _ncu_sass_structure(failure.value)["public_patterns"]
     assert isinstance(patterns, dict)
@@ -717,11 +789,11 @@ def test_runner_ncu_sass_line_structure_rejects_status_pattern_lookalikes(record
         + "\n"
         + record
         + "\n"
-        + _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))).split("\n", maxsplit=1)[1]
+        + _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))).split("\n", maxsplit=1)[1]
     )
 
     with pytest.raises(ValueError) as failure:
-        runner.parse_ncu_sass(source, ("KernelA",))
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
     patterns = _ncu_sass_structure(failure.value)["public_patterns"]
     assert isinstance(patterns, dict)
@@ -739,7 +811,7 @@ def test_runner_ncu_sass_line_structure_rejects_status_pattern_lookalikes(record
 def test_runner_ncu_sass_line_structure_public_words_require_exact_standalone_tokens(record: str) -> None:
 
     with pytest.raises(ValueError) as failure:
-        runner.parse_ncu_sass(_ncu_sass_export(("KernelA", (record,))), ("KernelA",))
+        runner.parse_ncu_sass(_ncu_sass_export((_NCU_KERNEL_A, (record,))), (_NCU_KERNEL_A,))
 
     vocabulary = _ncu_sass_structure(failure.value)["public_vocabulary"]
     assert isinstance(vocabulary, dict)
@@ -757,7 +829,7 @@ def test_runner_ncu_sass_line_structure_does_not_encode_token_order_or_values() 
     diagnostics = []
     for record in ("private,token", "token,private"):
         with pytest.raises(ValueError) as failure:
-            runner.parse_ncu_sass(_ncu_sass_export(("KernelA", (record,))), ("KernelA",))
+            runner.parse_ncu_sass(_ncu_sass_export((_NCU_KERNEL_A, (record,))), (_NCU_KERNEL_A,))
         assert record not in str(failure.value)
         diagnostics.append(_ncu_sass_diagnostic(failure.value))
 
@@ -772,10 +844,10 @@ def test_runner_ncu_sass_unrecognized_record_diagnostic_does_not_leak_adjacent_o
     adjacent_record = "adjacent-private-token"
     environment_token = "environment-private-token"
     monkeypatch.setenv("NCU_PRIVATE_TEST_TOKEN", environment_token)
-    source = _ncu_sass_export(("KernelA", (private_record, adjacent_record)))
+    source = _ncu_sass_export((_NCU_KERNEL_A, (private_record, adjacent_record)))
 
     with pytest.raises(ValueError) as failure:
-        runner.parse_ncu_sass(source, ("KernelA",))
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
     message = str(failure.value)
     assert _ncu_sass_diagnostic(failure.value)["line_number"] == 5
@@ -788,7 +860,7 @@ def test_runner_ncu_sass_nul_rejection_remains_metadata_only() -> None:
     private_record = "private\x00token"
 
     with pytest.raises(ValueError, match="reviewed text bound") as failure:
-        runner.parse_ncu_sass(_ncu_sass_export(("KernelA", (private_record,))), ("KernelA",))
+        runner.parse_ncu_sass(_ncu_sass_export((_NCU_KERNEL_A, (private_record,))), (_NCU_KERNEL_A,))
 
     assert private_record not in str(failure.value)
 
@@ -800,7 +872,7 @@ def test_runner_ncu_sass_unrecognized_record_diagnostic_fails_closed_at_serializ
     private_record = "private-token"
 
     with pytest.raises(ValueError) as failure:
-        runner.parse_ncu_sass(_ncu_sass_export(("KernelA", (private_record,))), ("KernelA",))
+        runner.parse_ncu_sass(_ncu_sass_export((_NCU_KERNEL_A, (private_record,))), (_NCU_KERNEL_A,))
 
     assert str(failure.value) == "unrecognized Nsight Compute SASS export record; diagnostic exceeds reviewed bound"
     assert len(str(failure.value).encode("utf-8")) <= 2048
@@ -819,39 +891,39 @@ def test_runner_ncu_sass_unrecognized_record_diagnostic_fails_closed_at_serializ
     ),
 )
 def test_runner_ncu_sass_parser_rejects_missing_or_mutated_table_separator(replacement: str) -> None:
-    source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
     section_separator = "Address Source\n" + _NCU_SASS_SEPARATOR
 
     with pytest.raises(ValueError):
         runner.parse_ncu_sass(
             source.replace(section_separator, "Address Source\n" + replacement),
-            ("KernelA",),
+            (_NCU_KERNEL_A,),
         )
 
 
 @pytest.mark.parametrize(
     "source",
     (
-        _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))).split("\n", maxsplit=1)[1],
-        "\n" + _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))),
-        "not-the-reviewed-separator\n" + _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))),
+        _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))).split("\n", maxsplit=1)[1],
+        "\n" + _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))),
+        "not-the-reviewed-separator\n" + _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))),
         _NCU_SASS_SEPARATOR
         + " \n"
-        + _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))).split("\n", maxsplit=1)[1],
+        + _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))).split("\n", maxsplit=1)[1],
     ),
     ids=("missing", "moved-to-line-2", "arbitrary-line-1", "padded-line-1"),
 )
 def test_runner_ncu_sass_parser_requires_exact_top_level_separator_at_line_one(source: str) -> None:
     with pytest.raises(ValueError, match="exact line-1 table separator"):
-        runner.parse_ncu_sass(source, ("KernelA",))
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
 
 def test_runner_ncu_sass_parser_rejects_duplicate_top_level_separator() -> None:
-    source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
     source = _NCU_SASS_SEPARATOR + "\n" + source
 
     with pytest.raises(ValueError, match=r"misplaced.*line 2"):
-        runner.parse_ncu_sass(source, ("KernelA",))
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
 
 @pytest.mark.parametrize(
@@ -859,9 +931,9 @@ def test_runner_ncu_sass_parser_rejects_duplicate_top_level_separator() -> None:
     ("", " Address Source", "Address Source ", "Address  Source", "Address\tSource", "address Source"),
 )
 def test_runner_ncu_sass_parser_rejects_missing_or_nonliteral_header(header: str) -> None:
-    source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
     with pytest.raises(ValueError):
-        runner.parse_ncu_sass(source.replace("Address Source", header), ("KernelA",))
+        runner.parse_ncu_sass(source.replace("Address Source", header), (_NCU_KERNEL_A,))
 
 
 @pytest.mark.parametrize(
@@ -872,53 +944,54 @@ def test_runner_ncu_sass_parser_rejects_missing_or_nonliteral_header(header: str
     ),
 )
 def test_runner_ncu_sass_parser_rejects_duplicate_or_misplaced_header(replacement: str) -> None:
-    source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
     with pytest.raises(ValueError, match=r"misplaced|unrecognized"):
-        runner.parse_ncu_sass(source.replace("Address Source", replacement), ("KernelA",))
+        runner.parse_ncu_sass(source.replace("Address Source", replacement), (_NCU_KERNEL_A,))
 
 
 def test_runner_ncu_sass_parser_rejects_header_before_kernel_section() -> None:
-    source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))).replace(
-        "Kernel Name: KernelA\nAddress Source", "Address Source\nKernel Name: KernelA"
+    section = _ncu_sass_kernel_row(_NCU_KERNEL_A)
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))).replace(
+        section + "\nAddress Source", "Address Source\n" + section
     )
     with pytest.raises(ValueError, match="misplaced"):
-        runner.parse_ncu_sass(source, ("KernelA",))
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
 
 @pytest.mark.parametrize("separator", (" " + _NCU_SASS_SEPARATOR, _NCU_SASS_SEPARATOR + " "))
 def test_runner_ncu_sass_parser_rejects_separator_outer_whitespace(separator: str) -> None:
-    source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
     section_separator = "Address Source\n" + _NCU_SASS_SEPARATOR
     with pytest.raises(ValueError):
         runner.parse_ncu_sass(
             source.replace(section_separator, "Address Source\n" + separator),
-            ("KernelA",),
+            (_NCU_KERNEL_A,),
         )
 
 
 @pytest.mark.parametrize(
     "source",
     (
-        _NCU_SASS_SEPARATOR + "\n" + _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))),
-        _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))).replace(
+        _NCU_SASS_SEPARATOR + "\n" + _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))),
+        _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))).replace(
             "0000000000000000 MOV R1, R2",
             _NCU_SASS_SEPARATOR + "\n0000000000000000 MOV R1, R2",
         ),
-        _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))) + _NCU_SASS_SEPARATOR + "\n",
+        _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))) + _NCU_SASS_SEPARATOR + "\n",
     ),
 )
 def test_runner_ncu_sass_parser_rejects_misplaced_or_duplicate_table_separator(source: str) -> None:
     with pytest.raises(ValueError, match=r"misplaced|unrecognized"):
-        runner.parse_ncu_sass(source, ("KernelA",))
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
 
 def test_runner_ncu_sass_file_boundary_is_bounded_and_nonleaking(tmp_path: Path) -> None:
     path = tmp_path / "ncu-sass.txt"
     private = "/private/profiler/" + "secret" * 10_000
-    path.write_text(_ncu_sass_export(("KernelA", (private,))))
+    path.write_text(_ncu_sass_export((_NCU_KERNEL_A, (private,))))
 
     with pytest.raises(ValueError) as failure:
-        runner._parse_ncu_sass_file(path, ("KernelA",))
+        runner._parse_ncu_sass_file(path, (_NCU_KERNEL_A,))
     assert str(failure.value) == "Nsight Compute SASS export line 5 exceeds its reviewed bound"
     assert private not in str(failure.value)
 
@@ -926,18 +999,18 @@ def test_runner_ncu_sass_file_boundary_is_bounded_and_nonleaking(tmp_path: Path)
         stream.seek((1 << 20) + 1)
         stream.write(b"x")
     with pytest.raises(ValueError, match="bounded regular file"):
-        runner._parse_ncu_sass_file(path, ("KernelA",))
+        runner._parse_ncu_sass_file(path, (_NCU_KERNEL_A,))
 
 
 def test_runner_ncu_sass_accepts_exact_file_and_line_bounds(tmp_path: Path) -> None:
     path = tmp_path / "ncu-sass.txt"
-    source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
     source = source.replace(
         _NCU_SASS_SEPARATOR + "\n",
         _NCU_SASS_SEPARATOR + "\n" + " " * 1024 + "\n",
         1,
     )
-    assert runner.parse_ncu_sass(source, ("KernelA",))[0].name == "KernelA"
+    assert runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))[0].name == _NCU_KERNEL_A
 
     remaining = (1 << 20) - len(source.encode())
     padding: list[str] = []
@@ -947,15 +1020,15 @@ def test_runner_ncu_sass_accepts_exact_file_and_line_bounds(tmp_path: Path) -> N
         remaining -= width + 1
     path.write_text(source + "".join(padding))
     assert path.stat().st_size == 1 << 20
-    assert runner._parse_ncu_sass_file(path, ("KernelA",))[0].name == "KernelA"
+    assert runner._parse_ncu_sass_file(path, (_NCU_KERNEL_A,))[0].name == _NCU_KERNEL_A
 
     path.write_bytes(b"\xff")
     with pytest.raises(ValueError, match="valid UTF-8"):
-        runner._parse_ncu_sass_file(path, ("KernelA",))
+        runner._parse_ncu_sass_file(path, (_NCU_KERNEL_A,))
 
-    path.write_bytes(_ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))).encode() + b"\x00")
+    path.write_bytes(_ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))).encode() + b"\x00")
     with pytest.raises(ValueError, match="reviewed text bound"):
-        runner._parse_ncu_sass_file(path, ("KernelA",))
+        runner._parse_ncu_sass_file(path, (_NCU_KERNEL_A,))
 
     with pytest.raises(ValueError, match="line 2 exceeds"):
         runner.parse_ncu_sass(
@@ -964,7 +1037,7 @@ def test_runner_ncu_sass_accepts_exact_file_and_line_bounds(tmp_path: Path) -> N
                 _NCU_SASS_SEPARATOR + "\n" + " " * 1025 + "\n",
                 1,
             ),
-            ("KernelA",),
+            (_NCU_KERNEL_A,),
         )
 
 
@@ -972,11 +1045,11 @@ def test_runner_ncu_sass_spills_are_read_only_from_validated_instruction_rows(tm
     sass_path = tmp_path / "ordinary.sass"
     sass_path.write_text(
         _ncu_sass_export(
-            ("KernelA", ("0000000000000000 LDL.64 R2, [R4]", "0000000000000010 STL [R4], R2")),
+            (_NCU_KERNEL_A, ("0000000000000000 LDL.64 R2, [R4]", "0000000000000010 STL [R4], R2")),
         )
     )
     profile = runner.NcuProfileEvidence(
-        metrics=(_ncu_metric("KernelA"),),
+        metrics=(_ncu_metric(_NCU_KERNEL_A),),
         report_path="profile.ncu-rep",
         report_sha256="1" * 64,
         sass_source_path=str(sass_path),
@@ -984,7 +1057,7 @@ def test_runner_ncu_sass_spills_are_read_only_from_validated_instruction_rows(tm
         final_hlo="hlo",
     )
 
-    parsed = runner.parse_ncu_sass(sass_path.read_text(), ("KernelA",))
+    parsed = runner.parse_ncu_sass(sass_path.read_text(), (_NCU_KERNEL_A,))
     assert tuple(instruction.mnemonic for instruction in parsed[0].instructions) == ("LDL.64", "STL")
     with pytest.raises(RuntimeError, match="local-memory spills"):
         runner.ordinary_kernel_records(
@@ -1004,51 +1077,51 @@ def test_runner_ncu_sass_spills_are_read_only_from_validated_instruction_rows(tm
     ("source", "expected_names", "message"),
     [
         (
-            _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))),
-            ("KernelA", "KernelB"),
+            _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))),
+            (_NCU_KERNEL_A, _NCU_KERNEL_B),
             "coverage differs",
         ),
         (
             _ncu_sass_export(
-                ("KernelA", ("0000000000000000 MOV R1, R2",)),
-                ("KernelA", ("0000000000000010 EXIT",)),
+                (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+                (_NCU_KERNEL_A, ("0000000000000010 EXIT",)),
             ),
-            ("KernelA",),
+            (_NCU_KERNEL_A,),
             "repeats a kernel section",
         ),
         (
-            _ncu_sass_export(("KernelA_suffix", ("0000000000000000 MOV R1, R2",))),
-            ("KernelA",),
+            _ncu_sass_export((_NCU_KERNEL_A[:-1] + "9", ("0000000000000000 MOV R1, R2",))),
+            (_NCU_KERNEL_A,),
             "coverage differs",
         ),
         (
-            _ncu_sass_export(("KernelA", ("not-an-address MOV R1, R2",))),
-            ("KernelA",),
+            _ncu_sass_export((_NCU_KERNEL_A, ("not-an-address MOV R1, R2",))),
+            (_NCU_KERNEL_A,),
             "unrecognized.*line",
         ),
         (
-            _ncu_sass_export(("KernelA", ("0000000000000000 NOTREAL R1, R2",))),
-            ("KernelA",),
+            _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 NOTREAL R1, R2",))),
+            (_NCU_KERNEL_A,),
             "unrecognized SASS instruction mnemonic",
         ),
         (
             "==WARNING== Profiler output was truncated\n",
-            ("KernelA",),
+            (_NCU_KERNEL_A,),
             "warning, error, or unavailable source",
         ),
         (
             "==ERROR== Profiler report cannot be imported\n",
-            ("KernelA",),
+            (_NCU_KERNEL_A,),
             "warning, error, or unavailable source",
         ),
         (
             "SASS is unavailable for KernelA\n",
-            ("KernelA",),
+            (_NCU_KERNEL_A,),
             "warning, error, or unavailable source",
         ),
         (
             "ordinary plain text with no SASS structure\n",
-            ("KernelA",),
+            (_NCU_KERNEL_A,),
             "exact line-1 table separator",
         ),
     ],
