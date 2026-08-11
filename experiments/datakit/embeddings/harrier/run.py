@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Embed every source represented by the pinned global fuzzy-dedup artifact with Harrier."""
+"""Embed the globally deduplicated Datakit sources with Harrier."""
+
+import argparse
 
 from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
@@ -15,37 +17,41 @@ from rigging.log_setup import configure_logging
 from experiments.datakit.embeddings.harrier.pipeline import (
     DEFAULT_BATCH_SIZE,
     EMBEDDING_ATTR_DATA_VERSION,
+    HARRIER_MAX_TOKENS,
     HARRIER_REPO,
     HARRIER_REVISION,
     embed_source,
     stage_harrier,
 )
+from experiments.datakit.embeddings.harrier.tei import tei_service_pool
 from experiments.datakit.reference_pipeline import select_sources
 
 DEDUP_ID = "dedup_709f5997"
 DEDUP_PATH = f"s3://marin-us-east-02a/marin/datakit/{DEDUP_ID}"
 WORKERS_PER_SOURCE = 32
 MAX_CONCURRENT = 8
-COORDINATOR_RESOURCES = ResourceConfig(
-    cpu=2,
-    ram="8g",
-    disk="8g",
-)
+TEI_INSTANCES = 128
+COORDINATOR_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
 
 
-def _embed_source(output_path: str, normalized_path: str) -> None:
+def _embed_source(output_path: str, normalized_path: str, endpoint_name: str) -> None:
     normalized = read_artifact(normalized_path, NormalizedData)
     dedup = read_artifact(DEDUP_PATH, FuzzyDupsAttrData)
     embed_source(
         output_path=output_path,
         normalized=normalized,
+        endpoint_name=endpoint_name,
         dedup_attr_dir=dedup.attr_dir_for_source(normalized.main_output_dir),
         max_workers=WORKERS_PER_SOURCE,
     )
 
 
-def build() -> list[StepSpec]:
-    sources = select_sources()
+def build_steps(endpoint_name: str, partition_index: int = 0, partition_count: int = 1) -> list[StepSpec]:
+    """Build one embedding step per source in a deterministic partition."""
+    if not 0 <= partition_index < partition_count:
+        raise ValueError(f"partition index {partition_index} must be in [0, {partition_count})")
+
+    sources = list(select_sources().items())[partition_index::partition_count]
     return [
         StepSpec(
             name=f"datakit/embed/harrier/{source_name}",
@@ -58,16 +64,37 @@ def build() -> list[StepSpec]:
                 "v": EMBEDDING_ATTR_DATA_VERSION,
             },
             fn=remote(
-                lambda output_path, normalized_path=normalized.output_path: _embed_source(output_path, normalized_path),
+                lambda output_path, normalized_path=normalized.output_path: _embed_source(
+                    output_path, normalized_path, endpoint_name
+                ),
                 resources=COORDINATOR_RESOURCES,
                 pip_dependency_groups=["datakit"],
             ),
         )
-        for source_name, normalized in sources.items()
+        for source_name, normalized in sources
     ]
 
 
-if __name__ == "__main__":
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--partition-index", type=int, default=0)
+    parser.add_argument("--partition-count", type=int, default=1)
+    parser.add_argument("--tei-instances", type=int, default=TEI_INSTANCES)
+    parser.add_argument("--max-concurrent", type=int, default=MAX_CONCURRENT)
+    args = parser.parse_args()
+
     configure_logging()
-    stage_harrier(HARRIER_REPO, HARRIER_REVISION, DEDUP_PATH)
-    StepRunner().run(build(), max_concurrent=MAX_CONCURRENT)
+    model_archive = stage_harrier(HARRIER_REPO, HARRIER_REVISION, DEDUP_PATH)
+    with tei_service_pool(
+        model_archive,
+        instances=args.tei_instances,
+        max_input_tokens=HARRIER_MAX_TOKENS,
+    ) as endpoint_name:
+        StepRunner().run(
+            build_steps(endpoint_name, args.partition_index, args.partition_count),
+            max_concurrent=args.max_concurrent,
+        )
+
+
+if __name__ == "__main__":
+    main()
