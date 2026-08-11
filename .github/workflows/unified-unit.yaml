@@ -234,11 +234,6 @@ jobs:
               timeout --kill-after=5 --signal=TERM 1490 \
               uv run --package marin-levanter --frozen --group test --extra tpu \
               pytest -n 0 ${{ needs.select.outputs.levanter_tpu_test_paths }} \
-              --ignore=lib/levanter/tests/test_audio.py \
-              --ignore=lib/levanter/tests/test_new_cache.py \
-              --ignore=lib/levanter/tests/test_hf_checkpoints.py \
-              --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py \
-              --ignore=lib/levanter/tests/test_gdn_layer.py \
               -v --tb=short --log-cli-level=WARNING --durations=20"
 
   iris_e2e_smoke:

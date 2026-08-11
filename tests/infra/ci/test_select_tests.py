@@ -292,19 +292,14 @@ def _levanter_accelerator_workspace(repo_root: Path) -> None:
     )
 
 
-def test_accelerator_suites_reuse_import_selected_levanter_files(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "changed_file",
+    ["lib/levanter/src/levanter/model.py", "lib/haliax/src/haliax/core.py"],
+)
+def test_accelerator_suites_reuse_import_selected_levanter_files(tmp_path: Path, changed_file: str) -> None:
     _levanter_accelerator_workspace(tmp_path)
 
-    paths = select_accelerator_paths(["lib/levanter/src/levanter/model.py"], tmp_path)
-
-    expected = ["lib/levanter/tests/test_model.py"]
-    assert paths == {"levanter-torch": expected, "levanter-tpu": expected}
-
-
-def test_haliax_change_selects_only_dependent_levanter_accelerator_tests(tmp_path: Path) -> None:
-    _levanter_accelerator_workspace(tmp_path)
-
-    paths = select_accelerator_paths(["lib/haliax/src/haliax/core.py"], tmp_path)
+    paths = select_accelerator_paths([changed_file], tmp_path)
 
     expected = ["lib/levanter/tests/test_model.py"]
     assert paths == {"levanter-torch": expected, "levanter-tpu": expected}

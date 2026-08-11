@@ -454,7 +454,6 @@ def extra_suites(changed_files: list[str]) -> list[str]:
 
 
 def _node_has_torch_marker(node: ast.AST) -> bool:
-    """Whether a decorator or module marker expression applies pytest's torch marker."""
     return any(
         (isinstance(child, ast.Name) and child.id == "skip_if_no_torch")
         or (isinstance(child, ast.Attribute) and child.attr == "torch")
@@ -650,12 +649,7 @@ def accelerator_suite_test_paths(
     *,
     force: bool = False,
 ) -> dict[str, list[str]]:
-    """Affected Levanter test paths for the Torch and TPU lanes.
-
-    CPU selection already walks transitive imports across Haliax and Levanter. Reuse
-    that result so accelerator jobs validate the same affected surface instead of
-    expanding any in-package change to the entire Levanter suite.
-    """
+    """Return affected Levanter tests split by accelerator lane."""
     is_triggered = force or any(
         filepath.startswith(prefix) for prefix in LEVANTER_ACCELERATOR_TRIGGERS for filepath in changed_files
     )
