@@ -32,7 +32,12 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem import prefix_join
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
-from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, RematMode, SmallParamSharding
+from experiments.grug.moe_hero_fsdp.model import (
+    GrugModelConfig,
+    RematMode,
+    RmsGatedNormImplementation,
+    SmallParamSharding,
+)
 from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_fsdp.train import (
     GrugAblationSweepConfig,
@@ -204,6 +209,7 @@ class HeroOverrides:
     small_param_sharding: SmallParamSharding | None = None
     remat_mode: RematMode | None = None
     ce_b_block_size: int | None = None
+    rms_gated_norm_implementation: RmsGatedNormImplementation | None = None
 
 
 def apply_hero_overrides(model: GrugModelConfig, overrides: HeroOverrides) -> GrugModelConfig:
@@ -364,11 +370,16 @@ def build_hero_sweep_run(
 
     ``priority`` is the Iris band for the training gang. It rides as a runtime arg, so rescheduling
     the same arms at a different band reuses the cached result rather than rebuilding.
+
     """
     if not arms:
         raise ValueError("a sweep needs at least one arm")
     parts = _hero_run_parts(
-        run_id=run_id, dp_racks=dp_racks, num_steps=steps_per_arm, save_checkpoints=False, version=version
+        run_id=run_id,
+        dp_racks=dp_racks,
+        num_steps=steps_per_arm,
+        save_checkpoints=False,
+        version=version,
     )
     wandb_project = parts.wandb_project
     grug_trainer = parts.grug_trainer
@@ -491,6 +502,12 @@ def build_hero_sweep_run(
     default=None,
     help="Global batch in sequences. Unset derives it as dp_racks x 1024. Must divide the device count.",
 )
+@click.option(
+    "--rms-gated-norm-implementation",
+    type=click.Choice(get_args(RmsGatedNormImplementation)),
+    default=None,
+    help="RMSNorm-GatedNorm boundary implementation. Unset keeps the hero value.",
+)
 @build_options
 def main(
     run_id: str,
@@ -506,6 +523,7 @@ def main(
     remat_mode: RematMode | None,
     ce_b_block_size: int | None,
     batch_size: int | None,
+    rms_gated_norm_implementation: RmsGatedNormImplementation | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -521,6 +539,7 @@ def main(
             small_param_sharding=small_param_sharding,
             remat_mode=remat_mode,
             ce_b_block_size=ce_b_block_size,
+            rms_gated_norm_implementation=rms_gated_norm_implementation,
         ),
         batch_size=batch_size,
     )
