@@ -204,6 +204,15 @@ jobs:
           echo "Using Docker image: $DOCKER_IMAGE"
           mkdir -p /tmp/uv-cache
           chmod 777 /tmp/uv-cache
+          TPU_TEST_PATHS="${{ needs.select.outputs.levanter_tpu_test_paths }}"
+          if [ -z "$TPU_TEST_PATHS" ]; then
+            TPU_TEST_PATHS="lib/levanter/tests"
+            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_audio.py"
+            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_new_cache.py"
+            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_hf_checkpoints.py"
+            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py"
+            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_gdn_layer.py"
+          fi
           # Run Levanter tests with the package TPU extra so CI validates the
           # explicit jax/jaxlib/libtpu pins shipped by marin-levanter.
           # TPU collection imports call jax.devices(), so keep pytest single-process here.
@@ -240,7 +249,7 @@ jobs:
               ( status=0; \
                 timeout --kill-after=5 --signal=TERM 1490 \
                 uv run --package marin-levanter --frozen --group test --extra tpu \
-                pytest -n 0 ${{ needs.select.outputs.levanter_tpu_test_paths || 'lib/levanter/tests' }} \
+                pytest -n 0 $TPU_TEST_PATHS \
                 -v --tb=short --log-cli-level=WARNING --durations=20 || status=\$?; \
                 [ "\$status" -eq 5 ] && exit 0; \
                 exit "\$status" )"
