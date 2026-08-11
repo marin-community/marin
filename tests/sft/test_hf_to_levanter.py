@@ -144,6 +144,23 @@ def test_explicit_steps_can_reuse_prebuilt_chat_cache():
     assert train_config.data.components["ds"].source.train_urls == []
 
 
+def test_selected_parquet_groups_are_explicit_transform_subsets():
+    conv = _fake_conversion()
+    dataset = dataclasses.replace(
+        _DATASET,
+        parquet_files={"terminal": ["terminal/data.parquet"]},
+        parquet_batch_size=1_024,
+    )
+    spec = dataclasses.replace(_spec(ConvertedCheckpointModel(conversion=conv)), datasets=[dataset])
+
+    step = sft_step(spec, ResourceConfig.with_cpu())
+    transform = next(dep for dep in step.deps if dep.name == "documents/ds")
+    transform_config = materialized_config(transform, _PREFIX)
+
+    assert transform_config.subsets == ["terminal"]
+    assert transform_config.parquet_files == {"terminal": ["terminal/data.parquet"]}
+
+
 def test_lm_config_draccus_round_trip_selects_subclass_by_model_type():
     """The carried arch survives the encode/decode used to ship it to the worker + downstream."""
     arch = _tiny_arch()

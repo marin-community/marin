@@ -676,6 +676,7 @@ def _dataset_deps(spec: SFTSpec) -> tuple[ArtifactStep, ...]:
                 adapter=multi_turn_adapter(**dict(dataset.adapter_kwargs)),
                 metadata_columns=[],
                 name=dataset.slug,
+                subsets=list(dataset.parquet_files) if dataset.parquet_files is not None else [],
                 columns=dataset.columns,
                 parquet_files={key: list(files) for key, files in (dataset.parquet_files or {}).items()},
                 parquet_batch_size=dataset.parquet_batch_size,
