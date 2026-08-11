@@ -2,6 +2,29 @@
 
 This directory contains thin trigger YAML around behavior implemented in `scripts/ci/`. See the design at `.agents/projects/workflow_scripts/design.md` and contracts at `.agents/projects/workflow_scripts/spec.md`.
 
+## Pulumi service rollouts
+
+`ops-pulumi-rollout.yaml` runs `pulumi up` for registered service projects after their source
+paths change on `main`. `scripts/ci/pulumi_rollouts.py` is the rollout registry and maps each
+service to its Pulumi directory, stack, deploy identity, tests, and additional source roots.
+The registry currently covers Ducky, Echo, Grafana, and XProf. Add one `Rollout` entry when
+another service should deploy through this workflow.
+
+For an `IrisService`, every registered shared source root must also be present in that
+service's `code_paths`. The rollout selector starts `pulumi up`; `code_paths` changes the
+`command.local.Command` input that resubmits the Iris job.
+
+Pull requests run each affected service's registered pytest path. Manual dispatch selects one
+registered service and accepts a deploy-generation override for Ducky and XProf. Ducky and
+XProf still read their runtime credentials from GitHub Actions secrets; the rollout job exposes
+those values only to the matching matrix entry.
+
+Run one stack manually from `main` with:
+
+```bash
+gh workflow run ops-pulumi-rollout.yaml --ref main -f service=echo
+```
+
 ## Agent prose cleanup
 
 `ops-agent-prose-cleanup.yaml` cleans issue and PR descriptions carrying the
