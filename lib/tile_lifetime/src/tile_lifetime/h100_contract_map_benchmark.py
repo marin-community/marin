@@ -408,6 +408,8 @@ RESULT_EVIDENCE_SECTIONS = (
             "device_to_device_bytes",
             "host_to_device_count",
             "host_to_device_bytes",
+            "device_to_host_count",
+            "device_to_host_bytes",
             "unexpected_copy_count",
         ),
     ),
@@ -1035,7 +1037,7 @@ def result_evidence_schema() -> dict[str, Any]:
     """Return the immutable result schema before any benchmark execution."""
     plan = default_h100_contract_map_benchmark_plan()
     return {
-        "schema": "shuttle.h100_contract_map_result_evidence.v3",
+        "schema": "shuttle.h100_contract_map_result_evidence.v4",
         "required_sections": [section.name for section in RESULT_EVIDENCE_SECTIONS],
         "sections": [asdict(section) for section in RESULT_EVIDENCE_SECTIONS],
         "nested_records": {
@@ -1136,6 +1138,8 @@ def validate_result_evidence(payload: Mapping[str, Any]) -> None:
         "device_to_device_bytes",
         "host_to_device_count",
         "host_to_device_bytes",
+        "device_to_host_count",
+        "device_to_host_bytes",
         "unexpected_copy_count",
     ):
         _require_nonnegative_integer(copies[field], f"copies.{field}")
@@ -1417,7 +1421,7 @@ def staging_manifest(*, shuttle_revision: str) -> dict[str, Any]:
     wiring = staged_backend_wiring()
     decisions = tuple(comparator_decision(comparator, plan.features) for comparator in ExternalComparator)
     return {
-        "schema": "shuttle.h100_contract_map_backend_evidence.v3",
+        "schema": "shuttle.h100_contract_map_backend_evidence.v4",
         "kind": "staged_plan_no_gpu_evidence",
         "shuttle_revision": shuttle_revision,
         "plan": asdict(plan),

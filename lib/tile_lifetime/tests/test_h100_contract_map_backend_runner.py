@@ -481,6 +481,8 @@ def test_runner_nsys_parser_accepts_lazy_omission_only_with_complete_cuda_trace_
         ("wrong-gpu-schema", "TARGET_INFO_GPU identity"),
         ("empty-gpu-metadata", "contains no CUDA device identity"),
         ("unknown-kernel-device", "unknown CUDA device ids"),
+        ("dangling-kernel-name", "invalid activity record"),
+        ("ambiguous-kernel-name", "do not resolve exactly once"),
         ("wrong-schedule", "exact steady-state schedule"),
     ),
 )
@@ -504,6 +506,10 @@ def test_runner_nsys_parser_rejects_missing_memcpy_without_complete_cuda_trace_p
             database.execute("DELETE FROM TARGET_INFO_GPU")
         elif mutation == "unknown-kernel-device":
             database.execute("UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET deviceId = 1")
+        elif mutation == "dangling-kernel-name":
+            database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (160, 240, 999, 0)")
+        elif mutation == "ambiguous-kernel-name":
+            database.execute("INSERT INTO StringIds VALUES (7, 'ambiguous_kernel')")
         elif mutation == "wrong-schedule":
             expected_ranges = ("contract_map.steady.1.ordinary_xla",)
         else:
@@ -790,14 +796,25 @@ def test_runner_merges_device_and_logical_timings_only_for_exact_copy_free_sched
         "logical_training_step": 10_000,
     }
     assert summary[BackendVariant.SHUTTLE_FAST.value]["launch_count"] == 2
+    assert summary[BackendVariant.SHUTTLE_FAST.value]["copies"] == {
+        "device_to_device_count": 0,
+        "device_to_device_bytes": 0,
+        "host_to_device_count": 0,
+        "host_to_device_bytes": 0,
+        "device_to_host_count": 0,
+        "device_to_host_bytes": 0,
+        "unexpected_copy_count": 0,
+    }
     for copy_fields in (
         {"device_to_device_count": 1, "device_to_device_bytes": 64},
         {"host_to_device_count": 1, "host_to_device_bytes": 64},
         {"device_to_host_count": 1, "device_to_host_bytes": 64},
     ):
         copied = replace(traces[0], **copy_fields)
-        with pytest.raises(ValueError, match="unexpected copies"):
+        with pytest.raises(ValueError, match="unexpected copies") as error:
             runner.merge_trace_timing(plan, {"raw_samples": worker_rows}, (copied, *traces[1:]))
+        for field, value in copy_fields.items():
+            assert f"'{field}': {value}" in str(error.value)
 
 
 def test_runner_retains_public_ordinary_xla_ptx_with_typed_absent_cubin(tmp_path: Path) -> None:
