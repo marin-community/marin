@@ -110,3 +110,29 @@ NCU profiling boundary.
 
 No v22 job, image build, GPU execution, or relaunch was performed for this
 source-only diagnostic change.
+
+## V22 line-1 diagnostic
+
+The single v22 task used source
+`75921c162d31642c14cfa6101421295c9030ec3a`. It authenticated the launcher and
+manifest, reached the NCU SASS parser, and failed once because line 1 was not
+the exact reviewed top-level separator. The old exception exposed no line-1
+length, hash, structure, or text, and the temporary profiler output was not
+retained. The v22 artifact therefore makes no claim about the rejected row.
+
+A line-1 mismatch now uses the same bounded structural diagnostic as any later
+unrecognized SASS record. It reports only line number 1, UTF-8 byte count,
+whole-line SHA-256, aggregate character/token/public-vocabulary and closed
+public-pattern facts, plus the reviewed fixed-column summary only when the row
+is exactly 107 bytes. The exact line-1 separator remains the sole accepted
+top-level record; this change does not relax parser acceptance.
+
+The exception contains no raw or redacted row, adjacent record, path, or
+environment value. The existing 2,048-byte serialized bound and fixed
+non-content fallback remain. Tests cover blank, profiler-status, kernel
+identity, header, instruction, separator-lookalike, Unicode, control, exact
+line-bound, and oversized records, as well as private data through the
+production profiler boundary.
+
+No image build, GPU execution, v23 submission, or relaunch was performed for
+this source-only diagnostic change.

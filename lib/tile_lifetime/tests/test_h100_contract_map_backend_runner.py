@@ -492,13 +492,24 @@ def test_runner_ncu_parser_bounds_and_decodes_input_before_csv_parsing(tmp_path:
 
 
 @pytest.mark.parametrize(
-    "variant", ("valid", "missing-top-level", "missing-identity-close", "unrecognized-record", "fixed-column-record")
+    "variant",
+    (
+        "valid",
+        "missing-top-level",
+        "private-line1",
+        "missing-identity-close",
+        "unrecognized-record",
+        "fixed-column-record",
+    ),
 )
 def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     variant: str,
 ) -> None:
+    private_line1 = "private-line1-/workspace/secret"
+    environment_token = "environment-private-token"
+    monkeypatch.setenv("NCU_PRIVATE_TEST_TOKEN", environment_token)
     config = _runner_config(tmp_path)
     cache_source, cache_contract = _worker_cache_fixture(tmp_path, ("ordinary_xla",))
     generated_manifest = tmp_path / "generated.json"
@@ -520,6 +531,8 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
         if variant == "missing-top-level":
             source = source.split("\n", maxsplit=1)[1]
+        elif variant == "private-line1":
+            source = private_line1 + "\n" + source
         elif variant == "missing-identity-close":
             source = source.replace(
                 _ncu_sass_kernel_row(_NCU_KERNEL_A) + "\n" + _NCU_SASS_SEPARATOR + "\n",
@@ -551,8 +564,25 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         cache_contract,
     )
     if variant == "missing-top-level":
-        with pytest.raises(ValueError, match="exact line-1 table separator"):
+        with pytest.raises(ValueError) as failure:
             runner._run_ncu_profile(*arguments)
+        diagnostic = _ncu_sass_diagnostic(failure.value)
+        assert diagnostic["line_number"] == 1
+        structure = diagnostic["line_structure"]
+        assert isinstance(structure, dict)
+        assert structure["public_patterns"]["section"] is True
+        assert "fixed_columns" in structure
+        assert _NCU_KERNEL_A not in str(failure.value)
+        return
+    if variant == "private-line1":
+        with pytest.raises(ValueError) as failure:
+            runner._run_ncu_profile(*arguments)
+        diagnostic = _ncu_sass_diagnostic(failure.value)
+        assert diagnostic["line_number"] == 1
+        assert diagnostic["line_sha256"] == hashlib.sha256(private_line1.encode()).hexdigest()
+        assert private_line1 not in str(failure.value)
+        assert _NCU_SASS_SEPARATOR not in str(failure.value)
+        assert environment_token not in str(failure.value)
         return
     if variant == "missing-identity-close":
         with pytest.raises(ValueError, match=r"identity table omits.*line 3"):
@@ -765,6 +795,74 @@ def test_runner_ncu_sass_parser_rejects_kernel_identity_row_mutations(section: s
 
     diagnostic = _ncu_sass_diagnostic(failure.value)
     assert diagnostic["line_number"] == 2
+
+
+@pytest.mark.parametrize(
+    ("record", "public_pattern"),
+    (
+        ("", None),
+        ("==PROF== Connected to process 123 (/public/tool)", "status"),
+        (_ncu_sass_kernel_row(_NCU_KERNEL_A), "section"),
+        ("Address Source", "header"),
+        ("0000000000000000 MOV R1, R2", "instruction"),
+        (_NCU_SASS_SEPARATOR[:-1] + "x", None),
+        ("unicode-" + "\N{SNOWMAN}" * 3, None),
+        ("\tcontrol\x1brecord", None),
+    ),
+    ids=("blank", "status", "identity", "header", "instruction", "separator-lookalike", "unicode", "control"),
+)
+def test_runner_ncu_sass_line1_mismatch_uses_closed_structural_diagnostic(
+    record: str, public_pattern: str | None
+) -> None:
+    source = record + "\n" + _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    diagnostic = _ncu_sass_diagnostic(failure.value)
+    assert diagnostic["line_number"] == 1
+    assert diagnostic["line_utf8_bytes"] == len(record.encode("utf-8"))
+    assert diagnostic["line_sha256"] == hashlib.sha256(record.encode("utf-8")).hexdigest()
+    structure = diagnostic["line_structure"]
+    assert isinstance(structure, dict)
+    patterns = structure["public_patterns"]
+    assert isinstance(patterns, dict)
+    assert {name for name, matched in patterns.items() if matched} == ({public_pattern} if public_pattern else set())
+    assert ("fixed_columns" in structure) is (len(record.encode("utf-8")) == 107)
+    if record:
+        assert record not in str(failure.value)
+
+
+@pytest.mark.parametrize("size", (1024, 1025))
+def test_runner_ncu_sass_line1_mismatch_retains_line_and_diagnostic_bounds(size: int) -> None:
+    private_record = "x" * size
+    source = private_record + "\n" + _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    if size == 1024:
+        diagnostic = _ncu_sass_diagnostic(failure.value)
+        assert diagnostic["line_number"] == 1
+        assert diagnostic["line_utf8_bytes"] == 1024
+    else:
+        assert str(failure.value) == "Nsight Compute SASS export line 1 exceeds its reviewed bound"
+    assert len(str(failure.value).encode("utf-8")) <= 2048
+    assert private_record not in str(failure.value)
+
+
+def test_runner_ncu_sass_line1_mismatch_diagnostic_fails_closed_at_serialized_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner, "_NCU_SASS_DIAGNOSTIC_PREFIX", "x" * 2048)
+    private_record = "private-line-1"
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(private_record + "\n" + _NCU_SASS_SEPARATOR, (_NCU_KERNEL_A,))
+
+    assert str(failure.value) == "unrecognized Nsight Compute SASS export record; diagnostic exceeds reviewed bound"
+    assert len(str(failure.value).encode("utf-8")) <= 2048
+    assert private_record not in str(failure.value)
 
 
 @pytest.mark.parametrize(
@@ -1172,8 +1270,10 @@ def test_runner_ncu_sass_parser_rejects_missing_or_mutated_table_separator(repla
     ids=("missing", "moved-to-line-2", "arbitrary-line-1", "padded-line-1"),
 )
 def test_runner_ncu_sass_parser_requires_exact_top_level_separator_at_line_one(source: str) -> None:
-    with pytest.raises(ValueError, match="exact line-1 table separator"):
+    with pytest.raises(ValueError) as failure:
         runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 1
 
 
 def test_runner_ncu_sass_parser_rejects_duplicate_top_level_separator() -> None:
@@ -1381,7 +1481,7 @@ def test_runner_ncu_sass_spills_are_read_only_from_validated_instruction_rows(tm
         (
             "ordinary plain text with no SASS structure\n",
             (_NCU_KERNEL_A,),
-            "exact line-1 table separator",
+            "unrecognized Nsight Compute SASS export record",
         ),
     ],
     ids=(
