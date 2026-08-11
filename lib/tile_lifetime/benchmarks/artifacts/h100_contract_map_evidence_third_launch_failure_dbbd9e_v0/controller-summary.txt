@@ -1,0 +1,22 @@
+Job: /dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3 (/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3)
+State: failed  exit=0  failures=1  preemptions=0
+Tasks: 0/1 completed  failed=1
+Error: h100_contract_map_source_payload.py: OK
+h100-evidence-source-manifest.json: OK
+Traceback (most recent call last):
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2507, in <module>
+    main()
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2489, in main
+    output = run_coordinator(
+             ^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1549, in run_coordinator
+    generated_artifacts = compile_generated_candidates(config)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 831, in compile_generated_candidates
+    raise RuntimeError("loaded shared-library SASS does not contain the exact generated kernel topology")
+RuntimeError: loaded shared-library SASS does not contain the exact generated kernel topology
+
+
+  TASK  STATE      EXIT  DURATION       PEAK MEM    CUR MEM    ERROR
+     0  failed        1  15.32 seconds  -           -          h100_contract_map_source_payload.py: OK
+                                                               h100-evide...

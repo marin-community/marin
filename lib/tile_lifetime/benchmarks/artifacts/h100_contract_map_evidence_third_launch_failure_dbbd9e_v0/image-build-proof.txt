@@ -1,0 +1,41 @@
+Workflow run: https://github.com/marin-community/marin/actions/runs/31449065352
+Run ID: 31449065352
+Run attempt: 1
+Event: workflow_dispatch
+Head SHA: dbbd9e4fe53e8ec7ad2c8d409dbaa0351ac064ff
+Created: 2026-08-11T01:21:46Z
+Completed: 2026-08-11T01:26:06Z
+Conclusion: success
+
+Build job: h100-evidence-image / build-h100-evidence-image
+Build job ID: 93649436197
+Build started: 2026-08-11T01:21:50Z
+Build completed: 2026-08-11T01:26:05Z
+Build conclusion: success
+
+Skipped legacy jobs:
+- finelog-image
+- marin-tpu-ci-images
+- iris-images
+- iris-manifests
+- iris-tags
+
+Image tag: ghcr.io/marin-community/iris-task-h100-evidence:dbbd9e4fe53e8ec7ad2c8d409dbaa0351ac064ff
+OCI digest: sha256:945f44cca0aa44be922c9d806e7b8e6b98915ed22323cca26ca89f23bf3a4e19
+Immutable image: ghcr.io/marin-community/iris-task-h100-evidence:dbbd9e4fe53e8ec7ad2c8d409dbaa0351ac064ff@sha256:945f44cca0aa44be922c9d806e7b8e6b98915ed22323cca26ca89f23bf3a4e19
+
+The build log recorded these completed layers:
+
+- An `sm_90a` smoke kernel compiled with the pinned absolute `nvcc`.
+- The smoke cubin passed both closed cuobjdump and function-scoped nvdisasm
+  validation with 24 instructions in each output.
+- `/opt/h100-evidence-runtime/bin/python` loaded CUDA runtime and NVTX symbols.
+- `JAX_PLATFORMS=cpu /opt/h100-evidence-runtime/bin/python` imported the pinned
+  JAX, NumPy, SciPy, and Shuttle runtime.
+- CUDA 13.2 `nvcc`, `ptxas`, `cuobjdump`, and `nvdisasm`, Nsight Compute
+  2026.1.1.0, and Nsight Systems 2026.1.3.425 returned version identities.
+
+The preserved raw build log was 94,440 bytes with SHA-256
+`1033d39fbae8ccf36f5fb96f9c47c6a880a4686124eb7db81d82e4e142e3bd21`.
+The build did not compile the generated contract-map source or compare a
+six-kernel shared-library topology.
