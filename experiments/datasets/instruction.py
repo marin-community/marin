@@ -119,6 +119,9 @@ class InstructionDatasetConfig:
         splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
                 Defaults to `train` only
         name: Optional friendly name for the dataset; defaults to `hf_dataset_id`.
+        columns: Source columns to read. None reads every column.
+        parquet_files: Hugging Face Parquet files to read directly, keyed by subset.
+        parquet_batch_size: Record-batch size for direct Parquet reads.
         max_parallelism: Max number of parallel data processing tasks. Reduce if needed to avoid HF rate limits.
     """
 
@@ -129,6 +132,9 @@ class InstructionDatasetConfig:
     name: str | None = None
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
+    columns: list[str] | None = None
+    parquet_files: dict[str, list[str]] = field(default_factory=dict)
+    parquet_batch_size: int | None = None
     max_parallelism: int | None = 32  # 32 works for free users; set to None to use default behavior (full parallelism)
 
 
@@ -629,6 +635,9 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ArtifactSte
         {dataset_cfg.revision}\
         -{sorted(dataset_cfg.subsets)}\
         -{sorted(dataset_cfg.splits)}\
+        -{sorted(dataset_cfg.columns) if dataset_cfg.columns is not None else None}\
+        -{dataset_cfg.parquet_files}\
+        -{dataset_cfg.parquet_batch_size}\
         -{adapter_signature_str}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
@@ -647,6 +656,9 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ArtifactSte
             adapter=_adapter,
             subsets=_cfg.subsets,
             splits=_cfg.splits,
+            columns=_cfg.columns,
+            parquet_files=_cfg.parquet_files,
+            parquet_batch_size=_cfg.parquet_batch_size,
             max_parallelism=_cfg.max_parallelism,
         ),
         override_path=pin,
