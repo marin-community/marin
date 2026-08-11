@@ -21,9 +21,12 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import fsspec
+from transformers import AutoTokenizer
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
 
@@ -160,6 +163,29 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
     return cmd
 
 
+@contextmanager
+def evaluation_config_with_tokenizer(config: dict) -> Iterator[dict]:
+    """Yield runtime config whose tokenizer matches the served model's chat template.
+
+    Evalchemy accepts a literal value for ``--apply_chat_template``, but its endpoint context
+    preflight calls the tokenizer without forwarding that value. Persisting the served template as
+    the evaluator tokenizer's default keeps preflight token accounting and prompt rendering aligned.
+    """
+    chat_template = config.get("chat_template")
+    if chat_template is None:
+        yield config
+        return
+
+    with tempfile.TemporaryDirectory(prefix="marin-eval-tokenizer-") as tokenizer_dir:
+        tokenizer = AutoTokenizer.from_pretrained(config["tokenizer"])
+        tokenizer.chat_template = chat_template
+        tokenizer.save_pretrained(tokenizer_dir)
+        runtime_config = dict(config)
+        runtime_config["tokenizer"] = tokenizer_dir
+        runtime_config["chat_template"] = None
+        yield runtime_config
+
+
 def scored_results(local_out: str) -> bool:
     """Whether any ``results_*.json`` under ``local_out`` holds a non-empty ``results`` payload.
 
@@ -195,26 +221,27 @@ def main() -> None:
     max_length = min(configured_lengths) if configured_lengths else None
     print(f"served max_model_len: {served} (lm-eval max_length={max_length})", flush=True)
     failures: list[str] = []
-    for task in tasks:
-        dest = f"{out_path}/{task['dir']}"
-        with tempfile.TemporaryDirectory() as local_out:
-            # Evalchemy is installed beside the uvx environment's interpreter.
-            cmd = build_command(config, task, local_out, sys.executable, max_length)
-            print(f"running evalchemy: {' '.join(cmd)}", flush=True)
-            # Upload whatever the task produced before reacting to its exit code, so one task's failure
-            # does not discard another task's already-scored output.
-            result = subprocess.run(cmd)
-            produced = os.listdir(local_out)
-            scored = scored_results(local_out)
-            if produced:
-                out_fs.put(local_out, dest, recursive=True)
-                print(f"uploaded {len(produced)} path(s) to {dest}", flush=True)
-        if result.returncode != 0:
-            failures.append(f"{task['name']}: evalchemy exited {result.returncode}")
-        elif not produced:
-            failures.append(f"{task['name']}: produced no artifacts")
-        elif not scored:
-            failures.append(f"{task['name']}: results are empty (every request to the endpoint failed?)")
+    with evaluation_config_with_tokenizer(config) as runtime_config:
+        for task in tasks:
+            dest = f"{out_path}/{task['dir']}"
+            with tempfile.TemporaryDirectory() as local_out:
+                # Evalchemy is installed beside the uvx environment's interpreter.
+                cmd = build_command(runtime_config, task, local_out, sys.executable, max_length)
+                print(f"running evalchemy: {' '.join(cmd)}", flush=True)
+                # Upload whatever the task produced before reacting to its exit code, so one task's failure
+                # does not discard another task's already-scored output.
+                result = subprocess.run(cmd)
+                produced = os.listdir(local_out)
+                scored = scored_results(local_out)
+                if produced:
+                    out_fs.put(local_out, dest, recursive=True)
+                    print(f"uploaded {len(produced)} path(s) to {dest}", flush=True)
+            if result.returncode != 0:
+                failures.append(f"{task['name']}: evalchemy exited {result.returncode}")
+            elif not produced:
+                failures.append(f"{task['name']}: produced no artifacts")
+            elif not scored:
+                failures.append(f"{task['name']}: results are empty (every request to the endpoint failed?)")
     print(f"evalchemy client wrote results for {len(tasks)} task(s) to {out_path}", flush=True)
     if failures:
         raise SystemExit("evalchemy task failures: " + "; ".join(failures))

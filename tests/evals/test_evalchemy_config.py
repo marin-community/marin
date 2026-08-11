@@ -14,7 +14,12 @@ import json
 import os
 
 import pytest
-from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
+from marin.evaluation.evalchemy.client import (
+    build_command,
+    build_model_args,
+    evaluation_config_with_tokenizer,
+    scored_results,
+)
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     _run_config_json,
@@ -173,6 +178,38 @@ def test_build_command_chat_route_needs_template_and_generation():
     cmd = build_command(config, mcq, "/tmp/out", "/opt/py", None)
     assert cmd[cmd.index("--model") + 1] == "local-completions"
     assert "--apply_chat_template" not in cmd
+
+
+def test_custom_chat_template_becomes_evaluator_tokenizer_default(monkeypatch):
+    template = "{{ bos_token }}{{ messages[0].content }}"
+    config = _payload(_config(apply_chat_template=True, chat_template=template))
+
+    class FakeTokenizer:
+        chat_template = None
+
+        def save_pretrained(self, path):
+            assert self.chat_template == template
+            with open(os.path.join(path, "tokenizer_config.json"), "w") as handle:
+                json.dump({"chat_template": self.chat_template}, handle)
+
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.client.AutoTokenizer.from_pretrained",
+        lambda tokenizer: FakeTokenizer(),
+    )
+
+    with evaluation_config_with_tokenizer(config) as runtime_config:
+        with open(os.path.join(runtime_config["tokenizer"], "tokenizer_config.json")) as handle:
+            assert json.load(handle)["chat_template"] == template
+        assert runtime_config["chat_template"] is None
+        command = build_command(runtime_config, runtime_config["tasks"][1], "/tmp/out", "/opt/py", None)
+        assert command[-1] == "--apply_chat_template"
+
+
+def test_native_chat_template_keeps_registered_tokenizer():
+    config = _payload(_config(apply_chat_template=True))
+
+    with evaluation_config_with_tokenizer(config) as runtime_config:
+        assert runtime_config is config
 
 
 def test_completion_only_pins_completions_route_and_forwards_unsafe_code():
