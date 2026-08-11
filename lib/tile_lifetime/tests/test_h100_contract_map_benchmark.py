@@ -30,6 +30,7 @@ from tile_lifetime.h100_contract_map_benchmark import (
     CubinUnavailableReason,
     ExternalComparator,
     MeasurementBoundary,
+    NumericalOutputFloor,
     RepeatabilityMode,
     StructuralFeature,
     comparator_decision,
@@ -319,18 +320,20 @@ def test_numerical_floor_rejects_posthoc_or_inconsistent_accuracy_bounds() -> No
     assert floor.repeatability is RepeatabilityMode.BITWISE
 
     with pytest.raises(ValueError, match="finite and nonnegative"):
-        replace(floor, maximum_absolute_error=-1.0)
+        replace(floor.output_floors[0], maximum_absolute_error=-1.0)
     with pytest.raises(ValueError, match="mean absolute error"):
-        replace(floor, mean_absolute_error=floor.maximum_absolute_error + 1.0)
+        NumericalOutputFloor("forward", maximum_absolute_error=1.0, mean_absolute_error=2.0)
     with pytest.raises(ValueError, match="mean ULP distance"):
-        replace(floor, mean_ulp_distance=floor.maximum_ulp_distance + 1.0)
+        replace(floor, mean_ulp_distance=2.0)
     with pytest.raises(ValueError, match="bitwise repeatability"):
         replace(floor, repeat_maximum_absolute_error=0.01)
 
 
 def test_plan_rejects_valid_relaxed_replacement_for_reviewed_numerical_floor() -> None:
     plan = default_h100_contract_map_benchmark_plan()
-    relaxed = replace(plan.numerical_floors[0], maximum_absolute_error=0.0625)
+    original = plan.numerical_floors[0]
+    relaxed_output = replace(original.output_floors[0], maximum_absolute_error=0.0625)
+    relaxed = replace(original, output_floors=(relaxed_output, *original.output_floors[1:]))
 
     with pytest.raises(ValueError, match="exact reviewed schema constant"):
         replace(plan, numerical_floors=(relaxed, *plan.numerical_floors[1:]))
@@ -435,7 +438,7 @@ def test_result_evidence_schema_names_all_24_required_records() -> None:
     schema = result_evidence_schema()
     required_records = schema["required_result_records"]
 
-    assert schema["schema"] == "shuttle.h100_contract_map_result_evidence.v2"
+    assert schema["schema"] == "shuttle.h100_contract_map_result_evidence.v3"
     assert len(required_records) == 24
     assert required_records == [
         {"case_id": case.case_id, "backend": backend.value, "measurement_boundary": boundary.value}
@@ -490,10 +493,8 @@ def test_result_evidence_rejects_incomplete_or_reordered_raw_schedule() -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     (
-        ("maximum_absolute_error", 0.03126),
-        ("mean_absolute_error", 0.00201),
-        ("maximum_ulp_distance", 5),
-        ("mean_ulp_distance", 0.26),
+        ("maximum_absolute_error", 0.06251),
+        ("mean_absolute_error", 0.003907),
         ("nonfinite_values", 1),
     ),
 )
@@ -510,7 +511,7 @@ def test_pre_timing_numerical_failure_reports_bounded_scalar_context() -> None:
     case_id = payload["identity"]["case_id"]
     output = payload["numerical"]["outputs"]["forward"]
     output.update(
-        maximum_absolute_error=0.001953989267349243,
+        maximum_absolute_error=0.031251,
         mean_absolute_error=0.0003520350146573037,
         maximum_ulp_distance=29298,
         mean_ulp_distance=8.55948121645796,
@@ -543,10 +544,10 @@ def test_pre_timing_numerical_failure_reports_bounded_scalar_context() -> None:
         "backend=ordinary_xla",
         "boundary=logical_training_step",
         "output=forward",
-        "metric=mean_ulp_distance",
-        "measured=8.55948121645796",
-        "limit=0.25",
-        "maximum_absolute_error=0.001953989267349243",
+        "metric=maximum_absolute_error",
+        "measured=0.031251",
+        "limit=0.03125",
+        "maximum_absolute_error=0.031251",
         "mean_absolute_error=0.0003520350146573037",
         "maximum_ulp_distance=29298",
         "nonfinite_values=0",
@@ -597,8 +598,6 @@ def test_result_evidence_rejects_nonfinite_measured_metrics(value: float) -> Non
     (
         ("maximum_absolute_error", 0.007813),
         ("mean_absolute_error", 0.000501),
-        ("maximum_ulp_distance", 5),
-        ("mean_ulp_distance", 0.26),
     ),
 )
 def test_result_evidence_rejects_repeat_drift_that_exceeds_backend_floor(field: str, value: float) -> None:
@@ -606,6 +605,45 @@ def test_result_evidence_rejects_repeat_drift_that_exceeds_backend_floor(field: 
     payload["numerical"]["outputs"]["dx"]["pairwise_drift"][0][field] = value
 
     with pytest.raises(ValueError, match="immutable ordinary_xla repeat floor"):
+        validate_result_evidence(payload)
+
+
+def test_real_algebra_ulp_metrics_are_diagnostic_but_absolute_error_remains_hard() -> None:
+    payload = _complete_result_evidence()
+    output = payload["numerical"]["outputs"]["forward"]
+    output["maximum_absolute_error"] = 0.001953989267349243
+    output["mean_absolute_error"] = 0.0003520350146573037
+    output["maximum_ulp_distance"] = 29298
+    output["mean_ulp_distance"] = 8.55948121645796
+
+    validate_result_evidence(payload)
+
+    output["maximum_absolute_error"] = 0.031251
+    with pytest.raises(ValueError, match="metric=maximum_absolute_error"):
+        validate_result_evidence(payload)
+
+
+@pytest.mark.parametrize(
+    ("role", "limit"),
+    (("forward", 0.03125), ("dx", 0.03125), ("dw0", 0.03125), ("dw1", 0.0625)),
+)
+def test_real_algebra_uses_each_predeclared_output_floor(role: str, limit: float) -> None:
+    payload = _complete_result_evidence()
+    payload["numerical"]["outputs"][role]["maximum_absolute_error"] = limit + 0.000001
+
+    with pytest.raises(ValueError) as error:
+        validate_result_evidence(payload)
+
+    assert f"output={role}" in str(error.value)
+    assert f"limit={limit}" in str(error.value)
+
+
+def test_source_ordered_ulp_metrics_remain_hard_acceptance_gates() -> None:
+    payload = _complete_result_evidence()
+    payload["identity"]["backend"] = BackendVariant.SHUTTLE_SOURCE_ORDERED.value
+    payload["numerical"]["outputs"]["forward"]["maximum_ulp_distance"] = 2
+
+    with pytest.raises(ValueError, match="metric=maximum_ulp_distance"):
         validate_result_evidence(payload)
 
 

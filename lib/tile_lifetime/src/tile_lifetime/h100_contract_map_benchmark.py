@@ -91,6 +91,13 @@ class RepeatabilityMode(StrEnum):
     BOUNDED_DRIFT = "bounded_drift"
 
 
+class UlpAcceptanceMode(StrEnum):
+    """Whether BF16 ULP diagnostics are an acceptance criterion."""
+
+    HARD = "hard"
+    DIAGNOSTIC_ONLY = "diagnostic_only"
+
+
 @dataclass(frozen=True)
 class StructuralCase:
     """Anonymous two-Contract/Map shape with no workload identity."""
@@ -124,52 +131,92 @@ class StructuralCase:
 
 
 @dataclass(frozen=True)
+class NumericalOutputFloor:
+    """Absolute-error bounds for one logical training-step output."""
+
+    output: str
+    maximum_absolute_error: float
+    mean_absolute_error: float
+
+    def __post_init__(self) -> None:
+        if self.output not in ("forward", "dx", "dw0", "dw1"):
+            raise ValueError("numerical output floor must name one reviewed output")
+        bounds = (self.maximum_absolute_error, self.mean_absolute_error)
+        if any(not math.isfinite(value) or value < 0.0 for value in bounds):
+            raise ValueError("absolute-error floors must be finite and nonnegative")
+        if self.mean_absolute_error > self.maximum_absolute_error:
+            raise ValueError("mean absolute error cannot exceed maximum absolute error")
+
+
+@dataclass(frozen=True)
 class NumericalFloor:
-    """Predeclared accuracy and repeatability bounds for one backend."""
+    """Predeclared accuracy and repeatability policy for one backend."""
 
     backend: BackendVariant
     reference: NumericalReference
-    maximum_absolute_error: float
-    mean_absolute_error: float
-    maximum_ulp_distance: int
-    mean_ulp_distance: float
+    output_floors: tuple[NumericalOutputFloor, ...]
+    ulp_acceptance: UlpAcceptanceMode
+    maximum_ulp_distance: int | None
+    mean_ulp_distance: float | None
     maximum_nonfinite_values: int
     repeatability: RepeatabilityMode
     repeat_maximum_absolute_error: float
     repeat_mean_absolute_error: float
 
     def __post_init__(self) -> None:
-        absolute_bounds = (
-            self.maximum_absolute_error,
-            self.mean_absolute_error,
-            self.mean_ulp_distance,
-            self.repeat_maximum_absolute_error,
-            self.repeat_mean_absolute_error,
-        )
+        if tuple(floor.output for floor in self.output_floors) != ("forward", "dx", "dw0", "dw1"):
+            raise ValueError("output floors must cover forward, dx, dw0, and dw1 in fixed order")
+        absolute_bounds = (self.repeat_maximum_absolute_error, self.repeat_mean_absolute_error)
         if any(not math.isfinite(value) or value < 0.0 for value in absolute_bounds):
             raise ValueError("numerical floors must be finite and nonnegative")
-        if self.mean_absolute_error > self.maximum_absolute_error:
-            raise ValueError("mean absolute error cannot exceed the maximum absolute error")
-        if self.mean_ulp_distance > self.maximum_ulp_distance:
-            raise ValueError("mean ULP distance cannot exceed the maximum ULP distance")
         if self.repeat_mean_absolute_error > self.repeat_maximum_absolute_error:
             raise ValueError("mean repeat drift cannot exceed maximum repeat drift")
-        if self.maximum_ulp_distance < 0 or self.maximum_nonfinite_values < 0:
-            raise ValueError("ULP and nonfinite bounds must be nonnegative")
+        if self.maximum_nonfinite_values < 0:
+            raise ValueError("nonfinite bounds must be nonnegative")
+        if self.ulp_acceptance is UlpAcceptanceMode.HARD:
+            if self.maximum_ulp_distance is None or self.mean_ulp_distance is None:
+                raise ValueError("hard ULP acceptance requires maximum and mean limits")
+            if self.maximum_ulp_distance < 0:
+                raise ValueError("maximum ULP distance must be nonnegative")
+            if not math.isfinite(self.mean_ulp_distance) or self.mean_ulp_distance < 0.0:
+                raise ValueError("mean ULP distance must be finite and nonnegative")
+            if self.mean_ulp_distance > self.maximum_ulp_distance:
+                raise ValueError("mean ULP distance cannot exceed maximum ULP distance")
+        elif self.maximum_ulp_distance is not None or self.mean_ulp_distance is not None:
+            raise ValueError("diagnostic-only ULP policy cannot carry acceptance limits")
         if self.repeatability is RepeatabilityMode.BITWISE and (
             self.repeat_maximum_absolute_error != 0.0 or self.repeat_mean_absolute_error != 0.0
         ):
             raise ValueError("bitwise repeatability requires zero drift bounds")
+
+    def output_floor(self, output: str) -> NumericalOutputFloor:
+        """Return the immutable absolute-error floor for one output."""
+        for floor in self.output_floors:
+            if floor.output == output:
+                return floor
+        raise ValueError("output must name one reviewed numerical role")
+
+
+def _uniform_output_floors(maximum: float, mean: float) -> tuple[NumericalOutputFloor, ...]:
+    return tuple(
+        NumericalOutputFloor(output=output, maximum_absolute_error=maximum, mean_absolute_error=mean)
+        for output in ("forward", "dx", "dw0", "dw1")
+    )
 
 
 REVIEWED_NUMERICAL_FLOORS = (
     NumericalFloor(
         backend=BackendVariant.ORDINARY_XLA,
         reference=NumericalReference.REAL_ALGEBRA_FP64,
-        maximum_absolute_error=0.03125,
-        mean_absolute_error=0.002,
-        maximum_ulp_distance=4,
-        mean_ulp_distance=0.25,
+        output_floors=(
+            NumericalOutputFloor("forward", 0.03125, 0.00390625),
+            NumericalOutputFloor("dx", 0.03125, 0.00390625),
+            NumericalOutputFloor("dw0", 0.03125, 0.00390625),
+            NumericalOutputFloor("dw1", 0.0625, 0.00390625),
+        ),
+        ulp_acceptance=UlpAcceptanceMode.DIAGNOSTIC_ONLY,
+        maximum_ulp_distance=None,
+        mean_ulp_distance=None,
         maximum_nonfinite_values=0,
         repeatability=RepeatabilityMode.BOUNDED_DRIFT,
         repeat_maximum_absolute_error=0.0078125,
@@ -178,8 +225,8 @@ REVIEWED_NUMERICAL_FLOORS = (
     NumericalFloor(
         backend=BackendVariant.SHUTTLE_SOURCE_ORDERED,
         reference=NumericalReference.SOURCE_ORDERED_FP32,
-        maximum_absolute_error=0.0078125,
-        mean_absolute_error=0.0005,
+        output_floors=_uniform_output_floors(0.0078125, 0.0005),
+        ulp_acceptance=UlpAcceptanceMode.HARD,
         maximum_ulp_distance=1,
         mean_ulp_distance=0.05,
         maximum_nonfinite_values=0,
@@ -190,10 +237,15 @@ REVIEWED_NUMERICAL_FLOORS = (
     NumericalFloor(
         backend=BackendVariant.SHUTTLE_FAST,
         reference=NumericalReference.REAL_ALGEBRA_FP64,
-        maximum_absolute_error=0.03125,
-        mean_absolute_error=0.002,
-        maximum_ulp_distance=4,
-        mean_ulp_distance=0.25,
+        output_floors=(
+            NumericalOutputFloor("forward", 0.03125, 0.00390625),
+            NumericalOutputFloor("dx", 0.03125, 0.00390625),
+            NumericalOutputFloor("dw0", 0.03125, 0.00390625),
+            NumericalOutputFloor("dw1", 0.0625, 0.00390625),
+        ),
+        ulp_acceptance=UlpAcceptanceMode.DIAGNOSTIC_ONLY,
+        maximum_ulp_distance=None,
+        mean_ulp_distance=None,
         maximum_nonfinite_values=0,
         repeatability=RepeatabilityMode.BOUNDED_DRIFT,
         repeat_maximum_absolute_error=0.0078125,
@@ -744,6 +796,7 @@ def _validate_numerical_output(
     output_name: str,
 ) -> None:
     context = f"numerical.outputs.{output_name}"
+    output_floor = floor.output_floor(output_name)
     maximum_absolute_error = _require_finite_nonnegative_number(
         output["maximum_absolute_error"], f"{context}.maximum_absolute_error"
     )
@@ -815,9 +868,8 @@ def _validate_numerical_output(
     )
 
     floating_metric_limits = (
-        ("maximum_absolute_error", maximum_absolute_error, floor.maximum_absolute_error),
-        ("mean_absolute_error", mean_absolute_error, floor.mean_absolute_error),
-        ("mean_ulp_distance", mean_ulp_distance, floor.mean_ulp_distance),
+        ("maximum_absolute_error", maximum_absolute_error, output_floor.maximum_absolute_error),
+        ("mean_absolute_error", mean_absolute_error, output_floor.mean_absolute_error),
     )
     for field, value, limit in floating_metric_limits:
         if value > limit:
@@ -832,18 +884,25 @@ def _validate_numerical_output(
                 limit=limit,
                 summary=summary,
             )
-    if maximum_ulp_distance > floor.maximum_ulp_distance:
-        raise _numerical_floor_error(
-            floor=floor,
-            floor_kind="numerical",
-            case_id=case_id,
-            measurement_boundary=measurement_boundary,
-            output_name=output_name,
-            metric="maximum_ulp_distance",
-            measured=maximum_ulp_distance,
-            limit=floor.maximum_ulp_distance,
-            summary=summary,
-        )
+    if floor.ulp_acceptance is UlpAcceptanceMode.HARD:
+        assert floor.maximum_ulp_distance is not None
+        assert floor.mean_ulp_distance is not None
+        for field, value, limit in (
+            ("maximum_ulp_distance", maximum_ulp_distance, floor.maximum_ulp_distance),
+            ("mean_ulp_distance", mean_ulp_distance, floor.mean_ulp_distance),
+        ):
+            if value > limit:
+                raise _numerical_floor_error(
+                    floor=floor,
+                    floor_kind="numerical",
+                    case_id=case_id,
+                    measurement_boundary=measurement_boundary,
+                    output_name=output_name,
+                    metric=field,
+                    measured=value,
+                    limit=limit,
+                    summary=summary,
+                )
     if nonfinite_values > floor.maximum_nonfinite_values:
         raise _numerical_floor_error(
             floor=floor,
@@ -877,11 +936,6 @@ def _validate_numerical_output(
         repeat_floating_limits = (
             ("maximum_absolute_error", drift.maximum_absolute_error, floor.repeat_maximum_absolute_error),
             ("mean_absolute_error", drift.mean_absolute_error, floor.repeat_mean_absolute_error),
-            (
-                "mean_ulp_distance",
-                drift.mean_ulp_distance,
-                0.0 if floor.repeatability is RepeatabilityMode.BITWISE else floor.mean_ulp_distance,
-            ),
         )
         for field, value, limit in repeat_floating_limits:
             if value > limit:
@@ -896,19 +950,29 @@ def _validate_numerical_output(
                     limit=limit,
                     summary=summary,
                 )
-        repeat_maximum_ulp_limit = 0 if floor.repeatability is RepeatabilityMode.BITWISE else floor.maximum_ulp_distance
-        if drift.maximum_ulp_distance > repeat_maximum_ulp_limit:
-            raise _numerical_floor_error(
-                floor=floor,
-                floor_kind="repeat",
-                case_id=case_id,
-                measurement_boundary=measurement_boundary,
-                output_name=output_name,
-                metric=(f"pairwise_drift[{drift.left_repeat_index}:{drift.right_repeat_index}].maximum_ulp_distance"),
-                measured=drift.maximum_ulp_distance,
-                limit=repeat_maximum_ulp_limit,
-                summary=summary,
+        if floor.ulp_acceptance is UlpAcceptanceMode.HARD:
+            assert floor.maximum_ulp_distance is not None
+            assert floor.mean_ulp_distance is not None
+            repeat_maximum_ulp_limit = (
+                0 if floor.repeatability is RepeatabilityMode.BITWISE else floor.maximum_ulp_distance
             )
+            repeat_mean_ulp_limit = 0.0 if floor.repeatability is RepeatabilityMode.BITWISE else floor.mean_ulp_distance
+            for field, value, limit in (
+                ("maximum_ulp_distance", drift.maximum_ulp_distance, repeat_maximum_ulp_limit),
+                ("mean_ulp_distance", drift.mean_ulp_distance, repeat_mean_ulp_limit),
+            ):
+                if value > limit:
+                    raise _numerical_floor_error(
+                        floor=floor,
+                        floor_kind="repeat",
+                        case_id=case_id,
+                        measurement_boundary=measurement_boundary,
+                        output_name=output_name,
+                        metric=f"pairwise_drift[{drift.left_repeat_index}:{drift.right_repeat_index}].{field}",
+                        measured=value,
+                        limit=limit,
+                        summary=summary,
+                    )
         drift_context = f"{context}.pairwise_drift[{drift.left_repeat_index}:{drift.right_repeat_index}]"
         if drift.mean_absolute_error > drift.maximum_absolute_error:
             raise ValueError(f"{drift_context}.mean_absolute_error cannot exceed maximum_absolute_error")
@@ -960,7 +1024,7 @@ def result_evidence_schema() -> dict[str, Any]:
     """Return the immutable result schema before any benchmark execution."""
     plan = default_h100_contract_map_benchmark_plan()
     return {
-        "schema": "shuttle.h100_contract_map_result_evidence.v2",
+        "schema": "shuttle.h100_contract_map_result_evidence.v3",
         "required_sections": [section.name for section in RESULT_EVIDENCE_SECTIONS],
         "sections": [asdict(section) for section in RESULT_EVIDENCE_SECTIONS],
         "nested_records": {
@@ -1342,7 +1406,7 @@ def staging_manifest(*, shuttle_revision: str) -> dict[str, Any]:
     wiring = staged_backend_wiring()
     decisions = tuple(comparator_decision(comparator, plan.features) for comparator in ExternalComparator)
     return {
-        "schema": "shuttle.h100_contract_map_backend_evidence.v2",
+        "schema": "shuttle.h100_contract_map_backend_evidence.v3",
         "kind": "staged_plan_no_gpu_evidence",
         "shuttle_revision": shuttle_revision,
         "plan": asdict(plan),

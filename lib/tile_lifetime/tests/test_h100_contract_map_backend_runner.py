@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from ml_dtypes import bfloat16
 
 import tile_lifetime.contract_map_backend as contract_map_backend
 import tile_lifetime.contract_map_backend_resources as resources
@@ -28,6 +29,26 @@ from tile_lifetime.h100_contract_map_benchmark import (
 )
 
 runner = importlib.import_module("lib.tile_lifetime.benchmarks.h100_contract_map_backend_runner")
+
+
+def test_output_numerical_evidence_counts_nonfinite_positions_once_and_keeps_finite_metrics() -> None:
+    observed = np.asarray([1.0, np.inf], dtype=bfloat16)
+    repeats = ((observed,), (observed,), (observed,))
+
+    evidence = runner._output_numerical_evidence(0, repeats, np.asarray([1.0, 2.0], dtype=np.float64))
+
+    assert evidence["nonfinite_values"] == 1
+    assert evidence["maximum_absolute_error"] == 0.0
+    assert evidence["mean_absolute_error"] == 0.0
+    assert evidence["maximum_ulp_distance"] == 0
+
+
+def test_output_numerical_evidence_rejects_shape_mismatch_before_broadcasting() -> None:
+    observed = np.zeros(2, dtype=bfloat16)
+    repeats = ((observed,), (observed,), (observed,))
+
+    with pytest.raises(ValueError, match="identical shapes"):
+        runner._output_numerical_evidence(0, repeats, np.zeros((1, 2), dtype=np.float64))
 
 
 def _ncu_sass_export(*sections: tuple[str, tuple[str, ...]]) -> str:
@@ -357,13 +378,12 @@ def test_runner_numerical_failure_reports_logical_training_step_boundary(monkeyp
     )
 
     def numerical_output(index: int, repeats: Any, reference: Any) -> dict[str, Any]:
-        mean_ulp_distance = 1.0 if index == 0 else 0.0
-        maximum_ulp_distance = 1 if index == 0 else 0
+        maximum_absolute_error = 0.031251 if index == 0 else 0.0
         return {
-            "maximum_absolute_error": 0.0,
+            "maximum_absolute_error": maximum_absolute_error,
             "mean_absolute_error": 0.0,
-            "maximum_ulp_distance": maximum_ulp_distance,
-            "mean_ulp_distance": mean_ulp_distance,
+            "maximum_ulp_distance": 0,
+            "mean_ulp_distance": 0.0,
             "nonfinite_values": 0,
             "repeat_hashes": ["a" * 64, "a" * 64, "a" * 64],
             "pairwise_drift": [
@@ -390,7 +410,7 @@ def test_runner_numerical_failure_reports_logical_training_step_boundary(monkeyp
     assert "backend=ordinary_xla" in diagnostic
     assert "boundary=logical_training_step" in diagnostic
     assert "output=forward" in diagnostic
-    assert "metric=mean_ulp_distance" in diagnostic
+    assert "metric=maximum_absolute_error" in diagnostic
 
 
 def test_runner_merges_device_and_logical_timings_only_for_exact_copy_free_schedule() -> None:
