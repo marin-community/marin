@@ -1,0 +1,45 @@
+{
+  "attempt": 1,
+  "conclusion": "failure",
+  "created_at": "2026-08-11T11:56:11Z",
+  "event": "workflow_dispatch",
+  "head_branch": "research/shuttle-clean-helper-boundaries",
+  "head_sha": "b9992d83251e35e06d362d1d2717842173d50652",
+  "input": {
+    "image_set": "h100-evidence"
+  },
+  "job": {
+    "completed_at": "2026-08-11T11:59:03Z",
+    "conclusion": "failure",
+    "id": 93770408581,
+    "name": "h100-evidence-image / build-h100-evidence-image",
+    "started_at": "2026-08-11T11:56:14Z",
+    "steps": [
+      {"conclusion": "success", "name": "Set up job", "number": 1},
+      {"conclusion": "success", "name": "Checkout selected ref", "number": 2},
+      {"conclusion": "success", "name": "Resolve exact source commit", "number": 3},
+      {"conclusion": "success", "name": "Verify Docker build context inputs", "number": 4},
+      {"conclusion": "success", "name": "Set up Docker Buildx", "number": 5},
+      {"conclusion": "success", "name": "Login to GitHub Container Registry", "number": 6},
+      {"conclusion": "failure", "name": "Build and push H100 evidence image", "number": 7},
+      {"conclusion": "success", "name": "Post Login to GitHub Container Registry", "number": 12},
+      {"conclusion": "success", "name": "Post Set up Docker Buildx", "number": 13},
+      {"conclusion": "success", "name": "Post Checkout selected ref", "number": 14},
+      {"conclusion": "success", "name": "Complete job", "number": 15}
+    ],
+    "url": "https://github.com/marin-community/marin/actions/runs/31488863448/job/93770408581"
+  },
+  "legacy_jobs": {
+    "finelog-image": "skipped",
+    "iris-images": "skipped",
+    "iris-manifests": "skipped",
+    "iris-tags": "skipped",
+    "marin-tpu-ci-images": "skipped"
+  },
+  "run_id": 31488863448,
+  "run_number": 139,
+  "status": "completed",
+  "updated_at": "2026-08-11T11:59:04Z",
+  "url": "https://github.com/marin-community/marin/actions/runs/31488863448",
+  "workflow": ".github/workflows/ops-docker-images.yaml"
+}

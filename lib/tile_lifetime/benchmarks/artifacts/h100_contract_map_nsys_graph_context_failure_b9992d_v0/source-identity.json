@@ -1,0 +1,30 @@
+{
+  "commit": "b9992d83251e35e06d362d1d2717842173d50652",
+  "files": {
+    ".github/workflows/ops-docker-images.yaml": {
+      "bytes": 8693,
+      "sha256": "7d0b2fe10acc29f0374886babc60772e806f5b5b81544008587982c77a0da473"
+    },
+    ".github/workflows/ops-h100-evidence-image.yaml": {
+      "bytes": 3496,
+      "sha256": "41d4b5632ef411fb99d4db346426823f31a51fc6e640193703c074382e62488c"
+    },
+    "lib/iris/Dockerfile": {
+      "bytes": 20779,
+      "sha256": "d0a4a281eb340275dacf6624953bc2e40991b8ba57c02ecd79e962daa0d11645"
+    },
+    "lib/iris/Dockerfile.dockerignore": {
+      "bytes": 2545,
+      "sha256": "c74362c5200744dc82deaec904989fcac44c79cbcc42c36a4908768c1df6aafb"
+    },
+    "lib/iris/images/h100-evidence-debian12-amd64.sha256": {
+      "bytes": 2970,
+      "sha256": "69d1432730d588b4a0762abd0abbbdcc12e3d6781888041a9820e7e0f50a3f82"
+    },
+    "lib/iris/images/h100_evidence_nsys_help.py": {
+      "bytes": 11744,
+      "sha256": "84aa20346e67e052c9d7386d406dc2cf991273a03a96c40e35c927f73009d241"
+    }
+  },
+  "tree": "49181fef617438d35ae363701f09c0f99d9bf3f1"
+}

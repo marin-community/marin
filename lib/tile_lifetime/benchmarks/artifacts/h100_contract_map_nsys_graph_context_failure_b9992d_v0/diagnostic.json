@@ -1,0 +1,32 @@
+{
+  "clauses": {
+    "capture-range-end": {
+      "available": true,
+      "bytes": 103,
+      "sha256": "5bb600baaef1460ea40efd622d1abe1ca29136bec4ff39aa65fb9e830afedf28",
+      "text": "Possible values are 'none', 'stop', 'stop-shutdown', 'repeat[:N][:mode]' or 'repeat-shutdown:N'[:mode]."
+    },
+    "cuda-graph-trace": {
+      "available": false,
+      "bytes": 0,
+      "reason": "unique_possible_values_clause_unavailable",
+      "sha256": null
+    }
+  },
+  "cuda_graph_context": {
+    "available": false,
+    "bytes": 772,
+    "declaration": {
+      "available": true,
+      "bytes": 51,
+      "sha256": "1b10e6785da4d720a94285d7e63778ac577d1d93f12e3cb60e645b3ed76c70c1",
+      "text": "\t--cuda-graph-trace=<granularity>[:<launch origin>]"
+    },
+    "graph_occurrences": 6,
+    "node_occurrences": 7,
+    "reason": "exact_graph_node_token_sequence_unavailable",
+    "sha256": "12dc013fb52a39d8bd06d65f213afc06e3a63f19caa239c450c673c3e73fb3f0",
+    "token_line_count": 9
+  },
+  "schema": "iris.h100_evidence_nsys_help_failure.v3"
+}
