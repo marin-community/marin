@@ -996,6 +996,7 @@ def test_backend_comparison_keeps_the_same_weak_scaling_contract(
     assert mesh_shape == expected_mesh_shape
     assert config.trainer.trainer.train_batch_size == 128
     assert resources.replicas == 2
+    assert resources.cpu == launch_mok_like.CPUS_PER_NODE
 
 
 def test_backend_comparison_rejects_unreviewed_node_counts() -> None:
