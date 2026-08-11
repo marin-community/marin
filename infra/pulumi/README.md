@@ -172,59 +172,55 @@ or `delete` on a NodePool is not** — it deprovisions a reserved bare-metal fle
 reconcile the program to match reality; never `pulumi up` through a destructive NodePool diff.
 Once the preview is clean, `pulumi up`.
 
-### Adopting existing GCP resources
+### Adopting live resources
 
-Set `marin-iac:import=true` when adding a custom role or owned service account that already
-exists in GCP:
+Marin follows Pulumi's Program-first bulk-import workflow. The normal program never attaches
+`import_` options, so adding one live resource cannot put unrelated resources into import mode.
+Each component instead records the provider ID beside the resource declaration. This includes
+all six GCP `*IAMMember` types, custom roles, service accounts, and the existing CoreWeave
+resource types.
+
+Declare the resource in code first and review its ordinary `create` preview in the PR. After the
+code is approved, generate a transaction file from the repository root:
 
 ```bash
-pulumi stack select marin
-pulumi config set marin-iac:import true
-pulumi preview
-pulumi up
-pulumi config rm marin-iac:import
+uv run --package marin-iac --extra deploy python infra/pulumi/import_resources.py \
+  generate --stack <stack> --output /tmp/marin-iac-<stack>-import.json
 ```
 
-The flag attaches an import ID to custom roles and owned service accounts. It deliberately does
-not attach one to `*IAMMember` grants: all six grant resources use the GCP provider's idempotent
-read-modify-write create path, which deduplicates an existing member and records its resource ID
-in Pulumi state. A live-but-untracked grant therefore appears as `create` in the preview but does
-not add a duplicate binding when applied. Already-tracked grants remain ordinary no-ops instead
-of entering an import diff against their parent policy's shared `etag`.
+The command runs the program against the selected stack with Pulumi's `--import-file` preview.
+Already-tracked resources are absent because they are not creates. It fills the generated
+placeholders from the program's provider-ID catalog and writes the result with mode `0600`.
+The file can contain decrypted IAM principals, so keep it outside the repository and never post
+or commit it. Reviewers use the normal code/config diff; the command emits only resource-type
+counts and a SHA-256 digest that are safe to share in the PR or deployment handoff.
 
-### Adopting a new cluster
+The generated file is also the import selector. Inspect it locally and delete complete resource
+entries that should be created rather than adopted. Keep component entries required as parents.
+Do not edit IDs, names, parents, providers, or the name table. A remaining `<PLACEHOLDER>` means
+the program has no provider ID for that resource: add the missing catalog registration and
+regenerate if it exists live, or remove its entry if it should be created.
 
-A cluster whose RBAC/NodePools/Kueue/Traefik already exist live (the normal case — the CKS
-cluster and its kubeconfig were provisioned by hand first) needs one *import* pass so Pulumi
-takes ownership of the existing objects instead of planning creates for them. Setting
-`marin-iac:import=true` stamps `import_=<live id>` on every resource the program declares:
+Apply the reviewed subset with:
 
 ```bash
+uv run --package marin-iac --extra deploy python infra/pulumi/import_resources.py \
+  apply --stack <stack> --file /tmp/marin-iac-<stack>-import.json
+```
+
+Before changing state, `apply` regenerates the current candidates and rejects a stale or edited
+manifest. It then runs `pulumi import --preview-only`, prints the same digest for confirmation,
+and imports with Pulumi's default deletion protection. Finally it runs a normal preview. Stop on
+any unexpected replace or delete, especially for a NodePool. When the follow-up preview is
+correct, run a normal `pulumi up`; that creates entries omitted from the import and reconciles
+temporary import protection with each resource's declared protection setting.
+
+For a new stack, initialize it before generating the transaction:
+
+```bash
+cd infra/pulumi
 pulumi stack init <cluster> \
   --secrets-provider="gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
-#    (on later runs, just: pulumi stack select <cluster>)
-
-pulumi config set marin-iac:import true
-pulumi preview          # gate: every resource `import` + no-op/update; ANY NodePool replace/delete → STOP
-pulumi up               # adopts live resources into GCS state; does not recreate them
-pulumi config rm marin-iac:import   # import_ is ONE-SHOT: set true → up once → remove
-```
-
-Leaving the flag set makes the *next* `up` try to import an already-managed resource and error.
-
-If only some components pre-exist (e.g. RBAC/NodePools/Kueue are live but Traefik was never
-installed on this cluster), scope the import pass to just those with `--target`, then run a
-normal untargeted `up` afterward to create the rest fresh:
-
-```bash
-pulumi config set marin-iac:import true
-targets="--target urn:pulumi:<cluster>::marin-iac::marin:coreweave:CoreweaveCluster::cluster \
-         --target urn:pulumi:<cluster>::marin-iac::marin:coreweave:IrisRbac::rbac \
-         --target urn:pulumi:<cluster>::marin-iac::marin:coreweave:KueueAddon::kueue"
-pulumi preview $targets
-pulumi up $targets
-pulumi config rm marin-iac:import
-pulumi up       # normal run, adopt=false now — creates the remaining components fresh
 ```
 
 A CoreWeave token rotation creates a new Managed Auth username (`cwtoken-…`). Append it to

@@ -17,13 +17,11 @@ from iac.gcp.iam import (
     GcpSecretIam,
     GcpServiceAccountIam,
 )
+from iac.imports import ImportCatalog
 
 TEST_PROJECT = "example"
 CUSTOM_ROLE_ID = "customViewer"
 OWNED_SERVICE_ACCOUNT_ID = "worker"
-OWNED_SERVICE_ACCOUNT_IMPORT_ID = (
-    f"projects/{TEST_PROJECT}/serviceAccounts/{OWNED_SERVICE_ACCOUNT_ID}@{TEST_PROJECT}.iam.gserviceaccount.com"
-)
 CUSTOM_ROLE_TYPE = "gcp:projects/iAMCustomRole:IAMCustomRole"
 OWNED_SERVICE_ACCOUNT_TYPE = "gcp:serviceaccount/account:Account"
 ARTIFACT_REPOSITORY_IAM_MEMBER_TYPE = "gcp:artifactregistry/repositoryIamMember:RepositoryIamMember"
@@ -71,7 +69,6 @@ def _args() -> GcpIamArgs:
             GcpArtifactRepositoryIam(location="us-central1", repository="test-repository", grants=(_grant(),)),
         ),
         service_accounts=(GcpServiceAccountIam(email="target@example.iam.gserviceaccount.com", grants=(_grant(),)),),
-        adopt=True,
     )
 
 
@@ -79,14 +76,17 @@ def _resource_recorder(
     resource_type: str,
     options_by_type: dict[str, pulumi.ResourceOptions],
 ) -> Callable[..., pulumi.Resource]:
-    def record(_name: str, **kwargs) -> pulumi.Resource:
+    def record(name: str, **kwargs) -> pulumi.Resource:
         options_by_type[resource_type] = kwargs["opts"]
-        return object.__new__(pulumi.Resource)
+        resource = object.__new__(pulumi.Resource)
+        resource._type = resource_type
+        resource._name = name
+        return resource
 
     return record
 
 
-def test_adoption_imports_owned_resources_without_reimporting_iam_members(monkeypatch):
+def test_gcp_iam_catalogs_provider_ids_without_in_program_imports(monkeypatch):
     options_by_type: dict[str, pulumi.ResourceOptions] = {}
     constructors = (
         (
@@ -106,12 +106,40 @@ def test_adoption_imports_owned_resources_without_reimporting_iam_members(monkey
         monkeypatch.setattr(namespace, name, _resource_recorder(resource_type, options_by_type))
 
     monkeypatch.setattr(iam_module.kms_v1, "KeyManagementServiceClient", object)
-    monkeypatch.setattr(pulumi.ComponentResource, "__init__", lambda *_args, **_kwargs: None)
+
+    def initialize_component(resource, resource_type, name, *_args, **_kwargs):
+        resource._type = resource_type
+        resource._name = name
+
+    monkeypatch.setattr(pulumi.ComponentResource, "__init__", initialize_component)
     monkeypatch.setattr(GcpIam, "register_outputs", lambda *_args, **_kwargs: None)
 
-    GcpIam("iam", _args(), gcp_provider=cast(pulumi.ProviderResource, None))
+    imports = ImportCatalog()
+    GcpIam("iam", _args(), gcp_provider=cast(pulumi.ProviderResource, None), imports=imports)
 
     assert set(options_by_type) == IAM_MEMBER_TYPES | {CUSTOM_ROLE_TYPE, OWNED_SERVICE_ACCOUNT_TYPE}
-    assert all(options_by_type[resource_type].import_ is None for resource_type in IAM_MEMBER_TYPES)
-    assert options_by_type[CUSTOM_ROLE_TYPE].import_ == f"projects/{TEST_PROJECT}/roles/{CUSTOM_ROLE_ID}"
-    assert options_by_type[OWNED_SERVICE_ACCOUNT_TYPE].import_ == OWNED_SERVICE_ACCOUNT_IMPORT_ID
+    assert all(options.import_ is None for options in options_by_type.values())
+    assert {spec.identity.resource_type: spec.provider_id for spec in imports.specs} == {
+        PROJECT_IAM_MEMBER_TYPE: f"{TEST_PROJECT} roles/viewer serviceAccount:reader@example.com",
+        KMS_IAM_MEMBER_TYPE: (
+            f"projects/{TEST_PROJECT}/locations/us-central1/keyRings/test-key-ring/cryptoKeys/test-key "
+            "roles/viewer serviceAccount:reader@example.com"
+        ),
+        SECRET_IAM_MEMBER_TYPE: (
+            f"projects/{TEST_PROJECT}/secrets/test-secret roles/viewer serviceAccount:reader@example.com"
+        ),
+        BUCKET_IAM_MEMBER_TYPE: "b/test-bucket roles/viewer serviceAccount:reader@example.com",
+        ARTIFACT_REPOSITORY_IAM_MEMBER_TYPE: (
+            f"projects/{TEST_PROJECT}/locations/us-central1/repositories/test-repository "
+            "roles/viewer serviceAccount:reader@example.com"
+        ),
+        SERVICE_ACCOUNT_IAM_MEMBER_TYPE: (
+            f"projects/{TEST_PROJECT}/serviceAccounts/target@example.iam.gserviceaccount.com "
+            "roles/viewer serviceAccount:reader@example.com"
+        ),
+        CUSTOM_ROLE_TYPE: f"projects/{TEST_PROJECT}/roles/{CUSTOM_ROLE_ID}",
+        OWNED_SERVICE_ACCOUNT_TYPE: (
+            f"projects/{TEST_PROJECT}/serviceAccounts/"
+            f"{OWNED_SERVICE_ACCOUNT_ID}@{TEST_PROJECT}.iam.gserviceaccount.com"
+        ),
+    }
