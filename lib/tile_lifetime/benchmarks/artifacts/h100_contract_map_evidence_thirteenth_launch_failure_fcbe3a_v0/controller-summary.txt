@@ -1,0 +1,30 @@
+Job: /dlwh/shuttle-h100-contract-map-evidence-fcbe3a3-v13
+State: failed
+Submitted epoch ms: 1786455777081
+Started epoch ms: 1786455778582
+Finished epoch ms: 1786455925685
+Stored job exit: 0
+Failures: 1
+Preemptions: 0
+Tasks: 0/1 completed; failed=1
+
+Task: /dlwh/shuttle-h100-contract-map-evidence-fcbe3a3-v13/0
+State: failed
+Exit: 1
+Submitted epoch ms: 1786455777081
+Started epoch ms: 1786455783976
+Finished epoch ms: 1786455925685
+Failure retries: 0
+Preemption retries: 1000
+Attempt count: 1
+
+Attempt: 0
+State: failed
+Started epoch ms: 1786455783976
+Finished epoch ms: 1786455925685
+Duration: 141.709 seconds
+Exit: 1
+Attempt UID: 9b9100182790ab9d
+
+First diagnostic:
+AssertionError: cache identity diagnostic exceeds its reviewed bound

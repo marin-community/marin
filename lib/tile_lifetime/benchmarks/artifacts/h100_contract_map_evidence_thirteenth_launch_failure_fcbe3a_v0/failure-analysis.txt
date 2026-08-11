@@ -1,0 +1,28 @@
+Observed boundary
+=================
+
+1. Trusted image `sha256sum` authenticated the launcher and manifest before
+   Python execution.
+2. The capsule restored exact source commit fcbe3a3c8ab430dd0fbc6e1e7f789b1342c71387
+   and the runner completed its imported-module audit.
+3. Returning from the first case's `_run_profiled_case` requires all three
+   numerical gates, warmup, the 24-row steady schedule, balanced NVTX ranges,
+   Nsight Systems profile/export, and strict range/kernel attribution to pass.
+4. The first ordinary-XLA `_run_cache_protocol` completed three compile workers
+   and three paired cold/hit roots. Each immediate cold/hit root-identity check
+   passed before the nine-root validator ran.
+5. The validator constructed a non-singleton semantic identity partition and
+   tried to serialize its rejection evidence. The complete message exceeded
+   4,096 characters, so it emitted only the fixed fail-closed bound error.
+
+Evidence limit
+==============
+
+The retained output contains no cache keys, serialized-executable hashes,
+equality classes, file counts, byte totals, or final-HLO hashes. It cannot
+establish the number or membership of observed partitions. No accepted
+ordinary-XLA cache protocol returned to the coordinator. Nsight Compute,
+retained backend artifacts, source-ordered and fast cache protocols, the
+remaining three cases, and final bundle publication were not reached. The job
+had one failed attempt, no preemptions, zero configured failure retries, and was
+not relaunched.
