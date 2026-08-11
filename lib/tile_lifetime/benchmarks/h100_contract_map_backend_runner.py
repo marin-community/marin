@@ -1012,7 +1012,7 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
         if len(line) > _MAX_NCU_SASS_LINE_CHARS:
             raise ValueError(f"Nsight Compute SASS export line {line_number} exceeds its reviewed bound")
     if not lines or lines[0] != _NCU_SASS_SEPARATOR:
-        raise ValueError("Nsight Compute SASS export omits its exact line-1 table separator")
+        raise _unrecognized_ncu_sass_record(1, lines[0] if lines else "")
 
     sections: list[NcuSassKernel] = []
     current_name: str | None = None
