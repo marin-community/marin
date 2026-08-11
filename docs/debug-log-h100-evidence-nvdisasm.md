@@ -120,11 +120,13 @@ bytes with SHA-256
 `22e2094101073b952da4c80a2b21f00cfa9937b73ff7980102fdcf58931643d0`.
 
 The nvdisasm validator now locates one exact expected `.global`, verifies its
-exact function label and `.text.<kernel>` section, and validates addressed
-records only within that function body. A following section or function closes
-the body. Addressed data outside the body is ignored; malformed addressed
-records inside it still fail. Missing or duplicate anchors, a wrong text
-section, and instructions found only in a trailing function also fail.
+exact function label and `.text.<kernel>` section, consumes the one immediate
+`.text.<kernel>:` label, and validates addressed records only within that
+function body. A following section or function closes the body; another text
+label is invalid. Addressed data outside the body is ignored; malformed
+addressed records inside it still fail. Missing, duplicate, or misordered
+anchors, a wrong text section, and instructions found only in a trailing
+function also fail.
 
 ## Validation boundary
 
