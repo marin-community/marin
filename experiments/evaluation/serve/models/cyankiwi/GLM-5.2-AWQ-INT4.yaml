@@ -23,7 +23,7 @@ serve:
   - --kv-cache-dtype
   - fp8
   - --gpu-memory-utilization
-  - "0.85"
+  - "0.78"
 generation:
   max_gen_toks: 8192
   extra_gen_kwargs:
