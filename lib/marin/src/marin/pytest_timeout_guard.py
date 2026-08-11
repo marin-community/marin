@@ -7,8 +7,8 @@ import sys
 import threading
 from collections.abc import Generator
 
-import pytest
-from pytest_timeout import Settings, is_debugging
+import pytest  # pyrefly: ignore[missing-import]  # Loaded only by pytest from the root test configuration.
+from pytest_timeout import Settings, is_debugging  # pyrefly: ignore[missing-import]
 
 HARD_KILL_DELAY = 5.0
 HARD_KILL_MESSAGE = "pytest-timeout signal handler did not stop the test; hard-killing process\n"
