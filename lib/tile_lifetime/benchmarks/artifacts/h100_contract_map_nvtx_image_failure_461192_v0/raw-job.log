@@ -1,0 +1,1047 @@
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	﻿2026-08-11T08:20:52.5508185Z Current runner version: '2.336.0'
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5539956Z ##[group]Runner Image Provisioner
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5540961Z Hosted Compute Agent
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5541681Z Version: 20260707.563
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5542372Z Commit: 02667638d2b423fbc733a8e32a88b44996a3ba6e
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5543128Z Build Date: 2026-07-07T19:33:50Z
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5543904Z Worker ID: {bbcfcf7c-6800-4297-b9bf-015a0f018e00}
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5544820Z Azure Region: northcentralus
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5545469Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5547112Z ##[group]Operating System
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5547753Z Ubuntu
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5548354Z 24.04.4
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5548927Z LTS
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5549502Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5550111Z ##[group]Runner Image
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5550734Z Image: ubuntu-24.04
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5551309Z Version: 20260720.247.2
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5552798Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260720.247/images/ubuntu/Ubuntu2404-Readme.md
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5554338Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260720.247
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5555503Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5556812Z ##[group]GITHUB_TOKEN Permissions
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5559242Z Contents: read
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5559900Z Metadata: read
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5560562Z Packages: write
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5561143Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5563856Z Secret source: Actions
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5565759Z Prepare workflow directory
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.5949351Z Prepare all required actions
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.6004974Z Getting action download info
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:52.8594115Z Download action repository 'actions/checkout@v5' (SHA:fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:53.1944913Z Download action repository 'docker/setup-buildx-action@v4' (SHA:bb05f3f5519dd87d3ba754cc423b652a5edd6d2c)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:53.6208893Z Download action repository 'docker/login-action@v4' (SHA:dbcb813823bdd20940b903addbd779551569679f)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.1583921Z Uses: marin-community/marin/.github/workflows/ops-h100-evidence-image.yaml@refs/heads/research/shuttle-clean-helper-boundaries (4611929eab07dc8fa11294c2456b4cdfde5a46bc)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.1591160Z ##[group] Inputs
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.1591900Z   ref: 4611929eab07dc8fa11294c2456b4cdfde5a46bc
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.1592766Z   image_set: h100-evidence
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.1593388Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.1594204Z Complete job name: h100-evidence-image / build-h100-evidence-image
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2512673Z ##[group]Run actions/checkout@v5
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2513741Z with:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2514293Z   ref: 4611929eab07dc8fa11294c2456b4cdfde5a46bc
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2515337Z   persist-credentials: false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2516035Z   repository: marin-community/marin
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2523361Z   token: ***
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2523859Z   ssh-strict: true
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2524403Z   ssh-user: git
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2525010Z   clean: true
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2525551Z   sparse-checkout-cone-mode: true
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2526275Z   fetch-depth: 1
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2526769Z   fetch-tags: false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2527296Z   show-progress: true
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2527896Z   lfs: false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2528375Z   submodules: false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2528904Z   set-safe-directory: true
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2529538Z   allow-unsafe-pr-checkout: false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.2530456Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3671395Z Syncing repository: marin-community/marin
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3674863Z ##[group]Getting Git version info
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3675916Z Working directory is '/home/runner/work/marin/marin'
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3677548Z [command]/usr/bin/git version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3726469Z git version 2.54.0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3750407Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3769867Z Temporarily overriding HOME='/home/runner/work/_temp/5ceac90e-faf6-4aaa-b519-7a82ed6061fa' before making global git config changes
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3773782Z Adding repository directory to the temporary git global config as a safe directory
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3777704Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/marin/marin
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3850368Z Deleting the contents of '/home/runner/work/marin/marin'
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3852415Z ##[group]Initializing the repository
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3853600Z [command]/usr/bin/git init /home/runner/work/marin/marin
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3944712Z hint: Using 'master' as the name for the initial branch. This default branch name
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3948058Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3951188Z hint: to use in all of your new repositories, which will suppress this warning,
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3953507Z hint: call:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3954864Z hint:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3956674Z hint: 	git config --global init.defaultBranch <name>
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3958093Z hint:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3959316Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3962514Z hint: 'development'. The just-created branch can be renamed via this command:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3964287Z hint:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3965204Z hint: 	git branch -m <name>
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3966125Z hint:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3967163Z hint: Disable this message with "git config set advice.defaultBranchName false"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3968724Z Initialized empty Git repository in /home/runner/work/marin/marin/.git/
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.3972631Z [command]/usr/bin/git remote add origin https://github.com/marin-community/marin
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.4024977Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.4026317Z ##[group]Disabling automatic garbage collection
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.4027314Z [command]/usr/bin/git config --local gc.auto 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.4071095Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.4072420Z ##[group]Setting up auth
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.4080521Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.4127226Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.4536646Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.4586949Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.4888034Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.4934062Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.5209995Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.5268779Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.5285215Z ##[group]Fetching the repository
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:54.5288320Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin 4611929eab07dc8fa11294c2456b4cdfde5a46bc
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.1802833Z From https://github.com/marin-community/marin
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.1805610Z  * branch            4611929eab07dc8fa11294c2456b4cdfde5a46bc -> FETCH_HEAD
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.1838145Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.1839558Z ##[group]Determining the checkout info
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.1841242Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.1846542Z [command]/usr/bin/git sparse-checkout disable
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.1902919Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.1941267Z ##[group]Checking out the ref
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.1948007Z [command]/usr/bin/git checkout --progress --force 4611929eab07dc8fa11294c2456b4cdfde5a46bc
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8430436Z Note: switching to '4611929eab07dc8fa11294c2456b4cdfde5a46bc'.
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8430874Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8431134Z You are in 'detached HEAD' state. You can look around, make experimental
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8432165Z changes and commit them, and you can discard any commits you make in this
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8432756Z state without impacting any branches by switching back to a branch.
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8433164Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8433444Z If you want to create a new branch to retain commits you create, you may
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8433971Z do so (now or later) by using -c with the switch command. Example:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8434289Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8434464Z   git switch -c <new-branch-name>
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8435042Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8435206Z Or undo this operation with:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8435401Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8435534Z   git switch -
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8435713Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8435990Z Turn off this advice by setting config variable advice.detachedHead to false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8436372Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8436576Z HEAD is now at 4611929 Diagnose H100 NVTX tracking before timing
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8457637Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8508951Z [command]/usr/bin/git log -1 --format=%H
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8541879Z 4611929eab07dc8fa11294c2456b4cdfde5a46bc
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8552567Z ##[group]Removing auth
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8557275Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8598501Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8861643Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8896752Z http.https://github.com/.extraheader
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8905681Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.8945998Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9221794Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9262712Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9526834Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9745924Z ##[group]Run full_sha="$(git rev-parse HEAD)"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9746478Z [36;1mfull_sha="$(git rev-parse HEAD)"[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9746879Z [36;1mif [[ ! "$full_sha" =~ ^[0-9a-f]{40}$ ]]; then[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9747359Z [36;1m  echo "checkout did not resolve to a full Git SHA: $full_sha" >&2[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9747780Z [36;1m  exit 1[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9748035Z [36;1mfi[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9748337Z [36;1mecho "full_sha=$full_sha" >> "$GITHUB_OUTPUT"[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9804402Z shell: /usr/bin/bash -e {0}
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9805113Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9995015Z ##[group]Run context_manifest="lib/iris/images/h100-evidence-debian12-amd64.sha256"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9995763Z [36;1mcontext_manifest="lib/iris/images/h100-evidence-debian12-amd64.sha256"[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9996306Z [36;1mdockerignore="lib/iris/Dockerfile.dockerignore"[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:57.9996734Z [36;1mif [[ ! -s "$context_manifest" ]]; then[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0079122Z [36;1m  echo "required Docker context manifest is missing or empty: $context_manifest" >&2[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0079919Z [36;1m  exit 1[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0080259Z [36;1mfi[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0080825Z [36;1mif ! grep -Fxq "!$context_manifest" "$dockerignore"; then[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0081817Z [36;1m  echo "Dockerfile-specific ignore rules exclude required manifest: $context_manifest" >&2[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0082521Z [36;1m  exit 1[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0082894Z [36;1mfi[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0140401Z shell: /usr/bin/bash -e {0}
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0140837Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0321229Z ##[group]Run docker/setup-buildx-action@v4
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0321608Z with:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0321871Z   driver: docker-container
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0322159Z   use: true
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0322411Z   keep-state: false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0322681Z   cache-binary: true
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0322954Z   cleanup: true
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.0323209Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.2333064Z ##[group]Docker info
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.2361944Z [command]/usr/bin/docker version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3218085Z Client: Docker Engine - Community
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3223544Z  Version:           28.0.4
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3224275Z  API version:       1.48
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3225370Z  Go version:        go1.23.7
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3225852Z  Git commit:        b8034c0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3226258Z  Built:             Tue Mar 25 15:07:16 2025
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3226701Z  OS/Arch:           linux/amd64
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3227070Z  Context:           default
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3227308Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3227618Z Server: Docker Engine - Community
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3228002Z  Engine:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3228314Z   Version:          28.0.4
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3228717Z   API version:      1.48 (minimum version 1.24)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3229172Z   Go version:       go1.23.7
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3229535Z   Git commit:       6430e49
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3229902Z   Built:            Tue Mar 25 15:07:16 2025
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3230323Z   OS/Arch:          linux/amd64
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3230696Z   Experimental:     false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3231039Z  containerd:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3231338Z   Version:          v2.2.6
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3231784Z   GitCommit:        11ce9d5f3c68c941867e82890e93e815c1304f1b
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3232272Z  runc:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3232556Z   Version:          1.3.6
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3232954Z   GitCommit:        v1.3.6-0-g491b69ba
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3233405Z  docker-init:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3233709Z   Version:          0.19.0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3234075Z   GitCommit:        de40ad0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:20:58.3274134Z [command]/usr/bin/docker info
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2921272Z Client: Docker Engine - Community
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2921987Z  Version:    28.0.4
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2922826Z  Context:    default
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2923180Z  Debug Mode: false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2923494Z  Plugins:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2923785Z   buildx: Docker Buildx (Docker Inc.)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2924153Z     Version:  v0.35.0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2924831Z     Path:     /usr/libexec/docker/cli-plugins/docker-buildx
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2925324Z   compose: Docker Compose (Docker Inc.)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2925708Z     Version:  v2.38.2
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2926125Z     Path:     /usr/libexec/docker/cli-plugins/docker-compose
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2926469Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2926587Z Server:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2926880Z  Containers: 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2927181Z   Running: 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2927496Z   Paused: 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2927780Z   Stopped: 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2928067Z  Images: 6
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2928394Z  Server Version: 28.0.4
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2928776Z  Storage Driver: overlay2
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2929116Z   Backing Filesystem: extfs
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2929455Z   Supports d_type: true
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2929782Z   Using metacopy: false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2930122Z   Native Overlay Diff: false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2930479Z   userxattr: false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2930816Z  Logging Driver: json-file
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2931200Z  Cgroup Driver: systemd
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2931532Z  Cgroup Version: 2
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2931853Z  Plugins:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2932214Z   Volume: local
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2932584Z   Network: bridge host ipvlan macvlan null overlay
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2933204Z   Log: awslogs fluentd gcplogs gelf journald json-file local splunk syslog
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2933777Z  Swarm: inactive
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2934141Z  Runtimes: io.containerd.runc.v2 runc
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2934998Z  Default Runtime: runc
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2935378Z  Init Binary: docker-init
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2936385Z  containerd version: 11ce9d5f3c68c941867e82890e93e815c1304f1b
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2937156Z  runc version: v1.3.6-0-g491b69ba
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2937579Z  init version: de40ad0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2937939Z  Security Options:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2938284Z   apparmor
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2938601Z   seccomp
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2938905Z    Profile: builtin
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2939246Z   cgroupns
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2939553Z  Kernel Version: 6.17.0-1020-azure
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2940032Z  Operating System: Ubuntu 24.04.4 LTS
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2940456Z  OSType: linux
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2940793Z  Architecture: x86_64
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2941145Z  CPUs: 4
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2941467Z  Total Memory: 15.61GiB
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2941831Z  Name: runnervmvrwv9
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2942219Z  ID: dce1e4a9-fc26-4218-aaf0-feee5194c8cb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2942688Z  Docker Root Dir: /var/lib/docker
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2943091Z  Debug Mode: false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2943481Z  Username: githubactions
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2943873Z  Experimental: false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2944241Z  Insecure Registries:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2949012Z   ::1/128
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2949348Z   127.0.0.0/8
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2949696Z  Live Restore Enabled: false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2949956Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.2951142Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.4346511Z ##[group]Buildx version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.4370602Z [command]/usr/bin/docker buildx version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.4954705Z github.com/docker/buildx v0.35.0 a319e5b15052cf6557ceb666eb8ff6e32380b782
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.4989569Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5159937Z ##[group]Inspecting default docker context
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5330439Z [
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5330757Z   {
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5331043Z     "Name": "default",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5331399Z     "Metadata": {},
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5331728Z     "Endpoints": {
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5332039Z       "docker": {
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5332383Z         "Host": "unix:///var/run/docker.sock",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5332756Z         "SkipTLSVerify": false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5333019Z       }
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5333200Z     },
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5333394Z     "TLSMaterial": {},
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5333615Z     "Storage": {
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5333833Z       "MetadataPath": "<IN MEMORY>",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5334099Z       "TLSPath": "<IN MEMORY>"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5334816Z     }
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5335029Z   }
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5335221Z ]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5335869Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.5336472Z ##[group]Creating a new builder instance
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.6799555Z [command]/usr/bin/docker buildx create --name builder-02465995-a127-4f62-8155-9355ff011338 --driver docker-container --buildkitd-flags --allow-insecure-entitlement security.insecure --allow-insecure-entitlement network.host --use
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.8021050Z builder-02465995-a127-4f62-8155-9355ff011338
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.8057501Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.8058327Z ##[group]Booting builder
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.8096054Z [command]/usr/bin/docker buildx inspect --bootstrap --builder builder-02465995-a127-4f62-8155-9355ff011338
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:03.8682720Z #1 [internal] booting buildkit
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:04.0191246Z #1 pulling image moby/buildkit:buildx-stable-1
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.5018385Z #1 pulling image moby/buildkit:buildx-stable-1 3.6s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.6529830Z #1 creating container buildx_buildkit_builder-02465995-a127-4f62-8155-9355ff0113380
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.7965412Z #1 creating container buildx_buildkit_builder-02465995-a127-4f62-8155-9355ff0113380 0.3s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.7981086Z #1 DONE 3.9s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8456130Z Name:          builder-02465995-a127-4f62-8155-9355ff011338
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8456653Z Driver:        docker-container
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8457059Z Last Activity: 2026-08-11 08:21:03 +0000 UTC
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8457356Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8457654Z Nodes:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8458045Z Name:                  builder-02465995-a127-4f62-8155-9355ff0113380
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8458696Z Endpoint:              unix:///var/run/docker.sock
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8460045Z Status:                running
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8460938Z BuildKit daemon flags: --allow-insecure-entitlement security.insecure --allow-insecure-entitlement network.host
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8461743Z BuildKit version:      v0.31.2
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8462230Z Platforms:             linux/amd64, linux/amd64/v2, linux/amd64/v3, linux/386
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8462764Z Labels:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8463117Z  org.mobyproject.buildkit.worker.executor:         oci
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8463741Z  org.mobyproject.buildkit.worker.hostname:         1f94847c75a4
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8464425Z  org.mobyproject.buildkit.worker.network:          host
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8465479Z  org.mobyproject.buildkit.worker.oci.process-mode: sandbox
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8466193Z  org.mobyproject.buildkit.worker.selinux.enabled:  false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8466832Z  org.mobyproject.buildkit.worker.snapshotter:      overlayfs
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8467359Z GC Policy rule#0:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8467701Z  All:            false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8468212Z  Filters:        type==source.local type==exec.cachemount type==source.git.checkout
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8468810Z  Keep Duration:  48h0m0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8469133Z  Max Used Space: 488.3MiB
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8469464Z GC Policy rule#1:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8469741Z  All:            false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8470058Z  Keep Duration:  1440h0m0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8470404Z  Reserved Space: 9.313GiB
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8470734Z  Max Used Space: 93.13GiB
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8471048Z  Min Free Space: 27.01GiB
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8471366Z GC Policy rule#2:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8471650Z  All:            false
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8471959Z  Reserved Space: 9.313GiB
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8472285Z  Max Used Space: 93.13GiB
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8472609Z  Min Free Space: 27.01GiB
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8472928Z GC Policy rule#3:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8473213Z  All:            true
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8473521Z  Reserved Space: 9.313GiB
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8473853Z  Max Used Space: 93.13GiB
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8474199Z  Min Free Space: 27.01GiB
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.8526211Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9474729Z ##[group]Inspect builder
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9475138Z {
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9475371Z   "nodes": [
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9475608Z     {
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9475928Z       "name": "builder-02465995-a127-4f62-8155-9355ff0113380",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9476379Z       "endpoint": "unix:///var/run/docker.sock",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9477005Z       "status": "running",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9478343Z       "buildkitd-flags": "--allow-insecure-entitlement security.insecure --allow-insecure-entitlement network.host",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9479279Z       "buildkit": "v0.31.2",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9479616Z       "platforms": "linux/amd64,linux/amd64/v2,linux/amd64/v3,linux/386",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9479963Z       "features": {
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9480279Z         "Automatically load images to the Docker Engine image store": true,
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9480651Z         "Cache export": true,
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9480931Z         "Direct push": true,
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9481182Z         "Docker exporter": true,
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9481435Z         "Multi-platform build": true,
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9481690Z         "OCI exporter": true
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9481913Z       },
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9482094Z       "labels": {
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9482361Z         "org.mobyproject.buildkit.worker.executor": "oci",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9482754Z         "org.mobyproject.buildkit.worker.hostname": "1f94847c75a4",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9483139Z         "org.mobyproject.buildkit.worker.network": "host",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9483568Z         "org.mobyproject.buildkit.worker.oci.process-mode": "sandbox",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9484002Z         "org.mobyproject.buildkit.worker.selinux.enabled": "false",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9484452Z         "org.mobyproject.buildkit.worker.snapshotter": "overlayfs"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9485129Z       },
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9485319Z       "gcPolicy": [
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9485508Z         {
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9486014Z           "all": false,
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9486408Z           "filter": [
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9486720Z             "type==source.local type==exec.cachemount type==source.git.checkout"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9487073Z           ],
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9487271Z           "keepDuration": "48h0m0s",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9487522Z           "maxUsedSpace": "488.3MiB"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9487775Z         },
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9487954Z         {
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9488157Z           "all": false,
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9488375Z           "keepDuration": "1440h0m0s",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9488626Z           "reservedSpace": "9.313GiB",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9488871Z           "maxUsedSpace": "93.13GiB",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9489111Z           "minFreeSpace": "27.01GiB"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9489341Z         },
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9489552Z         {
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9489725Z           "all": false,
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9489986Z           "reservedSpace": "9.313GiB",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9490258Z           "maxUsedSpace": "93.13GiB",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9490514Z           "minFreeSpace": "27.01GiB"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9490745Z         },
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9490932Z         {
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9491126Z           "all": true,
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9491357Z           "reservedSpace": "9.313GiB",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9491624Z           "maxUsedSpace": "93.13GiB",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9491864Z           "minFreeSpace": "27.01GiB"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9492109Z         }
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9492307Z       ]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9492481Z     }
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9492676Z   ],
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9492933Z   "name": "builder-02465995-a127-4f62-8155-9355ff011338",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9493270Z   "driver": "docker-container",
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9493536Z   "lastActivity": "2026-08-11T08:21:03.000Z"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9493799Z }
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9494226Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9495423Z ##[group]BuildKit version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9495842Z builder-02465995-a127-4f62-8155-9355ff0113380: v0.31.2
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9496333Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9650637Z ##[group]Run docker/login-action@v4
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9650926Z with:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9651154Z   registry: ghcr.io
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9651378Z   username: dlwh
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9653975Z   password: ***
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9654201Z   logout: true
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:07.9654414Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.1824065Z Logging into ghcr.io...
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5501512Z Login Succeeded!
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5666577Z ##[group]Run metadata_file="$RUNNER_TEMP/iris-task-h100-evidence-metadata.json"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5667185Z [36;1mmetadata_file="$RUNNER_TEMP/iris-task-h100-evidence-metadata.json"[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5667654Z [36;1mdocker buildx build --file lib/iris/Dockerfile \[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5668025Z [36;1m  --target task-h100-evidence \[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5668319Z [36;1m  --platform linux/amd64 \[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5668810Z [36;1m  --cache-from type=registry,ref=ghcr.io/marin-community/iris-cache:task-h100-evidence-amd64 \[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5669811Z [36;1m  --cache-to type=registry,ref=ghcr.io/marin-community/iris-cache:task-h100-evidence-amd64,mode=max,compression=zstd,compression-level=3,oci-mediatypes=true,image-manifest=true \[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5670732Z [36;1m  --output type=image,compression=zstd,compression-level=3,push=true \[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5671144Z [36;1m  --provenance=false \[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5671461Z [36;1m  --metadata-file "$metadata_file" \[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5671872Z [36;1m  --build-arg IRIS_GIT_HASH=4611929eab07dc8fa11294c2456b4cdfde5a46bc \[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5672255Z [36;1m  --tag "$IMAGE" \[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5672497Z [36;1m  .[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5672794Z [36;1mdigest="$(jq -r '."containerimage.digest"' "$metadata_file")"[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5673194Z [36;1mif [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5673567Z [36;1m  echo "build did not return an OCI digest: $digest" >&2[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5673891Z [36;1m  exit 1[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5674086Z [36;1mfi[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5674690Z [36;1mimage_ref="$IMAGE@$digest"[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5675089Z [36;1mdocker buildx imagetools inspect "$image_ref" > /dev/null[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5675498Z [36;1mecho "image_ref=$image_ref" >> "$GITHUB_OUTPUT"[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5675917Z [36;1mecho "H100 evidence image: \`$image_ref\`" >> "$GITHUB_STEP_SUMMARY"[0m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5723642Z shell: /usr/bin/bash -e {0}
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5723901Z env:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5724311Z   IMAGE: ghcr.io/marin-community/iris-task-h100-evidence:4611929eab07dc8fa11294c2456b4cdfde5a46bc
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.5724927Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.8754401Z #0 building with "builder-02465995-a127-4f62-8155-9355ff011338" instance using docker-container driver
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.8755206Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.8755353Z #1 [internal] load build definition from Dockerfile
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.8777083Z #1 transferring dockerfile: 23.38kB 0.0s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.8777595Z #1 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.8777724Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:08.8777900Z #2 [auth] astral-sh/uv:pull token for ghcr.io
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.0258385Z #2 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.0258640Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.0258918Z #3 [auth] library/python:pull token for registry-1.docker.io
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.0259410Z #3 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.0259524Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.0259691Z #4 [internal] load metadata for ghcr.io/astral-sh/uv:0.10.3
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.3247165Z #4 ...
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.3247632Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.3248175Z #5 [internal] load metadata for docker.io/library/python:3.12-slim
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.3248716Z #5 DONE 0.5s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.5098984Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.5100461Z #4 [internal] load metadata for ghcr.io/astral-sh/uv:0.10.3
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.5101179Z #4 DONE 0.6s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.5101339Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.5101454Z #6 [internal] load build context
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.5101876Z #6 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.5102035Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.5102217Z #7 [auth] marin-community/iris-cache:pull token for ghcr.io
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.6607242Z #7 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.6607426Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.6607736Z #8 importing cache manifest from ghcr.io/marin-community/iris-cache:task-h100-evidence-amd64
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.7473489Z #8 inferred cache manifest type: application/vnd.oci.image.manifest.v1+json done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:09.8589408Z #8 DONE 0.4s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0515234Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0517038Z #9 FROM ghcr.io/astral-sh/uv:0.10.3@sha256:7a88d4c4e6f44200575000638453a5a381db0ae31ad5c3a51b14f8687c9d93a3
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0518106Z #9 resolve ghcr.io/astral-sh/uv:0.10.3@sha256:7a88d4c4e6f44200575000638453a5a381db0ae31ad5c3a51b14f8687c9d93a3 done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0518598Z #9 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0518712Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0519113Z #10 [task 1/6] FROM docker.io/library/python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0519933Z #10 resolve docker.io/library/python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36 done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0520470Z #10 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0520583Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0521700Z #11 [task 2/6] RUN apt-get update && apt-get install -y --no-install-recommends     curl     unzip     ca-certificates     openssh-client     git     build-essential     ffmpeg     lldb     libibverbs1     ibverbs-providers     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash -     && apt-get install -y --no-install-recommends nodejs     && rm -rf /var/lib/apt/lists/*
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0522941Z #11 CACHED
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0523054Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0523221Z #12 [task 3/6] COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0523544Z #12 CACHED
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0523652Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0523747Z #6 [internal] load build context
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0524010Z #6 transferring context: 2.14MB 0.0s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0524273Z #6 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0524385Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0524912Z #13 [task 4/6] RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs     | sh -s -- -y --default-toolchain stable --profile minimal
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.0525858Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 0B / 204.75MB 0.2s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.2080343Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 12.58MB / 204.75MB 0.3s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.2083656Z #13 sha256:1eeaea0f93b6c8f94de8764a0a293f0beb111478a9a26c593a03378e7fedbafe 10.49MB / 20.98MB 0.3s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.2088336Z #13 sha256:b3c7a9bdb4f2a30d0a1358438d1539c06b86da99135cfd9d92756863cc87ae18 249B / 249B 0.2s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.2089900Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 0B / 370.52MB 0.2s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.3336266Z #13 sha256:1eeaea0f93b6c8f94de8764a0a293f0beb111478a9a26c593a03378e7fedbafe 20.98MB / 20.98MB 0.4s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.3337974Z #13 sha256:c85ad0bcaca895afa08053538ec1ea7642c7e9e05f5684d18e3627a2316ca8ae 12.11MB / 12.11MB 0.1s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.3339622Z #13 sha256:26c307b5e35a59ce911f5fde5b9458120ec8734e831ea2da5649a9ad14abfd3d 29.78MB / 29.78MB 0.1s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.5012177Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 41.94MB / 204.75MB 0.6s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.5013809Z #13 extracting sha256:26c307b5e35a59ce911f5fde5b9458120ec8734e831ea2da5649a9ad14abfd3d
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.5015162Z #13 sha256:5a31db4cd47898e862a567028aa41f7a11d814cf69be6904173402a8b8eac5cb 1.29MB / 1.29MB 0.0s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.6513760Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 52.43MB / 204.75MB 0.8s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.6515088Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 25.17MB / 370.52MB 0.6s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.8010649Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 62.91MB / 204.75MB 0.9s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.9525467Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 82.84MB / 204.75MB 1.1s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:10.9526998Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 52.43MB / 370.52MB 0.9s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:11.2512129Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 104.86MB / 204.75MB 1.4s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:11.2513282Z #13 extracting sha256:26c307b5e35a59ce911f5fde5b9458120ec8734e831ea2da5649a9ad14abfd3d 0.8s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:11.2514951Z #13 extracting sha256:5a31db4cd47898e862a567028aa41f7a11d814cf69be6904173402a8b8eac5cb 0.1s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:11.2515841Z #13 extracting sha256:c85ad0bcaca895afa08053538ec1ea7642c7e9e05f5684d18e3627a2316ca8ae
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:11.4012528Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 115.34MB / 204.75MB 1.5s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:11.4013750Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 73.40MB / 370.52MB 1.4s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:11.7013983Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 130.02MB / 204.75MB 1.8s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:12.0019703Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 97.52MB / 370.52MB 1.7s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:12.0020932Z #13 extracting sha256:c85ad0bcaca895afa08053538ec1ea7642c7e9e05f5684d18e3627a2316ca8ae 0.4s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:12.0021972Z #13 extracting sha256:b3c7a9bdb4f2a30d0a1358438d1539c06b86da99135cfd9d92756863cc87ae18 done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:12.0023032Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 146.80MB / 204.75MB 2.1s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:12.0023886Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 117.44MB / 370.52MB 2.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:12.1514693Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 159.38MB / 204.75MB 2.3s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:12.3094072Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 136.31MB / 370.52MB 2.3s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:12.4515603Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 180.36MB / 204.75MB 2.6s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:12.6017873Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 192.94MB / 204.75MB 2.7s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:12.6019447Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 157.29MB / 370.52MB 2.6s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:12.7516800Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 204.75MB / 204.75MB 2.9s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:12.9015087Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 178.26MB / 370.52MB 2.9s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:13.0601384Z #13 sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 204.75MB / 204.75MB 3.0s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:13.0608407Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 197.13MB / 370.52MB 3.2s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:13.3597881Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 220.20MB / 370.52MB 3.5s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:13.6594009Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 241.17MB / 370.52MB 3.8s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:13.9593528Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 262.14MB / 370.52MB 4.1s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:14.2591016Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 282.07MB / 370.52MB 4.4s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:14.5593977Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 304.09MB / 370.52MB 4.7s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:14.8591321Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 326.11MB / 370.52MB 5.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:15.1600234Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 350.22MB / 370.52MB 5.3s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:15.4596610Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 369.10MB / 370.52MB 5.6s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:16.1756079Z #13 sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 370.52MB / 370.52MB 6.3s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:16.3281224Z #13 extracting sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:19.8576169Z #13 extracting sha256:9ee0ba79fa48b4e8de733301938e7c6ed0e70bdfd9d931dd8685af9283eb1b6b 3.7s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:20.1031952Z #13 extracting sha256:1eeaea0f93b6c8f94de8764a0a293f0beb111478a9a26c593a03378e7fedbafe 0.1s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:20.1032805Z #13 extracting sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:21.6800185Z #13 extracting sha256:5d51d87e3b77d61191b53afef0fe375e3099f54920734c2fedc1ddeaab730c7a 1.7s done
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:21.6803705Z #13 DONE 11.8s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:21.8854706Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:21.8857590Z #14 [task 5/6] RUN set -eux;     case "$(uname -m)" in       aarch64) nsys_arch=sbsa;   pkg_arch=arm64 ;;       x86_64)  nsys_arch=x86_64; pkg_arch=amd64 ;;       *) echo "no nsight-systems build for $(uname -m)" >&2; exit 1 ;;     esac;     curl -fsSL -o /tmp/nsys.deb       "https://developer.download.nvidia.com/compute/cuda/repos/debian12/${nsys_arch}/nsight-systems-2026.1.3_2026.1.3.425-1_${pkg_arch}.deb";     dpkg-deb -x /tmp/nsys.deb /opt/nsight;     rm -f /tmp/nsys.deb;     ln -s "$(ls /opt/nsight/opt/nvidia/nsight-systems/2026.1.3/target-linux-*/nsys | head -1)" /usr/local/bin/nsys;     nsys --version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:21.8859830Z #14 0.054 + uname -m
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:21.8860269Z #14 0.056 + nsys_arch=x86_64
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:21.8860631Z #14 0.056 + pkg_arch=amd64
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:21.8861651Z #14 0.056 + curl -fsSL -o /tmp/nsys.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/nsight-systems-2026.1.3_2026.1.3.425-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:36.7346628Z #14 15.06 + dpkg-deb -x /tmp/nsys.deb /opt/nsight
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:42.1788649Z #14 20.50 + rm -f /tmp/nsys.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:42.3742101Z #14 20.56 + ls /opt/nsight/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:42.3742992Z #14 20.56 + head -1
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:42.3744247Z #14 20.57 + ln -s /opt/nsight/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys /usr/local/bin/nsys
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:42.3745214Z #14 20.69 + nsys --version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:42.5628791Z #14 20.73 NVIDIA Nsight Systems version 2026.1.3.425-261338342291v0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:44.9772237Z #14 DONE 23.3s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0863812Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0864379Z #15 [task 6/6] WORKDIR /app
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0866128Z #15 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0866670Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0868733Z #16 [h100-evidence-runtime  1/17] WORKDIR /build/runtime
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0869558Z #16 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0869897Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0870188Z #17 [h100-evidence-runtime  2/17] COPY uv.lock pyproject.toml ./
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0870647Z #17 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0870814Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0871178Z #18 [h100-evidence-runtime  3/17] COPY lib/iris/pyproject.toml ./lib/iris/pyproject.toml
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0871790Z #18 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0871992Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0872346Z #19 [h100-evidence-runtime  4/17] COPY lib/fray/pyproject.toml ./lib/fray/pyproject.toml
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0872976Z #19 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0873157Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0873636Z #20 [h100-evidence-runtime  5/17] COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0874338Z #20 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0874894Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0875289Z #21 [h100-evidence-runtime  6/17] COPY lib/dupekit/pyproject.toml ./lib/dupekit/pyproject.toml
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0875956Z #21 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0876117Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0876497Z #22 [h100-evidence-runtime  7/17] COPY lib/ducky/pyproject.toml ./lib/ducky/pyproject.toml
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0877113Z #22 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0877275Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0877699Z #23 [h100-evidence-runtime  8/17] COPY lib/shuttle/pyproject.toml lib/shuttle/README.md ./lib/shuttle/
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.0878324Z #23 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3062284Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3063234Z #24 [h100-evidence-runtime  9/17] COPY lib/tile_lifetime/pyproject.toml ./lib/tile_lifetime/pyproject.toml
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3064021Z #24 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3064155Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3064431Z #25 [h100-evidence-runtime 10/17] COPY lib/haliax/pyproject.toml ./lib/haliax/pyproject.toml
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3065315Z #25 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3065436Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3065719Z #26 [h100-evidence-runtime 11/17] COPY lib/levanter/pyproject.toml ./lib/levanter/pyproject.toml
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3066175Z #26 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3066310Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3067090Z #27 [h100-evidence-runtime 12/17] COPY lib/marin/pyproject.toml ./lib/marin/pyproject.toml
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3067530Z #27 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3067661Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3067937Z #28 [h100-evidence-runtime 13/17] COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3068385Z #28 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3068513Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3068759Z #29 [h100-evidence-runtime 14/17] COPY lib/zephyr/pyproject.toml ./lib/zephyr/pyproject.toml
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3069179Z #29 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3069307Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3069568Z #30 [h100-evidence-runtime 15/17] COPY infra/pulumi/pyproject.toml ./infra/pulumi/pyproject.toml
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3070009Z #30 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3070132Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3070325Z #31 [h100-evidence-runtime 16/17] COPY lib/shuttle/src/ ./lib/shuttle/src/
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3070696Z #31 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3070820Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.3071438Z #32 [h100-evidence-runtime 17/17] RUN --mount=type=cache,target=/root/.cache/uv     uv sync --frozen --package marin-tile-lifetime --extra cuda13       --no-default-groups --no-editable --no-install-project
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.4464207Z #32 0.291 Using CPython 3.12.13 interpreter at: /usr/local/bin/python3
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5464960Z #32 0.291 Creating virtual environment at: /opt/h100-evidence-runtime
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5465748Z #32 0.367    Building marin-shuttle @ file:///build/runtime/lib/shuttle
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5466400Z #32 0.381 Downloading nvidia-nvshmem-cu13 (57.6MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5466949Z #32 0.382 Downloading nvidia-cuda-cupti (10.2MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5467475Z #32 0.383 Downloading nvidia-cuda-runtime (2.1MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5468719Z #32 0.385 Downloading numpy (15.8MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5469207Z #32 0.385 Downloading nvidia-cusparse (139.2MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5469723Z #32 0.386 Downloading nvidia-nvjitlink (38.8MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5470084Z #32 0.389 Downloading nvidia-cusolver (191.6MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5470581Z #32 0.389 Downloading ml-dtypes (4.8MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5471103Z #32 0.389 Downloading nvidia-cuda-nvrtc (86.0MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5471618Z #32 0.390 Downloading nvidia-cufft (204.2MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5472023Z #32 0.390 Downloading scipy (33.4MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5472419Z #32 0.391 Downloading nvidia-nccl-cu13 (187.4MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.5472790Z #32 0.391 Downloading jax-cuda13-plugin (7.0MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.7012131Z #32 0.392 Downloading nvidia-nvvm (61.3MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.7012812Z #32 0.392 Downloading nvidia-cublas (386.1MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.7013363Z #32 0.392 Downloading nvidia-cuda-nvcc (42.0MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.7013887Z #32 0.393 Downloading jaxlib (81.9MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.7014228Z #32 0.394 Downloading jax-cuda13-pjrt (114.0MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.7014995Z #32 0.395 Downloading nvidia-cudnn-cu13 (349.1MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:45.7015470Z #32 0.395 Downloading jax (3.0MiB)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:46.1290466Z #32 0.973  Downloaded nvidia-cuda-runtime
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:46.3706497Z #32 1.215       Built marin-shuttle @ file:///build/runtime/lib/shuttle
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:46.8250992Z #32 1.519  Downloaded ml-dtypes
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:47.0108614Z #32 1.855  Downloaded jax-cuda13-plugin
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:47.2600819Z #32 2.104  Downloaded jax
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:47.4331074Z #32 2.278  Downloaded nvidia-cuda-cupti
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:50.4951355Z #32 5.339  Downloaded nvidia-nvjitlink
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:50.7859534Z #32 5.631  Downloaded nvidia-cuda-nvcc
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:50.9635318Z #32 5.808  Downloaded numpy
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:52.2974883Z #32 7.029  Downloaded scipy
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:52.2976511Z #32 7.142  Downloaded nvidia-nvshmem-cu13
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:52.5266595Z #32 7.370  Downloaded nvidia-nvvm
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:54.1545872Z #32 8.999  Downloaded nvidia-cuda-nvrtc
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:54.9469570Z #32 9.792  Downloaded jaxlib
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:55.2749453Z #32 10.12  Downloaded jax-cuda13-pjrt
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:55.9616617Z #32 10.81  Downloaded nvidia-cusparse
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:56.9573530Z #32 11.80  Downloaded nvidia-nccl-cu13
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:57.1699257Z #32 11.86  Downloaded nvidia-cusolver
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:57.1877555Z #32 12.03  Downloaded nvidia-cufft
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:58.4114739Z #32 13.26  Downloaded nvidia-cudnn-cu13
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:58.5345477Z #32 13.38  Downloaded nvidia-cublas
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:58.6891223Z #32 13.38 Prepared 23 packages in 13.01s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:58.6892108Z #32 13.38 warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:58.6893237Z #32 13.38          If the cache and target directories are on different filesystems, hardlinking may not be supported.
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:21:58.6894454Z #32 13.38          If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:05.8821868Z #32 20.72 Installed 23 packages in 7.34s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:05.8822373Z #32 20.72  + jax==0.10.1
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:05.8823049Z #32 20.72  + jax-cuda13-pjrt==0.10.1
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:05.8823411Z #32 20.72  + jax-cuda13-plugin==0.10.1
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:05.8823792Z #32 20.72  + jaxlib==0.10.1
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0325206Z #32 20.72  + marin-shuttle==0.1.0 (from file:///build/runtime/lib/shuttle)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0325705Z #32 20.73  + ml-dtypes==0.5.4
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0325978Z #32 20.73  + numpy==2.3.5
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0326239Z #32 20.73  + nvidia-cublas==13.4.1.1
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0326531Z #32 20.73  + nvidia-cuda-crt==13.2.78
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0326826Z #32 20.73  + nvidia-cuda-cupti==13.0.85
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0327119Z #32 20.73  + nvidia-cuda-nvcc==13.2.78
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0327405Z #32 20.73  + nvidia-cuda-nvrtc==13.0.88
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0328351Z #32 20.73  + nvidia-cuda-runtime==13.0.96
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0328640Z #32 20.73  + nvidia-cudnn-cu13==9.19.0.56
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0328910Z #32 20.73  + nvidia-cufft==12.0.0.61
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0329180Z #32 20.73  + nvidia-cusolver==12.0.4.66
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0329455Z #32 20.73  + nvidia-cusparse==12.6.3.3
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0329729Z #32 20.73  + nvidia-nccl-cu13==2.28.9
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0330018Z #32 20.73  + nvidia-nvjitlink==13.0.88
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0330290Z #32 20.73  + nvidia-nvshmem-cu13==3.4.5
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0330556Z #32 20.73  + nvidia-nvvm==13.2.78
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0330828Z #32 20.73  + opt-einsum==3.4.0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:06.0331093Z #32 20.73  + scipy==1.17.0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:10.8215207Z #32 DONE 25.7s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:14.2093770Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:14.2095084Z #33 [task-h100-evidence 1/8] COPY --from=h100-evidence-runtime /opt/h100-evidence-runtime /opt/h100-evidence-runtime
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:23.6875316Z #33 DONE 9.5s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:23.9367451Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:23.9368473Z #34 [task-h100-evidence 2/8] COPY lib/iris/images/h100-evidence-debian12-amd64.sha256 /tmp/h100-evidence-debian12-amd64.sha256
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:23.9369217Z #34 DONE 0.0s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:23.9369362Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:23.9375392Z #35 [task-h100-evidence 3/8] RUN set -eux;     test "$(dpkg --print-architecture)" = amd64;     while read -r expected_sha256 expected_size package_url extra; do       test -z "${extra}";       case "${expected_size}" in         ""|*[!0-9]*) echo "invalid NVIDIA package size: ${expected_size}" >&2; exit 1 ;;       esac;       test "${expected_size}" -gt 0;       case "${package_url}" in         https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/*) ;;         *) echo "invalid NVIDIA package URL: ${package_url}" >&2; exit 1 ;;       esac;       filename="${package_url##*/}";       case "${filename}" in         ""|*[!A-Za-z0-9._+-]*) echo "invalid NVIDIA package filename: ${filename}" >&2; exit 1 ;;       esac;       curl -fsSL --proto '=https' --tlsv1.2         -o "/tmp/${filename}"         "${package_url}";       actual_size="$(wc -c < "/tmp/${filename}")";       test "${actual_size}" -eq "${expected_size}";       echo "${expected_sha256}  /tmp/${filename}" | sha256sum --check --strict;       dpkg-deb --extract "/tmp/${filename}" /;       rm -f "/tmp/${filename}";     done < /tmp/h100-evidence-debian12-amd64.sha256;     rm -f /tmp/h100-evidence-debian12-amd64.sha256;     ln -sfn /usr/local/cuda-13.2 /usr/local/cuda;     ln -s libnvtx3interop.so /usr/local/cuda-13.2/lib64/libnvToolsExt.so;     ln -s /opt/nvidia/nsight-compute/2026.1.1/ncu /usr/local/bin/ncu;     test -x /usr/local/cuda-13.2/bin/nvcc;     test -x /usr/local/cuda-13.2/bin/ptxas;     test -x /usr/local/cuda-13.2/bin/cuobjdump;     test -x /usr/local/cuda-13.2/bin/nvdisasm;     test -x /usr/local/bin/ncu;     test -x /usr/local/bin/nsys;     /usr/local/cuda-13.2/bin/nvcc --version;     /usr/local/cuda-13.2/bin/ptxas --version;     /usr/local/cuda-13.2/bin/cuobjdump --version;     /usr/local/cuda-13.2/bin/nvdisasm --version;     /usr/local/bin/ncu --version;     /usr/local/bin/nsys --version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:23.9380879Z #35 0.052 + dpkg --print-architecture
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:23.9381168Z #35 0.056 + test amd64 = amd64
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:23.9381503Z #35 0.056 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:23.9381852Z #35 0.057 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:23.9382089Z #35 0.057 + test 1261292 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:23.9382371Z #35 0.057 + filename=cuda-cccl-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:23.9383167Z #35 0.057 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/cuda-cccl-13-2_13.2.86-1_amd64.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-cccl-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:25.4906347Z #35 1.761 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:25.6241612Z #35 1.763 + actual_size=1261292
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:25.6242160Z #35 1.763 + test 1261292 -eq 1261292
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:25.6243040Z #35 1.764 + echo 44a2457b6e71cdea22f6d486618fcf34ef75698561a7c7b2df3175cf9a97c033  /tmp/cuda-cccl-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:25.6244080Z #35 1.764 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:25.6244409Z #35 1.768 /tmp/cuda-cccl-13-2_13.2.86-1_amd64.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:25.6245072Z #35 1.768 + dpkg-deb --extract /tmp/cuda-cccl-13-2_13.2.86-1_amd64.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:25.6245491Z #35 1.895 + rm -f /tmp/cuda-cccl-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:25.7772115Z #35 1.897 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:25.7772538Z #35 1.897 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:25.7772775Z #35 1.897 + test 83114 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:25.7773082Z #35 1.897 + filename=cuda-crt-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:25.7773930Z #35 1.897 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/cuda-crt-13-2_13.2.86-1_amd64.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-crt-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.0091211Z #35 2.280 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.1738841Z #35 2.281 + actual_size=83114
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.1739363Z #35 2.281 + test 83114 -eq 83114
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.1739748Z #35 2.282 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.1740344Z #35 2.282 + echo a0a9719a9f382a79ab343e21c4fda9de1ef6a4145bfcd6a4744aad06e0c9d4f8  /tmp/cuda-crt-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.1740947Z #35 2.284 /tmp/cuda-crt-13-2_13.2.86-1_amd64.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.1741365Z #35 2.284 + dpkg-deb --extract /tmp/cuda-crt-13-2_13.2.86-1_amd64.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.1741767Z #35 2.292 + rm -f /tmp/cuda-crt-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.1742160Z #35 2.294 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.1742551Z #35 2.294 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.1742793Z #35 2.294 + test 179474 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.1743102Z #35 2.294 + filename=cuda-cudart-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.1743964Z #35 2.294 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/cuda-cudart-13-2_13.2.86-1_amd64.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-cudart-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.4426125Z #35 2.712 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.6103217Z #35 2.714 + actual_size=179474
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.6103679Z #35 2.714 + test 179474 -eq 179474
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.6104318Z #35 2.714 + echo 6f5c230f993f4971eec9f91b756ba3827fa0ff1419eeba9862d02f88247c34bf  /tmp/cuda-cudart-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.6105694Z #35 2.714 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.6106039Z #35 2.717 /tmp/cuda-cudart-13-2_13.2.86-1_amd64.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.6106429Z #35 2.717 + dpkg-deb --extract /tmp/cuda-cudart-13-2_13.2.86-1_amd64.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.6106823Z #35 2.729 + rm -f /tmp/cuda-cudart-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.6107202Z #35 2.730 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.6107535Z #35 2.730 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.6107751Z #35 2.730 + test 1449336 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.6108052Z #35 2.730 + filename=cuda-cudart-dev-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.6108940Z #35 2.730 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/cuda-cudart-dev-13-2_13.2.86-1_amd64.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-cudart-dev-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:26.9328328Z #35 3.203 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.1419599Z #35 3.205 + actual_size=1449336
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.1420086Z #35 3.205 + test 1449336 -eq 1449336
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.1420744Z #35 3.205 + echo f7682b556638eef82b5a5f7046dd4ab5ee799cbd42ef5e8edc585f1dc826e901  /tmp/cuda-cudart-dev-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.1421368Z #35 3.205 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.1421718Z #35 3.209 /tmp/cuda-cudart-dev-13-2_13.2.86-1_amd64.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.1422186Z #35 3.210 + dpkg-deb --extract /tmp/cuda-cudart-dev-13-2_13.2.86-1_amd64.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.1422626Z #35 3.260 + rm -f /tmp/cuda-cudart-dev-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.1423037Z #35 3.261 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.1423895Z #35 3.262 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.1424133Z #35 3.262 + test 23912 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.1424442Z #35 3.262 + filename=cuda-culibos-dev-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.1425594Z #35 3.262 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/cuda-culibos-dev-13-2_13.2.86-1_amd64.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-culibos-dev-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.3307727Z #35 3.601 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.4916852Z #35 3.603 + actual_size=23912
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.4917333Z #35 3.603 + test 23912 -eq 23912
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.4918002Z #35 3.603 + echo 1caca3e39170ab1571a694583765c21539c58292332b737b999e0d897311a23f  /tmp/cuda-culibos-dev-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.4918627Z #35 3.603 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.4918978Z #35 3.606 /tmp/cuda-culibos-dev-13-2_13.2.86-1_amd64.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.4919434Z #35 3.606 + dpkg-deb --extract /tmp/cuda-culibos-dev-13-2_13.2.86-1_amd64.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.4919929Z #35 3.610 + rm -f /tmp/cuda-culibos-dev-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.4920340Z #35 3.611 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.4920694Z #35 3.612 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.4920933Z #35 3.612 + test 278438 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.4921250Z #35 3.612 + filename=cuda-cuobjdump-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.4922149Z #35 3.612 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/cuda-cuobjdump-13-2_13.2.86-1_amd64.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-cuobjdump-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.6652315Z #35 3.936 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.8386192Z #35 3.937 + actual_size=278438
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.8386662Z #35 3.937 + test 278438 -eq 278438
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.8387328Z #35 3.938 + echo 09023a5255c11f7075c0407483d3bb64220b4139013946bf259ea55aadf8dbb1  /tmp/cuda-cuobjdump-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.8387896Z #35 3.938 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.8388253Z #35 3.941 /tmp/cuda-cuobjdump-13-2_13.2.86-1_amd64.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.8388689Z #35 3.941 + dpkg-deb --extract /tmp/cuda-cuobjdump-13-2_13.2.86-1_amd64.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.8389123Z #35 3.956 + rm -f /tmp/cuda-cuobjdump-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.8389500Z #35 3.958 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.8390377Z #35 3.958 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.8390595Z #35 3.958 + test 30868 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.8390873Z #35 3.958 + filename=cuda-driver-dev-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:27.8391737Z #35 3.958 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/cuda-driver-dev-13-2_13.2.86-1_amd64.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-driver-dev-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:28.1904417Z #35 4.461 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:28.3516585Z #35 4.463 + actual_size=30868
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:28.3516943Z #35 4.463 + test 30868 -eq 30868
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:28.3517532Z #35 4.463 + + echo ba113b074282ba57132a7dd44d3d454dc43d0b069cdfef992f3bd4f910b76711  /tmp/cuda-driver-dev-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:28.3518237Z #35 4.463 sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:28.3518694Z #35 4.465 /tmp/cuda-driver-dev-13-2_13.2.86-1_amd64.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:28.3519337Z #35 4.466 + dpkg-deb --extract /tmp/cuda-driver-dev-13-2_13.2.86-1_amd64.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:28.3520015Z #35 4.470 + rm -f /tmp/cuda-driver-dev-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:28.3520611Z #35 4.471 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:28.3521112Z #35 4.472 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:28.3521421Z #35 4.472 + test 31097160 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:28.3521756Z #35 4.472 + filename=cuda-nvcc-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:28.3522567Z #35 4.472 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/cuda-nvcc-13-2_13.2.86-1_amd64.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-nvcc-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:30.4377535Z #35 6.708 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:30.6198674Z #35 6.710 + actual_size=31097160
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:30.6199724Z #35 6.710 + test 31097160 -eq 31097160
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:30.6200268Z #35 6.710 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:30.6201401Z #35 6.710 + echo 8ac5c08904a69fe48cbbd36545e278242e9e872fdf455f40fb50c8bb62725d2e  /tmp/cuda-nvcc-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:30.6202566Z #35 6.740 /tmp/cuda-nvcc-13-2_13.2.86-1_amd64.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:30.6203339Z #35 6.740 + dpkg-deb --extract /tmp/cuda-nvcc-13-2_13.2.86-1_amd64.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.0270656Z #35 7.298 + rm -f /tmp/cuda-nvcc-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.1851980Z #35 7.305 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.1852566Z #35 7.305 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.1852810Z #35 7.305 + test 4284630 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.1853118Z #35 7.305 + filename=cuda-nvdisasm-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.1854007Z #35 7.305 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/cuda-nvdisasm-13-2_13.2.86-1_amd64.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-nvdisasm-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.6713734Z #35 7.942 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.8705801Z #35 7.944 + actual_size=4284630
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.8706265Z #35 7.944 + test 4284630 -eq 4284630
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.8707061Z #35 7.944 + echo 9d3ba750108356723313fa6e42d396a50fff8b00fc6f092a7b098537ac430b79  /tmp/cuda-nvdisasm-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.8707641Z #35 7.944 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.8707981Z #35 7.951 /tmp/cuda-nvdisasm-13-2_13.2.86-1_amd64.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.8708387Z #35 7.951 + dpkg-deb --extract /tmp/cuda-nvdisasm-13-2_13.2.86-1_amd64.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.8708819Z #35 7.988 + rm -f /tmp/cuda-nvdisasm-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.8709202Z #35 7.990 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.8709527Z #35 7.990 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.8709746Z #35 7.990 + test 100938 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.8710022Z #35 7.990 + filename=cuda-nvtx-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:31.8710844Z #35 7.990 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/cuda-nvtx-13-2_13.2.86-1_amd64.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-nvtx-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.2671568Z #35 8.538 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.4318490Z #35 8.539 + actual_size=100938
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.4318831Z #35 8.539 + test 100938 -eq 100938
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.4319403Z #35 8.540 + echo 2382d2286eeac980b190b6036dce287ee7ec806b7c2f7b95b0f28a96c1d793e2  /tmp/cuda-nvtx-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.4319966Z #35 8.540 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.4320276Z #35 8.542 /tmp/cuda-nvtx-13-2_13.2.86-1_amd64.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.4320657Z #35 8.543 + dpkg-deb --extract /tmp/cuda-nvtx-13-2_13.2.86-1_amd64.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.4321047Z #35 8.550 + rm -f /tmp/cuda-nvtx-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.4321435Z #35 8.551 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.4321767Z #35 8.552 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.4321984Z #35 8.552 + test 17408 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.4322304Z #35 8.552 + filename=cuda-toolkit-13-2-config-common_13.2.86-1_all.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.4323283Z #35 8.552 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/cuda-toolkit-13-2-config-common_13.2.86-1_all.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-toolkit-13-2-config-common_13.2.86-1_all.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.7693576Z #35 9.040 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.9307132Z #35 9.041 + actual_size=17408
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.9307624Z #35 9.042 + test 17408 -eq 17408
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.9308269Z #35 9.042 + echo 46491ab1a16047bc1a9f30c4eb785e325637164055dfac9f40c206099e45bc55  /tmp/cuda-toolkit-13-2-config-common_13.2.86-1_all.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.9308883Z #35 9.042 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.9309232Z #35 9.044 /tmp/cuda-toolkit-13-2-config-common_13.2.86-1_all.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.9310292Z #35 9.045 + dpkg-deb --extract /tmp/cuda-toolkit-13-2-config-common_13.2.86-1_all.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.9310776Z #35 9.049 + rm -f /tmp/cuda-toolkit-13-2-config-common_13.2.86-1_all.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.9311195Z #35 9.050 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.9311526Z #35 9.050 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.9311759Z #35 9.050 + test 17444 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.9312068Z #35 9.050 + filename=cuda-toolkit-13-config-common_13.2.86-1_all.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:32.9313162Z #35 9.051 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/cuda-toolkit-13-config-common_13.2.86-1_all.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-toolkit-13-config-common_13.2.86-1_all.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.2414336Z #35 9.512 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.4035302Z #35 9.514 + actual_size=17444
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.4035653Z #35 9.514 + test 17444 -eq 17444
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.4036258Z #35 9.514 + echo e4e487936d971e5e965b1a19bc15d8e6e7339bdabc4567ce304af44f6af124e6  /tmp/cuda-toolkit-13-config-common_13.2.86-1_all.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.4036907Z #35 9.514 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.4037241Z #35 9.517 /tmp/cuda-toolkit-13-config-common_13.2.86-1_all.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.4037706Z #35 9.517 + dpkg-deb --extract /tmp/cuda-toolkit-13-config-common_13.2.86-1_all.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.4038182Z #35 9.522 + rm -f /tmp/cuda-toolkit-13-config-common_13.2.86-1_all.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.4038580Z #35 9.523 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.4038901Z #35 9.523 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.4039117Z #35 9.523 + test 17440 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.4039410Z #35 9.523 + filename=cuda-toolkit-config-common_13.2.86-1_all.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.4040321Z #35 9.523 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/cuda-toolkit-config-common_13.2.86-1_all.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-toolkit-config-common_13.2.86-1_all.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:33.9582197Z #35 10.23 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:34.1194909Z #35 10.23 + actual_size=17440
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:34.1195250Z #35 10.23 + test 17440 -eq 17440
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:34.1195845Z #35 10.23 + echo bc3c6c303b6a3aefe8472696a40613411c9895d0bf7d080b292444770e2d63c6  /tmp/cuda-toolkit-config-common_13.2.86-1_all.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:34.1196435Z #35 10.23 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:34.1197317Z #35 10.23 /tmp/cuda-toolkit-config-common_13.2.86-1_all.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:34.1197792Z #35 10.23 + dpkg-deb --extract /tmp/cuda-toolkit-config-common_13.2.86-1_all.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:34.1198250Z #35 10.24 + rm -f /tmp/cuda-toolkit-config-common_13.2.86-1_all.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:34.1198633Z #35 10.24 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:34.1198949Z #35 10.24 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:34.1199169Z #35 10.24 + test 14288308 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:34.1199456Z #35 10.24 + filename=libnvptxcompiler-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:34.1200351Z #35 10.24 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/libnvptxcompiler-13-2_13.2.86-1_amd64.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/libnvptxcompiler-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:34.9228304Z #35 11.19 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.0899877Z #35 11.19 + actual_size=14288308
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.0900362Z #35 11.19 + test 14288308 -eq 14288308
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.0901351Z #35 11.20 + echo 232fb201d5a482d607d7be57fc087333d50fad9d0c32332f91c9034127dc1dc6  /tmp/libnvptxcompiler-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.0902334Z #35 11.20 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.0902841Z #35 11.21 /tmp/libnvptxcompiler-13-2_13.2.86-1_amd64.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.0903521Z #35 11.21 + dpkg-deb --extract /tmp/libnvptxcompiler-13-2_13.2.86-1_amd64.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.2549758Z #35 11.53 + rm -f /tmp/libnvptxcompiler-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.4102256Z #35 11.53 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.4103272Z #35 11.53 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.4103508Z #35 11.53 + test 45459016 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.4103798Z #35 11.53 + filename=libnvvm-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.4104820Z #35 11.53 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/libnvvm-13-2_13.2.86-1_amd64.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/libnvvm-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.6729988Z #35 11.94 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.8678147Z #35 11.95 + actual_size=45459016
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.8678639Z #35 11.95 + test 45459016 -eq 45459016
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.8679765Z #35 11.95 + echo a4806fe86ee3f47cc912fe1dd9fe68e831536d4572386ea7a4ee2ad969943f5e  /tmp/libnvvm-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.8680807Z #35 11.95 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.8681342Z #35 11.99 /tmp/libnvvm-13-2_13.2.86-1_amd64.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:35.8682018Z #35 11.99 + dpkg-deb --extract /tmp/libnvvm-13-2_13.2.86-1_amd64.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:36.5066006Z #35 12.78 + rm -f /tmp/libnvvm-13-2_13.2.86-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:36.6664998Z #35 12.79 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:36.6665412Z #35 12.79 + test -z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:36.6665645Z #35 12.79 + test 329884926 -gt 0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:36.6665984Z #35 12.79 + filename=nsight-compute-2026.1.1_2026.1.1.2-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:36.6666975Z #35 12.79 + curl -fsSL --proto =https --tlsv1.2 -o /tmp/nsight-compute-2026.1.1_2026.1.1.2-1_amd64.deb https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/nsight-compute-2026.1.1_2026.1.1.2-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:53.2385500Z #35 29.51 + wc -c
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:53.3921821Z #35 29.51 + actual_size=329884926
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:53.3922302Z #35 29.51 + test 329884926 -eq 329884926
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:53.3923284Z #35 29.51 + echo f1ead828efaf27835dd6fbbc2d9f2f058f99490ba034e1f4a037a3ed0188be00  /tmp/nsight-compute-2026.1.1_2026.1.1.2-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:53.3924252Z #35 29.51 + sha256sum --check --strict
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:53.5195950Z #35 29.79 /tmp/nsight-compute-2026.1.1_2026.1.1.2-1_amd64.deb: OK
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:53.6706429Z #35 29.79 + dpkg-deb --extract /tmp/nsight-compute-2026.1.1_2026.1.1.2-1_amd64.deb /
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.3142603Z #35 34.58 + rm -f /tmp/nsight-compute-2026.1.1_2026.1.1.2-1_amd64.deb
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4591475Z #35 34.64 + read -r expected_sha256 expected_size package_url extra
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4594054Z #35 34.64 + rm -f /tmp/h100-evidence-debian12-amd64.sha256
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4595177Z #35 34.64 + ln -sfn /usr/local/cuda-13.2 /usr/local/cuda
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4595937Z #35 34.64 + ln -s libnvtx3interop.so /usr/local/cuda-13.2/lib64/libnvToolsExt.so
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4596591Z #35 34.64 + ln -s /opt/nvidia/nsight-compute/2026.1.1/ncu /usr/local/bin/ncu
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4596990Z #35 34.64 + test -x /usr/local/cuda-13.2/bin/nvcc
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4597302Z #35 34.64 + test -x /usr/local/cuda-13.2/bin/ptxas
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4597626Z #35 34.64 + test -x /usr/local/cuda-13.2/bin/cuobjdump
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4597961Z #35 34.64 + test -x /usr/local/cuda-13.2/bin/nvdisasm
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4598247Z #35 34.64 + test -x /usr/local/bin/ncu
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4598508Z #35 34.64 + test -x /usr/local/bin/nsys
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4598797Z #35 34.64 + /usr/local/cuda-13.2/bin/nvcc --version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4599110Z #35 34.66 nvcc: NVIDIA (R) Cuda compiler driver
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4599429Z #35 34.66 Copyright (c) 2005-2026 NVIDIA Corporation
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4599741Z #35 34.66 Built on Fri_May_08_10:53:34_AM_PDT_2026
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4600068Z #35 34.66 Cuda compilation tools, release 13.2, V13.2.86
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4600396Z #35 34.66 Build cuda_13.2.r13.2/compiler.37953736_0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4600706Z #35 34.66 + /usr/local/cuda-13.2/bin/ptxas --version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4601018Z #35 34.66 ptxas: NVIDIA (R) Ptx optimizing assembler
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4601320Z #35 34.66 Copyright (c) 2005-2026 NVIDIA Corporation
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4601613Z #35 34.66 Built on Fri_May_08_10:53:34_AM_PDT_2026
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4602174Z #35 34.66 Cuda compilation tools, release 13.2, V13.2.86
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4602484Z #35 34.66 Build cuda_13.2.r13.2/compiler.37953736_0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4602790Z #35 34.66 + /usr/local/cuda-13.2/bin/cuobjdump --version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4603110Z #35 34.66 cuobjdump: NVIDIA (R) fat binary listing tool
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4603427Z #35 34.66 Copyright (c) 2005-2026 NVIDIA Corporation
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4603720Z #35 34.66 Built on Fri_May_08_10:53:34_AM_PDT_2026
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4604043Z #35 34.66 Cuda compilation tools, release 13.2, V13.2.86
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4604364Z #35 34.66 Build cuda_13.2.r13.2/compiler.37953736_0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4605193Z #35 34.66 + /usr/local/cuda-13.2/bin/nvdisasm --version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4605691Z #35 34.66 nvdisasm: NVIDIA (R) CUDA disassembler
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4606096Z #35 34.66 Copyright (c) 2005-2026 NVIDIA Corporation
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4606395Z #35 34.66 Built on Fri_May_08_10:52:53_AM_PDT_2026
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4606714Z #35 34.66 Cuda compilation tools, release 13.2, V13.2.86
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4607020Z #35 34.66 Build cuda_13.2.r13.2/compiler.37953736_0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4607399Z #35 34.66 + /usr/local/bin/ncu --version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4607885Z #35 34.68 NVIDIA (R) Nsight Compute Command Line Profiler
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4608394Z #35 34.68 Copyright (c) 2018-2026 NVIDIA Corporation
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4608898Z #35 34.68 Version 2026.1.1.0 (build 37634170) (public-release)
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4609380Z #35 34.68 + /usr/local/bin/nsys --version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:22:58.4609882Z #35 34.73 NVIDIA Nsight Systems version 2026.1.3.425-261338342291v0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:01.0889797Z #35 DONE 37.4s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:01.2202029Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:01.2204889Z #36 [task-h100-evidence 4/8] RUN --mount=type=bind,source=lib/iris/images/h100_evidence_nsys_help.py,target=/tmp/h100-evidence-nsys-help.py,ro     set -eux;     /usr/local/bin/nsys profile --help > /tmp/h100-evidence-nsys-profile-help.txt;     /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nsys-help.py       /tmp/h100-evidence-nsys-profile-help.txt;     rm -f /tmp/h100-evidence-nsys-profile-help.txt
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:01.2207055Z #36 0.092 + /usr/local/bin/nsys profile --help
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:01.2207956Z #36 0.131 + /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nsys-help.py /tmp/h100-evidence-nsys-profile-help.txt
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:01.3756252Z #36 0.286 nsys profile help validation passed: capture-range-end=none,stop,stop-shutdown,repeat[:N][:mode],repeat-shutdown:N
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:01.5909199Z #36 0.292 + rm -f /tmp/h100-evidence-nsys-profile-help.txt
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:01.5909590Z #36 DONE 0.3s
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:01.5909709Z 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:01.5914160Z #37 [task-h100-evidence 5/8] RUN --mount=type=bind,source=lib/tile_lifetime/src/tile_lifetime/nvtx_range.py,target=/tmp/h100-evidence-nvtx-range.py,ro     --mount=type=bind,source=lib/iris/images/h100_evidence_nvtx_smoke.py,target=/tmp/h100-evidence-nvtx-smoke.py,ro     set -eux;     env NSYS_NVTX_PROFILER_REGISTER_ONLY=0       /usr/local/bin/nsys profile --force-overwrite=true --trace=nvtx       --capture-range=nvtx --capture-range-end=stop       --nvtx-capture=h100-evidence-nvtx-smoke       --output /tmp/h100-evidence-nvtx       /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py emit         --module /tmp/h100-evidence-nvtx-range.py         --library "/usr/local/cuda-13.2/lib64/libnvToolsExt.so"         --output /tmp/h100-evidence-nvtx-result.json         --name h100-evidence-nvtx-smoke;     test -s /tmp/h100-evidence-nvtx.nsys-rep;     /usr/local/bin/nsys export --force-overwrite=true --type=sqlite       --output /tmp/h100-evidence-nvtx.sqlite /tmp/h100-evidence-nvtx.nsys-rep;     /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py validate       --result /tmp/h100-evidence-nvtx-result.json       --sqlite /tmp/h100-evidence-nvtx.sqlite       --name h100-evidence-nvtx-smoke;     rm -f /tmp/h100-evidence-nvtx-result.json /tmp/h100-evidence-nvtx.nsys-rep       /tmp/h100-evidence-nvtx.sqlite
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:01.5920899Z #37 0.050 + env NSYS_NVTX_PROFILER_REGISTER_ONLY=0 /usr/local/bin/nsys profile --force-overwrite=true --trace=nvtx --capture-range=nvtx --capture-range-end=stop --nvtx-capture=h100-evidence-nvtx-smoke --output /tmp/h100-evidence-nvtx /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py emit --module /tmp/h100-evidence-nvtx-range.py --library /usr/local/cuda-13.2/lib64/libnvToolsExt.so --output /tmp/h100-evidence-nvtx-result.json --name h100-evidence-nvtx-smoke
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:01.9980681Z #37 0.608 NVTX smoke validation failed: NVTX push rejected range 'h100-evidence-nvtx-smoke': return_code=-1 classification=negative_error requested_library='/usr/local/cuda-13.2/lib64/libnvToolsExt.so' resolved_library='/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvtx3interop.so.1.1.0' dladdr_library='/usr/local/cuda-13.2/lib64/libnvToolsExt.so' NVTX_INJECTION64_PATH=present NVTX_INJECTION32_PATH=absent
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.3812394Z #37 1.991 Capture range started in the application.
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.3813127Z #37 1.991 Capture range ended in the application.
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.3813801Z #37 1.991 Generating '/tmp/nsys-report-1f88.qdstrm'
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.3814304Z #37 1.991 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4883598Z [1/1] [0%                          ] h100-evidence-nvtx.nsys-repProcessing events...
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4884974Z #37 2.054 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4885382Z [1/1] [0%                          ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4885884Z [1/1] [5%                          ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4886310Z [1/1] [6%                          ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4886784Z [1/1] [8%                          ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4887286Z [1/1] [=========43%                ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4887767Z [1/1] [==================78%       ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4888260Z [1/1] [===================82%      ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4888780Z [1/1] [====================83%     ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4889278Z [1/1] [========================100%] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4889765Z [1/1] [========================100%] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4890202Z #37 2.083 Generated:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4890964Z #37 2.083 	/tmp/h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.4896075Z #37 ERROR: process "/bin/sh -c set -eux;     env NSYS_NVTX_PROFILER_REGISTER_ONLY=0       /usr/local/bin/nsys profile --force-overwrite=true --trace=nvtx       --capture-range=nvtx --capture-range-end=stop       --nvtx-capture=h100-evidence-nvtx-smoke       --output /tmp/h100-evidence-nvtx       /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py emit         --module /tmp/h100-evidence-nvtx-range.py         --library \"${CUDA_HOME}/lib64/libnvToolsExt.so\"         --output /tmp/h100-evidence-nvtx-result.json         --name h100-evidence-nvtx-smoke;     test -s /tmp/h100-evidence-nvtx.nsys-rep;     /usr/local/bin/nsys export --force-overwrite=true --type=sqlite       --output /tmp/h100-evidence-nvtx.sqlite /tmp/h100-evidence-nvtx.nsys-rep;     /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py validate       --result /tmp/h100-evidence-nvtx-result.json       --sqlite /tmp/h100-evidence-nvtx.sqlite       --name h100-evidence-nvtx-smoke;     rm -f /tmp/h100-evidence-nvtx-result.json /tmp/h100-evidence-nvtx.nsys-rep       /tmp/h100-evidence-nvtx.sqlite" did not complete successfully: exit code: 1
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5011593Z ------
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5019950Z  > [task-h100-evidence 5/8] RUN --mount=type=bind,source=lib/tile_lifetime/src/tile_lifetime/nvtx_range.py,target=/tmp/h100-evidence-nvtx-range.py,ro     --mount=type=bind,source=lib/iris/images/h100_evidence_nvtx_smoke.py,target=/tmp/h100-evidence-nvtx-smoke.py,ro     set -eux;     env NSYS_NVTX_PROFILER_REGISTER_ONLY=0       /usr/local/bin/nsys profile --force-overwrite=true --trace=nvtx       --capture-range=nvtx --capture-range-end=stop       --nvtx-capture=h100-evidence-nvtx-smoke       --output /tmp/h100-evidence-nvtx       /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py emit         --module /tmp/h100-evidence-nvtx-range.py         --library "/usr/local/cuda-13.2/lib64/libnvToolsExt.so"         --output /tmp/h100-evidence-nvtx-result.json         --name h100-evidence-nvtx-smoke;     test -s /tmp/h100-evidence-nvtx.nsys-rep;     /usr/local/bin/nsys export --force-overwrite=true --type=sqlite       --output /tmp/h100-evidence-nvtx.sqlite /tmp/h100-evidence-nvtx.nsys-rep;     /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py validate       --result /tmp/h100-evidence-nvtx-result.json       --sqlite /tmp/h100-evidence-nvtx.sqlite       --name h100-evidence-nvtx-smoke;     rm -f /tmp/h100-evidence-nvtx-result.json /tmp/h100-evidence-nvtx.nsys-rep       /tmp/h100-evidence-nvtx.sqlite:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5029451Z 0.050 + env NSYS_NVTX_PROFILER_REGISTER_ONLY=0 /usr/local/bin/nsys profile --force-overwrite=true --trace=nvtx --capture-range=nvtx --capture-range-end=stop --nvtx-capture=h100-evidence-nvtx-smoke --output /tmp/h100-evidence-nvtx /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py emit --module /tmp/h100-evidence-nvtx-range.py --library /usr/local/cuda-13.2/lib64/libnvToolsExt.so --output /tmp/h100-evidence-nvtx-result.json --name h100-evidence-nvtx-smoke
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5034412Z 0.608 NVTX smoke validation failed: NVTX push rejected range 'h100-evidence-nvtx-smoke': return_code=-1 classification=negative_error requested_library='/usr/local/cuda-13.2/lib64/libnvToolsExt.so' resolved_library='/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvtx3interop.so.1.1.0' dladdr_library='/usr/local/cuda-13.2/lib64/libnvToolsExt.so' NVTX_INJECTION64_PATH=present NVTX_INJECTION32_PATH=absent
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5036782Z Processing events...
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5037111Z 2.054 
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5037453Z [1/1] [0%                          ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5037994Z [1/1] [5%                          ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5038446Z [1/1] [6%                          ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5039118Z [1/1] [8%                          ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5039982Z [1/1] [=========43%                ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5040517Z [1/1] [==================78%       ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5040987Z [1/1] [===================82%      ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5041468Z [1/1] [====================83%     ] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5041926Z [1/1] [========================100%] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5042397Z [1/1] [========================100%] h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5042875Z 2.083 Generated:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5043200Z 2.083 	/tmp/h100-evidence-nvtx.nsys-rep
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5043601Z ------
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5157240Z Dockerfile:346
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5157570Z --------------------
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5157980Z  345 |     # and neither loads a driver nor queries a device.
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5158941Z  346 | >>> RUN --mount=type=bind,source=lib/tile_lifetime/src/tile_lifetime/nvtx_range.py,target=/tmp/h100-evidence-nvtx-range.py,ro \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5160287Z  347 | >>>     --mount=type=bind,source=lib/iris/images/h100_evidence_nvtx_smoke.py,target=/tmp/h100-evidence-nvtx-smoke.py,ro \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5161106Z  348 | >>>     set -eux; \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5161489Z  349 | >>>     env NSYS_NVTX_PROFILER_REGISTER_ONLY=0 \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5162100Z  350 | >>>       /usr/local/bin/nsys profile --force-overwrite=true --trace=nvtx \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5162754Z  351 | >>>       --capture-range=nvtx --capture-range-end=stop \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5163299Z  352 | >>>       --nvtx-capture=h100-evidence-nvtx-smoke \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5163787Z  353 | >>>       --output /tmp/h100-evidence-nvtx \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5164756Z  354 | >>>       /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py emit \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5165260Z  355 | >>>         --module /tmp/h100-evidence-nvtx-range.py \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5165622Z  356 | >>>         --library "${CUDA_HOME}/lib64/libnvToolsExt.so" \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5166038Z  357 | >>>         --output /tmp/h100-evidence-nvtx-result.json \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5166392Z  358 | >>>         --name h100-evidence-nvtx-smoke; \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5166717Z  359 | >>>     test -s /tmp/h100-evidence-nvtx.nsys-rep; \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5167115Z  360 | >>>     /usr/local/bin/nsys export --force-overwrite=true --type=sqlite \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5167640Z  361 | >>>       --output /tmp/h100-evidence-nvtx.sqlite /tmp/h100-evidence-nvtx.nsys-rep; \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5168197Z  362 | >>>     /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py validate \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5168663Z  363 | >>>       --result /tmp/h100-evidence-nvtx-result.json \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5169007Z  364 | >>>       --sqlite /tmp/h100-evidence-nvtx.sqlite \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5169316Z  365 | >>>       --name h100-evidence-nvtx-smoke; \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5169743Z  366 | >>>     rm -f /tmp/h100-evidence-nvtx-result.json /tmp/h100-evidence-nvtx.nsys-rep \
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5170182Z  367 | >>>       /tmp/h100-evidence-nvtx.sqlite
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5170467Z  368 |     
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5170653Z --------------------
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5174451Z ERROR: failed to build: failed to solve: process "/bin/sh -c set -eux;     env NSYS_NVTX_PROFILER_REGISTER_ONLY=0       /usr/local/bin/nsys profile --force-overwrite=true --trace=nvtx       --capture-range=nvtx --capture-range-end=stop       --nvtx-capture=h100-evidence-nvtx-smoke       --output /tmp/h100-evidence-nvtx       /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py emit         --module /tmp/h100-evidence-nvtx-range.py         --library \"${CUDA_HOME}/lib64/libnvToolsExt.so\"         --output /tmp/h100-evidence-nvtx-result.json         --name h100-evidence-nvtx-smoke;     test -s /tmp/h100-evidence-nvtx.nsys-rep;     /usr/local/bin/nsys export --force-overwrite=true --type=sqlite       --output /tmp/h100-evidence-nvtx.sqlite /tmp/h100-evidence-nvtx.nsys-rep;     /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nvtx-smoke.py validate       --result /tmp/h100-evidence-nvtx-result.json       --sqlite /tmp/h100-evidence-nvtx.sqlite       --name h100-evidence-nvtx-smoke;     rm -f /tmp/h100-evidence-nvtx-result.json /tmp/h100-evidence-nvtx.nsys-rep       /tmp/h100-evidence-nvtx.sqlite" did not complete successfully: exit code: 1
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5216410Z ##[error]Process completed with exit code 1.
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.5313631Z Post job cleanup.
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.8145086Z ##[group]Logout from ghcr.io
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.8201242Z [command]/usr/bin/docker logout ghcr.io
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.8352700Z Removing login credentials for ghcr.io
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.8383090Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.8391860Z ##[group]Post cache
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.8392193Z State not set
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.8392691Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:03.8586973Z Post job cleanup.
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:04.0500329Z ##[group]Removing builder
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:04.1893064Z [command]/usr/bin/docker buildx rm builder-02465995-a127-4f62-8155-9355ff011338
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.6042290Z builder-02465995-a127-4f62-8155-9355ff011338 removed
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.6075066Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.6075897Z ##[group]Cleaning up certificates
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.6081013Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.6081530Z ##[group]Post cache
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.6082944Z State not set
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.6083504Z ##[endgroup]
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.6265560Z Post job cleanup.
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.7167348Z [command]/usr/bin/git version
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.7212768Z git version 2.54.0
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.7254996Z Temporarily overriding HOME='/home/runner/work/_temp/d845d893-dff4-4563-a167-c9ee533273b0' before making global git config changes
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.7256447Z Adding repository directory to the temporary git global config as a safe directory
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.7261283Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/marin/marin
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.7305017Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.7342829Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.7625459Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.7665070Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.7947073Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.7991839Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.8433725Z Evaluate and set job outputs
+h100-evidence-image / build-h100-evidence-image	UNKNOWN STEP	2026-08-11T08:23:06.8440578Z Cleaning up orphan processes

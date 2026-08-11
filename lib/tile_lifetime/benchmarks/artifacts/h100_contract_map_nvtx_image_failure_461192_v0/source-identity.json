@@ -1,0 +1,11 @@
+{
+  "event": "workflow_dispatch",
+  "image_tag_if_successful": "ghcr.io/marin-community/iris-task-h100-evidence:4611929eab07dc8fa11294c2456b4cdfde5a46bc",
+  "job_id": 93719624982,
+  "job_url": "https://github.com/marin-community/marin/actions/runs/31472791216/job/93719624982",
+  "source_commit": "4611929eab07dc8fa11294c2456b4cdfde5a46bc",
+  "source_tree": "ef6b2ccf1d8ace9128aa8410b3188bc450ee0632",
+  "workflow_attempt": 1,
+  "workflow_run_id": 31472791216,
+  "workflow_url": "https://github.com/marin-community/marin/actions/runs/31472791216"
+}
