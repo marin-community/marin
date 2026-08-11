@@ -20,6 +20,7 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from jax._src import config as jax_config
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -31,7 +32,7 @@ from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
-from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -201,6 +202,24 @@ def build_train_loader(
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
+
+
+def _reshard_tree_to_mesh(tree, mesh: Mesh):
+    """Move each array leaf onto ``mesh``, preserving its PartitionSpec.
+
+    The train and eval meshes name the same axes (only the ``expert``/``data`` sizes differ), so a
+    leaf's PartitionSpec is valid on both; ``jax.device_put`` performs the cross-mesh transfer. The
+    model's own ``reshard`` calls fix the exact layout inside the forward, so any valid placement on
+    the target mesh suffices here. Non-array leaves pass through.
+    """
+
+    def move(leaf):
+        if not isinstance(leaf, jax.Array):
+            return leaf
+        spec = leaf.sharding.spec if isinstance(leaf.sharding, NamedSharding) else P()
+        return jax.device_put(leaf, NamedSharding(mesh, spec))
+
+    return jax.tree.map(move, tree)
 
 
 def _to_dropless_local(model: Transformer) -> Transformer:
@@ -708,19 +727,24 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     every=interval,
                 )
                 if dropless_evaluator is not None and dropless_eval_mesh is not None:
-                    # The training loop runs under `set_mesh(mesh)` (expert-parallel); the dropless
-                    # evaluator must run under the expert-collapsed mesh so the local backend sees
-                    # expert=1 and the model params reshard off the expert axis.
-                    dropless_cb = cb_tagged_evaluate(
-                        dropless_evaluator,
-                        prefix=f"{eval_cfg.prefix}_dropless",
-                        eval_current=eval_cfg.eval_current,
-                        eval_ema=eval_ema,
-                    )
+                    # The training loop runs under `set_mesh(mesh)` (expert-parallel). The dropless
+                    # evaluator runs under the expert-collapsed mesh, so the model params -- sharded on
+                    # the train mesh -- must be resharded onto the eval mesh before its eval jit (JAX
+                    # does not auto-reshard across explicit meshes), then the local backend sees
+                    # expert=1. PGLE is disabled for the eval module as in `cb_tagged_evaluate`.
+                    dropless_prefix = f"{eval_cfg.prefix}_dropless"
 
-                    def dropless_eval_hook(step, *args, _cb=dropless_cb, _eval_mesh=dropless_eval_mesh, **kwargs):
-                        with set_mesh(_eval_mesh):
-                            return _cb(step, *args, **kwargs)
+                    def dropless_eval_hook(
+                        step, *args, _mesh=dropless_eval_mesh, _ev=dropless_evaluator, _prefix=dropless_prefix, **kwargs
+                    ):
+                        step_count = int(step.step)
+                        if step_count < 0:
+                            return
+                        with set_mesh(_mesh):
+                            model = _reshard_tree_to_mesh(step.model, _mesh)
+                            with jax_config.enable_pgle(False):
+                                log_dict = eval_model(_ev, model, prefix=_prefix)
+                            levanter.tracker.log(log_dict, step=step_count)
 
                     state_callbacks.add_hook(dropless_eval_hook, every=interval)
 
