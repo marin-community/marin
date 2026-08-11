@@ -1,0 +1,36 @@
+[06:59:43] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 | h100_contract_map_source_payload.py: OK
+[06:59:43] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 | h100-evidence-source-manifest.json: OK
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 | Traceback (most recent call last):
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2599, in <module>
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |     main()
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2581, in main
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |     output = run_coordinator(
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |              ^^^^^^^^^^^^^^^^
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1651, in run_coordinator
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |     case_result, trace_records = _run_profiled_case(
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |                                  ^^^^^^^^^^^^^^^^^^^
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1991, in _run_profiled_case
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |     raise RuntimeError(f"Nsight Systems case worker failed: {command}: {completed.stdout}\n{completed.stderr}")
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 | RuntimeError: Nsight Systems case worker failed: ('/opt/nsight/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys', 'profile', '--force-overwrite=true', '--trace=cuda,nvtx', '--capture-range=cudaProfilerApi', '--capture-range-end=stop', '--output', '/tmp/shuttle-h100-contract-map-evidence-3deae66-v7/cases/contract_map_9836cdbed389db24/steady_trace', '/opt/h100-evidence-runtime/bin/python', '/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py', '--worker', 'case', '--case-id', 'contract_map_9836cdbed389db24', '--backend', 'all', '--generated-manifest', '/tmp/shuttle-h100-contract-map-evidence-3deae66-v7/generated_manifest.json', '--json-output', '/tmp/shuttle-h100-contract-map-evidence-3deae66-v7/cases/contract_map_9836cdbed389db24/case_result.json', '--source-root', '/app/source', '--source-sha', '3deae6618d52b3cfe1bf993b40f8e5192928be20', '--nvcc', '/usr/local/cuda-13.2/bin/nvcc', '--require-jax-version', '0.10.1', '--cache-kind', 'none', '--source-tree', 'e5cc6ee41bc756bcdc4caa4da96792aef5510101', '--source-capsule-manifest', '/app/h100-evidence-source-manifest.json', '--source-capsule-manifest-sha256', '16d611e5b4bd456262473f55e5180900fe200322045c5035156d911cac4a8cca'): Processing events...
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 | Generated:
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 | 	No reports were generated
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 | Traceback (most recent call last):
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2599, in <module>
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |     main()
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2565, in main
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |     run_worker(args)
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 991, in run_worker
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |     result = _run_case_worker(args, context, jax=jax)
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1216, in _run_case_worker
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |     numerical = _numerical_evidence(context, executables, jax=jax)
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1354, in _numerical_evidence
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |     validate_backend_numerical_evidence(
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |   File "/app/source/lib/tile_lifetime/src/tile_lifetime/h100_contract_map_benchmark.py", line 1003, in validate_backend_numerical_evidence
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |     _validate_numerical_output(
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |   File "/app/source/lib/tile_lifetime/src/tile_lifetime/h100_contract_map_benchmark.py", line 895, in _validate_numerical_output
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |     raise _numerical_floor_error(
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 | ValueError: immutable shuttle_source_ordered numerical floor exceeded: case=contract_map_9836cdbed389db24 backend=shuttle_source_ordered boundary=logical_training_step output=dx reference=source_ordered_fp32 metric=maximum_ulp_distance measured=29608 limit=1 maximum_absolute_error=0.00390625 mean_absolute_error=0.0003416987310629338 maximum_ulp_distance=29608 mean_ulp_distance=28.51408765652952 nonfinite_values=0 repeat_count=3 repeat_identities_equal=true repeat_maximum_absolute_error=0.0 repeat_mean_absolute_error=0.0 repeat_maximum_ulp_distance=0 repeat_mean_ulp_distance=0.0
+[07:01:02] task=/dlwh/shuttle-h100-contract-map-evidence-3deae66-v7/0 |
