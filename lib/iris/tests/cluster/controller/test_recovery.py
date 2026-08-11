@@ -16,11 +16,9 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 )
 from iris.cluster.platforms.types import CloudSliceState, ListedSlice
 from iris.cluster.types import WorkerStatus
+from iris.testing.backends import make_fake_slice_handle, make_mock_platform
+from iris.testing.controller import make_autoscaler, mark_discovered_ready
 from rigging.timing import Duration, Timestamp
-
-from lib.iris.tests.cluster.backends.conftest import make_fake_slice_handle, make_mock_platform
-
-from .conftest import make_autoscaler, mark_discovered_ready
 
 
 def _draining_group(platform) -> ScalingGroup:

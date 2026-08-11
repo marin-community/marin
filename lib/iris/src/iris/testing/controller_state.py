@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test-support helpers and a controller projection carrier for tests.
+"""Controller projection carrier and state helpers for tests.
 
 After Stage 7 (transitions-pure.md), production no longer has a
 ``ControllerTransitions`` class to hang test helpers off of. Tests still
@@ -14,6 +14,10 @@ projections through ``Controller`` constructor arguments.
 """
 
 from dataclasses import dataclass
+
+from rigging.timing import Timestamp
+from sqlalchemy import bindparam, select
+from sqlalchemy import update as sa_update
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import ops, reads, writes
@@ -30,9 +34,6 @@ from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
-from rigging.timing import Timestamp
-from sqlalchemy import bindparam, select
-from sqlalchemy import update as sa_update
 
 
 @dataclass

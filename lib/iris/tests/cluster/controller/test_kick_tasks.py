@@ -11,16 +11,14 @@ from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
-from rigging.timing import Timestamp
-
-from lib.iris.tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-
-from .conftest import (
+from iris.testing.controller import (
     make_direct_job_request,
     make_worker_metadata,
     register_worker,
     submit_job,
 )
+from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
+from rigging.timing import Timestamp
 
 JOB_USER = "test-user"
 

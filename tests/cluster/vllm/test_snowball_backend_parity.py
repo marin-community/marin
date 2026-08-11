@@ -18,8 +18,8 @@ from iris.client import IrisClient
 from iris.cluster.setup_scripts import default_setup_script
 from iris.rpc import job_pb2
 
-from tests.cluster.vllm.snowball import RepresentativeGolden, read_representative_goldens
-from tests.cluster.vllm.snowball_backend_parity_jobs import (
+from .snowball import RepresentativeGolden, read_representative_goldens
+from .snowball_backend_parity_jobs import (
     GPU_COUNT,
     score_levanter_against_goldens,
     score_vllm_against_goldens,

@@ -26,9 +26,8 @@ from iris.cluster.controller.autoscaler.routing import (
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.types import AcceleratorType
 from iris.rpc import job_pb2
+from iris.testing.backends import make_fake_slice_handle, make_mock_platform
 from rigging.timing import Timestamp
-
-from lib.iris.tests.cluster.backends.conftest import make_fake_slice_handle, make_mock_platform
 
 TS = Timestamp.from_ms(1_000_000)
 

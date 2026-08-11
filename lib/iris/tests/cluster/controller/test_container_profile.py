@@ -22,13 +22,12 @@ from iris.cluster.controller.projections.run_templates import RunTemplatesProjec
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from rigging.server_auth import VerifiedIdentity, _verified_identity
-
-from lib.iris.tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     MockController,
     make_controller_state,
     make_test_entrypoint,
 )
+from rigging.server_auth import VerifiedIdentity, _verified_identity
 
 PRIVILEGED = job_pb2.CONTAINER_PROFILE_PRIVILEGED
 DOCKER_ACCESS = job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS

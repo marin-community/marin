@@ -31,19 +31,11 @@ from iris.cluster.controller.schema import jobs_table, worker_attributes_table
 from iris.cluster.types import AcceleratorType, CapacityType, JobName, UserBudgetDefaults, WorkerId
 from iris.cluster.worker.env_probe import _build_worker_attributes
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
-from iris.time_proto import duration_to_proto
-from rigging.timing import Duration, Timestamp
-from sqlalchemy import select
-from sqlalchemy import update as sa_update
-
-from lib.iris.tests.cluster.conftest import eq_constraint, in_constraint
-from lib.iris.tests.cluster.controller._test_support import ControllerTestState, set_worker_health_for_test
-from lib.iris.tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-
-from .conftest import (
+from iris.testing.cluster import eq_constraint, in_constraint
+from iris.testing.controller import (
     building_counts as _building_counts,
 )
-from .conftest import (
+from iris.testing.controller import (
     check_task_can_be_scheduled,
     healthy_active_workers,
     make_job_request,
@@ -52,24 +44,30 @@ from .conftest import (
     register_worker,
     submit_job,
 )
-from .conftest import (
+from iris.testing.controller import (
     make_test_entrypoint as _make_test_entrypoint,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_job as _query_job,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_task as _query_task,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_tasks_for_job as _query_tasks_for_job,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_worker as _query_worker,
 )
-from .conftest import (
+from iris.testing.controller import (
     schedulable_tasks as _schedulable_tasks,
 )
+from iris.testing.controller_state import ControllerTestState, set_worker_health_for_test
+from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
+from iris.time_proto import duration_to_proto
+from rigging.timing import Duration, Timestamp
+from sqlalchemy import select
+from sqlalchemy import update as sa_update
 
 
 def _job_requirements_from_job(job) -> JobRequirements:

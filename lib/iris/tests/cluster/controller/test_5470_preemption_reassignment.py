@@ -35,16 +35,10 @@ from iris.cluster.controller.scheduling.scheduler import (
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
-from rigging.timing import Timestamp
-from sqlalchemy import func, select, update
-
-from lib.iris.tests.cluster.controller._test_support import ControllerTestState
-from lib.iris.tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-
-from .conftest import (
+from iris.testing.controller import (
     building_counts as _building_counts,
 )
-from .conftest import (
+from iris.testing.controller import (
     check_task_can_be_scheduled,
     healthy_active_workers,
     make_test_entrypoint,
@@ -53,11 +47,15 @@ from .conftest import (
     register_worker,
     submit_job,
 )
-from .conftest import query_job as _query_job
-from .conftest import query_task as _query_task
-from .conftest import (
+from iris.testing.controller import query_job as _query_job
+from iris.testing.controller import query_task as _query_task
+from iris.testing.controller import (
     schedulable_tasks as _schedulable_tasks,
 )
+from iris.testing.controller_state import ControllerTestState
+from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
+from rigging.timing import Timestamp
+from sqlalchemy import func, select, update
 
 CHIPS_PER_VM = 4
 VMS_PER_SLICE = 8

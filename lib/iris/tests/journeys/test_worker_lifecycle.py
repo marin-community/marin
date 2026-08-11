@@ -3,8 +3,7 @@
 
 import pytest
 from iris.rpc import job_pb2
-
-from lib.iris.tests.journeys.worker import WorkerJourney
+from iris.testing.journeys.worker import WorkerJourney
 
 
 @pytest.fixture

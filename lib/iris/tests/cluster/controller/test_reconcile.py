@@ -60,19 +60,7 @@ from iris.cluster.controller.worker_health import (
 )
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import job_pb2, worker_pb2
-from rigging.timing import Duration, Timestamp
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
-
-from lib.iris.tests.cluster.controller._test_support import ControllerTestState
-from lib.iris.tests.cluster.controller.transition_driver import (
-    WorkerTaskUpdates,
-    apply_task_observations,
-    commit_dispatch_updates,
-    commit_reconcile,
-)
-
-from .conftest import (
+from iris.testing.controller import (
     assign_task,
     dispatch_task,
     make_controller_state,
@@ -89,6 +77,16 @@ from .conftest import (
     store_from_runtime,
     submit_job,
 )
+from iris.testing.controller_state import ControllerTestState
+from iris.testing.transitions import (
+    WorkerTaskUpdates,
+    apply_task_observations,
+    commit_dispatch_updates,
+    commit_reconcile,
+)
+from rigging.timing import Duration, Timestamp
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 _W1 = "worker-1"
 _W2 = "worker-2"

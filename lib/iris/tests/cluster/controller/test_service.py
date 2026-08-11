@@ -39,22 +39,20 @@ from iris.cluster.controller.service import (
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
-from rigging.server_auth import VerifiedIdentity, _verified_identity
-from rigging.timing import Duration, Timestamp
-from sqlalchemy import func
-from sqlalchemy import update as sa_update
-
-from lib.iris.tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
-from lib.iris.tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-
-from .conftest import (
+from iris.testing.controller import (
     make_job_request,
     make_test_entrypoint,
     make_worker_metadata,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_tasks_with_attempts as _query_tasks_with_attempts,
 )
+from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
+from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
+from rigging.server_auth import VerifiedIdentity, _verified_identity
+from rigging.timing import Duration, Timestamp
+from sqlalchemy import func
+from sqlalchemy import update as sa_update
 
 # =============================================================================
 # Test Helpers

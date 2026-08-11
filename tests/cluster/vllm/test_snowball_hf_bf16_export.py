@@ -33,8 +33,9 @@ from levanter.models.snowball import validate_single_name_config
 from levanter.tokenizers import load_tokenizer
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
-from tests.cluster.vllm.snowball import SNOWBALL
-from tests.cluster.vllm.snowball_checkpoint import (
+
+from .snowball import SNOWBALL
+from .snowball_checkpoint import (
     VendoredTransformer,
     apply_pending_qb_betas,
     decode_vendored_config,

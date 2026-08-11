@@ -274,16 +274,17 @@ def is_test_module(filename: str) -> bool:
 def _test_tree(scope: str, repo_root: Path) -> dict[str, Path]:
     """Every .py under a scope's test directory, keyed by the name it imports itself as.
 
-    Test trees use repository-qualified module names. This keeps distinct test
-    roots separate and matches both relative imports and explicit imports such
-    as ``from lib.iris.tests.cluster.conftest import x``.
+    Test trees are imported as the ``tests`` package rooted at the test directory's parent,
+    which is what both relative (``from .conftest import x``) and absolute
+    (``from tests.cluster.conftest import x``) intra-tree imports resolve against.
     """
     test_dir = repo_root / TEST_DIR[scope]
     if not test_dir.exists():
         return {}
+    import_root = repo_root / PurePosixPath(TEST_DIR[scope]).parent
     tree: dict[str, Path] = {}
     for py in test_dir.rglob("*.py"):
-        module = path_to_module(py, repo_root)
+        module = path_to_module(py, import_root)
         if module:
             tree[module] = py
     return tree

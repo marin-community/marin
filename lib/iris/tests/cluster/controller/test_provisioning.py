@@ -16,15 +16,14 @@ from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.platforms.types import QuotaExhaustedError
 from iris.cluster.stats.tables import ProvisioningOutcome
 from iris.cluster.types import CapacityType
-from rigging.timing import Timestamp
-
-from lib.iris.tests.cluster.backends.conftest import make_mock_platform, make_mock_slice_handle
-from lib.iris.tests.cluster.controller.conftest import (
+from iris.testing.backends import make_mock_platform, make_mock_slice_handle
+from iris.testing.controller import (
     make_autoscaler,
     make_demand_entries,
     make_scale_group_config,
     mark_discovered_ready,
 )
+from rigging.timing import Timestamp
 
 
 class FakeTable:

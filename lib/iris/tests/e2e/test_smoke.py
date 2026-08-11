@@ -32,10 +32,7 @@ from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from rigging.connect import proxy_path
-from rigging.timing import Duration, ExponentialBackoff
-
-from .conftest import (
+from iris.testing.e2e import (
     DEFAULT_CONFIG,
     MARIN_ROOT,
     ClusterCapabilities,
@@ -46,7 +43,9 @@ from .conftest import (
     discover_capabilities,
     wait_for_dashboard_ready,
 )
-from .helpers import TestJobs
+from iris.testing.e2e_helpers import TestJobs
+from rigging.connect import proxy_path
+from rigging.timing import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 

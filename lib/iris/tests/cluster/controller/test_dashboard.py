@@ -47,6 +47,17 @@ from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
+from iris.testing.controller import (
+    check_task_can_be_scheduled,
+    make_test_entrypoint,
+    make_worker_metadata,
+    register_worker,
+)
+from iris.testing.controller import (
+    query_tasks_with_attempts as _query_tasks_with_attempts,
+)
+from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
+from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
 from iris.time_proto import timestamp_to_proto
 from rigging.auth import StaticTokenProvider
 from rigging.credentials import ClientCredentials
@@ -56,19 +67,6 @@ from rigging.timing import Timestamp
 from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
-
-from lib.iris.tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
-from lib.iris.tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-
-from .conftest import (
-    check_task_can_be_scheduled,
-    make_test_entrypoint,
-    make_worker_metadata,
-    register_worker,
-)
-from .conftest import (
-    query_tasks_with_attempts as _query_tasks_with_attempts,
-)
 
 # =============================================================================
 # Test Helpers

@@ -118,10 +118,14 @@ types even in startup-polling loops.
   `@pytest.mark.requires_cluster`.
 - Docker-dependent tests must also be marked `@pytest.mark.docker`.
 - E2E tests live in `tests/e2e/`.
+- Reusable test support lives in `src/iris/testing/` and is imported through
+  `iris.testing`. Tests do not import `conftest.py` or another test module.
+- `conftest.py` files expose pytest fixtures only. Consume setup through fixture
+  parameters instead of importing fixture functions.
 - Shared fakes live in `src/iris/cluster/backends/gcp/fake.py`
   (`InMemoryGcpService`), `src/iris/cluster/backends/k8s/fake.py`
-  (`InMemoryK8sService`), or `src/iris/test_util.py`. Do not duplicate
-  fakes across files.
+  (`InMemoryK8sService`), `src/iris/test_util.py`, or `src/iris/testing/`.
+  Do not duplicate fakes across files.
 
 ## Protocols
 

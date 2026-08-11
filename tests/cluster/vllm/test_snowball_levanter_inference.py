@@ -28,8 +28,8 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.tokenizers import load_tokenizer
 
-from tests.cluster.vllm.backend_parity import TokenScore
-from tests.cluster.vllm.snowball import (
+from .backend_parity import TokenScore
+from .snowball import (
     TOP_K,
     RepresentativeGolden,
     RepresentativePromptFixture,
@@ -37,7 +37,7 @@ from tests.cluster.vllm.snowball import (
     read_prompt_fixture,
     read_representative_goldens,
 )
-from tests.cluster.vllm.snowball_checkpoint import (
+from .snowball_checkpoint import (
     VendoredTransformer,
     apply_pending_qb_betas,
     decode_vendored_config,

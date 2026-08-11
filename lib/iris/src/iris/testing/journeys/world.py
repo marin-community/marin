@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed domain actions and public observations for Iris journeys."""
+"""Domain actions and public observations for Iris journeys."""
 
 import contextlib
 from dataclasses import dataclass
@@ -9,6 +9,9 @@ from pathlib import Path
 
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
+from rigging.server_auth import VerifiedIdentity, identity_scope
+from rigging.timing import Timestamp
+
 from iris.cluster.config import PeerConfig
 from iris.cluster.controller.checkpoint import CheckpointResult, download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig
@@ -20,10 +23,7 @@ from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, TaskAttempt
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2
-from rigging.server_auth import VerifiedIdentity, identity_scope
-from rigging.timing import Timestamp
-
-from lib.iris.tests.journeys.backend import (
+from iris.testing.journeys.backend import (
     BackendEvent,
     ScriptedObservation,
     ScriptedTaskBackend,

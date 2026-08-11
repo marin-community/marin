@@ -11,7 +11,7 @@ and registers remote-job helpers for by-value pickling.
 import cloudpickle
 import pytest
 
-from tests.cluster.vllm import backend_parity, snowball, snowball_checkpoint
+from . import backend_parity, snowball, snowball_checkpoint
 
 VLLM_ATTENTION_BACKENDS = ("FLASH_ATTN", "TRITON_ATTN")
 

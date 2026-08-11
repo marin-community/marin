@@ -110,9 +110,7 @@ packages = ["src/iris"]
 timeout = 10
 timeout_method = "thread"
 addopts = "-n auto --durations=25 -m 'not slow and not docker and not requires_cluster' -v --import-mode=importlib"
-# The repository root makes shared test support importable through the unique
-# lib.iris.tests namespace in both Iris-only and mixed-path invocations.
-pythonpath = ["src", ".", "../.."]
+pythonpath = ["src"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "docker: marks tests requiring Docker runtime (slow, needs daemon)",

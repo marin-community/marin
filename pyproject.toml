@@ -275,8 +275,6 @@ search-path = [
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
-    # benchmark_controller.py imports repository-qualified controller test fixtures.
-    ".",
 ]
 disable-search-path-heuristics = true
 

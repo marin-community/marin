@@ -5,7 +5,7 @@ import math
 
 import pytest
 
-from tests.cluster.vllm.backend_parity import (
+from .backend_parity import (
     NextTokenObservation,
     NextTokenParity,
     TokenScore,
