@@ -469,9 +469,18 @@ class OpenRouterPanelist:
         return index
 
 
-def openrouter_panel(model: str, size: int = DEFAULT_PANEL_SIZE) -> list[OpenRouterPanelist]:
-    """``size`` OpenRouter seats of the same ``model`` (self-consistency, not diversity)."""
-    return [OpenRouterPanelist(seat=i, model=model) for i in range(1, size + 1)]
+def openrouter_panel(models: Sequence[str], size: int = DEFAULT_PANEL_SIZE) -> list[OpenRouterPanelist]:
+    """OpenRouter panel seats.
+
+    One model gives ``size`` seats of it (self-consistency, like the CLI panel).
+    Several models give one seat each — a cross-provider panel whose agreement
+    actually is agreement across independent lineages.
+    """
+    if not models:
+        raise ValueError("openrouter_panel needs at least one model")
+    if len(models) == 1:
+        return [OpenRouterPanelist(seat=i, model=models[0]) for i in range(1, size + 1)]
+    return [OpenRouterPanelist(seat=i, model=m) for i, m in enumerate(models, start=1)]
 
 
 # ---------------------------------------------------------------------------

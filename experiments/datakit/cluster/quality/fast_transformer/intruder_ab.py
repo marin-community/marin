@@ -190,10 +190,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--panel-size", type=int, default=DEFAULT_PANEL_SIZE)
     parser.add_argument(
         "--panel-model",
+        action="append",
         default=None,
         metavar="OPENROUTER_MODEL",
-        help="judge via OpenRouter with this model instead of local headless claude "
-        "(needs OR_INTRUDER_key; use when CLI seats would starve the operator's own usage)",
+        help="judge via OpenRouter instead of local headless claude (needs OR_INTRUDER_key; "
+        "use when CLI seats would starve the operator's own usage). Repeat for one seat "
+        "per model — a cross-provider panel instead of one model's self-consistency.",
     )
     parser.add_argument("--target-trials", type=int, default=120)
     parser.add_argument("--max-trials", type=int, default=400)
@@ -249,8 +251,14 @@ def main() -> None:
     counts = sorted(result.abstained_by_side.values())
     if len(counts) == 2 and counts[1] > 3 * max(counts[0], 1):
         print("  WARNING: abstentions are lopsided — treat this comparison as void, not as evidence")
-    print("\nPanel seats are the same model, so this measures self-consistency, not")
-    print("agreement across independent judges.")
+    if len({p.name.rsplit("-", 1)[0] for p in panel}) > 1:
+        print("\nper-seat detection rates (cross-provider panel):")
+        for seat_name, sides in sorted(result.per_model_accuracy.items()):
+            per_side = "  ".join(f"{bn} {acc:.3f}" for bn, acc in sorted(sides.items()))
+            print(f"  {seat_name:32} {per_side}")
+    else:
+        print("\nPanel seats are the same model, so this measures self-consistency, not")
+        print("agreement across independent judges.")
 
 
 if __name__ == "__main__":
