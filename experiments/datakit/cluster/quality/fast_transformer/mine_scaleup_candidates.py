@@ -93,6 +93,9 @@ def _gelu_tanh(x: np.ndarray) -> np.ndarray:
 
 def mlp_predict(params: dict, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """(argmax class index, softmax confidence) per row, batched."""
+    # A fully-labeled shard yields zero rows to type; concatenate needs the guard.
+    if len(x) == 0:
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.float32)
     idx_out, conf_out = [], []
     for start in range(0, len(x), PREDICT_BATCH):
         h = _gelu_tanh(x[start : start + PREDICT_BATCH] @ params["w1"] + params["b1"])
