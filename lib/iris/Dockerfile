@@ -330,6 +330,16 @@ ENV CUDA_HOME=/usr/local/cuda-13.2
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
 ENV NVDISASM_PATH="${CUDA_HOME}/bin"
 
+# Bind the pinned CLI's own option contract to the capture policy used by the
+# evidence runner. This invokes help only; it does not load a driver or query a
+# device. The validator is build-only and is not copied into the final image.
+RUN --mount=type=bind,source=lib/iris/images/h100_evidence_nsys_help.py,target=/tmp/h100-evidence-nsys-help.py,ro \
+    set -eux; \
+    /usr/local/bin/nsys profile --help > /tmp/h100-evidence-nsys-profile-help.txt; \
+    /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nsys-help.py \
+      /tmp/h100-evidence-nsys-profile-help.txt; \
+    rm -f /tmp/h100-evidence-nsys-profile-help.txt
+
 # Exercise the runner's exact compiler/disassembler dependency without loading
 # a driver or querying a device. cuobjdump delegates SASS decoding to nvdisasm.
 RUN --mount=type=bind,source=lib/iris/images/h100_evidence_sass_smoke.py,target=/tmp/h100-evidence-sass-smoke.py,ro \

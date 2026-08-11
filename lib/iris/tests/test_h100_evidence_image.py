@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).parents[3]
 DOCKERFILE = REPO_ROOT / "lib" / "iris" / "Dockerfile"
 DOCKERIGNORE = REPO_ROOT / "lib" / "iris" / "Dockerfile.dockerignore"
 PACKAGE_MANIFEST = REPO_ROOT / "lib" / "iris" / "images" / "h100-evidence-debian12-amd64.sha256"
+NSYS_HELP_VALIDATOR = REPO_ROOT / "lib" / "iris" / "images" / "h100_evidence_nsys_help.py"
 SASS_VALIDATOR = REPO_ROOT / "lib" / "iris" / "images" / "h100_evidence_sass_smoke.py"
 H100_IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-h100-evidence-image.yaml"
 BROAD_IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-docker-images.yaml"
@@ -263,6 +264,35 @@ def test_h100_evidence_target_inherits_task_and_checks_every_required_tool():
     assert 'test "$(dpkg --print-architecture)" = amd64' in target
     for tool in ("nvcc", "ptxas", "cuobjdump", "nvdisasm", "ncu", "nsys"):
         assert re.search(rf"/[^ ;]*{tool} --version", target)
+
+
+def test_h100_evidence_image_validates_the_pinned_nsys_profile_contract():
+    dockerfile = DOCKERFILE.read_text()
+    target = _docker_stage("task-h100-evidence")
+    validator_source = NSYS_HELP_VALIDATOR.relative_to(REPO_ROOT).as_posix()
+
+    assert "ARG NSYS_VERSION=2026.1.3" in dockerfile
+    assert "ARG NSYS_BUILD=2026.1.3.425-1" in dockerfile
+    assert (
+        "RUN --mount=type=bind,source=lib/iris/images/h100_evidence_nsys_help.py,"
+        "target=/tmp/h100-evidence-nsys-help.py,ro" in target
+    )
+    assert "/usr/local/bin/nsys profile --help > /tmp/h100-evidence-nsys-profile-help.txt" in target
+    assert (
+        "/opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nsys-help.py "
+        "\\\n      /tmp/h100-evidence-nsys-profile-help.txt" in target
+    )
+    assert f"COPY {validator_source}" not in target
+    assert (
+        "nvidia-smi"
+        not in target.split("# Bind the pinned CLI's own option contract", maxsplit=1)[1].split(
+            "# Exercise the runner's exact compiler/disassembler dependency", maxsplit=1
+        )[0]
+    )
+
+    dockerignore = DOCKERIGNORE.read_text()
+    assert _docker_context_includes(validator_source, dockerignore)
+    assert not _docker_context_includes(validator_source, dockerignore.replace(f"!{validator_source}\n", ""))
 
 
 def test_h100_evidence_image_executes_the_runner_cubin_disassembly_closure():

@@ -299,6 +299,32 @@ def test_runner_nsys_parser_attributes_kernel_and_copy_activity_to_exact_ranges(
     )
 
 
+def test_runner_profiles_cuda_range_with_supported_nsys_end_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _runner_config(tmp_path)
+    case_directory = tmp_path / "case"
+    case_directory.mkdir()
+    generated_manifest = tmp_path / "generated.json"
+    generated_manifest.write_text("{}\n")
+
+    monkeypatch.setattr(runner, "_worker_base_command", lambda *args, **kwargs: ("worker", "--case"))
+
+    def reject_after_inspecting_command(command, **kwargs):
+        arguments = tuple(str(value) for value in command)
+        assert arguments[:2] == (str(config.tools.nsys), "profile")
+        assert "--capture-range=cudaProfilerApi" in arguments
+        assert [value for value in arguments if value.startswith("--capture-range-end")] == ["--capture-range-end=stop"]
+        assert not any(value.startswith("--stop-on-range-end") for value in arguments)
+        assert arguments[-2:] == ("worker", "--case")
+        return subprocess.CompletedProcess(arguments, 2, "", "synthetic nsys refusal")
+
+    monkeypatch.setattr(runner.subprocess, "run", reject_after_inspecting_command)
+
+    with pytest.raises(RuntimeError, match="synthetic nsys refusal"):
+        runner._run_profiled_case(config, "case-id", generated_manifest, case_directory)
+
+
 def test_runner_merges_device_and_logical_timings_only_for_exact_copy_free_schedule() -> None:
     plan = default_h100_contract_map_benchmark_plan()
     worker_rows = []
