@@ -48,9 +48,53 @@ Policy coverage derives the `cuobjdump --dump-sass` requirement from the
 runner's checked-in compile plan and binds it to the `nvdisasm` package,
 environment, and functional image smoke.
 
+## Image build attempt
+
+[Workflow run 31445598155](https://github.com/marin-community/marin/actions/runs/31445598155)
+built exact source `b42357de95f322e6e1a9ce2eb435dc3a1c0bc08f` with
+`image_set=h100-evidence`. All five legacy image jobs were skipped, and only
+job `93639015620` ran.
+
+The closed package step downloaded `cuda-nvdisasm-13-2_13.2.86-1_amd64.deb`,
+matched its 4,284,630-byte size and SHA-256, extracted it, and reported CUDA
+13.2.86 for NVCC, `ptxas`, `cuobjdump`, and `nvdisasm`. The functional smoke
+then completed the `sm_90a` cubin compile, poisoned-`PATH` `cuobjdump
+--dump-sass`, direct `nvdisasm`, and both kernel-name checks.
+
+The first instruction check failed because the single-quoted grep ERE used two
+backslashes around each literal `*`:
+
+```text
+grep -Eq '/\\*[[:xdigit:]]+\\*/.*[A-Z][A-Z0-9.]+' /tmp/h100-evidence-cuobjdump.sass
+```
+
+The extra backslashes changed the ERE instead of matching an address comment
+such as `/*0000*/`. The build stopped at step 4 of 6. The absolute Python CUDA
+library probe, CPU-only JAX import probe, image push, registry inspection, and
+OCI digest were not reached. No image was published. The downloaded raw job log
+was 87,069 bytes with SHA-256
+`232a031477b2b48e6358ad821cbdad4a846b9b16fef55a1c1763144ad95d2859`.
+
+## Parser repair
+
+The image build now bind-mounts a stdlib-only validator instead of rendering an
+ERE in the Docker shell. The validator accepts one exact expected kernel,
+requires bounded UTF-8 output and at least one address-bearing instruction,
+and rejects empty output, warning or error diagnostics, malformed records,
+unexpected symbols, and duplicate or descending addresses. It validates the
+tool-specific `Function` or `.global`/label anchors for `cuobjdump` and
+`nvdisasm`. The bind mount does not persist the validator source in the final
+image.
+
+The regression uses representative lines from NVIDIA's CUDA binary-utilities
+output for both tools. It also executes the previous double-escaped grep
+pattern and confirms that it rejects the same valid `cuobjdump` text accepted
+by the validator.
+
 ## Validation boundary
 
-This checkpoint contains source and local policy-test evidence only. It does
-not include an image build, workflow dispatch, GPU query, or H100 relaunch. A
-future immutable image build must pass the new compile/disassembly smoke before
-it can be considered for another reviewed launch.
+This checkpoint contains source, local policy-test evidence, and the failed
+image-build evidence above. It does not include a workflow rerun, published
+image, OCI digest, GPU query, or H100 relaunch. A future immutable image build
+must pass the repaired compile/disassembly smoke and the two remaining runtime
+probes before it can be considered for another reviewed launch.

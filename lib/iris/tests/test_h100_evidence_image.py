@@ -2,17 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
+import json
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).parents[3]
 DOCKERFILE = REPO_ROOT / "lib" / "iris" / "Dockerfile"
 DOCKERIGNORE = REPO_ROOT / "lib" / "iris" / "Dockerfile.dockerignore"
 PACKAGE_MANIFEST = REPO_ROOT / "lib" / "iris" / "images" / "h100-evidence-debian12-amd64.sha256"
+SASS_VALIDATOR = REPO_ROOT / "lib" / "iris" / "images" / "h100_evidence_sass_smoke.py"
 H100_IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-h100-evidence-image.yaml"
 BROAD_IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ops-docker-images.yaml"
 ROOT_PYPROJECT = REPO_ROOT / "pyproject.toml"
@@ -21,6 +26,26 @@ UV_LOCK = REPO_ROOT / "uv.lock"
 H100_RUNNER = REPO_ROOT / "lib" / "tile_lifetime" / "benchmarks" / "h100_contract_map_backend_runner.py"
 BACKEND_RESOURCES = REPO_ROOT / "lib" / "tile_lifetime" / "src" / "tile_lifetime" / "contract_map_backend_resources.py"
 NVIDIA_DEBIAN12_AMD64_REPOSITORY = "https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64"
+
+CUOBJDUMP_SASS = """\
+        code for sm_90a
+                Function : h100_evidence_smoke
+        .headerflags    @"EF_CUDA_SM90A EF_CUDA_VIRTUAL_SM(EF_CUDA_SM90A)"
+        /*0000*/                   LDC R1, c[0x0][0x37c] ;       /* 0x0000df00ff017b82 */
+                                                                 /* 0x000fe20000000800 */
+        /*0010*/                   S2R R9, SR_TID.X ;            /* 0x0000000000097919 */
+                                                                 /* 0x000e2e0000002100 */
+"""
+NVDISASM_SASS = """\
+        .section        .text.h100_evidence_smoke,"ax",@progbits
+        .sectioninfo    @"SHI_REGISTERS=6"
+        .global         h100_evidence_smoke
+        .type           h100_evidence_smoke,@function
+h100_evidence_smoke:
+.text.h100_evidence_smoke:
+        /*0000*/                   LDC R1, c[0x0][0x37c] ;
+        /*0010*/                   S2R R9, SR_TID.X ;
+"""
 
 EXPECTED_PACKAGES = {
     "cuda-cccl-13-2_13.2.86-1_amd64.deb",
@@ -152,6 +177,25 @@ def _runner_cubin_disassemblers() -> set[str]:
     return disassemblers
 
 
+def _run_sass_validator(tmp_path: Path, *, output_format: str, text: str) -> subprocess.CompletedProcess[str]:
+    artifact = tmp_path / f"{output_format}.sass"
+    artifact.write_text(text)
+    return subprocess.run(
+        (
+            sys.executable,
+            str(SASS_VALIDATOR),
+            "--format",
+            output_format,
+            "--expected-kernel",
+            "h100_evidence_smoke",
+            str(artifact),
+        ),
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+
 def test_h100_evidence_package_manifest_is_closed_and_hash_pinned():
     records = _package_manifest_records()
     filenames = {Path(urlparse(url).path).name for _, _, url in records}
@@ -208,9 +252,67 @@ def test_h100_evidence_image_executes_the_runner_cubin_disassembly_closure():
     assert 'env PATH=/usr/bin:/bin NVDISASM_PATH="${CUDA_HOME}/bin"' in smoke
     assert '"${CUDA_HOME}/bin/cuobjdump" --dump-sass /tmp/h100-evidence-smoke.cubin' in smoke
     assert '"${CUDA_HOME}/bin/nvdisasm" /tmp/h100-evidence-smoke.cubin' in smoke
-    assert smoke.count("grep -Fq h100_evidence_smoke") == 2
-    assert smoke.count("grep -Eq") == 2
+    assert smoke.count("/opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-sass-smoke.py") == 2
+    assert "--format cuobjdump --expected-kernel h100_evidence_smoke" in smoke
+    assert "--format nvdisasm --expected-kernel h100_evidence_smoke" in smoke
+    assert "grep -Eq" not in smoke
+    assert f"COPY {SASS_VALIDATOR.relative_to(REPO_ROOT).as_posix()}" not in target
     assert "nvidia-smi" not in smoke
+
+    validator_source = SASS_VALIDATOR.relative_to(REPO_ROOT).as_posix()
+    dockerignore = DOCKERIGNORE.read_text()
+    assert _docker_context_includes(validator_source, dockerignore)
+    assert not _docker_context_includes(validator_source, dockerignore.replace(f"!{validator_source}\n", ""))
+
+
+@pytest.mark.parametrize(
+    ("output_format", "sass"),
+    (("cuobjdump", CUOBJDUMP_SASS), ("nvdisasm", NVDISASM_SASS)),
+)
+def test_h100_evidence_sass_validator_accepts_addressed_kernel_instructions(tmp_path, output_format, sass):
+    result = _run_sass_validator(tmp_path, output_format=output_format, text=sass)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "format": output_format,
+        "instruction_count": 2,
+        "kernel": "h100_evidence_smoke",
+    }
+
+
+@pytest.mark.parametrize(
+    "sass",
+    (
+        "",
+        "warning: source unavailable\n" + CUOBJDUMP_SASS,
+        "Function : h100_evidence_smoke\nplain text without instructions\n",
+        "Function : h100_evidence_smoke\n/*address*/ MOV R1, R2 ;\n",
+        "Function : different_kernel\n/*0000*/ MOV R1, R2 ;\n",
+        "Function : h100_evidence_smoke\nFunction : h100_evidence_smoke\n/*0000*/ MOV R1, R2 ;\n",
+        "Function : h100_evidence_smoke\n/*0010*/ MOV R1, R2 ;\n/*0000*/ EXIT ;\n",
+    ),
+)
+def test_h100_evidence_sass_validator_rejects_unusable_cuobjdump_output(tmp_path, sass):
+    result = _run_sass_validator(tmp_path, output_format="cuobjdump", text=sass)
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.startswith("cuobjdump SASS validation failed:")
+
+
+def test_h100_evidence_sass_validator_replaces_the_failed_double_escaped_ere(tmp_path):
+    previous_pattern = r"/\\*[[:xdigit:]]+\\*/.*[A-Z][A-Z0-9.]+"
+    previous = subprocess.run(
+        ("grep", "-Eq", previous_pattern),
+        input=CUOBJDUMP_SASS,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    current = _run_sass_validator(tmp_path, output_format="cuobjdump", text=CUOBJDUMP_SASS)
+
+    assert previous.returncode == 1
+    assert current.returncode == 0, current.stderr
 
 
 def test_h100_evidence_image_probes_every_runner_loaded_cuda_library():

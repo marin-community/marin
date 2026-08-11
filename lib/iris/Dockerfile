@@ -332,7 +332,8 @@ ENV NVDISASM_PATH="${CUDA_HOME}/bin"
 
 # Exercise the runner's exact compiler/disassembler dependency without loading
 # a driver or querying a device. cuobjdump delegates SASS decoding to nvdisasm.
-RUN set -eux; \
+RUN --mount=type=bind,source=lib/iris/images/h100_evidence_sass_smoke.py,target=/tmp/h100-evidence-sass-smoke.py,ro \
+    set -eux; \
     printf '%s\n' 'extern "C" __global__ void h100_evidence_smoke(int *output) { if (threadIdx.x == 0) *output = 1; }' \
       > /tmp/h100-evidence-smoke.cu; \
     "${CUDA_HOME}/bin/nvcc" -arch=sm_90a --cubin \
@@ -341,10 +342,10 @@ RUN set -eux; \
       "${CUDA_HOME}/bin/cuobjdump" --dump-sass /tmp/h100-evidence-smoke.cubin \
       > /tmp/h100-evidence-cuobjdump.sass; \
     "${CUDA_HOME}/bin/nvdisasm" /tmp/h100-evidence-smoke.cubin > /tmp/h100-evidence-nvdisasm.sass; \
-    grep -Fq h100_evidence_smoke /tmp/h100-evidence-cuobjdump.sass; \
-    grep -Fq h100_evidence_smoke /tmp/h100-evidence-nvdisasm.sass; \
-    grep -Eq '/\\*[[:xdigit:]]+\\*/.*[A-Z][A-Z0-9.]+' /tmp/h100-evidence-cuobjdump.sass; \
-    grep -Eq '/\\*[[:xdigit:]]+\\*/.*[A-Z][A-Z0-9.]+' /tmp/h100-evidence-nvdisasm.sass; \
+    /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-sass-smoke.py \
+      --format cuobjdump --expected-kernel h100_evidence_smoke /tmp/h100-evidence-cuobjdump.sass; \
+    /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-sass-smoke.py \
+      --format nvdisasm --expected-kernel h100_evidence_smoke /tmp/h100-evidence-nvdisasm.sass; \
     rm -f /tmp/h100-evidence-smoke.cu /tmp/h100-evidence-smoke.cubin \
       /tmp/h100-evidence-cuobjdump.sass /tmp/h100-evidence-nvdisasm.sass
 
