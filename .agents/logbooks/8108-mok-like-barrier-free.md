@@ -546,3 +546,23 @@ W&B: https://wandb.ai/marin-community/marin_moe/runs/mok-like-ab-mok-like-100-20
 - Interpretation: device-wait cancellation alone is insufficient. Every peer executable shard must receive the same failure before any can advance to a later XLA collective. Typed FFI handlers return after enqueuing device work, so a peer that observes cancellation asynchronously cannot currently turn that observation into an all-rank FFI error. Shipping the partial patch would replace one hang class with a later collective mismatch.
 - Decision: revert native-v13 and keep the measured native-v12 implementation for the stable branch. The stable snapshot documents rank-local handler/CUDA failure closure as an unresolved limitation; sticky device traps remain terminal process-poison tests. Future work must provide invocation-wide host-visible error propagation before handler return, or eliminate/postpone post-FFI collectives so every shard aborts consistently.
 - Next action: commit and push the v12 dropless/forward-zero-copy implementation and launcher/scale hardening, then run a short promoted gate from that commit before multi-node scaling.
+
+### 2026-08-11 10:30 PT - Current-source two-node strict-dropless gate prepared
+
+- DRI: dlwh. Source: clean pushed branch `codex/upstream-mok-like` at `80f909f4bb4657166c995293a8ff1931bf601ae8`; native build schema v12 with pinned MoK `6438bf48f88094d305972fbe0fa6deba0f7d4d1a` and ThunderKittens `1c3920d993404dd49a6d4c7267ea11d583bd5c68`.
+- Contract: two Iris tasks, one JAX process and four GB200s per task, local EP4 and DP2, global batch 128 at sequence length 4096, 48 layers, 25 optimizer updates. The reviewed `promoted_dropless_v12` preset selects strict factor-four schedule capacity, one workspace slot, forward XLA-peer storage, staged backward storage, shared eager cuda-async at fraction 0.80, local-only autotune cache, no trims, and zero child retries/failure tolerance.
+- Output identity: artifact `grug/moe-backend-comparison/mok_like/mok-scale-003-v12-dropless-2node-25-20260811-1030/2026.08.11`; W&B id/name `mok-scale-003-v12-dropless-2node-25-20260811-1030`, project `marin-community/marin_moe`, group `moe-backend-comparison-2node`, resume `allow`. This metrics gate writes no final model checkpoint; `initialize_from` is unset. Default temporary checkpointing is retained only for preemption recovery, with no retry authorized.
+- Exact submission, with the secret value scrubbed:
+
+  ```bash
+  run_id="mok-scale-003-v12-dropless-2node-25-20260811-1030"
+  .venv/bin/python -c 'import iris.cluster.platforms.k8s.service as service; from iris.cluster.platforms.types import find_free_port; service.find_free_port = lambda start=10000: find_free_port(); from iris.cli.main import main; main()' \
+    --config lib/iris/config/cw-us-east-08a.yaml job run --no-wait --enable-extra-resources \
+    --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 14400 --max-retries 0 \
+    --job-name "${run_id}-coord" -e WANDB_API_KEY '<redacted>' -e WANDB_PROJECT marin_moe -- \
+    .venv/bin/python -m experiments.grug.moe_hero_ep.launch_mok_like \
+      --run-id "$run_id" --backend mok_like --num-steps 25 --num-nodes 2 \
+      --mok-like-preset promoted_dropless_v12 --version 2026.08.11 --run
+  ```
+
+- Acceptance: both tasks and coordinator terminal-successful; 25 finite losses and zero drops on every row; exact 4,800 forward and 4,800 backward handlers per process; forward staging zero; staged backward copy calls/bytes exact; slot one unused with maximum active slots one; zero generation, reuse, trim, or protocol anomalies across both processes. Score profile-free steps 10-24, report total and per-GPU throughput, mean step time, MFU, peak HBM, and weak-scale efficiency against the sealed four-GPU dropless score. Stop on deterministic topology, allocator, numerical, or protocol failure; do not resubmit.
