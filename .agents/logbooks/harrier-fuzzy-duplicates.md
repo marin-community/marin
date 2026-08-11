@@ -81,3 +81,22 @@ author: Rafal Wojdyla
 - Output root: `s3://marin-us-east-02a/marin/datakit/embed/harrier-fuzzy-duplicates/`.
 - Result: Both repaired Iris submissions succeeded.
 - Next action: Check startup state after 120 seconds and verify that port collisions do not recur.
+
+### 2026-08-11 20:10 UTC - Kubernetes port-zero behavior
+
+- Status: Both v2 roots are stopped before source processing started.
+- Evidence: All 96 descendants ran in each region without bind errors, but TEI logged HTTP and metrics ports as zero.
+- Root cause: The CoreWeave Kubernetes backend does not allocate numeric named ports. It supplies zero for automatic binding.
+- Effect: TEI selects a port, but the parent health check and endpoint registry cannot discover that port.
+- Decision: Use Iris ports when they are nonzero. Use a deterministic, run-specific port block when Iris returns zero.
+- Next action: Add fallback-port tests, validate the repair, and launch v3.
+
+### 2026-08-11 20:16 UTC - CoreWeave fallback ports validated
+
+- Commit hash: `fd073d80eb9e632db84e2ff7e03d823681d7dfc2`.
+- Change: Each pool selects a run-specific block in ports 12000 through 13999 when Iris returns zero.
+- Port coverage: A 96-instance pool gets 192 unique HTTP and metrics ports.
+- Regression evidence: The port-zero tests failed before the repair and passed after it.
+- Validation: Datakit has 250 passing tests and five expected failures.
+- Validation: Pre-commit and Pyrefly passed.
+- Next action: Push the repair and launch v3 in both regions.
