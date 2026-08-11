@@ -144,6 +144,13 @@ def _docker_stage(name: str) -> str:
     return dockerfile[stage_start.end() : stage_start.end() + next_stage.start()]
 
 
+def _required_nvtx_smoke_graph_mode(smoke: str) -> str:
+    modes = re.findall(r"(?<!\S)--cuda-graph-trace=(?P<mode>[^\s\\]+)", smoke)
+    if modes != ["node"]:
+        raise ValueError("CPU-only NVTX smoke must select exactly cuda-graph-trace=node")
+    return modes[0]
+
+
 def _locked_package(name: str) -> dict:
     lock = tomllib.loads(UV_LOCK.read_text())
     matches = [package for package in lock["package"] if package["name"] == name]
@@ -309,6 +316,7 @@ def test_h100_evidence_image_profiles_the_exact_runner_nvtx_range_without_a_devi
     assert f"source={harness_source},target=/tmp/h100-evidence-nvtx-smoke.py,ro" in smoke
     assert "env NSYS_NVTX_PROFILER_REGISTER_ONLY=0" in smoke
     assert "/usr/local/bin/nsys profile --force-overwrite=true --trace=nvtx" in smoke
+    assert _required_nvtx_smoke_graph_mode(smoke) == "node"
     assert "--capture-range=nvtx --capture-range-end=stop" in smoke
     assert "--nvtx-capture=h100-evidence-nvtx-smoke" in smoke
     assert "h100-evidence-nvtx-smoke.py emit" in smoke
@@ -326,6 +334,18 @@ def test_h100_evidence_image_profiles_the_exact_runner_nvtx_range_without_a_devi
         assert (REPO_ROOT / source).read_bytes()
         assert _docker_context_includes(source, dockerignore)
         assert not _docker_context_includes(source, dockerignore.replace(f"!{source}\n", ""))
+
+
+@pytest.mark.parametrize("replacement", ("", "--cuda-graph-trace=graph"), ids=("deleted", "graph-mode"))
+def test_h100_evidence_image_rejects_nvtx_smoke_without_node_mode(replacement: str) -> None:
+    target = _docker_stage("task-h100-evidence")
+    smoke = target.split("# Exercise the runner's exact ctypes NVTX range", maxsplit=1)[1].split(
+        "# Exercise the runner's exact compiler/disassembler dependency", maxsplit=1
+    )[0]
+    mutated_smoke = smoke.replace("--cuda-graph-trace=node", replacement)
+    assert mutated_smoke != smoke
+    with pytest.raises(ValueError, match="must select exactly cuda-graph-trace=node"):
+        _required_nvtx_smoke_graph_mode(mutated_smoke)
 
 
 def test_h100_evidence_image_executes_the_runner_cubin_disassembly_closure():
