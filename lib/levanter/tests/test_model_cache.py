@@ -3,6 +3,7 @@
 
 """Tests for the distributed-locked model snapshot cache."""
 
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -16,7 +17,6 @@ import pytest
 import levanter.model_cache as model_cache
 from levanter.model_cache import (
     DEFAULT_COMPLETE_MARKER,
-    HF_REVISION_FILENAME,
     cache_hf_model,
     cache_to_prefix,
     resolve_cached_model_path,
@@ -119,7 +119,7 @@ def test_cache_hf_model_streams_one_file_at_a_time(tmp_path, monkeypatch):
     assert max_local_files == 1, f"expected at most one staged file, saw {max_local_files}"
     for filename in repo_files:
         assert Path(cache_path, filename).read_text() == f"contents of {filename}"
-    assert Path(cache_path, DEFAULT_COMPLETE_MARKER).exists()
+    assert json.loads(Path(cache_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": None}
 
 
 @pytest.mark.parametrize(
@@ -173,7 +173,7 @@ def test_resolve_pinned_commit_skips_hf_lookup(tmp_path, monkeypatch):
 
     assert first == second
     assert Path(second, "config.json").read_text() == commit
-    assert Path(second, HF_REVISION_FILENAME).read_text() == commit
+    assert json.loads(Path(second, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": commit}
 
 
 def test_resolve_keeps_distinct_refs_in_distinct_cache_dirs(monkeypatch):
@@ -239,8 +239,8 @@ def test_resolve_tracks_mutable_hf_revision(tmp_path, monkeypatch):
     second_path = resolve_cached_model_path("org/model", cache_ttl_days=7, cache_prefix="models")
 
     assert first_path != second_path
-    assert Path(first_path, HF_REVISION_FILENAME).read_text() == first_commit
-    assert Path(second_path, HF_REVISION_FILENAME).read_text() == second_commit
+    assert json.loads(Path(first_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": first_commit}
+    assert json.loads(Path(second_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": second_commit}
     for filename in repo_files:
         assert Path(first_path, filename).read_text() == first_commit
         assert Path(second_path, filename).read_text() == second_commit

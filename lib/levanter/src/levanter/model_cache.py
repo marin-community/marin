@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import logging
 import os
 import re
@@ -29,19 +30,25 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Generator
+from dataclasses import asdict, dataclass
 
 import fsspec
 from huggingface_hub import hf_hub_download, list_repo_files, model_info
 from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, DistributedLease, LeaseLostError, create_lock
-from rigging.filesystem import marin_temp_bucket, prefix_join, url_to_fs
+from rigging.filesystem import marin_temp_bucket, url_to_fs
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COMPLETE_MARKER = ".cache_complete"
-"""Marker written last after a full upload; its presence is the cache-hit signal."""
+DEFAULT_COMPLETE_MARKER = ".cache_metadata.json"
+"""Metadata written last after a full upload; its presence is the cache-hit signal."""
 
-HF_REVISION_FILENAME = ".cache_hf_revision"
-"""Cache-owned sidecar containing the Hugging Face revision used for the snapshot."""
+
+@dataclass(frozen=True)
+class CacheMetadata:
+    """Metadata persisted with a completed cache snapshot."""
+
+    source_revision: str | None = None
+
 
 _LOCK_SUFFIX = ".lock"
 _HF_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
@@ -58,6 +65,7 @@ def cache_to_prefix(
     cache_path: str,
     populate: Populate,
     *,
+    metadata: CacheMetadata = CacheMetadata(),
     complete_marker: str = DEFAULT_COMPLETE_MARKER,
     poll_interval: float = _DEFAULT_POLL_INTERVAL,
 ) -> str:
@@ -80,8 +88,9 @@ def cache_to_prefix(
         populate: Callback ``(fs, cache_path) -> None`` that streams the snapshot
             into ``cache_path`` on filesystem ``fs``. Use :func:`cache_hf_model`
             for the common HF-repo case instead of writing one by hand.
-        complete_marker: Filename (relative to ``cache_path``) written last to
-            mark the cache complete.
+        metadata: Metadata written into the completion marker.
+        complete_marker: JSON filename (relative to ``cache_path``) written last to mark
+            the cache complete.
         poll_interval: Seconds a blocked worker waits between marker re-checks.
 
     Returns:
@@ -110,7 +119,7 @@ def cache_to_prefix(
             logger.info("model cache populated while acquiring lock: %s", cache_path)
             return cache_path
         with _heartbeat(lock):
-            _populate(fs, cache_path, marker, populate)
+            _populate(fs, cache_path, marker, populate, metadata)
         return cache_path
     finally:
         lock.release()
@@ -136,13 +145,14 @@ def cache_hf_model(
         cache_path: Destination prefix for the mirrored snapshot.
         model_id: HuggingFace repo id, e.g. ``Qwen/Qwen3-0.6B``.
         revision: Optional git revision (branch, tag, or commit) to mirror and record in
-            :data:`HF_REVISION_FILENAME`.
+            the cache metadata.
         complete_marker: Filename written last to mark the cache complete.
         poll_interval: Seconds a blocked worker waits between marker re-checks.
     """
     return cache_to_prefix(
         cache_path,
         lambda fs, dest: _stream_hf_snapshot(fs, dest, model_id, revision),
+        metadata=CacheMetadata(source_revision=revision),
         complete_marker=complete_marker,
         poll_interval=poll_interval,
     )
@@ -227,13 +237,16 @@ def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str,
             fs.makedirs(remote_path.rsplit("/", 1)[0], exist_ok=True)
             fs.put_file(local_path, remote_path)
             os.remove(local_path)
-    if revision is not None:
-        with fs.open(prefix_join(dest, HF_REVISION_FILENAME), "w") as handle:
-            handle.write(revision)
 
 
-def _populate(fs: fsspec.AbstractFileSystem, cache_path: str, marker: str, populate: Populate) -> None:
-    """Stream the snapshot into *cache_path* via *populate*, then write *marker*."""
+def _populate(
+    fs: fsspec.AbstractFileSystem,
+    cache_path: str,
+    marker: str,
+    populate: Populate,
+    metadata: CacheMetadata,
+) -> None:
+    """Stream the snapshot into *cache_path* via *populate*, then write metadata to *marker*."""
     logger.info("model cache miss; populating %s", cache_path)
     # Object stores have no real directories, but local/posix-backed fsspec
     # filesystems need the prefix to exist before files are written into it.
@@ -241,7 +254,7 @@ def _populate(fs: fsspec.AbstractFileSystem, cache_path: str, marker: str, popul
     populate(fs, cache_path)
     # Marker last: its presence is the cache-hit signal, so a crashed populate won't read as complete.
     with fs.open(marker, "w") as handle:
-        handle.write("ok")
+        json.dump(asdict(metadata), handle, sort_keys=True)
 
 
 @contextlib.contextmanager
