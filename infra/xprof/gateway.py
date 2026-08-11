@@ -32,6 +32,7 @@ _SOURCE_MARKER = ".xprof-source"
 _REWRITE_SUFFIXES = (".html", ".js")
 _XPROF_RUN_PATH = ("plugins", "profile")
 _XPROF_TTL_SEGMENT = re.compile(r"ttl=[1-9]\d*d")
+_TOOL_QUERY_PARAMETER = "tool"
 
 StartResponse = Callable[[str, list[tuple[str, str]]], Callable[[bytes], object] | None]
 WsgiApplication = Callable[[dict, StartResponse], Iterable[bytes]]
@@ -287,7 +288,7 @@ class XprofGateway:
 
         query = parse_qs(environ.get("QUERY_STRING", ""))
         uri = query.get("uri", [""])[0]
-        tool = query.get("tool", [""])[0]
+        tool = query.get(_TOOL_QUERY_PARAMETER, [""])[0]
         if not uri:
             return _response(start_response, "400 Bad Request", b"missing uri query parameter\n", "text/plain")
         try:
@@ -316,7 +317,7 @@ class XprofGateway:
     def _progress(self, environ: dict, start_response: StartResponse) -> Iterable[bytes]:
         query = parse_qs(environ.get("QUERY_STRING", ""))
         uri = query.get("uri", [""])[0]
-        tool = query.get("tool", [""])[0]
+        tool = query.get(_TOOL_QUERY_PARAMETER, [""])[0]
         try:
             normalized_uri = self._profiles.validate(uri)
         except ProfileSourceError as exc:
@@ -398,7 +399,7 @@ def _json_response(start_response: StartResponse, status: str, value: dict) -> l
 def _xprof_location(run_path: Path, tool: str) -> str:
     params = {"run_path": str(run_path)}
     if tool:
-        params["tool"] = tool
+        params[_TOOL_QUERY_PARAMETER] = tool
     return f"./?{urlencode(params)}"
 
 
@@ -406,7 +407,7 @@ def _loading_page(uri: str, tool: str) -> bytes:
     safe_uri = html.escape(uri)
     params = {"uri": uri}
     if tool:
-        params["tool"] = tool
+        params[_TOOL_QUERY_PARAMETER] = tool
     progress_url = f"./progress?{urlencode(params)}"
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Loading XProf profile</title>
