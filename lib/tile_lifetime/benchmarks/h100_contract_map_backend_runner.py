@@ -237,15 +237,18 @@ _SASS_OPCODE_BASES = frozenset(
     }
 )
 _NCU_SASS_SECTION_PATTERN = re.compile(r"^\s*Kernel Name\s*:\s*(?P<name>.+?)\s*$")
+_NCU_SASS_HEADER_PATTERN = re.compile(r"^\s*Address\s+Source\s*$")
+_NCU_SASS_SEPARATOR_PATTERN = re.compile(r"^\s*-{18} -{60}(?: -{6}){4}\s*$")
 _NCU_SASS_INSTRUCTION_PATTERN = re.compile(
     r"^\s*(?:/\*)?(?P<address>(?:0x)?[0-9A-Fa-f]{4,16})(?:\*/)?(?:\s+|\s*:\s*)"
     r"(?:@!?P[0-9]+(?:\.[A-Z0-9_]+)?\s+)?(?P<mnemonic>[A-Z][A-Z0-9_]*(?:\.[A-Z0-9_]+)*)\b"
 )
-_NCU_SASS_METADATA_PATTERN = re.compile(r"^\s*(?:Address\s+Source|Address|Source|[-=]+)\s*$")
 _NCU_SASS_FAILURE_PATTERN = re.compile(
     r"(?:^|\b)(?:warning|error)(?::|\b)|(?:source|sass)\s+(?:is\s+)?(?:not|un)available|\bN/A\b",
     flags=re.IGNORECASE,
 )
+_MAX_NCU_SASS_BYTES = 1 << 20
+_MAX_NCU_SASS_LINE_CHARS = 1024
 _CUOBJDUMP_FUNCTION_PATTERN = re.compile(r"^\s*Function\s*:\s*(?P<name>[A-Za-z_.$][A-Za-z0-9_.$]*)\s*$")
 _CUOBJDUMP_FUNCTION_PREFIX = re.compile(r"^\s*Function\b")
 _CUOBJDUMP_INSTRUCTION_PATTERN = re.compile(
@@ -840,6 +843,8 @@ def parse_ncu_metrics(path: Path) -> tuple[NcuKernelMetrics, ...]:
 
 def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassKernel, ...]:
     """Parse a closed Nsight Compute SASS source-page export."""
+    if not source or len(source.encode("utf-8")) > _MAX_NCU_SASS_BYTES or "\x00" in source:
+        raise ValueError("Nsight Compute SASS export violates its reviewed text bound")
     expected = tuple(normalize_cuda_kernel_name(name) for name in expected_names)
     if not expected or len(set(expected)) != len(expected):
         raise ValueError("expected Nsight Compute SASS kernel identities must be unique and nonempty")
@@ -849,28 +854,44 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
     sections: list[NcuSassKernel] = []
     current_name: str | None = None
     instructions: list[NcuSassInstruction] = []
+    header_seen = False
+    separator_seen = False
 
     def finish_section() -> None:
-        nonlocal current_name, instructions
+        nonlocal current_name, instructions, header_seen, separator_seen
         if current_name is None:
             return
-        if not instructions:
-            raise ValueError(f"Nsight Compute SASS section {current_name!r} contains no valid instructions")
+        if not header_seen or not separator_seen or not instructions:
+            raise ValueError(f"Nsight Compute SASS section {current_name!r} is structurally incomplete")
         sections.append(NcuSassKernel(name=current_name, instructions=tuple(instructions)))
         current_name = None
         instructions = []
+        header_seen = False
+        separator_seen = False
 
-    for line in source.splitlines():
+    for line_number, line in enumerate(source.splitlines(), start=1):
+        if len(line) > _MAX_NCU_SASS_LINE_CHARS:
+            raise ValueError(f"Nsight Compute SASS export line {line_number} exceeds its reviewed bound")
         section = _NCU_SASS_SECTION_PATTERN.fullmatch(line)
         if section is not None:
             finish_section()
             current_name = normalize_cuda_kernel_name(section.group("name"))
             continue
-        if not line.strip() or _NCU_SASS_METADATA_PATTERN.fullmatch(line):
+        if not line.strip():
+            continue
+        if _NCU_SASS_HEADER_PATTERN.fullmatch(line):
+            if current_name is None or header_seen or separator_seen or instructions:
+                raise ValueError(f"misplaced Nsight Compute SASS header at line {line_number}")
+            header_seen = True
+            continue
+        if _NCU_SASS_SEPARATOR_PATTERN.fullmatch(line):
+            if current_name is None or not header_seen or separator_seen or instructions:
+                raise ValueError(f"misplaced Nsight Compute SASS separator at line {line_number}")
+            separator_seen = True
             continue
         instruction = _NCU_SASS_INSTRUCTION_PATTERN.match(line)
-        if instruction is None or current_name is None:
-            raise ValueError(f"unrecognized Nsight Compute SASS export line: {line!r}")
+        if instruction is None or current_name is None or not separator_seen:
+            raise ValueError(f"unrecognized Nsight Compute SASS export record at line {line_number}")
         mnemonic = instruction.group("mnemonic")
         if mnemonic.split(".", maxsplit=1)[0] not in _SASS_OPCODE_BASES:
             raise ValueError(f"unrecognized SASS instruction mnemonic: {mnemonic!r}")
@@ -890,6 +911,21 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
         raise ValueError(f"Nsight Compute SASS kernel coverage differs: expected {expected}, got {actual}")
     by_name = {section.name: section for section in sections}
     return tuple(by_name[name] for name in expected)
+
+
+def _parse_ncu_sass_file(path: Path, expected_names: Sequence[str]) -> tuple[NcuSassKernel, ...]:
+    metadata = path.stat(follow_symlinks=False)
+    if path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= _MAX_NCU_SASS_BYTES:
+        raise ValueError("Nsight Compute SASS export must be a bounded regular file")
+    with path.open("rb") as stream:
+        payload = stream.read(_MAX_NCU_SASS_BYTES + 1)
+    if len(payload) != metadata.st_size or len(payload) > _MAX_NCU_SASS_BYTES:
+        raise ValueError("Nsight Compute SASS export changed or exceeded its reviewed byte bound")
+    try:
+        source = payload.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("Nsight Compute SASS export must be valid UTF-8") from error
+    return parse_ncu_sass(source, expected_names)
 
 
 def _csv_field(row: Mapping[str | None, str | list[str] | None], name: str) -> str:
@@ -3375,7 +3411,7 @@ def _run_ncu_profile(
         raise RuntimeError("Nsight Compute produced no public SASS/source export")
     worker_result = json.loads(result.read_text())
     metrics = parse_ncu_metrics(csv_path)
-    parse_ncu_sass(sass_source_path.read_text(), tuple(metric.name for metric in metrics))
+    _parse_ncu_sass_file(sass_source_path, tuple(metric.name for metric in metrics))
     return NcuProfileEvidence(
         metrics=metrics,
         report_path=str(report_path),
