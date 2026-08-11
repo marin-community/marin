@@ -37,6 +37,9 @@ repeated, or mutated units rows, empty later identity rows, duplicate wide
 kernel rows, and invalid metric values. Extra profiler columns remain opaque;
 the evidence contract neither exposes nor depends on the other 254 columns.
 Exact kernel identity and metric coverage checks remain unchanged downstream.
+The CSV must also be a regular, NUL-free UTF-8 file within a 1 MiB bound, and
+malformed-row errors identify only the required field rather than serializing
+the profiler row.
 
 A bounded real-format fixture covers the observed wide shape. Mutation tests
 exercise every requested unit, missing and duplicate units rows, reordered

@@ -133,6 +133,7 @@ _NCU_METRIC_UNITS = {
     "launch__occupancy_limit_warps": "block",
     "sm__warps_active.avg.pct_of_peak_sustained_active": "%",
 }
+_MAX_NCU_CSV_BYTES = 1 << 20
 _SASS_OPCODE_BASES = frozenset(
     {
         "ATOM",
@@ -762,7 +763,20 @@ def _checked_output(
 
 def parse_ncu_metrics(path: Path) -> tuple[NcuKernelMetrics, ...]:
     """Parse the pinned wide raw-page Nsight Compute CSV contract."""
-    lines = tuple(line for line in path.read_text().splitlines() if not line.startswith("=="))
+    metadata = path.stat(follow_symlinks=False)
+    if path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= _MAX_NCU_CSV_BYTES:
+        raise ValueError("Nsight Compute CSV must be a nonempty regular file within the reviewed byte bound")
+    with path.open("rb") as stream:
+        payload = stream.read(_MAX_NCU_CSV_BYTES + 1)
+    if len(payload) != metadata.st_size or len(payload) > _MAX_NCU_CSV_BYTES:
+        raise ValueError("Nsight Compute CSV changed or exceeded its reviewed byte bound")
+    try:
+        source = payload.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("Nsight Compute CSV must be valid UTF-8") from error
+    if "\x00" in source:
+        raise ValueError("Nsight Compute CSV must not contain NUL bytes")
+    lines = tuple(line for line in source.splitlines() if not line.startswith("=="))
     reader = csv.DictReader(lines)
     fieldnames = reader.fieldnames
     if fieldnames is None or not fieldnames or any(field is None or not field for field in fieldnames):
@@ -881,7 +895,7 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
 def _csv_field(row: Mapping[str | None, str | list[str] | None], name: str) -> str:
     value = row.get(name)
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"Nsight Compute row omits {name!r}: {row}")
+        raise ValueError(f"Nsight Compute row omits required field {name!r}")
     return value.strip()
 
 

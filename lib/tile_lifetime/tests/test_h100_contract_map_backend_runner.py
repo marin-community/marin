@@ -347,6 +347,40 @@ def test_runner_ncu_parser_rejects_blank_or_units_as_kernel_data(tmp_path: Path)
         runner.parse_ncu_metrics(output)
 
 
+@pytest.mark.parametrize("missing_identity", ("ID", "Kernel Name"))
+def test_runner_ncu_parser_does_not_echo_profiler_rows(tmp_path: Path, missing_identity: str) -> None:
+    fieldnames, rows = _read_ncu_csv(_NCU_RAW_FIXTURE)
+    fieldnames.append("private_profiler_field")
+    private = "/private/profiler/path/" + "secret" * 10_000
+    rows[0]["private_profiler_field"] = "opaque-unit"
+    rows[1]["private_profiler_field"] = private
+    rows[1][missing_identity] = ""
+    output = tmp_path / "ncu.csv"
+    _write_ncu_rows(output, fieldnames, rows)
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_metrics(output)
+    assert str(failure.value) == f"Nsight Compute row omits required field {missing_identity!r}"
+    assert private not in str(failure.value)
+
+
+def test_runner_ncu_parser_bounds_and_decodes_input_before_csv_parsing(tmp_path: Path) -> None:
+    output = tmp_path / "ncu.csv"
+    output.write_bytes(b"\xff")
+    with pytest.raises(ValueError, match="valid UTF-8"):
+        runner.parse_ncu_metrics(output)
+
+    output.write_bytes(_NCU_RAW_FIXTURE.read_bytes() + b"\x00")
+    with pytest.raises(ValueError, match="must not contain NUL"):
+        runner.parse_ncu_metrics(output)
+
+    with output.open("wb") as stream:
+        stream.seek((1 << 20) + 1)
+        stream.write(b"x")
+    with pytest.raises(ValueError, match="reviewed byte bound"):
+        runner.parse_ncu_metrics(output)
+
+
 def test_runner_ncu_profile_parses_real_wide_units_contract_at_process_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
