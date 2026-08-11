@@ -34,19 +34,19 @@ declined push/pop level tracking.
 
 ## Changes to make
 
-The production wrapper now reports a bounded diagnostic containing the signed
-return, the `-2` classification, requested and resolved library paths, the
+The production wrapper reports a bounded diagnostic containing the signed
+return, its closed classification, requested and resolved library paths, the
 `dladdr` library path when available, and presence-only injection flags. It
 never emits injection-path values or the full environment. Push level `0` and
-positive nested levels remain successful; negative push/pop results fail, and a
-nonmatching nonnegative pop level also fails.
+positive nested levels remain successful. Exact `-1` is provisional untracked
+success; other negatives fail, and nonmatching push/pop results fail.
 
 The H100 image build now runs this exact production wrapper under pinned Nsight
 Systems 2026.1.3 with `--trace=nvtx`, `--capture-range=nvtx`, and
 `--capture-range-end=stop`. It names the exact capture range and permits the
-unregistered string used by the ctypes call. The CPU-only smoke requires a
-balanced nonnegative push/pop result, a generated report, and exactly one
-matching exported NVTX event. The wrapper and harness are read-only BuildKit
+unregistered string used by the ctypes call. The CPU-only smoke requires either
+a balanced tracked result or an exact `-1` push/pop pair, a generated report,
+and exactly one matching exported NVTX event. The wrapper and harness are read-only BuildKit
 mounts and are absent from the final image. The smoke does not load the CUDA
 driver or query a device.
 
@@ -60,16 +60,43 @@ The image smoke validator tests balanced result and exported-event acceptance,
 plus missing, duplicate, lookalike, malformed, negative, unbalanced, and
 oversized evidence.
 
-The exact pinned image smoke has not run yet. No library or profiler binding was
-changed because the retained v8 evidence does not prove which binding mechanism
-failed. A future authorized image build must pass the new smoke before a tag can
-be published.
+The authorized image workflow
+[31472791216](https://github.com/marin-community/marin/actions/runs/31472791216)
+ran the smoke at exact source
+`4611929eab07dc8fa11294c2456b4cdfde5a46bc`. Nsight Systems logged that capture
+started and ended, generated a nonempty local report, and the injected
+`nvtxRangePushA` returned signed `-1`. The wrapper rejected that return before
+calling pop or exporting the report. The sole image job failed before export or
+push; all five legacy jobs were skipped. The workflow was not rerun. The exact
+terminal snapshot and complete log are sealed in
+`lib/tile_lifetime/benchmarks/artifacts/h100_contract_map_nvtx_image_failure_461192_v0/`.
+
+CUDA's public NVTX header does not document `-1` as a general success value. It
+names only `-2` (`NVTX_NO_PUSH_POP_TRACKING`) for the no-callback fallback and
+describes negative results generically as errors. However, an
+[NVIDIA engineer's response to the same Nsight Systems behavior](https://forums.developer.nvidia.com/t/nvtxrangepusha-and-nvtxrangepop-returns-2/255993)
+records `-1` from push and pop while the profiler still captures the range. The
+exact image run independently reproduced the push side of that tool-specific
+condition: the profiler announced both capture boundaries and wrote a report.
+
+The wrapper therefore models three closed result kinds. Nonnegative returns are
+tracked levels. Exact `-1` is an Nsight-specific untracked success whose event
+still requires external proof. Every other negative, including the named `-2`
+no-tracking result, remains an error. A `-1` push must still be followed by pop,
+and only a matching `-1` pop is locally balanced. Mixing tracked and untracked
+results fails.
+
+Local acceptance is deliberately insufficient for benchmark evidence. The
+image smoke must export the generated report and find exactly one well-formed
+event with the requested name. The production runner continues to require the
+entire ordered steady range schedule and contained kernel/copy facts from the
+exported Nsight database before accepting profile or timing evidence. Missing
+reports, missing or repeated events, an unattached `-2`, and all other negative
+returns fail closed.
 
 ## Future work
 
-- [ ] Run the reviewed image workflow once to observe the pinned CPU-only NVTX
-  smoke.
-- [ ] If the smoke reports `-2`, use its bounded library and injection identity
-  to repair the proven binding failure before another H100 launch.
+- [ ] Run the reviewed image workflow once with the exact `-1` handling and
+  exported-event gate. Do not publish a tag unless the entire smoke passes.
 - [ ] Re-run the 24-record evidence protocol only after the image smoke and
   source review pass.

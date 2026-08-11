@@ -20,8 +20,10 @@ EXPECTED_RESULT_KEYS = frozenset(
     {
         "dladdr_library",
         "name",
-        "pop_level",
-        "push_level",
+        "pop_result_kind",
+        "pop_return_code",
+        "push_result_kind",
+        "push_return_code",
         "requested_library",
         "resolved_library",
     }
@@ -44,14 +46,20 @@ def emit_range(module_path: Path, library_path: Path, output_path: Path, name: s
     module = _load_nvtx_module(module_path)
     with module.NvtxRange(name, library_path) as nvtx_range:
         pass
+    push_result = nvtx_range.push_result
+    pop_result = nvtx_range.pop_result
+    if push_result is None or pop_result is None:
+        raise RuntimeError("NVTX range did not produce balanced push/pop results")
     identity = nvtx_range.library_identity
     output_path.write_text(
         json.dumps(
             {
                 "dladdr_library": identity.dladdr_path,
                 "name": name,
-                "pop_level": nvtx_range.pop_level,
-                "push_level": nvtx_range.push_level,
+                "pop_result_kind": pop_result.kind.value,
+                "pop_return_code": pop_result.return_code,
+                "push_result_kind": push_result.kind.value,
+                "push_return_code": push_result.return_code,
                 "requested_library": identity.requested_path,
                 "resolved_library": identity.resolved_path,
             },
@@ -91,10 +99,26 @@ def _closed_result(path: Path, expected_name: str) -> dict[str, Any]:
         raise ValueError("NVTX smoke result is not canonical JSON")
     if result["name"] != expected_name:
         raise ValueError("NVTX smoke result has the wrong range name")
-    push_level = result["push_level"]
-    pop_level = result["pop_level"]
-    if type(push_level) is not int or type(pop_level) is not int or push_level < 0 or pop_level != push_level:
-        raise ValueError("NVTX smoke result does not contain a balanced nonnegative range")
+    push_return_code = result["push_return_code"]
+    pop_return_code = result["pop_return_code"]
+    push_result_kind = result["push_result_kind"]
+    pop_result_kind = result["pop_result_kind"]
+    if type(push_return_code) is not int or type(pop_return_code) is not int:
+        raise ValueError("NVTX smoke result has noninteger return codes")
+    tracked = (
+        push_result_kind == "tracked_level"
+        and pop_result_kind == "tracked_level"
+        and push_return_code >= 0
+        and pop_return_code == push_return_code
+    )
+    untracked = (
+        push_result_kind == "untracked_success"
+        and pop_result_kind == "untracked_success"
+        and push_return_code == -1
+        and pop_return_code == -1
+    )
+    if not tracked and not untracked:
+        raise ValueError("NVTX smoke result does not contain a balanced accepted range")
     for key in ("requested_library", "resolved_library", "dladdr_library"):
         if not isinstance(result[key], str) or not result[key]:
             raise ValueError(f"NVTX smoke result has an invalid {key}")

@@ -13,7 +13,7 @@ import pytest
 
 import tile_lifetime.cuda_toolchain as cuda_toolchain
 import tile_lifetime.nvtx_range as nvtx_range
-from tile_lifetime.nvtx_range import NvtxRange
+from tile_lifetime.nvtx_range import NvtxRange, NvtxRangeResultKind
 
 _RUNNER_PATH = Path(__file__).parents[1] / "benchmarks" / "h100_contract_map_backend_runner.py"
 
@@ -66,10 +66,14 @@ def test_nvtx_range_accepts_balanced_outermost_and_nested_levels(level: int) -> 
     library = _FakeLibrary(pushes=(level,), pops=(level,))
 
     with _range(library) as active:
-        assert active.push_level == level
-        assert active.pop_level is None
+        assert active.push_result is not None
+        assert active.push_result.return_code == level
+        assert active.push_result.kind is NvtxRangeResultKind.TRACKED_LEVEL
+        assert active.pop_result is None
 
-    assert active.pop_level == level
+    assert active.pop_result is not None
+    assert active.pop_result.return_code == level
+    assert active.pop_result.kind is NvtxRangeResultKind.TRACKED_LEVEL
     assert library.nvtxRangePushA.calls == [(b"contract_map.steady.0.ordinary_xla",)]
     assert library.nvtxRangePop.calls == [()]
     assert library.nvtxRangePushA.argtypes == (ctypes.c_char_p,)
@@ -80,7 +84,7 @@ def test_nvtx_range_accepts_balanced_outermost_and_nested_levels(level: int) -> 
 
 @pytest.mark.parametrize(
     ("result", "classification"),
-    ((-2, "no_push_pop_tracking"), (-1, "negative_error")),
+    ((-2, "no_push_pop_tracking"), (-3, "negative_error")),
 )
 def test_nvtx_range_reports_bounded_signed_push_failure_without_environment_values(
     result: int, classification: str
@@ -104,7 +108,7 @@ def test_nvtx_range_reports_bounded_signed_push_failure_without_environment_valu
     assert library.nvtxRangePop.calls == []
 
 
-@pytest.mark.parametrize("result", (-2, -1))
+@pytest.mark.parametrize("result", (-3, -2))
 def test_nvtx_range_rejects_negative_pop_after_successful_push(result: int) -> None:
     library = _FakeLibrary(pushes=(0,), pops=(result,))
 
@@ -116,13 +120,49 @@ def test_nvtx_range_rejects_negative_pop_after_successful_push(result: int) -> N
 def test_nvtx_range_rejects_unbalanced_nonnegative_pop() -> None:
     library = _FakeLibrary(pushes=(2,), pops=(1,))
 
-    with pytest.raises(RuntimeError, match="push_level=2 pop_level=1"):
+    with pytest.raises(RuntimeError, match=r"push_return_code=2.*pop_return_code=1"):
+        with _range(library):
+            pass
+
+
+def test_nvtx_range_accepts_exact_untracked_success_and_still_pops() -> None:
+    library = _FakeLibrary(pushes=(-1,), pops=(-1,))
+
+    with _range(library) as active:
+        assert active.push_result is not None
+        assert active.push_result.return_code == -1
+        assert active.push_result.kind is NvtxRangeResultKind.UNTRACKED_SUCCESS
+
+    assert active.pop_result is not None
+    assert active.pop_result.return_code == -1
+    assert active.pop_result.kind is NvtxRangeResultKind.UNTRACKED_SUCCESS
+    assert library.nvtxRangePop.calls == [()]
+
+
+@pytest.mark.parametrize(
+    ("push", "pop"),
+    ((-1, 0), (-1, -2), (-1, -3), (0, -1), (2, -1)),
+)
+def test_nvtx_range_rejects_untracked_tracked_or_error_mismatch(push: int, pop: int) -> None:
+    library = _FakeLibrary(pushes=(push,), pops=(pop,))
+
+    with pytest.raises(RuntimeError, match=r"NVTX (range result mismatch|pop rejected)"):
         with _range(library):
             pass
 
 
 def test_nvtx_range_pops_when_the_annotated_body_raises() -> None:
     library = _FakeLibrary(pushes=(0,), pops=(0,))
+
+    with pytest.raises(LookupError, match="body failed"):
+        with _range(library):
+            raise LookupError("body failed")
+
+    assert library.nvtxRangePop.calls == [()]
+
+
+def test_nvtx_range_untracked_success_pops_and_preserves_body_exception() -> None:
+    library = _FakeLibrary(pushes=(-1,), pops=(-1,))
 
     with pytest.raises(LookupError, match="body failed"):
         with _range(library):
@@ -152,5 +192,26 @@ def test_runner_nvtx_wrapper_uses_the_toolkit_library_and_exact_range_contract(
     with runner._NvtxRange("production-boundary", Path("/pinned/cuda/bin/nvcc")) as active:
         assert active.library_identity.requested_path == str(expected_library)
 
-    assert active.push_level == 0
-    assert active.pop_level == 0
+    assert active.push_result is not None
+    assert active.pop_result is not None
+    assert active.push_result.return_code == 0
+    assert active.pop_result.return_code == 0
+
+
+def test_runner_nvtx_wrapper_accepts_only_exact_untracked_success_at_production_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _current_runner()
+    library = _FakeLibrary(pushes=(-1,), pops=(-1,))
+    expected_library = Path("/pinned/cuda/lib64/libnvToolsExt.so")
+    monkeypatch.setattr(cuda_toolchain, "cuda_toolkit_shared_library", lambda nvcc, name: expected_library)
+    monkeypatch.setattr(nvtx_range.ctypes, "CDLL", lambda path: library)
+    monkeypatch.setattr(nvtx_range, "_symbol_library_path", lambda symbol: "/pinned/libnvtx3interop.so.1")
+
+    with runner._NvtxRange("production-boundary", Path("/pinned/cuda/bin/nvcc")) as active:
+        assert active.push_result is not None
+        assert active.push_result.kind is NvtxRangeResultKind.UNTRACKED_SUCCESS
+
+    assert active.pop_result is not None
+    assert active.pop_result.kind is NvtxRangeResultKind.UNTRACKED_SUCCESS
+    assert library.nvtxRangePop.calls == [()]
