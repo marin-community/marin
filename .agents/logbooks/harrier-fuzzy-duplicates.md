@@ -33,3 +33,17 @@ author: Rafal Wojdyla
 - RNO command: `uv run iris --cluster marin job run --no-wait --target-cluster cw-rno2a --job-name harrier-fuzzy-dups-rno-p1-20260811 --priority interactive --cpu 2 --memory 8GB --disk 16GB --enable-extra-resources --extra datakit -e MARIN_PREFIX s3://marin-us-east-02a/marin -- python -m experiments.datakit.embeddings.harrier.run --document-set fuzzy_duplicates --partition-index 1 --partition-count 2 --tei-instances 96 --max-concurrent 1`.
 - Result: The launch is not started.
 - Next action: Commit and push this run contract, then submit both Iris jobs.
+
+### 2026-08-11 19:56 UTC - Dual-region launch
+
+- Runtime source SHA: `1bb93a759198bc463a87514ac6b421731ffdd6f2`.
+- Code commit: `48ef14ea8e62d15fee2d1db101feae216ca04fbc`.
+- Dirty tree: No.
+- East job: `/rav/harrier-fuzzy-dups-east-p0-20260811`.
+- RNO job: `/rav/harrier-fuzzy-dups-rno-p1-20260811`.
+- Priority: Interactive.
+- Hardware: 96 H100 TEI workers per region, for 192 H100 workers total.
+- Partitions: East uses partition 0 of 2. RNO uses partition 1 of 2.
+- Output root: `s3://marin-us-east-02a/marin/datakit/embed/harrier-fuzzy-duplicates/`.
+- Result: Both Iris submissions succeeded.
+- Next action: Check startup state after 120 seconds, then monitor at a 15-minute cadence.
