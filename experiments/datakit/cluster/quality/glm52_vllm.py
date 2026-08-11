@@ -24,14 +24,20 @@ worker, and the served endpoint is registered so a client resolves it by name wi
 resolve a cached weight path instead of each pulling 756 GB from Hugging Face.
 """
 
+import logging
 import os
+import shutil
 import socket
 import subprocess
 import tempfile
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+import fsspec
 import psutil
 from iris.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
@@ -39,13 +45,16 @@ from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device, is_job_finished
 from iris.rpc import job_pb2
-from marin.inference.config import DEFAULT_CUDA_VLLM_VERSION
+from marin.inference.config import DEFAULT_CUDA_VLLM_VERSION, VllmCompilationCacheMode
 from marin.inference.model_preparation import resolve_model_path
 from marin.inference.proxy import _reserve_port
 from marin.inference.types import InferenceRequestProvider, InferenceWorkerMetadata, OpenAIEndpoint, RunningModel
+from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_server import IsolatedCudaVllm, _poll_until_ready
 from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import Duration, ExponentialBackoff
+
+logger = logging.getLogger(__name__)
 
 MODEL = "zai-org/GLM-5.2-FP8"
 MODEL_REVISION = "ba978f7d347eaf65d22f1a86833408afdb953541"
@@ -60,6 +69,23 @@ ENDPOINT_TIMEOUT = 3 * 3600
 RUN_TIMEOUT_HOURS = 30 * 24
 RAY_PORT = "ray"
 HTTP_PORT = "http"
+# How long a worker rests after its raylet exits before re-resolving the head.
+WORKER_REJOIN_DELAY = 15.0
+
+# Node-local weight cache, under the node-persistent ``/cache`` scratch mount
+# (NVMe on the GB200 fleet; nothing prunes it). The serving path is: serve from
+# this cache when every gang node holds the full snapshot, fall back to the
+# bucket otherwise, and fill the cache in the background once serving is up —
+# so a cold node pays nothing extra on its critical path and the node's next
+# gang skips the cross-region stream entirely.
+NODE_WEIGHTS_CACHE_ROOT = "/cache/glm52-weights"
+WEIGHTS_MARKER = ".complete"
+WEIGHTS_FILL_THREADS = 8
+# Free NVMe the fill leaves untouched for whatever else shares the scratch mount.
+WEIGHTS_FILL_SPACE_MARGIN = 64 * 2**30
+# The head reads gang-mate cache states after Ray is up, by which point every
+# worker registered its state long ago; this only bounds a stuck registry read.
+WEIGHTS_STATE_TIMEOUT = 300.0
 
 
 @dataclass(frozen=True)
@@ -152,6 +178,148 @@ class Glm52LaunchConfig:
     # endpoint is still registered for observability, but requests arrive by
     # lease rather than by address.
     broker_worker: BrokerWorkerConfig | None = None
+
+
+def _node_weights_dir() -> Path:
+    return Path(NODE_WEIGHTS_CACHE_ROOT) / f"{MODEL.replace('/', '--')}--{MODEL_REVISION}"
+
+
+def _node_weights_ready() -> bool:
+    return (_node_weights_dir() / WEIGHTS_MARKER).exists()
+
+
+def _weights_state_endpoint(launch: "Glm52LaunchConfig", task_index: int) -> str:
+    return f"{launch.vllm_endpoint}-weights-{task_index}"
+
+
+def _fill_node_weights_cache(weights: str) -> None:
+    """Mirror the bucket snapshot onto node NVMe, marker last.
+
+    One serving task holds the node (the gang requests nearly all of it), so no
+    cross-process locking: a crashed fill leaves files without the marker and
+    the next fill re-fetches whatever sizes disagree.
+    """
+    target = _node_weights_dir()
+    marker = target / WEIGHTS_MARKER
+    if marker.exists():
+        return
+    fs = fsspec.filesystem("s3")
+    prefix = weights.removeprefix("s3://").rstrip("/")
+    files = {path: info for path, info in fs.find(prefix, detail=True).items() if info.get("type") != "directory"}
+    total = sum(int(info.get("size") or 0) for info in files.values())
+    target.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(target).free
+    if free < total + WEIGHTS_FILL_SPACE_MARGIN:
+        logger.warning(
+            "glm52_vllm: skipping node weights cache fill: %.0f GB free < %.0f GB snapshot + margin",
+            free / 2**30,
+            total / 2**30,
+        )
+        return
+    began = time.monotonic()
+
+    def fetch(path: str) -> None:
+        destination = target / path[len(prefix) + 1 :]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists() and destination.stat().st_size == int(files[path].get("size") or 0):
+            return
+        fs.get_file(path, str(destination))
+
+    with ThreadPoolExecutor(WEIGHTS_FILL_THREADS) as pool:
+        list(pool.map(fetch, sorted(files)))
+    marker.touch()
+    elapsed = time.monotonic() - began
+    logger.info(
+        "glm52_vllm: node weights cache filled: %.0f GB in %.0fs (%.2f GB/s) -> %s",
+        total / 2**30,
+        elapsed,
+        total / 2**30 / max(elapsed, 1e-9),
+        target,
+    )
+
+
+def _fill_cache_after_serving(launch: "Glm52LaunchConfig", weights: str) -> None:
+    """Fill this node's weight cache in the background once inference is up.
+
+    Waiting on the served endpoint keeps the fill off the critical path: the
+    cross-region stream that loads the engine finishes before the cache copy
+    starts competing for the NIC.
+    """
+    if _node_weights_ready():
+        return
+
+    def fill() -> None:
+        try:
+            wait_for_endpoint_url(launch.vllm_endpoint, timeout=ENDPOINT_TIMEOUT)
+            _fill_node_weights_cache(weights)
+        except Exception:
+            logger.warning("glm52_vllm: node weights cache fill failed", exc_info=True)
+
+    threading.Thread(target=fill, name="glm52-weights-cache-fill", daemon=True).start()
+
+
+def _negotiated_weights(launch: "Glm52LaunchConfig", weights: str) -> str:
+    """The path vLLM serves from: node NVMe only when every gang node is warm.
+
+    The model path is one string read by ranks on every node, so a gang with one
+    cold node must serve from the bucket. Workers register their cache state
+    before joining Ray; the head reads it after Ray is up.
+    """
+    if not _node_weights_ready():
+        return weights
+    for task_index in range(1, launch.fleet.replicas):
+        state = wait_for_endpoint_url(_weights_state_endpoint(launch, task_index), timeout=WEIGHTS_STATE_TIMEOUT)
+        if state != "local":
+            return weights
+    local = str(_node_weights_dir())
+    logger.info("glm52_vllm: serving weights from the node cache at %s", local)
+    return local
+
+
+def _serve_args(launch: "Glm52LaunchConfig") -> tuple[str, ...]:
+    """The stable vLLM serve arguments: everything but the weights path and bind
+    address, shared between the launch command and the compile-cache identity."""
+    server = launch.server
+    return (
+        "--served-model-name",
+        MODEL,
+        "--tensor-parallel-size",
+        str(launch.fleet.tensor_parallel_size),
+        "--distributed-executor-backend",
+        "ray",
+        "--enable-expert-parallel",
+        "--max-model-len",
+        str(server.max_model_len),
+        "--max-num-seqs",
+        str(server.max_num_seqs),
+        "--kv-cache-dtype",
+        server.kv_cache_dtype,
+        "--decode-context-parallel-size",
+        str(server.decode_context_parallel_size),
+        "--gpu-memory-utilization",
+        str(GPU_MEMORY_UTILIZATION),
+        "--trust-remote-code",
+    )
+
+
+def _prepare_compilation_cache(launch: "Glm52LaunchConfig", environment: dict[str, str]) -> VllmCompilationCache:
+    """Restore the managed vLLM compile cache and return it for publication.
+
+    Runs on every gang node: compilation happens in the Ray worker processes,
+    which inherit their environment from the node's own ``ray start``, so each
+    node must restore the archive and export the cache paths itself. The
+    identity keys on the pinned model revision rather than the weights path,
+    which varies between the bucket and the node cache.
+    """
+    return VllmCompilationCache.prepare(
+        launcher_identity=IsolatedCudaVllm(version=DEFAULT_CUDA_VLLM_VERSION).cache_identity(),
+        compile_identity=VllmCompileIdentity.from_vllm_args(
+            model_name_or_path=f"{MODEL}@{MODEL_REVISION}",
+            extra_cli_args=_serve_args(launch),
+        ),
+        environment=environment,
+        mode=VllmCompilationCacheMode.MANAGED,
+    )
 
 
 def _ray_worker_port_args(*excluded_ports: int) -> list[str]:
@@ -251,35 +419,20 @@ def _run_vllm(
     vllm_command: list[str],
     environment: dict[str, str],
     weights: str,
+    serve_weights: str,
     launch: Glm52LaunchConfig,
+    compilation_cache: VllmCompilationCache,
 ) -> None:
     process = subprocess.Popen(
         [
             *vllm_command,
             "serve",
-            weights,
-            "--served-model-name",
-            MODEL,
+            serve_weights,
             "--host",
             host,
             "--port",
             str(http_port),
-            "--tensor-parallel-size",
-            str(launch.fleet.tensor_parallel_size),
-            "--distributed-executor-backend",
-            "ray",
-            "--enable-expert-parallel",
-            "--max-model-len",
-            str(launch.server.max_model_len),
-            "--max-num-seqs",
-            str(launch.server.max_num_seqs),
-            "--kv-cache-dtype",
-            launch.server.kv_cache_dtype,
-            "--decode-context-parallel-size",
-            str(launch.server.decode_context_parallel_size),
-            "--gpu-memory-utilization",
-            str(GPU_MEMORY_UTILIZATION),
-            "--trust-remote-code",
+            *_serve_args(launch),
         ],
         env={**environment, "RAY_ADDRESS": ray_address},
     )
@@ -291,6 +444,8 @@ def _run_vllm(
             check_alive=lambda: _check_process_alive(process),
         )
         with ctx.registry.registered(launch.vllm_endpoint, base_url):
+            compilation_cache.publish()
+            _fill_cache_after_serving(launch, weights)
             if launch.broker_worker is not None:
                 _pull_from_broker(launch, base_url, process)
             return_code = process.wait()
@@ -329,6 +484,7 @@ def _serve_ray_head(
     ray_command: list[str],
     environment: dict[str, str],
     launch: Glm52LaunchConfig,
+    compilation_cache: VllmCompilationCache,
 ) -> None:
     fleet = launch.fleet
     weights = prepare_model_cache()
@@ -366,27 +522,55 @@ def _serve_ray_head(
                 timeout=Duration.from_seconds(900),
                 error_message=(f"Ray cluster did not register all {fleet.tensor_parallel_size} {fleet.variant} GPUs"),
             )
-            _run_vllm(ctx, host, http_port, ray_address, vllm_command, environment, weights, launch)
+            serve_weights = _negotiated_weights(launch, weights)
+            _run_vllm(
+                ctx,
+                host,
+                http_port,
+                ray_address,
+                vllm_command,
+                environment,
+                weights,
+                serve_weights,
+                launch,
+                compilation_cache,
+            )
         finally:
             subprocess.run([*ray_command, "stop", "--force"], env=environment, check=False)
 
 
 def _serve_ray_worker(host: str, launch: Glm52LaunchConfig, ray_command: list[str], environment: dict[str, str]) -> None:
-    ray_address = wait_for_endpoint_url(launch.ray_endpoint, timeout=ENDPOINT_TIMEOUT)
-    subprocess.run(
-        [
-            *ray_command,
-            "start",
-            f"--address={ray_address}",
-            f"--node-ip-address={host}",
-            *_ray_worker_port_args(),
-            f"--num-gpus={launch.fleet.gpus_per_node}",
-            "--disable-usage-stats",
-            "--block",
-        ],
-        check=True,
-        env=environment,
-    )
+    """Join the head's Ray cluster, rejoining across head bounces.
+
+    ``ray start --block`` exits when its raylet loses the head — including the
+    routine case of the head task being preempted or bounced for atomic gang
+    re-scheduling. That exit is a transient gang event, not this task's failure:
+    a bounced head re-registers under a fresh address, so each round re-resolves
+    the endpoint and rejoins. A gang whose head never comes back exhausts
+    ``wait_for_endpoint_url``'s own timeout and fails the task then.
+    """
+    while True:
+        ray_address = wait_for_endpoint_url(launch.ray_endpoint, timeout=ENDPOINT_TIMEOUT)
+        joined = subprocess.run(
+            [
+                *ray_command,
+                "start",
+                f"--address={ray_address}",
+                f"--node-ip-address={host}",
+                *_ray_worker_port_args(),
+                f"--num-gpus={launch.fleet.gpus_per_node}",
+                "--disable-usage-stats",
+                "--block",
+            ],
+            check=False,
+            env=environment,
+        )
+        logger.warning(
+            "glm52_vllm: ray worker exited with code %d (head at %s gone or unreachable); rejoining",
+            joined.returncode,
+            ray_address,
+        )
+        time.sleep(WORKER_REJOIN_DELAY)
 
 
 def _serve_glm52(launch: Glm52LaunchConfig) -> None:
@@ -401,10 +585,15 @@ def _serve_glm52(launch: Glm52LaunchConfig) -> None:
     environment["CUDA_HOME"] = _cuda_home(vllm_command, environment)
     environment["VLLM_HOST_IP"] = host
     environment["GLOO_SOCKET_IFNAME"] = _network_interface(host)
+    compilation_cache = _prepare_compilation_cache(launch, environment)
+    environment = compilation_cache.environment()
     if info.task_index == 0:
-        _serve_ray_head(ctx, host, vllm_command, ray_command, environment, launch)
+        _serve_ray_head(ctx, host, vllm_command, ray_command, environment, launch, compilation_cache)
         return
-    _serve_ray_worker(host, launch, ray_command, environment)
+    state = "local" if _node_weights_ready() else "remote"
+    with ctx.registry.registered(_weights_state_endpoint(launch, info.task_index), state):
+        _fill_cache_after_serving(launch, prepare_model_cache())
+        _serve_ray_worker(host, launch, ray_command, environment)
 
 
 def _task_env_vars(launch: Glm52LaunchConfig) -> dict[str, str]:
@@ -426,10 +615,13 @@ def submit_glm52(ctx, launch: Glm52LaunchConfig, name: str = "vllm", max_retries
 
     ``max_retries_failure`` defaults to 0 for a directly-addressed server, whose
     driver resolves the endpoint once and should fail fast with it. A brokered
-    pool passes a generous count instead: a preempted head leaves its gang-mate
-    racing ``ray start`` against a dead GCS, which lands as a task *failure*,
-    and in an elastic pool a retried gang is capacity regained while an
-    unretried one is capacity lost for the whole run.
+    pool passes a generous count instead: retried capacity is capacity regained,
+    while an unretried gang is lost for the whole run. The same count also feeds
+    the job-level ``max_task_failures`` — the controller fails a job whose
+    *cumulative* task failures exceed that budget regardless of per-task retries
+    (one gang crash round books one failure), and its default of zero is what
+    permanently killed a quarter of the first 32-gang pool within minutes.
+    Preemptions are budgeted separately and generously by the iris default.
     """
     fleet = launch.fleet
     return ctx.client.submit(
@@ -450,6 +642,7 @@ def submit_glm52(ctx, launch: Glm52LaunchConfig, name: str = "vllm", max_retries
         replicas=fleet.replicas,
         timeout=Duration.from_hours(RUN_TIMEOUT_HOURS),
         max_retries_failure=max_retries_failure,
+        max_task_failures=max_retries_failure,
         priority_band=launch.priority_band,
     )
 
