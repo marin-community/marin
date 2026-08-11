@@ -35,6 +35,7 @@ from typing import Any
 
 from tile_lifetime.bfloat16_metrics import bfloat16_ulp_distance
 from tile_lifetime.h100_contract_map_benchmark import NumericalFloorError
+from tile_lifetime.nvtx_range import NvtxRange
 
 _ARCHITECTURE = "sm_90a"
 _COMPUTE_CAPABILITY = "9.0"
@@ -1259,24 +1260,11 @@ def _run_case_worker(args: argparse.Namespace, context: _WorkerCaseContext, *, j
     }
 
 
-class _NvtxRange:
+class _NvtxRange(NvtxRange):
     def __init__(self, name: str, nvcc: Path):
         from tile_lifetime.cuda_toolchain import cuda_toolkit_shared_library  # noqa: PLC0415
 
-        self._name = name
-        self._library = ctypes.CDLL(str(cuda_toolkit_shared_library(nvcc, "nvToolsExt")))
-        self._library.nvtxRangePushA.argtypes = (ctypes.c_char_p,)
-        self._library.nvtxRangePushA.restype = ctypes.c_int
-        self._library.nvtxRangePop.argtypes = ()
-        self._library.nvtxRangePop.restype = ctypes.c_int
-
-    def __enter__(self) -> None:
-        if self._library.nvtxRangePushA(self._name.encode()) < 0:
-            raise RuntimeError(f"NVTX rejected range {self._name!r}")
-
-    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
-        if self._library.nvtxRangePop() < 0:
-            raise RuntimeError(f"NVTX failed to close range {self._name!r}")
+        super().__init__(name, cuda_toolkit_shared_library(nvcc, "nvToolsExt"))
 
 
 class _CudaProfiler:
