@@ -527,6 +527,12 @@ def test_runner_ncu_sass_parser_rejects_duplicate_or_misplaced_header(replacemen
         runner.parse_ncu_sass(source.replace("Address Source", replacement), ("KernelA",))
 
 
+def test_runner_ncu_sass_parser_rejects_header_before_kernel_section() -> None:
+    source = "Address Source\n" + _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+    with pytest.raises(ValueError, match="misplaced"):
+        runner.parse_ncu_sass(source, ("KernelA",))
+
+
 @pytest.mark.parametrize("separator", (" " + _NCU_SASS_SEPARATOR, _NCU_SASS_SEPARATOR + " "))
 def test_runner_ncu_sass_parser_rejects_separator_outer_whitespace(separator: str) -> None:
     source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
