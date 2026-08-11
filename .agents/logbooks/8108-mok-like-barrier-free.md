@@ -610,8 +610,8 @@ W&B: https://wandb.ai/marin-community/marin_moe/runs/mok-like-ab-mok-like-100-20
 
 - Acceptance remains the exact 16-process numerical/runtime audit and at least 80% weak-scale efficiency. A second capacity wait is not a training failure; report its exact fit/exclusion state without changing the cluster.
 
-### 2026-08-11 11:25 PT - Live rack inventory attributes admission wait to occupied nodes
+### 2026-08-11 11:25 PT - Admission wait is occupied-node capacity
 
-- Correction: the identical Kueue `resource "cpu"` exclusion at 120 and 96 requested cores does not establish that the request size is the limiting threshold. A read-only Kubernetes inventory summed active pod requests on all 201 four-GPU GB200 nodes across 12 NVLink domains. Only seven nodes had at least 80-120 free cores; lowering the hypothetical request to 64, 48, or 32 cores raised the total to only nine. No rack had more than two qualifying nodes at any threshold.
-- Interpretation: other GPU work occupies nearly the entire fleet, and Kueue reports CPU because that is the first exhausted per-node resource in its flavor fit. No CPU setting can currently form the required hard 16-node rack slice. The 96-core setting remains safe relative to the measured 1.698% peak CPU use, but it does not solve this capacity state.
+- Correction: the identical Kueue exclusion at 120 and 96 requested cores does not establish that the request size is the limiting threshold. A read-only node inventory showed that no complete rack slice was currently available even under substantially smaller hypothetical CPU requests.
+- Interpretation: other GPU work occupies the nodes needed for the hard 16-node slice. The 96-core setting remains safe relative to the measured 1.698% peak CPU use, but it does not solve the current capacity state.
 - Decision: keep `/dlwh/mok-scale-005-v12-dropless-1rack-cpu96-25-20260811-1120-coord` pending at interactive priority. Do not lower the request again, submit competing gangs, or mutate the cluster. Resume the numerical/performance gate when one complete rack becomes available.
