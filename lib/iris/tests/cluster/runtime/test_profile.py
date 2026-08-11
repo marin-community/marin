@@ -20,6 +20,7 @@ from iris.cluster.runtime.profile import (
     build_memray_attach_cmd,
     build_memray_transform_cmd,
     build_pyspy_cmd,
+    build_pyspy_dump_cmd,
     capture_cpu,
     capture_memory_attach,
     capture_threads,
@@ -92,6 +93,18 @@ def test_build_pyspy_cmd_includes_subprocesses_flag_by_default():
     spec = resolve_cpu_spec(cfg, duration_seconds=5, pid="1")
     cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path="/tmp/out.svg")
     assert "--subprocesses" in cmd
+
+
+def test_build_pyspy_dump_cmd_excludes_optional_detail_flags_by_default():
+    cmd = build_pyspy_dump_cmd("1")
+    assert "--locals" not in cmd
+    assert "--native" not in cmd
+
+
+def test_build_pyspy_dump_cmd_includes_requested_detail_flags():
+    cmd = build_pyspy_dump_cmd("1", include_locals=True, include_native=True)
+    assert "--locals" in cmd
+    assert "--native" in cmd
 
 
 # ---------------------------------------------------------------------------

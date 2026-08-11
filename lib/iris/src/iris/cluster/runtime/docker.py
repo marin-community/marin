@@ -621,7 +621,12 @@ exec {quoted_cmd}
             memray_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/memray", "memray"),
         )
         if profile_type.HasField("threads"):
-            return capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
+            return capture_threads(
+                dispatch,
+                pid="1",
+                include_locals=profile_type.threads.locals,
+                include_native=profile_type.threads.native,
+            )
         elif profile_type.HasField("cpu"):
             return capture_cpu(dispatch, profile_type.cpu, duration_seconds, pid="1")
         elif profile_type.HasField("memory"):
