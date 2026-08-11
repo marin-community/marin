@@ -1,0 +1,17 @@
+h100_contract_map_source_payload.py: OK
+h100-evidence-source-manifest.json: OK
+Traceback (most recent call last):
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3315, in <module>
+    main()
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3297, in main
+    output = run_coordinator(
+             ^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2284, in run_coordinator
+    backend.value: _run_cache_protocol(
+                   ^^^^^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2789, in _run_cache_protocol
+    identity = validated_cache_protocol_identity(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2639, in validated_cache_protocol_identity
+    raise AssertionError("cache identity diagnostic exceeds its reviewed bound")
+AssertionError: cache identity diagnostic exceeds its reviewed bound
