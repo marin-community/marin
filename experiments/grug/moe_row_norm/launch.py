@@ -25,10 +25,10 @@ from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_validation_sets
 from experiments.grug.moe.launch import (
-    GrugMoeLaunchConfig as BaselineLaunchConfig,
+    NEMOTRON_MIX_WITH_DEFAULT_VALIDATION as BASELINE_DATA,
 )
 from experiments.grug.moe.launch import (
-    NEMOTRON_MIX_WITH_DEFAULT_VALIDATION as BASELINE_DATA,
+    GrugMoeLaunchConfig as BaselineLaunchConfig,
 )
 from experiments.grug.moe.launch import (
     run_grug_moe_trial as run_baseline_trial,

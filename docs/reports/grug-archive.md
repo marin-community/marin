@@ -37,3 +37,12 @@ This file is the paper trail for grug experiments.
 - Status: deleted
 - Purpose: historical head-to-head comparison.
 - Superseded by: template-first workflow centered on `experiments/grug/base/`.
+
+### moe-row-norm-july-8131
+- Path: `experiments/grug/moe_row_norm/`
+- Origin: `experiments/grug/moe/` at July baseline commit `52d8a9eb8d9434cf1dcaaee060edeadc60dfff9d`.
+- Introduced: `82482dc554893a8b1025ed6561d8224e98013e66`.
+- Last known-good: `82482dc554893a8b1025ed6561d8224e98013e66`.
+- Status: active
+- Purpose: test unit-initialized output scales with row-wise MuonH against the exact July MoE baseline.
+- Issue: https://github.com/marin-community/marin/issues/8131

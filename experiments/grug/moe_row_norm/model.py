@@ -18,9 +18,8 @@ import jax.scipy as jsp
 from einops import rearrange
 from haliax.jax_utils import named_call
 from jax import core, random
-from jax.sharding import NamedSharding
+from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
-from jax.sharding import get_abstract_mesh, reshard
 
 try:
     from jax.shard_map import shard_map
