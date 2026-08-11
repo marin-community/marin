@@ -101,7 +101,7 @@ committing.
 
 ```bash
 # Tests affected by the current branch and working tree (run from repo root)
-python3 -m infra.ci.run_tests
+uv run --no-project infra/ci/run_tests.py
 
 # Full safe Finelog suite
 uv run --package marin-finelog --group test pytest --tb=short lib/finelog/tests/

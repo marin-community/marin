@@ -67,8 +67,8 @@ skip or weaken checks.
 
 ## 3. Tests and docs checks (when relevant)
 
-- `python3 -m infra.ci.run_tests` to run every safe unit test selected from the
-  branch and working-tree diff. Keep the repository's default marker
+- `uv run --no-project infra/ci/run_tests.py` to run every safe unit test
+  selected from the branch and working-tree diff. Keep the repository's default marker
   expression so slow, integration, live-cluster, Docker, and manual tests
   remain delegated to their dedicated CI jobs.
 - If docs pages were added/deleted/renamed: `uv run python infra/check_docs_source_links.py`.

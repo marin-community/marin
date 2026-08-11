@@ -51,11 +51,6 @@ uv run pytest <relevant test paths>
 uv run --no-project infra/ci/run_tests.py
 ```
 
-`pyproject.toml` already excludes the slow, integration, data-integration, live-cluster,
-Docker, and manual markers by default. Do not pass `-m 'not slow'`: `-m` replaces the whole
-default expression, so it re-selects the cluster and Docker tests it looks like it is
-narrowing.
-
 The runner selects transitive import dependents and uses the workspace test
 dependencies and pytest settings. Use `uv run pytest <relevant test paths>`
 during the edit-test loop, or add `--all` to run the full safe unit suite.

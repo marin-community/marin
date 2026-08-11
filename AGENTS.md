@@ -70,7 +70,7 @@ uv run pyrefly check
 - Keep type hints passing under `uv run pyrefly check`; configuration lives in `pyproject.toml`.
 
 # Safe tests affected by the current branch and working tree
-python3 -m infra.ci.run_tests
+uv run --no-project infra/ci/run_tests.py
 - The runner compares committed, staged, unstaged, and untracked changes with
   the merge base of `origin/main`, selects transitive import dependents, and
   uses each package's uv test group plus the unified CI xdist settings.
@@ -86,8 +86,8 @@ python3 -m infra.ci.run_tests
 ```
 
 - Python >=3.12. Use `uv run` for entry points; the stdlib-only local test
-  runner uses `python3 -m infra.ci.run_tests` so it can select a package before
-  uv installs that package's test dependencies.
+  runner uses `uv run --no-project infra/ci/run_tests.py` so it can select a
+  package before uv installs that package's test dependencies.
 - Do not replace pytest's default marker expression with a partial expression
   such as `-m "not slow"`; `-m` overrides the whole default and can select live
   cluster tests. Run excluded markers only when the user or a dedicated task

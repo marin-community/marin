@@ -11,7 +11,7 @@ reviewing tests, read root `AGENTS.md`, this file, the nearest module
 Run the safe tests affected by the current branch and working tree with:
 
 ```bash
-python3 -m infra.ci.run_tests
+uv run --no-project infra/ci/run_tests.py
 ```
 
 The runner compares committed, staged, unstaged, and untracked files with the
@@ -20,7 +20,8 @@ files that transitively import changed modules, then runs one pytest process per
 affected package with the same uv extras and xdist flags as unified unit CI.
 Use `--dry-run` to inspect the commands, `--all` to run every safe unit-test
 scope, or `--base-ref <ref>` when the branch targets another ref. Extra pytest
-arguments follow `--`, for example `python3 -m infra.ci.run_tests -- -x`.
+arguments follow `--`, for example
+`uv run --no-project infra/ci/run_tests.py -- -x`.
 
 The repository defaults exclude `slow`, `integration`, `data_integration`,
 `cluster`, `requires_cluster`, `docker`, and `manual` tests. The same exclusions

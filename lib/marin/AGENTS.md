@@ -11,7 +11,7 @@ Vendored Marin pipeline framework. In this file, leading `/` refers to repositor
 
 ```bash
 # Tests affected by the current branch and working tree
-python3 -m infra.ci.run_tests
+uv run --no-project infra/ci/run_tests.py
 
 # Full safe Marin suite
 uv run --package marin-core --group test --extra cpu --extra dedup pytest tests

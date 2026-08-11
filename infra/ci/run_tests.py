@@ -7,10 +7,10 @@ changes from the branch point with main. Tests run once per affected package;
 dedicated accelerator and browser suites remain delegated to CI.
 
 Usage:
-    python3 -m infra.ci.run_tests
-    python3 -m infra.ci.run_tests --dry-run
-    python3 -m infra.ci.run_tests --all
-    python3 -m infra.ci.run_tests --base-ref upstream/main -- -x
+    uv run --no-project infra/ci/run_tests.py
+    uv run --no-project infra/ci/run_tests.py --dry-run
+    uv run --no-project infra/ci/run_tests.py --all
+    uv run --no-project infra/ci/run_tests.py --base-ref upstream/main -- -x
 """
 
 import argparse
