@@ -129,11 +129,24 @@ def deep_gemm_cuda_environment(nvidia_roots: tuple[Path, ...], temporary_root: P
     compatibility_include = compatibility_home / "include"
     compatibility_lib = compatibility_home / "lib64"
 
+    nvvm_root = compiler_root / "nvvm"
+    if not (nvvm_root / "bin" / "cicc").is_file():
+        raise RuntimeError(f"Packaged CUDA compiler is missing NVVM cicc: {nvvm_root}")
+
     _link_directory_entries(compiler_root / "bin", compatibility_bin)
     _link_directory_entries(compiler_root / "include", compatibility_include)
     _link_directory_entries(cublas_root / "include", compatibility_include)
     _link_directory_entries(cuda_runtime_root / "lib", compatibility_lib)
     _link_directory_entries(cublas_root / "lib", compatibility_lib)
+
+    compatibility_nvvm = compatibility_home / "nvvm"
+    if compatibility_nvvm.is_symlink():
+        if compatibility_nvvm.resolve() != nvvm_root.resolve():
+            raise RuntimeError(f"Conflicting CUDA NVVM compatibility link: {compatibility_nvvm}")
+    elif compatibility_nvvm.exists():
+        raise RuntimeError(f"CUDA NVVM compatibility path is not a symlink: {compatibility_nvvm}")
+    else:
+        compatibility_nvvm.symlink_to(nvvm_root, target_is_directory=True)
 
     namespaced_cccl = compatibility_include / "cccl"
     if namespaced_cccl.exists() or namespaced_cccl.is_symlink():

@@ -198,6 +198,10 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     (compiler_root / "bin" / "nvcc").touch()
     (compiler_root / "include").mkdir()
     (compiler_root / "include" / "cuda.h").touch()
+    (compiler_root / "nvvm" / "bin").mkdir(parents=True)
+    (compiler_root / "nvvm" / "bin" / "cicc").touch()
+    (compiler_root / "nvvm" / "libdevice").mkdir()
+    (compiler_root / "nvvm" / "libdevice" / "libdevice.10.bc").touch()
     cccl_root = nvidia_root / "cuda_cccl" / "include"
     (cccl_root / "nv").mkdir(parents=True)
     (cccl_root / "nv" / "target").touch()
@@ -225,6 +229,9 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     assert (compatibility_include / "cuda.h").resolve() == (compiler_root / "include" / "cuda.h").resolve()
     assert (compatibility_include / "cccl").resolve() == cccl_root.resolve()
     assert (compatibility_include / "cublasLt.h").resolve() == (cublas_root / "include" / "cublasLt.h").resolve()
+    assert (compatibility_home / "nvvm").resolve() == (compiler_root / "nvvm").resolve()
+    assert (compatibility_home / "nvvm" / "bin" / "cicc").is_file()
+    assert (compatibility_home / "nvvm" / "libdevice" / "libdevice.10.bc").is_file()
     assert (compatibility_home / "lib64" / "libcudart.so.12").resolve() == (
         cuda_runtime_root / "lib" / "libcudart.so.12"
     ).resolve()
@@ -249,6 +256,27 @@ def test_deep_gemm_cuda_environment_rejects_missing_compiler(tmp_path):
     (nvidia_root / "cuda_runtime" / "lib").mkdir(parents=True)
 
     with pytest.raises(RuntimeError, match="Expected one packaged CUDA compiler root"):
+        deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime")
+
+
+def test_deep_gemm_cuda_environment_rejects_compiler_without_nvvm(tmp_path):
+    nvidia_root = tmp_path / "site-packages" / "nvidia"
+    compiler_root = nvidia_root / "cu13"
+    (compiler_root / "bin").mkdir(parents=True)
+    (compiler_root / "bin" / "nvcc").touch()
+    (compiler_root / "include").mkdir()
+    cccl_root = nvidia_root / "cuda_cccl" / "include"
+    (cccl_root / "nv").mkdir(parents=True)
+    (cccl_root / "nv" / "target").touch()
+    (cccl_root / "cuda" / "std").mkdir(parents=True)
+    (cccl_root / "cuda" / "std" / "type_traits").touch()
+    cublas_root = nvidia_root / "cublas"
+    (cublas_root / "include").mkdir(parents=True)
+    (cublas_root / "include" / "cublasLt.h").touch()
+    (cublas_root / "lib").mkdir()
+    (nvidia_root / "cuda_runtime" / "lib").mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="Packaged CUDA compiler is missing NVVM cicc"):
         deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime")
 
 
