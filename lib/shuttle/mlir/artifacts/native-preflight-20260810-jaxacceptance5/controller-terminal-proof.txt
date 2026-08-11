@@ -1,0 +1,6 @@
+I20260810 17:50:44 8418467456 iris.cluster.config Loading config from /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml
+I20260810 17:50:44 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260810 17:50:45 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10000 -> iris-controller-svc:10000
+JOB ID                                                       STATE    SUBMITTED                         REASON
+/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5  failed   2026-08-10T23:56:24.088000+00:00  t-pipeline_observer_test.log
+                                                                                                        6ed8c4ba26608069d81a09d9759a072...

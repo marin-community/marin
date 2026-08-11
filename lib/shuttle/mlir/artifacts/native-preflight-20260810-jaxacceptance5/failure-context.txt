@@ -1,0 +1,33 @@
+First failed gate: ordinary-JAX acceptance populate worker
+Canonical Marin source: e606e77594614fac33a547189e275c95a804a036
+Focused acceptance tests: PASS, 55/55
+Fixture oracle verifier: PASS
+Configured JAX cquery: PASS
+Shuttle native build gates: PASS, 7/7
+Built and cqueried shuttle-test-opt: PASS
+Six-fixture default audit: PASS, 6/6
+Shuttle native tests: PASS, 4/4
+MLIR lit tests: PASS, 17/17
+Patched XLA tests: PASS, 4/4
+JAX release wheel build and isolated install: PASS
+Ordinary-JAX disabled baseline: PASS
+Ordinary-JAX cache-disabled concurrency/lifetime worker: PASS
+Ordinary-JAX populate worker: FAIL
+Ordinary-JAX reuse worker: NOT_RUN
+Retry count: 0
+
+The release wheel had sha256
+9c200a26fed96ea2fb5b1c50b04e3cde50072b9b5653e02284532117dd69c495.
+The populate worker entered a private observer Capture context and reached the
+context-manager exit. Nanobind rejected the normal Python exit arguments:
+
+TypeError: __exit__(): incompatible function arguments. The following argument
+types are supported:
+    1. __exit__(self, arg0: object, arg1: object, arg2: object, /) -> bool
+
+Invoked with types:
+    jaxlib._jax._shuttle_test_observer.Capture, NoneType, NoneType, NoneType
+
+The exception arose at `with bridge.subscribe() as capture` in
+`run_cache_worker`. The subprocess exited before writing populate.json; the
+orchestrator then reported its nonzero exit. No cache-reuse evidence exists.

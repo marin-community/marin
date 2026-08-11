@@ -1,0 +1,59 @@
+[23:56:27] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | + run_jax_acceptance_preflight.sh:99: printf 'preflight_started_utc=%s\n' 2026-08-10T23:56:27Z
+[23:56:27] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | preflight_started_utc=2026-08-10T23:56:27Z
+[23:56:27] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | + run_jax_acceptance_preflight.sh:100: printf 'canonical_marin_sha=%s\n' e606e77594614fac33a547189e275c95a804a036
+[23:56:27] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | canonical_marin_sha=e606e77594614fac33a547189e275c95a804a036
+[23:56:27] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | + run_jax_acceptance_preflight.sh:101: printf 'xla_revision=%s\n' 9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+[23:56:27] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | xla_revision=9b635916ecc6df6efee62d8e4b0c7ef87ef84d69
+[23:56:27] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | + run_jax_acceptance_preflight.sh:102: printf 'jax_revision=%s\n' 619764c15117fbefc4ba13ab941871cb514c23f6
+[23:56:27] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | jax_revision=619764c15117fbefc4ba13ab941871cb514c23f6
+[23:56:27] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | + run_jax_acceptance_preflight.sh:103: printf 'bazel_version=%s\n' 7.7.0
+[23:56:27] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | bazel_version=7.7.0
+[23:56:27] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | + run_jax_acceptance_preflight.sh:106: printf 'bundled_shuttle_file_count=%s\n' 84
+[23:56:27] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | bundled_shuttle_file_count=84
+[23:56:41] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | + run_jax_acceptance_preflight.sh:182: printf 'anchored_xla_runtime_label_count=%s\n' 7
+[23:56:41] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | anchored_xla_runtime_label_count=7
+[23:57:03] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | ======================== 55 passed, 2 warnings in 1.03s ========================
+[23:57:03] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | + run_jax_acceptance_preflight.sh:204: grep -F '55 passed' /app/logs/acceptance-contract-pytest.log
+[23:57:03] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | ======================== 55 passed, 2 warnings in 1.03s ========================
+[23:57:53] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | + run_jax_acceptance_preflight.sh:219: printf 'jax_acceptance_cquery_proof=PASS\n'
+[23:57:53] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | jax_acceptance_cquery_proof=PASS
+[23:58:35] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 1 total action
+[23:59:40] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 952 total actions
+[00:01:04] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 498 total actions
+[00:01:10] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 191 total actions
+[00:01:13] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 12 total actions
+[00:01:15] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 9 total actions
+[00:02:46] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 778 total actions
+[00:02:51] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 11 total actions
+[00:02:53] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | fixture_audit_normalizer=/app/sources/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/shuttle-test-opt
+[00:02:53] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | six_fixture_default_audit=PASS
+[00:02:53] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | + run_jax_acceptance_preflight.sh:282: grep -F fixture_audit_normalizer= /app/logs/six-fixture-default-audit.log
+[00:02:53] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | fixture_audit_normalizer=/app/sources/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/shuttle-test-opt
+[00:02:53] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | fixture_audit_normalizer=/app/sources/xla/bazel-out/k8-opt/bin/external/shuttle_mlir/shuttle-test-opt
+[00:02:53] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | + run_jax_acceptance_preflight.sh:284: grep -Fx six_fixture_default_audit=PASS /app/logs/six-fixture-default-audit.log
+[00:02:53] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | six_fixture_default_audit=PASS
+[00:03:34] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 397 total actions
+[00:03:49] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 24 total actions
+[00:03:55] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 9 total actions
+[00:03:58] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 10 total actions
+[00:04:37] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 584 total actions
+[00:04:38] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 18 total actions
+[00:04:38] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | Executed 17 out of 17 tests: 17 tests pass.
+[00:04:38] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | + run_jax_acceptance_preflight.sh:308: grep -F 'Executed 17 out of 17 tests: 17 tests pass.' /app/logs/bazel-test-shuttle-mlir.log
+[00:04:38] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | Executed 17 out of 17 tests: 17 tests pass.
+[00:09:39] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 4501 total actions
+[00:09:39] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | //xla/pjrt:stablehlo_module_transform_test                               PASSED in 0.0s
+[00:09:52] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 9 total actions
+[00:09:52] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | //xla/pjrt:mlir_to_hlo_test                                              PASSED in 0.0s
+[00:10:05] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 9 total actions
+[00:10:05] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | //xla/pjrt:mlir_to_hlo_unregistered_transform_test                       PASSED in 0.0s
+[00:10:18] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 9 total actions
+[00:10:18] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | //xla/pjrt:pjrt_executable_test                                          PASSED in 0.0s
+[00:40:01] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | INFO: Build completed successfully, 25078 total actions
+[00:40:01] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | 2026-08-11 00:40:01,305 - INFO - Distribution path: /app/wheel-dist/jaxlib-0.10.1-cp312-cp312-manylinux_2_27_x86_64.whl
+[00:40:09] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | jaxlib @ file:///app/wheel-dist/jaxlib-0.10.1-cp312-cp312-manylinux_2_27_x86_64.whl#sha256=9c200a26fed96ea2fb5b1c50b04e3cde50072b9b5653e02284532117dd69c495
+[00:40:10] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | jaxlib=0.10.1
+[00:40:12] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | TypeError: __exit__(): incompatible function arguments. The following argument types are supported:
+[00:40:12] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | Invoked with types: jaxlib._jax._shuttle_test_observer.Capture, NoneType, NoneType, NoneType
+[00:40:12] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | preflight_exit_code=1
+[00:40:12] task=/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0 | preflight_finished_utc=2026-08-11T00:40:12Z

@@ -1,0 +1,20 @@
+Canonical Marin revision: e606e77594614fac33a547189e275c95a804a036
+Canonical worktree status entries: 0
+Canonical non-artifact Shuttle source files: 84
+Payload Shuttle source files: 84
+Payload/canonical sha256 comparison: identical
+Payload files: 86
+Workspace zip files: 86
+Workspace zip size: 131549 bytes
+Workspace zip sha256: 7c60140f2c3406ec988a034c3dd910008ba76f51345208900c7636d83ac6ee92
+Config, coreweave.yaml, .git, and artifact entries in zip: 0
+
+Pre-submit proofs:
+- 55 focused Python tests passed.
+- Acceptance fixture oracle verifier passed.
+- XLA 0001 then 0002 applied and reverse-checked cleanly.
+- JAX 0001 then 0002 applied and reverse-checked cleanly.
+- Both patched trees passed git diff --check.
+- Each of the seven anchored XLA runtime labels occurred exactly once.
+- Bazel 7.7.0 configured JAX cquery verifier passed.
+- Controller collision query returned no jobs for the exact prefix.

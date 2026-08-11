@@ -1,0 +1,16 @@
+{
+  "ts": 1786406184000,
+  "job_id": "/dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5",
+  "config": "/private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml",
+  "resubmit_command": "/private/tmp/marin-iris-current.JoCV0V/.venv/bin/iris --config /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml job run --no-wait --no-sync --enable-extra-resources --cpu 24 --memory 96GB --disk 250GB --max-retries 0 --timeout 14400 --priority interactive --job-name shuttle-native-mlir-preflight-20260810-jaxacceptance5 -- bash run_jax_acceptance_preflight.sh",
+  "restart_count": 0,
+  "monitor_owner": "/root/mlir_native_build",
+  "relaunch_authorized": false,
+  "terminal_state": "failed",
+  "task_exit_code": 1,
+  "task_duration_seconds": 2630.84,
+  "failures": 1,
+  "preemptions": 0,
+  "first_failed_gate": "ordinary_jax_acceptance_populate_context_exit",
+  "terminal_utc": "2026-08-11T00:40:12Z"
+}

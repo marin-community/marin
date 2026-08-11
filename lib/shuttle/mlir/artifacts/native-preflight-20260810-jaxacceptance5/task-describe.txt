@@ -1,0 +1,47 @@
+I20260810 17:50:50 8418467456 iris.cluster.config Loading config from /private/tmp/marin-iris-current.JoCV0V/lib/iris/config/cw-us-east-02a.yaml
+I20260810 17:50:50 8418467456 iris.cli.connect Establishing tunnel to controller...
+I20260810 17:50:51 8418467456 iris.cluster.platforms.k8s.service Tunnel ready: 127.0.0.1:10002 -> iris-controller-svc:10000
+Task: /dlwh/shuttle-native-mlir-preflight-20260810-jaxacceptance5/0
+State: failed  exit=1
+Resources: 24 cpu, 96 GiB, 250 GiB disk
+Error: t-pipeline_observer_test.log
+6ed8c4ba26608069d81a09d9759a07239a9c548ba2bc6ac9b1117ffba01f0008  /app/logs/bazel-test-shuttle-mlir.log
+12b98c26cb6c8b17a282f03865919d662fbfb786a4ae48d6ac81842335a3fdf6  /app/logs/bazel-test-xla-mlir_to_hlo_test.log
+41e271ff67ce4e4bbfc7ecfd00363530eda54110ae6fda0742e6d4f995258fc5  /app/logs/bazel-test-xla-mlir_to_hlo_unregistered_transform_test.log
+8eadfc8c9aa95b84881c4efae1d548327700a8d5bf7a729f5d2efe5a6db59e6e  /app/logs/bazel-test-xla-pjrt_executable_test.log
+41f68bb04db9763df7dcad6e77ce1db9e06af98468f288f661f3673a91749391  /app/logs/bazel-test-xla-stablehlo_module_transform_test.log
+1debd71604b48147c040309e5eaa751938b00ea3666341d5351982e01e37504d  /app/logs/bazel-test-xla_registration_test.log
+214c11a953eec13d4bf81b53630014c3aa9cb8e5d2f4309677b54177d5bc9c65  /app/logs/bazel-test-xla_registry_adapter_test.log
+88fa9cf35be8b1d12aea9f8d28d09a4d0086abfc7d257e1f9b0e8d37dd286cdf  /app/logs/bundled-source-sha256.txt
+725a7772f41e3640a8111c5669efe18f9c5ec8fb1cb37495ff7515ca2f64887e  /app/logs/jax-acceptance-cquery-proof.log
+e8b605a0fcf06cd0f3e5eae394455b4f77d5667150cd859957ee7194548a9851  /app/logs/jax-patch-sha256.txt
+d43cb1899f235d6490c5ff7baeadae1a62931dab94f33fb6ee45dc70572edc6c  /app/logs/jax-patch-stat.txt
+28745c69e35d150d40bb35c754606e96e545e78e9301701d1913d9d00a89721d  /app/logs/jaxlib-acceptance.log
+6ffc019293b644591728357973deb96d68322db0693a0f39b0f46b6e6747ef4a  /app/logs/jaxlib-wheel-build.log
+bd9e6ac1b722dd9603874aa1e8e38c70c7e15b048db8d46110225e38d95f7b82  /app/logs/jaxlib-wheel-contents.txt
+1df46e9b11584d137e71d9cab28e7d468ee0d3059b5909271bc4734ee382957f  /app/logs/jaxlib-wheel-sha256.txt
+1e0b22f66ead7b9fc35b7787b3693cf1d8c90e353e510a87a90cc76ddd9c561d  /app/logs/lit-label-proof.txt
+56233920266efbb758ca36c60240c81e8b7d39997e32142283354748c353d479  /app/logs/six-fixture-default-audit.log
+858436d681258b3c97c6bccc4530fbf82439ddbc5c8c555c3239873332af2768  /app/logs/xla-patch-sha256.txt
+835786bd7f7cc0fb1188b402c9e60f8f5bc4ce274f3e29dec70211a9120d196a  /app/logs/xla-patch-stat.txt
+
+
+Attempts:
+  ATTEMPT  UID           STATE      EXIT  WORKER    REASON
+        0  68898a374a9e  failed        1  -         t-pipeline_observer_test.log
+                                                    6ed8c4ba26608069d81a09d9759a07…
+
+Root cause:
+  Traceback (most recent call last):
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 456, in <module>
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 446, in main
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 382, in run_worker
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 315, in run_cache_worker
+  TypeError: __exit__(): incompatible function arguments. The following argument types are supported:
+  Traceback (most recent call last):
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 456, in <module>
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 450, in main
+    File "/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py", line 402, in run_orchestrator
+    File "/usr/local/lib/python3.12/subprocess.py", line 571, in run
+      raise CalledProcessError(retcode, process.args,
+  subprocess.CalledProcessError: Command '['/app/acceptance-venv/bin/python', '/app/lib/shuttle/mlir/jax_patch/shuttle_jaxlib_acceptance.py', '--worker', 'populate', '--baseline', '/app/acceptance-work/disabled-baseline.npz', '--cache-directory', '/app/acceptance-work/persistent-cache', '--key-map', '/app/acceptance-work/cache-keys.json', '--report', '/app/acceptance-work/populate.json']' returned non-zero exit status 1.
