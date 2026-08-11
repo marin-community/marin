@@ -1,0 +1,8 @@
+{
+  "line_number": 3,
+  "line_sha256": "122e874e3697a1afff045ed06277875d09e54df9bfd4b34f4d02577dcf3fab94",
+  "line_text_available": false,
+  "line_utf8_bytes": 107,
+  "recognized_pattern": "exact_ncu_sass_separator",
+  "source": "bounded terminal ValueError after the exact separator branch"
+}
