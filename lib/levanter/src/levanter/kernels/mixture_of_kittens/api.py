@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fused Mixture-of-Kittens forward with a JAX reference gradient."""
+"""Fused Mixture-of-Kittens forward and backward JAX integration."""
 
 from collections.abc import Callable
 

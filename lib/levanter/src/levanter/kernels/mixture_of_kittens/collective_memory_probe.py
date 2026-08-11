@@ -27,9 +27,9 @@ from jaxlib.mlir import ir
 from levanter.kernels.mixture_of_kittens.build import (
     _CUDA_DISTRIBUTIONS,
     _cuda_include_dirs,
-    _cuda_toolchain_root,
     _distribution_version,
     _jaxlib_include_dir,
+    _materialize_cuda_toolchain,
 )
 
 COLLECTIVE_MEMORY_PROBE_TARGET = "levanter_collective_memory_ring_u32"
@@ -111,7 +111,7 @@ def build_collective_memory_probe_library(config: CollectiveMemoryProbeBuildConf
         fcntl.flock(lock, fcntl.LOCK_EX)
         if library_path.is_file():
             return library_path
-        toolchain_root = _cuda_toolchain_root(build_dir)
+        toolchain_root = _materialize_cuda_toolchain(build_dir)
         temporary_library = library_path.with_name(f"{library_path.name}.{uuid.uuid4().hex}.tmp")
         command = [
             str(toolchain_root / "bin" / "nvcc"),

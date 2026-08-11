@@ -1317,7 +1317,6 @@ def test_run_grug_rejects_inapplicable_default_pool_preallocation(
     ],
 )
 def test_run_grug_rejects_default_pool_trim_outside_shared_cuda_async_mode(
-    monkeypatch: pytest.MonkeyPatch,
     allocator: train.GpuAllocator,
     temp_pool: train.GpuTempBufferPool,
     message: str,

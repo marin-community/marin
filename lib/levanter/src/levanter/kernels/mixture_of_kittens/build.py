@@ -68,7 +68,7 @@ def _cuda_include_dirs() -> tuple[Path, ...]:
     return tuple(include_dirs)
 
 
-def _cuda_toolchain_root(build_dir: Path) -> Path:
+def _materialize_cuda_toolchain(build_dir: Path) -> Path:
     toolchain_root = build_dir / "cuda"
     for distribution_name in ("nvidia-cuda-nvcc", "nvidia-nvvm", "nvidia-cuda-runtime"):
         distribution = importlib.metadata.distribution(distribution_name)
@@ -543,7 +543,7 @@ def build_native_library(build_config: MokLikeBuildConfig) -> Path:
             return library_path
         _write_prepared_sources(build_dir, build_config)
         source_root = mok_source_root(build_config)
-        toolchain_root = _cuda_toolchain_root(build_dir)
+        toolchain_root = _materialize_cuda_toolchain(build_dir)
         temporary_library = library_path.with_name(f"{library_path.name}.{uuid.uuid4().hex}.tmp")
         command = [
             str(toolchain_root / "bin" / "nvcc"),

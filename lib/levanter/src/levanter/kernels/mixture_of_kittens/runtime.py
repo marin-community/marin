@@ -292,7 +292,7 @@ class MokLikeRuntimeHandle:
     def __enter__(self) -> MokLikeRuntimeHandle:
         return self
 
-    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+    def __exit__(self, _exc_type: object, _exc_value: object, _traceback: object) -> None:
         self.close()
 
 
@@ -356,7 +356,7 @@ def validate_mok_like_mesh_topology(mesh: jax.sharding.Mesh) -> None:
 
 def _validate_topology(mesh: jax.sharding.Mesh) -> None:
     devices = jax.local_devices()
-    if len(devices) != 4:
+    if len(devices) != _NUM_DEVICES:
         raise RuntimeError(f"mok_like requires exactly four visible local GPUs, found {len(devices)} devices")
     non_cuda = tuple(device.platform for device in devices if device.platform != "gpu")
     if non_cuda:

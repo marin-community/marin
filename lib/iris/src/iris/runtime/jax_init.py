@@ -140,22 +140,7 @@ def configure_jax_compilation_cache() -> None:
 
 
 def _enable_xla_autotune_cache() -> None:
-    """Point XLA's per-fusion autotune cache at the node-local mount.
-
-    Goes through ``XLA_FLAGS`` because JAX derives this path from the compilation
-    cache dir, which is remote. Every task sees the same literal path on its
-    node-local scratch-cache mount, so the flag is stable across a distributed
-    compilation even when JAX includes it in the cache key. XLA opens the directory
-    from C++ through ``tsl::Env``, which cannot read an object store, so the live
-    directory is always node-local. Remote-sync mode mirrors it with
-    :func:`rigging.cache.sync_kv_cache`; local-only mode skips that stage-down and mirror.
-
-    GPU only: a TPU or CPU jaxlib aborts on an unknown ``--xla_gpu`` flag.
-
-    The mount arrives with the worker, and VM-cluster workers restart on their own
-    daily schedule. For up to a day after a rollout a task can land on a worker
-    whose mount is absent or unwritable; skip the cache there.
-    """
+    """Enable the node-local XLA autotune cache when its GPU scratch mount is writable."""
     if TaskResources.from_environment().gpu_count == 0:
         return
 

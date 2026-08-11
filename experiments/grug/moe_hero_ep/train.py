@@ -82,6 +82,7 @@ _XLA_FLAG_DEFAULTS = (
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 XLA_SEPARATE_TEMP_BUFFER_FLAG = "--xla_gpu_temp_buffer_use_separate_color"
+XLA_FLAGS_ENV = "XLA_FLAGS"
 
 
 class GpuAllocator(StrEnum):
@@ -107,11 +108,11 @@ class GpuDefaultPoolPreallocation(StrEnum):
 
 def _apply_hero_ep_runtime_defaults() -> None:
     os.environ.update(HERO_EP_RUNTIME_ENV)
-    xla_flags = os.environ.get("XLA_FLAGS", "").split()
+    xla_flags = os.environ.get(XLA_FLAGS_ENV, "").split()
     flag_defaults = (*_XLA_FLAG_DEFAULTS, XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG)
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
-    os.environ["XLA_FLAGS"] = " ".join(xla_flags)
+    os.environ[XLA_FLAGS_ENV] = " ".join(xla_flags)
 
 
 @dataclass(frozen=True)
@@ -234,7 +235,7 @@ def _mok_like_tokens_per_rank(*, batch_size: int, sequence_length: int, mesh: Me
 
 
 def _apply_dispatch_environment(config: GrugRunConfig) -> None:
-    xla_flags = os.environ.get("XLA_FLAGS", "").split()
+    xla_flags = os.environ.get(XLA_FLAGS_ENV, "").split()
     for override in config.xla_flag_overrides:
         if not override.startswith("--") or "=" not in override:
             raise ValueError(f"XLA flag overrides must have the form --name=value, got {override!r}")
@@ -275,7 +276,7 @@ def _apply_dispatch_environment(config: GrugRunConfig) -> None:
     xla_flags = [flag for flag in xla_flags if flag.partition("=")[0] != XLA_SEPARATE_TEMP_BUFFER_FLAG]
     use_separate_temp_pool = config.gpu_temp_buffer_pool is GpuTempBufferPool.SEPARATE
     xla_flags.append(f"{XLA_SEPARATE_TEMP_BUFFER_FLAG}={'true' if use_separate_temp_pool else 'false'}")
-    os.environ["XLA_FLAGS"] = " ".join(xla_flags)
+    os.environ[XLA_FLAGS_ENV] = " ".join(xla_flags)
     os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = (
         "true" if config.gpu_default_pool_preallocation is GpuDefaultPoolPreallocation.EAGER else "false"
     )

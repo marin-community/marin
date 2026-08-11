@@ -52,21 +52,15 @@ class MokLikeBuildConfig:
 
 
 def mok_cache_root(config: MokLikeBuildConfig, component: str) -> Path:
-    """Return the configured persistent build cache for one component."""
-
     return config.resolved_cache_root / component
 
 
 def mok_cuda_arch_flag(config: MokLikeBuildConfig) -> str:
-    """Return the NVCC target flag for the explicitly configured architecture."""
-
     compute = config.cuda_arch.replace("sm_", "compute_", 1)
     return f"-gencode=arch={compute},code={config.cuda_arch}"
 
 
 def missing_source_files(root: Path) -> tuple[Path, ...]:
-    """Return required pinned-source files absent from root."""
-
     return tuple(root / relative for relative in _REQUIRED_FILES if not (root / relative).is_file())
 
 

@@ -45,7 +45,6 @@ DEFAULT_STEPS = 25
 DEFAULT_WANDB_PROJECT = "marin_moe"
 BATCH_SIZE_PER_NODE = 64
 GPUS_PER_NODE = 4
-SUPPORTED_NUM_NODES = (1, 2, 16, 32)
 MATCHED_CAPACITY_FACTOR = 1.1
 PRODUCTION_MOK_LIKE_WORKSPACE_SLOTS = 1
 DEFAULT_GPU_DEVICE_MEMORY_FRACTION = 0.85
@@ -74,6 +73,7 @@ _SCALE_METADATA = {
     16: ("one-rack", "moe-backend-comparison-1rack"),
     32: ("two-rack", "moe-backend-comparison-2rack"),
 }
+SUPPORTED_NUM_NODES = tuple(_SCALE_METADATA)
 
 
 class MoeBackend(StrEnum):
