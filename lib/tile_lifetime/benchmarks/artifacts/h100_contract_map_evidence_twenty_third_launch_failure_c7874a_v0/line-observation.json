@@ -1,0 +1,45 @@
+{
+  "line_number": 1,
+  "line_sha256": "0b8a2ad1cacd348c79a70159e30ef84f1e7363b5a932c17c6722c3416cb3e257",
+  "line_structure": {
+    "ascii_classes": {
+      "control": 0,
+      "digit": 0,
+      "lowercase": 0,
+      "punctuation": 103,
+      "uppercase": 0,
+      "whitespace": 5
+    },
+    "delimiters": {
+      "colon": 0,
+      "comma": 0,
+      "hyphen": 103,
+      "pipe": 0
+    },
+    "leading_spaces": 0,
+    "non_ascii_codepoints": 0,
+    "public_patterns": {
+      "header": false,
+      "instruction": false,
+      "section": false,
+      "separator": false,
+      "status": false
+    },
+    "public_vocabulary": {
+      "Address": false,
+      "Function": false,
+      "Kernel": false,
+      "Name": false,
+      "Section": false,
+      "Source": false
+    },
+    "spaces": 5,
+    "tabs": 0,
+    "token_count": 6,
+    "token_max_utf8_bytes": 61,
+    "trailing_spaces": 0
+  },
+  "line_text_available": false,
+  "line_utf8_bytes": 108,
+  "source": "bounded terminal ValueError from the first NCU public SASS parse failure"
+}
