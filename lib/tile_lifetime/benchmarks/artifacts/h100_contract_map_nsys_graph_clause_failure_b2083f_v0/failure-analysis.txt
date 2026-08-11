@@ -1,0 +1,42 @@
+Observed boundary
+=================
+
+1. The workflow checked out exact source
+   b2083f35f3d6990eb021a52ece8e6bf27a5deb9d and resolved the same full SHA.
+2. Manual input image_set=h100-evidence ran the sole non-matrix H100 reusable
+   job. iris-tags, iris-images, iris-manifests, finelog-image, and
+   marin-tpu-ci-images were skipped.
+3. The Docker context preflight passed. BuildKit completed the pinned CUDA,
+   Nsight Compute, and Nsight Systems installation/version boundary and reached
+   the task-h100-evidence Nsight Systems help smoke.
+4. The repaired capture-range-end grammar accepted the exact clause emitted by
+   pinned Nsight Systems 2026.1.3.
+5. The validator then rejected cuda-graph-trace because its bounded diagnostic
+   could not locate one recognizable unique possible-values clause.
+
+Exact first failure
+===================
+
+nsys profile help validation failed: --cuda-graph-trace must contain one
+recognizable possible-values list
+
+Bounded observed syntax
+=======================
+
+The only available option syntax is the already reviewed 103-byte
+capture-range-end clause with SHA-256
+5bb600baaef1460ea40efd622d1abe1ca29136bec4ff39aa65fb9e830afedf28:
+
+Possible values are 'none', 'stop', 'stop-shutdown', 'repeat[:N][:mode]' or
+'repeat-shutdown:N'[:mode].
+
+The cuda-graph-trace diagnostic is explicitly unavailable with reason
+unique_possible_values_clause_unavailable. No graph syntax was emitted or
+inferred.
+
+Evidence limit
+==============
+
+The remaining image smokes, image export, OCI digest validation, and registry
+inspection did not run. No retry, rerun, image deletion, GPU query, or H100
+evidence job occurred.
