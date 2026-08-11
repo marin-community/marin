@@ -215,8 +215,11 @@ def test_synced_directory_stages_remote_files_down_and_mirrors_new_ones_up(tmp_p
     (local / "b.txt").write_bytes(b"two")
     handle.close()
 
-    assert (remote / "b.txt").read_bytes() == b"two"
     assert (remote / "a.txt").read_bytes() == b"tampered"
+    reloaded = tmp_path / "reloaded"
+    reader = SyncedDirectory(remote=lambda: str(remote), local=str(reloaded))
+    assert (reloaded / "b.txt").read_bytes() == b"two"
+    reader.close()
 
 
 def test_synced_directory_mirrors_nested_files_up_when_the_remote_starts_empty(tmp_path):
@@ -228,7 +231,45 @@ def test_synced_directory_mirrors_nested_files_up_when_the_remote_starts_empty(t
     (local / "sub" / "k").write_bytes(b"v")
     handle.close()
 
-    assert (remote / "sub" / "k").read_bytes() == b"v"
+    reloaded = tmp_path / "reloaded"
+    reader = SyncedDirectory(remote=lambda: str(remote), local=str(reloaded))
+    assert (reloaded / "sub" / "k").read_bytes() == b"v"
+    reader.close()
+
+
+def test_synced_directory_batches_many_files_into_one_remote_object(tmp_path):
+    remote, local = tmp_path / "remote", tmp_path / "local"
+    handle = SyncedDirectory(remote=lambda: str(remote), local=str(local))
+    for index in range(100):
+        (local / f"{index}.textproto").write_bytes(f"value-{index}".encode())
+
+    handle.close()
+
+    assert len([path for path in remote.rglob("*") if path.is_file()]) == 1
+    reloaded = tmp_path / "reloaded"
+    reader = SyncedDirectory(remote=lambda: str(remote), local=str(reloaded))
+    assert sorted(path.read_bytes() for path in reloaded.glob("*.textproto")) == sorted(
+        f"value-{index}".encode() for index in range(100)
+    )
+    reader.close()
+
+
+def test_synced_directory_preserves_files_from_concurrent_writers(tmp_path):
+    remote = tmp_path / "remote"
+    first_local, second_local = tmp_path / "first", tmp_path / "second"
+    first = SyncedDirectory(remote=lambda: str(remote), local=str(first_local))
+    second = SyncedDirectory(remote=lambda: str(remote), local=str(second_local))
+    (first_local / "a").write_bytes(b"one")
+    (second_local / "b").write_bytes(b"two")
+
+    first.close()
+    second.close()
+
+    reloaded = tmp_path / "reloaded"
+    reader = SyncedDirectory(remote=lambda: str(remote), local=str(reloaded))
+    assert (reloaded / "a").read_bytes() == b"one"
+    assert (reloaded / "b").read_bytes() == b"two"
+    reader.close()
 
 
 def test_sync_kv_cache_namespaces_the_object_store_by_tree_hash(tmp_path, monkeypatch):
@@ -240,7 +281,10 @@ def test_sync_kv_cache_namespaces_the_object_store_by_tree_hash(tmp_path, monkey
     (local / "k").write_bytes(b"v")
     handle.close()
 
-    assert (tmp_path / "xla-autotune" / "treehash" / "k").read_bytes() == b"v"
+    reloaded = tmp_path / "reloaded"
+    reader = sync_kv_cache("xla-autotune", str(reloaded))
+    assert (reloaded / "k").read_bytes() == b"v"
+    reader.close()
 
 
 def test_sync_kv_cache_is_a_noop_without_a_tree_hash(tmp_path, monkeypatch):

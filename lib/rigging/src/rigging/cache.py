@@ -25,7 +25,11 @@ import hashlib
 import logging
 import os
 import pathlib
+import shutil
+import tarfile
+import tempfile
 import threading
+import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_for_futures
@@ -46,6 +50,10 @@ _HASH_COMPONENT_LENGTH_BYTES = 8
 _EXIT_FLUSH_TIMEOUT = 10.0
 # How often a SyncedDirectory mirrors newly written files up while a run is live.
 _SYNC_FLUSH_INTERVAL = 120.0
+# Bound object-store concurrency while migrating legacy one-file-per-key mirrors.
+_SYNC_TRANSFER_BATCH_SIZE = 32
+# Append-only archives live below a reserved directory so legacy raw files remain readable.
+_SYNC_ARCHIVE_SUBDIR = ".rigging-archives-v1"
 
 _background_lock = threading.Lock()
 _background_executor: ThreadPoolExecutor | None = None
@@ -272,10 +280,11 @@ class SyncedDirectory:
     which its C++ opens through ``tsl::Env`` and cannot point at an object store —
     is the case :class:`PersistentKvCache` does not cover: the contents are a
     mirrored tree, not keyed values a caller serializes. On construction this stages
-    the object-store directory down into the local one so the consumer starts warm,
-    then mirrors files written since on a daemon thread. Mirroring is best-effort
-    and never blocks shutdown: on a hard exit the last unflushed files are simply
-    rebuilt next run.
+    the object-store directory down into the local one so the consumer starts warm.
+    A daemon thread packages newly written files into append-only compressed archives;
+    independent writers therefore add to the same remote mirror without replacing one
+    another. Legacy raw files remain readable and are fetched concurrently. Mirroring
+    is best-effort: on a hard exit the last unflushed files are simply rebuilt next run.
 
     Every transfer degrades to a warning rather than failing the caller. The remote
     directory resolves on first use, so this is safe to build before the active
@@ -299,16 +308,24 @@ class SyncedDirectory:
         base = pathlib.Path(self._local)
         with self._flush_lock:
             present = {p.relative_to(base).as_posix() for p in base.rglob("*") if p.is_file()}
+            pending = sorted(present - self._known)
+            if not pending:
+                return
+
             remote_root = StoragePath(self._remote())
-            for relative in sorted(present - self._known):
-                target = remote_root / relative
-                try:
+            try:
+                with tempfile.TemporaryDirectory(prefix="synced-cache-flush-") as staging_dir:
+                    archive = pathlib.Path(staging_dir) / f"{uuid.uuid4().hex}.tar.gz"
+                    with tarfile.open(archive, "w:gz") as tar:
+                        for relative in pending:
+                            tar.add(base / relative, arcname=relative, recursive=False)
+                    target = remote_root / _SYNC_ARCHIVE_SUBDIR / archive.name
                     target.parent.mkdirs()
-                    target.upload_from(str(base / relative))
-                except OSError as exc:
-                    logger.warning("synced cache upload failed for %s: %s", relative, exc)
-                    return
-                self._known.add(relative)
+                    target.upload_from(str(archive))
+            except (OSError, tarfile.TarError) as exc:
+                logger.warning("synced cache archive upload failed: %s", exc)
+                return
+            self._known.update(pending)
 
     def close(self) -> None:
         """Stop the mirror thread and flush a final time."""
@@ -325,16 +342,50 @@ class SyncedDirectory:
         try:
             if not remote_root.exists():
                 return
-            for parent, _dirs, files in remote_root.walk():
-                for name in files:
-                    remote_file = parent / name
-                    relative = remote_file.relative_to(remote_root)
+            with tempfile.TemporaryDirectory(prefix="synced-cache-fetch-") as staging_dir:
+                remote_root.download_to(
+                    staging_dir,
+                    recursive=True,
+                    batch_size=_SYNC_TRANSFER_BATCH_SIZE,
+                )
+                staged_root = pathlib.Path(staging_dir) / remote_root.name
+                archive_root = staged_root / _SYNC_ARCHIVE_SUBDIR
+                if archive_root.is_dir():
+                    for archive in sorted(archive_root.glob("*.tar.gz")):
+                        try:
+                            self._known.update(_extract_archive(archive, pathlib.Path(self._local)))
+                        except (OSError, tarfile.TarError, ValueError) as exc:
+                            logger.warning("synced cache archive fetch failed for %s: %s", archive.name, exc)
+
+                for staged_file in sorted(staged_root.rglob("*")):
+                    if not staged_file.is_file() or archive_root in staged_file.parents:
+                        continue
+                    relative = staged_file.relative_to(staged_root)
                     local_file = pathlib.Path(self._local) / relative
                     local_file.parent.mkdir(parents=True, exist_ok=True)
-                    remote_file.download_to(str(local_file))
-                    self._known.add(pathlib.PurePosixPath(relative).as_posix())
+                    shutil.copyfile(staged_file, local_file)
+                    self._known.add(relative.as_posix())
         except OSError as exc:
             logger.warning("synced cache fetch failed, starting cold: %s", exc)
+
+
+def _extract_archive(archive: pathlib.Path, destination: pathlib.Path) -> set[str]:
+    """Extract regular files from one cache archive and return their relative paths."""
+    extracted: set[str] = set()
+    with tarfile.open(archive, "r:gz") as tar:
+        for member in tar:
+            relative = pathlib.PurePosixPath(member.name)
+            if not member.isfile() or relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(f"unsafe synced-cache archive member: {member.name!r}")
+            source = tar.extractfile(member)
+            if source is None:
+                raise ValueError(f"synced-cache archive member has no contents: {member.name!r}")
+            target = destination.joinpath(*relative.parts)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("wb") as output:
+                shutil.copyfileobj(source, output)
+            extracted.add(relative.as_posix())
+    return extracted
 
 
 def sync_kv_cache(prefix: str, local: str) -> SyncedDirectory | None:
