@@ -1,15 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Core fixtures and helpers for Iris E2E tests.
+"""Core drivers and helpers for Iris E2E tests.
 
 Boots a local cluster via connect_cluster() + make_local_config() and provides
 a IrisTestCluster dataclass that wraps the IrisClient and ControllerServiceClientSync
 with convenience methods for job submission, waiting, and status queries.
 
-The cluster fixture is function-scoped so each test gets a fresh cluster with no
-stale worker state or chaos bleed. Chaos state is also reset per-test via an
-autouse fixture.
+Each local cluster driver boots fresh state for its caller.
 """
 
 import fcntl
@@ -22,13 +20,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-import pytest
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from rigging.connect import proxy_path
 from rigging.timing import Duration, ExponentialBackoff
 
-from iris.chaos import reset_chaos
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import (
     IrisClusterConfig,
@@ -54,18 +50,17 @@ from iris.cluster.types import (
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
-MARIN_ROOT = Path(__file__).resolve().parents[4]  # repo root
+MARIN_ROOT = Path(__file__).resolve().parents[5]  # repo root
 IRIS_ROOT = MARIN_ROOT / "lib" / "iris"
 DEFAULT_CONFIG = IRIS_ROOT / "config" / "ci-test.yaml"
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _ensure_dashboard_built(tmp_path_factory):
+def ensure_dashboard_built(tmp_path_factory) -> None:
     """Build dashboard assets once per session so dashboard tests have content to render.
 
-    With pytest-xdist each worker gets its own session fixture, so all 8 workers
-    race to run ``npm ci`` in the same directory — corrupting node_modules.
-    A filelock serialises this so only one worker installs at a time.
+    With pytest-xdist each worker calls this once per session, so all workers
+    race to run ``npm ci`` in the same directory. A file lock serializes the
+    install.
     """
     dashboard_dir = IRIS_ROOT / "dashboard"
     if not (dashboard_dir / "package.json").exists():
@@ -82,48 +77,6 @@ def _ensure_dashboard_built(tmp_path_factory):
             subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, check=True, capture_output=True)
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
-
-
-def pytest_addoption(parser):
-    """Cloud mode CLI options for running smoke tests against remote clusters."""
-    parser.addoption("--iris-controller-url", default=None, help="Connect to existing controller")
-
-
-# Cloud mode needs much longer timeouts: GCE provisioning can take 20 minutes,
-# and individual tests need time for remote job execution. Local mode's first
-# smoke test pays the module-scoped fixture's wait_for_workers(timeout=60) cost,
-# so it gets its own larger budget; subsequent tests reuse the booted cluster.
-_LOCAL_FIXTURE_TIMEOUT = 120  # first smoke test absorbs cluster boot + worker registration
-_LOCAL_E2E_TIMEOUT = 30  # local e2e tests boot clusters + run jobs
-_CLOUD_FIXTURE_TIMEOUT = 1200  # 20 min for cluster provisioning
-_CLOUD_TEST_TIMEOUT = 120  # 2 min per test
-
-
-def pytest_collection_modifyitems(config, items):
-    """Set appropriate timeouts for e2e tests.
-
-    Local mode: 30s default; first smoke test gets 120s to cover cluster boot.
-    Cloud mode: 20 min for first smoke test (provisioning), 2 min for the rest.
-    """
-    is_cloud = config.getoption("--iris-controller-url") is not None
-
-    first_smoke_test = True
-    for item in items:
-        if item.get_closest_marker("timeout"):
-            continue
-        uses_smoke = "smoke_cluster" in getattr(item, "fixturenames", ())
-        if is_cloud:
-            if uses_smoke and first_smoke_test:
-                item.add_marker(pytest.mark.timeout(_CLOUD_FIXTURE_TIMEOUT))
-                first_smoke_test = False
-            else:
-                item.add_marker(pytest.mark.timeout(_CLOUD_TEST_TIMEOUT))
-        else:
-            if uses_smoke and first_smoke_test:
-                item.add_marker(pytest.mark.timeout(_LOCAL_FIXTURE_TIMEOUT))
-                first_smoke_test = False
-            else:
-                item.add_marker(pytest.mark.timeout(_LOCAL_E2E_TIMEOUT))
 
 
 @dataclass
@@ -362,9 +315,8 @@ def _add_coscheduling_group(config: IrisClusterConfig) -> None:
     )
 
 
-@pytest.fixture
-def cluster():
-    """Boots a local cluster. Yields a IrisTestCluster with IrisClient and RPC access."""
+def local_test_cluster():
+    """Boot a local cluster and yield its test client."""
     config = load_config(DEFAULT_CONFIG)
     _add_coscheduling_group(config)
     config = make_local_config(config)
@@ -401,9 +353,8 @@ def _make_multi_worker_config(num_workers: int) -> IrisClusterConfig:
     return make_local_config(config)
 
 
-@pytest.fixture
-def multi_worker_cluster():
-    """Boots a local cluster with 4 workers for distribution and concurrency tests.
+def local_multi_worker_test_cluster():
+    """Boot a local cluster with four workers.
 
     Waits for all workers to register before yielding, since the autoscaler
     scales up one slice per evaluation interval (~0.5s each).
@@ -422,12 +373,6 @@ def multi_worker_cluster():
         yield tc
         log_client.close()
         controller_client.close()
-
-
-@pytest.fixture(autouse=True)
-def _reset_chaos():
-    yield
-    reset_chaos()
 
 
 logger = logging.getLogger(__name__)
@@ -471,8 +416,7 @@ def _open_fds() -> dict[int, Path]:
     return fds
 
 
-@pytest.fixture(autouse=True)
-def _detect_fd_leaks(request):
+def detect_fd_leaks(request):
     """Log file descriptors that were opened but not closed during a test."""
     before = _open_fds()
     yield
@@ -489,7 +433,7 @@ def _detect_fd_leaks(request):
 
 
 def assert_visible(page, selector: str, *, timeout: int = 10_000) -> None:
-    from playwright.sync_api import expect  # noqa: PLC0415  # optional dep: playwright
+    from playwright.sync_api import expect  # noqa: PLC0415  # pyrefly: ignore[missing-import]
 
     expect(page.locator(selector).first).to_be_visible(timeout=timeout)
 

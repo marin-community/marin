@@ -5,7 +5,6 @@
 
 from pathlib import Path
 
-import pytest
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
 from iris.cluster.config import PeerConfig
@@ -78,7 +77,7 @@ class InProcessPeerConnection:
 class FederationJourney:
     """Drive two real controllers while scripting only peer reachability."""
 
-    def __init__(self, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def __init__(self, root: Path, monkeypatch) -> None:
         self.peer = JourneyWorld(root / "peer", monkeypatch)
         self.connection = InProcessPeerConnection(self.peer.controller)
         self._federation_peer = FederationPeer(

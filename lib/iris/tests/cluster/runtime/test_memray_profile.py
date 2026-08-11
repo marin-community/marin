@@ -12,6 +12,8 @@ import pytest
 from iris.cluster.runtime.profile import _run_memray_profile
 from iris.rpc import job_pb2
 
+pytestmark = pytest.mark.manual
+
 
 @contextmanager
 def _allocations_during_profile():
@@ -42,7 +44,6 @@ def _allocations_during_profile():
         job_pb2.MemoryProfile.RAW,
     ],
 )
-@pytest.mark.memray
 def test_run_memray_profile_returns_output_in_the_requested_format(profile_format, tmp_path: Path):
     config = job_pb2.MemoryProfile(format=profile_format, leaks=False)
 
@@ -74,7 +75,6 @@ def test_run_memray_profile_returns_output_in_the_requested_format(profile_forma
         reader.close()
 
 
-@pytest.mark.memray
 def test_run_memray_profile_stats_returns_valid_json():
     config = job_pb2.MemoryProfile(format=job_pb2.MemoryProfile.STATS, leaks=False)
 

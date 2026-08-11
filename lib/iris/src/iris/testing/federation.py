@@ -143,7 +143,9 @@ def attach_federation(
         bundles=parent_service._bundle_store,
         cluster_id="parent",
     )
-    parent_service._controller.federation = manager
+    controller = parent_service._controller
+    assert isinstance(controller, MockController)
+    controller.federation = manager
     return manager
 
 

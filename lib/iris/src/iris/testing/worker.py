@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Worker fakes, factories, and fixtures."""
+"""Worker fakes and factories."""
 
 import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from unittest.mock import Mock
 
-import pytest
 from rigging.timing import Duration
 
 from iris.cluster.bundle import BundleStore
@@ -21,16 +20,11 @@ from iris.rpc import job_pb2
 from iris.time_proto import duration_to_proto
 
 
-@pytest.fixture
-def docker_runtime(tmp_path):
-    """DockerRuntime that cleans up its own containers after the test."""
-    rt = DockerRuntime(cache_dir=tmp_path / "cache")
-    yield rt
-    rt.cleanup()
+def make_docker_runtime(tmp_path) -> DockerRuntime:
+    return DockerRuntime(cache_dir=tmp_path / "cache")
 
 
-@pytest.fixture
-def mock_bundle_store(tmp_path):
+def make_mock_bundle_store() -> Mock:
     cache = Mock(spec=BundleStore)
     cache.extract_bundle_to = Mock()
     return cache
@@ -135,8 +129,7 @@ def create_mock_container_handle(
     )
 
 
-@pytest.fixture
-def mock_runtime():
+def make_mock_runtime() -> Mock:
     """Mock DockerRuntime that produces FakeContainerHandle instances.
 
     The runtime itself stays as a Mock because tests need mock assertions
@@ -154,8 +147,7 @@ def mock_runtime():
     return runtime
 
 
-@pytest.fixture
-def mock_worker(mock_bundle_store, mock_runtime, tmp_path):
+def make_mock_worker(mock_bundle_store, mock_runtime, tmp_path) -> Worker:
     """Create Worker with mocked dependencies."""
     config = WorkerConfig(
         port=0,

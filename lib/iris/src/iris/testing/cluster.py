@@ -1,13 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared cluster test harnesses and fixtures."""
+"""Shared cluster test harnesses and factories."""
 
 import hashlib
 from dataclasses import dataclass
 from unittest.mock import Mock
 
-import pytest
 from finelog.client import LogClient
 from rigging.timing import Timestamp
 from sqlalchemy import select
@@ -54,18 +53,16 @@ def in_constraint(key: str, values: list[str]) -> Constraint:
 
 
 # ---------------------------------------------------------------------------
-# Resource spec fixtures
+# Resource spec builders
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def cpu_resource_spec() -> job_pb2.ResourceSpecProto:
+def make_cpu_resource_spec() -> job_pb2.ResourceSpecProto:
     """Standard CPU resource spec for scheduling tests."""
     return job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=4 * 1024**3)
 
 
-@pytest.fixture
-def gpu_resource_spec() -> job_pb2.ResourceSpecProto:
+def make_gpu_resource_spec() -> job_pb2.ResourceSpecProto:
     """GPU resource spec with device type constraint."""
     spec = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=4 * 1024**3)
     spec.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="h100", count=1))
@@ -294,7 +291,7 @@ class ServiceTestHarness:
 
     def _query_tasks(self, job_id: JobName) -> list:
         with self.db.read_snapshot() as tx:
-            return tx.execute(select(tasks_table).where(tasks_table.c.job_id == job_id)).all()
+            return list(tx.execute(select(tasks_table).where(tasks_table.c.job_id == job_id)).all())
 
     def _query_task(self, task_id: JobName):
         with self.db.read_snapshot() as tx:
@@ -513,16 +510,10 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     )
 
 
-@pytest.fixture(params=["gcp", "k8s"])
-def harness(request, tmp_path, embedded_log_server) -> ServiceTestHarness:
-    """ControllerServiceImpl backed by either GCP or K8s provider.
-
-    Tests using this fixture run twice -- once with each provider -- to ensure
-    both code paths are exercised.
-    """
-    if request.param == "k8s":
-        h = _make_k8s_harness(tmp_path, embedded_log_server.address)
-    else:
-        h = _make_gcp_harness(tmp_path, embedded_log_server.address)
-    yield h
-    h.db.close()
+def make_service_test_harness(provider_type: str, tmp_path, log_address: str) -> ServiceTestHarness:
+    """Build a controller service harness for the requested provider."""
+    if provider_type == "k8s":
+        return _make_k8s_harness(tmp_path, log_address)
+    if provider_type == "gcp":
+        return _make_gcp_harness(tmp_path, log_address)
+    raise ValueError(f"Unknown provider type: {provider_type}")

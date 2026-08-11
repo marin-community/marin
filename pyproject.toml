@@ -434,7 +434,6 @@ markers = [
     "cluster: mark smokes that submit a real job to a standing Marin cluster (run by marin-cluster-smoke.yaml)",
     "requires_cluster: mark Iris tests that start or connect to a cluster",
     "docker: mark tests that require a Docker daemon",
-    "memray: mark Iris tests that exercise the memray profiler dependency",
     "manual: mark tests that are run by hand on demand, never by any CI workflow",
 ]
 testpaths = ["tests", "experiments"]

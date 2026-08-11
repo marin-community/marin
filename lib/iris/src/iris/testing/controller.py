@@ -1,19 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Controller test fixtures, fakes, and state-query helpers."""
+"""Controller test factories, fakes, and state-query helpers."""
 
 import shutil
 import tempfile
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import replace as _replace
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
-import pytest
 from finelog.client.log_client import Table
 from rigging.timing import Duration, RateLimiter, Timestamp
 from sqlalchemy import func, select
@@ -298,13 +297,6 @@ def worker_daemon_backends_for_prune(state: ControllerTestState) -> list[FakePro
     return [provider]
 
 
-@pytest.fixture
-def state():
-    """Create a fresh ControllerTestState with temp DB and log store."""
-    with make_controller_state() as s:
-        yield s
-
-
 class MockController:
     """Mock that implements the ControllerProtocol surface used by ControllerServiceImpl."""
 
@@ -343,14 +335,12 @@ class MockController:
         return self.all_liveness().get(worker_id, WorkerLiveness())
 
 
-@pytest.fixture
-def mock_controller() -> MockController:
+def make_mock_controller() -> MockController:
     return MockController()
 
 
-@pytest.fixture
-def controller_service(state, log_client, mock_controller, tmp_path) -> ControllerServiceImpl:
-    """ControllerServiceImpl with fresh DB, log service, and mock controller.
+def make_controller_service(state, log_client, mock_controller, tmp_path) -> ControllerServiceImpl:
+    """Build a controller service with a fresh DB, log service, and mock controller.
 
     The service registers workers into and reads liveness through the controller's
     backend, so point the mock backend's tracker at this state's ``_health`` so
@@ -383,9 +373,8 @@ def make_controller_state(**kwargs):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-@pytest.fixture
-def make_controller(tmp_path):
-    """Factory for building ``Controller`` instances with automatic teardown.
+def controller_factory(tmp_path) -> Iterator[Callable[..., Controller]]:
+    """Yield a factory for building ``Controller`` instances with automatic teardown.
 
     ``Controller.__init__`` attaches a ``RemoteLogHandler`` to the ``iris``
     logger and spawns a ``LogClient`` drain thread. Without ``stop()``, those
@@ -658,9 +647,11 @@ def query_worker(state: ControllerTestState, worker_id: WorkerId) -> WorkerView 
 def query_tasks_for_job(state: ControllerTestState, job_id: JobName) -> list:
     """Return SA Rows for all tasks in ``job_id``."""
     with state._db.read_snapshot() as tx:
-        return tx.execute(
-            select(tasks_table).where(tasks_table.c.job_id == job_id).order_by(tasks_table.c.task_index)
-        ).all()
+        return list(
+            tx.execute(
+                select(tasks_table).where(tasks_table.c.job_id == job_id).order_by(tasks_table.c.task_index)
+            ).all()
+        )
 
 
 def promote_queued_federation(manager: FederationManager, state: ControllerTestState) -> None:
@@ -1039,7 +1030,7 @@ def transition_task(
     assert task is not None
     if new_state == job_pb2.TASK_STATE_KILLED:
         with state._db.transaction() as cur:
-            ops.job.cancel(cur, job_id=task.job_id, reason=error or "killed", health=state._health)
+            ops.job.cancel(cur, job_id=task.job_id, reason=error or "killed")
         return state
     # Compute worker_id: prefer current attempt's worker, fall back to current_worker_id.
     current_attempt = task.attempts[-1] if task.attempts else None
@@ -1138,8 +1129,7 @@ class ControllerTestHarness:
         return query_job(self.state, job_id)
 
 
-@pytest.fixture
-def harness(state) -> ControllerTestHarness:
+def make_controller_test_harness(state) -> ControllerTestHarness:
     return ControllerTestHarness(state)
 
 

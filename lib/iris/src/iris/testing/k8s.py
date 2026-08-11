@@ -1,11 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kubernetes provider fakes, factories, and fixtures."""
+"""Kubernetes provider fakes and factories."""
 
 from copy import deepcopy
-
-import pytest
 
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
 from iris.cluster.controller.reads import ControlSnapshot
@@ -16,44 +14,12 @@ from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
-from iris.test_util import FakeStatsTable
 
 KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
 LABEL_MANAGED = "iris.managed"
 LABEL_RUNTIME = "iris.runtime"
 RUNTIME_LABEL_VALUE = "iris-kubernetes"
 TASK_CONTAINER_NAME = "task"
-
-
-@pytest.fixture
-def k8s() -> InMemoryK8sService:
-    return InMemoryK8sService(namespace="iris")
-
-
-@pytest.fixture
-def task_stats_table() -> FakeStatsTable:
-    return FakeStatsTable()
-
-
-@pytest.fixture
-def provider(k8s, task_stats_table):
-    p = K8sTaskProvider(
-        kubectl=k8s,
-        pods=pod_config(),
-        task_stats_table=task_stats_table,
-        resource_poll_interval=0.05,
-        cluster_scan_interval=0.0,
-    )
-    yield p
-    p.close()
-
-
-@pytest.fixture
-def kueue_provider(k8s):
-    """K8sTaskProvider with Kueue gang admission enabled (a configured LocalQueue)."""
-    p = make_kueue_provider(k8s)
-    yield p
-    p.close()
 
 
 def pod_config(
@@ -72,7 +38,7 @@ def make_run_req(
     cpu_mc: int = 1000,
     num_tasks: int = 0,
     coscheduling_group_by: str = "",
-    priority: int = job_pb2.PRIORITY_BAND_INHERIT,
+    priority: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
     attempt_uid: str = "",
 ) -> job_pb2.RunTaskRequest:
     req = job_pb2.RunTaskRequest()

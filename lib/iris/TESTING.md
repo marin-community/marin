@@ -118,9 +118,10 @@ types even in startup-polling loops.
   `@pytest.mark.requires_cluster`.
 - Docker-dependent tests must also be marked `@pytest.mark.docker`.
 - E2E tests live in `tests/e2e/`.
-- Reusable test support lives in `src/iris/testing/` and is imported through
-  `iris.testing`. Tests do not import `conftest.py` or another test module.
-- `conftest.py` files expose pytest fixtures only. Consume setup through fixture
+- Reusable fakes, factories, and test drivers live in `src/iris/testing/` and
+  are imported through `iris.testing`. Tests do not import `conftest.py` or
+  another test module.
+- Pytest fixtures and hooks stay in `conftest.py`. Consume setup through fixture
   parameters instead of importing fixture functions.
 - Shared fakes live in `src/iris/cluster/backends/gcp/fake.py`
   (`InMemoryGcpService`), `src/iris/cluster/backends/k8s/fake.py`
@@ -199,8 +200,10 @@ Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
 # All unit tests
 uv run --package marin-iris --group test pytest lib/iris/tests/
 
-# In-process memory profiling (included in the unit suite)
-uv run --package marin-iris --group test pytest lib/iris/tests/cluster/runtime/test_memray_profile.py
+# Manual in-process memory profiling
+uv run --package marin-iris --group test pytest \
+  -m 'manual and not slow and not docker and not requires_cluster' \
+  lib/iris/tests/cluster/runtime/test_memray_profile.py
 
 # Focused root and Iris tests in one pytest process
 uv run --package marin-iris --group test pytest \

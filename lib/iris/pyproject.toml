@@ -109,12 +109,12 @@ packages = ["src/iris"]
 [tool.pytest.ini_options]
 timeout = 10
 timeout_method = "thread"
-addopts = "-n auto --durations=25 -m 'not slow and not docker and not requires_cluster' -v --import-mode=importlib"
+addopts = "-n auto --durations=25 -m 'not slow and not docker and not requires_cluster and not manual' -v --import-mode=importlib"
 pythonpath = ["src"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "docker: marks tests requiring Docker runtime (slow, needs daemon)",
-    "memray: marks tests that exercise the memray profiler dependency",
+    "manual: marks tests that run only when explicitly selected",
     "requires_cluster: mark tests that need a running iris cluster",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
