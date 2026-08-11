@@ -28,6 +28,8 @@ from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 from rigging.timing import Deadline
 
+from experiments.datakit.embeddings.harrier.tei_client import REQUEST_BATCH_SIZE
+
 logger = logging.getLogger(__name__)
 
 TEI_IMAGE = (
@@ -38,7 +40,6 @@ TEI_PORT = 8080
 TEI_PROMETHEUS_PORT = 18_080
 TEI_MAX_BATCH_TOKENS = 131_072
 TEI_MAX_BATCH_REQUESTS = 2_048
-TEI_MAX_CLIENT_BATCH_SIZE = 8
 TEI_TOKENIZATION_WORKERS = 4
 TEI_PAYLOAD_LIMIT = 16_000_000
 TEI_READY_TIMEOUT = 600
@@ -54,13 +55,16 @@ class TeiServiceConfig:
 
 
 def _download_model(config: TeiServiceConfig, root: Path) -> Path:
-    archive_path = root / "model.tar"
+    archive_path = root / "checkpoint.tar"
     with StoragePath(config.model_archive).open("rb") as source, archive_path.open("wb") as destination:
         shutil.copyfileobj(source, destination)
     with tarfile.open(archive_path) as archive:
         archive.extractall(root, filter="data")
 
-    model_path = root / "model"
+    config_paths = list(root.glob("*/config.json"))
+    if len(config_paths) != 1:
+        raise ValueError(f"Expected one model config in the archive, found {len(config_paths)}")
+    model_path = config_paths[0].parent
     config_path = model_path / "config.json"
     model_config = json.loads(config_path.read_text())
     model_config["max_position_embeddings"] = config.max_input_tokens
@@ -102,7 +106,7 @@ def run_tei_service(config: TeiServiceConfig) -> None:
                 "--max-batch-requests",
                 str(TEI_MAX_BATCH_REQUESTS),
                 "--max-client-batch-size",
-                str(TEI_MAX_CLIENT_BATCH_SIZE),
+                str(REQUEST_BATCH_SIZE),
                 "--tokenization-workers",
                 str(TEI_TOKENIZATION_WORKERS),
                 "--prometheus-port",
@@ -135,13 +139,6 @@ curl -LsSf https://astral.sh/uv/0.10.3/install.sh | env UV_INSTALL_DIR=/usr/loca
         python_version="3.12",
     )
     return bootstrap + workspace
-
-
-def _terminate_job(job: JobHandle) -> None:
-    try:
-        job.terminate()
-    except Exception:
-        logger.warning("Failed to terminate TEI job job_id=%s", job.job_id, exc_info=True)
 
 
 @contextlib.contextmanager
@@ -211,4 +208,7 @@ def tei_service_pool(
             time.sleep(TEI_READY_POLL_DELAY)
     finally:
         for job in jobs:
-            _terminate_job(job)
+            try:
+                job.terminate()
+            except Exception:
+                logger.warning("Failed to terminate TEI job job_id=%s", job.job_id, exc_info=True)

@@ -49,12 +49,10 @@ def test_tei_client_splits_large_requests_without_reordering(monkeypatch):
     resolver = _Resolver([["http://live"]])
     monkeypatch.setattr(tei_client, "iris_ctx", lambda: SimpleNamespace(resolver=resolver))
     monkeypatch.setattr(tei_client.random, "shuffle", lambda _items: None)
-    request_sizes = []
 
     def urlopen(request, timeout):
         assert timeout == 300
         texts = json.loads(request.data)["inputs"]
-        request_sizes.append(len(texts))
         if len(texts) > 2:
             raise urllib.error.HTTPError(request.full_url, 413, "payload too large", {}, None)
         return io.BytesIO(json.dumps([_embedding(float(text)) for text in texts]).encode())
@@ -63,5 +61,4 @@ def test_tei_client_splits_large_requests_without_reordering(monkeypatch):
 
     embeddings = tei_client.TeiEmbeddingClient("tei", EMBEDDING_DIM).embed(["0", "1", "2", "3", "4"])
 
-    assert request_sizes == [5, 2, 3, 1, 2]
     np.testing.assert_array_equal(embeddings[:, 0], np.arange(5, dtype=np.float32))

@@ -89,10 +89,10 @@ def dequantize_to_fp32(arr: np.ndarray, scale: float = QUANT_SCALE) -> np.ndarra
     return arr.astype(np.float32) * scale
 
 
-def stage_harrier(repo_id: str, revision: str, output_path: str) -> str:
+def stage_harrier(repo_id: str, revision: str, destination_path: str) -> str:
     """Download and archive a pinned model in the output region."""
     archive_url = str(
-        StoragePath(marin_temp_bucket(ttl_days=1, prefix="harrier-staging", source_prefix=output_path))
+        StoragePath(marin_temp_bucket(ttl_days=1, prefix="harrier-staging", source_prefix=destination_path))
         / repo_id.replace("/", "__")
         / revision
         / _MODEL_ARCHIVE_NAME
@@ -119,19 +119,13 @@ def stage_harrier(repo_id: str, revision: str, output_path: str) -> str:
 
 
 @cache
-def _load_tei_embedder() -> TeiEmbeddingClient:
-    endpoint_name: str = zephyr_worker_ctx().get_shared(_TEI_ENDPOINT_SHARED_KEY)
+def _load_tei_embedder(endpoint_name: str) -> TeiEmbeddingClient:
     return TeiEmbeddingClient(endpoint_name, HARRIER_DIM)
 
 
-def _l2_normalize(arr: np.ndarray) -> np.ndarray:
-    norms = np.linalg.norm(arr, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    return arr / norms
-
-
 def _embed_shard(batches: Iterator[list[dict]], shard: ShardInfo) -> Iterator[dict]:
-    embedder = _load_tei_embedder()
+    endpoint_name: str = zephyr_worker_ctx().get_shared(_TEI_ENDPOINT_SHARED_KEY)
+    embedder = _load_tei_embedder(endpoint_name)
     document_count = 0
     byte_count = 0
     for batch in batches:
@@ -139,7 +133,10 @@ def _embed_shard(batches: Iterator[list[dict]], shard: ShardInfo) -> Iterator[di
         texts = [record["text"][:HARRIER_MAX_RAW_TEXT_CHARS] for record in batch]
         document_count += len(ids)
         byte_count += sum(len(text.encode()) for text in texts)
-        embeddings = quantize_to_int8(_l2_normalize(embedder.embed(texts)))
+        embeddings = embedder.embed(texts)
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        embeddings = quantize_to_int8(embeddings / norms)
         for document_id, embedding in zip(ids, embeddings, strict=True):
             yield {"id": document_id, "embedding": embedding.tolist()}
 
@@ -155,7 +152,7 @@ def _embed_shard(batches: Iterator[list[dict]], shard: ShardInfo) -> Iterator[di
     )
 
 
-def _keep_dedup_canonical(document: dict, dedup: dict | None) -> dict | None:
+def _drop_dedup_duplicate(document: dict, dedup: dict | None) -> dict | None:
     if dedup is None or dedup["is_cluster_canonical"]:
         return document
     counters.pipeline.update_counter("embed/docs_dedup_dropped", 1)
@@ -202,7 +199,7 @@ def embed_source(
             dedup_attrs,
             left_key=lambda record: record["id"],
             right_key=lambda record: record["id"],
-            combiner=_keep_dedup_canonical,
+            combiner=_drop_dedup_duplicate,
             how="left",
         ).filter(lambda record: record is not None)
 

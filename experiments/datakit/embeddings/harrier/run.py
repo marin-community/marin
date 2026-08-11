@@ -31,7 +31,6 @@ DEDUP_PATH = f"s3://marin-us-east-02a/marin/datakit/{DEDUP_ID}"
 WORKERS_PER_SOURCE = 32
 MAX_CONCURRENT = 8
 TEI_INSTANCES = 128
-COORDINATOR_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
 
 
 def _embed_source(output_path: str, normalized_path: str, endpoint_name: str) -> None:
@@ -67,7 +66,7 @@ def build_steps(endpoint_name: str, partition_index: int = 0, partition_count: i
                 lambda output_path, normalized_path=normalized.output_path: _embed_source(
                     output_path, normalized_path, endpoint_name
                 ),
-                resources=COORDINATOR_RESOURCES,
+                resources=ResourceConfig(cpu=2, ram="8g", disk="8g"),
                 pip_dependency_groups=["datakit"],
             ),
         )
