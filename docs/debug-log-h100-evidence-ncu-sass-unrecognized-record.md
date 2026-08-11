@@ -160,3 +160,26 @@ Behavioral tests run both accepted forms through the parser and NCU subprocess
 boundary. They reject other group counts, widths, orders, gaps, mixed separator
 forms, and a widened kernel row. No image build, GPU execution, v24 submission,
 or relaunch was performed for this source repair.
+
+## V24 kernel identity-width observation
+
+The single v24 task used source
+`c19e1bb8582da83519f746da67de88e0ca55f494`. It authenticated the launcher and
+manifest, accepted the reviewed 108-byte line-1 separator, and failed once on
+line 2. The bounded diagnostic reports 108 UTF-8 bytes, three non-whitespace
+tokens, 72 ASCII spaces, 63 trailing spaces, and the exact public vocabulary
+tokens `Kernel` and `Name`. It contains no raw identifier, row, or adjacent
+record.
+
+The kernel identity row now derives its total width and trailing padding from
+the separator selected at line 1. The 60-byte source column requires a
+107-byte row with 62 trailing spaces; the 61-byte source column requires a
+108-byte row with 63 trailing spaces. Both retain the exact `Kernel Name`
+prefix, eight following spaces, and the reviewed 26-byte CUDA identifier
+grammar. Rows for the other width, changed trailing padding, or redistributed
+internal padding fail before section admission. The exact selected separator
+remains mandatory at both later table closes.
+
+Behavioral tests exercise both layouts through the parser and NCU subprocess
+boundary and reject mixed row and separator widths. No image build, GPU
+execution, v25 submission, or relaunch was performed for this source repair.
