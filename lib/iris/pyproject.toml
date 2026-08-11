@@ -14,7 +14,7 @@ dependencies = [
     # does not depend on it, so the controller — its one consumer — pulls it in
     # explicitly.
     "marin-finelog >= 0.2.10",
-    "marin-finelog-server>=0.2.17.dev30664483151",
+    "marin-finelog-server>=0.2.21.dev31054160190",
     # Platform companion wheel containing the Rust-owned public proxy listener.
     "marin-iris-native>=0.1.5.dev30223685542",
     "click>=8.3.1",
