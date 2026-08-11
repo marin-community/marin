@@ -66,3 +66,18 @@ author: Rafal Wojdyla
 - Validation: Fray has 89 passing tests. Datakit has 248 passing tests and five expected failures.
 - Validation: Pre-commit and Pyrefly passed.
 - Next action: Push the repair, stop both degraded roots, and relaunch both partitions from the new SHA.
+
+### 2026-08-11 20:07 UTC - Repaired dual-region launch
+
+- Runtime source SHA: `2e23fbe3d9b65ec7095b13a0dd94cf3ef6cb221a`.
+- Code commit: `daa2275a0cb63ca5ffed9fb64d59394d777a31f8`.
+- Dirty tree: No.
+- Old east job: `/rav/harrier-fuzzy-dups-east-p0-20260811`, stopped.
+- Old RNO job: `/rav/harrier-fuzzy-dups-rno-p1-20260811`, stopped.
+- East job: `/rav/harrier-fuzzy-dups-east-p0-20260811-v2`.
+- RNO job: `/rav/harrier-fuzzy-dups-rno-p1-20260811-v2`.
+- Priority: Interactive.
+- Hardware: 96 H100 TEI workers per region, for 192 H100 workers total.
+- Output root: `s3://marin-us-east-02a/marin/datakit/embed/harrier-fuzzy-duplicates/`.
+- Result: Both repaired Iris submissions succeeded.
+- Next action: Check startup state after 120 seconds and verify that port collisions do not recur.
