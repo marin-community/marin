@@ -56,3 +56,23 @@ reject changed width, internal or trailing padding, token order/count,
 colon-form rows, identifier lookalikes, and invalid identifier characters.
 No image build, GPU execution, or relaunch was performed for this parser
 change.
+
+## V20 identity-table close observation
+
+The single v20 task used source
+`d45ea8fefb7ad73677136b7e6d53d711a46e34da`. It failed once, without retry,
+after the line-1 table separator and line-2 fixed-width kernel identity row
+passed. The parser then recognized the exact 107-byte separator at line 3 but
+rejected it because the kernel identity table had no reviewed close state.
+
+The parser now requires that exact separator immediately after every accepted
+fixed-width kernel identity row. A missing, duplicate, moved, or changed close
+fails before the address-source table can begin. The previously reviewed
+`Address Source`, per-section separator, and instruction grammar remains
+unchanged.
+
+The retained v20 evidence proves no line-4 or later syntax. In particular, the
+existing address-source grammar is retained from earlier synthetic fixtures,
+not inferred from the v20 traceback. The remote NCU report and SASS export were
+not retained. No image build, GPU execution, or relaunch was performed for
+this repair.

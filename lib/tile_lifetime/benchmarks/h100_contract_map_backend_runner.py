@@ -941,22 +941,31 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
     sections: list[NcuSassKernel] = []
     current_name: str | None = None
     instructions: list[NcuSassInstruction] = []
+    identity_separator_seen = False
     header_seen = False
     separator_seen = False
 
     def finish_section() -> None:
-        nonlocal current_name, instructions, header_seen, separator_seen
+        nonlocal current_name, instructions, identity_separator_seen, header_seen, separator_seen
         if current_name is None:
             return
-        if not header_seen or not separator_seen or not instructions:
+        if not identity_separator_seen or not header_seen or not separator_seen or not instructions:
             raise ValueError(f"Nsight Compute SASS section {current_name!r} is structurally incomplete")
         sections.append(NcuSassKernel(name=current_name, instructions=tuple(instructions)))
         current_name = None
         instructions = []
+        identity_separator_seen = False
         header_seen = False
         separator_seen = False
 
     for line_number, line in enumerate(lines[1:], start=2):
+        if current_name is not None and not identity_separator_seen:
+            if line != _NCU_SASS_SEPARATOR:
+                raise ValueError(
+                    f"Nsight Compute SASS kernel identity table omits its exact close at line {line_number}"
+                )
+            identity_separator_seen = True
+            continue
         section = _NCU_SASS_SECTION_PATTERN.fullmatch(line)
         if section is not None:
             finish_section()

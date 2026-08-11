@@ -178,6 +178,7 @@ def _ncu_sass_export(*sections: tuple[str, tuple[str, ...]]) -> str:
         lines.extend(
             (
                 _ncu_sass_kernel_row(name),
+                _NCU_SASS_SEPARATOR,
                 "Address Source",
                 _NCU_SASS_SEPARATOR,
             )
@@ -470,7 +471,7 @@ def test_runner_ncu_parser_bounds_and_decodes_input_before_csv_parsing(tmp_path:
         runner.parse_ncu_metrics(output)
 
 
-@pytest.mark.parametrize("variant", ("valid", "missing-top-level", "unrecognized-record"))
+@pytest.mark.parametrize("variant", ("valid", "missing-top-level", "missing-identity-close", "unrecognized-record"))
 def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -497,6 +498,12 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
         if variant == "missing-top-level":
             source = source.split("\n", maxsplit=1)[1]
+        elif variant == "missing-identity-close":
+            source = source.replace(
+                _ncu_sass_kernel_row(_NCU_KERNEL_A) + "\n" + _NCU_SASS_SEPARATOR + "\n",
+                _ncu_sass_kernel_row(_NCU_KERNEL_A) + "\n",
+                1,
+            )
         elif variant == "unrecognized-record":
             section = _ncu_sass_kernel_row(_NCU_KERNEL_A)
             source = source.replace(section, "public-unknown-record\n" + section)
@@ -518,6 +525,10 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
     )
     if variant == "missing-top-level":
         with pytest.raises(ValueError, match="exact line-1 table separator"):
+            runner._run_ncu_profile(*arguments)
+        return
+    if variant == "missing-identity-close":
+        with pytest.raises(ValueError, match=r"identity table omits.*line 3"):
             runner._run_ncu_profile(*arguments)
         return
     if variant == "unrecognized-record":
@@ -596,6 +607,57 @@ def test_runner_ncu_sass_parser_accepts_exact_colonless_padded_kernel_identity()
 
 
 @pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing",
+        "missing-second",
+        "duplicate",
+        "moved",
+        "wrong-literal",
+        "blank-before-close",
+        "separator-before-kernel",
+    ),
+)
+def test_runner_ncu_sass_parser_requires_immediate_exact_identity_table_close(mutation: str) -> None:
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
+    row = _ncu_sass_kernel_row(_NCU_KERNEL_A)
+    expected_names = (_NCU_KERNEL_A,)
+    if mutation == "missing-second":
+        source = _ncu_sass_export(
+            (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+            (_NCU_KERNEL_B, ("0000000000000010 EXIT",)),
+        )
+        row = _ncu_sass_kernel_row(_NCU_KERNEL_B)
+        expected_names = (_NCU_KERNEL_A, _NCU_KERNEL_B)
+    identity_table = row + "\n" + _NCU_SASS_SEPARATOR + "\nAddress Source"
+    if mutation in {"missing", "missing-second"}:
+        source = source.replace(identity_table, row + "\nAddress Source", 1)
+    elif mutation == "duplicate":
+        source = source.replace(
+            identity_table,
+            row + "\n" + _NCU_SASS_SEPARATOR + "\n" + _NCU_SASS_SEPARATOR + "\nAddress Source",
+            1,
+        )
+    elif mutation == "moved":
+        source = source.replace(identity_table, row + "\nAddress Source\n" + _NCU_SASS_SEPARATOR, 1)
+    elif mutation == "wrong-literal":
+        source = source.replace(identity_table, row + "\n" + _NCU_SASS_SEPARATOR + " \nAddress Source", 1)
+    elif mutation == "blank-before-close":
+        source = source.replace(identity_table, row + "\n\n" + _NCU_SASS_SEPARATOR + "\nAddress Source", 1)
+    elif mutation == "separator-before-kernel":
+        source = source.replace(
+            _NCU_SASS_SEPARATOR + "\n" + row,
+            _NCU_SASS_SEPARATOR + "\n" + _NCU_SASS_SEPARATOR + "\n" + row,
+            1,
+        )
+    else:
+        raise AssertionError(f"unhandled mutation {mutation!r}")
+
+    with pytest.raises(ValueError, match=r"identity table omits|misplaced"):
+        runner.parse_ncu_sass(source, expected_names)
+
+
+@pytest.mark.parametrize(
     "section",
     (
         "Kernel Name" + " " * 8 + _NCU_KERNEL_A + " " * 61,
@@ -651,6 +713,7 @@ def test_runner_ncu_sass_parser_rejects_kernel_identity_row_mutations(section: s
         (
             _NCU_SASS_SEPARATOR,
             section,
+            _NCU_SASS_SEPARATOR,
             "Address Source",
             _NCU_SASS_SEPARATOR,
             "0000000000000000 MOV R1, R2",
@@ -687,7 +750,7 @@ def test_runner_ncu_sass_unrecognized_record_diagnostic_is_metadata_only(record:
     diagnostic = _ncu_sass_diagnostic(failure.value)
     structure = diagnostic.pop("line_structure")
     assert diagnostic == {
-        "line_number": 5,
+        "line_number": 6,
         "line_sha256": hashlib.sha256(record_bytes).hexdigest(),
         "line_utf8_bytes": len(record_bytes),
     }
@@ -870,7 +933,7 @@ def test_runner_ncu_sass_unrecognized_record_diagnostic_does_not_leak_adjacent_o
         runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
     message = str(failure.value)
-    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 5
+    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 6
     assert private_record not in message
     assert adjacent_record not in message
     assert environment_token not in message
@@ -972,7 +1035,8 @@ def test_runner_ncu_sass_parser_rejects_duplicate_or_misplaced_header(replacemen
 def test_runner_ncu_sass_parser_rejects_header_before_kernel_section() -> None:
     section = _ncu_sass_kernel_row(_NCU_KERNEL_A)
     source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))).replace(
-        section + "\nAddress Source", "Address Source\n" + section
+        section + "\n" + _NCU_SASS_SEPARATOR + "\nAddress Source",
+        "Address Source\n" + section + "\n" + _NCU_SASS_SEPARATOR,
     )
     with pytest.raises(ValueError, match="misplaced"):
         runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
@@ -1012,7 +1076,7 @@ def test_runner_ncu_sass_file_boundary_is_bounded_and_nonleaking(tmp_path: Path)
 
     with pytest.raises(ValueError) as failure:
         runner._parse_ncu_sass_file(path, (_NCU_KERNEL_A,))
-    assert str(failure.value) == "Nsight Compute SASS export line 5 exceeds its reviewed bound"
+    assert str(failure.value) == "Nsight Compute SASS export line 6 exceeds its reviewed bound"
     assert private not in str(failure.value)
 
     with path.open("wb") as stream:
