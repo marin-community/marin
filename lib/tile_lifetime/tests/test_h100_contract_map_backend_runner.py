@@ -1269,7 +1269,8 @@ def test_compile_worker_records_target_cache_key_executable_root_events_and_fina
             return compiled.as_text()
 
     monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", str(cache_directory))
-    monkeypatch.setattr(runner, "_require_pinned_cache_compression_runtime", lambda: None)
+    compression_checks = []
+    monkeypatch.setattr(runner, "_require_pinned_cache_compression_runtime", lambda: compression_checks.append(True))
     monitoring = _FakeMonitoring()
 
     def compile_backend(*args, **kwargs):
@@ -1309,6 +1310,7 @@ def test_compile_worker_records_target_cache_key_executable_root_events_and_fina
     assert record["persistent_cache_file_count"] == 2
     assert record["persistent_cache_total_bytes"] == len(target_entry) + len(_compressed_cache_entry(b"helper"))
     assert record["final_hlo"] == "authoritative final HLO"
+    assert compression_checks == [True]
 
 
 def test_persistent_cache_target_rejects_metadata_nested_and_ambiguous_entries(tmp_path: Path) -> None:
