@@ -282,18 +282,29 @@ LABEL org.opencontainers.image.description="Iris H100 evidence task image"
 COPY --from=h100-evidence-runtime /opt/h100-evidence-runtime /opt/h100-evidence-runtime
 ENV PATH="/opt/h100-evidence-runtime/bin:${PATH}"
 
-ARG NVIDIA_DEBIAN12_AMD64_REPOSITORY=https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64
 COPY lib/iris/images/h100-evidence-debian12-amd64.sha256 /tmp/h100-evidence-debian12-amd64.sha256
 
 RUN set -eux; \
     test "$(dpkg --print-architecture)" = amd64; \
-    while read -r expected_sha256 filename; do \
+    while read -r expected_sha256 expected_size package_url extra; do \
+      test -z "${extra}"; \
+      case "${expected_size}" in \
+        ""|*[!0-9]*) echo "invalid NVIDIA package size: ${expected_size}" >&2; exit 1 ;; \
+      esac; \
+      test "${expected_size}" -gt 0; \
+      case "${package_url}" in \
+        https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/*) ;; \
+        *) echo "invalid NVIDIA package URL: ${package_url}" >&2; exit 1 ;; \
+      esac; \
+      filename="${package_url##*/}"; \
       case "${filename}" in \
         ""|*[!A-Za-z0-9._+-]*) echo "invalid NVIDIA package filename: ${filename}" >&2; exit 1 ;; \
       esac; \
       curl -fsSL --proto '=https' --tlsv1.2 \
         -o "/tmp/${filename}" \
-        "${NVIDIA_DEBIAN12_AMD64_REPOSITORY}/${filename}"; \
+        "${package_url}"; \
+      actual_size="$(wc -c < "/tmp/${filename}")"; \
+      test "${actual_size}" -eq "${expected_size}"; \
       echo "${expected_sha256}  /tmp/${filename}" | sha256sum --check --strict; \
       dpkg-deb --extract "/tmp/${filename}" /; \
       rm -f "/tmp/${filename}"; \
@@ -305,16 +316,34 @@ RUN set -eux; \
     test -x /usr/local/cuda-13.2/bin/nvcc; \
     test -x /usr/local/cuda-13.2/bin/ptxas; \
     test -x /usr/local/cuda-13.2/bin/cuobjdump; \
+    test -x /usr/local/cuda-13.2/bin/nvdisasm; \
     test -x /usr/local/bin/ncu; \
     test -x /usr/local/bin/nsys; \
     /usr/local/cuda-13.2/bin/nvcc --version; \
     /usr/local/cuda-13.2/bin/ptxas --version; \
     /usr/local/cuda-13.2/bin/cuobjdump --version; \
+    /usr/local/cuda-13.2/bin/nvdisasm --version; \
     /usr/local/bin/ncu --version; \
     /usr/local/bin/nsys --version
 
 ENV CUDA_HOME=/usr/local/cuda-13.2
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
+ENV NVDISASM_PATH="${CUDA_HOME}/bin/nvdisasm"
+
+# Exercise the runner's exact compiler/disassembler dependency without loading
+# a driver or querying a device. cuobjdump delegates SASS decoding to nvdisasm.
+RUN set -eux; \
+    printf '%s\n' 'extern "C" __global__ void h100_evidence_smoke(int *output) { if (threadIdx.x == 0) *output = 1; }' \
+      > /tmp/h100-evidence-smoke.cu; \
+    nvcc -arch=sm_90a --cubin /tmp/h100-evidence-smoke.cu -o /tmp/h100-evidence-smoke.cubin; \
+    cuobjdump --dump-sass /tmp/h100-evidence-smoke.cubin > /tmp/h100-evidence-cuobjdump.sass; \
+    nvdisasm /tmp/h100-evidence-smoke.cubin > /tmp/h100-evidence-nvdisasm.sass; \
+    grep -Fq h100_evidence_smoke /tmp/h100-evidence-cuobjdump.sass; \
+    grep -Fq h100_evidence_smoke /tmp/h100-evidence-nvdisasm.sass; \
+    grep -Eq '/\\*[[:xdigit:]]+\\*/.*[A-Z][A-Z0-9.]+' /tmp/h100-evidence-cuobjdump.sass; \
+    grep -Eq '/\\*[[:xdigit:]]+\\*/.*[A-Z][A-Z0-9.]+' /tmp/h100-evidence-nvdisasm.sass; \
+    rm -f /tmp/h100-evidence-smoke.cu /tmp/h100-evidence-smoke.cubin \
+      /tmp/h100-evidence-cuobjdump.sass /tmp/h100-evidence-nvdisasm.sass
 
 # The runner loads these libraries from the selected NVCC toolkit before it
 # records any evidence. Resolve and load every required symbol without calling

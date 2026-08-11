@@ -5,6 +5,7 @@ import ast
 import re
 import tomllib
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlparse
 
 import yaml
 
@@ -18,6 +19,8 @@ ROOT_PYPROJECT = REPO_ROOT / "pyproject.toml"
 TILE_LIFETIME_PYPROJECT = REPO_ROOT / "lib" / "tile_lifetime" / "pyproject.toml"
 UV_LOCK = REPO_ROOT / "uv.lock"
 H100_RUNNER = REPO_ROOT / "lib" / "tile_lifetime" / "benchmarks" / "h100_contract_map_backend_runner.py"
+BACKEND_RESOURCES = REPO_ROOT / "lib" / "tile_lifetime" / "src" / "tile_lifetime" / "contract_map_backend_resources.py"
+NVIDIA_DEBIAN12_AMD64_REPOSITORY = "https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64"
 
 EXPECTED_PACKAGES = {
     "cuda-cccl-13-2_13.2.86-1_amd64.deb",
@@ -28,6 +31,7 @@ EXPECTED_PACKAGES = {
     "cuda-cuobjdump-13-2_13.2.86-1_amd64.deb",
     "cuda-driver-dev-13-2_13.2.86-1_amd64.deb",
     "cuda-nvcc-13-2_13.2.86-1_amd64.deb",
+    "cuda-nvdisasm-13-2_13.2.86-1_amd64.deb",
     "cuda-nvtx-13-2_13.2.86-1_amd64.deb",
     "cuda-toolkit-13-2-config-common_13.2.86-1_all.deb",
     "cuda-toolkit-13-config-common_13.2.86-1_all.deb",
@@ -112,12 +116,62 @@ def _locked_package(name: str) -> dict:
     return matches[0]
 
 
-def test_h100_evidence_package_manifest_is_closed_and_hash_pinned():
-    records = [line.split() for line in PACKAGE_MANIFEST.read_text().splitlines()]
+def _package_manifest_records() -> list[tuple[str, int, str]]:
+    records = []
+    for line in PACKAGE_MANIFEST.read_text().splitlines():
+        digest, size, url = line.split()
+        records.append((digest, int(size), url))
+    return records
 
-    assert {filename for _, filename in records} == EXPECTED_PACKAGES
+
+def _runner_cubin_disassemblers() -> set[str]:
+    tree = ast.parse(BACKEND_RESOURCES.read_text())
+    disassemblers = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not any(
+            isinstance(target, ast.Name) and target.id == "sass" for target in node.targets
+        ):
+            continue
+        strings = {
+            child.value
+            for child in ast.walk(node.value)
+            if isinstance(child, ast.Constant) and isinstance(child.value, str)
+        }
+        if "--dump-sass" not in strings:
+            continue
+        for child in ast.walk(node.value):
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+                and child.func.attr == "with_name"
+                and len(child.args) == 1
+                and isinstance(child.args[0], ast.Constant)
+                and isinstance(child.args[0].value, str)
+            ):
+                disassemblers.add(child.args[0].value)
+    return disassemblers
+
+
+def test_h100_evidence_package_manifest_is_closed_and_hash_pinned():
+    records = _package_manifest_records()
+    filenames = {Path(urlparse(url).path).name for _, _, url in records}
+
+    assert filenames == EXPECTED_PACKAGES
     assert len(records) == len(EXPECTED_PACKAGES)
-    assert all(re.fullmatch(r"[0-9a-f]{64}", digest) for digest, _ in records)
+    assert all(re.fullmatch(r"[0-9a-f]{64}", digest) for digest, _, _ in records)
+    assert all(size > 0 for _, size, _ in records)
+    assert all(url == f"{NVIDIA_DEBIAN12_AMD64_REPOSITORY}/{Path(urlparse(url).path).name}" for _, _, url in records)
+    assert (
+        "9d3ba750108356723313fa6e42d396a50fff8b00fc6f092a7b098537ac430b79",
+        4_284_630,
+        f"{NVIDIA_DEBIAN12_AMD64_REPOSITORY}/cuda-nvdisasm-13-2_13.2.86-1_amd64.deb",
+    ) in records
+
+    target = _docker_stage("task-h100-evidence")
+    assert "while read -r expected_sha256 expected_size package_url extra" in target
+    assert 'test "${actual_size}" -eq "${expected_size}"' in target
+    assert '"${package_url}"' in target
+    assert "ARG NVIDIA_DEBIAN12_AMD64_REPOSITORY" not in target
 
 
 def test_h100_evidence_manifest_is_in_the_real_nonempty_docker_context():
@@ -137,8 +191,25 @@ def test_h100_evidence_target_inherits_task_and_checks_every_required_tool():
 
     assert "h100-evidence-debian12-amd64.sha256" in target
     assert 'test "$(dpkg --print-architecture)" = amd64' in target
-    for tool in ("nvcc", "ptxas", "cuobjdump", "ncu", "nsys"):
+    for tool in ("nvcc", "ptxas", "cuobjdump", "nvdisasm", "ncu", "nsys"):
         assert re.search(rf"/[^ ;]*{tool} --version", target)
+
+
+def test_h100_evidence_image_executes_the_runner_cubin_disassembly_closure():
+    target = _docker_stage("task-h100-evidence")
+    smoke = target.split("# Exercise the runner's exact compiler/disassembler dependency", maxsplit=1)[1].split(
+        "# The runner loads these libraries", maxsplit=1
+    )[0]
+
+    assert _runner_cubin_disassemblers() == {"cuobjdump"}
+    assert "cuda-nvdisasm-13-2_13.2.86-1_amd64.deb" in EXPECTED_PACKAGES
+    assert 'ENV NVDISASM_PATH="${CUDA_HOME}/bin/nvdisasm"' in target
+    assert "nvcc -arch=sm_90a --cubin" in smoke
+    assert "cuobjdump --dump-sass /tmp/h100-evidence-smoke.cubin" in smoke
+    assert "nvdisasm /tmp/h100-evidence-smoke.cubin" in smoke
+    assert smoke.count("grep -Fq h100_evidence_smoke") == 2
+    assert smoke.count("grep -Eq") == 2
+    assert "nvidia-smi" not in smoke
 
 
 def test_h100_evidence_image_probes_every_runner_loaded_cuda_library():
