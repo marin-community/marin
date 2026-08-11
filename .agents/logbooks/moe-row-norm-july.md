@@ -10,12 +10,12 @@ author: kaiyuew
 
 ## Current TL;DR
 
-The first Gate-1 launch matched July hyperparameters but was not descended from
-the `july_baseline` branch. Its d512 result is not decision-grade, and its d768
-cell was stopped at step 6,257. A later matched control was stopped at step 707
-for the same ancestry error. The corrected variant is now based directly on
-July commit `52d8a9eb8d9434cf1dcaaee060edeadc60dfff9d` and snapshot at
-`82482dc554893a8b1025ed6561d8224e98013e66`.
+The corrected exact-July d512 pair completed successfully. Row-norm finished at
+Paloma macro loss 3.59609 and 348,644 final-100-step tokens/s, versus 3.57940
+and 355,680 tokens/s for the paired untouched July control. Its effective
+speedup is 0.8965x, so the variant fails at d512 and should not advance to d768.
+Both runs descend directly from July commit
+`52d8a9eb8d9434cf1dcaaee060edeadc60dfff9d`.
 
 ## Scope
 
@@ -76,3 +76,49 @@ July commit `52d8a9eb8d9434cf1dcaaee060edeadc60dfff9d` and snapshot at
 - Next action: submit W&B runs `MOE-ROW-NORM-JULY-001-d512` and
   `MOE-ROW-NORM-JULY-CTRL-001-d512`, verify both advance, then compare terminal
   metrics.
+
+### 2026-08-10 19:14 PDT - Corrected pair advancing
+
+- Hypothesis: an exact-codebase control separates the row-norm intervention
+  from drift between the July branch and current Marin.
+- Iris parent: `/kaiyuew/moe-row-norm-july-d512-pair-8131`.
+- W&B:
+  - Variant: https://wandb.ai/marin-community/dial_moe/runs/MOE-ROW-NORM-JULY-001-d512
+  - Control: https://wandb.ai/marin-community/dial_moe/runs/MOE-ROW-NORM-JULY-CTRL-001-d512
+- Config: the serialized runtime configs match on all selected model, data,
+  optimizer-scalar, trainer, and hardware fields. They differ only in the
+  intended model/optimizer implementation and checkpoint destination.
+- Result: both runs advanced across two observations with finite loss. The
+  second observation was variant step 267, loss 5.5504, 352,273 tokens/s;
+  control step 369, loss 5.2661, 355,829 tokens/s. The step offset comes from
+  the variant's longer initial compilation.
+- Interpretation: the corrected launch passed the fourth check: live runtime
+  config equality and healthy paired execution.
+- Next action: monitor both jobs through terminal state and compare final
+  Paloma macro loss and final-100-step throughput.
+
+### 2026-08-10 20:39 PDT - Corrected pair terminal
+
+- Hypothesis: row-wise direction updates plus norm-preserving output scales
+  improve quality enough to offset any throughput cost.
+- Iris parent: `/kaiyuew/moe-row-norm-july-d512-pair-8131` (succeeded).
+- Result:
+  - Row-norm: final Paloma macro loss 3.5960889; mean throughput over steps
+    10,880--10,979 was 348,644 tokens/s.
+  - Exact July control: final Paloma macro loss 3.5793972; mean throughput over
+    steps 10,880--10,979 was 355,680 tokens/s.
+  - Delta: row-norm was 0.0166917 loss worse and 1.98% slower.
+  - Effective speedup against the paired control: 0.8965x at the d512
+    3.82e17-FLOP budget.
+  - The historical July run was loss 3.5667 at 352,609 tokens/s. The new
+    exact-code control was 0.01270 loss worse and 0.87% faster, demonstrating
+    enough run-to-run drift that the paired control is the primary comparator.
+- Checkpoints:
+  - `gs://marin-us-central1/grug/moe_row_norm_july_d512-a38388/checkpoints/step-10980`
+  - `gs://marin-us-central1/grug/moe_row_norm_july_baseline_control_d512-cf2086/checkpoints/step-10980`
+  - Both metadata files report step 10,980 and `is_temporary: false`.
+- Interpretation: the hypothesis is rejected at d512. The quality penalty
+  narrowed late but never reversed, and the intervention also reduced
+  throughput. This cell fails the first Gate-1 scale.
+- Next action: do not launch d768 for this variant. Retain the implementation
+  and histories as a negative result.
