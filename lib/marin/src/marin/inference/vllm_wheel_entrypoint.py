@@ -138,6 +138,7 @@ def deep_gemm_cuda_environment(nvidia_roots: tuple[Path, ...], temporary_root: P
     compatibility_lib = compatibility_home / "lib64"
 
     _link_directory_entries(cuda_runtime_root / "include", compatibility_include)
+    _link_directory_entries(cccl_root, compatibility_include)
     _link_directory_entries(cuda_nvrtc_root / "include", compatibility_include)
     _link_directory_entries(curand_root / "include", compatibility_include)
     _link_directory_entries(cublas_root / "include", compatibility_include)

@@ -229,6 +229,9 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     }
     assert not (compatibility_home / "bin" / "nvcc").exists()
     assert (compatibility_include / "cuda.h").resolve() == (cuda_runtime_root / "include" / "cuda.h").resolve()
+    assert (compatibility_include / "cuda" / "std" / "type_traits").resolve() == (
+        cccl_root / "cuda" / "std" / "type_traits"
+    ).resolve()
     assert (compatibility_include / "cccl").resolve() == cccl_root.resolve()
     assert (compatibility_include / "cublasLt.h").resolve() == (cublas_root / "include" / "cublasLt.h").resolve()
     assert (compatibility_include / "curand_kernel.h").resolve() == (
