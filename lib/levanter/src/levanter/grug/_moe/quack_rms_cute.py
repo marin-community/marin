@@ -18,7 +18,7 @@ import quack.utils as quack_utils
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from levanter.grug._moe.quack_moe_cute import _cute_dtype
 from quack.activation import dact_fn_map
-from quack.cute_dsl_utils import mlir_namedtuple
+from quack.cute_dsl_utils import get_max_active_clusters, mlir_namedtuple
 from quack.epi_ops import (
     ColVecLoad,
     ColVecReduce,
@@ -41,10 +41,17 @@ _DEFAULT_CLUSTER_MNK = (2, 1, 1)
 _DEFAULT_BACKWARD_TILE_MN = (256, 128)
 _DEFAULT_BACKWARD_CLUSTER_MNK = (2, 1, 1)
 _DEFAULT_MAX_SWIZZLE = 8
-_MAX_ACTIVE_CLUSTERS = 148
+_FALLBACK_MAX_ACTIVE_CLUSTERS = 148
 _MATRIX_MODE = (1, 2, 0)
 _MATRIX_DIVISIBILITY = (1, 1, 8)
 _VECTOR_DIVISIBILITY = (1, 4)
+
+
+def _max_active_clusters(cluster_mnk: tuple[int, int, int]) -> int:
+    """Size the persistent grid from the live device, as the sibling QuACK bridges do."""
+    if jax.default_backend() == "cpu":
+        return _FALLBACK_MAX_ACTIVE_CLUSTERS
+    return get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
 
 
 class _GemmRmsBackwardMixin(GemmActMixin):
@@ -244,7 +251,7 @@ def quack_coda_rms_backward_producer(
         a_dtype=_cute_dtype(gate_preactivation_cotangent.dtype),
         tile_mn=tile_mn,
         cluster_mnk=cluster_mnk,
-        max_active_clusters=_MAX_ACTIVE_CLUSTERS,
+        max_active_clusters=_max_active_clusters(cluster_mnk),
         max_swizzle=max_swizzle,
     )
 
@@ -304,7 +311,7 @@ def quack_silu_backward_gemm(
         a_dtype=_cute_dtype(output_cotangent.dtype),
         tile_mn=tile_mn,
         cluster_mnk=cluster_mnk,
-        max_active_clusters=_MAX_ACTIVE_CLUSTERS,
+        max_active_clusters=_max_active_clusters(cluster_mnk),
         max_swizzle=max_swizzle,
     )
     tensor_spec = cjax.TensorSpec
