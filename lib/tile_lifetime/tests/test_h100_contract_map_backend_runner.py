@@ -7,8 +7,11 @@ import csv
 import hashlib
 import importlib
 import json
+import os
 import sqlite3
 import subprocess
+import sys
+import zlib
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -16,6 +19,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from jax._src import compilation_cache as pinned_jax_compilation_cache
 from ml_dtypes import bfloat16
 
 import tile_lifetime.contract_map_backend as contract_map_backend
@@ -1149,14 +1153,26 @@ def test_worker_environment_replaces_inherited_cache_configuration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", "/inherited/cache")
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_CHECK_CONTENTS", "true")
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_INCLUDE_METADATA_IN_KEY", "true")
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_MAX_SIZE", "123")
+    monkeypatch.setenv("JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES", "all")
     monkeypatch.setenv("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "99")
 
     uncached = runner._worker_environment(tmp_path / "uncached_dump")
     isolated = runner._worker_environment(tmp_path / "cached_dump", tmp_path / "isolated_cache")
 
     assert "JAX_COMPILATION_CACHE_DIR" not in uncached
+    assert "JAX_COMPILATION_CACHE_CHECK_CONTENTS" not in uncached
+    assert "JAX_COMPILATION_CACHE_INCLUDE_METADATA_IN_KEY" not in uncached
+    assert "JAX_COMPILATION_CACHE_MAX_SIZE" not in uncached
+    assert "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" not in uncached
     assert "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS" not in uncached
     assert isolated["JAX_COMPILATION_CACHE_DIR"] == str((tmp_path / "isolated_cache").resolve())
+    assert isolated["JAX_COMPILATION_CACHE_CHECK_CONTENTS"] == "false"
+    assert isolated["JAX_COMPILATION_CACHE_INCLUDE_METADATA_IN_KEY"] == "false"
+    assert isolated["JAX_COMPILATION_CACHE_MAX_SIZE"] == "-1"
+    assert isolated["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] == "none"
     assert isolated["JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS"] == "0"
 
 
@@ -1189,13 +1205,57 @@ def test_compile_timing_stops_at_worker_compile_completion_before_delayed_public
     assert record["postcompile_ns"] == 600
 
 
-def test_compile_worker_records_public_cache_count_bytes_identity_and_final_hlo(
+def _compressed_cache_entry(executable: bytes, *, compile_time: int = 7) -> bytes:
+    return zlib.compress(compile_time.to_bytes(4, "big") + executable)
+
+
+def test_pinned_jax_0_10_1_cache_layout_is_four_byte_big_endian_time_prefix() -> None:
+    executable = b"serialized executable"
+
+    combined = pinned_jax_compilation_cache.combine_executable_and_time(executable, 0x01020304)
+
+    assert combined == b"\x01\x02\x03\x04serialized executable"
+    assert pinned_jax_compilation_cache.extract_executable_and_time(combined) == (executable, 0x01020304)
+
+
+class _FakeMonitoring:
+    def __init__(self) -> None:
+        self.listener = None
+
+    def register_event_listener(self, listener) -> None:
+        self.listener = listener
+
+    def unregister_event_listener(self, listener) -> None:
+        assert self.listener is listener
+        self.listener = None
+
+
+def test_compile_cache_listener_is_scoped_across_compile_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monitoring = _FakeMonitoring()
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("compile failed")
+
+    monkeypatch.setattr(runner, "_compiled_backend", fail)
+
+    with pytest.raises(RuntimeError, match="compile failed"):
+        runner._compile_with_cache_events(
+            SimpleNamespace(),
+            "ordinary_xla",
+            jax=SimpleNamespace(monitoring=monitoring),
+        )
+    assert monitoring.listener is None
+
+
+def test_compile_worker_records_target_cache_key_executable_root_events_and_final_hlo(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cache_directory = tmp_path / "cache"
     cache_directory.mkdir()
-    (cache_directory / "entry-a-cache").write_bytes(b"first cache entry")
-    (cache_directory / "entry-b-cache").write_bytes(b"second")
+    key = f"jit_step-{'a' * 64}"
+    target_entry = _compressed_cache_entry(b"serialized executable", compile_time=17)
+    (cache_directory / f"{key}-cache").write_bytes(target_entry)
+    (cache_directory / f"jit_helper-{'b' * 64}-cache").write_bytes(_compressed_cache_entry(b"helper"))
     compiled = SimpleNamespace(
         __call__=lambda *args: ("output",),
         as_text=lambda: "authoritative final HLO",
@@ -1209,24 +1269,216 @@ def test_compile_worker_records_public_cache_count_bytes_identity_and_final_hlo(
             return compiled.as_text()
 
     monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", str(cache_directory))
-    monkeypatch.setattr(runner, "_compiled_backend", lambda *args, **kwargs: (FakeCompiled(), 123))
+    monkeypatch.setattr(runner, "_require_pinned_cache_compression_runtime", lambda: None)
+    monitoring = _FakeMonitoring()
+
+    def compile_backend(*args, **kwargs):
+        assert monitoring.listener is not None
+        monitoring.listener(runner._CACHE_EVENT_NAMES[0])
+        monitoring.listener(runner._CACHE_EVENT_NAMES[2])
+        return FakeCompiled(), 123
+
+    monkeypatch.setattr(runner, "_compiled_backend", compile_backend)
     context = SimpleNamespace(inputs=("x", "w0", "w1", "do"))
     args = SimpleNamespace(case_id="case", backend="ordinary_xla", cache_kind="compile")
 
     record = runner._run_compile_worker(
         args,
         context,
-        jax=SimpleNamespace(block_until_ready=lambda value: None),
+        jax=SimpleNamespace(block_until_ready=lambda value: None, monitoring=monitoring),
     )
 
-    identity = hashlib.sha256()
+    root_identity = hashlib.sha256()
     for path in sorted(cache_directory.iterdir()):
-        identity.update(path.name.encode())
-        identity.update(bytes.fromhex(runner.file_sha256(path)))
-    assert record["persistent_cache_identity"] == identity.hexdigest()
+        root_identity.update(path.name.encode())
+        root_identity.update(bytes.fromhex(runner.file_sha256(path)))
+    executable_identity = hashlib.sha256(b"serialized executable").hexdigest()
+    contract_identity = hashlib.sha256(key.encode() + bytes.fromhex(executable_identity)).hexdigest()
+    assert record["persistent_cache_identity"] == contract_identity
+    assert record["persistent_cache_key"] == key
+    assert record["persistent_cache_serialized_executable_sha256"] == executable_identity
+    assert record["persistent_cache_compile_time"] == 17
+    assert record["persistent_cache_entry_sha256"] == hashlib.sha256(target_entry).hexdigest()
+    assert record["persistent_cache_root_identity"] == root_identity.hexdigest()
+    assert record["persistent_cache_compression"] == "zlib"
+    assert record["persistent_cache_events"] == {
+        runner._CACHE_EVENT_NAMES[0]: 1,
+        runner._CACHE_EVENT_NAMES[1]: 0,
+        runner._CACHE_EVENT_NAMES[2]: 1,
+    }
     assert record["persistent_cache_file_count"] == 2
-    assert record["persistent_cache_total_bytes"] == len(b"first cache entrysecond")
+    assert record["persistent_cache_total_bytes"] == len(target_entry) + len(_compressed_cache_entry(b"helper"))
     assert record["final_hlo"] == "authoritative final HLO"
+
+
+def test_persistent_cache_target_rejects_metadata_nested_and_ambiguous_entries(tmp_path: Path) -> None:
+    key = f"jit_step-{'a' * 64}"
+    (tmp_path / f"{key}-cache").write_bytes(_compressed_cache_entry(b"executable"))
+
+    atime = tmp_path / f"{key}-atime"
+    atime.write_bytes(b"timestamp")
+    with pytest.raises(RuntimeError, match="unexpected entry") as raised:
+        runner._persistent_cache_target(tmp_path)
+    assert atime.name not in str(raised.value)
+    atime.unlink()
+
+    nested = tmp_path / "xla_gpu_per_fusion_autotune_cache_dir"
+    nested.mkdir()
+    with pytest.raises(RuntimeError, match="only flat regular cache entries"):
+        runner._persistent_cache_target(tmp_path)
+    nested.rmdir()
+
+    (tmp_path / f"jit_step-{'b' * 64}-cache").write_bytes(_compressed_cache_entry(b"other"))
+    with pytest.raises(RuntimeError, match="exactly one jit_step"):
+        runner._persistent_cache_target(tmp_path)
+
+
+def test_persistent_cache_target_strips_only_pinned_compile_time_prefix(tmp_path: Path) -> None:
+    executable = b"same serialized executable"
+    identities = []
+    for index, compile_time in enumerate((1, 257)):
+        root = tmp_path / str(index)
+        root.mkdir()
+        key = f"jit_step-{'a' * 64}"
+        compressed = _compressed_cache_entry(executable, compile_time=compile_time)
+        (root / f"{key}-cache").write_bytes(compressed)
+        target, _ = runner._persistent_cache_target(root)
+        identities.append(target)
+
+    assert identities[0].compile_time == 1
+    assert identities[1].compile_time == 257
+    assert identities[0].compressed_entry_sha256 != identities[1].compressed_entry_sha256
+    assert identities[0].serialized_executable_sha256 == identities[1].serialized_executable_sha256
+    assert identities[0].serialized_executable_sha256 == hashlib.sha256(executable).hexdigest()
+
+
+def test_persistent_cache_target_rejects_wrong_compression_and_oversized_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = f"jit_step-{'a' * 64}"
+    path = tmp_path / f"{key}-cache"
+    path.write_bytes(b"not zlib")
+    with pytest.raises(RuntimeError, match="pinned zlib"):
+        runner._persistent_cache_target(tmp_path)
+
+    path.write_bytes(_compressed_cache_entry(b"executable"))
+    monkeypatch.setattr(runner, "_MAX_PERSISTENT_CACHE_ENTRY_BYTES", path.stat().st_size - 1)
+    with pytest.raises(RuntimeError, match="invalid bounded size"):
+        runner._persistent_cache_target(tmp_path)
+
+
+def test_persistent_cache_target_rejects_trailing_stream_high_expansion_and_fifo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = f"jit_step-{'a' * 64}"
+    path = tmp_path / f"{key}-cache"
+    path.write_bytes(_compressed_cache_entry(b"executable") + b"trailing")
+    with pytest.raises(RuntimeError, match="one complete bounded zlib stream"):
+        runner._persistent_cache_target(tmp_path)
+
+    path.write_bytes(_compressed_cache_entry(b"x" * 1_024))
+    monkeypatch.setattr(runner, "_MAX_SERIALIZED_EXECUTABLE_BYTES", 32)
+    with pytest.raises(RuntimeError, match="one complete bounded zlib stream"):
+        runner._persistent_cache_target(tmp_path)
+
+    path.unlink()
+    os.mkfifo(path)
+    with pytest.raises(RuntimeError, match="only flat regular cache entries"):
+        runner._persistent_cache_target(tmp_path)
+
+
+def test_persistent_cache_target_bounds_all_entries_and_root_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = _compressed_cache_entry(b"executable")
+    helper = _compressed_cache_entry(b"helper")
+    (tmp_path / f"jit_step-{'a' * 64}-cache").write_bytes(target)
+    (tmp_path / f"jit_helper-{'b' * 64}-cache").write_bytes(helper)
+
+    monkeypatch.setattr(runner, "_MAX_PERSISTENT_CACHE_FILES", 1)
+    with pytest.raises(RuntimeError, match="file-count bound"):
+        runner._persistent_cache_target(tmp_path)
+
+    monkeypatch.setattr(runner, "_MAX_PERSISTENT_CACHE_FILES", 2)
+    monkeypatch.setattr(runner, "_MAX_PERSISTENT_CACHE_ROOT_BYTES", len(target) + len(helper) - 1)
+    with pytest.raises(RuntimeError, match="total-byte bound"):
+        runner._persistent_cache_target(tmp_path)
+
+
+def test_cache_compression_contract_rejects_optional_zstandard(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner.importlib.metadata, "version", lambda distribution: "0.25.0")
+
+    with pytest.raises(RuntimeError, match="requires zstandard to be absent"):
+        runner._require_pinned_cache_compression_runtime()
+
+
+def test_cache_compression_contract_accepts_pinned_python_without_zstandard(monkeypatch: pytest.MonkeyPatch) -> None:
+    def absent(distribution: str) -> str:
+        raise runner.importlib.metadata.PackageNotFoundError(distribution)
+
+    monkeypatch.setattr(runner.importlib.metadata, "version", absent)
+
+    runner._require_pinned_cache_compression_runtime()
+
+
+def test_pinned_jax_target_key_and_public_events_across_fresh_and_hit_processes(tmp_path: Path) -> None:
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    (shim / "zstandard.py").write_text("raise ImportError('disabled by pinned-runtime test')\n")
+    script = "\n".join(
+        (
+            "import json, sys",
+            "import jax",
+            "import jax.numpy as jnp",
+            "from lib.tile_lifetime.benchmarks import h100_contract_map_backend_runner as runner",
+            "counts = {name: 0 for name in runner._CACHE_EVENT_NAMES}",
+            "def listener(event, **metadata):",
+            "    if event in counts: counts[event] += 1",
+            "def step(value):",
+            "    return jnp.tanh(value @ value)",
+            "value = jnp.ones((8, 8), dtype=jnp.float32)",
+            "jax.block_until_ready(value)",
+            "jax.monitoring.register_event_listener(listener)",
+            "try:",
+            "    compiled = jax.jit(step).lower(value).compile()",
+            "finally:",
+            "    jax.monitoring.unregister_event_listener(listener)",
+            "jax.block_until_ready(compiled(value))",
+            "target, entries = runner._persistent_cache_target(runner.Path(sys.argv[1]))",
+            "print(json.dumps({'events': counts, 'key': target.cache_key, "
+            "'executable': target.serialized_executable_sha256, 'entry_count': len(entries)}, sort_keys=True))",
+        )
+    )
+    base_environment = {
+        **os.environ,
+        **runner._CACHE_ENVIRONMENT,
+        "JAX_PLATFORMS": "cpu",
+        "PYTHONPATH": str(shim) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }
+
+    def run(cache: Path) -> dict[str, object]:
+        cache.mkdir(exist_ok=True)
+        completed = subprocess.run(
+            (sys.executable, "-c", script, str(cache)),
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**base_environment, "JAX_COMPILATION_CACHE_DIR": str(cache)},
+        )
+        return json.loads(completed.stdout)
+
+    cold_records = [run(tmp_path / f"fresh-{index}") for index in range(3)]
+    hit_record = run(tmp_path / "fresh-0")
+
+    assert all(
+        record["events"] == dict(zip(runner._CACHE_EVENT_NAMES, (1, 0, 1), strict=True)) for record in cold_records
+    )
+    assert hit_record["events"] == dict(zip(runner._CACHE_EVENT_NAMES, (1, 1, 0), strict=True))
+    assert len({record["key"] for record in cold_records}) == 1
+    assert len({record["executable"] for record in cold_records}) == 1
+    assert cold_records[0]["key"] == hit_record["key"]
+    assert cold_records[0]["executable"] == hit_record["executable"]
+    assert cold_records[0]["entry_count"] == hit_record["entry_count"]
 
 
 @pytest.mark.parametrize("compile_done", [99, 1_001, True])
@@ -1250,41 +1502,146 @@ def test_compile_timing_rejects_worker_timestamp_outside_spawn_and_exit(tmp_path
 
 
 def _cache_root_record(
-    identity: str,
+    executable_identity: str,
     *,
+    cache_key_digest: str = "a" * 64,
+    phase: str = "compile",
     final_hlo: str = "stable final HLO",
     file_count: int = 2,
     total_bytes: int = 4096,
+    root_identity: str = "c" * 64,
+    compile_time: int = 7,
 ) -> dict[str, object]:
+    cache_key = f"jit_step-{cache_key_digest}"
+    identity = hashlib.sha256(cache_key.encode() + bytes.fromhex(executable_identity)).hexdigest()
     return {
+        "persistent_cache_compression": "zlib",
+        "persistent_cache_compile_time": compile_time,
+        "persistent_cache_entry_sha256": "b" * 64,
+        "persistent_cache_events": {
+            runner._CACHE_EVENT_NAMES[0]: 1,
+            runner._CACHE_EVENT_NAMES[1]: int(phase == "hit"),
+            runner._CACHE_EVENT_NAMES[2]: int(phase != "hit"),
+        },
         "persistent_cache_identity": identity,
         "persistent_cache_file_count": file_count,
+        "persistent_cache_key": cache_key,
+        "persistent_cache_root_identity": root_identity,
+        "persistent_cache_serialized_executable_sha256": executable_identity,
         "persistent_cache_total_bytes": total_bytes,
         "final_hlo": final_hlo,
     }
 
 
 def test_cache_protocol_rejects_any_compile_cold_or_hit_root_identity_mismatch() -> None:
-    identity = "a" * 64
-    matching = tuple(_cache_root_record(identity) for _ in range(3))
+    executable_identity = "a" * 64
+    compile_records = tuple(_cache_root_record(executable_identity, phase="compile") for _ in range(3))
+    cold_records = tuple(_cache_root_record(executable_identity, phase="cold") for _ in range(3))
+    hit_records = tuple(_cache_root_record(executable_identity, phase="hit") for _ in range(3))
+    identity = str(compile_records[0]["persistent_cache_identity"])
 
     assert (
         runner.validated_cache_protocol_identity(
-            matching,
-            matching,
-            matching,
+            compile_records,
+            cold_records,
+            hit_records,
             case_id="contract_map_case",
             backend="ordinary_xla",
             required_processes=3,
         )
         == identity
     )
-    mismatched = (*matching[:2], _cache_root_record("b" * 64))
+    mismatched = (*compile_records[:2], _cache_root_record("d" * 64, phase="compile"))
     with pytest.raises(ValueError, match="all compile, cold, and hit roots"):
         runner.validated_cache_protocol_identity(
             mismatched,
-            matching,
-            matching,
+            cold_records,
+            hit_records,
+            case_id="contract_map_case",
+            backend="ordinary_xla",
+            required_processes=3,
+        )
+
+
+def test_cache_protocol_accepts_proven_metadata_and_unrelated_root_differences() -> None:
+    executable = "a" * 64
+
+    def records(phase: str) -> tuple[dict[str, object], ...]:
+        return tuple(
+            {
+                **_cache_root_record(
+                    executable,
+                    phase=phase,
+                    compile_time=index + 1,
+                    root_identity=f"{index + 1:x}" * 64,
+                    total_bytes=4_000 + index,
+                ),
+                "persistent_cache_entry_sha256": f"{index + 4:x}" * 64,
+            }
+            for index in range(3)
+        )
+
+    compile_records = records("compile")
+    cold_records = records("cold")
+    hit_records = records("hit")
+
+    assert (
+        runner.validated_cache_protocol_identity(
+            compile_records,
+            cold_records,
+            hit_records,
+            case_id="contract_map_case",
+            backend="ordinary_xla",
+            required_processes=3,
+        )
+        == compile_records[0]["persistent_cache_identity"]
+    )
+
+
+@pytest.mark.parametrize("difference", ("cache_key", "serialized_executable"))
+def test_cache_protocol_rejects_target_key_and_executable_differences_independently(difference: str) -> None:
+    compile_records = [_cache_root_record("a" * 64, phase="compile") for _ in range(3)]
+    if difference == "cache_key":
+        compile_records[2] = _cache_root_record("a" * 64, cache_key_digest="d" * 64, phase="compile")
+    else:
+        compile_records[2] = _cache_root_record("d" * 64, phase="compile")
+    cold_records = tuple(_cache_root_record("a" * 64, phase="cold") for _ in range(3))
+    hit_records = tuple(_cache_root_record("a" * 64, phase="hit") for _ in range(3))
+
+    with pytest.raises(ValueError, match="one cache content identity"):
+        runner.validated_cache_protocol_identity(
+            compile_records,
+            cold_records,
+            hit_records,
+            case_id="contract_map_case",
+            backend="ordinary_xla",
+            required_processes=3,
+        )
+
+
+@pytest.mark.parametrize(
+    ("phase", "events"),
+    (
+        ("compile", (0, 0, 1)),
+        ("compile", (1, 1, 0)),
+        ("cold", (1, 0, 0)),
+        ("hit", (1, 0, 1)),
+        ("hit", (1, 1, 1)),
+    ),
+)
+def test_cache_protocol_requires_exact_public_hit_miss_events(phase: str, events: tuple[int, int, int]) -> None:
+    groups = {
+        "compile": [_cache_root_record("a" * 64, phase="compile") for _ in range(3)],
+        "cold": [_cache_root_record("a" * 64, phase="cold") for _ in range(3)],
+        "hit": [_cache_root_record("a" * 64, phase="hit") for _ in range(3)],
+    }
+    groups[phase][1]["persistent_cache_events"] = dict(zip(runner._CACHE_EVENT_NAMES, events, strict=True))
+
+    with pytest.raises(ValueError, match="invalid public cache events"):
+        runner.validated_cache_protocol_identity(
+            groups["compile"],
+            groups["cold"],
+            groups["hit"],
             case_id="contract_map_case",
             backend="ordinary_xla",
             required_processes=3,
@@ -1292,15 +1649,15 @@ def test_cache_protocol_rejects_any_compile_cold_or_hit_root_identity_mismatch()
 
 
 def test_cache_protocol_failure_reports_closed_nine_root_equality_partition() -> None:
-    identity_a = "a" * 64
-    identity_b = "b" * 64
+    executable_a = "a" * 64
+    executable_b = "d" * 64
     compile_records = (
-        _cache_root_record(identity_a, final_hlo="compile HLO", file_count=2, total_bytes=100),
-        _cache_root_record(identity_b, final_hlo="changed HLO", file_count=3, total_bytes=200),
-        _cache_root_record(identity_a, final_hlo="compile HLO", file_count=2, total_bytes=100),
+        _cache_root_record(executable_a, final_hlo="compile HLO", file_count=2, total_bytes=100),
+        _cache_root_record(executable_b, final_hlo="changed HLO", file_count=3, total_bytes=200),
+        _cache_root_record(executable_a, final_hlo="compile HLO", file_count=2, total_bytes=100),
     )
-    cold_records = tuple(_cache_root_record(identity_a, final_hlo="compile HLO") for _ in range(3))
-    hit_records = tuple(_cache_root_record(identity_a, final_hlo="compile HLO") for _ in range(3))
+    cold_records = tuple(_cache_root_record(executable_a, phase="cold", final_hlo="compile HLO") for _ in range(3))
+    hit_records = tuple(_cache_root_record(executable_a, phase="hit", final_hlo="compile HLO") for _ in range(3))
 
     with pytest.raises(ValueError) as raised:
         runner.validated_cache_protocol_identity(
@@ -1317,7 +1674,7 @@ def test_cache_protocol_failure_reports_closed_nine_root_equality_partition() ->
     assert diagnostic["backend"] == "ordinary_xla"
     assert diagnostic["expected_equality_partitions"] == 1
     assert diagnostic["observed_equality_partitions"] == 2
-    assert tuple(root["role"] for root in diagnostic["roots"]) == (
+    assert tuple(f"{root['phase']}[{root['index']}]" for root in diagnostic["roots"]) == (
         "compile[0]",
         "compile[1]",
         "compile[2]",
@@ -1340,14 +1697,18 @@ def test_cache_protocol_failure_reports_closed_nine_root_equality_partition() ->
         "class_0",
     )
     assert diagnostic["roots"][1] == {
+        "cached_compile_time": 7,
         "equality_partition": "class_1",
         "final_hlo_sha256": hashlib.sha256(b"changed HLO").hexdigest(),
         "index": 1,
         "persistent_cache_file_count": 3,
-        "persistent_cache_identity": identity_b,
+        "persistent_cache_root_identity": "c" * 64,
         "persistent_cache_total_bytes": 200,
         "phase": "compile",
-        "role": "compile[1]",
+    }
+    assert diagnostic["classes"]["class_1"] == {
+        "cache_key_digest": "a" * 64,
+        "serialized_executable_sha256": executable_b,
     }
     assert "compile HLO" not in str(raised.value)
 
@@ -1365,9 +1726,9 @@ def test_run_cache_protocol_propagates_bounded_root_diagnostic_from_production_b
         phase = command[1]
         index = phase_counts[phase]
         phase_counts[phase] += 1
-        identity = "b" * 64 if phase == "compile" and index == 1 else "a" * 64
+        identity = "d" * 64 if phase == "compile" and index == 1 else "a" * 64
         return {
-            **_cache_root_record(identity, final_hlo=f"private HLO {phase} {index}"),
+            **_cache_root_record(identity, phase=phase, final_hlo=f"private HLO {phase} {index}"),
             "private_cache_path": f"/secret/cache/{phase}/{index}",
         }
 
@@ -1393,16 +1754,47 @@ def test_run_cache_protocol_propagates_bounded_root_diagnostic_from_production_b
     assert "/secret/cache" not in message
 
 
+def test_run_cache_protocol_rejects_cold_hit_root_byte_change_before_semantic_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _runner_config(tmp_path)
+    phase_counts = {"compile": 0, "cold": 0, "hit": 0}
+
+    def worker_command(*args, cache_kind: str, **kwargs) -> tuple[str, str]:
+        return "worker", cache_kind
+
+    def worker_result(command, **kwargs):
+        phase = command[1]
+        index = phase_counts[phase]
+        phase_counts[phase] += 1
+        root_identity = "d" * 64 if phase == "hit" and index == 0 else "c" * 64
+        return _cache_root_record("a" * 64, phase=phase, root_identity=root_identity)
+
+    monkeypatch.setattr(runner, "_worker_base_command", worker_command)
+    monkeypatch.setattr(runner, "run_timed_compile_worker_command", worker_result)
+
+    with pytest.raises(ValueError, match="root changed between cold and hit"):
+        runner._run_cache_protocol(
+            config,
+            "contract_map_9836cdbed389db24",
+            "ordinary_xla",
+            tmp_path / "generated.json",
+            tmp_path / "cache_protocol",
+        )
+
+
 def test_cache_protocol_diagnostic_fails_closed_at_serialized_bound(monkeypatch: pytest.MonkeyPatch) -> None:
-    matching = tuple(_cache_root_record("a" * 64) for _ in range(3))
-    mismatched = (*matching[:2], _cache_root_record("b" * 64))
+    compile_records = tuple(_cache_root_record("a" * 64, phase="compile") for _ in range(3))
+    cold_records = tuple(_cache_root_record("a" * 64, phase="cold") for _ in range(3))
+    hit_records = tuple(_cache_root_record("a" * 64, phase="hit") for _ in range(3))
+    mismatched = (*compile_records[:2], _cache_root_record("d" * 64, phase="compile"))
     monkeypatch.setattr(runner, "_MAX_CACHE_IDENTITY_DIAGNOSTIC_CHARS", 1)
 
     with pytest.raises(AssertionError, match="exceeds its reviewed bound"):
         runner.validated_cache_protocol_identity(
             mismatched,
-            matching,
-            matching,
+            cold_records,
+            hit_records,
             case_id="contract_map_case",
             backend="ordinary_xla",
             required_processes=3,
@@ -1412,7 +1804,16 @@ def test_cache_protocol_diagnostic_fails_closed_at_serialized_bound(monkeypatch:
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     (
+        ("persistent_cache_compression", "zstandard", "invalid compression contract"),
+        ("persistent_cache_key", "jit_other-" + "a" * 64, "invalid target cache key"),
+        ("persistent_cache_serialized_executable_sha256", "not-a-digest", "invalid serialized executable"),
         ("persistent_cache_identity", "not-a-digest", "invalid content identity"),
+        ("persistent_cache_identity", "d" * 64, "inconsistent content identity"),
+        ("persistent_cache_entry_sha256", "not-a-digest", "invalid compressed entry identity"),
+        ("persistent_cache_root_identity", "not-a-digest", "invalid root identity"),
+        ("persistent_cache_compile_time", True, "invalid cached compile time"),
+        ("persistent_cache_compile_time", -1, "invalid cached compile time"),
+        ("persistent_cache_events", {}, "invalid public cache events"),
         ("persistent_cache_file_count", True, "invalid file count"),
         ("persistent_cache_file_count", 0, "invalid file count"),
         ("persistent_cache_total_bytes", True, "invalid byte total"),
