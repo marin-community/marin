@@ -631,7 +631,25 @@ def test_mtp_depth_zero_leaves_the_model_unchanged():
     mesh = _explicit_mesh(1, 1, 1, 1)
     with set_mesh(mesh):
         built = model.Transformer.init(cfg, key=jax.random.key(0))
-    assert built.mtp_modules == ()
+    assert built.mtp_modules is None
+
+
+def test_mtp_modules_stack_with_a_replicated_depth_axis():
+    # The MTP modules must be an ArrayStacked so their MoE expert weights carry a leading (replicated)
+    # depth axis (4D like the main blocks). A plain tuple gives 3D expert weights with a sharded
+    # leading axis, which the MuonH padded-stack Newton-Schulz rejects.
+    cfg = _mtp_config(mtp_depth=2)
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    with set_mesh(mesh):
+        built = model.Transformer.init(cfg, key=jax.random.key(0))
+    assert built.mtp_modules is not None
+    assert built.mtp_modules.num_layers == 2
+    w_gate = built.mtp_modules.stacked.block.mlp.expert_mlp.w_gate
+    assert w_gate.ndim == 4 and w_gate.shape[0] == 2  # (depth, num_experts, hidden, intermediate)
+    # Every module gained a gated norm (RMSNorm + GatedNorm) on h/e/out.
+    assert built.mtp_modules.stacked.h_gated_norm.w_down.shape[0] == 2
+    assert built.mtp_modules.stacked.e_gated_norm.w_down.shape[0] == 2
+    assert built.mtp_modules.stacked.out_gated_norm.w_down.shape[0] == 2
 
 
 def test_mtp_depth_one_builds_a_forward_and_a_scalar_loss():
@@ -641,7 +659,7 @@ def test_mtp_depth_one_builds_a_forward_and_a_scalar_loss():
     weight = jax.ShapeDtypeStruct((1, 8), jnp.float32)
     with set_mesh(mesh):
         built = model.Transformer.init(cfg, key=jax.random.key(0))
-        assert len(built.mtp_modules) == 1
+        assert built.mtp_modules is not None and built.mtp_modules.num_layers == 1
         out = jax.eval_shape(lambda t: built(t)[0], tokens)
         loss = jax.eval_shape(
             lambda t, w: built.next_token_loss(t, w, reduction="mean", mtp_progress=0.5),

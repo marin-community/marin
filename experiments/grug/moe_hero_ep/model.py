@@ -1098,26 +1098,33 @@ class MTPModule(eqx.Module):
     For module depth k at position i: normalize the previous depth's hidden ``h_i^{k-1}`` and the
     shared-embedding of input token ``x_{i+k}``, concatenate, project 2d->d with ``proj`` (M_k), then
     run one transformer ``Block`` (the full MoE + shared block) as a full-causal ("global") layer
-    like DeepSeek's MTP TRM. ``out_norm(h_i^k)`` feeds the shared output head; the token embedding
-    and output head are the main model's -- only the fields below are new per module.
+    like DeepSeek's MTP TRM. The output feeds the shared output head; the token embedding and output
+    head are the main model's -- only the fields below are new per module. Each of the three norms is
+    a gated norm (RMSNorm -> GatedNorm), matching the block's ``rms_* + *_gated_norm`` pattern.
     """
 
     h_norm: RMSNorm
+    h_gated_norm: GatedNorm
     e_norm: RMSNorm
+    e_gated_norm: GatedNorm
     proj: jax.Array
     block: Block
     out_norm: RMSNorm
+    out_gated_norm: GatedNorm
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MTPModule":
-        k_proj, k_block = random.split(key, 2)
+        k_proj, k_block, k_hgn, k_egn, k_ogn = random.split(key, 5)
         d = cfg.hidden_dim
         return MTPModule(
             h_norm=RMSNorm.init(d, cfg.layer_norm_eps),
+            h_gated_norm=GatedNorm.init(d, cfg.initializer_std, key=k_hgn),
             e_norm=RMSNorm.init(d, cfg.layer_norm_eps),
+            e_gated_norm=GatedNorm.init(d, cfg.initializer_std, key=k_egn),
             proj=reshard(_init_weight(k_proj, (2 * d, d), cfg.initializer_std), P(_FSDP_AXES, "model")),
             block=Block.init(cfg, key=k_block),
             out_norm=RMSNorm.init(d, cfg.layer_norm_eps),
+            out_gated_norm=GatedNorm.init(d, cfg.initializer_std, key=k_ogn),
         )
 
     @named_call
@@ -1128,11 +1135,13 @@ class MTPModule(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array,
     ) -> Float[Array, "B S D"]:
-        combined = jnp.concatenate([self.h_norm(h_prev), self.e_norm(emb)], axis=-1)
+        h_normed = self.h_gated_norm(self.h_norm(h_prev))
+        e_normed = self.e_gated_norm(self.e_norm(emb))
+        combined = jnp.concatenate([h_normed, e_normed], axis=-1)
         h = jnp.einsum("bsD,Dd->bsd", combined, self.proj, out_sharding=_batch_spec())
         # Always a full-causal ("global") layer -- the main forward runs global layers rope-free.
         h, _ = self.block(h, mask, disable_rope=disable_rope, is_global=True)
-        return self.out_norm(h)
+        return self.out_gated_norm(self.out_norm(h))
 
 
 class Transformer(eqx.Module):
@@ -1143,9 +1152,12 @@ class Transformer(eqx.Module):
     stacked_blocks: ArrayStacked[Block]
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
-    # DeepSeek-V3 MTP modules (empty when cfg.mtp_depth == 0). Kept out of the main stacked-block
-    # scan so the main forward and QB router-bias plumbing are untouched.
-    mtp_modules: tuple[MTPModule, ...]
+    # DeepSeek-V3 MTP modules, stacked with a leading (replicated) depth axis exactly like
+    # ``stacked_blocks`` so their MoE expert weights are 4D ``(depth, expert, hidden, inter)`` and the
+    # MuonH Newton-Schulz handles them identically to the main blocks. ``None`` when mtp_depth == 0
+    # (an ArrayStacked cannot be empty). Kept out of the main scan so the main forward and QB
+    # router-bias plumbing are untouched.
+    mtp_modules: ArrayStacked[MTPModule] | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -1176,8 +1188,11 @@ class Transformer(eqx.Module):
             _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
         )
         stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
-        mtp_keys = random.split(mtp_key, cfg.mtp_depth) if cfg.mtp_depth > 0 else []
-        mtp_modules = tuple(MTPModule.init(cfg, key=mtp_keys[i]) for i in range(cfg.mtp_depth))
+        mtp_modules = (
+            ArrayStacked.init(cfg.mtp_depth, MTPModule)(cfg, key=random.split(mtp_key, cfg.mtp_depth))
+            if cfg.mtp_depth > 0
+            else None
+        )
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -1380,9 +1395,14 @@ class Transformer(eqx.Module):
             if cfg.remat_mode == "save_moe"
             else None
         )
+        # mtp_modules is stacked with a leading depth axis; reconstruct module k-1 by indexing the
+        # stacked leaves (static fields like cfg are not leaves and pass through unchanged).
+        assert self.mtp_modules is not None  # guarded by cfg.mtp_depth > 0 at the call site
+        stacked = self.mtp_modules.stacked
         h_prev = h0
         mtp_ce = jnp.zeros((), dtype=loss_dtype)
-        for k, module in enumerate(self.mtp_modules, start=1):
+        for k in range(1, cfg.mtp_depth + 1):
+            module = jax.tree_util.tree_map(lambda leaf, i=k - 1: leaf[i], stacked)
             emb_k = _shift_left(embed_all, k)  # Embed(x_{i+k})
             target_k = _shift_left(token_ids, k + 1).astype(jnp.int32)  # x_{i+k+1}
             weight_k = _shift_left(loss_weight, k)  # loss_weight[i+k]; 0 on the last k positions
