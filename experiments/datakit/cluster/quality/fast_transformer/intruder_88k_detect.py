@@ -524,7 +524,7 @@ def run_detection(
     panel: Sequence[Panelist],
     *,
     max_trials: int,
-    seed: int = SEED,
+    prior: dict | None = None,
 ) -> dict:
     """One-pool sequential detection test against the ``CHANCE_LEVEL`` floor.
 
@@ -533,12 +533,33 @@ def run_detection(
     the interval excludes the chance floor, or after ``max_trials`` attempted
     trials. Attempted (not completed) trials bound the loop, so a panel that
     abstains on everything cannot loop forever issuing paid calls.
+
+    ``prior`` resumes an unresolved run from its results JSON instead of paying
+    for its trials again: the confidence sequence and tallies restart from the
+    stored counts, which the sequence's anytime validity licenses — it covers the
+    truth at every n, so extending with further independent draws is just moving
+    to a later n. The extension samples with a seed offset by the prior attempt
+    count so it draws a fresh trial stream rather than replaying (and double
+    counting) the exact trials already scored.
     """
-    rng = np.random.default_rng(seed)
-    cs = ConfidenceSequence(alpha=ALPHA, rho=1.0 / math.sqrt(TARGET_TRIALS))
-    per_model: dict[str, dict[str, int]] = {p.name: {"correct": 0, "votes": 0} for p in panel}
-    attempted = 0
-    abstained = 0
+    prior = prior or {}
+    attempted = prior.get("n_attempted", 0)
+    abstained = prior.get("n_abstained", 0)
+    rng = np.random.default_rng(SEED + attempted)
+    cs = ConfidenceSequence(
+        alpha=ALPHA,
+        rho=1.0 / math.sqrt(TARGET_TRIALS),
+        n=prior.get("n_trials", 0),
+        total=prior.get("detection_rate", 0.0) * prior.get("n_trials", 0),
+    )
+    stored = prior.get("per_model", {})
+    per_model: dict[str, dict[str, int]] = {
+        p.name: {
+            "correct": round((stored.get(p.name, {}).get("accuracy") or 0.0) * stored.get(p.name, {}).get("votes", 0)),
+            "votes": stored.get(p.name, {}).get("votes", 0),
+        }
+        for p in panel
+    }
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         while attempted < max_trials:
             batch = [pool.sample_trial(rng) for _ in range(min(BATCH_SIZE, max_trials - attempted))]
@@ -574,15 +595,31 @@ def run_detection(
 
 
 def run_panel(label_source: str, max_trials: int) -> None:
-    """Run one label source's detection test and write its results JSON."""
+    """Run one label source's detection test and write its results JSON.
+
+    A resolved result is final. An unresolved one is *resumed* — its scored
+    trials carry over and only the extension up to ``max_trials`` attempted
+    trials is paid for — so re-running with a larger ``--max-trials`` is the way
+    to buy an unresolved run more evidence.
+    """
     result_path = f"{RESULTS_PREFIX}/{label_source}.json"
+    prior = None
     if StoragePath(result_path).exists():
-        logger.info("results already exist at %s", result_path)
-        return
+        with StoragePath(result_path).open("r") as fh:
+            prior = json.loads(fh.read())
+        if prior["decision"] != "unresolved":
+            logger.info("results at %s are already resolved (%s)", result_path, prior["decision"])
+            return
+        if prior["n_attempted"] >= max_trials:
+            logger.info("results at %s already attempted %d >= %d trials", result_path, prior["n_attempted"], max_trials)
+            return
+        logger.info(
+            "resuming %s from %d scored trials (%d attempted)", label_source, prior["n_trials"], prior["n_attempted"]
+        )
     pool = build_pool(label_source)
     panel = openrouter_panel(list(PANEL_MODELS))
     usage_start = _openrouter_usage()
-    result = run_detection(pool, panel, max_trials=max_trials)
+    result = run_detection(pool, panel, max_trials=max_trials, prior=prior)
     result.update(
         {
             "panel_models": list(PANEL_MODELS),

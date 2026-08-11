@@ -75,3 +75,24 @@ def test_detection_resolves_below_chance_for_a_systematically_wrong_panel():
     result = run_detection(_pool(), [FixedPanelist("wrong", correct=False)], max_trials=150)
     assert result["decision"] == "below_chance"
     assert result["interval"][1] < result["chance"]
+
+
+def test_detection_resumes_from_a_prior_unresolved_result():
+    # An unresolved 100-trial run at the chance rate, resumed with a sharp panel:
+    # the carried trials stay in the tallies (the rate lands strictly between the
+    # prior 0.2 and the extension's 1.0) and only the extension is attempted.
+    prior = {
+        "n_trials": 100,
+        "n_attempted": 100,
+        "n_abstained": 3,
+        "detection_rate": 0.2,
+        "per_model": {"sharp": {"accuracy": 0.2, "votes": 100}},
+    }
+    result = run_detection(_pool(), [FixedPanelist("sharp", correct=True)], max_trials=200, prior=prior)
+    assert result["n_trials"] > 100
+    assert result["n_attempted"] <= 200
+    assert result["n_abstained"] == 3
+    assert 0.2 < result["detection_rate"] < 1.0
+    votes = result["per_model"]["sharp"]["votes"]
+    assert votes > 100
+    assert result["per_model"]["sharp"]["accuracy"] == (20 + votes - 100) / votes
