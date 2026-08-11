@@ -1,0 +1,14 @@
+[01:33:38] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 | h100_contract_map_source_payload.py: OK
+[01:33:38] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 | h100-evidence-source-manifest.json: OK
+[01:33:49] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 | Traceback (most recent call last):
+[01:33:49] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2507, in <module>
+[01:33:49] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 |     main()
+[01:33:49] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2489, in main
+[01:33:49] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 |     output = run_coordinator(
+[01:33:49] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 |              ^^^^^^^^^^^^^^^^
+[01:33:49] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1549, in run_coordinator
+[01:33:49] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 |     generated_artifacts = compile_generated_candidates(config)
+[01:33:49] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[01:33:49] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 831, in compile_generated_candidates
+[01:33:49] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 |     raise RuntimeError("loaded shared-library SASS does not contain the exact generated kernel topology")
+[01:33:49] task=/dlwh/shuttle-h100-contract-map-evidence-dbbd9e-v3/0 | RuntimeError: loaded shared-library SASS does not contain the exact generated kernel topology
