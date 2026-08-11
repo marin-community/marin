@@ -25,13 +25,17 @@ CLOSED_VALUE_LIST = re.compile(
     rf"^\s*{QUOTED_TOKEN}(?:\s*,\s*{QUOTED_TOKEN})*(?:\s*,?\s+and\s+{QUOTED_TOKEN})?\s*$",
     re.IGNORECASE,
 )
-CAPTURE_RANGE_END_VALUES = {
+CAPTURE_RANGE_END_LIST = re.compile(
+    r"^\s*'none'\s*,\s*'stop'\s*,\s*'stop-shutdown'\s*,\s*"
+    r"'repeat\[:N\]\[:mode\]'\s+or\s+'repeat-shutdown:N'\[:mode\]\s*$"
+)
+CAPTURE_RANGE_END_VALUES = (
     "none",
     "stop",
     "stop-shutdown",
     "repeat[:N][:mode]",
     "repeat-shutdown:N[:mode]",
-}
+)
 CUDA_GRAPH_TRACE_VALUES = {"graph", "node"}
 
 
@@ -57,6 +61,10 @@ def _option_values(text: str, option: str) -> tuple[str, ...]:
     if len(value_lists) != 1:
         raise ValueError(f"--{option} must contain one recognizable possible-values list")
     serialized_values = value_lists[0].group("values")
+    if option == "capture-range-end":
+        if CAPTURE_RANGE_END_LIST.fullmatch(serialized_values) is None:
+            raise ValueError(f"--{option} possible values contain unrecognized syntax")
+        return CAPTURE_RANGE_END_VALUES
     if CLOSED_VALUE_LIST.fullmatch(serialized_values) is None:
         raise ValueError(f"--{option} possible values contain unrecognized syntax")
     values = tuple(match.group("value") for match in QUOTED_VALUE.finditer(serialized_values))
@@ -75,7 +83,7 @@ def validate_nsys_profile_help(text: str) -> tuple[tuple[str, ...], tuple[str, .
         raise ValueError("help exposes obsolete --stop-on-range-end")
 
     capture_values = _option_values(text, "capture-range-end")
-    if set(capture_values) != CAPTURE_RANGE_END_VALUES or capture_values.count("stop") != 1:
+    if capture_values != CAPTURE_RANGE_END_VALUES:
         raise ValueError("--capture-range-end does not expose the exact closed stop policy")
     graph_values = _option_values(text, "cuda-graph-trace")
     if set(graph_values) != CUDA_GRAPH_TRACE_VALUES or graph_values.count("node") != 1:

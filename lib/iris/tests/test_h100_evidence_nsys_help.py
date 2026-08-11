@@ -18,8 +18,8 @@ usage: nsys profile [<args>] [application] [<application args>]
       Start collection at the selected capture range.
   --capture-range-end arg (=stop-shutdown)
       Specify the desired behavior when a capture range ends. Possible values
-      are 'none', 'stop', 'stop-shutdown', 'repeat[:N][:mode]', and
-      'repeat-shutdown:N[:mode]'. If 'stop', collection stops and the target
+      are 'none', 'stop', 'stop-shutdown', 'repeat[:N][:mode]' or
+      'repeat-shutdown:N'[:mode]. If 'stop', collection stops and the target
       application continues running.
   --cuda-graph-trace arg (=graph)
       Select CUDA Graph activity granularity. Possible values are 'graph' and
@@ -80,6 +80,47 @@ def test_nsys_profile_help_accepts_unique_stop_policy(tmp_path: Path) -> None:
     assert "cuda-graph-trace=graph,node" in result.stdout
 
 
+def test_nsys_profile_help_accepts_exact_remote_capture_range_end_clause(tmp_path: Path) -> None:
+    exact_clause = (
+        "Possible values are 'none', 'stop', 'stop-shutdown', " "'repeat[:N][:mode]' or 'repeat-shutdown:N'[:mode]."
+    )
+    help_text = PROFILE_HELP.replace(
+        "Possible values\n"
+        "      are 'none', 'stop', 'stop-shutdown', 'repeat[:N][:mode]' or\n"
+        "      'repeat-shutdown:N'[:mode].",
+        exact_clause,
+    )
+
+    result = _validate(tmp_path, help_text.encode())
+
+    assert result.returncode == 0, result.stderr
+    assert "capture-range-end=none,stop,stop-shutdown,repeat[:N][:mode],repeat-shutdown:N[:mode]" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "'repeat[:N][:mode]' and\n      'repeat-shutdown:N'[:mode]",
+        "'repeat[:N][:mode]', or\n      'repeat-shutdown:N'[:mode]",
+        "'repeat[:N][:mode]' or\n      'repeat-shutdown:N[:mode]'",
+        "'repeat[:N][:mode]' or\n      'repeat-shutdown:N'",
+        "'repeat-shutdown:N'[:mode] or\n      'repeat[:N][:mode]'",
+        '"repeat[:N][:mode]" or\n      "repeat-shutdown:N"[:mode]',
+    ),
+    ids=("and", "comma-or", "quoted-suffix", "missing-suffix", "reordered", "double-quoted"),
+)
+def test_nsys_profile_help_rejects_noncanonical_capture_range_end_grammar(tmp_path: Path, mutation: str) -> None:
+    help_text = PROFILE_HELP.replace(
+        "'repeat[:N][:mode]' or\n      'repeat-shutdown:N'[:mode]",
+        mutation,
+    )
+
+    result = _validate(tmp_path, help_text.encode())
+
+    assert result.returncode == 1
+    assert result.stderr.startswith("nsys profile help validation failed: --capture-range-end")
+
+
 @pytest.mark.parametrize(
     "help_text",
     (
@@ -97,12 +138,12 @@ def test_nsys_profile_help_accepts_unique_stop_policy(tmp_path: Path) -> None:
             "      application continues running. Possible values are 'none', 'stop', and 'stop-shutdown'.\n",
         ),
         PROFILE_HELP.replace(
-            "'repeat-shutdown:N[:mode]'",
-            "'repeat-shutdown:N[:mode]', and future",
+            "'repeat-shutdown:N'[:mode]",
+            "'repeat-shutdown:N'[:mode] and future",
         ),
         PROFILE_HELP.replace(
-            "'repeat-shutdown:N[:mode]'",
-            "'repeat-shutdown:N[:mode]', and 'future'",
+            "'repeat-shutdown:N'[:mode]",
+            "'repeat-shutdown:N'[:mode] and 'future'",
         ),
         PROFILE_HELP + "  --stop-on-range-end arg (=true)\n",
     ),
@@ -345,13 +386,13 @@ def test_nsys_profile_help_failure_escape_expansion_remains_within_total_bound(
     control_text = "\x01" * 700
     capture_clause = (
         "Possible values\n"
-        "      are 'none', 'stop', 'stop-shutdown', 'repeat[:N][:mode]', and\n"
-        f"      'repeat-shutdown:N[:mode]', and {control_text}."
+        "      are 'none', 'stop', 'stop-shutdown', 'repeat[:N][:mode]' or\n"
+        f"      'repeat-shutdown:N'[:mode] and {control_text}."
     )
     graph_clause = f"Possible values are 'graph' and\n      'node', and {control_text}."
     help_text = PROFILE_HELP.replace(
-        "'repeat-shutdown:N[:mode]'.",
-        f"'repeat-shutdown:N[:mode]', and {control_text}.",
+        "'repeat-shutdown:N'[:mode].",
+        f"'repeat-shutdown:N'[:mode] and {control_text}.",
     ).replace(
         "      'node'.",
         f"      'node', and {control_text}.",
