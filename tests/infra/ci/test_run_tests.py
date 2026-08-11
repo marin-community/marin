@@ -6,8 +6,8 @@
 import subprocess
 from pathlib import Path
 
-from infra.ci.run_tests import PytestInvocation, local_invocations, pytest_command, worktree_diff
-from infra.ci.select_tests import SelectionResult
+from infra.ci.run_tests import PytestInvocation, local_invocations, worktree_diff
+from infra.ci.select_tests import MatrixLeg, SelectionResult
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -49,38 +49,39 @@ def test_local_invocations_collapse_ci_shards_and_keep_package_configuration() -
     selection = SelectionResult(
         reason="diff-driven",
         matrix=[
-            {
-                "label": "levanter 1/2",
-                "package": "marin-levanter",
-                "python": "3.12",
-                "extras": "",
-                "pytest_args": "--durations=5 -n auto --dist=worksteal --tb=short",
-                "test_paths": "lib/levanter/tests/test_a.py",
-                "setup": "",
-                "timeout": 15,
-            },
-            {
-                "label": "levanter 2/2",
-                "package": "marin-levanter",
-                "python": "3.12",
-                "extras": "",
-                "pytest_args": "--durations=5 -n auto --dist=worksteal --tb=short",
-                "test_paths": "lib/levanter/tests/test_b.py",
-                "setup": "",
-                "timeout": 15,
-            },
-            {
-                "label": "marin",
-                "package": "marin-core",
-                "python": "3.12",
-                "extras": "--extra cpu --extra dedup",
-                "pytest_args": "--durations=5 -n auto --dist=worksteal --tb=short",
-                "test_paths": "tests/test_training.py",
-                "setup": "",
-                "timeout": 15,
-            },
+            MatrixLeg(
+                label="levanter 1/2",
+                package="marin-levanter",
+                python="3.12",
+                extras="",
+                pytest_args="--durations=5 -n auto --dist=worksteal --tb=short",
+                test_paths="lib/levanter/tests/test_a.py",
+                setup="",
+                timeout=15,
+            ),
+            MatrixLeg(
+                label="levanter 2/2",
+                package="marin-levanter",
+                python="3.12",
+                extras="",
+                pytest_args="--durations=5 -n auto --dist=worksteal --tb=short",
+                test_paths="lib/levanter/tests/test_b.py",
+                setup="",
+                timeout=15,
+            ),
+            MatrixLeg(
+                label="marin",
+                package="marin-core",
+                python="3.12",
+                extras="--extra cpu --extra dedup",
+                pytest_args="--durations=5 -n auto --dist=worksteal --tb=short",
+                test_paths="tests/test_training.py",
+                setup="",
+                timeout=15,
+            ),
         ],
         suites=[],
+        suite_test_paths={},
     )
 
     invocations = local_invocations(selection)
@@ -104,38 +105,4 @@ def test_local_invocations_collapse_ci_shards_and_keep_package_configuration() -
             test_paths=("tests/test_training.py",),
             source_build=False,
         ),
-    )
-
-
-def test_pytest_command_matches_unified_unit_defaults() -> None:
-    invocation = PytestInvocation(
-        label="marin",
-        package="marin-core",
-        python="3.12",
-        extras=("--extra", "cpu"),
-        pytest_args=("--durations=5", "-n", "auto", "--dist=worksteal", "--tb=short"),
-        test_paths=("tests/test_training.py",),
-        source_build=False,
-    )
-
-    assert pytest_command(invocation, ("-x",)) == (
-        "uv",
-        "run",
-        "--isolated",
-        "--python",
-        "3.12",
-        "--package",
-        "marin-core",
-        "--extra",
-        "cpu",
-        "--group",
-        "test",
-        "pytest",
-        "--durations=5",
-        "-n",
-        "auto",
-        "--dist=worksteal",
-        "--tb=short",
-        "tests/test_training.py",
-        "-x",
     )

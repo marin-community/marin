@@ -1,11 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Run the safe unit tests affected by the current local change.
+"""Run the safe unit tests affected by a local branch and working tree.
 
-The CI selector owns change-to-test mapping. This module adds the local pieces:
-it compares the working tree (including untracked files) with the branch point,
-collapses CI shards into one invocation per package, and runs pytest with the
-same uv extras and parallelism as unified-unit.yaml.
+The default comparison includes committed, staged, unstaged, and untracked
+changes from the branch point with main. Tests run once per affected package;
+dedicated accelerator and browser suites remain delegated to CI.
 
 Usage:
     python3 -m infra.ci.run_tests
@@ -21,7 +20,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from infra.ci.select_tests import SelectionResult, select_changed_tests
+from infra.ci.select_tests import RUST_SETUP_TAG, SelectionResult, select_changed_tests
 
 DEFAULT_BASE_REFS: tuple[str, ...] = ("origin/HEAD", "origin/main", "main")
 
@@ -95,17 +94,17 @@ def local_invocations(selection: SelectionResult) -> tuple[PytestInvocation, ...
     metadata: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...], bool]] = {}
 
     for leg in selection.matrix:
-        package = str(leg["package"])
-        label = str(leg["label"]).split(maxsplit=1)[0]
-        python = str(leg["python"])
-        extras = tuple(shlex.split(str(leg["extras"])))
-        pytest_args = tuple(shlex.split(str(leg["pytest_args"])))
-        source_build = leg["setup"] == "rust"
+        package = leg.package
+        label = leg.label.split(maxsplit=1)[0]
+        python = leg.python
+        extras = tuple(shlex.split(leg.extras))
+        pytest_args = tuple(shlex.split(leg.pytest_args))
+        source_build = leg.setup == RUST_SETUP_TAG
         current = (label, python, extras, pytest_args, source_build)
         if package in metadata and metadata[package] != current:
             raise LocalTestError(f"inconsistent matrix metadata for {package}")
         metadata[package] = current
-        grouped_paths.setdefault(package, []).extend(shlex.split(str(leg["test_paths"])))
+        grouped_paths.setdefault(package, []).extend(shlex.split(leg.test_paths))
 
     invocations = []
     for package, paths in grouped_paths.items():
