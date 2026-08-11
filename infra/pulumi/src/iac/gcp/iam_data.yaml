@@ -1513,6 +1513,9 @@ secrets:
     - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
 - secret: marinmirror-token
   grants:
+  - role: projects/hai-gcp-models/roles/marinSecretIamManager
+    members:
+    - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
   - role: roles/secretmanager.secretAccessor
     members:
     - serviceAccount:echo-sync@hai-gcp-models.iam.gserviceaccount.com

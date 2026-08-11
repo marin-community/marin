@@ -10,6 +10,10 @@ service to its Pulumi directory, stack, deploy identity, tests, and additional s
 The registry currently covers Ducky, Echo, Grafana, and XProf. Add one `Rollout` entry when
 another service should deploy through this workflow.
 
+For an `IrisService`, every registered shared source root must also be present in that
+service's `code_paths`. The rollout selector starts `pulumi up`; `code_paths` changes the
+`command.local.Command` input that resubmits the Iris job.
+
 Pull requests run each affected service's registered pytest path. Manual dispatch selects one
 registered service and accepts a deploy-generation override for Ducky and XProf. Ducky and
 XProf still read their runtime credentials from GitHub Actions secrets; the rollout job exposes
