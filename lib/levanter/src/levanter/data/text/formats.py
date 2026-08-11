@@ -77,11 +77,15 @@ class LossWeightTransform(StrEnum):
     IDENTITY = "identity"
     SHIFT_LEFT = "shift_left"
 
-    def apply(self, loss_weight: np.ndarray) -> np.ndarray:
+    def apply(self, loss_weight: np.ndarray, segment_ids: np.ndarray | None = None) -> np.ndarray:
         if self is LossWeightTransform.IDENTITY:
             return loss_weight
         if self is LossWeightTransform.SHIFT_LEFT:
-            return np.roll(loss_weight, -1)
+            shifted = np.roll(loss_weight, -1)
+            valid_next = np.arange(loss_weight.shape[0]) < loss_weight.shape[0] - 1
+            if segment_ids is not None:
+                valid_next &= segment_ids == np.roll(segment_ids, -1)
+            return np.where(valid_next, shifted, 0)
         raise ValueError(f"Unknown loss weight transform {self}")
 
 

@@ -386,7 +386,7 @@ def test_prebuilt_cache_with_loss_weights(tmp_path):
 def test_prebuilt_cache_packs_variable_length_records_with_transformed_loss_weights(tmp_path):
     records = [
         {"input_ids": [1, 2, 3], "assistant_mask": [0.0, 1.0, 1.0]},
-        {"input_ids": [4, 5], "assistant_mask": [0.0, 1.0]},
+        {"input_ids": [4, 5], "assistant_mask": [1.0, 0.0]},
     ]
     data_path = tmp_path / "prebuilt_packed.jsonl"
     _write_prebuilt_jsonl(data_path, records)
@@ -419,7 +419,7 @@ def test_prebuilt_cache_packs_variable_length_records_with_transformed_loss_weig
     assert len(ds) == 1
     example = ds[0]
     np.testing.assert_array_equal(np.asarray(example.tokens), np.array([1, 2, 3, 4, 5, 0, 0, 0]))
-    np.testing.assert_array_equal(np.asarray(example.loss_weight), np.array([1, 1, 0, 1, 0, 0, 0, 0]))
+    np.testing.assert_array_equal(np.asarray(example.loss_weight), np.array([1, 1, 0, 0, 0, 0, 0, 0]))
 
 
 def test_prebuilt_cache_right_slices_overlength_record(tmp_path):

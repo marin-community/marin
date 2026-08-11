@@ -17,6 +17,8 @@ from marin.transform.conversation.transform_conversation import (
     transform_row,
 )
 
+from experiments.datasets.instruction import InstructionDatasetConfig, transform_dataset_step
+
 OPENAI_FORMAT_SAMPLE = {
     "messages": [
         {"role": "user", "content": "What is the capital of France?"},
@@ -413,3 +415,25 @@ def test_direct_parquet_source_preserves_selected_conversations(tmp_path: Path, 
     assert result["count"] == 1
     assert [message["content"] for message in rows[0]["messages"]] == ["Run the tests.", "Done."]
     assert "unused" not in rows[0]
+
+
+def test_default_instruction_source_keeps_existing_cache_pin():
+    adapter = TransformAdapter(
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        conversation_column="conversations",
+        role_key="role",
+        content_key="content",
+        user_value="user",
+        assistant_value="assistant",
+        system_value="system",
+    )
+    cfg = InstructionDatasetConfig(
+        hf_dataset_id="example/conversations",
+        revision="deadbee",
+        metadata_columns=[],
+        adapter=adapter,
+        subsets=["terminal"],
+        splits=["train"],
+    )
+
+    assert transform_dataset_step(cfg).override_path == "documents/example--conversations-deadbee-28fea3"
