@@ -952,10 +952,31 @@ def _ncu_sass_line_structure(line: str, column_widths: tuple[int, ...]) -> dict[
 
 
 def _ncu_sass_header_matches(line: str, column_widths: tuple[int, ...]) -> bool:
+    columns = _ncu_sass_selected_columns(line, column_widths)
+    if columns is None:
+        return False
+    if columns[0].rstrip(b" ") != b"Address" or columns[0].startswith(b" "):
+        return False
+    if columns[1].strip(b" ") != b"Source":
+        return False
+    return all(re.fullmatch(rb"[a-z]{6}", column) is not None for column in columns[2:])
+
+
+def _ncu_sass_metric_labels_match(line: str, column_widths: tuple[int, ...]) -> bool:
+    columns = _ncu_sass_selected_columns(line, column_widths)
+    if columns is None or any(column != b" " * len(column) for column in columns[:2]):
+        return False
+    return all(
+        len(column) == 6 and column.count(b"_") == 2 and sum(ord("a") <= value <= ord("z") for value in column) == 4
+        for column in columns[2:]
+    )
+
+
+def _ncu_sass_selected_columns(line: str, column_widths: tuple[int, ...]) -> tuple[bytes, ...] | None:
     line_bytes = line.encode("utf-8")
     expected_bytes = sum(column_widths) + len(column_widths) - 1
     if len(line_bytes) != expected_bytes:
-        return False
+        return None
 
     columns: list[bytes] = []
     offset = 0
@@ -964,15 +985,11 @@ def _ncu_sass_header_matches(line: str, column_widths: tuple[int, ...]) -> bool:
         offset += width
         if index < len(column_widths) - 1:
             if line_bytes[offset : offset + 1] != b" ":
-                return False
+                return None
             offset += 1
     if offset != len(line_bytes):
-        raise AssertionError("fixed Nsight Compute SASS header columns do not cover the selected width")
-    if columns[0].rstrip(b" ") != b"Address" or columns[0].startswith(b" "):
-        return False
-    if columns[1].strip(b" ") != b"Source":
-        return False
-    return all(re.fullmatch(rb"[a-z]{6}", column) is not None for column in columns[2:])
+        raise AssertionError("fixed Nsight Compute SASS columns do not cover the selected width")
+    return tuple(columns)
 
 
 def _ncu_sass_fixed_columns(line: bytes, column_widths: tuple[int, ...]) -> dict[str, object] | None:
@@ -1074,19 +1091,27 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
     instructions: list[NcuSassInstruction] = []
     identity_separator_seen = False
     header_seen = False
+    metric_labels_seen = False
     separator_seen = False
 
     def finish_section() -> None:
-        nonlocal current_name, instructions, identity_separator_seen, header_seen, separator_seen
+        nonlocal current_name, instructions, identity_separator_seen, header_seen, metric_labels_seen, separator_seen
         if current_name is None:
             return
-        if not identity_separator_seen or not header_seen or not separator_seen or not instructions:
+        if (
+            not identity_separator_seen
+            or not header_seen
+            or not metric_labels_seen
+            or not separator_seen
+            or not instructions
+        ):
             raise ValueError(f"Nsight Compute SASS section {current_name!r} is structurally incomplete")
         sections.append(NcuSassKernel(name=current_name, instructions=tuple(instructions)))
         current_name = None
         instructions = []
         identity_separator_seen = False
         header_seen = False
+        metric_labels_seen = False
         separator_seen = False
 
     for line_number, line in enumerate(lines[1:], start=2):
@@ -1101,6 +1126,11 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
             if not _ncu_sass_header_matches(line, selected_separator_widths):
                 raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)
             header_seen = True
+            continue
+        if current_name is not None and not metric_labels_seen:
+            if not _ncu_sass_metric_labels_match(line, selected_separator_widths):
+                raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)
+            metric_labels_seen = True
             continue
         if current_name is not None and not separator_seen:
             if not is_selected_separator(line):

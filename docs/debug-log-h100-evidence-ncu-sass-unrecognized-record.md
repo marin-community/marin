@@ -295,3 +295,29 @@ widths, non-ASCII punctuation lookalikes, same-histogram private values in
 different orders, the 2,048-byte exception bound, and the production NCU
 subprocess boundary. No image build, GPU execution, v29 submission, retry, or
 relaunch was performed for this source-only diagnostic change.
+
+## V29 opaque metric-label row
+
+The single v29 task used source
+`fd0fe901919e975f1e07b3b8036fd9d1d41e9046`. It selected the 107-byte layout
+and accepted the kernel identity, identity-table close, and fixed-column
+header. The first rejection was line 5. Its bounded diagnostic reports empty
+columns 0 and 1 followed by four six-byte tokens. Each private token has four
+lowercase ASCII letters and exactly two underscore characters; all other
+punctuation counts are zero. The observation does not disclose the private
+letter sequences or the character order inside a token.
+
+The parser now requires one opaque metric-label row immediately after each
+fixed-column header. The separator tuple selected at line 1 fixes the six
+column widths and five single-ASCII-space gaps. Columns 0 and 1 must contain
+only ASCII spaces. Each of columns 2 through 5 must contain exactly four
+lowercase ASCII letters and two underscores in any order. The exact selected
+separator must follow before any instruction. The parser neither retains nor
+emits the private label values.
+
+Behavioral tests exercise both reviewed widths, varied underscore positions,
+missing, duplicate, and reordered records, per-section state reset, blank
+private columns, wrong underscore counts, uppercase, digits, other punctuation,
+nonspace identity columns, every gap, cross-width records, and the production
+NCU subprocess boundary. No image build, GPU execution, v30 submission, retry,
+or relaunch was performed for this source repair.
