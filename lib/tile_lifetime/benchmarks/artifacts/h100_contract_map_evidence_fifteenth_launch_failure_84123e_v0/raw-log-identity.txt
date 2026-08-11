@@ -1,0 +1,12 @@
+Complete controller-retained task output:
+bytes: 13220
+lines: 20
+sha256: 170ca215b9964429802731e0d8825eacbc14c0d800495e0da7f9b74b69dd9a5c
+
+Omitted final diagnostic line:
+bytes: 11992
+sha256: 2cda49af2b828547592a54b85900c1a973bb76b6dc7a4d5611484ed398cba349
+
+The other 19 exact lines are retained in bounded-traceback.log. The final line
+contains the complete 274-column Nsight Compute units row and is represented by
+ncu-units-observation.json instead of being copied into the repository.
