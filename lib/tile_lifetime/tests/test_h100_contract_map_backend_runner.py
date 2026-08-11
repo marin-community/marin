@@ -399,19 +399,38 @@ def test_runner_ncu_sass_parser_rejects_unverifiable_exports(
         runner.parse_ncu_sass(source, expected_names)
 
 
-def test_runner_nsys_parser_attributes_kernel_and_copy_activity_to_exact_ranges(tmp_path: Path) -> None:
-    database_path = tmp_path / "trace.sqlite"
+def _write_nsys_trace_database(database_path: Path, *, include_memcpy_table: bool) -> None:
     with sqlite3.connect(database_path) as database:
         database.execute("CREATE TABLE NVTX_EVENTS (start INTEGER, end INTEGER, text TEXT)")
         database.execute("CREATE TABLE StringIds (id INTEGER, value TEXT)")
-        database.execute("CREATE TABLE CUPTI_ACTIVITY_KIND_KERNEL (start INTEGER, end INTEGER, demangledName INTEGER)")
+        database.execute("CREATE TABLE TARGET_INFO_GPU (id INTEGER, name TEXT)")
         database.execute(
-            "CREATE TABLE CUPTI_ACTIVITY_KIND_MEMCPY (start INTEGER, end INTEGER, bytes INTEGER, copyKind INTEGER)"
+            "CREATE TABLE CUPTI_ACTIVITY_KIND_KERNEL "
+            "(start INTEGER, end INTEGER, demangledName INTEGER, deviceId INTEGER)"
         )
+        if include_memcpy_table:
+            database.execute(
+                "CREATE TABLE CUPTI_ACTIVITY_KIND_MEMCPY "
+                "(start INTEGER, end INTEGER, bytes INTEGER, copyKind INTEGER)"
+            )
         database.execute("INSERT INTO NVTX_EVENTS VALUES (100, 400, 'contract_map.steady.0.ordinary_xla')")
         database.execute("INSERT INTO StringIds VALUES (7, 'fusion_kernel')")
-        database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (150, 250, 7)")
-        database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_MEMCPY VALUES (260, 280, 64, 8)")
+        database.execute("INSERT INTO TARGET_INFO_GPU VALUES (0, 'NVIDIA H100')")
+        database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (150, 250, 7, 0)")
+
+
+def test_runner_nsys_parser_attributes_kernel_and_copy_activity_to_exact_ranges(tmp_path: Path) -> None:
+    database_path = tmp_path / "trace.sqlite"
+    _write_nsys_trace_database(database_path, include_memcpy_table=True)
+    with sqlite3.connect(database_path) as database:
+        database.executemany(
+            "INSERT INTO CUPTI_ACTIVITY_KIND_MEMCPY VALUES (?, ?, ?, ?)",
+            (
+                (260, 270, 32, 1),
+                (271, 280, 64, 2),
+                (281, 290, 128, 8),
+            ),
+        )
 
     records = runner.parse_nsys_sqlite(database_path, ("contract_map.steady.0.ordinary_xla",))
 
@@ -421,12 +440,111 @@ def test_runner_nsys_parser_attributes_kernel_and_copy_activity_to_exact_ranges(
             ordered_kernel_names=("fusion_kernel",),
             kernel_duration_ns=100,
             device_to_device_count=1,
-            device_to_device_bytes=64,
-            host_to_device_count=0,
-            host_to_device_bytes=0,
+            device_to_device_bytes=128,
+            host_to_device_count=1,
+            host_to_device_bytes=32,
+            device_to_host_count=1,
+            device_to_host_bytes=64,
             unexpected_copy_count=0,
         ),
     )
+
+
+def test_runner_nsys_parser_accepts_lazy_omission_only_with_complete_cuda_trace_provenance(tmp_path: Path) -> None:
+    database_path = tmp_path / "trace.sqlite"
+    _write_nsys_trace_database(database_path, include_memcpy_table=False)
+
+    records = runner.parse_nsys_sqlite(database_path, ("contract_map.steady.0.ordinary_xla",))
+
+    assert records == (
+        runner.TraceRange(
+            name="contract_map.steady.0.ordinary_xla",
+            ordered_kernel_names=("fusion_kernel",),
+            kernel_duration_ns=100,
+            device_to_device_count=0,
+            device_to_device_bytes=0,
+            host_to_device_count=0,
+            host_to_device_bytes=0,
+            device_to_host_count=0,
+            device_to_host_bytes=0,
+            unexpected_copy_count=0,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("trace-disabled", "omits required trace tables"),
+        ("empty-kernels", "without CUDA kernels"),
+        ("missing-gpu-metadata", "TARGET_INFO_GPU identity"),
+        ("wrong-gpu-schema", "TARGET_INFO_GPU identity"),
+        ("empty-gpu-metadata", "contains no CUDA device identity"),
+        ("unknown-kernel-device", "unknown CUDA device ids"),
+        ("wrong-schedule", "exact steady-state schedule"),
+    ),
+)
+def test_runner_nsys_parser_rejects_missing_memcpy_without_complete_cuda_trace_provenance(
+    tmp_path: Path, mutation: str, message: str
+) -> None:
+    database_path = tmp_path / "trace.sqlite"
+    _write_nsys_trace_database(database_path, include_memcpy_table=False)
+    expected_ranges = ("contract_map.steady.0.ordinary_xla",)
+    with sqlite3.connect(database_path) as database:
+        if mutation == "trace-disabled":
+            database.execute("DROP TABLE CUPTI_ACTIVITY_KIND_KERNEL")
+        elif mutation == "empty-kernels":
+            database.execute("DELETE FROM CUPTI_ACTIVITY_KIND_KERNEL")
+        elif mutation == "missing-gpu-metadata":
+            database.execute("DROP TABLE TARGET_INFO_GPU")
+        elif mutation == "wrong-gpu-schema":
+            database.execute("DROP TABLE TARGET_INFO_GPU")
+            database.execute("CREATE TABLE TARGET_INFO_GPU (id INTEGER, label TEXT)")
+        elif mutation == "empty-gpu-metadata":
+            database.execute("DELETE FROM TARGET_INFO_GPU")
+        elif mutation == "unknown-kernel-device":
+            database.execute("UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET deviceId = 1")
+        elif mutation == "wrong-schedule":
+            expected_ranges = ("contract_map.steady.1.ordinary_xla",)
+        else:
+            raise AssertionError(f"unhandled mutation: {mutation}")
+
+    with pytest.raises(ValueError, match=message):
+        runner.parse_nsys_sqlite(database_path, expected_ranges)
+
+
+def test_runner_nsys_parser_rejects_corrupt_or_wrong_activity_schema(tmp_path: Path) -> None:
+    corrupt_path = tmp_path / "corrupt.sqlite"
+    corrupt_path.write_bytes(b"not sqlite")
+    with pytest.raises(ValueError, match="SQLite export is unreadable"):
+        runner.parse_nsys_sqlite(corrupt_path, ("contract_map.steady.0.ordinary_xla",))
+
+    wrong_schema_path = tmp_path / "wrong.sqlite"
+    _write_nsys_trace_database(wrong_schema_path, include_memcpy_table=True)
+    with sqlite3.connect(wrong_schema_path) as database:
+        database.execute("DROP TABLE CUPTI_ACTIVITY_KIND_MEMCPY")
+        database.execute("CREATE TABLE CUPTI_ACTIVITY_KIND_MEMCPY (start INTEGER, end INTEGER, bytes INTEGER)")
+    with pytest.raises(ValueError, match="omits start, end, bytes, or copyKind"):
+        runner.parse_nsys_sqlite(wrong_schema_path, ("contract_map.steady.0.ordinary_xla",))
+
+
+@pytest.mark.parametrize(
+    "values",
+    (
+        (260, 250, 64, 8),
+        (260, 280, -1, 8),
+        (260, 280, 64, -1),
+        (b"260", 280, 64, 8),
+    ),
+)
+def test_runner_nsys_parser_rejects_malformed_memcpy_records(tmp_path: Path, values: tuple[object, ...]) -> None:
+    database_path = tmp_path / "trace.sqlite"
+    _write_nsys_trace_database(database_path, include_memcpy_table=True)
+    with sqlite3.connect(database_path) as database:
+        database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_MEMCPY VALUES (?, ?, ?, ?)", values)
+
+    with pytest.raises(ValueError, match="invalid activity record"):
+        runner.parse_nsys_sqlite(database_path, ("contract_map.steady.0.ordinary_xla",))
 
 
 def test_runner_profiles_cuda_range_with_supported_nsys_end_policy(
@@ -443,6 +561,7 @@ def test_runner_profiles_cuda_range_with_supported_nsys_end_policy(
     def reject_after_inspecting_command(command, **kwargs):
         arguments = tuple(str(value) for value in command)
         assert arguments[:2] == (str(config.tools.nsys), "profile")
+        assert "--trace=cuda,nvtx" in arguments
         assert "--capture-range=cudaProfilerApi" in arguments
         assert [value for value in arguments if value.startswith("--capture-range-end")] == ["--capture-range-end=stop"]
         assert not any(value.startswith("--stop-on-range-end") for value in arguments)
@@ -453,6 +572,55 @@ def test_runner_profiles_cuda_range_with_supported_nsys_end_policy(
 
     with pytest.raises(RuntimeError, match="synthetic nsys refusal"):
         runner._run_profiled_case(config, "case-id", generated_manifest, case_directory)
+
+
+def test_runner_profile_boundary_explicitly_binds_lazy_export_to_cuda_trace_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _runner_config(tmp_path)
+    case_directory = tmp_path / "case"
+    case_directory.mkdir()
+    generated_manifest = tmp_path / "generated.json"
+    generated_manifest.write_text("{}\n")
+    result_path = case_directory / "case_result.json"
+    monkeypatch.setattr(runner, "_worker_base_command", lambda *args, **kwargs: ("worker", "--case"))
+
+    def successful_profile(command, **kwargs):
+        arguments = tuple(str(value) for value in command)
+        assert arguments[:2] == (str(config.tools.nsys), "profile")
+        assert [value for value in arguments if value.startswith("--trace=")] == ["--trace=cuda,nvtx"]
+        assert arguments[-2:] == ("worker", "--case")
+        result_path.write_text(
+            json.dumps(
+                {
+                    "raw_samples": [
+                        {
+                            "sample_index": 0,
+                            "backend_order": [BackendVariant.ORDINARY_XLA.value],
+                        }
+                    ]
+                }
+            )
+        )
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    def successful_lazy_export(command):
+        arguments = tuple(str(value) for value in command)
+        assert arguments[:2] == (str(config.tools.nsys), "export")
+        assert [value for value in arguments if value.startswith("--lazy=")] == ["--lazy=true"]
+        sqlite_path = Path(arguments[arguments.index("--output") + 1])
+        _write_nsys_trace_database(sqlite_path, include_memcpy_table=False)
+
+    monkeypatch.setattr(runner.subprocess, "run", successful_profile)
+    monkeypatch.setattr(runner, "_run_retained", successful_lazy_export)
+
+    result, records = runner._run_profiled_case(config, "case-id", generated_manifest, case_directory)
+
+    assert result["raw_samples"][0]["sample_index"] == 0
+    assert records[0].ordered_kernel_names == ("fusion_kernel",)
+    assert records[0].device_to_device_count == 0
+    assert records[0].host_to_device_count == 0
+    assert records[0].device_to_host_count == 0
 
 
 def test_runner_numerical_failure_reports_logical_training_step_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -607,6 +775,8 @@ def test_runner_merges_device_and_logical_timings_only_for_exact_copy_free_sched
                     device_to_device_bytes=0,
                     host_to_device_count=0,
                     host_to_device_bytes=0,
+                    device_to_host_count=0,
+                    device_to_host_bytes=0,
                     unexpected_copy_count=0,
                 )
             )
@@ -620,9 +790,14 @@ def test_runner_merges_device_and_logical_timings_only_for_exact_copy_free_sched
         "logical_training_step": 10_000,
     }
     assert summary[BackendVariant.SHUTTLE_FAST.value]["launch_count"] == 2
-    copied = replace(traces[0], device_to_device_count=1, device_to_device_bytes=64)
-    with pytest.raises(ValueError, match="unexpected copies"):
-        runner.merge_trace_timing(plan, {"raw_samples": worker_rows}, (copied, *traces[1:]))
+    for copy_fields in (
+        {"device_to_device_count": 1, "device_to_device_bytes": 64},
+        {"host_to_device_count": 1, "host_to_device_bytes": 64},
+        {"device_to_host_count": 1, "device_to_host_bytes": 64},
+    ):
+        copied = replace(traces[0], **copy_fields)
+        with pytest.raises(ValueError, match="unexpected copies"):
+            runner.merge_trace_timing(plan, {"raw_samples": worker_rows}, (copied, *traces[1:]))
 
 
 def test_runner_retains_public_ordinary_xla_ptx_with_typed_absent_cubin(tmp_path: Path) -> None:

@@ -39,6 +39,8 @@ from tile_lifetime.nvtx_range import NvtxRange
 
 _ARCHITECTURE = "sm_90a"
 _COMPUTE_CAPABILITY = "9.0"
+_NSYS_TRACE_APIS = "cuda,nvtx"
+_NSYS_EXPORT_LAZY = "true"
 _OUTPUT_NAMES = ("forward", "dx", "dw0", "dw1")
 _MAX_NUMERICAL_WORST_PAIR_DIAGNOSTIC_CHARS = 2048
 _CACHE_ENVIRONMENT = {
@@ -294,6 +296,8 @@ class TraceRange:
     device_to_device_bytes: int
     host_to_device_count: int
     host_to_device_bytes: int
+    device_to_host_count: int
+    device_to_host_bytes: int
     unexpected_copy_count: int
 
 
@@ -780,17 +784,26 @@ def _metric_int(value: str) -> int:
 
 def parse_nsys_sqlite(path: Path, expected_ranges: tuple[str, ...]) -> tuple[TraceRange, ...]:
     """Read CUDA kernels and copies contained by each required NVTX range."""
-    with sqlite3.connect(path) as database:
-        tables = {row[0] for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        required = {"NVTX_EVENTS", "StringIds", "CUPTI_ACTIVITY_KIND_KERNEL", "CUPTI_ACTIVITY_KIND_MEMCPY"}
-        if not required.issubset(tables):
-            raise ValueError(f"Nsight Systems SQLite export omits CUPTI tables: {tuple(sorted(required - tables))}")
-        ranges = _nsys_ranges(database)
-        kernels = _nsys_kernels(database)
-        copies = _nsys_copies(database)
+    try:
+        with sqlite3.connect(path) as database:
+            tables = {row[0] for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            required = {"NVTX_EVENTS", "StringIds", "CUPTI_ACTIVITY_KIND_KERNEL"}
+            if not required.issubset(tables):
+                raise ValueError(
+                    f"Nsight Systems SQLite export omits required trace tables: {tuple(sorted(required - tables))}"
+                )
+            ranges = _nsys_ranges(database)
+            kernels = _nsys_kernels(database)
+            if tuple(ranges) != expected_ranges:
+                raise ValueError("Nsight Systems NVTX ranges do not match the exact steady-state schedule")
+            if "CUPTI_ACTIVITY_KIND_MEMCPY" in tables:
+                copies = _nsys_copies(database)
+            else:
+                _validate_lazy_memcpy_absence(database, kernels)
+                copies = ()
+    except sqlite3.DatabaseError as error:
+        raise ValueError(f"Nsight Systems SQLite export is unreadable: {error}") from error
 
-    if tuple(ranges) != expected_ranges:
-        raise ValueError("Nsight Systems NVTX ranges do not match the exact steady-state schedule")
     records = []
     for name in expected_ranges:
         start, end = ranges[name]
@@ -800,7 +813,10 @@ def parse_nsys_sqlite(path: Path, expected_ranges: tuple[str, ...]) -> tuple[Tra
             raise ValueError(f"Nsight Systems range {name!r} contains no CUDA kernels")
         d2d = tuple(copy for copy in contained_copies if copy[3] == "device_to_device")
         h2d = tuple(copy for copy in contained_copies if copy[3] == "host_to_device")
-        unexpected = tuple(copy for copy in contained_copies if copy[3] not in {"device_to_device", "host_to_device"})
+        d2h = tuple(copy for copy in contained_copies if copy[3] == "device_to_host")
+        unexpected = tuple(
+            copy for copy in contained_copies if copy[3] not in {"device_to_device", "host_to_device", "device_to_host"}
+        )
         records.append(
             TraceRange(
                 name=name,
@@ -810,6 +826,8 @@ def parse_nsys_sqlite(path: Path, expected_ranges: tuple[str, ...]) -> tuple[Tra
                 device_to_device_bytes=sum(copy[2] for copy in d2d),
                 host_to_device_count=len(h2d),
                 host_to_device_bytes=sum(copy[2] for copy in h2d),
+                device_to_host_count=len(d2h),
+                device_to_host_bytes=sum(copy[2] for copy in d2h),
                 unexpected_copy_count=len(unexpected),
             )
         )
@@ -824,25 +842,63 @@ def _nsys_ranges(database: sqlite3.Connection) -> dict[str, tuple[int, int]]:
     records: dict[str, tuple[int, int]] = {}
     for start, end, text in database.execute("SELECT start, end, text FROM NVTX_EVENTS WHERE end IS NOT NULL"):
         if isinstance(text, str) and text.startswith("contract_map.steady."):
+            if type(start) is not int or type(end) is not int or start < 0 or end <= start:
+                raise ValueError(f"Nsight Systems has an invalid steady-state NVTX range {text!r}")
             if text in records:
                 raise ValueError(f"Nsight Systems repeats steady-state NVTX range {text!r}")
             records[text] = (int(start), int(end))
     return records
 
 
-def _nsys_kernels(database: sqlite3.Connection) -> tuple[tuple[int, int, str], ...]:
+def _nsys_kernels(database: sqlite3.Connection) -> tuple[tuple[int, int, str, int], ...]:
     columns = _table_columns(database, "CUPTI_ACTIVITY_KIND_KERNEL")
     name_column = "demangledName" if "demangledName" in columns else "shortName"
-    if not {"start", "end", name_column}.issubset(columns):
-        raise ValueError("CUPTI kernel table omits start, end, or kernel-name identity")
+    if not {"start", "end", name_column, "deviceId"}.issubset(columns):
+        raise ValueError("CUPTI kernel table omits start, end, device, or kernel-name identity")
     query = (
-        f"SELECT kernel.start, kernel.end, strings.value "
+        f"SELECT kernel.start, kernel.end, strings.value, kernel.deviceId "
         f"FROM CUPTI_ACTIVITY_KIND_KERNEL AS kernel JOIN StringIds AS strings "
         f"ON kernel.{name_column} = strings.id ORDER BY kernel.start"
     )
-    return tuple(
-        (int(start), int(end), normalize_cuda_kernel_name(str(name))) for start, end, name in database.execute(query)
-    )
+    records = []
+    for start, end, name, device_id in database.execute(query):
+        if (
+            type(start) is not int
+            or type(end) is not int
+            or type(device_id) is not int
+            or start < 0
+            or end <= start
+            or device_id < 0
+            or not isinstance(name, str)
+            or not name.strip()
+        ):
+            raise ValueError("CUPTI kernel table contains an invalid activity record")
+        records.append((start, end, normalize_cuda_kernel_name(name), device_id))
+    return tuple(records)
+
+
+def _validate_lazy_memcpy_absence(
+    database: sqlite3.Connection,
+    kernels: tuple[tuple[int, int, str, int], ...],
+) -> None:
+    """Prove a lazy export omitted an empty memcpy table rather than CUDA trace data."""
+    if not kernels:
+        raise ValueError("Nsight Systems cannot treat a missing memcpy table as empty without CUDA kernels")
+    columns = _table_columns(database, "TARGET_INFO_GPU")
+    if not {"id", "name"}.issubset(columns):
+        raise ValueError("Nsight Systems cannot prove CUDA trace provenance without TARGET_INFO_GPU identity")
+    devices: dict[int, str] = {}
+    for device_id, name in database.execute("SELECT id, name FROM TARGET_INFO_GPU"):
+        if type(device_id) is not int or device_id < 0 or not isinstance(name, str) or not name.strip():
+            raise ValueError("TARGET_INFO_GPU contains an invalid CUDA device identity")
+        if device_id in devices:
+            raise ValueError(f"TARGET_INFO_GPU repeats CUDA device id {device_id}")
+        devices[device_id] = name
+    if not devices:
+        raise ValueError("TARGET_INFO_GPU contains no CUDA device identity")
+    missing_devices = tuple(sorted({kernel[3] for kernel in kernels} - devices.keys()))
+    if missing_devices:
+        raise ValueError(f"CUPTI kernels reference unknown CUDA device ids: {missing_devices}")
 
 
 def _nsys_copies(database: sqlite3.Connection) -> tuple[tuple[int, int, int, str], ...]:
@@ -850,12 +906,23 @@ def _nsys_copies(database: sqlite3.Connection) -> tuple[tuple[int, int, int, str
     if not {"start", "end", "bytes", "copyKind"}.issubset(columns):
         raise ValueError("CUPTI memcpy table omits start, end, bytes, or copyKind")
     kinds = {1: "host_to_device", 2: "device_to_host", 8: "device_to_device"}
-    return tuple(
-        (int(start), int(end), int(size), kinds.get(int(kind), f"copy_kind_{kind}"))
-        for start, end, size, kind in database.execute(
-            "SELECT start, end, bytes, copyKind FROM CUPTI_ACTIVITY_KIND_MEMCPY ORDER BY start"
-        )
-    )
+    records = []
+    for start, end, size, kind in database.execute(
+        "SELECT start, end, bytes, copyKind FROM CUPTI_ACTIVITY_KIND_MEMCPY ORDER BY start"
+    ):
+        if (
+            type(start) is not int
+            or type(end) is not int
+            or type(size) is not int
+            or type(kind) is not int
+            or start < 0
+            or end <= start
+            or size < 0
+            or kind < 0
+        ):
+            raise ValueError("CUPTI memcpy table contains an invalid activity record")
+        records.append((start, end, size, kinds.get(kind, f"copy_kind_{kind}")))
+    return tuple(records)
 
 
 def _table_columns(database: sqlite3.Connection, table: str) -> set[str]:
@@ -2101,7 +2168,7 @@ def _run_profiled_case(
         str(config.tools.nsys),
         "profile",
         "--force-overwrite=true",
-        "--trace=cuda,nvtx",
+        f"--trace={_NSYS_TRACE_APIS}",
         "--capture-range=cudaProfilerApi",
         "--capture-range-end=stop",
         "--output",
@@ -2124,6 +2191,7 @@ def _run_profiled_case(
         "export",
         "--force-overwrite=true",
         "--type=sqlite",
+        f"--lazy={_NSYS_EXPORT_LAZY}",
         "--output",
         str(sqlite_path),
         str(report),
@@ -2350,7 +2418,10 @@ def merge_trace_timing(plan: Any, case_result: Mapping[str, Any], traces: tuple[
             copies["host_to_device_count"] += trace.host_to_device_count
             copies["host_to_device_bytes"] += trace.host_to_device_bytes
             copies["unexpected_copy_count"] += (
-                trace.unexpected_copy_count + trace.device_to_device_count + trace.host_to_device_count
+                trace.unexpected_copy_count
+                + trace.device_to_device_count
+                + trace.host_to_device_count
+                + trace.device_to_host_count
             )
         raw_samples.append(
             {
