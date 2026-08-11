@@ -25,6 +25,7 @@ from rigging.filesystem.storage_path import StoragePath
 from zephyr import memory_budget
 from zephyr.expr import col
 from zephyr.runners import _InProcessWorkerContext
+from zephyr.shard_keys import encode_key
 from zephyr.shuffle import (
     _PAYLOAD_COL,
     _SCATTER_MAX_ROW_GROUPS_PER_CHUNK,
@@ -66,8 +67,9 @@ def _key(item):
 
 
 def _target(key, num_shards):
-    """Match Python-item scatter routing: Polars hash of the raw key value."""
-    return int(pl.select((pl.lit(key).hash(seed=_SCATTER_HASH_SEED) % num_shards).cast(pl.Int32)).item())
+    """Match Python-item scatter routing: Polars hash of msgpack-encoded key bytes."""
+    encoded = encode_key(key)
+    return int(pl.select((pl.lit(encoded).hash(seed=_SCATTER_HASH_SEED) % num_shards).cast(pl.Int32)).item())
 
 
 def _build_shard(tmp_path, items, num_output_shards=4, source_shard=0):
@@ -104,7 +106,7 @@ def test_scatter_roundtrip(tmp_path):
 
 
 def test_scatter_each_shard_gets_correct_items(tmp_path):
-    """Items are routed to shards by Polars hash(key) % num_shards."""
+    """Items are routed to shards by Polars hash(encode_key(key)) % num_shards."""
     num_shards = 4
     items = [{"k": i % 4, "v": i} for i in range(40)]
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=num_shards)
@@ -537,14 +539,14 @@ def test_scatter_empty_input(tmp_path):
 
 
 def test_scatter_key_fn_must_be_serializable(tmp_path):
-    """key_fn must return an Arrow-serializable value for the sort-key column."""
+    """key_fn must return a msgpack-serializable value for the sort-key column."""
 
     class _Unserializable:
         pass
 
     items = [{"v": 0}, {"v": 1}]
     data_path = str(tmp_path / "shard-0000.shuffle")
-    with pytest.raises(ValueError, match="Arrow-serializable"):
+    with pytest.raises(ValueError, match="msgpack-serializable"):
         list(
             _write_scatter(
                 iter(items),
