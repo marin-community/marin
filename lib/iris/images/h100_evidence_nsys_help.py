@@ -15,7 +15,18 @@ POSSIBLE_VALUES = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 QUOTED_VALUE = re.compile(r"['\"](?P<value>[^'\"]+)['\"]")
-REQUIRED_VALUES = {"none", "stop", "stop-shutdown"}
+QUOTED_TOKEN = r"(?:'[^']+'|\"[^\"]+\")"
+CLOSED_VALUE_LIST = re.compile(
+    rf"^\s*{QUOTED_TOKEN}(?:\s*,\s*{QUOTED_TOKEN})*(?:\s*,?\s+and\s+{QUOTED_TOKEN})?\s*$",
+    re.IGNORECASE,
+)
+CAPTURE_RANGE_END_VALUES = {
+    "none",
+    "stop",
+    "stop-shutdown",
+    "repeat[:N][:mode]",
+    "repeat-shutdown:N[:mode]",
+}
 CUDA_GRAPH_TRACE_VALUES = {"graph", "node"}
 
 
@@ -40,7 +51,10 @@ def _option_values(text: str, option: str) -> tuple[str, ...]:
     value_lists = tuple(POSSIBLE_VALUES.finditer(block))
     if len(value_lists) != 1:
         raise ValueError(f"--{option} must contain one recognizable possible-values list")
-    values = tuple(match.group("value") for match in QUOTED_VALUE.finditer(value_lists[0].group("values")))
+    serialized_values = value_lists[0].group("values")
+    if CLOSED_VALUE_LIST.fullmatch(serialized_values) is None:
+        raise ValueError(f"--{option} possible values contain unrecognized syntax")
+    values = tuple(match.group("value") for match in QUOTED_VALUE.finditer(serialized_values))
     if not values or len(values) != len(set(values)):
         raise ValueError(f"--{option} possible values are empty or duplicated")
     return values
@@ -56,8 +70,8 @@ def validate_nsys_profile_help(text: str) -> tuple[tuple[str, ...], tuple[str, .
         raise ValueError("help exposes obsolete --stop-on-range-end")
 
     capture_values = _option_values(text, "capture-range-end")
-    if not REQUIRED_VALUES.issubset(capture_values) or capture_values.count("stop") != 1:
-        raise ValueError("--capture-range-end does not expose the exact stop policy")
+    if set(capture_values) != CAPTURE_RANGE_END_VALUES or capture_values.count("stop") != 1:
+        raise ValueError("--capture-range-end does not expose the exact closed stop policy")
     graph_values = _option_values(text, "cuda-graph-trace")
     if set(graph_values) != CUDA_GRAPH_TRACE_VALUES or graph_values.count("node") != 1:
         raise ValueError("--cuda-graph-trace does not expose exactly graph and node")

@@ -586,6 +586,8 @@ def test_runner_nsys_no_kernel_diagnostic_is_bounded_and_classifies_exact_interv
             "graphExecId INTEGER)"
         )
         database.execute("INSERT INTO CUPTI_ACTIVITY_KIND_GRAPH_TRACE VALUES (150, 250, 0, 30, 1, 2)")
+        database.execute("CREATE TABLE UNREVIEWED_PRIVATE_TRACE_NAME (raw_value TEXT)")
+        database.execute("INSERT INTO UNREVIEWED_PRIVATE_TRACE_NAME VALUES ('unbounded raw trace value')")
 
     with pytest.raises(ValueError, match="contains no associated CUDA kernels") as error:
         runner.parse_nsys_sqlite(
@@ -623,6 +625,24 @@ def test_runner_nsys_no_kernel_diagnostic_is_bounded_and_classifies_exact_interv
     assert diagnostic["runtime_correlation"]["same_thread_contained_count"] == 1
     assert diagnostic["sqlite"]["sha256"] == hashlib.sha256(database_path.read_bytes()).hexdigest()
     assert diagnostic["report"]["sha256"] == hashlib.sha256(report_path.read_bytes()).hexdigest()
+    with sqlite3.connect(database_path) as database:
+        table_names = tuple(
+            sorted(str(row[0]) for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'"))
+        )
+    expected_table_hash = hashlib.sha256(
+        json.dumps(table_names, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert diagnostic["database"]["table_count"] == len(table_names)
+    assert diagnostic["database"]["table_names_sha256"] == expected_table_hash
+    kernel_columns = tuple(sorted(("correlationId", "demangledName", "deviceId", "end", "graphNodeId", "start")))
+    assert diagnostic["relevant_tables"]["CUPTI_ACTIVITY_KIND_KERNEL"] == {
+        "column_count": len(kernel_columns),
+        "columns_sha256": (
+            hashlib.sha256(json.dumps(kernel_columns, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        ),
+        "present": True,
+        "row_count": 4,
+    }
     assert diagnostic["profile_args"] == [
         "--trace=cuda,nvtx",
         "--cuda-graph-trace=node",
@@ -631,6 +651,8 @@ def test_runner_nsys_no_kernel_diagnostic_is_bounded_and_classifies_exact_interv
     ]
     assert diagnostic["export_args"] == ["--type=sqlite", "--lazy=true"]
     assert "fusion_kernel" not in str(error.value)
+    assert "UNREVIEWED_PRIVATE_TRACE_NAME" not in str(error.value)
+    assert "unbounded raw trace value" not in str(error.value)
 
 
 def test_runner_nsys_no_kernel_diagnostic_rejects_empty_retained_report(tmp_path: Path) -> None:
@@ -648,6 +670,30 @@ def test_runner_nsys_no_kernel_diagnostic_rejects_empty_retained_report(tmp_path
             ("contract_map.steady.0.ordinary_xla",),
             report_path=report_path,
         )
+
+
+def test_runner_nsys_no_kernel_diagnostic_fails_closed_when_reviewed_bound_is_exceeded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_path = tmp_path / "trace.sqlite"
+    _write_nsys_trace_database(database_path, include_memcpy_table=False)
+    with sqlite3.connect(database_path) as database:
+        database.execute("UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET start = 500, end = 600")
+        database.execute("UPDATE CUPTI_ACTIVITY_KIND_RUNTIME SET start = 450, end = 475")
+    monkeypatch.setattr(runner, "_MAX_NSYS_NO_KERNEL_DIAGNOSTIC_CHARS", 128)
+
+    with pytest.raises(AssertionError, match="diagnostic exceeds its reviewed bound"):
+        runner.parse_nsys_sqlite(database_path, ("contract_map.steady.0.ordinary_xla",))
+
+
+def test_runner_nsys_parser_rejects_overlapping_kernel_with_associated_contained_runtime(tmp_path: Path) -> None:
+    database_path = tmp_path / "trace.sqlite"
+    _write_nsys_trace_database(database_path, include_memcpy_table=True)
+    with sqlite3.connect(database_path) as database:
+        database.execute("UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET start = 90, end = 110")
+
+    with pytest.raises(ValueError, match="contains no associated CUDA kernels"):
+        runner.parse_nsys_sqlite(database_path, ("contract_map.steady.0.ordinary_xla",))
 
 
 @pytest.mark.parametrize(
@@ -829,6 +875,58 @@ def test_runner_profile_boundary_explicitly_binds_lazy_export_to_cuda_trace_prov
     assert records[0].device_to_device_count == 0
     assert records[0].host_to_device_count == 0
     assert records[0].device_to_host_count == 0
+
+
+def test_runner_profile_failure_binds_bounded_diagnostic_to_retained_report_and_sqlite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _runner_config(tmp_path)
+    case_directory = tmp_path / "case"
+    case_directory.mkdir()
+    generated_manifest = tmp_path / "generated.json"
+    generated_manifest.write_text("{}\n")
+    result_path = case_directory / "case_result.json"
+    report_path = case_directory / "steady_trace.nsys-rep"
+    sqlite_path = case_directory / "steady_trace.sqlite"
+    monkeypatch.setattr(runner, "_worker_base_command", lambda *args, **kwargs: ("worker", "--case"))
+
+    def successful_profile(command, **kwargs):
+        result_path.write_text(
+            json.dumps(
+                {
+                    "raw_samples": [
+                        {
+                            "sample_index": 0,
+                            "backend_order": [BackendVariant.ORDINARY_XLA.value],
+                        }
+                    ]
+                }
+            )
+        )
+        report_path.write_bytes(b"retained profile report")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    def export_without_contained_kernel(command):
+        _write_nsys_trace_database(sqlite_path, include_memcpy_table=False)
+        with sqlite3.connect(sqlite_path) as database:
+            database.execute("UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET start = 500, end = 600")
+            database.execute("UPDATE CUPTI_ACTIVITY_KIND_RUNTIME SET start = 450, end = 475")
+
+    monkeypatch.setattr(runner.subprocess, "run", successful_profile)
+    monkeypatch.setattr(runner, "_run_retained", export_without_contained_kernel)
+
+    with pytest.raises(ValueError, match="contains no associated CUDA kernels") as error:
+        runner._run_profiled_case(config, "case-id", generated_manifest, case_directory)
+
+    diagnostic = _nsys_failure_diagnostic(error)
+    assert diagnostic["report"] == {
+        "bytes": report_path.stat().st_size,
+        "sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+    }
+    assert diagnostic["sqlite"] == {
+        "bytes": sqlite_path.stat().st_size,
+        "sha256": hashlib.sha256(sqlite_path.read_bytes()).hexdigest(),
+    }
 
 
 def test_runner_numerical_failure_reports_logical_training_step_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
