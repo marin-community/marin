@@ -33,7 +33,7 @@ CUOBJDUMP_SASS = """\
         .headerflags    @"EF_CUDA_SM90A EF_CUDA_VIRTUAL_SM(EF_CUDA_SM90A)"
         /*0000*/                   LDC R1, c[0x0][0x37c] ;       /* 0x0000df00ff017b82 */
                                                                  /* 0x000fe20000000800 */
-        /*0010*/                   S2R R9, SR_TID.X ;            /* 0x0000000000097919 */
+        /*0010*/              @!P0 S2R R9, SR_TID.X ;            /* 0x0000000000097919 */
                                                                  /* 0x000e2e0000002100 */
 """
 NVDISASM_SASS = """\
@@ -196,6 +196,25 @@ def _run_sass_validator(tmp_path: Path, *, output_format: str, text: str) -> sub
     )
 
 
+def _run_sass_validator_bytes(tmp_path: Path, *, output_format: str, payload: bytes) -> subprocess.CompletedProcess[str]:
+    artifact = tmp_path / f"{output_format}.sass"
+    artifact.write_bytes(payload)
+    return subprocess.run(
+        (
+            sys.executable,
+            str(SASS_VALIDATOR),
+            "--format",
+            output_format,
+            "--expected-kernel",
+            "h100_evidence_smoke",
+            str(artifact),
+        ),
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+
 def test_h100_evidence_package_manifest_is_closed_and_hash_pinned():
     records = _package_manifest_records()
     filenames = {Path(urlparse(url).path).name for _, _, url in records}
@@ -255,6 +274,10 @@ def test_h100_evidence_image_executes_the_runner_cubin_disassembly_closure():
     assert smoke.count("/opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-sass-smoke.py") == 2
     assert "--format cuobjdump --expected-kernel h100_evidence_smoke" in smoke
     assert "--format nvdisasm --expected-kernel h100_evidence_smoke" in smoke
+    assert (
+        "RUN --mount=type=bind,source=lib/iris/images/h100_evidence_sass_smoke.py,"
+        "target=/tmp/h100-evidence-sass-smoke.py,ro" in target
+    )
     assert "grep -Eq" not in smoke
     assert f"COPY {SASS_VALIDATOR.relative_to(REPO_ROOT).as_posix()}" not in target
     assert "nvidia-smi" not in smoke
@@ -287,6 +310,8 @@ def test_h100_evidence_sass_validator_accepts_addressed_kernel_instructions(tmp_
         "warning: source unavailable\n" + CUOBJDUMP_SASS,
         "Function : h100_evidence_smoke\nplain text without instructions\n",
         "Function : h100_evidence_smoke\n/*address*/ MOV R1, R2 ;\n",
+        "Function : h100_evidence_smoke\n/*0000*/ MOV R1, R2 ;\n/*0010*/ this is not SASS\n",
+        "Function : h100_evidence_smoke\n/*0000*/ MOV R1, R2 ;\n/*0000*/ EXIT ;\n",
         "Function : different_kernel\n/*0000*/ MOV R1, R2 ;\n",
         "Function : h100_evidence_smoke\nFunction : h100_evidence_smoke\n/*0000*/ MOV R1, R2 ;\n",
         "Function : h100_evidence_smoke\n/*0010*/ MOV R1, R2 ;\n/*0000*/ EXIT ;\n",
@@ -294,6 +319,59 @@ def test_h100_evidence_sass_validator_accepts_addressed_kernel_instructions(tmp_
 )
 def test_h100_evidence_sass_validator_rejects_unusable_cuobjdump_output(tmp_path, sass):
     result = _run_sass_validator(tmp_path, output_format="cuobjdump", text=sass)
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.startswith("cuobjdump SASS validation failed:")
+
+
+@pytest.mark.parametrize(
+    "sass",
+    (
+        ".global h100_evidence_smoke\nh100_evidence_smoke:\nplain text without instructions\n",
+        ".global h100_evidence_smoke\nh100_evidence_smoke:\n/*0000*/ MOV R1, R2 ;\n/*0010*/ not SASS\n",
+        "warning: source unavailable\n" + NVDISASM_SASS,
+        ".global different_kernel\nh100_evidence_smoke:\n/*0000*/ MOV R1, R2 ;\n",
+        ".global h100_evidence_smoke\n.global h100_evidence_smoke\nh100_evidence_smoke:\n/*0000*/ MOV R1, R2 ;\n",
+        ".global h100_evidence_smoke\nh100_evidence_smoke:\nh100_evidence_smoke:\n/*0000*/ MOV R1, R2 ;\n",
+        ".global h100_evidence_smoke\nh100_evidence_smoke:\n/*0010*/ MOV R1, R2 ;\n/*0000*/ EXIT ;\n",
+    ),
+)
+def test_h100_evidence_sass_validator_rejects_unusable_nvdisasm_output(tmp_path, sass):
+    result = _run_sass_validator(tmp_path, output_format="nvdisasm", text=sass)
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.startswith("nvdisasm SASS validation failed:")
+
+
+def test_h100_evidence_sass_validator_rejects_non_utf8_artifact(tmp_path):
+    result = _run_sass_validator_bytes(tmp_path, output_format="cuobjdump", payload=b"\xff")
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.startswith("cuobjdump SASS validation failed:")
+
+
+def test_h100_evidence_sass_validator_rejects_oversized_artifact(tmp_path):
+    artifact = tmp_path / "cuobjdump.sass"
+    with artifact.open("wb") as stream:
+        stream.seek(1 << 20)
+        stream.write(b"x")
+    result = subprocess.run(
+        (
+            sys.executable,
+            str(SASS_VALIDATOR),
+            "--format",
+            "cuobjdump",
+            "--expected-kernel",
+            "h100_evidence_smoke",
+            str(artifact),
+        ),
+        capture_output=True,
+        check=False,
+        text=True,
+    )
 
     assert result.returncode == 1
     assert result.stdout == ""

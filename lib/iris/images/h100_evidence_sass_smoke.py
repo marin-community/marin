@@ -19,6 +19,8 @@ INSTRUCTION = re.compile(
     r"(?P<mnemonic>[A-Z][A-Z0-9]*(?:\.[A-Z0-9]+)*)\b"
     r".*;\s*(?:/\*\s*0x[0-9A-Fa-f]+\s*\*/)?\s*$"
 )
+COMMENT_PREFIX = re.compile(r"^\s*/\*")
+ENCODING_CONTINUATION = re.compile(r"^\s*/\*\s*0x[0-9A-Fa-f]{16,32}\s*\*/\s*$")
 CUOBJDUMP_FUNCTION = re.compile(r"^\s*Function\s*:\s*(?P<name>[A-Za-z_.$][A-Za-z0-9_.$]*)\s*$")
 NVDISASM_GLOBAL = re.compile(r"^\s*\.global\s+(?P<name>[A-Za-z_.$][A-Za-z0-9_.$]*)\s*$")
 
@@ -52,11 +54,24 @@ def validate_sass(text: str, *, output_format: str, expected_kernel: str) -> tup
     else:
         raise ValueError(f"unsupported SASS output format: {output_format}")
 
-    records = tuple(
-        InstructionRecord(address=int(match.group("address"), 16), mnemonic=match.group("mnemonic"))
-        for line in lines
-        if (match := INSTRUCTION.fullmatch(line))
-    )
+    records = []
+    previous_was_instruction = False
+    for line in lines:
+        match = INSTRUCTION.fullmatch(line)
+        if match is not None:
+            records.append(InstructionRecord(address=int(match.group("address"), 16), mnemonic=match.group("mnemonic")))
+            previous_was_instruction = True
+            continue
+        if ENCODING_CONTINUATION.fullmatch(line) is not None:
+            if output_format != "cuobjdump" or not previous_was_instruction:
+                raise ValueError("unexpected standalone instruction encoding")
+            previous_was_instruction = False
+            continue
+        if COMMENT_PREFIX.match(line) is not None:
+            raise ValueError(f"malformed address-bearing instruction record: {line!r}")
+        previous_was_instruction = False
+
+    records = tuple(records)
     if not records:
         raise ValueError("output contains no address-bearing instruction records")
     addresses = tuple(record.address for record in records)
@@ -69,7 +84,10 @@ def validate_file(path: Path, *, output_format: str, expected_kernel: str) -> tu
     """Read and validate one bounded UTF-8 SASS artifact."""
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"SASS artifact must be a regular file: {path}")
-    payload = path.read_bytes()
+    if path.stat().st_size > MAX_SASS_BYTES:
+        raise ValueError(f"SASS artifact exceeds {MAX_SASS_BYTES} bytes")
+    with path.open("rb") as artifact:
+        payload = artifact.read(MAX_SASS_BYTES + 1)
     if len(payload) > MAX_SASS_BYTES:
         raise ValueError(f"SASS artifact exceeds {MAX_SASS_BYTES} bytes")
     try:
