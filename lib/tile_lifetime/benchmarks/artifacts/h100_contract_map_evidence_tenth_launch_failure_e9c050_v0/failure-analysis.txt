@@ -1,0 +1,41 @@
+Observed boundary
+=================
+
+1. Trusted image `sha256sum` authenticated the transported launcher and
+   manifest before Python execution.
+2. The task selected `/opt/h100-evidence-runtime/bin/python` for the launcher
+   and its required `--runtime-python` value.
+3. `run_coordinator` reached `_run_profiled_case`. Its control flow requires
+   source audit, H100/tool preflight, generated compilation, and loaded shared
+   library topology validation to finish first.
+4. The case worker returned successfully and produced `case_result.json`. Its
+   control flow requires all three backend numerical gates, warmup, the
+   counterbalanced steady schedule, balanced NVTX ranges, and CUDA profiler
+   stop to finish first.
+5. `nsys profile` returned successfully, the report existed, and `nsys export
+   --type=sqlite --lazy=true` returned successfully. Otherwise
+   `_run_profiled_case` would have raised before `parse_nsys_sqlite`.
+6. `parse_nsys_sqlite` admitted the required table schema, exact NVTX schedule,
+   complete kernel-name resolution, and the missing-empty-memcpy-table rule.
+   It rejected the first required range because no parsed CUDA kernel satisfied
+   `range_start <= kernel_start` and `kernel_end <= range_end`.
+
+Exact first failure
+===================
+
+Exception: ValueError: Nsight Systems range
+`contract_map.steady.0.ordinary_xla` contains no CUDA kernels
+
+The failed container's temporary report and SQLite database were not exported
+from Iris. The controller log contains no range timestamps, kernel timestamps,
+table inventory, or kernel names. This artifact does not infer whether the
+failure came from timing scope, correlation, clock domains, or parser logic.
+
+Evidence limit
+==============
+
+No `TraceRange` tuple returned to `run_coordinator`, so no trace timing or copy
+record was accepted. Cache protocol workers, Nsight Compute, artifact
+retention, the remaining cases, and final bundle publication were not reached.
+The job had one failed attempt, no preemptions, zero configured failure
+retries, and was not relaunched.
