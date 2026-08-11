@@ -15,9 +15,12 @@ README.md's "Future work".
 """
 
 import os
+
 import pulumi
 import pulumi_gcp as gcp
 import pulumi_kubernetes as k8s
+from rigging.secrets import resolve_secret_spec
+
 from iac.config import CLOUDFLARE_TOKEN_SECRET, Provider, load_iris_config, load_provisioning
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
 from iac.coreweave.dns import FederationDns, FederationDnsArgs
@@ -30,7 +33,6 @@ from iac.gcp.iam_config import load_iam_config
 from iac.gcp.registries import GcpArtifactRegistries, GcpArtifactRegistriesArgs
 from iac.imports import NO_IMPORTS, ImportRegistrar
 from iac.nodepools import derive_nodepools
-from rigging.secrets import resolve_secret_spec
 
 DEFAULT_NAMESPACE = "iris"
 

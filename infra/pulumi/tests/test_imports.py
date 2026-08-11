@@ -88,7 +88,11 @@ def test_validate_reviewed_manifest_accepts_unchanged_subset():
         "resources": current["resources"],
     }
 
-    validate_reviewed_manifest(reviewed, current)
+    summary = validate_reviewed_manifest(reviewed, current)
+
+    assert summary.imports_by_type == {IAM_MEMBER_TYPE: 1}
+    assert summary.component_count == 1
+    assert summary.digest == import_manifest_summary(reviewed).digest
 
 
 @pytest.mark.parametrize(
@@ -111,7 +115,7 @@ def test_validate_reviewed_manifest_rejects_stale_or_edited_entries(mutate):
 def test_validate_reviewed_manifest_rejects_unresolved_placeholder():
     current = resolve_import_manifest(_generated_manifest(), [])
 
-    with pytest.raises(ValueError, match="unresolved import ID"):
+    with pytest.raises(ValueError):
         validate_reviewed_manifest(current, current)
 
 

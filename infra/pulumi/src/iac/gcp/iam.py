@@ -15,7 +15,6 @@ than kept as a separate component.
 """
 
 import base64
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Protocol, TypeVar
 
@@ -25,9 +24,6 @@ from google.cloud import kms_v1
 
 from iac.gcp.cloud_run import resource_slug
 from iac.imports import NO_IMPORTS, ImportRegistrar
-
-# Builds the common ResourceOptions for one owned resource or IAM member grant.
-OptsFor = Callable[..., pulumi.ResourceOptions]
 
 _ConditionArgsT = TypeVar("_ConditionArgsT")
 
@@ -138,6 +134,33 @@ class GcpIamArgs:
     service_accounts: tuple[GcpServiceAccountIam, ...]
 
 
+@dataclass(frozen=True)
+class _GrantDeclaration:
+    logical_name: str
+    member: str
+    provider_id: str
+
+
+@dataclass(frozen=True)
+class _GcpIamContext:
+    args: GcpIamArgs
+    imports: ImportRegistrar
+    provider: pulumi.ProviderResource
+    parent: pulumi.Resource
+    dependencies: tuple[pulumi.Resource, ...] = ()
+
+    def options(self, *, protect: bool = False) -> pulumi.ResourceOptions:
+        return pulumi.ResourceOptions(
+            parent=self.parent,
+            provider=self.provider,
+            depends_on=list(self.dependencies),
+            protect=protect,
+        )
+
+    def register(self, resource: pulumi.Resource, provider_id: str) -> None:
+        self.imports.register(resource, parent=self.parent, provider_id=provider_id)
+
+
 def _grant_name(prefix: str, role: str, member: str, condition: GcpIamCondition | None) -> str:
     name = f"{prefix}-{resource_slug(role)}-{resource_slug(member)}"
     return f"{name}-{resource_slug(condition.title)}" if condition else name
@@ -205,7 +228,7 @@ def _grant_resource(
     resource_ref: str,
     grant: GcpRoleGrant,
     member: str | GcpEncryptedMember,
-) -> tuple[str, str, str]:
+) -> _GrantDeclaration:
     """The logical name, principal, and provider ID for one IAM member grant.
     Asserts `member` is already resolved to `str` — every call site runs after
     `_resolve_encrypted_members`, so this is a safety net, not the resolution step, and narrows
@@ -216,196 +239,153 @@ def _grant_resource(
     assert isinstance(member, str), f"unresolved encrypted member reached _grant_resource: {member!r}"
     name = _grant_name(name_prefix, grant.role, member, grant.condition)
     import_id = f"{resource_ref} {grant.role} {member}{_condition_suffix(grant.condition)}"
-    return name, member, import_id
+    return _GrantDeclaration(logical_name=name, member=member, provider_id=import_id)
 
 
-def _create_service_accounts(
-    args: GcpIamArgs,
-    opts_for: OptsFor,
-    imports: ImportRegistrar,
-    parent: pulumi.Resource,
-) -> list[gcp.serviceaccount.Account]:
+def _create_service_accounts(context: _GcpIamContext) -> list[gcp.serviceaccount.Account]:
     created = []
-    for account in args.owned_service_accounts:
+    for account in context.args.owned_service_accounts:
         import_id = (
-            f"projects/{args.project}/serviceAccounts/{account.account_id}@{args.project}.iam.gserviceaccount.com"
+            f"projects/{context.args.project}/serviceAccounts/"
+            f"{account.account_id}@{context.args.project}.iam.gserviceaccount.com"
         )
         resource = gcp.serviceaccount.Account(
             f"account-{resource_slug(account.account_id)}",
-            project=args.project,
+            project=context.args.project,
             account_id=account.account_id,
             display_name=account.display_name,
-            opts=opts_for(protect=True),
+            opts=context.options(protect=True),
         )
-        imports.register(resource, parent=parent, provider_id=import_id)
+        context.register(resource, import_id)
         created.append(resource)
     return created
 
 
-def _create_custom_roles(
-    args: GcpIamArgs,
-    opts_for: OptsFor,
-    imports: ImportRegistrar,
-    parent: pulumi.Resource,
-) -> list[gcp.projects.IAMCustomRole]:
+def _create_custom_roles(context: _GcpIamContext) -> list[gcp.projects.IAMCustomRole]:
     created = []
-    for role in args.custom_roles:
-        import_id = f"projects/{args.project}/roles/{role.role_id}"
+    for role in context.args.custom_roles:
+        import_id = f"projects/{context.args.project}/roles/{role.role_id}"
         resource = gcp.projects.IAMCustomRole(
             f"role-{resource_slug(role.role_id)}",
-            project=args.project,
+            project=context.args.project,
             role_id=role.role_id,
             title=role.title,
             description=role.description,
             permissions=list(role.permissions),
-            opts=opts_for(),
+            opts=context.options(),
         )
-        imports.register(resource, parent=parent, provider_id=import_id)
+        context.register(resource, import_id)
         created.append(resource)
     return created
 
 
-def _grant_project_iam(
-    args: GcpIamArgs,
-    opts_for: OptsFor,
-    imports: ImportRegistrar,
-    parent: pulumi.Resource,
-) -> None:
-    for grant in args.project_grants:
+def _grant_project_iam(context: _GcpIamContext) -> None:
+    for grant in context.args.project_grants:
         for member in grant.members:
-            name, member, import_id = _grant_resource("project", args.project, grant, member)
+            declaration = _grant_resource("project", context.args.project, grant, member)
             resource = gcp.projects.IAMMember(
-                name,
-                project=args.project,
+                declaration.logical_name,
+                project=context.args.project,
                 role=grant.role,
-                member=member,
+                member=declaration.member,
                 condition=_condition_args(grant.condition, gcp.projects.IAMMemberConditionArgs),
-                opts=opts_for(),
+                opts=context.options(),
             )
-            imports.register(resource, parent=parent, provider_id=import_id)
+            context.register(resource, declaration.provider_id)
 
 
-def _grant_kms_iam(
-    args: GcpIamArgs,
-    opts_for: OptsFor,
-    imports: ImportRegistrar,
-    parent: pulumi.Resource,
-) -> None:
-    crypto_key_id = _crypto_key_id(args)
-    for grant in args.kms_grants:
+def _grant_kms_iam(context: _GcpIamContext) -> None:
+    crypto_key_id = _crypto_key_id(context.args)
+    for grant in context.args.kms_grants:
         for member in grant.members:
-            name, member, import_id = _grant_resource("kms", crypto_key_id, grant, member)
+            declaration = _grant_resource("kms", crypto_key_id, grant, member)
             resource = gcp.kms.CryptoKeyIAMMember(
-                name,
+                declaration.logical_name,
                 crypto_key_id=crypto_key_id,
                 role=grant.role,
-                member=member,
+                member=declaration.member,
                 condition=_condition_args(grant.condition, gcp.kms.CryptoKeyIAMMemberConditionArgs),
-                opts=opts_for(),
+                opts=context.options(),
             )
-            imports.register(resource, parent=parent, provider_id=import_id)
+            context.register(resource, declaration.provider_id)
 
 
-def _grant_secret_iam(
-    args: GcpIamArgs,
-    opts_for: OptsFor,
-    imports: ImportRegistrar,
-    parent: pulumi.Resource,
-) -> None:
-    for secret in args.secrets:
-        secret_id = f"projects/{args.project}/secrets/{secret.secret}"
+def _grant_secret_iam(context: _GcpIamContext) -> None:
+    for secret in context.args.secrets:
+        secret_id = f"projects/{context.args.project}/secrets/{secret.secret}"
         for grant in secret.grants:
             for member in grant.members:
-                name, member, import_id = _grant_resource(
-                    f"secret-{resource_slug(secret.secret)}", secret_id, grant, member
-                )
+                declaration = _grant_resource(f"secret-{resource_slug(secret.secret)}", secret_id, grant, member)
                 resource = gcp.secretmanager.SecretIamMember(
-                    name,
-                    project=args.project,
+                    declaration.logical_name,
+                    project=context.args.project,
                     secret_id=secret.secret,
                     role=grant.role,
-                    member=member,
+                    member=declaration.member,
                     condition=_condition_args(grant.condition, gcp.secretmanager.SecretIamMemberConditionArgs),
-                    opts=opts_for(),
+                    opts=context.options(),
                 )
-                imports.register(resource, parent=parent, provider_id=import_id)
+                context.register(resource, declaration.provider_id)
 
 
-def _grant_bucket_iam(
-    args: GcpIamArgs,
-    opts_for: OptsFor,
-    imports: ImportRegistrar,
-    parent: pulumi.Resource,
-) -> None:
-    for bucket in args.buckets:
+def _grant_bucket_iam(context: _GcpIamContext) -> None:
+    for bucket in context.args.buckets:
         for grant in bucket.grants:
             for member in grant.members:
-                name, member, import_id = _grant_resource(
+                declaration = _grant_resource(
                     f"bucket-{resource_slug(bucket.bucket)}", f"b/{bucket.bucket}", grant, member
                 )
                 resource = gcp.storage.BucketIAMMember(
-                    name,
+                    declaration.logical_name,
                     bucket=bucket.bucket,
                     role=grant.role,
-                    member=member,
+                    member=declaration.member,
                     condition=_condition_args(grant.condition, gcp.storage.BucketIAMMemberConditionArgs),
-                    opts=opts_for(),
+                    opts=context.options(),
                 )
-                imports.register(resource, parent=parent, provider_id=import_id)
+                context.register(resource, declaration.provider_id)
 
 
-def _grant_artifact_repository_iam(
-    args: GcpIamArgs,
-    opts_for: OptsFor,
-    imports: ImportRegistrar,
-    parent: pulumi.Resource,
-) -> None:
-    for repo in args.artifact_repositories:
-        repo_path = f"projects/{args.project}/locations/{repo.location}/repositories/{repo.repository}"
+def _grant_artifact_repository_iam(context: _GcpIamContext) -> None:
+    for repo in context.args.artifact_repositories:
+        repo_path = f"projects/{context.args.project}/locations/{repo.location}/repositories/{repo.repository}"
         for grant in repo.grants:
             for member in grant.members:
-                name, member, import_id = _grant_resource(
+                declaration = _grant_resource(
                     f"ar-{resource_slug(repo.location)}-{resource_slug(repo.repository)}",
                     repo_path,
                     grant,
                     member,
                 )
                 resource = gcp.artifactregistry.RepositoryIamMember(
-                    name,
-                    project=args.project,
+                    declaration.logical_name,
+                    project=context.args.project,
                     location=repo.location,
                     repository=repo.repository,
                     role=grant.role,
-                    member=member,
+                    member=declaration.member,
                     condition=_condition_args(grant.condition, gcp.artifactregistry.RepositoryIamMemberConditionArgs),
-                    opts=opts_for(),
+                    opts=context.options(),
                 )
-                imports.register(resource, parent=parent, provider_id=import_id)
+                context.register(resource, declaration.provider_id)
 
 
-def _grant_service_account_iam(
-    args: GcpIamArgs,
-    opts_for: OptsFor,
-    imports: ImportRegistrar,
-    parent: pulumi.Resource,
-) -> None:
-    for account in args.service_accounts:
-        service_account_id = f"projects/{args.project}/serviceAccounts/{account.email}"
+def _grant_service_account_iam(context: _GcpIamContext) -> None:
+    for account in context.args.service_accounts:
+        service_account_id = f"projects/{context.args.project}/serviceAccounts/{account.email}"
         account_local = account.email.split("@", 1)[0]
         for grant in account.grants:
             for member in grant.members:
-                name, member, import_id = _grant_resource(
-                    f"sa-{resource_slug(account_local)}", service_account_id, grant, member
-                )
+                declaration = _grant_resource(f"sa-{resource_slug(account_local)}", service_account_id, grant, member)
                 resource = gcp.serviceaccount.IAMMember(
-                    name,
+                    declaration.logical_name,
                     service_account_id=service_account_id,
                     role=grant.role,
-                    member=member,
+                    member=declaration.member,
                     condition=_condition_args(grant.condition, gcp.serviceaccount.IAMMemberConditionArgs),
-                    opts=opts_for(),
+                    opts=context.options(),
                 )
-                imports.register(resource, parent=parent, provider_id=import_id)
+                context.register(resource, declaration.provider_id)
 
 
 def _condition_args(
@@ -438,34 +418,21 @@ class GcpIam(pulumi.ComponentResource):
         # Decrypt every GcpEncryptedMember before declaring any resource, so everything below
         # only ever handles plain strings.
         args = _resolve_encrypted_members(args, _KmsMemberDecryptor(_crypto_key_id(args)))
-
-        def opts_for(
-            *,
-            depends_on: list[pulumi.Resource] | None = None,
-            protect: bool = False,
-        ) -> pulumi.ResourceOptions:
-            return pulumi.ResourceOptions(
-                parent=self,
-                provider=gcp_provider,
-                depends_on=depends_on,
-                protect=protect,
-            )
+        context = _GcpIamContext(args=args, imports=imports, provider=gcp_provider, parent=self)
 
         # Owned service accounts and custom role definitions first: a grant referencing either
         # by name needs it to already exist on a from-scratch `up`. `depends_on` (not Python call
         # order, which Pulumi's engine ignores) is what actually enforces that — every grant
         # waits on both, mirroring GcpDeployPermissions's created_accounts -> grant_opts pattern.
-        created_accounts = _create_service_accounts(args, opts_for, imports, self)
-        created_roles = _create_custom_roles(args, opts_for, imports, self)
+        created_accounts = _create_service_accounts(context)
+        created_roles = _create_custom_roles(context)
+        grant_context = replace(context, dependencies=tuple(created_accounts + created_roles))
 
-        def grant_opts_for() -> pulumi.ResourceOptions:
-            return opts_for(depends_on=created_accounts + created_roles)
-
-        _grant_project_iam(args, grant_opts_for, imports, self)
-        _grant_kms_iam(args, grant_opts_for, imports, self)
-        _grant_secret_iam(args, grant_opts_for, imports, self)
-        _grant_bucket_iam(args, grant_opts_for, imports, self)
-        _grant_artifact_repository_iam(args, grant_opts_for, imports, self)
-        _grant_service_account_iam(args, grant_opts_for, imports, self)
+        _grant_project_iam(grant_context)
+        _grant_kms_iam(grant_context)
+        _grant_secret_iam(grant_context)
+        _grant_bucket_iam(grant_context)
+        _grant_artifact_repository_iam(grant_context)
+        _grant_service_account_iam(grant_context)
 
         self.register_outputs({})

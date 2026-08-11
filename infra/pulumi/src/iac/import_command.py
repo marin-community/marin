@@ -14,6 +14,7 @@ from pathlib import Path
 from pulumi import automation as auto
 
 from iac.imports import (
+    IMPORT_MANIFEST_MODE,
     ImportCatalog,
     ImportManifest,
     ImportManifestSummary,
@@ -26,6 +27,7 @@ from iac.program import build_stack
 
 PULUMI_DIR = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = PULUMI_DIR.parents[1]
+CONFIRMATION_DIGEST_LENGTH = 12
 
 
 def _load_manifest(path: Path) -> ImportManifest:
@@ -39,7 +41,7 @@ def _require_local_manifest(path: Path, *, must_exist: bool) -> Path:
     resolved = path.expanduser().resolve(strict=must_exist)
     if resolved.is_relative_to(REPOSITORY_ROOT):
         raise ValueError("import manifests contain provider IDs and must be kept outside the repository")
-    if must_exist and stat.S_IMODE(resolved.stat().st_mode) != 0o600:
+    if must_exist and stat.S_IMODE(resolved.stat().st_mode) != IMPORT_MANIFEST_MODE:
         raise ValueError("reviewed import manifest must have mode 0600")
     return resolved
 
@@ -95,8 +97,7 @@ def apply(stack_name: str, reviewed_path: Path) -> None:
         generated_path = Path(temp_directory) / "generated.json"
         current = _generate_manifest(stack_name, generated_path)
 
-    validate_reviewed_manifest(reviewed, current)
-    summary = import_manifest_summary(reviewed)
+    summary = validate_reviewed_manifest(reviewed, current)
     _print_summary(summary)
     _run_pulumi(
         [
@@ -110,8 +111,9 @@ def apply(stack_name: str, reviewed_path: Path) -> None:
         ]
     )
 
-    confirmation = input(f"Type 'import {summary.digest[:12]}' to apply this protected import: ")
-    if confirmation != f"import {summary.digest[:12]}":
+    confirmation_token = f"import {summary.digest[:CONFIRMATION_DIGEST_LENGTH]}"
+    confirmation = input(f"Type '{confirmation_token}' to apply this protected import: ")
+    if confirmation != confirmation_token:
         raise ValueError("import confirmation did not match the reviewed manifest digest")
 
     _run_pulumi(

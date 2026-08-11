@@ -16,6 +16,7 @@ from typing import Any, Protocol
 import pulumi
 
 IMPORT_ID_PLACEHOLDER = "<PLACEHOLDER>"
+IMPORT_MANIFEST_MODE = 0o600
 
 ImportManifest = dict[str, Any]
 
@@ -246,7 +247,7 @@ def _validate_manifest_references(manifest: Mapping[str, Any]) -> None:
                 raise ValueError(f"import {field} is absent from resources and nameTable")
 
 
-def validate_reviewed_manifest(reviewed: Mapping[str, Any], current: Mapping[str, Any]) -> None:
+def validate_reviewed_manifest(reviewed: Mapping[str, Any], current: Mapping[str, Any]) -> ImportManifestSummary:
     """Require the reviewed manifest to be a ready, unchanged subset of current creates."""
 
     reviewed_name_table = _manifest_name_table(reviewed)
@@ -268,13 +269,14 @@ def validate_reviewed_manifest(reviewed: Mapping[str, Any], current: Mapping[str
     if imported_leaf_count == 0:
         raise ValueError("reviewed import manifest contains no resources to import")
     _validate_manifest_references(reviewed)
+    return import_manifest_summary(reviewed)
 
 
 def write_import_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
     """Write a local import transaction file with owner-only permissions."""
 
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(descriptor, 0o600)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, IMPORT_MANIFEST_MODE)
+    os.fchmod(descriptor, IMPORT_MANIFEST_MODE)
     with os.fdopen(descriptor, "w", encoding="utf-8") as output:
         json.dump(manifest, output, indent=2, ensure_ascii=False)
         output.write("\n")
