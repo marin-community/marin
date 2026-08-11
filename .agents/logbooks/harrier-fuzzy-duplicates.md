@@ -100,3 +100,16 @@ author: Rafal Wojdyla
 - Validation: Datakit has 250 passing tests and five expected failures.
 - Validation: Pre-commit and Pyrefly passed.
 - Next action: Push the repair and launch v3 in both regions.
+
+### 2026-08-11 20:17 UTC - CoreWeave fallback launch
+
+- Runtime source SHA: `e9b9368d49dd49942edd4f16f457a73cefb97215`.
+- Code commit: `fd073d80eb9e632db84e2ff7e03d823681d7dfc2`.
+- Dirty tree: No.
+- East job: `/rav/harrier-fuzzy-dups-east-p0-20260811-v3`.
+- RNO job: `/rav/harrier-fuzzy-dups-rno-p1-20260811-v3`.
+- Priority: Interactive.
+- Hardware: 96 H100 TEI workers per region, for 192 H100 workers total.
+- Output root: `s3://marin-us-east-02a/marin/datakit/embed/harrier-fuzzy-duplicates/`.
+- Result: Both v3 Iris submissions succeeded.
+- Next action: Verify nonzero TEI ports, service registration, source-job startup, and error-free logs.
