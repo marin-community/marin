@@ -72,7 +72,6 @@ class _GemmRmsBackwardMixin(GemmActMixin):
         mX: cute.Tensor | None = None
         mRowDotPartial: cute.Tensor | None = None
         mAuxOut: cute.Tensor | None = None
-        add_to_output: cutlass.Constexpr[bool] = False
         rounding_mode: cutlass.Constexpr[int] = RoundingMode.RN
 
     def epi_to_underlying_arguments(self, args, *, loc=None, ip=None):
@@ -92,7 +91,7 @@ class _GemmRmsBackwardMixin(GemmActMixin):
         tDrRowDot = epi_loop_tensors.get("mRowDotPartial")
 
         rD = tRS_rD.load()
-        if cutlass.const_expr(hasattr(params, "alpha") and params.alpha is not None):
+        if cutlass.const_expr(params.alpha is not None):
             rD *= quack_utils.load_scalar_or_pointer(params.alpha)
         tRS_rUnweightedCotangent = cute.make_rmem_tensor_like(tRS_rD, self.a_dtype)
         tRS_rUnweightedCotangent.store(rD.to(self.a_dtype))

@@ -19,6 +19,7 @@ from levanter.grug._moe.rms_gated_norm import (
 
 from experiments.grug.moe_hero_fsdp import launch, train
 from experiments.grug.moe_hero_fsdp.model import (
+    _GATED_NORM_RANK,
     GatedNorm,
     GrugModelConfig,
     GrugMoeHfConfig,
@@ -28,7 +29,6 @@ from experiments.grug.moe_hero_fsdp.model import (
 )
 
 _NORM_EPS = 1e-5
-_GATED_NORM_RANK = 128
 
 
 class NormInputs(NamedTuple):

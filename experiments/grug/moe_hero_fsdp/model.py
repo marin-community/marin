@@ -10,7 +10,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 import dataclasses
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import equinox as eqx
 import jax
@@ -232,7 +232,7 @@ class GrugModelConfig:
             raise ValueError("expert_chunks must be positive")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
-        if self.rms_gated_norm_implementation not in ("xla", "quack_coda_backward"):
+        if self.rms_gated_norm_implementation not in get_args(RmsGatedNormImplementation):
             raise ValueError(f"unsupported RMS-GatedNorm implementation {self.rms_gated_norm_implementation!r}")
         resolve_moe_implementation(self.moe_implementation)
 
@@ -573,6 +573,18 @@ class CausalSelfAttention(eqx.Module):
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
 
+def _rms_norm_with_inverse(
+    x: jax.Array,
+    weight: jax.Array,
+    eps: float,
+) -> tuple[jax.Array, jax.Array]:
+    """Apply RMSNorm and return the per-row inverse RMS used by its reverse."""
+    dtype = x.dtype
+    x = x.astype(jnp.float32)
+    inverse_rms = jax.lax.rsqrt(jnp.mean(jnp.square(x), axis=-1, keepdims=True) + eps)
+    return (x * inverse_rms * weight).astype(dtype), inverse_rms[..., 0]
+
+
 class RMSNorm(eqx.Module):
     weight: jax.Array
     eps: float = eqx.field(static=True)
@@ -584,11 +596,20 @@ class RMSNorm(eqx.Module):
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         weight = unshard(self.weight)
-        dtype = x.dtype
-        x = x.astype(jnp.float32)
-        variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
-        normed = x * jax.lax.rsqrt(variance + self.eps)
-        return (normed * weight).astype(dtype)
+        normalized, _ = _rms_norm_with_inverse(x, weight, self.eps)
+        return normalized
+
+
+def _gated_norm_with_residuals(
+    x: jax.Array,
+    w_down: jax.Array,
+    w_up: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Apply GatedNorm and return the values required by its fused reverse."""
+    gate_preactivation = jnp.einsum("...d,dr->...r", x, w_down)
+    gate_hidden = jax.nn.silu(gate_preactivation)
+    gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, w_up))
+    return x * gate.astype(x.dtype), gate_preactivation, gate_hidden, gate
 
 
 class GatedNorm(eqx.Module):
@@ -622,23 +643,15 @@ class GatedNorm(eqx.Module):
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         w_down = reshard(self.w_down, P(None, None))
         w_up = reshard(self.w_up, P(None, None))
-        gate_hidden = jnp.einsum("...d,dr->...r", x, w_down)
-        # TODO: silu activation here isn't explored, just cargo-culted from Qwen. Likely low-hanging ablation fruit
-        # (e.g. compare no activation, relu, etc.).
-        gate_hidden = jax.nn.silu(gate_hidden)
-        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, w_up))
-        return x * gate.astype(x.dtype)
+        output, _, _, _ = _gated_norm_with_residuals(x, w_down, w_up)
+        return output
 
 
 def _rms_gated_norm_exact_forward(x, norm_weight, w_down, w_up, eps):
     """Run the stock BF16 forward while retaining exact reverse-mode residuals."""
     x_flat = x.reshape((-1, x.shape[-1]))
-    inverse_rms = jax.lax.rsqrt(jnp.mean(jnp.square(x_flat.astype(jnp.float32)), axis=-1) + eps)
-    normalized = (x_flat.astype(jnp.float32) * inverse_rms[:, None] * norm_weight).astype(x.dtype)
-    gate_preactivation = jnp.einsum("td,dr->tr", normalized, w_down)
-    gate_hidden = jax.nn.silu(gate_preactivation)
-    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
-    output = (normalized * gate).reshape(x.shape)
+    normalized, inverse_rms = _rms_norm_with_inverse(x_flat, norm_weight, eps)
+    output, gate_preactivation, gate_hidden, gate = _gated_norm_with_residuals(normalized, w_down, w_up)
     residuals = RmsGatedNormResiduals(
         x=x,
         norm_weight=norm_weight,
@@ -650,7 +663,7 @@ def _rms_gated_norm_exact_forward(x, norm_weight, w_down, w_up, eps):
         gate_hidden=gate_hidden,
         gate=gate,
     )
-    return output, residuals
+    return output.reshape(x.shape), residuals
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(4,))
