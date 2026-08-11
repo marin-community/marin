@@ -249,6 +249,8 @@ _NCU_SASS_FAILURE_PATTERN = re.compile(
 )
 _MAX_NCU_SASS_BYTES = 1 << 20
 _MAX_NCU_SASS_LINE_CHARS = 1024
+_MAX_NCU_SASS_DIAGNOSTIC_BYTES = 2048
+_NCU_SASS_DIAGNOSTIC_PREFIX = "unrecognized Nsight Compute SASS export record: "
 _CUOBJDUMP_FUNCTION_PATTERN = re.compile(r"^\s*Function\s*:\s*(?P<name>[A-Za-z_.$][A-Za-z0-9_.$]*)\s*$")
 _CUOBJDUMP_FUNCTION_PREFIX = re.compile(r"^\s*Function\b")
 _CUOBJDUMP_INSTRUCTION_PATTERN = re.compile(
@@ -841,6 +843,20 @@ def parse_ncu_metrics(path: Path) -> tuple[NcuKernelMetrics, ...]:
     return tuple(records)
 
 
+def _unrecognized_ncu_sass_record(line_number: int, line: str) -> ValueError:
+    line_bytes = line.encode("utf-8")
+    metadata = {
+        "line_number": line_number,
+        "line_sha256": hashlib.sha256(line_bytes).hexdigest(),
+        "line_utf8_bytes": len(line_bytes),
+    }
+    detail = json.dumps(metadata, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    message = _NCU_SASS_DIAGNOSTIC_PREFIX + detail
+    if len(message.encode("utf-8")) > _MAX_NCU_SASS_DIAGNOSTIC_BYTES:
+        return ValueError("unrecognized Nsight Compute SASS export record; diagnostic exceeds reviewed bound")
+    return ValueError(message)
+
+
 def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassKernel, ...]:
     """Parse a closed Nsight Compute SASS source-page export."""
     if not source or len(source.encode("utf-8")) > _MAX_NCU_SASS_BYTES or "\x00" in source:
@@ -896,7 +912,7 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
             continue
         instruction = _NCU_SASS_INSTRUCTION_PATTERN.match(line)
         if instruction is None or current_name is None or not separator_seen:
-            raise ValueError(f"unrecognized Nsight Compute SASS export record at line {line_number}")
+            raise _unrecognized_ncu_sass_record(line_number, line)
         mnemonic = instruction.group("mnemonic")
         if mnemonic.split(".", maxsplit=1)[0] not in _SASS_OPCODE_BASES:
             raise ValueError(f"unrecognized SASS instruction mnemonic: {mnemonic!r}")

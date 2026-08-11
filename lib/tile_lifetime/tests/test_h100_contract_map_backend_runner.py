@@ -180,6 +180,16 @@ def _ncu_sass_export(*sections: tuple[str, tuple[str, ...]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _ncu_sass_diagnostic(error: ValueError) -> dict[str, object]:
+    message = str(error)
+    prefix = "unrecognized Nsight Compute SASS export record: "
+    assert message.startswith(prefix)
+    assert len(message.encode("utf-8")) <= 2048
+    diagnostic = json.loads(message.removeprefix(prefix))
+    assert set(diagnostic) == {"line_number", "line_sha256", "line_utf8_bytes"}
+    return diagnostic
+
+
 def test_runner_preflight_records_exact_clean_source_tools_and_h100(tmp_path: Path) -> None:
     config = _runner_config(tmp_path)
 
@@ -433,11 +443,11 @@ def test_runner_ncu_parser_bounds_and_decodes_input_before_csv_parsing(tmp_path:
         runner.parse_ncu_metrics(output)
 
 
-@pytest.mark.parametrize("include_top_level_separator", (True, False), ids=("valid", "missing-top-level"))
+@pytest.mark.parametrize("variant", ("valid", "missing-top-level", "unrecognized-record"))
 def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    include_top_level_separator: bool,
+    variant: str,
 ) -> None:
     config = _runner_config(tmp_path)
     cache_source, cache_contract = _worker_cache_fixture(tmp_path, ("ordinary_xla",))
@@ -457,8 +467,10 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
     def export_sass(command: Any) -> subprocess.CompletedProcess[str]:
         arguments = tuple(str(value) for value in command)
         source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
-        if not include_top_level_separator:
+        if variant == "missing-top-level":
             source = source.split("\n", maxsplit=1)[1]
+        elif variant == "unrecognized-record":
+            source = source.replace("Kernel Name: KernelA", "public-unknown-record\nKernel Name: KernelA")
         Path(arguments[arguments.index("--log-file") + 1]).write_text(source)
         return subprocess.CompletedProcess(arguments, 0, "", "")
 
@@ -475,9 +487,19 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         cache_source,
         cache_contract,
     )
-    if not include_top_level_separator:
+    if variant == "missing-top-level":
         with pytest.raises(ValueError, match="exact line-1 table separator"):
             runner._run_ncu_profile(*arguments)
+        return
+    if variant == "unrecognized-record":
+        with pytest.raises(ValueError) as failure:
+            runner._run_ncu_profile(*arguments)
+        assert _ncu_sass_diagnostic(failure.value) == {
+            "line_number": 2,
+            "line_sha256": hashlib.sha256(b"public-unknown-record").hexdigest(),
+            "line_utf8_bytes": 21,
+        }
+        assert "public-unknown-record" not in str(failure.value)
         return
 
     evidence = runner._run_ncu_profile(*arguments)
@@ -495,6 +517,75 @@ def test_runner_ncu_sass_parser_requires_valid_instruction_rows_for_exact_kernel
     assert tuple(record.name for record in records) == ("KernelA", "KernelB")
     assert tuple(instruction.mnemonic for instruction in records[0].instructions) == ("MOV", "EXIT")
     assert records[1].instructions == (runner.NcuSassInstruction(address=0x20, mnemonic="FFMA"),)
+
+
+@pytest.mark.parametrize(
+    "record",
+    (
+        "x" * 512,
+        "x" * 513,
+        ('"\\' * 256),
+        "private-token-/workspace/secret",
+        "\tcontrol\x1brecord",
+        "unicode-" + "\N{SNOWMAN}" * 300,
+    ),
+    ids=("512-bytes", "513-bytes", "escape-expansion", "private-token", "control", "unicode"),
+)
+def test_runner_ncu_sass_unrecognized_record_diagnostic_is_metadata_only(record: str) -> None:
+    source = _ncu_sass_export(("KernelA", (record,)))
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, ("KernelA",))
+
+    record_bytes = record.encode("utf-8")
+    assert _ncu_sass_diagnostic(failure.value) == {
+        "line_number": 5,
+        "line_sha256": hashlib.sha256(record_bytes).hexdigest(),
+        "line_utf8_bytes": len(record_bytes),
+    }
+    assert record not in str(failure.value)
+
+
+def test_runner_ncu_sass_unrecognized_record_diagnostic_does_not_leak_adjacent_or_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_record = "private-token-/workspace/secret"
+    adjacent_record = "adjacent-private-token"
+    environment_token = "environment-private-token"
+    monkeypatch.setenv("NCU_PRIVATE_TEST_TOKEN", environment_token)
+    source = _ncu_sass_export(("KernelA", (private_record, adjacent_record)))
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, ("KernelA",))
+
+    message = str(failure.value)
+    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 5
+    assert private_record not in message
+    assert adjacent_record not in message
+    assert environment_token not in message
+
+
+def test_runner_ncu_sass_nul_rejection_remains_metadata_only() -> None:
+    private_record = "private\x00token"
+
+    with pytest.raises(ValueError, match="reviewed text bound") as failure:
+        runner.parse_ncu_sass(_ncu_sass_export(("KernelA", (private_record,))), ("KernelA",))
+
+    assert private_record not in str(failure.value)
+
+
+def test_runner_ncu_sass_unrecognized_record_diagnostic_fails_closed_at_serialized_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner, "_NCU_SASS_DIAGNOSTIC_PREFIX", "x" * 2048)
+    private_record = "private-token"
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(_ncu_sass_export(("KernelA", (private_record,))), ("KernelA",))
+
+    assert str(failure.value) == "unrecognized Nsight Compute SASS export record; diagnostic exceeds reviewed bound"
+    assert len(str(failure.value).encode("utf-8")) <= 2048
+    assert private_record not in str(failure.value)
 
 
 @pytest.mark.parametrize(
