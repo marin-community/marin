@@ -1,0 +1,37 @@
+Observed boundary
+=================
+
+1. The task command authenticated the transported launcher and manifest with
+   trusted image `sha256sum` before invoking Python.
+2. The command selected `/opt/h100-evidence-runtime/bin/python` both to execute
+   the launcher and as the launcher's required `--runtime-python` value.
+3. The launcher restored the exact 152-member source capsule. The runner then
+   passed its manifest/import audit, exact one-H100 compute-capability check,
+   and executable/tool identity checks.
+4. For the first SOURCE_ORDERED candidate, the runner completed the shared
+   library, PTX, and cubin commands and successfully disassembled the separate
+   retained cubin.
+5. The runner then invoked `cuobjdump --dump-sass` on the shared library that
+   the FFI workers would load. The parsed function tuple did not equal the six
+   generated kernel names, so the runner failed closed before retaining the
+   loaded-image SASS record or starting any worker.
+
+The exact expected first-candidate topology, mechanically recovered from the
+frozen generated source, was:
+
+1. `ShuttleContractMapFirstForwardKernel_d39f76659f7697304c1bca70a28095cb91e50900945077558f67d0a89b7abf01`
+2. `ShuttleContractMapSecondForwardKernel_d39f76659f7697304c1bca70a28095cb91e50900945077558f67d0a89b7abf01`
+3. `ShuttleContractMapAdjointMapKernel_d39f76659f7697304c1bca70a28095cb91e50900945077558f67d0a89b7abf01`
+4. `ShuttleContractMapSecondWeightAdjointKernel_d39f76659f7697304c1bca70a28095cb91e50900945077558f67d0a89b7abf01`
+5. `ShuttleContractMapInputAdjointKernel_d39f76659f7697304c1bca70a28095cb91e50900945077558f67d0a89b7abf01`
+6. `ShuttleContractMapFirstWeightAdjointKernel_d39f76659f7697304c1bca70a28095cb91e50900945077558f67d0a89b7abf01`
+
+The failed task did not persist the temporary shared library or its SASS
+outside the terminated container, and the error did not print the parsed
+actual tuple. The negative artifact therefore proves a mismatch but does not
+claim whether it was missing/extra names or an ordering-only difference.
+
+No generated or ordinary-XLA worker, kernel execution, numerical check, timing
+schedule, Nsight Compute profile, Nsight Systems trace, or evidence acceptance
+occurred. The controller recorded one failed attempt with
+`max_retries_failure=0`; no retry or relaunch was performed.
