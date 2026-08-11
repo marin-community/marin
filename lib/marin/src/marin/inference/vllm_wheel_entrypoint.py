@@ -132,10 +132,17 @@ def deep_gemm_cuda_environment(nvidia_roots: tuple[Path, ...], temporary_root: P
     nvvm_root = compiler_root / "nvvm"
     if not (nvvm_root / "bin" / "cicc").is_file():
         raise RuntimeError(f"Packaged CUDA compiler is missing NVVM cicc: {nvvm_root}")
+    if not (compiler_root / "include" / "curand_kernel.h").is_file():
+        raise RuntimeError(f"Packaged CUDA toolkit is missing cuRAND headers: {compiler_root}")
+    if not (compiler_root / "include" / "nvrtc.h").is_file():
+        raise RuntimeError(f"Packaged CUDA toolkit is missing NVRTC headers: {compiler_root}")
+    if not (compiler_root / "lib").is_dir():
+        raise RuntimeError(f"Packaged CUDA toolkit is missing compiler libraries: {compiler_root}")
 
     _link_directory_entries(compiler_root / "bin", compatibility_bin)
     _link_directory_entries(compiler_root / "include", compatibility_include)
     _link_directory_entries(cublas_root / "include", compatibility_include)
+    _link_directory_entries(compiler_root / "lib", compatibility_lib)
     _link_directory_entries(cuda_runtime_root / "lib", compatibility_lib)
     _link_directory_entries(cublas_root / "lib", compatibility_lib)
 
@@ -172,6 +179,8 @@ def _configure_deep_gemm_cuda_environment() -> None:
     nvidia_roots = tuple(Path(path) for path in nvidia.__path__)
     environment = deep_gemm_cuda_environment(nvidia_roots, Path(tempfile.gettempdir()))
     os.environ.update(environment)
+
+
 def main() -> None:
     expected = _WheelProvenance.from_json(sys.argv.pop(1))
     print(f"{_SELECTED_SENTINEL}{json.dumps(expected.record(), sort_keys=True)}", flush=True)

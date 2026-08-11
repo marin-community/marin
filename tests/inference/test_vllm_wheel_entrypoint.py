@@ -198,6 +198,11 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     (compiler_root / "bin" / "nvcc").touch()
     (compiler_root / "include").mkdir()
     (compiler_root / "include" / "cuda.h").touch()
+    (compiler_root / "include" / "curand_kernel.h").touch()
+    (compiler_root / "include" / "nvrtc.h").touch()
+    (compiler_root / "lib").mkdir()
+    (compiler_root / "lib" / "libcurand.so.10").touch()
+    (compiler_root / "lib" / "libnvrtc.so.13").touch()
     (compiler_root / "nvvm" / "bin").mkdir(parents=True)
     (compiler_root / "nvvm" / "bin" / "cicc").touch()
     (compiler_root / "nvvm" / "libdevice").mkdir()
@@ -215,7 +220,6 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     cuda_runtime_root = nvidia_root / "cuda_runtime"
     (cuda_runtime_root / "lib").mkdir(parents=True)
     (cuda_runtime_root / "lib" / "libcudart.so.12").touch()
-
     environment = deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime")
 
     compatibility_home = Path(environment["CUDA_HOME"])
@@ -229,6 +233,10 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     assert (compatibility_include / "cuda.h").resolve() == (compiler_root / "include" / "cuda.h").resolve()
     assert (compatibility_include / "cccl").resolve() == cccl_root.resolve()
     assert (compatibility_include / "cublasLt.h").resolve() == (cublas_root / "include" / "cublasLt.h").resolve()
+    assert (compatibility_include / "curand_kernel.h").resolve() == (
+        compiler_root / "include" / "curand_kernel.h"
+    ).resolve()
+    assert (compatibility_include / "nvrtc.h").resolve() == (compiler_root / "include" / "nvrtc.h").resolve()
     assert (compatibility_home / "nvvm").resolve() == (compiler_root / "nvvm").resolve()
     assert (compatibility_home / "nvvm" / "bin" / "cicc").is_file()
     assert (compatibility_home / "nvvm" / "libdevice" / "libdevice.10.bc").is_file()
@@ -237,6 +245,12 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     ).resolve()
     assert (compatibility_home / "lib64" / "libcublas.so.12").resolve() == (
         cublas_root / "lib" / "libcublas.so.12"
+    ).resolve()
+    assert (compatibility_home / "lib64" / "libcurand.so.10").resolve() == (
+        compiler_root / "lib" / "libcurand.so.10"
+    ).resolve()
+    assert (compatibility_home / "lib64" / "libnvrtc.so.13").resolve() == (
+        compiler_root / "lib" / "libnvrtc.so.13"
     ).resolve()
 
     assert deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime") == environment
@@ -265,6 +279,9 @@ def test_deep_gemm_cuda_environment_rejects_compiler_without_nvvm(tmp_path):
     (compiler_root / "bin").mkdir(parents=True)
     (compiler_root / "bin" / "nvcc").touch()
     (compiler_root / "include").mkdir()
+    (compiler_root / "include" / "curand_kernel.h").touch()
+    (compiler_root / "include" / "nvrtc.h").touch()
+    (compiler_root / "lib").mkdir()
     cccl_root = nvidia_root / "cuda_cccl" / "include"
     (cccl_root / "nv").mkdir(parents=True)
     (cccl_root / "nv" / "target").touch()
@@ -275,9 +292,10 @@ def test_deep_gemm_cuda_environment_rejects_compiler_without_nvvm(tmp_path):
     (cublas_root / "include" / "cublasLt.h").touch()
     (cublas_root / "lib").mkdir()
     (nvidia_root / "cuda_runtime" / "lib").mkdir(parents=True)
-
     with pytest.raises(RuntimeError, match="Packaged CUDA compiler is missing NVVM cicc"):
         deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime")
+
+
 @pytest.mark.parametrize(
     ("wheel", "compute_capability"),
     [(H100_WHEEL, (9, 0)), (GB200_WHEEL, (10, 0))],

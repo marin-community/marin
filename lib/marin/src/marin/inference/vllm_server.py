@@ -53,6 +53,7 @@ _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
 _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
 _FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
 _DEEPGEMM_NVRTC_ENV_VAR = "DG_JIT_USE_NVRTC"
+_DEEP_GEMM_TOOLKIT_REQUIREMENTS = ("cuda-toolkit[curand,nvrtc]==13.0.2",)
 _PYTHON_FILE_BOOTSTRAP = """\
 import runpy
 import sys
@@ -174,7 +175,9 @@ class IsolatedCudaVllm:
             )
             return _CudaVllmInstall(
                 requirement=vllm_gpu_wheel_requirement(wheel),
-                runtime_requirements=wheel.runtime_requirements,
+                runtime_requirements=(
+                    (*wheel.runtime_requirements, *_DEEP_GEMM_TOOLKIT_REQUIREMENTS) if wheel.runtime_requirements else ()
+                ),
                 torch_backend=VLLM_GPU_RELEASE.torch_backend,
                 executable="python",
                 executable_args=(

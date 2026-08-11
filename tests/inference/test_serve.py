@@ -198,7 +198,12 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert separator
     assert urlunsplit(parsed_url._replace(fragment="")) == wheel.url
     assert parse_qs(parsed_url.fragment) == {"sha256": [wheel.sha256]}
-    assert runtime_requirements == ["runai-model-streamer[s3]==0.16.1", *wheel.runtime_requirements]
+    expected_toolkit = ["cuda-toolkit[curand,nvrtc]==13.0.2"] if wheel.runtime_requirements else []
+    assert runtime_requirements == [
+        "runai-model-streamer[s3]==0.16.1",
+        *wheel.runtime_requirements,
+        *expected_toolkit,
+    ]
     assert cmd[cmd.index("--torch-backend") + 1] == VLLM_GPU_RELEASE.torch_backend
     bootstrap_index = cmd.index("-c")
     assert Path(cmd[bootstrap_index + 2]).name == "vllm_wheel_entrypoint.py"
@@ -211,6 +216,8 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
     assert requirement in launcher.cache_identity()
     for runtime_requirement in wheel.runtime_requirements:
+        assert runtime_requirement in launcher.cache_identity()
+    for runtime_requirement in expected_toolkit:
         assert runtime_requirement in launcher.cache_identity()
 
 
