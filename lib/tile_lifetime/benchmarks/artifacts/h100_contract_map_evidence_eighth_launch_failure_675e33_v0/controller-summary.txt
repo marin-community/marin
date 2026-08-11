@@ -1,0 +1,30 @@
+Job: /dlwh/shuttle-h100-contract-map-evidence-675e339-v8
+State: failed
+Submitted epoch ms: 1786434346963
+Started epoch ms: 1786434351158
+Finished epoch ms: 1786434442919
+Failures: 1
+Preemptions: 0
+Tasks: 0/1 completed; failed=1
+
+Task: /dlwh/shuttle-h100-contract-map-evidence-675e339-v8/0
+State: failed
+Exit: 1
+Submitted epoch ms: 1786434346963
+Started epoch ms: 1786434348002
+Finished epoch ms: 1786434442919
+Failure retries: 0
+Preemption retries: 1000
+Attempt count: 1
+
+Attempt: 0
+State: failed
+Created epoch ms: 1786434348002
+Started epoch ms: 1786434356266
+Finished epoch ms: 1786434442919
+Duration: 86.653 seconds
+Exit: 1
+Attempt UID: eecf7f4db0ac90f2
+
+First diagnostic:
+RuntimeError: NVTX rejected range 'contract_map.steady.0.ordinary_xla'

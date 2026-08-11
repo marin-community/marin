@@ -1,0 +1,43 @@
+Observed boundary
+=================
+
+1. Trusted image `sha256sum` authenticated the transported launcher and
+   manifest before Python execution.
+2. The task selected `/opt/h100-evidence-runtime/bin/python` for the launcher
+   and its required `--runtime-python` value.
+3. `run_coordinator` reached `_run_profiled_case`. Its control flow requires
+   the capsule audit, H100/tool preflight, generated compilation, and exact
+   retained loaded-shared-library topology validation to finish first.
+4. The case worker completed `_numerical_evidence` for ordinary XLA,
+   `shuttle_source_ordered`, and `shuttle_fast`. It then completed warmup and
+   called `cudaProfilerStart` before entering the first steady sample.
+5. The first `_NvtxRange` push raised before the first timed ordinary-XLA
+   execution. The outer Nsight Systems process completed a local report after
+   the worker exited.
+
+Exact first failure
+===================
+
+Range: contract_map.steady.0.ordinary_xla
+Exception: RuntimeError: NVTX rejected range 'contract_map.steady.0.ordinary_xla'
+
+The exact source declares `nvtxRangePushA` with signed `ctypes.c_int` and
+rejects only results below zero. It therefore already accepts the documented
+outermost level `0` and nested positive levels. Reaching the exception proves
+that the pinned interop library returned a negative value, but the diagnostic
+does not record which negative value.
+
+Evidence limit
+==============
+
+The control-flow boundary establishes that all three pre-timing numerical gates
+and the warmup schedule completed. No numerical scalars were emitted because
+the gates passed. The first steady execution did not begin, so the result
+contains no accepted timing sample.
+
+Nsight Systems generated a local `steady_trace.nsys-rep` after the worker
+failed. That temporary report was not retained in the controller log and was
+not parsed into accepted profile evidence. Nsight Compute, cache protocol, the
+remaining cases, and the final 24-record bundle were not reached. The job had
+one failed attempt, no preemptions, zero configured failure retries, and was not
+relaunched.
