@@ -12,8 +12,10 @@ from pathlib import Path
 
 MAX_HELP_BYTES = 1 << 20
 MAX_POSSIBLE_VALUES_CLAUSE_BYTES = 1024
+MAX_GRAPH_DIAGNOSTIC_LINE_BYTES = 512
+MAX_GRAPH_DIAGNOSTIC_BYTES = 1536
 MAX_FAILURE_MESSAGE_CHARS = 4096
-FAILURE_DIAGNOSTIC_SCHEMA = "iris.h100_evidence_nsys_help_failure.v2"
+FAILURE_DIAGNOSTIC_SCHEMA = "iris.h100_evidence_nsys_help_failure.v3"
 OPTION_DECLARATION = re.compile(r"^\s*(?:-[A-Za-z0-9],\s+)?--(?P<name>[a-z0-9][a-z0-9-]*)(?:[ =].*)?$")
 POSSIBLE_VALUES = re.compile(
     r"Possible values\s*(?:are|:)\s*(?P<values>.*?)\.(?=\s|$)",
@@ -37,9 +39,10 @@ CAPTURE_RANGE_END_VALUES = (
     "repeat-shutdown:N[:mode]",
 )
 CUDA_GRAPH_TRACE_VALUES = {"graph", "node"}
+GRAPH_DIAGNOSTIC_TOKEN = re.compile(r"(?<![a-z0-9_-])(?P<token>graph|node)(?![a-z0-9_-])")
 
 
-def _option_block(text: str, option: str) -> str:
+def _option_block_lines(text: str, option: str) -> list[str]:
     lines = text.splitlines()
     declarations = []
     for index, line in enumerate(lines):
@@ -52,7 +55,11 @@ def _option_block(text: str, option: str) -> str:
         raise ValueError(f"help must contain one exact --{option} option declaration")
     start = target_indices[0]
     end = next((index for index, _ in declarations if index > start), len(lines))
-    return "\n".join(lines[start:end])
+    return lines[start:end]
+
+
+def _option_block(text: str, option: str) -> str:
+    return "\n".join(_option_block_lines(text, option))
 
 
 def _option_values(text: str, option: str) -> tuple[str, ...]:
@@ -143,17 +150,85 @@ def _diagnostic_possible_values_clause(text: str, option: str) -> dict[str, obje
     return record
 
 
+def _bounded_text_record(text: str, limit: int) -> dict[str, object]:
+    payload = text.encode("utf-8")
+    record: dict[str, object] = {
+        "available": len(payload) <= limit,
+        "bytes": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
+    if len(payload) <= limit:
+        record["text"] = text
+    else:
+        record["reason"] = f"exceeds_{limit}_byte_bound"
+    return record
+
+
+def _diagnostic_cuda_graph_context(text: str) -> dict[str, object]:
+    try:
+        block = _option_block_lines(text, "cuda-graph-trace")
+    except ValueError:
+        return {
+            "available": False,
+            "bytes": 0,
+            "declaration": None,
+            "graph_occurrences": 0,
+            "node_occurrences": 0,
+            "reason": "exact_option_anchor_unavailable",
+            "sha256": None,
+            "token_line_count": 0,
+        }
+
+    declaration = block[0]
+    token_lines: list[str] = []
+    token_sequence: list[str] = []
+    for line in block[1:]:
+        tokens = [match.group("token") for match in GRAPH_DIAGNOSTIC_TOKEN.finditer(line)]
+        if tokens:
+            token_lines.append(line)
+            token_sequence.extend(tokens)
+
+    context = "\n".join((declaration, *token_lines))
+    context_payload = context.encode("utf-8")
+    record: dict[str, object] = {
+        "available": False,
+        "bytes": len(context_payload),
+        "declaration": _bounded_text_record(declaration, MAX_GRAPH_DIAGNOSTIC_LINE_BYTES),
+        "graph_occurrences": token_sequence.count("graph"),
+        "node_occurrences": token_sequence.count("node"),
+        "sha256": hashlib.sha256(context_payload).hexdigest(),
+        "token_line_count": len(token_lines),
+    }
+    if token_sequence != ["graph", "node"]:
+        record["reason"] = "exact_graph_node_token_sequence_unavailable"
+        return record
+    if len(declaration.encode("utf-8")) > MAX_GRAPH_DIAGNOSTIC_LINE_BYTES:
+        record["reason"] = f"declaration_line_exceeds_{MAX_GRAPH_DIAGNOSTIC_LINE_BYTES}_byte_bound"
+        return record
+    if any(len(line.encode("utf-8")) > MAX_GRAPH_DIAGNOSTIC_LINE_BYTES for line in token_lines):
+        record["reason"] = f"token_line_exceeds_{MAX_GRAPH_DIAGNOSTIC_LINE_BYTES}_byte_bound"
+        return record
+    if len(context_payload) > MAX_GRAPH_DIAGNOSTIC_BYTES:
+        record["reason"] = f"context_exceeds_{MAX_GRAPH_DIAGNOSTIC_BYTES}_byte_bound"
+        return record
+
+    record["available"] = True
+    record["token_lines"] = [_bounded_text_record(line, MAX_GRAPH_DIAGNOSTIC_LINE_BYTES) for line in token_lines]
+    return record
+
+
 def _failure_diagnostic(text: str) -> dict[str, object]:
     return {
         "clauses": {
             option: _diagnostic_possible_values_clause(text, option)
             for option in ("capture-range-end", "cuda-graph-trace")
         },
+        "cuda_graph_context": _diagnostic_cuda_graph_context(text),
         "schema": FAILURE_DIAGNOSTIC_SCHEMA,
     }
 
 
-def _without_clause_text(diagnostic: dict[str, object]) -> dict[str, object]:
+def _without_diagnostic_text(diagnostic: dict[str, object]) -> dict[str, object]:
     clauses = diagnostic["clauses"]
     assert isinstance(clauses, dict)
     bounded_clauses: dict[str, object] = {}
@@ -164,7 +239,20 @@ def _without_clause_text(diagnostic: dict[str, object]) -> dict[str, object]:
             record["available"] = False
             record["reason"] = f"omitted_to_fit_{MAX_FAILURE_MESSAGE_CHARS}_character_bound"
         bounded_clauses[option] = record
-    return {"clauses": bounded_clauses, "schema": FAILURE_DIAGNOSTIC_SCHEMA}
+    context = diagnostic["cuda_graph_context"]
+    assert isinstance(context, dict)
+    bounded_context = {key: field for key, field in context.items() if key != "token_lines"}
+    declaration = bounded_context.get("declaration")
+    if isinstance(declaration, dict):
+        bounded_context["declaration"] = {key: field for key, field in declaration.items() if key != "text"}
+    if "token_lines" in context:
+        bounded_context["available"] = False
+        bounded_context["reason"] = f"omitted_to_fit_{MAX_FAILURE_MESSAGE_CHARS}_character_bound"
+    return {
+        "clauses": bounded_clauses,
+        "cuda_graph_context": bounded_context,
+        "schema": FAILURE_DIAGNOSTIC_SCHEMA,
+    }
 
 
 def _validation_failure_message(text: str, error: ValueError) -> str:
@@ -176,7 +264,7 @@ def _validation_failure_message(text: str, error: ValueError) -> str:
         return message
 
     serialized = json.dumps(
-        _without_clause_text(diagnostic),
+        _without_diagnostic_text(diagnostic),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,

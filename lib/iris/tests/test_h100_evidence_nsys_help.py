@@ -30,6 +30,8 @@ usage: nsys profile [<args>] [application] [<application args>]
 FAILURE_DIAGNOSTIC_MARKER = " diagnostic="
 MAX_FAILURE_MESSAGE_CHARS = 4096
 MAX_POSSIBLE_VALUES_CLAUSE_BYTES = 1024
+MAX_GRAPH_DIAGNOSTIC_LINE_BYTES = 512
+MAX_GRAPH_DIAGNOSTIC_BYTES = 1536
 
 
 def _validate(tmp_path: Path, payload: bytes) -> subprocess.CompletedProcess[str]:
@@ -254,7 +256,7 @@ def test_nsys_profile_help_failure_emits_only_exact_possible_values_clauses(tmp_
     assert result.stderr.startswith(
         "nsys profile help validation failed: --cuda-graph-trace does not expose exactly graph and node"
     )
-    assert diagnostic["schema"] == "iris.h100_evidence_nsys_help_failure.v2"
+    assert diagnostic["schema"] == "iris.h100_evidence_nsys_help_failure.v3"
     capture = diagnostic["clauses"]["capture-range-end"]
     graph = diagnostic["clauses"]["cuda-graph-trace"]
     assert capture["available"] is True
@@ -266,10 +268,24 @@ def test_nsys_profile_help_failure_emits_only_exact_possible_values_clauses(tmp_
     assert capture["text"].startswith("Possible values")
     assert graph["text"] == "Possible values are 'graph', 'node', and 'future'."
     assert "--capture-range-end arg" not in result.stderr
-    assert "--cuda-graph-trace arg" not in result.stderr
     assert "PRIVATE_OUTSIDE_CLAUSES" not in result.stderr
     assert "Collect CUDA backtraces" not in result.stderr
     assert len(result.stderr) <= MAX_FAILURE_MESSAGE_CHARS
+
+    context = diagnostic["cuda_graph_context"]
+    assert context["available"] is True
+    assert context["graph_occurrences"] == 1
+    assert context["node_occurrences"] == 1
+    assert [line["text"] for line in context["token_lines"]] == [
+        "      Select CUDA Graph activity granularity. Possible values are 'graph', 'node', and 'future'."
+    ]
+    assert (
+        context["sha256"]
+        == hashlib.sha256(
+            b"  --cuda-graph-trace arg (=graph)\n"
+            b"      Select CUDA Graph activity granularity. Possible values are 'graph', 'node', and 'future'."
+        ).hexdigest()
+    )
 
 
 def test_nsys_profile_help_failure_extracts_clauses_from_real_size_option_blocks(tmp_path: Path) -> None:
@@ -304,6 +320,12 @@ def test_nsys_profile_help_failure_extracts_clauses_from_real_size_option_blocks
     assert "PRIVATE_GRAPH_PADDING" not in serialized
     assert "PRIVATE_OUTSIDE_CLAUSES" not in serialized
 
+    context = diagnostic["cuda_graph_context"]
+    assert context["available"] is True
+    assert context["token_line_count"] == 1
+    assert [line["text"] for line in context["token_lines"]] == [f"      description before clause. {graph_clause}"]
+    assert "PRIVATE_GRAPH_PADDING" not in json.dumps(context)
+
 
 def test_nsys_profile_help_failure_preserves_multiline_clause_exactly(tmp_path: Path) -> None:
     help_text = PROFILE_HELP.replace("'graph' and\n      'node'", "'graph', 'node', and\n      'future'")
@@ -335,6 +357,17 @@ def test_nsys_profile_help_failure_marks_nonunique_option_anchor_unavailable(tmp
         "bytes": 0,
         "reason": "exact_option_anchor_unavailable",
         "sha256": None,
+    }
+    context = diagnostic["cuda_graph_context"]
+    assert context == {
+        "available": False,
+        "bytes": 0,
+        "declaration": None,
+        "graph_occurrences": 0,
+        "node_occurrences": 0,
+        "reason": "exact_option_anchor_unavailable",
+        "sha256": None,
+        "token_line_count": 0,
     }
 
 
@@ -411,6 +444,8 @@ def test_nsys_profile_help_failure_escape_expansion_remains_within_total_bound(
     assert diagnostic["clauses"]["cuda-graph-trace"]["sha256"] == hashlib.sha256(graph_clause.encode()).hexdigest()
     assert "text" not in diagnostic["clauses"]["capture-range-end"]
     assert "text" not in diagnostic["clauses"]["cuda-graph-trace"]
+    assert "token_lines" not in diagnostic["cuda_graph_context"]
+    assert "text" not in diagnostic["cuda_graph_context"]["declaration"]
     assert len(result.stderr) <= MAX_FAILURE_MESSAGE_CHARS
     assert "\\u0001" not in result.stderr
 
@@ -430,3 +465,120 @@ def test_nsys_profile_help_failure_does_not_emit_unrelated_future_value_clause(t
     assert diagnostic["clauses"]["cuda-graph-trace"]["available"] is True
     assert "private-future" not in result.stderr
     assert "PRIVATE_UNRELATED" not in result.stderr
+
+
+def test_nsys_profile_help_failure_emits_only_scoped_graph_token_lines(tmp_path: Path) -> None:
+    graph_block = (
+        "  --cuda-graph-trace arg (=graph)\n"
+        "      PRIVATE_GRAPH_DESCRIPTION_WITHOUT_LOWERCASE_TOKENS\n"
+        "      graph selects whole-graph activity.\n"
+        "      node selects activity.\n"
+        "      future selects PRIVATE_FUTURE_VALUE activity.\n"
+    )
+    help_text = PROFILE_HELP.replace(
+        "  --cuda-graph-trace arg (=graph)\n"
+        "      Select CUDA Graph activity granularity. Possible values are 'graph' and\n"
+        "      'node'.\n",
+        graph_block,
+    ).replace("usage: nsys profile", "usage: --stop-on-range-end nsys profile")
+
+    result = _validate(tmp_path, help_text.encode())
+
+    diagnostic = _failure_diagnostic(result)
+    context = diagnostic["cuda_graph_context"]
+    assert context["available"] is True
+    assert context["bytes"] <= MAX_GRAPH_DIAGNOSTIC_BYTES
+    assert context["declaration"]["text"] == "  --cuda-graph-trace arg (=graph)"
+    assert [line["text"] for line in context["token_lines"]] == [
+        "      graph selects whole-graph activity.",
+        "      node selects activity.",
+    ]
+    assert all(line["bytes"] <= MAX_GRAPH_DIAGNOSTIC_LINE_BYTES for line in context["token_lines"])
+    assert all(line["sha256"] == hashlib.sha256(line["text"].encode()).hexdigest() for line in context["token_lines"])
+    serialized = json.dumps(diagnostic)
+    assert "PRIVATE_GRAPH_DESCRIPTION" not in serialized
+    assert "PRIVATE_FUTURE_VALUE" not in serialized
+    assert "future selects" not in serialized
+
+
+@pytest.mark.parametrize(
+    ("replacement", "graph_occurrences", "node_occurrences"),
+    (
+        ("      graph then graph then node.\n", 2, 1),
+        ("      node then graph.\n", 1, 1),
+        ("      graph only.\n", 1, 0),
+    ),
+    ids=("duplicate-graph", "reordered", "missing-node"),
+)
+def test_nsys_profile_help_failure_marks_ambiguous_graph_tokens_unavailable(
+    tmp_path: Path,
+    replacement: str,
+    graph_occurrences: int,
+    node_occurrences: int,
+) -> None:
+    help_text = PROFILE_HELP.replace(
+        "      Select CUDA Graph activity granularity. Possible values are 'graph' and\n" "      'node'.\n",
+        replacement,
+    ).replace("usage: nsys profile", "usage: --stop-on-range-end nsys profile")
+
+    context = _failure_diagnostic(_validate(tmp_path, help_text.encode()))["cuda_graph_context"]
+
+    assert context["available"] is False
+    assert context["reason"] == "exact_graph_node_token_sequence_unavailable"
+    assert context["graph_occurrences"] == graph_occurrences
+    assert context["node_occurrences"] == node_occurrences
+    assert "token_lines" not in context
+
+
+def test_nsys_profile_help_failure_graph_context_line_bound_is_fail_closed(tmp_path: Path) -> None:
+    oversized_line = "      graph node " + "x" * MAX_GRAPH_DIAGNOSTIC_LINE_BYTES
+    help_text = PROFILE_HELP.replace(
+        "      Select CUDA Graph activity granularity. Possible values are 'graph' and\n" "      'node'.",
+        oversized_line,
+    ).replace("usage: nsys profile", "usage: --stop-on-range-end nsys profile")
+
+    context = _failure_diagnostic(_validate(tmp_path, help_text.encode()))["cuda_graph_context"]
+
+    assert context["available"] is False
+    assert context["reason"] == "token_line_exceeds_512_byte_bound"
+    assert context["bytes"] > MAX_GRAPH_DIAGNOSTIC_LINE_BYTES
+    assert "token_lines" not in context
+
+
+def test_nsys_profile_help_failure_graph_declaration_bound_is_fail_closed(tmp_path: Path) -> None:
+    declaration = "  --cuda-graph-trace " + "d" * (MAX_GRAPH_DIAGNOSTIC_LINE_BYTES - 20)
+    assert len(declaration.encode()) == MAX_GRAPH_DIAGNOSTIC_LINE_BYTES + 1
+    help_text = PROFILE_HELP.replace(
+        "  --cuda-graph-trace arg (=graph)",
+        declaration,
+    ).replace("usage: nsys profile", "usage: --stop-on-range-end nsys profile")
+
+    context = _failure_diagnostic(_validate(tmp_path, help_text.encode()))["cuda_graph_context"]
+
+    assert context["available"] is False
+    assert context["reason"] == "declaration_line_exceeds_512_byte_bound"
+    assert context["declaration"]["available"] is False
+    assert "text" not in context["declaration"]
+    assert "token_lines" not in context
+
+
+def test_nsys_profile_help_failure_graph_context_total_bound_is_fail_closed(tmp_path: Path) -> None:
+    declaration = "  --cuda-graph-trace " + "d" * (MAX_GRAPH_DIAGNOSTIC_LINE_BYTES - 21)
+    graph_line = "      graph " + "g" * (MAX_GRAPH_DIAGNOSTIC_LINE_BYTES - 13)
+    node_line = "      node " + "n" * (MAX_GRAPH_DIAGNOSTIC_LINE_BYTES - 11)
+    assert len(declaration.encode()) == MAX_GRAPH_DIAGNOSTIC_LINE_BYTES
+    assert len(graph_line.encode()) == MAX_GRAPH_DIAGNOSTIC_LINE_BYTES - 1
+    assert len(node_line.encode()) == MAX_GRAPH_DIAGNOSTIC_LINE_BYTES
+    help_text = PROFILE_HELP.replace(
+        "  --cuda-graph-trace arg (=graph)\n"
+        "      Select CUDA Graph activity granularity. Possible values are 'graph' and\n"
+        "      'node'.\n",
+        f"{declaration}\n{graph_line}\n{node_line}\n",
+    ).replace("usage: nsys profile", "usage: --stop-on-range-end nsys profile")
+
+    context = _failure_diagnostic(_validate(tmp_path, help_text.encode()))["cuda_graph_context"]
+
+    assert context["available"] is False
+    assert context["bytes"] == MAX_GRAPH_DIAGNOSTIC_BYTES + 1
+    assert context["reason"] == "context_exceeds_1536_byte_bound"
+    assert "token_lines" not in context
