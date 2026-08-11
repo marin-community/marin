@@ -214,16 +214,22 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     (cuda_nvrtc_root / "include" / "nvrtc.h").touch()
     (cuda_nvrtc_root / "lib").mkdir()
     (cuda_nvrtc_root / "lib" / "libnvrtc.so.12").touch()
-    cuda_nvcc_root = nvidia_root / "cuda_nvcc"
-    (cuda_nvcc_root / "include" / "crt").mkdir(parents=True)
-    (cuda_nvcc_root / "include" / "crt" / "host_defines.h").touch()
+    compiler_root = tmp_path / "site-packages" / "marin_cuda_nvcc"
+    (compiler_root / "bin").mkdir(parents=True)
+    (compiler_root / "bin" / "nvcc").touch()
+    (compiler_root / "include" / "crt").mkdir(parents=True)
+    (compiler_root / "include" / "crt" / "host_defines.h").touch()
+    (compiler_root / "lib").mkdir()
+    (compiler_root / "lib" / "libnvptxcompiler_static.a").touch()
+    (compiler_root / "nvvm" / "bin").mkdir(parents=True)
+    (compiler_root / "nvvm" / "bin" / "cicc").touch()
     curand_root = nvidia_root / "curand"
     (curand_root / "include").mkdir(parents=True)
     (curand_root / "include" / "__init__.py").touch()
     (curand_root / "include" / "curand_kernel.h").touch()
     (curand_root / "lib").mkdir()
     (curand_root / "lib" / "libcurand.so.10").touch()
-    environment = deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime")
+    environment = deep_gemm_cuda_environment((nvidia_root,), compiler_root, tmp_path / "runtime")
 
     compatibility_home = Path(environment["CUDA_HOME"])
     compatibility_include = compatibility_home / "include"
@@ -232,7 +238,7 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
         "DG_JIT_USE_NVRTC": "1",
         "NVCC_PREPEND_FLAGS": f"-I{compatibility_include} -I{cccl_root}",
     }
-    assert not (compatibility_home / "bin" / "nvcc").exists()
+    assert (compatibility_home / "bin" / "nvcc").resolve() == (compiler_root / "bin" / "nvcc").resolve()
     assert (compatibility_include / "cuda.h").resolve() == (cuda_runtime_root / "include" / "cuda.h").resolve()
     assert (compatibility_include / "cuda" / "std" / "type_traits").resolve() == (
         cccl_root / "cuda" / "std" / "type_traits"
@@ -245,7 +251,10 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     ).resolve()
     assert (compatibility_include / "nvrtc.h").resolve() == (cuda_nvrtc_root / "include" / "nvrtc.h").resolve()
     assert (compatibility_include / "crt" / "host_defines.h").resolve() == (
-        cuda_nvcc_root / "include" / "crt" / "host_defines.h"
+        compiler_root / "include" / "crt" / "host_defines.h"
+    ).resolve()
+    assert (compatibility_home / "nvvm" / "bin" / "cicc").resolve() == (
+        compiler_root / "nvvm" / "bin" / "cicc"
     ).resolve()
     assert (compatibility_home / "lib64" / "libcudart.so.12").resolve() == (
         cuda_runtime_root / "lib" / "libcudart.so.12"
@@ -260,7 +269,7 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
         cuda_nvrtc_root / "lib" / "libnvrtc.so.12"
     ).resolve()
 
-    assert deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime") == environment
+    assert deep_gemm_cuda_environment((nvidia_root,), compiler_root, tmp_path / "runtime") == environment
 
 
 def test_deep_gemm_cuda_environment_rejects_missing_nvrtc(tmp_path):
@@ -276,14 +285,13 @@ def test_deep_gemm_cuda_environment_rejects_missing_nvrtc(tmp_path):
     (cublas_root / "lib").mkdir()
     (nvidia_root / "cuda_runtime" / "include").mkdir(parents=True)
     (nvidia_root / "cuda_runtime" / "lib").mkdir()
-    (nvidia_root / "cuda_nvcc" / "include" / "crt").mkdir(parents=True)
-    (nvidia_root / "cuda_nvcc" / "include" / "crt" / "host_defines.h").touch()
+    compiler_root = tmp_path / "site-packages" / "marin_cuda_nvcc"
     (nvidia_root / "curand" / "include").mkdir(parents=True)
     (nvidia_root / "curand" / "include" / "curand_kernel.h").touch()
     (nvidia_root / "curand" / "lib").mkdir()
 
     with pytest.raises(RuntimeError, match="Expected one packaged CUDA NVRTC root"):
-        deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime")
+        deep_gemm_cuda_environment((nvidia_root,), compiler_root, tmp_path / "runtime")
 
 
 def test_deep_gemm_cuda_environment_rejects_missing_curand(tmp_path):
@@ -302,10 +310,9 @@ def test_deep_gemm_cuda_environment_rejects_missing_curand(tmp_path):
     (nvidia_root / "cuda_nvrtc" / "include").mkdir(parents=True)
     (nvidia_root / "cuda_nvrtc" / "include" / "nvrtc.h").touch()
     (nvidia_root / "cuda_nvrtc" / "lib").mkdir()
-    (nvidia_root / "cuda_nvcc" / "include" / "crt").mkdir(parents=True)
-    (nvidia_root / "cuda_nvcc" / "include" / "crt" / "host_defines.h").touch()
+    compiler_root = tmp_path / "site-packages" / "marin_cuda_nvcc"
     with pytest.raises(RuntimeError, match="Expected one packaged cuRAND root"):
-        deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime")
+        deep_gemm_cuda_environment((nvidia_root,), compiler_root, tmp_path / "runtime")
 
 
 @pytest.mark.parametrize(

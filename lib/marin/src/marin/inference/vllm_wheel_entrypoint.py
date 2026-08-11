@@ -98,8 +98,10 @@ def _link_cccl_headers(source: Path, destination: Path) -> None:
         destination_entry.symlink_to(source_entry, target_is_directory=True)
 
 
-def deep_gemm_cuda_environment(nvidia_roots: tuple[Path, ...], temporary_root: Path) -> dict[str, str]:
-    """Build the packaged CUDA toolkit view expected by DeepGEMM's NVRTC JIT."""
+def deep_gemm_cuda_environment(
+    nvidia_roots: tuple[Path, ...], compiler_root: Path, temporary_root: Path
+) -> dict[str, str]:
+    """Build the packaged CUDA toolkit view expected by DeepGEMM and TileLang JITs."""
     cccl_roots = tuple(
         candidate
         for nvidia_root in nvidia_roots
@@ -124,12 +126,6 @@ def deep_gemm_cuda_environment(nvidia_roots: tuple[Path, ...], temporary_root: P
         for candidate in (nvidia_root / "cuda_nvrtc",)
         if (candidate / "include" / "nvrtc.h").is_file() and (candidate / "lib").is_dir()
     )
-    cuda_nvcc_roots = tuple(
-        candidate
-        for nvidia_root in nvidia_roots
-        for candidate in (nvidia_root / "cuda_nvcc",)
-        if (candidate / "include" / "crt" / "host_defines.h").is_file()
-    )
     curand_roots = tuple(
         candidate
         for nvidia_root in nvidia_roots
@@ -144,36 +140,52 @@ def deep_gemm_cuda_environment(nvidia_roots: tuple[Path, ...], temporary_root: P
         raise RuntimeError(f"Expected one packaged CUDA runtime root, found {cuda_runtime_roots}")
     if len(cuda_nvrtc_roots) != 1:
         raise RuntimeError(f"Expected one packaged CUDA NVRTC root, found {cuda_nvrtc_roots}")
-    if len(cuda_nvcc_roots) != 1:
-        raise RuntimeError(f"Expected one packaged CUDA compiler-header root, found {cuda_nvcc_roots}")
     if len(curand_roots) != 1:
         raise RuntimeError(f"Expected one packaged cuRAND root, found {curand_roots}")
+    if not (compiler_root / "bin" / "nvcc").is_file():
+        raise RuntimeError(f"Packaged CUDA compiler is missing nvcc: {compiler_root}")
+    if not (compiler_root / "nvvm" / "bin" / "cicc").is_file():
+        raise RuntimeError(f"Packaged CUDA compiler is missing NVVM cicc: {compiler_root}")
+    if not (compiler_root / "include" / "crt" / "host_defines.h").is_file():
+        raise RuntimeError(f"Packaged CUDA compiler is missing runtime headers: {compiler_root}")
 
     cccl_root = cccl_roots[0]
     cublas_root = cublas_roots[0]
     cuda_runtime_root = cuda_runtime_roots[0]
     cuda_nvrtc_root = cuda_nvrtc_roots[0]
-    cuda_nvcc_root = cuda_nvcc_roots[0]
     curand_root = curand_roots[0]
     source_identity = "\0".join(
         str(path.resolve())
-        for path in (cccl_root, cublas_root, cuda_runtime_root, cuda_nvrtc_root, cuda_nvcc_root, curand_root)
+        for path in (compiler_root, cccl_root, cublas_root, cuda_runtime_root, cuda_nvrtc_root, curand_root)
     )
     identity = hashlib.sha256(source_identity.encode()).hexdigest()[:16]
     compatibility_home = temporary_root / _CUDA_COMPAT_DIRECTORY / identity
+    compatibility_bin = compatibility_home / "bin"
     compatibility_include = compatibility_home / "include"
     compatibility_lib = compatibility_home / "lib64"
 
+    _link_directory_entries(compiler_root / "bin", compatibility_bin)
     _link_directory_entries(cuda_runtime_root / "include", compatibility_include)
-    _link_directory_entries(cuda_nvcc_root / "include", compatibility_include)
+    _link_directory_entries(compiler_root / "include", compatibility_include)
     _link_cccl_headers(cccl_root, compatibility_include)
     _link_directory_entries(cuda_nvrtc_root / "include", compatibility_include)
     _link_directory_entries(curand_root / "include", compatibility_include)
     _link_directory_entries(cublas_root / "include", compatibility_include)
+    _link_directory_entries(compiler_root / "lib", compatibility_lib)
     _link_directory_entries(cuda_runtime_root / "lib", compatibility_lib)
     _link_directory_entries(cuda_nvrtc_root / "lib", compatibility_lib)
     _link_directory_entries(curand_root / "lib", compatibility_lib)
     _link_directory_entries(cublas_root / "lib", compatibility_lib)
+
+    compatibility_nvvm = compatibility_home / "nvvm"
+    compiler_nvvm = compiler_root / "nvvm"
+    if compatibility_nvvm.is_symlink():
+        if compatibility_nvvm.resolve() != compiler_nvvm.resolve():
+            raise RuntimeError(f"Conflicting CUDA NVVM compatibility link: {compatibility_nvvm}")
+    elif compatibility_nvvm.exists():
+        raise RuntimeError(f"CUDA NVVM compatibility path is not a symlink: {compatibility_nvvm}")
+    else:
+        compatibility_nvvm.symlink_to(compiler_nvvm, target_is_directory=True)
 
     namespaced_cccl = compatibility_include / "cccl"
     if namespaced_cccl.exists() or namespaced_cccl.is_symlink():
@@ -197,7 +209,14 @@ def _configure_deep_gemm_cuda_environment() -> None:
 
     nvidia = importlib.import_module("nvidia")
     nvidia_roots = tuple(Path(path) for path in nvidia.__path__)
-    environment = deep_gemm_cuda_environment(nvidia_roots, Path(tempfile.gettempdir()))
+    compiler_distribution = importlib.metadata.distribution("marin-cuda-nvcc")
+    nvcc_file = next(
+        file
+        for file in compiler_distribution.files or ()
+        if tuple(file.parts[-3:]) == ("marin_cuda_nvcc", "bin", "nvcc")
+    )
+    compiler_root = Path(nvcc_file.locate()).parent.parent
+    environment = deep_gemm_cuda_environment(nvidia_roots, compiler_root, Path(tempfile.gettempdir()))
     os.environ.update(environment)
 
 
