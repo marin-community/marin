@@ -539,6 +539,7 @@ def build_profile_row(
             format=ProfileFormat.RAW.value,
             trigger=trigger.value,
             locals_dump=bool(profile_type.threads.locals),
+            native=bool(profile_type.threads.native),
             profile_data=profile_data,
         )
     raise ValueError(f"ProfileType has no profiler set: {profile_type!r}")

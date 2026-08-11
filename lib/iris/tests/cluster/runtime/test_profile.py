@@ -19,6 +19,7 @@ from iris.cluster.runtime.profile import (
     _run_memray_profile,
     build_memray_attach_cmd,
     build_memray_transform_cmd,
+    build_profile_row,
     build_pyspy_cmd,
     build_pyspy_dump_cmd,
     capture_cpu,
@@ -105,6 +106,22 @@ def test_build_pyspy_dump_cmd_includes_requested_detail_flags():
     cmd = build_pyspy_dump_cmd("1", include_locals=True, include_native=True)
     assert "--locals" in cmd
     assert "--native" in cmd
+
+
+def test_build_profile_row_records_thread_detail_options():
+    profile_type = job_pb2.ProfileType(threads=job_pb2.ThreadsProfile(locals=True, native=True))
+
+    row = build_profile_row(
+        source="/alice/job/0",
+        attempt_id=1,
+        vm_id="worker-1",
+        duration_seconds=0,
+        profile_type=profile_type,
+        profile_data=b"Thread 0x1",
+    )
+
+    assert row.locals_dump is True
+    assert row.native is True
 
 
 # ---------------------------------------------------------------------------
