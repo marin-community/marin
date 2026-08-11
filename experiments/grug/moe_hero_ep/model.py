@@ -48,6 +48,12 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
+from levanter.kernels.mixture_of_kittens import (
+    MOK_CONTEXT_CHECKPOINT_NAME,
+    MokLikeConfig,
+    MokLikeRuntimeHandle,
+    mok_like_mlp,
+)
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -67,6 +73,9 @@ GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
+# The scanned transformer has one static mok_like callsite, shared by every layer.
+# Any future static callsite must receive a different ID so concurrent FFI rendezvous cannot alias.
+MOK_LIKE_MODEL_COLLECTIVE_ID = 0
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -82,7 +91,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
-RematMode = Literal["recompute_all", "save_moe"]
+RematMode = Literal["recompute_all", "save_moe", "offload_moe"]
 
 
 def _batch_spec() -> P:
@@ -158,12 +167,14 @@ class GrugModelConfig:
     sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    mok_like: MokLikeConfig | None = None
     expert_chunks: int = 1
     report_capacity_overflow: bool = False
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
-    backward skips re-running expert dispatch and its EP collectives."""
+    backward skips re-running expert dispatch and its EP collectives; "offload_moe"
+    keeps the fused mok_like backward context in pinned host memory."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
 
@@ -202,6 +213,13 @@ class GrugModelConfig:
             raise ValueError("expert_chunks must be positive")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
+        if self.mok_like is not None:
+            if self.shared_expert_intermediate_dim != self.intermediate_dim:
+                raise ValueError("mok_like requires matching routed and shared intermediate dimensions")
+            if self.hidden_dim % 256 != 0 or self.intermediate_dim % 256 != 0:
+                raise ValueError("mok_like hidden and intermediate dimensions must be divisible by 256")
+            if self.remat_mode == "recompute_all":
+                raise ValueError("mok_like requires remat_mode='save_moe' or 'offload_moe'")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -748,6 +766,9 @@ class MoEMLP(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
+        *,
+        shared_expert: DenseMLP | None = None,
+        mok_like_runtime: MokLikeRuntimeHandle | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
@@ -794,18 +815,39 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        moe_out = self.expert_mlp(
-            x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            mesh=get_abstract_mesh(),
-            report_capacity_overflow=self.cfg.report_capacity_overflow,
-        )
-        if self.cfg.report_capacity_overflow:
-            routed_flat, dropped_assignments = moe_out
+        if self.cfg.mok_like is not None:
+            if shared_expert is None:
+                raise ValueError("mok_like requires the block's shared expert")
+            if mok_like_runtime is None:
+                raise ValueError("mok_like requires an initialized runtime handle bound to the model")
+            routed_flat, dropped_assignments = mok_like_mlp(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights_f,
+                self.expert_mlp.w_gate,
+                self.expert_mlp.w_up,
+                self.expert_mlp.w_down,
+                shared_expert.w_gate,
+                shared_expert.w_up,
+                shared_expert.w_down,
+                mesh=get_abstract_mesh(),
+                runtime=mok_like_runtime,
+                config=self.cfg.mok_like,
+                collective_id=MOK_LIKE_MODEL_COLLECTIVE_ID,
+            )
         else:
-            routed_flat = moe_out
-            dropped_assignments = _zero_dropped_assignments()
+            moe_out = self.expert_mlp(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                mesh=get_abstract_mesh(),
+                report_capacity_overflow=self.cfg.report_capacity_overflow,
+            )
+            if self.cfg.report_capacity_overflow:
+                routed_flat, dropped_assignments = moe_out
+            else:
+                routed_flat = moe_out
+                dropped_assignments = _zero_dropped_assignments()
         router_stats["capacity_overflow"] = dropped_assignments
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
@@ -861,6 +903,7 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
+        mok_like_runtime: MokLikeRuntimeHandle | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         # segment_ids (packed-document boundaries) for the branch-output SConvs; None when unpacked.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -872,9 +915,15 @@ class Block(eqx.Module):
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
+        shared_expert = None if self.shared is None else self.shared[0]
+        mlp_out, router_stats = self.mlp(
+            mlp_in,
+            shared_expert=shared_expert,
+            mok_like_runtime=mok_like_runtime,
+        )
         if self.shared is not None:
-            for shared_expert in self.shared:
+            first_unfused = 1 if self.mlp.cfg.mok_like is not None else 0
+            for shared_expert in self.shared[first_unfused:]:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
@@ -896,6 +945,7 @@ class Transformer(eqx.Module):
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
+    mok_like_runtime: MokLikeRuntimeHandle | None = eqx.field(static=True, default=None)
 
     @staticmethod
     def init(
@@ -934,7 +984,15 @@ class Transformer(eqx.Module):
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
+            mok_like_runtime=None,
         )
+
+    def bind_mok_like_runtime(self, runtime: MokLikeRuntimeHandle) -> "Transformer":
+        """Return this model with an explicit caller-owned mok_like runtime."""
+
+        if self.config.mok_like is None:
+            raise ValueError("cannot bind a mok_like runtime when the backend is not configured")
+        return dataclasses.replace(self, mok_like_runtime=runtime)
 
     @property
     def Vocab(self) -> Axis:
@@ -968,6 +1026,13 @@ class Transformer(eqx.Module):
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+        elif cfg.remat_mode == "offload_moe":
+            remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+                names_which_can_be_saved=MOE_REMAT_SAVE_NAMES,
+                names_which_can_be_offloaded=(MOK_CONTEXT_CHECKPOINT_NAME,),
+                offload_src="device",
+                offload_dst="pinned_host",
+            )
         else:
             remat_policy = None
 
@@ -1003,6 +1068,7 @@ class Transformer(eqx.Module):
                 layer_mask,
                 use_long,
                 use_long,
+                self.mok_like_runtime,
             )
 
         hidden, stacked_router_stats = jax.lax.scan(

@@ -13,6 +13,7 @@ import atexit
 import logging
 import os
 import time
+from enum import StrEnum
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -38,6 +39,7 @@ logger = logging.getLogger(__name__)
 _COMPILATION_CACHE_SUBDIR = "compilation-cache"
 _XLA_AUTOTUNE_CACHE_SUBDIR = "xla/per-fusion-autotune"
 _XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir"
+XLA_AUTOTUNE_CACHE_MODE_ENV = "IRIS_XLA_AUTOTUNE_CACHE_MODE"
 # Object-store home (per build) that sync_kv_cache mirrors the node-local dir against.
 _XLA_AUTOTUNE_REMOTE_PREFIX = "xla-per-fusion-autotune"
 # JAX's RegisterTask barrier defaults to 300s. On a large gang (e.g. v5p-64 = 8 hosts) a
@@ -61,6 +63,13 @@ _JAX_ENV_KEYS = (
     "JAX_COORDINATOR_ADDRESS",
     "JAX_COORDINATOR_BIND_ADDRESS",
 )
+
+
+class XlaAutotuneCacheMode(StrEnum):
+    """Persistence policy for XLA's node-local per-fusion autotune cache."""
+
+    REMOTE_SYNC = "remote_sync"
+    LOCAL_ONLY = "local_only"
 
 
 def resolve_coordinator_port(job_info: JobInfo, explicit: int | None = None) -> int:
@@ -131,13 +140,15 @@ def configure_jax_compilation_cache() -> None:
 
 
 def _enable_xla_autotune_cache() -> None:
-    """Point XLA's per-fusion autotune cache at the node-local mount and mirror it remotely.
+    """Point XLA's per-fusion autotune cache at the node-local mount.
 
     Goes through ``XLA_FLAGS`` because JAX derives this path from the compilation
-    cache dir, which is remote. The flag is on ``xla_flags_to_exclude_from_cache_key``,
-    so it stays out of the compilation cache key. XLA opens the directory from C++
-    through ``tsl::Env``, which cannot read an object store, so the live directory
-    is always node-local and :func:`rigging.cache.sync_kv_cache` mirrors it.
+    cache dir, which is remote. Every task sees the same literal path on its
+    node-local scratch-cache mount, so the flag is stable across a distributed
+    compilation even when JAX includes it in the cache key. XLA opens the directory
+    from C++ through ``tsl::Env``, which cannot read an object store, so the live
+    directory is always node-local. Remote-sync mode mirrors it with
+    :func:`rigging.cache.sync_kv_cache`; local-only mode skips that stage-down and mirror.
 
     GPU only: a TPU or CPU jaxlib aborts on an unknown ``--xla_gpu`` flag.
 
@@ -165,6 +176,11 @@ def _enable_xla_autotune_cache() -> None:
 
     os.environ["XLA_FLAGS"] = f"{xla_flags} {_XLA_AUTOTUNE_CACHE_DIR_FLAG}={autotune_dir}".strip()
     logger.info("XLA per-fusion autotune cache: %s", autotune_dir)
+
+    mode = XlaAutotuneCacheMode(os.environ.get(XLA_AUTOTUNE_CACHE_MODE_ENV, XlaAutotuneCacheMode.REMOTE_SYNC.value))
+    if mode is XlaAutotuneCacheMode.LOCAL_ONLY:
+        logger.info("XLA per-fusion autotune cache remote sync disabled")
+        return
 
     # Mirror the node-local cache to per-build object storage only on a real launch;
     # off one (local dev, unit tests) the published provenance is absent and the

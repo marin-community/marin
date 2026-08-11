@@ -11,6 +11,7 @@ from fray.cluster import ResourceConfig
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, create_environment
 from iris.rpc.proto_display import priority_band_value
+from iris.runtime.jax_init import XLA_AUTOTUNE_CACHE_MODE_ENV
 from marin.training.run_environment import extras_for_resources
 from marin.training.training import resolve_training_env
 
@@ -29,11 +30,14 @@ PRODUCTION_PRIORITY = priority_band_value("production")
 # not leak onto accelerator tasks.
 _FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
+_FORWARDED_ENV_KEYS = (XLA_AUTOTUNE_CACHE_MODE_ENV,)
 
 
 def _forwarded_env_vars() -> dict[str, str]:
     return {
-        k: v for k, v in os.environ.items() if k.startswith(_FORWARDED_ENV_PREFIXES) and k not in _FORWARDED_ENV_EXCLUDE
+        k: v
+        for k, v in os.environ.items()
+        if (k.startswith(_FORWARDED_ENV_PREFIXES) or k in _FORWARDED_ENV_KEYS) and k not in _FORWARDED_ENV_EXCLUDE
     }
 
 
@@ -49,8 +53,11 @@ def dispatch_grug_training_run(
     local_entrypoint: Callable[[ConfigT], None],
     resources: ResourceConfig,
     max_retries_failure: int = 3,
+    max_retries_preemption: int = 100,
+    max_task_failures: int = 10,
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
+    pip_packages: tuple[str, ...] = (),
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -63,9 +70,14 @@ def dispatch_grug_training_run(
         name=f"grug-train-{safe_run_id}",
         entrypoint=Entrypoint.from_callable(local_entrypoint, args=[config]),
         resources=resources,
-        environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
+        environment=create_environment(
+            env_vars=env_vars,
+            extras=extras_for_resources(resources),
+            pip_packages=pip_packages,
+        ),
         max_retries_failure=max_retries_failure,
-        max_task_failures=10,
+        max_retries_preemption=max_retries_preemption,
+        max_task_failures=max_task_failures,
         processes_per_task=processes_per_task,
         priority=priority,
     )

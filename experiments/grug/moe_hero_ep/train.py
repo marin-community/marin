@@ -1,12 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
+import contextlib
 import dataclasses
 import functools
 import logging
 import os
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 import equinox as eqx
 import jax
@@ -14,10 +18,13 @@ import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
 import levanter.tracker
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from iris.runtime.jax_init import XLA_AUTOTUNE_CACHE_MODE_ENV, XlaAutotuneCacheMode
+from jax.experimental import multihost_utils
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -31,6 +38,15 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.kernels.mixture_of_kittens import (
+    MokLikeBackwardPeerStorage,
+    MokLikeBuildConfig,
+    MokLikeDebugCounters,
+    MokLikeForwardXStorage,
+    MokLikeMemoryPoolTrimTelemetry,
+    MokLikeRuntimeHandle,
+    initialize_mok_like_runtime,
+)
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
@@ -50,9 +66,13 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 logger = logging.getLogger(__name__)
 
+_MOK_LIKE_PEER_WAIT_PHASES = ("forward_pre", "forward_post", "backward_pre", "backward_post")
+_MOK_LIKE_STAGING_COPY_PHASES = ("forward", "backward")
+_BF16_BYTES = 2
+_FLOAT32_BYTES = 4
+
 HERO_EP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "false",
-    "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
 _XLA_FLAG_DEFAULTS = (
     "--xla_gpu_experimental_parallel_collective_overlap_limit=4",
@@ -61,6 +81,28 @@ _XLA_FLAG_DEFAULTS = (
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+XLA_SEPARATE_TEMP_BUFFER_FLAG = "--xla_gpu_temp_buffer_use_separate_color"
+
+
+class GpuAllocator(StrEnum):
+    """Pinned JAX GPU allocators supported by the Grug hero launcher."""
+
+    CUDA_ASYNC = "cuda_async"
+    VMM = "vmm"
+
+
+class GpuTempBufferPool(StrEnum):
+    """Allocation pool used for XLA's compiled executable temporary heap."""
+
+    SHARED = "shared"
+    SEPARATE = "separate"
+
+
+class GpuDefaultPoolPreallocation(StrEnum):
+    """Allocation policy for XLA's default CUDA memory pool."""
+
+    EAGER = "eager"
+    ON_DEMAND = "on_demand"
 
 
 def _apply_hero_ep_runtime_defaults() -> None:
@@ -120,9 +162,514 @@ class GrugRunConfig:
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    mok_like_build: MokLikeBuildConfig | None = None
+    mok_like_pinned_host_memory_limit_gb: int | None = None
+    gpu_allocator: GpuAllocator = GpuAllocator.CUDA_ASYNC
+    gpu_temp_buffer_pool: GpuTempBufferPool = GpuTempBufferPool.SHARED
+    gpu_default_pool_preallocation: GpuDefaultPoolPreallocation = GpuDefaultPoolPreallocation.EAGER
+    gpu_default_pool_trim_interval_updates: int | None = None
+    xla_autotune_cache_mode: XlaAutotuneCacheMode = XlaAutotuneCacheMode.REMOTE_SYNC
+    gpu_device_memory_fraction: float | None = None
+    xla_flag_overrides: tuple[str, ...] = ()
+    pip_packages: tuple[str, ...] = ()
+    max_retries_failure: int = 3
+    max_retries_preemption: int = 100
+    max_task_failures: int = 10
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+
+    def __post_init__(self) -> None:
+        for field_name in ("max_retries_failure", "max_retries_preemption", "max_task_failures"):
+            value = getattr(self, field_name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+
+
+def _initialize_mok_like_for_config(
+    config: GrugRunConfig,
+    mesh: Mesh,
+    *,
+    batch_size: int,
+) -> MokLikeRuntimeHandle | None:
+    if config.model.mok_like is None:
+        if config.mok_like_build is not None:
+            raise ValueError("mok_like_build was provided but the model does not select mok_like")
+        return None
+    batch_sizes = config.trainer.trainer.batch_schedule.unique_batch_sizes()
+    if len(batch_sizes) != 1:
+        raise ValueError(
+            "mok_like requires a fixed batch size because its peer workspace has a static token shape; "
+            f"configured sizes are {sorted(batch_sizes)}"
+        )
+    if config.mok_like_build is None:
+        raise ValueError("a mok_like model requires explicit mok_like_build configuration")
+    if config.eval is not None and config.eval.eval_batch_size != batch_size:
+        raise ValueError(
+            "mok_like evaluation must use the training batch size because its peer workspace has a static token shape; "
+            f"training batch is {batch_size}, eval batch is {config.eval.eval_batch_size}"
+        )
+
+    num_tokens = _mok_like_tokens_per_rank(batch_size=batch_size, sequence_length=config.model.max_seq_len, mesh=mesh)
+    return initialize_mok_like_runtime(
+        build_config=config.mok_like_build,
+        num_tokens=num_tokens,
+        hidden_dim=config.model.hidden_dim,
+        top_k=config.model.num_experts_per_token,
+        workspace_slots=config.model.mok_like.workspace_slots,
+        mesh=mesh,
+    )
+
+
+def _mok_like_tokens_per_rank(*, batch_size: int, sequence_length: int, mesh: Mesh) -> int:
+    batch_axis_size = 1
+    for axis_name in _BATCH_AXES:
+        batch_axis_size *= int(mesh.shape[axis_name])
+    global_tokens = batch_size * sequence_length
+    if global_tokens % batch_axis_size != 0:
+        raise ValueError(
+            f"global token count {global_tokens} must divide evenly over mok_like batch axes {batch_axis_size}"
+        )
+    return global_tokens // batch_axis_size
+
+
+def _apply_dispatch_environment(config: GrugRunConfig) -> None:
+    xla_flags = os.environ.get("XLA_FLAGS", "").split()
+    for override in config.xla_flag_overrides:
+        if not override.startswith("--") or "=" not in override:
+            raise ValueError(f"XLA flag overrides must have the form --name=value, got {override!r}")
+        name = override.partition("=")[0]
+        xla_flags = [flag for flag in xla_flags if flag.partition("=")[0] != name]
+        xla_flags.append(override)
+    if not isinstance(config.gpu_temp_buffer_pool, GpuTempBufferPool):
+        raise TypeError("gpu_temp_buffer_pool must be a GpuTempBufferPool")
+    if not isinstance(config.gpu_default_pool_preallocation, GpuDefaultPoolPreallocation):
+        raise TypeError("gpu_default_pool_preallocation must be a GpuDefaultPoolPreallocation")
+    if not isinstance(config.xla_autotune_cache_mode, XlaAutotuneCacheMode):
+        raise TypeError("xla_autotune_cache_mode must be an XlaAutotuneCacheMode")
+    os.environ[XLA_AUTOTUNE_CACHE_MODE_ENV] = config.xla_autotune_cache_mode.value
+    if config.gpu_temp_buffer_pool is GpuTempBufferPool.SEPARATE and config.gpu_allocator is not GpuAllocator.CUDA_ASYNC:
+        raise ValueError("a separate GPU temp-buffer pool requires the cuda_async allocator")
+    if (
+        config.gpu_temp_buffer_pool is GpuTempBufferPool.SEPARATE
+        and config.gpu_default_pool_preallocation is not GpuDefaultPoolPreallocation.ON_DEMAND
+    ):
+        raise ValueError("a separate GPU temp-buffer pool requires on-demand default-pool preallocation")
+    if (
+        config.gpu_allocator is not GpuAllocator.CUDA_ASYNC
+        and config.gpu_default_pool_preallocation is GpuDefaultPoolPreallocation.ON_DEMAND
+    ):
+        raise ValueError("on-demand default-pool preallocation requires the cuda_async allocator")
+    trim_interval_updates = config.gpu_default_pool_trim_interval_updates
+    if trim_interval_updates is not None:
+        if type(trim_interval_updates) is not int or trim_interval_updates <= 0:
+            raise ValueError("gpu_default_pool_trim_interval_updates must be positive")
+        if config.model.mok_like is None:
+            raise ValueError("default GPU pool trimming requires a mok_like model")
+        if config.gpu_allocator is not GpuAllocator.CUDA_ASYNC:
+            raise ValueError("default GPU pool trimming requires the cuda_async allocator")
+        if config.gpu_temp_buffer_pool is not GpuTempBufferPool.SHARED:
+            raise ValueError("default GPU pool trimming requires the shared temp-buffer pool")
+        if trim_interval_updates > config.trainer.trainer.num_train_steps:
+            raise ValueError("gpu_default_pool_trim_interval_updates must not exceed num_train_steps")
+    xla_flags = [flag for flag in xla_flags if flag.partition("=")[0] != XLA_SEPARATE_TEMP_BUFFER_FLAG]
+    use_separate_temp_pool = config.gpu_temp_buffer_pool is GpuTempBufferPool.SEPARATE
+    xla_flags.append(f"{XLA_SEPARATE_TEMP_BUFFER_FLAG}={'true' if use_separate_temp_pool else 'false'}")
+    os.environ["XLA_FLAGS"] = " ".join(xla_flags)
+    os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = (
+        "true" if config.gpu_default_pool_preallocation is GpuDefaultPoolPreallocation.EAGER else "false"
+    )
+
+    host_memory_limit = config.mok_like_pinned_host_memory_limit_gb
+    device_memory_fraction = config.gpu_device_memory_fraction
+    os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = config.gpu_allocator.value
+    if device_memory_fraction is not None:
+        if not 0.0 < device_memory_fraction <= 1.0:
+            raise ValueError("gpu_device_memory_fraction must be in (0, 1]")
+        os.environ.pop("XLA_PYTHON_CLIENT_MEM_FRACTION", None)
+        os.environ["XLA_CLIENT_MEM_FRACTION"] = str(device_memory_fraction)
+    if config.model.mok_like is None:
+        if host_memory_limit is not None:
+            raise ValueError("mok_like pinned-host memory configuration requires a mok_like model")
+        return
+    if host_memory_limit is None:
+        if config.model.remat_mode == "offload_moe":
+            raise ValueError("mok_like with offload_moe requires an explicit pinned-host memory limit")
+    elif host_memory_limit <= 0:
+        raise ValueError("mok_like_pinned_host_memory_limit_gb must be positive")
+    else:
+        os.environ["XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"] = str(host_memory_limit)
+    if device_memory_fraction is None:
+        raise ValueError("mok_like requires an explicit device memory fraction")
+
+
+def _mok_like_debug_metrics(counters: MokLikeDebugCounters) -> dict[str, int | float]:
+    metrics: dict[str, int | float] = {
+        "mok_like/runtime/total_peer_wait_events": sum(counters.peer_ready_waits) + sum(counters.completion_waits),
+        "mok_like/runtime/staging_copy_calls_total": sum(sum(rank) for rank in counters.staging_copy_calls),
+        "mok_like/runtime/staging_copy_bytes_total": sum(sum(rank) for rank in counters.staging_copy_bytes),
+    }
+    phase_peer_fields = {
+        "peer_wait_events": counters.peer_wait_events,
+        "peer_wait_cycles": counters.peer_wait_cycles,
+        "peer_wait_max_cycles": counters.peer_wait_max_cycles,
+    }
+    for metric_name, ranks in phase_peer_fields.items():
+        for rank, phases in enumerate(ranks):
+            for phase, peers in zip(_MOK_LIKE_PEER_WAIT_PHASES, phases, strict=True):
+                for peer, value in enumerate(peers):
+                    metrics[f"mok_like/runtime/rank_{rank}/{phase}/peer_{peer}/{metric_name}"] = value
+    for phase_index, phase in enumerate(_MOK_LIKE_PEER_WAIT_PHASES):
+        events = sum(
+            counters.peer_wait_events[rank][phase_index][peer]
+            for rank in range(len(counters.peer_wait_events))
+            for peer in range(len(counters.peer_wait_events[rank][phase_index]))
+        )
+        cycles = sum(
+            counters.peer_wait_cycles[rank][phase_index][peer]
+            for rank in range(len(counters.peer_wait_cycles))
+            for peer in range(len(counters.peer_wait_cycles[rank][phase_index]))
+        )
+        maximum = max(
+            counters.peer_wait_max_cycles[rank][phase_index][peer]
+            for rank in range(len(counters.peer_wait_max_cycles))
+            for peer in range(len(counters.peer_wait_max_cycles[rank][phase_index]))
+        )
+        metrics[f"mok_like/runtime/{phase}/peer_wait_events_total"] = events
+        metrics[f"mok_like/runtime/{phase}/peer_wait_cycles_total"] = cycles
+        metrics[f"mok_like/runtime/{phase}/peer_wait_max_cycles"] = maximum
+        metrics[f"mok_like/runtime/{phase}/peer_wait_mean_cycles"] = cycles / events if events else 0.0
+    rank_fields = {
+        "peer_ready_waits": counters.peer_ready_waits,
+        "completion_waits": counters.completion_waits,
+        "generation_mismatches": counters.generation_mismatches,
+        "slot_reuse_failures": counters.slot_reuse_failures,
+        "max_active_slots": counters.max_active_slots,
+    }
+    for metric_name, ranks in rank_fields.items():
+        for rank, value in enumerate(ranks):
+            metrics[f"mok_like/runtime/rank_{rank}/{metric_name}"] = value
+    for rank, acquisitions in enumerate(counters.slot_acquisitions):
+        for slot, value in enumerate(acquisitions):
+            metrics[f"mok_like/runtime/rank_{rank}/slot_{slot}/acquisitions"] = value
+    for rank, (calls, bytes_by_phase) in enumerate(
+        zip(counters.staging_copy_calls, counters.staging_copy_bytes, strict=True)
+    ):
+        for phase, call_count, byte_count in zip(_MOK_LIKE_STAGING_COPY_PHASES, calls, bytes_by_phase, strict=True):
+            metrics[f"mok_like/runtime/rank_{rank}/{phase}/staging_copy_calls"] = call_count
+            metrics[f"mok_like/runtime/rank_{rank}/{phase}/staging_copy_bytes"] = byte_count
+    return metrics
+
+
+def _memory_pool_trim_metrics(
+    telemetry: MokLikeMemoryPoolTrimTelemetry,
+    *,
+    completed_update: int,
+    trim_ordinal: int,
+) -> dict[str, int | float]:
+    metrics: dict[str, int | float] = {
+        "mok_like/runtime/default_pool_trim/completed_update": completed_update,
+        "mok_like/runtime/default_pool_trim/trim_ordinal": trim_ordinal,
+        "mok_like/runtime/default_pool_trim/active_reservations": telemetry.active_reservations,
+        "mok_like/runtime/default_pool_trim/active_workspace_slots": telemetry.active_workspace_slots,
+        "mok_like/runtime/default_pool_trim/wall_time_seconds": telemetry.wall_time_seconds,
+    }
+    for rank in telemetry.ranks:
+        prefix = f"mok_like/runtime/default_pool_trim/rank_{rank.rank}"
+        metrics[f"{prefix}/reserved_bytes_before"] = rank.reserved_bytes_before
+        metrics[f"{prefix}/used_bytes_before"] = rank.used_bytes_before
+        metrics[f"{prefix}/reserved_bytes_after"] = rank.reserved_bytes_after
+        metrics[f"{prefix}/used_bytes_after"] = rank.used_bytes_after
+        metrics[f"{prefix}/device_free_bytes_before"] = rank.device_free_bytes_before
+        metrics[f"{prefix}/device_total_bytes_before"] = rank.device_total_bytes_before
+        metrics[f"{prefix}/device_free_bytes_after"] = rank.device_free_bytes_after
+        metrics[f"{prefix}/device_total_bytes_after"] = rank.device_total_bytes_after
+        metrics[f"{prefix}/graph_reserved_bytes_after"] = rank.graph_reserved_bytes_after
+        metrics[f"{prefix}/graph_used_bytes_after"] = rank.graph_used_bytes_after
+        metrics[f"{prefix}/device_bytes_outside_default_pool_after"] = max(
+            0,
+            rank.device_total_bytes_after - rank.device_free_bytes_after - rank.reserved_bytes_after,
+        )
+        metrics[f"{prefix}/device_bytes_outside_default_and_graph_pools_after"] = max(
+            0,
+            rank.device_total_bytes_after
+            - rank.device_free_bytes_after
+            - rank.reserved_bytes_after
+            - rank.graph_reserved_bytes_after,
+        )
+    return metrics
+
+
+@dataclass
+class _MokLikeHostTrimAudit:
+    """Fixed-size host state accumulated across quiescent pool trims."""
+
+    trim_count: int = 0
+    active_reservation_anomalies: int = 0
+    active_workspace_slot_anomalies: int = 0
+    reserved_bytes_before: int = 0
+    reserved_bytes_after: int = 0
+    released_bytes: int = 0
+
+    def record(self, telemetry: MokLikeMemoryPoolTrimTelemetry) -> None:
+        self.trim_count += 1
+        self.active_reservation_anomalies += int(telemetry.active_reservations != 0)
+        self.active_workspace_slot_anomalies += int(telemetry.active_workspace_slots != 0)
+        for rank in telemetry.ranks:
+            self.reserved_bytes_before += rank.reserved_bytes_before
+            self.reserved_bytes_after += rank.reserved_bytes_after
+            self.released_bytes += max(0, rank.reserved_bytes_before - rank.reserved_bytes_after)
+
+
+_MOK_LIKE_PROCESS_SUMMARY_FIELDS = 17
+
+
+def _pack_mok_like_process_summary(values: tuple[int, ...]) -> np.ndarray:
+    if len(values) != _MOK_LIKE_PROCESS_SUMMARY_FIELDS:
+        raise ValueError(f"expected {_MOK_LIKE_PROCESS_SUMMARY_FIELDS} process-summary fields, got {len(values)}")
+    unsigned = np.asarray(values, dtype=np.uint64)
+    packed = np.empty((unsigned.size, 2), dtype=np.uint32)
+    packed[:, 0] = unsigned.astype(np.uint32)
+    packed[:, 1] = (unsigned >> np.uint64(32)).astype(np.uint32)
+    return packed.reshape(-1)
+
+
+def _unpack_mok_like_process_summaries(packed: np.ndarray) -> np.ndarray:
+    words = np.asarray(packed, dtype=np.uint32).reshape(-1, _MOK_LIKE_PROCESS_SUMMARY_FIELDS, 2)
+    return words[:, :, 0].astype(np.uint64) | (words[:, :, 1].astype(np.uint64) << np.uint64(32))
+
+
+def _maybe_trim_default_memory_pools(
+    config: GrugRunConfig,
+    runtime: MokLikeRuntimeHandle | None,
+    *,
+    completed_update: int,
+    train_step_result: tuple[GrugTrainState, dict[str, jax.Array], dict[str, jax.Array] | None],
+) -> MokLikeMemoryPoolTrimTelemetry | None:
+    """Run the configured cadence trim after a fully completed one-based update."""
+
+    interval_updates = config.gpu_default_pool_trim_interval_updates
+    if interval_updates is None or completed_update % interval_updates != 0:
+        return None
+    if runtime is None:
+        raise RuntimeError("default GPU pool trimming requires an initialized mok_like runtime")
+
+    jax.block_until_ready(train_step_result)
+    telemetry = runtime.trim_default_memory_pools()
+    trim_ordinal = completed_update // interval_updates
+    trim_metrics = _memory_pool_trim_metrics(
+        telemetry,
+        completed_update=completed_update,
+        trim_ordinal=trim_ordinal,
+    )
+    levanter.tracker.log(trim_metrics, step=completed_update - 1)
+    for rank in telemetry.ranks:
+        logger.info(
+            "mok_like default-pool trim rank=%d reserved_before=%d used_before=%d reserved_after=%d used_after=%d "
+            "device_free_before=%d device_total_before=%d device_free_after=%d device_total_after=%d "
+            "graph_reserved_after=%d graph_used_after=%d",
+            rank.rank,
+            rank.reserved_bytes_before,
+            rank.used_bytes_before,
+            rank.reserved_bytes_after,
+            rank.used_bytes_after,
+            rank.device_free_bytes_before,
+            rank.device_total_bytes_before,
+            rank.device_free_bytes_after,
+            rank.device_total_bytes_after,
+            rank.graph_reserved_bytes_after,
+            rank.graph_used_bytes_after,
+        )
+    logger.info(
+        "mok_like default-pool trim completed_update=%d trim_ordinal=%d active_reservations=%d "
+        "active_workspace_slots=%d wall_time_seconds=%.6f",
+        completed_update,
+        trim_ordinal,
+        telemetry.active_reservations,
+        telemetry.active_workspace_slots,
+        telemetry.wall_time_seconds,
+    )
+    return telemetry
+
+
+def _mok_like_process_metrics(
+    counters: MokLikeDebugCounters,
+    call_counts: tuple[int, int],
+    trim_audit: _MokLikeHostTrimAudit,
+    *,
+    expected_handler_calls: int,
+    expected_trim_count: int,
+    forward_x_storage: MokLikeForwardXStorage,
+    backward_peer_storage: MokLikeBackwardPeerStorage,
+    num_tokens: int,
+    hidden_dim: int,
+    top_k: int,
+    workspace_slots: int,
+) -> dict[str, int]:
+    """Gather the small process-level correctness contract after training quiesces."""
+
+    forward_staging_calls = sum(rank[0] for rank in counters.staging_copy_calls)
+    forward_staging_bytes = sum(rank[0] for rank in counters.staging_copy_bytes)
+    backward_staging_calls = sum(rank[1] for rank in counters.staging_copy_calls)
+    backward_staging_bytes = sum(rank[1] for rank in counters.staging_copy_bytes)
+    expected_backward_staging_calls, expected_backward_staging_bytes = _expected_mok_like_backward_staging(
+        backward_peer_storage,
+        expected_handler_calls=expected_handler_calls,
+        num_tokens=num_tokens,
+        hidden_dim=hidden_dim,
+        top_k=top_k,
+    )
+    slot1_acquisitions = sum(rank[1] for rank in counters.slot_acquisitions)
+    max_active_slots = max(counters.max_active_slots, default=0)
+    local_summary = _pack_mok_like_process_summary(
+        (
+            jax.process_index(),
+            call_counts[0],
+            call_counts[1],
+            sum(counters.generation_mismatches),
+            sum(counters.slot_reuse_failures),
+            forward_staging_calls,
+            forward_staging_bytes,
+            backward_staging_calls,
+            backward_staging_bytes,
+            slot1_acquisitions,
+            max_active_slots,
+            trim_audit.trim_count,
+            trim_audit.active_reservation_anomalies,
+            trim_audit.active_workspace_slot_anomalies,
+            trim_audit.reserved_bytes_before,
+            trim_audit.reserved_bytes_after,
+            trim_audit.released_bytes,
+        )
+    )
+    packed_summaries = np.asarray(multihost_utils.process_allgather(local_summary, tiled=False), dtype=np.uint32)
+    gathered = _unpack_mok_like_process_summaries(packed_summaries)
+    gathered = gathered.reshape(jax.process_count(), _MOK_LIKE_PROCESS_SUMMARY_FIELDS)
+    expected_process_indices = np.arange(jax.process_count(), dtype=np.uint64)
+    if not np.array_equal(gathered[:, 0], expected_process_indices):
+        raise RuntimeError(
+            f"mok_like runtime summaries have unexpected process indices {gathered[:, 0].tolist()}, "
+            f"expected {expected_process_indices.tolist()}"
+        )
+
+    metrics: dict[str, int] = {
+        "mok_like/runtime/process_count": jax.process_count(),
+        "mok_like/runtime/expected_handler_calls_per_process": expected_handler_calls,
+        "mok_like/runtime/processes_with_protocol_errors": int(np.count_nonzero(gathered[:, 3:5].sum(axis=1))),
+        "mok_like/runtime/processes_with_forward_staging": int(
+            np.count_nonzero((gathered[:, 5] != 0) | (gathered[:, 6] != 0))
+        ),
+        "mok_like/runtime/total_forward_staging_calls": int(gathered[:, 5].sum()),
+        "mok_like/runtime/total_forward_staging_bytes": int(gathered[:, 6].sum()),
+        "mok_like/runtime/processes_with_backward_staging": int(
+            np.count_nonzero((gathered[:, 7] != 0) | (gathered[:, 8] != 0))
+        ),
+        "mok_like/runtime/expected_backward_staging_calls_per_process": expected_backward_staging_calls,
+        "mok_like/runtime/expected_backward_staging_bytes_per_process": expected_backward_staging_bytes,
+        "mok_like/runtime/total_backward_staging_calls": int(gathered[:, 7].sum()),
+        "mok_like/runtime/total_backward_staging_bytes": int(gathered[:, 8].sum()),
+        "mok_like/runtime/processes_using_slot1": int(np.count_nonzero(gathered[:, 9])),
+        "mok_like/runtime/max_active_slots_across_processes": int(gathered[:, 10].max(initial=0)),
+        "mok_like/runtime/expected_trim_count_per_process": expected_trim_count,
+        "mok_like/runtime/expected_trim_count_across_processes": expected_trim_count * jax.process_count(),
+        "mok_like/runtime/actual_trim_count_across_processes": int(gathered[:, 11].sum()),
+        "mok_like/runtime/processes_with_trim_anomalies": int(np.count_nonzero(gathered[:, 12:14].sum(axis=1))),
+        "mok_like/runtime/total_trim_reserved_bytes_before": int(gathered[:, 14].sum()),
+        "mok_like/runtime/total_trim_reserved_bytes_after": int(gathered[:, 15].sum()),
+        "mok_like/runtime/total_trimmed_bytes_across_processes": int(gathered[:, 16].sum()),
+    }
+    for summary in gathered:
+        (
+            process_index,
+            forward_calls,
+            backward_calls,
+            generation_mismatches,
+            slot_reuse_failures,
+            process_forward_staging_calls,
+            process_forward_staging_bytes,
+            process_backward_staging_calls,
+            process_backward_staging_bytes,
+            process_slot1_acquisitions,
+            process_max_active_slots,
+            process_trim_count,
+            active_reservation_anomalies,
+            active_workspace_slot_anomalies,
+            reserved_bytes_before,
+            reserved_bytes_after,
+            released_bytes,
+        ) = summary
+        prefix = f"mok_like/runtime/process_{process_index}"
+        metrics[f"{prefix}/forward_calls"] = int(forward_calls)
+        metrics[f"{prefix}/backward_calls"] = int(backward_calls)
+        metrics[f"{prefix}/generation_mismatches"] = int(generation_mismatches)
+        metrics[f"{prefix}/slot_reuse_failures"] = int(slot_reuse_failures)
+        metrics[f"{prefix}/forward_staging_calls"] = int(process_forward_staging_calls)
+        metrics[f"{prefix}/forward_staging_bytes"] = int(process_forward_staging_bytes)
+        metrics[f"{prefix}/backward_staging_calls"] = int(process_backward_staging_calls)
+        metrics[f"{prefix}/backward_staging_bytes"] = int(process_backward_staging_bytes)
+        metrics[f"{prefix}/slot1_acquisitions"] = int(process_slot1_acquisitions)
+        metrics[f"{prefix}/max_active_slots"] = int(process_max_active_slots)
+        metrics[f"{prefix}/trim_count"] = int(process_trim_count)
+        metrics[f"{prefix}/trim_active_reservation_anomalies"] = int(active_reservation_anomalies)
+        metrics[f"{prefix}/trim_active_workspace_slot_anomalies"] = int(active_workspace_slot_anomalies)
+        metrics[f"{prefix}/trim_reserved_bytes_before"] = int(reserved_bytes_before)
+        metrics[f"{prefix}/trim_reserved_bytes_after"] = int(reserved_bytes_after)
+        metrics[f"{prefix}/trimmed_bytes"] = int(released_bytes)
+
+    bad_call_counts = gathered[(gathered[:, 1] != expected_handler_calls) | (gathered[:, 2] != expected_handler_calls)]
+    protocol_errors = gathered[(gathered[:, 3] != 0) | (gathered[:, 4] != 0)]
+    unexpected_forward_staging = (
+        gathered[(gathered[:, 5] != 0) | (gathered[:, 6] != 0)]
+        if forward_x_storage is MokLikeForwardXStorage.XLA_PEER_EXPERIMENTAL
+        else np.empty((0, gathered.shape[1]), dtype=gathered.dtype)
+    )
+    bad_backward_staging = gathered[
+        (gathered[:, 7] != expected_backward_staging_calls) | (gathered[:, 8] != expected_backward_staging_bytes)
+    ]
+    invalid_slot_usage = (
+        gathered[(gathered[:, 9] != 0) | (gathered[:, 10] > 1)]
+        if workspace_slots == 1
+        else np.empty((0, gathered.shape[1]), dtype=gathered.dtype)
+    )
+    bad_trim_counts = gathered[gathered[:, 11] != expected_trim_count]
+    trim_anomalies = gathered[(gathered[:, 12] != 0) | (gathered[:, 13] != 0)]
+    if (
+        bad_call_counts.size
+        or protocol_errors.size
+        or unexpected_forward_staging.size
+        or bad_backward_staging.size
+        or invalid_slot_usage.size
+        or bad_trim_counts.size
+        or trim_anomalies.size
+    ):
+        raise RuntimeError(
+            "mok_like distributed runtime contract failed: "
+            f"expected_handler_calls={expected_handler_calls}, expected_trim_count={expected_trim_count}, "
+            f"forward_x_storage={forward_x_storage.value}, backward_peer_storage={backward_peer_storage.value}, "
+            f"expected_backward_staging=({expected_backward_staging_calls}, {expected_backward_staging_bytes}), "
+            f"workspace_slots={workspace_slots}, "
+            f"summaries={gathered.tolist()}"
+        )
+    return metrics
+
+
+def _expected_mok_like_backward_staging(
+    storage: MokLikeBackwardPeerStorage,
+    *,
+    expected_handler_calls: int,
+    num_tokens: int,
+    hidden_dim: int,
+    top_k: int,
+) -> tuple[int, int]:
+    activation_bytes = num_tokens * hidden_dim * _BF16_BYTES
+    router_bytes = num_tokens * top_k * _FLOAT32_BYTES
+    if storage is MokLikeBackwardPeerStorage.RUNTIME_STAGED:
+        return expected_handler_calls * 4, expected_handler_calls * (2 * activation_bytes + 2 * router_bytes)
+    if storage is MokLikeBackwardPeerStorage.XLA_PEER_INPUTS_EXPERIMENTAL:
+        return expected_handler_calls, expected_handler_calls * router_bytes
+    if storage is MokLikeBackwardPeerStorage.XLA_PEER_EXPERIMENTAL:
+        return 0, 0
+    raise AssertionError(f"unhandled backward peer storage {storage}")
 
 
 def build_train_dataset(
@@ -314,8 +861,11 @@ def initial_state(
     key: PRNGKeyArray,
     ema_beta: float | None,
     offload_opt_state: bool = False,
+    mok_like_runtime: MokLikeRuntimeHandle | None = None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    if mok_like_runtime is not None:
+        params = params.bind_mok_like_runtime(mok_like_runtime)
     num_moe_layers = model_config.num_layers
     opt_state = optimizer.init(params)
     if offload_opt_state:
@@ -470,7 +1020,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
     )
-    with set_mesh(mesh):
+    with set_mesh(mesh), contextlib.ExitStack() as runtime_stack:
         batch_schedule = trainer.batch_schedule
 
         train_dataset = build_train_dataset(
@@ -485,6 +1035,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
         )
 
+        initial_batch_size = batch_schedule.batch_size_at_step(0)
+        mok_like_runtime = _initialize_mok_like_for_config(
+            config,
+            mesh,
+            batch_size=initial_batch_size,
+        )
+        if mok_like_runtime is not None:
+            runtime_stack.callback(mok_like_runtime.close)
+
         @jax.jit
         def _init_state(model_rng):
             return initial_state(
@@ -494,6 +1053,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
                 offload_opt_state=config.trainer.offload_opt_state,
+                mok_like_runtime=mok_like_runtime,
             )
 
         state = _init_state(model_key)
@@ -572,6 +1132,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
+        training_start_step = int(state.step)
+        trim_audit = _MokLikeHostTrimAudit()
+        if mok_like_runtime is not None:
+            mok_like_runtime.reset_call_counts()
+            mok_like_runtime.reset_debug_counters()
 
         # Main optimization loop.
         try:
@@ -584,8 +1149,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
-                state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
+                train_step_result = train_step(state, batch, compute_watch=compute_watch)
+                state, metrics, watch_stats = train_step_result
                 step = int(state.step) - 1
+
+                trim_telemetry = _maybe_trim_default_memory_pools(
+                    config,
+                    mok_like_runtime,
+                    completed_update=step + 1,
+                    train_step_result=train_step_result,
+                )
+                if trim_telemetry is not None:
+                    trim_audit.record(trim_telemetry)
 
                 jax.block_until_ready(metrics["train/loss"])
 
@@ -631,6 +1206,39 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if mok_like_runtime is not None:
+                counters = mok_like_runtime.debug_counters()
+                debug_metrics = _mok_like_debug_metrics(counters)
+                expected_handler_calls = (trainer.num_train_steps - training_start_step) * config.model.num_layers * 4
+                trim_interval_updates = config.gpu_default_pool_trim_interval_updates
+                expected_trim_count = (
+                    trainer.num_train_steps // trim_interval_updates - training_start_step // trim_interval_updates
+                    if trim_interval_updates is not None
+                    else 0
+                )
+                process_metrics = _mok_like_process_metrics(
+                    counters,
+                    mok_like_runtime.call_counts(),
+                    trim_audit,
+                    expected_handler_calls=expected_handler_calls,
+                    expected_trim_count=expected_trim_count,
+                    forward_x_storage=config.model.mok_like.forward_x_storage,
+                    backward_peer_storage=config.model.mok_like.backward_peer_storage,
+                    num_tokens=_mok_like_tokens_per_rank(
+                        batch_size=initial_batch_size,
+                        sequence_length=config.model.max_seq_len,
+                        mesh=mesh,
+                    ),
+                    hidden_dim=config.model.hidden_dim,
+                    top_k=config.model.num_experts_per_token,
+                    workspace_slots=config.model.mok_like.workspace_slots,
+                )
+                levanter.tracker.log_summary({**debug_metrics, **process_metrics})
+                logger.info(
+                    "mok_like runtime completed with %d recorded peer waits and %d handlers per phase/process",
+                    debug_metrics["mok_like/runtime/total_peer_wait_events"],
+                    expected_handler_calls,
+                )
 
     levanter.tracker.current_tracker().finish()
 
@@ -643,20 +1251,29 @@ def run_grug(config: GrugRunConfig) -> None:
 
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
     _apply_hero_ep_runtime_defaults()
+    _apply_dispatch_environment(config)
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
         local_entrypoint=_run_grug_local,
         resources=config.resources,
+        max_retries_failure=config.max_retries_failure,
+        max_retries_preemption=config.max_retries_preemption,
+        max_task_failures=config.max_task_failures,
         processes_per_task=config.processes_per_task,
+        pip_packages=config.pip_packages,
     )
 
 
 __all__ = [
+    "GpuAllocator",
+    "GpuDefaultPoolPreallocation",
+    "GpuTempBufferPool",
     "GrugEvalConfig",
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "XlaAutotuneCacheMode",
     "initial_state",
     "run_grug",
 ]
