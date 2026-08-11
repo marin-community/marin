@@ -263,7 +263,7 @@ def build_small_run(
     num_experts_per_token: int = 4,
     intermediate_dim: int | None = None,
     latent_dim: int | None = None,
-    qb_use_histogram: bool = True,
+    qb_use_histogram: bool = False,
     qb_hist_bins: int = 1000,
     tokens_per_active_param: int = 750,
     num_train_steps_override: int | None = None,
@@ -515,9 +515,9 @@ def build_small_run(
 )
 @click.option(
     "--qb-histogram/--no-qb-histogram",
-    default=True,
+    default=False,
     show_default=True,
-    help="Estimate the QB quantile with the histogram estimator (EP hero arm) instead of top-k mean.",
+    help="Estimate the QB quantile with the histogram estimator instead of the top-k mean (the hero default).",
 )
 @click.option(
     "--qb-hist-bins",
