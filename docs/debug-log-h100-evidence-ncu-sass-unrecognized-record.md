@@ -76,3 +76,37 @@ existing address-source grammar is retained from earlier synthetic fixtures,
 not inferred from the v20 traceback. The remote NCU report and SASS export were
 not retained. No image build, GPU execution, or relaunch was performed for
 this repair.
+
+## V21 fixed-column diagnostic
+
+The v21 task used source `d1edf1def2bfb604ca46a9cc8693186a50c309fc`.
+After an image-pull backoff recovered without a new attempt, the task executed
+and failed once at the unrecognized line-4 record. The retained aggregate says
+only that the row is 107 ASCII bytes with six whitespace-delimited tokens, 70
+spaces, and standalone public `Address` and `Source` words. It does not prove
+the row text, token order, space distribution, or adjacent syntax.
+
+For an unrecognized row of exactly 107 UTF-8 bytes, the diagnostic now applies
+the six public table widths `18, 60, 6, 6, 6, 6` separated by the five
+single-byte gaps established by the reviewed separator. For each column it
+reports the column index, space-trimmed byte length, ASCII character-class
+counts, non-ASCII byte count, token count, and exact standalone `Address` and
+`Source` booleans. It separately reports whether each gap is one ASCII space.
+The parser still rejects the row; the new fields do not expand accepted NCU
+syntax.
+
+The diagnostic includes no column or token value, token sequence, per-column
+or per-token hash, raw or redacted row shape, adjacent line, path, or
+environment value. The previously reviewed whole-line SHA-256 remains. The
+compact diagnostic retains the 2,048-byte serialized-error cap and falls back
+to a fixed non-content error if that cap is exceeded.
+
+These aggregates are not a confidentiality guarantee. In particular, a
+low-entropy column can be identifiable from its byte length and character-class
+counts even though its value is not emitted. Behavioral tests cover exact byte
+boundaries, every gap, non-ASCII and control bytes, public-word lookalikes,
+private-value and ordering nonleakage, the serialized bound, and the production
+NCU profiling boundary.
+
+No v22 job, image build, GPU execution, or relaunch was performed for this
+source-only diagnostic change.

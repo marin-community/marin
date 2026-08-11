@@ -240,6 +240,17 @@ _SASS_OPCODE_BASES = frozenset(
 _NCU_SASS_SECTION_PATTERN = re.compile(r"^Kernel Name {8}(?P<name>[A-Za-z_][A-Za-z0-9_]{25}) {62}$")
 _NCU_SASS_HEADER = "Address Source"
 _NCU_SASS_SEPARATOR = "------------------ " + "-" * 60 + " ------ ------ ------ ------"
+_NCU_SASS_COLUMN_WIDTHS = tuple(len(group) for group in _NCU_SASS_SEPARATOR.split(" "))
+_NCU_SASS_COLUMN_ASCII_CLASS_FIELDS = ("control", "digit", "lowercase", "punctuation", "uppercase", "whitespace")
+_NCU_SASS_COLUMN_FIELDS = (
+    "index",
+    "trimmed_utf8_bytes",
+    "ascii_class_counts",
+    "non_ascii_bytes",
+    "token_count",
+    "Address",
+    "Source",
+)
 _NCU_SASS_INSTRUCTION_PATTERN = re.compile(
     r"^\s*(?:/\*)?(?P<address>(?:0x)?[0-9A-Fa-f]{4,16})(?:\*/)?(?:\s+|\s*:\s*)"
     r"(?:@!?P[0-9]+(?:\.[A-Z0-9_]+)?\s+)?(?P<mnemonic>[A-Z][A-Z0-9_]*(?:\.[A-Z0-9_]+)*)\b"
@@ -895,7 +906,7 @@ def _ncu_sass_line_structure(line: str) -> dict[str, object]:
 
     tokens = re.findall(r"\S+", line)
     public_words = frozenset(_NCU_SASS_PUBLIC_WORD_PATTERN.findall(line))
-    return {
+    structure: dict[str, object] = {
         "ascii_classes": ascii_classes,
         "delimiters": {
             "colon": line.count(":"),
@@ -918,6 +929,71 @@ def _ncu_sass_line_structure(line: str) -> dict[str, object]:
         "token_count": len(tokens),
         "token_max_utf8_bytes": max((len(token.encode("utf-8")) for token in tokens), default=0),
         "trailing_spaces": len(line) - len(line.rstrip(" ")),
+    }
+    fixed_columns = _ncu_sass_fixed_columns(line.encode("utf-8"))
+    if fixed_columns is not None:
+        structure["fixed_columns"] = fixed_columns
+    return structure
+
+
+def _ncu_sass_fixed_columns(line: bytes) -> dict[str, object] | None:
+    if len(line) != len(_NCU_SASS_SEPARATOR.encode("ascii")):
+        return None
+
+    columns: list[list[object]] = []
+    gap_single_ascii_space: list[bool] = []
+    offset = 0
+    for index, width in enumerate(_NCU_SASS_COLUMN_WIDTHS):
+        column = line[offset : offset + width]
+        offset += width
+        trimmed = column.strip(b" ")
+        ascii_class_counts = dict.fromkeys(_NCU_SASS_COLUMN_ASCII_CLASS_FIELDS, 0)
+        non_ascii_bytes = 0
+        for value in trimmed:
+            if value >= 128:
+                non_ascii_bytes += 1
+            elif 65 <= value <= 90:
+                ascii_class_counts["uppercase"] += 1
+            elif 97 <= value <= 122:
+                ascii_class_counts["lowercase"] += 1
+            elif 48 <= value <= 57:
+                ascii_class_counts["digit"] += 1
+            elif value in b" \t\r\n\v\f":
+                ascii_class_counts["whitespace"] += 1
+            elif chr(value) in string.punctuation:
+                ascii_class_counts["punctuation"] += 1
+            elif value < 32 or value == 127:
+                ascii_class_counts["control"] += 1
+            else:
+                raise AssertionError("ASCII byte classification is incomplete")
+        try:
+            column_text = trimmed.decode("utf-8")
+        except UnicodeDecodeError:
+            public_words: frozenset[str] = frozenset()
+        else:
+            public_words = frozenset(_NCU_SASS_PUBLIC_WORD_PATTERN.findall(column_text))
+        columns.append(
+            [
+                index,
+                len(trimmed),
+                [ascii_class_counts[field] for field in _NCU_SASS_COLUMN_ASCII_CLASS_FIELDS],
+                non_ascii_bytes,
+                len(re.findall(rb"\S+", trimmed)),
+                "Address" in public_words,
+                "Source" in public_words,
+            ]
+        )
+        if index < len(_NCU_SASS_COLUMN_WIDTHS) - 1:
+            gap_single_ascii_space.append(line[offset : offset + 1] == b" ")
+            offset += 1
+    if offset != len(line):
+        raise AssertionError("fixed Nsight Compute SASS columns do not cover the reviewed line width")
+    return {
+        "ascii_class_fields": list(_NCU_SASS_COLUMN_ASCII_CLASS_FIELDS),
+        "column_fields": list(_NCU_SASS_COLUMN_FIELDS),
+        "column_widths": list(_NCU_SASS_COLUMN_WIDTHS),
+        "columns": columns,
+        "gap_single_ascii_space": gap_single_ascii_space,
     }
 
 
