@@ -42,7 +42,9 @@ from iris.rpc import job_pb2
 from marin.inference.config import DEFAULT_CUDA_VLLM_VERSION
 from marin.inference.model_preparation import resolve_model_path
 from marin.inference.proxy import _reserve_port
+from marin.inference.types import InferenceRequestProvider, InferenceWorkerMetadata, OpenAIEndpoint, RunningModel
 from marin.inference.vllm_server import IsolatedCudaVllm, _poll_until_ready
+from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import Duration, ExponentialBackoff
 
 MODEL = "zai-org/GLM-5.2-FP8"
@@ -103,6 +105,26 @@ class ServerConfig:
 
 
 @dataclass(frozen=True)
+class BrokerWorkerConfig:
+    """Pull-mode serving: the gang leases requests from an inference broker.
+
+    Instead of clients addressing the gang's endpoint directly, the head task
+    runs an :class:`~marin.inference.worker.InferenceWorker` that pulls leased
+    requests from ``broker`` and forwards them to the local vLLM server. A pool
+    of gangs behind one broker is then elastic capacity: gangs joining late add
+    throughput, gangs dying shed it, and no work is pinned to any one gang.
+
+    ``broker`` is the broker actor handle (satisfies
+    :class:`~marin.inference.types.InferenceRequestProvider`); it pickles into
+    the gang's entrypoint like any other launch parameter.
+    """
+
+    broker: InferenceRequestProvider
+    max_in_flight: int
+    request_timeout: float
+
+
+@dataclass(frozen=True)
 class Glm52LaunchConfig:
     """One GLM-5.2 instance: where to register it, how to serve it, on what fleet.
 
@@ -126,6 +148,10 @@ class Glm52LaunchConfig:
     # interactive priority raises its server to match, so a queued gang does not
     # stall a driver that already holds its slot.
     priority_band: int = job_pb2.PRIORITY_BAND_BATCH
+    # When set, the gang serves in pull mode (see BrokerWorkerConfig). The
+    # endpoint is still registered for observability, but requests arrive by
+    # lease rather than by address.
+    broker_worker: BrokerWorkerConfig | None = None
 
 
 def _ray_worker_port_args(*excluded_ports: int) -> list[str]:
@@ -265,6 +291,8 @@ def _run_vllm(
             check_alive=lambda: _check_process_alive(process),
         )
         with ctx.registry.registered(launch.vllm_endpoint, base_url):
+            if launch.broker_worker is not None:
+                _pull_from_broker(launch, base_url, process)
             return_code = process.wait()
             raise RuntimeError(f"vLLM exited with code {return_code}")
     finally:
@@ -274,6 +302,24 @@ def _run_vllm(
                 process.wait(timeout=30)
         if process.poll() is None:
             process.kill()
+
+
+def _pull_from_broker(launch: Glm52LaunchConfig, base_url: str, process: subprocess.Popen[bytes]) -> None:
+    """Serve in pull mode until the vLLM process exits."""
+    worker_config = launch.broker_worker
+    assert worker_config is not None
+    worker_config.broker.register_worker(
+        launch.vllm_endpoint,
+        InferenceWorkerMetadata(tensor_parallel_size=launch.fleet.tensor_parallel_size, backend_name="vllm"),
+    )
+    worker = InferenceWorker(
+        broker=worker_config.broker,
+        upstream=RunningModel(endpoint=OpenAIEndpoint(base_url=f"{base_url}/v1", model=MODEL)),
+        request_timeout_seconds=worker_config.request_timeout,
+    )
+    with run_inference_worker(worker, max_in_flight=worker_config.max_in_flight):
+        return_code = process.wait()
+        raise RuntimeError(f"vLLM exited with code {return_code}")
 
 
 def _serve_ray_head(
@@ -375,11 +421,11 @@ def _task_env_vars(launch: Glm52LaunchConfig) -> dict[str, str]:
     return env
 
 
-def submit_glm52(ctx, launch: Glm52LaunchConfig):
+def submit_glm52(ctx, launch: Glm52LaunchConfig, name: str = "vllm"):
     fleet = launch.fleet
     return ctx.client.submit(
         entrypoint=Entrypoint.from_callable(_serve_glm52, launch),
-        name="vllm",
+        name=name,
         resources=ResourceSpec(
             cpu=fleet.cpu,
             memory=fleet.memory,

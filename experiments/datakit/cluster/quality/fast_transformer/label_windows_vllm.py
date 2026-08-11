@@ -1,42 +1,41 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Label bme grading windows with a self-hosted GLM-5.2 vLLM gang.
+"""Label bme grading windows with a brokered pool of self-hosted GLM-5.2 gangs.
 
 The grading contract is :mod:`label_windows_openrouter`'s exactly — one window
 per request as ``<document index="0">``, the v2 rubric system prompt, the
 bracketed position notice on middle/end windows, temperature 0, one-JSON-object
-verdict — with the serving path swapped from OpenRouter to
-:mod:`label_with_glm52`'s self-hosting pattern: this driver runs as an Iris job,
-submits the two-node GLM-5.2-FP8 server as a child, resolves its endpoint by
-name, and terminates it on the way out.
+verdict — with the serving path swapped from OpenRouter to a self-hosted pool.
 
-The campaign fans the window set across independent driver jobs, each with its
-own server gang, and the design separates work assignment from completion state
-so the fan-out can be rescaled at any time:
+The pool follows the brokered-fleet shape of the OCR extraction route rather
+than static work partitioning. This driver runs as an Iris job and owns three
+things:
 
-* **Assignment** — the window set is cut into ``--num-partitions`` fine slices
-  by a deterministic hash of the document id (disjoint, stable across
-  resubmissions, and a document's windows stay together), and each driver takes
-  the ``--partitions`` slices it is handed. Slicing finer than the driver count
-  (64 slices across 16 drivers, say) leaves headroom: scaling to more drivers
-  later is just dealing the same slices into more hands.
-* **Completion** — every driver shares one ``--out`` and therefore one
-  ``<out>.chunks/`` checkpoint store, resumed by ``(id, window)`` against the
-  union of all chunks (chunk files are uuid-suffixed, so concurrent writers
-  never collide). Re-sharding or adding windows never relabels anything: only
-  windows absent from the shared store are pending. A driver whose assignment
-  is fully checkpointed skips bringing up a server at all.
+* an :class:`~marin.inference.broker.InferenceBroker` actor holding the leased
+  request queue;
+* ``--num-gangs`` two-node GLM-5.2-FP8 gangs
+  (:mod:`experiments.datakit.cluster.quality.glm52_vllm`), each launched in
+  pull mode: the gang's head runs an ``InferenceWorker`` that leases requests
+  from the broker and forwards them to its local vLLM;
+* the :func:`~marin.inference.proxy.serve_inference_proxy` OpenAI endpoint,
+  served in-process, that the labeling loop posts windows to.
 
-Fan-out drivers run with ``--chunks-only`` and write no final parquet — with a
-shared store, a mid-campaign consolidation would publish other partitions'
-half-finished state under the final name. When every partition has finished,
-one cheap run *without* the flag (its pending set is empty, so no server) folds
-the store into the labels parquet and stats.
+Because capacity is whoever is pulling, the pool is elastic where a partition
+plan is brittle: labeling starts when the *first* gang is ready, gangs admitted
+late simply join, a dead gang sheds throughput instead of stranding its share
+of the windows, and scaling a tranche is ``--num-gangs``, not a re-shard.
+Failed requests are retried on later runs (chunk resume), and a chunk that
+mostly fails still aborts the run — with a broker in front, that now means the
+whole pool is unhealthy rather than one server.
+
+Checkpointing is unchanged: chunks under ``<out>.chunks/`` resumed by
+``(id, window)``, so tranches and reruns never relabel a window, and a run
+whose window set is fully checkpointed writes the final parquet without
+bringing up any GPU at all.
 """
 
 import argparse
-import hashlib
 import json
 import logging
 import os
@@ -44,9 +43,15 @@ import random
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
+import httpx
 import pyarrow.parquet as pq
+from fray.current_client import current_client
+from fray.types import ActorConfig, ResourceConfig
 from iris.client import iris_ctx
+from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
+from marin.inference.broker import InferenceBroker
+from marin.inference.proxy import serve_inference_proxy
 from openai import OpenAI
 from rigging.filesystem import StoragePath
 from rigging.filesystem.s3_compat import configure_coreweave_s3, configure_fsspec_s3
@@ -73,10 +78,10 @@ from experiments.datakit.cluster.quality.fast_transformer.label_with_glm52 impor
 from experiments.datakit.cluster.quality.fast_transformer.rubric import SYSTEM_PROMPT
 from experiments.datakit.cluster.quality.glm52_vllm import (
     MODEL,
+    BrokerWorkerConfig,
     Glm52LaunchConfig,
     ServerConfig,
     submit_glm52,
-    wait_for_endpoint_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,14 +93,31 @@ DEFAULT_MAX_MODEL_LEN = 8_192
 # 192 sequences measured 3.96 docs/s on this fleet at 10.5k-char prompts; windows
 # are ~5x shorter, so 192 keeps the queue full without starving KV cache.
 DEFAULT_MAX_NUM_SEQS = 192
-DEFAULT_CONCURRENCY = 160
-DEFAULT_CHUNK_SIZE = 1_000
+DEFAULT_NUM_GANGS = 8
+# Requests each gang's pull worker keeps in flight against its vLLM. Matching
+# max_num_seqs keeps every engine slot fed without stacking a latency queue on
+# the server side; the broker holds the real backlog.
+DEFAULT_GANG_IN_FLIGHT = DEFAULT_MAX_NUM_SEQS
+# Windows per checkpoint. The pool's offered concurrency is gangs x in-flight
+# (1,536 at the defaults), so chunks several times that keep the pipeline full
+# while a preemption still only costs a few minutes of fleet time.
+DEFAULT_CHUNK_SIZE = 8_000
 
-
-def partition_index(doc_id: str, num_partitions: int) -> int:
-    """Stable partition of a document id (Python's ``hash`` is salted per process)."""
-    digest = hashlib.sha256(doc_id.encode()).digest()
-    return int.from_bytes(digest[:8], "big") % num_partitions
+# Bounds on a hung request, not load shedding; far above the tens of seconds a
+# window verdict takes. BrokerConfig's ordering rule applies: worker < lease <
+# proxy, so a request that dies at any hop re-enters the queue before the hop
+# above it gives up on it.
+WORKER_REQUEST_TIMEOUT = 900.0
+LEASE_TIMEOUT = 1020.0
+PROXY_REQUEST_TIMEOUT = 1140.0
+# Weight-load budget: a gang streams 756 GB before it can serve, and admission
+# of the first gang can queue behind the cluster. Same window the direct-serve
+# path allows its endpoint.
+POOL_READY_TIMEOUT = 3 * 3600.0
+BROKER_READY_TIMEOUT = 900.0
+# In-flight payloads are a few KB of window text each, so the broker needs no
+# per-fleet memory sizing the way the image-carrying OCR broker does.
+BROKER_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="8g", disk="20g", preemptible=False)
 
 
 def _expand_globs(patterns: Sequence[str]) -> list[str]:
@@ -123,7 +145,7 @@ def label_window(client: OpenAI, row: dict, rejects: list[str]) -> dict | None:
                 {"role": "user", "content": window_user_content(row)},
             ],
         )
-    except Exception as failure:  # one bad request must not abort the partition
+    except Exception as failure:  # one bad request must not abort the run
         logger.warning("label_windows_vllm: request failed for %s: %r", window_key(row), failure)
         return None
     choice = response.choices[0]
@@ -167,79 +189,134 @@ def label_rows(
     ]
 
 
+def _label_through_pool(
+    ctx,
+    rows: Sequence[dict],
+    *,
+    out: str,
+    server: ServerConfig,
+    run_id: str,
+    num_gangs: int,
+    gang_in_flight: int,
+    chunk_size: int,
+    label_batch: str,
+    fleet_name: str,
+    object_store_endpoint: str | None,
+):
+    """Bring up broker, gangs, and proxy; label ``rows``; tear everything down."""
+    job_info = get_job_info()
+    assert job_info is not None
+
+    broker_group = current_client().create_actor_group(
+        InferenceBroker,
+        name=f"glm52-broker-{run_id}",
+        count=1,
+        request_lease_timeout_seconds=LEASE_TIMEOUT,
+        resources=BROKER_RESOURCES,
+        actor_config=ActorConfig(max_task_retries=0, priority=job_pb2.PRIORITY_BAND_INTERACTIVE),
+    )
+    gang_jobs = []
+    try:
+        broker = broker_group.wait_ready(count=1, timeout=BROKER_READY_TIMEOUT)[0]
+        for gang in range(num_gangs):
+            launch = Glm52LaunchConfig(
+                f"{VLLM_ENDPOINT}-{run_id}-g{gang}",
+                f"{RAY_ENDPOINT}-{run_id}-g{gang}",
+                server,
+                fleet=FLEETS[fleet_name],
+                object_store_endpoint=object_store_endpoint,
+                # The campaign runs both driver and pool at interactive priority:
+                # a batch-band gang behind an interactive driver would hold the
+                # driver's slot while its own gang waits at the back of the queue.
+                priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+                broker_worker=BrokerWorkerConfig(
+                    broker=broker, max_in_flight=gang_in_flight, request_timeout=WORKER_REQUEST_TIMEOUT
+                ),
+            )
+            gang_jobs.append(submit_glm52(ctx, launch, name=f"vllm-g{gang}"))
+
+        concurrency = num_gangs * gang_in_flight
+        with serve_inference_proxy(
+            broker=broker,
+            model=MODEL,
+            host=job_info.advertise_host,
+            port=0,
+            request_timeout_seconds=PROXY_REQUEST_TIMEOUT,
+            readiness_timeout_seconds=POOL_READY_TIMEOUT,
+            max_pending_requests=concurrency * 2,
+            response_fetch_batch_size=256,
+            server_start_timeout_seconds=60.0,
+        ) as running_model:
+            # Blocks until the first gang registers and serves; later gangs join live.
+            readiness = httpx.get(running_model.endpoint.url("models"), timeout=POOL_READY_TIMEOUT)
+            readiness.raise_for_status()
+            logger.info("label_windows_vllm: pool serving at %s", running_model.endpoint.base_url)
+            client = OpenAI(base_url=running_model.endpoint.base_url, api_key="EMPTY")
+
+            def label_chunk(batch: Sequence[dict], rejects: list[str]) -> list[dict]:
+                return label_rows(client, batch, concurrency, label_batch, rejects)
+
+            return label_with_checkpoints(label_chunk, rows, chunk_size=chunk_size, out=out)
+    finally:
+        # Never let a teardown failure mask the real error, but never leave a
+        # GPU gang or the broker running either.
+        for job in gang_jobs:
+            try:
+                job.terminate()
+            except Exception:
+                logger.warning("label_windows_vllm: failed to terminate a GLM-5.2 gang", exc_info=True)
+        try:
+            broker_group.shutdown()
+        except Exception:
+            logger.warning("label_windows_vllm: failed to shut down the broker actor", exc_info=True)
+
+
 def run(
     *,
     windows: list[str],
     out: str,
     server: ServerConfig,
     run_id: str,
-    partitions: Sequence[int],
-    num_partitions: int,
-    concurrency: int,
+    num_gangs: int,
+    gang_in_flight: int,
     chunk_size: int,
     label_batch: str,
     limit: int | None,
     fleet_name: str,
     object_store_endpoint: str | None,
-    chunks_only: bool,
 ) -> None:
     ctx = iris_ctx()
     if ctx is None or ctx.client is None:
-        raise RuntimeError("window labeling must run inside an Iris job so it can submit the GLM-5.2 server")
+        raise RuntimeError("window labeling must run inside an Iris job so it can submit the GLM-5.2 pool")
 
-    assigned = frozenset(partitions)
-    rows = [r for r in _read_windows(_expand_globs(windows)) if partition_index(r["id"], num_partitions) in assigned]
+    rows = _read_windows(_expand_globs(windows))
     # A stable shuffle so --limit draws a representative smoke rather than one
-    # shard's head, and so a full run's chunks mix sources evenly.
+    # shard's head, and so a run's chunks mix sources evenly.
     random.Random(0).shuffle(rows)
     if limit:
         rows = rows[:limit]
-    logger.info("label_windows_vllm: slices %s of %d hold %d windows", sorted(assigned), num_partitions, len(rows))
+    logger.info("label_windows_vllm: %d windows in the set", len(rows))
 
     pending = [r for r in rows if window_key(r) not in _labeled_keys(_chunk_dir(out))]
     if not pending:
         logger.info("label_windows_vllm: nothing pending, consolidating existing checkpoints")
         table = consolidate_chunks(_chunk_dir(out))
     else:
-        vllm_endpoint = f"{VLLM_ENDPOINT}-{run_id}"
-        launch = Glm52LaunchConfig(
-            vllm_endpoint,
-            f"{RAY_ENDPOINT}-{run_id}",
-            server,
-            fleet=FLEETS[fleet_name],
+        logger.info("label_windows_vllm: %d windows pending", len(pending))
+        table = _label_through_pool(
+            ctx,
+            rows,
+            out=out,
+            server=server,
+            run_id=run_id,
+            num_gangs=num_gangs,
+            gang_in_flight=gang_in_flight,
+            chunk_size=chunk_size,
+            label_batch=label_batch,
+            fleet_name=fleet_name,
             object_store_endpoint=object_store_endpoint,
-            # The campaign runs both driver and server at interactive priority:
-            # a batch-band server behind an interactive driver would hold the
-            # driver's slot while its own gang waits at the back of the queue.
-            priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         )
-        vllm_job = submit_glm52(ctx, launch)
-        try:
-            base_url = wait_for_endpoint_url(vllm_endpoint, vllm_job)
-            logger.info("label_windows_vllm: endpoint ready at %s", base_url)
-            client = OpenAI(base_url=f"{base_url}/v1", api_key="EMPTY")
 
-            def label_chunk(batch: Sequence[dict], rejects: list[str]) -> list[dict]:
-                return label_rows(client, batch, concurrency, label_batch, rejects)
-
-            table = label_with_checkpoints(label_chunk, rows, chunk_size=chunk_size, out=out)
-        finally:
-            # Never let a teardown failure mask the real error, but never leave
-            # a two-node GPU gang running either.
-            try:
-                vllm_job.terminate()
-            except Exception:
-                logger.warning("label_windows_vllm: failed to terminate the GLM-5.2 server job", exc_info=True)
-
-    if chunks_only:
-        # The store is shared: consolidating mid-campaign would publish other
-        # drivers' half-finished state under the final name. Report and stop.
-        logger.info(
-            "label_windows_vllm: chunks-only run done, %d windows assigned, %d labels in the shared store",
-            len(rows),
-            table.num_rows,
-        )
-        return
     with StoragePath(out).open("wb") as fh:
         pq.write_table(table, fh)
     stats = {
@@ -258,25 +335,20 @@ def run(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--windows", required=True, nargs="+", help="windows parquet path(s) or glob(s)")
+    parser.add_argument("--out", required=True, help="labels parquet path; checkpoints live under <out>.chunks/")
+    parser.add_argument("--run-id", required=True, help="unique tag for this run's broker and gang endpoints")
+    parser.add_argument("--num-gangs", type=int, default=DEFAULT_NUM_GANGS, help="GLM-5.2 gangs in the pool")
     parser.add_argument(
-        "--out",
-        required=True,
-        help="final labels parquet path; every fan-out driver shares it (and its .chunks/ store)",
+        "--gang-in-flight",
+        type=int,
+        default=DEFAULT_GANG_IN_FLIGHT,
+        help="requests each gang's pull worker keeps in flight",
     )
-    parser.add_argument("--partitions", type=int, required=True, nargs="+", help="id-hash slices this driver labels")
-    parser.add_argument("--num-partitions", type=int, default=64, help="how many slices the id hash cuts")
-    parser.add_argument("--run-id", required=True, help="unique tag for this run's server endpoints")
     parser.add_argument("--label-batch", default=DEFAULT_LABEL_BATCH)
-    parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE, help="windows per checkpoint")
     parser.add_argument("--max-model-len", type=int, default=DEFAULT_MAX_MODEL_LEN)
     parser.add_argument("--max-num-seqs", type=int, default=DEFAULT_MAX_NUM_SEQS)
     parser.add_argument("--limit", type=int, default=None, help="label only the first N windows (smoke runs)")
-    parser.add_argument(
-        "--chunks-only",
-        action="store_true",
-        help="write checkpoint chunks but no final parquet (fan-out drivers sharing --out)",
-    )
     # gb200 is the shape this stack is verified on; the H100 path currently fails
     # in FlashInfer's SM90 JIT link.
     parser.add_argument("--fleet", choices=sorted(FLEETS), default="gb200", help="GPU shape to serve on")
@@ -284,16 +356,13 @@ def main() -> None:
         "--object-store-endpoint",
         default=None,
         help=(
-            "S3 endpoint for both this driver and the serving task (e.g. https://cwobject.com). "
+            "S3 endpoint for both this driver and the serving gangs (e.g. https://cwobject.com). "
             "Required when the windows, labels, or weight cache live in a different region than "
             "the GPUs: the pod's node-local LOTA endpoint cannot read cross-region buckets."
         ),
     )
     args = parser.parse_args()
     configure_logging(logging.INFO)
-    bad = [p for p in args.partitions if not 0 <= p < args.num_partitions]
-    if bad:
-        raise ValueError(f"--partitions {bad} outside [0, {args.num_partitions})")
     if args.object_store_endpoint:
         # The pod arrives with FSSPEC_S3/AWS_ENDPOINT_URL pointing at its
         # node-local LOTA endpoint; rebuild the process-wide config against the
@@ -308,15 +377,13 @@ def main() -> None:
         out=args.out,
         server=ServerConfig(max_model_len=args.max_model_len, max_num_seqs=args.max_num_seqs),
         run_id=args.run_id,
-        partitions=args.partitions,
-        num_partitions=args.num_partitions,
-        concurrency=args.concurrency,
+        num_gangs=args.num_gangs,
+        gang_in_flight=args.gang_in_flight,
         chunk_size=args.chunk_size,
         label_batch=args.label_batch,
         limit=args.limit,
         fleet_name=args.fleet,
         object_store_endpoint=args.object_store_endpoint,
-        chunks_only=args.chunks_only,
     )
 
 
