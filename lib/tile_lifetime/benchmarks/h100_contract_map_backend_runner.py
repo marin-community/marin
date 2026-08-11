@@ -1098,7 +1098,7 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
             continue
         if current_name is not None and not separator_seen:
             if not is_selected_separator(line):
-                raise ValueError(f"Nsight Compute SASS address table omits its exact close at line {line_number}")
+                raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)
             separator_seen = True
             continue
         section = selected_section_pattern.fullmatch(line)

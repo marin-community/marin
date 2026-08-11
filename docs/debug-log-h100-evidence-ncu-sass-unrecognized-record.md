@@ -244,3 +244,30 @@ lookalike public fields; altered gaps or padding; and private labels with the
 wrong length, case, character class, digit, punctuation, or encoding. No image
 build, GPU execution, v27 submission, or relaunch was performed for this source
 repair.
+
+## V27 address-table-close diagnostic
+
+The single v27 task used source
+`797d5efa79416aff9fbbd8c90de3536bf782c248`. It authenticated the launcher and
+manifest, selected a reviewed separator layout, accepted the matching kernel
+identity row and identity-table close, and accepted the selected-width
+fixed-column header. It then failed once because line 5 was not the exact
+selected-width address-table close. The old exception retained only the line
+number. It did not retain the rejected line's byte count, hash, structure, or
+text, and the temporary profiler output was not durably exported.
+
+An address-table-close mismatch now uses the existing bounded unrecognized-row
+diagnostic with the separator widths selected at line 1. It reports only the
+line number, UTF-8 byte count, whole-line SHA-256, aggregate character and
+public-pattern fields, and the selected-width fixed-column aggregate when the
+row has that exact width. The parser still requires the exact selected
+separator and rejects every mismatch; no SASS grammar was added or relaxed.
+
+The exception contains no raw or redacted row, adjacent record, path, or
+environment value. The existing 2,048-byte serialized bound and fixed
+non-content fallback remain. Tests cover wrong-width separators, instructions,
+headers, blank rows, and private fixed-column records under both reviewed
+layouts, including the production NCU subprocess boundary.
+
+No image build, GPU execution, v28 submission, retry, or relaunch was performed
+for this source-only diagnostic change.
