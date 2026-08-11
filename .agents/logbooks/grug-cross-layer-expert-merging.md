@@ -26,8 +26,8 @@ author: dlwh
 - `GRUG-XEM-008` found material direct shared-bank gradient conflict only at the 25.03M-token midpoint, not at the Stage-A start or 50.07M endpoint. The preregistered persistent-conflict gate required two of three checkpoints and returned inconclusive. No optimizer intervention or larger surgery is justified by this diagnostic.
 - `GRUG-XEM-009` was canceled before TPU allocation after a 3-hour-48-minute central2 capacity wait. Neither arm produced a W&B run or checkpoint. Central1 is not a valid substitute because it lacks the exact approximately 25 TB training cache and does not offer `v4-2048`; the large architecture result remains unmeasured.
 - `GRUG-XEM-011` passed the d1024 architecture and compression-normalized gates. Tying removed 45.45% of expert parameters and finished +0.03076 Paloma above the matched control, with zero overflow, all experts active, balanced shared-bank updates, and 1.66% higher throughput. The raw penalty grew by 0.00222 from d768 and effective speed was 0.812x, so tying remains an architecture target rather than a compute-speed recipe.
-- `GRUG-XEM-012` passed its d1280 smoke and has an active full comparison in `us-central1`. At the 2026-08-09 11:06 PDT handoff, control/treatment were at zero-indexed `global_step=1252/1427`, or 1,253/1,428 completed updates out of 14,315. Control recovered automatically from one TPU-worker preemption; both arms are healthy. Step-1,000 Paloma delta is an early `+0.021216` and is not a gate result.
-- The pushed research branch is `research/grug-matcher-jit` in `/tmp/marin-grug-xem-jit`. No PR exists.
+- `GRUG-XEM-012` passed the terminal d1280 architecture, raw non-growth, and compression-normalized gates. Treatment finished `+0.029795` Paloma above control while removing 46.154% of expert parameters, with zero overflow, healthy routing and tied-bank updates, and 1.616% higher throughput. Effective speed was `0.7987x`, so tying remains a Theseus architecture target rather than a compute-speed recipe.
+- The pushed research branch is `research/grug-matcher-jit` in `/tmp/marin-grug-xem-resume`. No PR exists.
 
 ## Baseline
 
@@ -40,7 +40,6 @@ author: dlwh
 ### Active
 
 - `GRUG-XEM-H4`: One adjacent middle-layer pair can recover to the tied architecture's quality target after checkpoint surgery. Current best shared result: +0.02769 validation/+0.02583 Paloma after 250.09M online tokens, above the required +0.02 validation gate. Resume only with a new preregistered d512 shared-bank hypothesis.
-- `GRUG-XEM-H15`: With two anchors at each end, one singleton core layer, and the remaining core layers tied in groups of four, the tied-from-scratch Paloma penalty remains at most +0.04 at d1280. This is the final central1 architecture-scale test in the registered progression, not an effective-speed promotion gate.
 
 ### Blocked
 
@@ -63,6 +62,7 @@ author: dlwh
 - `GRUG-XEM-H7`: The d768 middle-four penalty diminished to +0.02855 Paloma from +0.03817 at d512 with unscaled MuonH. The d768 tied architecture passed the +0.06 screening gate but had 0.849x effective speed.
 - `GRUG-XEM-H8`: CE+KL bank-only Stage A improved the MoE-only control by 0.01837 validation and 0.01967 Paloma at 50M tokens without material local-fit regression. The later shared recovery still missed H4's strict validation gate.
 - `GRUG-XEM-H14`: The d1024 tied core passed at +0.03076 Paloma with 45.45% fewer expert parameters. Its compression-normalized penalty was below +0.03460, routing and updates were healthy, and throughput was 1.66% higher; raw penalty grew slightly from d768 and effective speed was 0.812x.
+- `GRUG-XEM-H15`: The d1280 tied core passed at +0.02980 Paloma with 46.154% fewer expert parameters. It passed the raw non-growth, compression-normalized, routing, and update-health gates; throughput was 1.616% higher, but effective speed was 0.7987x.
 
 ## Background Research Brief
 
@@ -926,3 +926,15 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Resume status: `.venv/bin/iris --config lib/iris/config/marin.yaml job list --prefix /dlwh/grug-xem-012-d1280-full-20260809`; inspect structured child status with `.venv/bin/iris --config lib/iris/config/marin.yaml job summary <child-id>`; inspect recent logs with `.venv/bin/iris --config lib/iris/config/marin.yaml job logs --since-seconds 900 /dlwh/grug-xem-012-d1280-full-20260809 | rg -i -e 'loss|traceback|exception|resource_exhausted|oom|program hbm requirement|largest program allocations|ownerdiederror|dead node|node death|failed_precondition'`.
 - Monitoring contract: use `.agents/skills/babysit-job/SKILL.md`, remain the single owner, and continue until both W&B runs are `finished`, both permanent artifacts exist, and the issue's exact final-100/terminal gate is applied. Expected terminal values are zero-indexed step 14314, exactly 15,010,365,440 tokens per arm, and `checkpoints/step-14315`.
 - Stop rule: XEM-012 launches no further experiment automatically. Do not start post-hoc surgery, another width, or any cross-region copy after terminal result.
+
+### 2026-08-10 21:31 - GRUG-XEM-012 d1280 full result
+
+- Terminal state: the controller and both children succeeded with exit 0 and no task failures. The control and treatment recovered automatically from seven and four TPU-worker preemptions. Both W&B runs finished at zero-indexed step 14314 and exactly 15,010,365,440 tokens. Both permanent roots contain `.artifact.json` and `checkpoints/step-14315/metadata.json`; all 23 terminal component losses are finite.
+- Quality: terminal Paloma is control `2.899857998` and treatment `2.929653406`, delta `+0.029795408`. This passes the `<=+0.040` architecture gate, the `<=+0.030764580` raw non-growth gate, and the `<=+0.031237881` compression-normalized gate. The raw penalty is `0.000969172` smaller than d1024.
+- Exact final-100 audit: both canonical W&B histories contain exactly one complete finite sample for every required metric at steps 14215-14314. Capacity overflow is zero in every layer and step. Every layer uses all 256 experts over the window, and every entropy sample exceeds 5.3. Treatment layer 1 used 255 experts in one individual batch at step 14264; the registered window-union activity gate still passes.
+- Shared-bank and routing health: treatment bank-2/bank-3 gradient medians are `0.026317708/0.027302301`, ratio `1.037412`; update medians are `0.176721595/0.176733546`, ratio `1.000068`. Cross-loop top-1 agreement median is `0.0298141`; top-4 set-overlap median is `0.0744639`.
+- Throughput and parameters: final-100 median throughput is control `126,778.038` and treatment `128,826.465` tokens/s, a 1.616% treatment increase. Unique counts are control `8,635,884,288` total/`8,178,892,800` expert and treatment `4,861,010,688` total/`4,404,019,200` expert. The treatment removes `3,774,873,600` parameters, 46.154% of expert and 43.711% of whole-model unique parameters.
+- Effective speed: the registered scaling-law calculation gives `C_needed=2.71944e19` and effective speed `0.798665x`. This is not a compute-speed win despite the higher measured tokens/s.
+- Activation medians, layers 0-12: control `[0.046658,0.051675,0.058873,0.070144,0.084961,0.102577,0.127789,0.157119,0.206290,0.269675,0.347530,0.435402,0.635318]`; treatment `[0.045992,0.055599,0.063809,0.074789,0.088516,0.104847,0.126686,0.153334,0.192523,0.245775,0.326661,0.425769,0.660067]`.
+- Interpretation: the tied-expert architecture is viable across the tested d512, d768, d1024, and d1280 scales, and d1280 reverses the small raw-gap growth seen at d1024. The result strengthens the target-manifold premise for Theseus conversion but does not improve the post-hoc correspondence evidence; aggregate shared-bank distillation remains the only surgery direction with weak signs of life.
+- Decision: promote H15. Stop autonomous architecture scaling here. Do not launch another width, a larger surgery, or any cross-region copy from this result.
