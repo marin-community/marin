@@ -237,7 +237,7 @@ _SASS_OPCODE_BASES = frozenset(
         "YIELD",
     }
 )
-_NCU_SASS_SECTION_PATTERN = re.compile(r"^\s*Kernel Name\s*:\s*(?P<name>.+?)\s*$")
+_NCU_SASS_SECTION_PATTERN = re.compile(r"^Kernel Name {8}(?P<name>[A-Za-z_][A-Za-z0-9_]{25}) {62}$")
 _NCU_SASS_HEADER = "Address Source"
 _NCU_SASS_SEPARATOR = "------------------ " + "-" * 60 + " ------ ------ ------ ------"
 _NCU_SASS_INSTRUCTION_PATTERN = re.compile(

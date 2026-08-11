@@ -32,3 +32,27 @@ explicitly reviewed whole-line SHA-256.
 
 No image build, GPU execution, or relaunch was performed for this diagnostic
 change.
+
+## V19 aggregate observation
+
+The single v19 task used source
+`e23df72a667e50a7f7fb1fd13b8c4b75b4cd1d01`. It failed once, without retry,
+at the same line-2 parser boundary. The bounded diagnostic reports 107 UTF-8
+bytes, 71 spaces, no leading spaces or tabs, 62 trailing spaces, three tokens,
+and exact standalone `Kernel` and `Name` words. The longest token is 26 bytes.
+There are no colons, commas, pipes, hyphens, controls, or non-ASCII codepoints.
+The remote row text remains unavailable.
+
+The parser now admits only the corresponding fixed-width public record:
+`Kernel Name`, eight padding spaces, one 26-byte CUDA identifier, and 62
+trailing padding spaces. The line is exactly 107 bytes. The identifier uses the
+same closed ASCII letter, digit, and underscore grammar as normalized CUDA
+names, and the parsed name must still match the independently expected NCU
+kernel coverage. The former whitespace-tolerant colon form had no retained
+profiler evidence and was removed.
+
+Behavioral tests exercise the parser and the NCU subprocess boundary. They
+reject changed width, internal or trailing padding, token order/count,
+colon-form rows, identifier lookalikes, and invalid identifier characters.
+No image build, GPU execution, or relaunch was performed for this parser
+change.
