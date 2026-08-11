@@ -163,8 +163,15 @@ def test_worst_pair_failure_diagnostic_rejects_oversized_serialization() -> None
     assert error.output_name == "dx"
 
 
-_NCU_SASS_SEPARATOR = "------------------ " + "-" * 60 + " ------ ------ ------ ------"
 _NCU_SASS_COLUMN_WIDTHS = (18, 60, 6, 6, 6, 6)
+_NCU_SASS_WIDE_COLUMN_WIDTHS = (18, 61, 6, 6, 6, 6)
+
+
+def _ncu_sass_separator(widths: tuple[int, ...]) -> str:
+    return " ".join("-" * width for width in widths)
+
+
+_NCU_SASS_SEPARATOR = _ncu_sass_separator(_NCU_SASS_COLUMN_WIDTHS)
 _NCU_KERNEL_A = "ordinary_xla_kernel_nam_00"
 _NCU_KERNEL_B = "ordinary_xla_kernel_nam_01"
 
@@ -173,15 +180,19 @@ def _ncu_sass_kernel_row(name: str) -> str:
     return f"Kernel Name        {name}{' ' * 62}"
 
 
-def _ncu_sass_export(*sections: tuple[str, tuple[str, ...]]) -> str:
-    lines = [_NCU_SASS_SEPARATOR]
+def _ncu_sass_export(
+    *sections: tuple[str, tuple[str, ...]],
+    separator_widths: tuple[int, ...] = _NCU_SASS_COLUMN_WIDTHS,
+) -> str:
+    separator = _ncu_sass_separator(separator_widths)
+    lines = [separator]
     for name, instructions in sections:
         lines.extend(
             (
                 _ncu_sass_kernel_row(name),
-                _NCU_SASS_SEPARATOR,
+                separator,
                 "Address Source",
-                _NCU_SASS_SEPARATOR,
+                separator,
             )
         )
         lines.extend(instructions)
@@ -497,6 +508,7 @@ def test_runner_ncu_parser_bounds_and_decodes_input_before_csv_parsing(tmp_path:
         "valid",
         "missing-top-level",
         "private-line1",
+        "wide-separator",
         "missing-identity-close",
         "unrecognized-record",
         "fixed-column-record",
@@ -528,7 +540,11 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
 
     def export_sass(command: Any) -> subprocess.CompletedProcess[str]:
         arguments = tuple(str(value) for value in command)
-        source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
+        separator_widths = _NCU_SASS_WIDE_COLUMN_WIDTHS if variant == "wide-separator" else _NCU_SASS_COLUMN_WIDTHS
+        source = _ncu_sass_export(
+            (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+            separator_widths=separator_widths,
+        )
         if variant == "missing-top-level":
             source = source.split("\n", maxsplit=1)[1]
         elif variant == "private-line1":
@@ -1274,6 +1290,90 @@ def test_runner_ncu_sass_parser_requires_exact_top_level_separator_at_line_one(s
         runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
     assert _ncu_sass_diagnostic(failure.value)["line_number"] == 1
+
+
+@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+def test_runner_ncu_sass_parser_accepts_each_reviewed_separator_width(separator_widths: tuple[int, ...]) -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=separator_widths,
+    )
+
+    parsed = runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    assert parsed[0].name == _NCU_KERNEL_A
+
+
+@pytest.mark.parametrize(
+    "separator_widths",
+    (
+        (17, 61, 6, 6, 6, 6),
+        (18, 59, 6, 6, 6, 6),
+        (18, 62, 6, 6, 6, 6),
+        (18, 6, 61, 6, 6, 6),
+        (61, 18, 6, 6, 6, 6),
+        (18, 60, 6, 6, 6),
+        (18, 60, 6, 6, 6, 6, 6),
+    ),
+)
+def test_runner_ncu_sass_parser_rejects_other_separator_group_widths(separator_widths: tuple[int, ...]) -> None:
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
+    source = _ncu_sass_separator(separator_widths) + "\n" + source.split("\n", maxsplit=1)[1]
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 1
+
+
+@pytest.mark.parametrize("gap", ("\t", "  ", "x"), ids=("tab", "two-spaces", "nonspace"))
+def test_runner_ncu_sass_parser_rejects_nonliteral_separator_gaps(gap: str) -> None:
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
+    line_one = gap.join("-" * width for width in _NCU_SASS_COLUMN_WIDTHS)
+    source = line_one + "\n" + source.split("\n", maxsplit=1)[1]
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 1
+
+
+@pytest.mark.parametrize("separator_line", (2, 4), ids=("identity-close", "instruction-header-close"))
+@pytest.mark.parametrize(
+    ("selected_widths", "mixed_widths"),
+    (
+        (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS),
+        (_NCU_SASS_WIDE_COLUMN_WIDTHS, _NCU_SASS_COLUMN_WIDTHS),
+    ),
+)
+def test_runner_ncu_sass_parser_rejects_mixed_separator_widths(
+    separator_line: int,
+    selected_widths: tuple[int, ...],
+    mixed_widths: tuple[int, ...],
+) -> None:
+    lines = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=selected_widths,
+    ).splitlines()
+    lines[separator_line] = _ncu_sass_separator(mixed_widths)
+
+    with pytest.raises(ValueError):
+        runner.parse_ncu_sass("\n".join(lines) + "\n", (_NCU_KERNEL_A,))
+
+
+def test_runner_ncu_sass_parser_does_not_relax_kernel_row_for_wide_separator() -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=_NCU_SASS_WIDE_COLUMN_WIDTHS,
+    )
+    source = source.replace(_ncu_sass_kernel_row(_NCU_KERNEL_A), _ncu_sass_kernel_row(_NCU_KERNEL_A) + " ")
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    diagnostic = _ncu_sass_diagnostic(failure.value)
+    assert diagnostic["line_number"] == 2
+    assert diagnostic["line_utf8_bytes"] == 108
 
 
 def test_runner_ncu_sass_parser_rejects_duplicate_top_level_separator() -> None:
