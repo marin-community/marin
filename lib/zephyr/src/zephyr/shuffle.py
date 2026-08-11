@@ -35,6 +35,7 @@ from rigging.timing import RateLimiter, log_time
 
 from zephyr.expr import ColumnExpr
 from zephyr.external_sort import external_sort_merge
+from zephyr.shard_keys import encode_key
 from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
 
@@ -160,7 +161,7 @@ def _column_routing_exprs(key: ColumnExpr, sort_by: ColumnExpr | None) -> tuple[
 
 def _columns_to_dataframe(
     payloads: list[bytes],
-    key_values: list[Any],
+    key_bytes: list[bytes],
     sort_values: list[Any],
     num_output_shards: int,
 ) -> pl.DataFrame:
@@ -171,18 +172,21 @@ def _columns_to_dataframe(
     fast path, and ``pl.struct`` over existing columns is cheap. Field order
     (key first) drives the (key, sort_value) sort order.
 
-    ``key_values`` / ``sort_values`` must be Arrow-serializable. Shard routing
-    hashes ``_KEY_TMP_COL`` with Polars (see :func:`_with_routing_columns`).
+    ``key_bytes`` must be pre-encoded via :func:`~zephyr.shard_keys.encode_key` so
+    that ``_KEY_TMP_COL`` is always ``Binary`` — preventing sort-key schema
+    mismatches when different mapper shards produce keys of different Python
+    types. Shard routing hashes those bytes with Polars (see
+    :func:`_with_routing_columns`).
     """
     try:
         df = pl.DataFrame(
             {
                 _PAYLOAD_COL: pl.Series(payloads, dtype=pl.Binary),
-                _KEY_TMP_COL: pl.Series(key_values),
+                _KEY_TMP_COL: pl.Series(key_bytes, dtype=pl.Binary),
                 _SORT_VALUE_TMP_COL: sort_values,
             }
         )
-        # Non-serializable key/sort values surface as TypeError from Series
+        # Non-serializable sort_values surface as TypeError from Series
         # construction or InvalidOperationError ("nested objects are not
         # allowed") when a column lands as Object dtype and pl.struct rejects it.
         return _with_routing_columns(
@@ -192,7 +196,7 @@ def _columns_to_dataframe(
             num_output_shards,
         ).select(_PAYLOAD_COL, _SHARD_COL, _SORT_KEY_COL)
     except (TypeError, pl.exceptions.InvalidOperationError) as err:
-        raise ValueError("key_fn/sort_fn must return an Arrow-serializable object.") from err
+        raise ValueError("sort_fn must return an Arrow-serializable object.") from err
 
 
 def _items_to_dataframe(
@@ -207,16 +211,21 @@ def _items_to_dataframe(
     (int32 target shard index) and ``_SORT_KEY_COL``. This is the adapter
     between Python-item pipelines and the DataFrame-based
     :class:`ScatterWriter`; DataFrame-native pipelines can feed the writer
-    directly. Shard indices are computed with the same Polars hash used by
-    :meth:`ScatterWriter.write_batch`.
+    directly. Keys are msgpack-encoded to Binary before routing so every
+    mapper writes the same sort-key dtype; shard indices then use the same
+    Polars hash as :meth:`ScatterWriter.write_batch`.
     """
-    key_values: list[Any] = []
+    key_bytes: list[bytes] = []
     sort_values: list[Any] = []
     for item in items:
-        key_values.append(key_fn(item))
+        key = key_fn(item)
+        try:
+            key_bytes.append(encode_key(key))
+        except TypeError as err:
+            raise ValueError(f"key_fn must return a msgpack-serializable object; got {type(key).__name__!r}.") from err
         sort_values.append(sort_fn(item) if sort_fn is not None else None)
     payloads = [cloudpickle.dumps(item) for item in items]
-    return _columns_to_dataframe(payloads, key_values, sort_values, num_output_shards)
+    return _columns_to_dataframe(payloads, key_bytes, sort_values, num_output_shards)
 
 
 # ---------------------------------------------------------------------------
