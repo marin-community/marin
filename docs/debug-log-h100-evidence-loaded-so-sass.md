@@ -43,7 +43,31 @@ six generated names with no extras, not tool-emission order.
 
 ## Results
 
-Pending source diagnosis and regression test.
+The existing loaded-image evidence path rejected a representative cuobjdump
+fixture containing the exact two expected names in reverse section order. The
+focused pre-fix test failed at `generated_kernel_records` with
+`loaded shared-library SASS kernel identities changed after compilation`.
+
+The repaired parser requires one or more valid addressed instructions in each
+unique function section. It rejects empty output, NUL, diagnostics, malformed
+function anchors, malformed address records, standalone encodings, empty
+sections, repeated or reordered addresses, duplicate names, and any exact
+coverage difference. Once coverage matches, it preserves generated source
+order for evidence and leaves actual launch-order validation to Nsight Systems.
+
+The compile path writes loaded-image SASS before topology validation, so a
+local failure retains the parser input and reports the actual, missing, and
+unexpected names. Evidence construction rehashes both the shared library and
+its loaded-image SASS before producing kernel records. The separate cubin is
+still retained but is not used for loaded-image SASS.
+
+The focused repaired matrix passed 9 tests, and the complete runner module
+passed 49 tests on macOS without CUDA or a GPU. The broader package suite passed
+947 tests with one pre-existing snapshot test deselected because its committed
+checksum list names an ignored raw log absent from the exact checkout. The exact
+remote `.so` was ephemeral and unavailable after task termination. The repair
+proves that order-only differences no longer fail, but it does not prove that
+section order was the only mismatch in the third H100 attempt.
 
 ## Future work
 
