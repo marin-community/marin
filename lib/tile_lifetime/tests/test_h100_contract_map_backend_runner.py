@@ -202,11 +202,15 @@ def _ncu_sass_export(
     return "\n".join(lines) + "\n"
 
 
-def _ncu_sass_fixed_column_row(columns: tuple[str, ...], gaps: tuple[bytes, ...] = (b" ",) * 5) -> str:
-    assert len(columns) == len(_NCU_SASS_COLUMN_WIDTHS)
-    assert len(gaps) == len(_NCU_SASS_COLUMN_WIDTHS) - 1
+def _ncu_sass_fixed_column_row(
+    columns: tuple[str, ...],
+    gaps: tuple[bytes, ...] = (b" ",) * 5,
+    column_widths: tuple[int, ...] = _NCU_SASS_COLUMN_WIDTHS,
+) -> str:
+    assert len(columns) == len(column_widths)
+    assert len(gaps) == len(column_widths) - 1
     chunks: list[bytes] = []
-    for index, (column, width) in enumerate(zip(columns, _NCU_SASS_COLUMN_WIDTHS, strict=True)):
+    for index, (column, width) in enumerate(zip(columns, column_widths, strict=True)):
         value = column.encode("utf-8")
         assert len(value) <= width
         chunks.append(value.ljust(width, b" "))
@@ -214,7 +218,7 @@ def _ncu_sass_fixed_column_row(columns: tuple[str, ...], gaps: tuple[bytes, ...]
             assert len(gaps[index]) == 1
             chunks.append(gaps[index])
     row = b"".join(chunks)
-    assert len(row) == len(_NCU_SASS_SEPARATOR.encode("ascii"))
+    assert len(row) == sum(column_widths) + len(column_widths) - 1
     return row.decode("utf-8")
 
 
@@ -240,7 +244,7 @@ def _ncu_sass_diagnostic(error: ValueError) -> dict[str, object]:
         "token_max_utf8_bytes",
         "trailing_spaces",
     }
-    if diagnostic["line_utf8_bytes"] == len(_NCU_SASS_SEPARATOR.encode("ascii")):
+    if "fixed_columns" in structure:
         expected_structure_fields.add("fixed_columns")
     assert set(structure) == expected_structure_fields
     return diagnostic
@@ -515,6 +519,7 @@ def test_runner_ncu_parser_bounds_and_decodes_input_before_csv_parsing(tmp_path:
         "missing-identity-close",
         "unrecognized-record",
         "fixed-column-record",
+        "wide-fixed-column-record",
     ),
 )
 def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
@@ -543,7 +548,11 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
 
     def export_sass(command: Any) -> subprocess.CompletedProcess[str]:
         arguments = tuple(str(value) for value in command)
-        separator_widths = _NCU_SASS_WIDE_COLUMN_WIDTHS if variant == "wide-separator" else _NCU_SASS_COLUMN_WIDTHS
+        separator_widths = (
+            _NCU_SASS_WIDE_COLUMN_WIDTHS
+            if variant in ("wide-separator", "wide-fixed-column-record")
+            else _NCU_SASS_COLUMN_WIDTHS
+        )
         source = _ncu_sass_export(
             (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
             separator_widths=separator_widths,
@@ -559,10 +568,13 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         elif variant == "unrecognized-record":
             section = _ncu_sass_kernel_row(_NCU_KERNEL_A, separator_widths)
             source = source.replace(section, "public-unknown-record\n" + section)
-        elif variant == "fixed-column-record":
+        elif variant in ("fixed-column-record", "wide-fixed-column-record"):
             source = source.replace(
                 "Address Source",
-                _ncu_sass_fixed_column_row(("Address", "private", "Source", "", "", "")),
+                _ncu_sass_fixed_column_row(
+                    ("Address", "private", "Source", "", "", ""),
+                    column_widths=separator_widths,
+                ),
             )
         Path(arguments[arguments.index("--log-file") + 1]).write_text(source)
         return subprocess.CompletedProcess(arguments, 0, "", "")
@@ -648,7 +660,7 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         }
         assert "public-unknown-record" not in str(failure.value)
         return
-    if variant == "fixed-column-record":
+    if variant in ("fixed-column-record", "wide-fixed-column-record"):
         with pytest.raises(ValueError) as failure:
             runner._run_ncu_profile(*arguments)
         diagnostic = _ncu_sass_diagnostic(failure.value)
@@ -657,7 +669,10 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         assert isinstance(structure, dict)
         fixed_columns = structure["fixed_columns"]
         assert isinstance(fixed_columns, dict)
-        assert fixed_columns["column_widths"] == [18, 60, 6, 6, 6, 6]
+        expected_widths = (
+            _NCU_SASS_WIDE_COLUMN_WIDTHS if variant == "wide-fixed-column-record" else _NCU_SASS_COLUMN_WIDTHS
+        )
+        assert fixed_columns["column_widths"] == list(expected_widths)
         assert fixed_columns["gap_single_ascii_space"] == [True] * 5
         return
 
@@ -981,15 +996,24 @@ def test_runner_ncu_sass_line_structure_is_closed_aggregate_metadata() -> None:
     assert record not in str(failure.value)
 
 
-def test_runner_ncu_sass_fixed_columns_report_closed_per_column_aggregates() -> None:
-    record = _ncu_sass_fixed_column_row(("Address", "private alpha", "Source", "A1_b", "\tab", "\x1bxy"))
+@pytest.mark.parametrize("column_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+def test_runner_ncu_sass_fixed_columns_report_closed_per_column_aggregates(
+    column_widths: tuple[int, ...],
+) -> None:
+    record = _ncu_sass_fixed_column_row(
+        ("Address", "private alpha", "Source", "A1_b", "\tab", "\x1bxy"),
+        column_widths=column_widths,
+    )
 
     with pytest.raises(ValueError) as failure:
-        runner.parse_ncu_sass(_ncu_sass_export((_NCU_KERNEL_A, (record,))), (_NCU_KERNEL_A,))
+        runner.parse_ncu_sass(
+            _ncu_sass_export((_NCU_KERNEL_A, (record,)), separator_widths=column_widths),
+            (_NCU_KERNEL_A,),
+        )
 
     diagnostic = _ncu_sass_diagnostic(failure.value)
     assert len(str(failure.value).encode("utf-8")) <= 2048
-    assert diagnostic["line_utf8_bytes"] == 107
+    assert diagnostic["line_utf8_bytes"] == sum(column_widths) + len(column_widths) - 1
     structure = diagnostic["line_structure"]
     assert isinstance(structure, dict)
     assert structure["fixed_columns"] == {
@@ -1003,7 +1027,7 @@ def test_runner_ncu_sass_fixed_columns_report_closed_per_column_aggregates() -> 
             "Address",
             "Source",
         ],
-        "column_widths": [18, 60, 6, 6, 6, 6],
+        "column_widths": list(column_widths),
         "columns": [
             [0, 7, [0, 0, 6, 0, 1, 0], 0, 1, True, False],
             [1, 13, [0, 0, 12, 0, 0, 1], 0, 2, False, False],
@@ -1019,13 +1043,25 @@ def test_runner_ncu_sass_fixed_columns_report_closed_per_column_aggregates() -> 
 
 @pytest.mark.parametrize("gap_index", range(5))
 @pytest.mark.parametrize("replacement", (b"\t", b"x"), ids=("tab", "nonspace"))
-def test_runner_ncu_sass_fixed_columns_report_each_invalid_gap(gap_index: int, replacement: bytes) -> None:
+@pytest.mark.parametrize("column_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+def test_runner_ncu_sass_fixed_columns_report_each_invalid_gap(
+    gap_index: int,
+    replacement: bytes,
+    column_widths: tuple[int, ...],
+) -> None:
     gaps = [b" "] * 5
     gaps[gap_index] = replacement
-    record = _ncu_sass_fixed_column_row(("Address", "private", "Source", "", "", ""), tuple(gaps))
+    record = _ncu_sass_fixed_column_row(
+        ("Address", "private", "Source", "", "", ""),
+        tuple(gaps),
+        column_widths,
+    )
 
     with pytest.raises(ValueError) as failure:
-        runner.parse_ncu_sass(_ncu_sass_export((_NCU_KERNEL_A, (record,))), (_NCU_KERNEL_A,))
+        runner.parse_ncu_sass(
+            _ncu_sass_export((_NCU_KERNEL_A, (record,)), separator_widths=column_widths),
+            (_NCU_KERNEL_A,),
+        )
 
     fixed_columns = _ncu_sass_structure(failure.value)["fixed_columns"]
     assert isinstance(fixed_columns, dict)
@@ -1078,8 +1114,10 @@ def test_runner_ncu_sass_fixed_columns_use_the_reviewed_byte_boundaries() -> Non
     ]
 
 
+@pytest.mark.parametrize("column_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
 def test_runner_ncu_sass_fixed_columns_do_not_expose_private_values_or_order(
     monkeypatch: pytest.MonkeyPatch,
+    column_widths: tuple[int, ...],
 ) -> None:
     private_values = ("secret", "hidden")
     adjacent = "adjacent-private-value"
@@ -1088,8 +1126,14 @@ def test_runner_ncu_sass_fixed_columns_do_not_expose_private_values_or_order(
     diagnostics = []
     messages = []
     for first, second in (private_values, tuple(reversed(private_values))):
-        record = _ncu_sass_fixed_column_row((first, second, "Source", "", "", ""))
-        source = _ncu_sass_export((_NCU_KERNEL_A, (record, adjacent)))
+        record = _ncu_sass_fixed_column_row(
+            (first, second, "Source", "", "", ""),
+            column_widths=column_widths,
+        )
+        source = _ncu_sass_export(
+            (_NCU_KERNEL_A, (record, adjacent)),
+            separator_widths=column_widths,
+        )
         with pytest.raises(ValueError) as failure:
             runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
         diagnostic = _ncu_sass_diagnostic(failure.value)
@@ -1115,6 +1159,33 @@ def test_runner_ncu_sass_fixed_columns_are_only_reported_for_exact_width(width: 
         runner.parse_ncu_sass(_ncu_sass_export((_NCU_KERNEL_A, (record,))), (_NCU_KERNEL_A,))
 
     assert "fixed_columns" not in _ncu_sass_structure(failure.value)
+
+
+@pytest.mark.parametrize(
+    ("selected_widths", "record_widths"),
+    (
+        (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS),
+        (_NCU_SASS_WIDE_COLUMN_WIDTHS, _NCU_SASS_COLUMN_WIDTHS),
+    ),
+)
+def test_runner_ncu_sass_fixed_columns_require_the_selected_separator_width(
+    selected_widths: tuple[int, ...],
+    record_widths: tuple[int, ...],
+) -> None:
+    record = _ncu_sass_fixed_column_row(
+        ("Address", "private", "Source", "", "", ""),
+        column_widths=record_widths,
+    )
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, (record,)),
+        separator_widths=selected_widths,
+    )
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    structure = _ncu_sass_structure(failure.value)
+    assert "fixed_columns" not in structure
 
 
 @pytest.mark.parametrize(
