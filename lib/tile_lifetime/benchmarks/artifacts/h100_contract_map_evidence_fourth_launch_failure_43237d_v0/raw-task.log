@@ -1,0 +1,19 @@
+[02:22:43] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 | h100_contract_map_source_payload.py: OK
+[02:22:43] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 | h100-evidence-source-manifest.json: OK
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 | Traceback (most recent call last):
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2590, in <module>
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 |     main()
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2572, in main
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 |     output = run_coordinator(
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 |              ^^^^^^^^^^^^^^^^
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1642, in run_coordinator
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 |     case_result, trace_records = _run_profiled_case(
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 |                                  ^^^^^^^^^^^^^^^^^^^
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 |   File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1982, in _run_profiled_case
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 |     raise RuntimeError(f"Nsight Systems case worker failed: {command}: {completed.stdout}\n{completed.stderr}")
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 | RuntimeError: Nsight Systems case worker failed: ('/opt/nsight/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys', 'profile', '--force-overwrite=true', '--trace=cuda,nvtx', '--capture-range=cudaProfilerApi', '--stop-on-range-end=true', '--output', '/tmp/shuttle-h100-contract-map-evidence-43237d5-v4/cases/contract_map_9836cdbed389db24/steady_trace', '/opt/h100-evidence-runtime/bin/python', '/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py', '--worker', 'case', '--case-id', 'contract_map_9836cdbed389db24', '--backend', 'all', '--generated-manifest', '/tmp/shuttle-h100-contract-map-evidence-43237d5-v4/generated_manifest.json', '--json-output', '/tmp/shuttle-h100-contract-map-evidence-43237d5-v4/cases/contract_map_9836cdbed389db24/case_result.json', '--source-root', '/app/source', '--source-sha', '43237d5ea8a68c814d7b4d2356365fffe8fe765a', '--nvcc', '/usr/local/cuda-13.2/bin/nvcc', '--require-jax-version', '0.10.1', '--cache-kind', 'none', '--source-tree', '1911a4efde3eac57f0ebb471a45395697edb1d7b', '--source-capsule-manifest', '/app/h100-evidence-source-manifest.json', '--source-capsule-manifest-sha256', '0103bec37f863b5118324b21f9426923371482264b9e96cc4e1a652174f8aa21'): 
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 | unrecognised option '--stop-on-range-end=true'
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 | 
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 | usage: nsys profile [<args>] [application] [<application args>]
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 | Try 'nsys profile --help' for more information.
+[02:23:53] task=/dlwh/shuttle-h100-contract-map-evidence-43237d5-v4/0 | 
