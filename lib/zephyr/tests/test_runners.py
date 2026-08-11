@@ -9,6 +9,7 @@ import uuid
 from contextlib import suppress
 
 import polars as pl
+import pyarrow as pa
 import pytest
 from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
@@ -194,6 +195,47 @@ def finelog_server(tmp_path):
     server = EmbeddedServer(log_dir=str(tmp_path / "finelog"))
     yield f"http://127.0.0.1:{server.port}"
     server.stop()
+
+
+@pytest.mark.parametrize(
+    "batch",
+    [
+        pytest.param(pl.DataFrame({"value": [1, 2, 3]}), id="dataframe"),
+        pytest.param(pa.RecordBatch.from_pydict({"value": pa.array([1, 2, 3], type=pa.int64())}), id="record-batch"),
+    ],
+)
+def test_finelog_stats_count_columnar_rows_and_buffer_bytes(local_client, tmp_path, finelog_server, monkeypatch, batch):
+    """Columnar batches contribute their logical rows and buffers to stage throughput."""
+    writers: list[StatsWriter] = []
+
+    def make_writer(url: str | None = None) -> StatsWriter:
+        writer = StatsWriter(LogClient.connect(finelog_server))
+        writers.append(writer)
+        return writer
+
+    monkeypatch.setattr(StatsWriter, "connect", staticmethod(make_writer))
+
+    ctx = _ctx(local_client, tmp_path, stage_runner_factory=lambda: InlineRunner())
+    try:
+        ctx.execute(Dataset.from_list([batch]).map(lambda item: item))
+    finally:
+        ctx.shutdown()
+        for writer in writers:
+            with suppress(Exception):
+                writer.close()
+
+    query_client = LogClient.connect(finelog_server)
+    try:
+        stage_rows = query_client.query(f'SELECT * FROM "{ZEPHYR_STAGE_STATS_NAMESPACE}"')
+    finally:
+        query_client.close()
+
+    assert stage_rows.num_rows == 1
+    stage = {column: stage_rows.column(column).to_pylist()[0] for column in stage_rows.column_names}
+    assert stage["items"] == 3
+    assert stage["bytes_processed"] == 24
+    assert stage["item_rate"] == pytest.approx(3 / stage["elapsed"])
+    assert stage["byte_rate"] == pytest.approx(24 / stage["elapsed"])
 
 
 def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypatch):
