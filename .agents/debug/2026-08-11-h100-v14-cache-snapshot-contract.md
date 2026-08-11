@@ -30,11 +30,14 @@ had the same HLO hash and different executable hashes.
 
 The three clean-root processes remain fresh compile-time and first-execution
 samples. Their target keys must agree; their executable and HLO hashes are
-retained individually. Compile sample zero supplies the canonical populated
-root for each backend. The case-level snapshot keeps the full ordinary-XLA
+retained individually. Separate unmeasured setup workers supply the canonical
+populated roots before the case worker. Their compile and first-execution times
+do not enter evidence. The case-level snapshot keeps the full ordinary-XLA
 canonical root, including setup/helper entries, and overlays only the two other
 validated backend target entries. Duplicate backend keys or different bytes at
-one target name reject the run.
+one target name reject the run. The case worker completes numerical and repeat
+gates before warmup/timing, and the three fresh compile-timing workers run only
+after that worker succeeds.
 
 Each cache-retrieval, timing, and profile worker receives a fresh byte copy of
 the sealed snapshot. Before process launch and after process exit, the

@@ -1731,6 +1731,17 @@ def _materialized_cache_record(
     }
 
 
+def _canonical_cache_record(tmp_path: Path) -> tuple[Path, dict[str, object]]:
+    cache = tmp_path / "canonical-source"
+    record = _materialized_cache_record(
+        {"JAX_COMPILATION_CACHE_DIR": str(cache)},
+        b"canonical",
+        phase="compile",
+        final_hlo="private HLO canonical",
+    )
+    return cache, record
+
+
 def test_cache_protocol_accepts_fresh_executable_nondeterminism_but_rejects_cached_mismatch() -> None:
     executable_identity = "a" * 64
     compile_records = tuple(_cache_root_record(executable_identity, phase="compile") for _ in range(3))
@@ -1771,6 +1782,37 @@ def test_cache_protocol_accepts_fresh_executable_nondeterminism_but_rejects_cach
             backend="ordinary_xla",
             required_processes=3,
         )
+
+
+def test_cache_protocol_uses_unmeasured_canonical_record_not_any_fresh_compile() -> None:
+    canonical = _cache_root_record("f" * 64, phase="compile", root_identity="e" * 64)
+    compile_records = tuple(
+        _cache_root_record(f"{index + 1:x}" * 64, phase="compile", root_identity=f"{index + 1:x}" * 64)
+        for index in range(3)
+    )
+
+    def cloned(phase: str) -> tuple[dict[str, object], ...]:
+        return tuple(
+            {
+                **_cache_root_record("f" * 64, phase=phase, root_identity="e" * 64),
+                "persistent_cache_entry_sha256": canonical["persistent_cache_entry_sha256"],
+            }
+            for _ in range(3)
+        )
+
+    expected = hashlib.sha256(str(canonical["persistent_cache_key"]).encode() + bytes.fromhex("f" * 64)).hexdigest()
+    assert (
+        runner.validated_cache_protocol_identity(
+            compile_records,
+            cloned("cold"),
+            cloned("hit"),
+            canonical_record=canonical,
+            case_id="contract_map_case",
+            backend="ordinary_xla",
+            required_processes=3,
+        )
+        == expected
+    )
 
 
 def test_cache_protocol_accepts_fresh_root_differences_but_requires_exact_cloned_roots() -> None:
@@ -1903,7 +1945,8 @@ def test_cache_protocol_failure_reports_closed_nine_root_equality_partition() ->
     diagnostic = json.loads(str(raised.value).split("diagnostic=", 1)[1])
     assert diagnostic["case_id"] == "contract_map_9836cdbed389db24"
     assert diagnostic["backend"] == "ordinary_xla"
-    assert diagnostic["schema_version"] == 2
+    assert diagnostic["schema_version"] == 3
+    assert diagnostic["canonical_equality_partition"] == "class_0"
     assert diagnostic["expected_cached_equality_partitions"] == 1
     assert diagnostic["fresh_compile_equality_partitions"] == 2
     assert diagnostic["observed_equality_partitions"] == 2
@@ -1975,6 +2018,7 @@ def test_run_cache_protocol_propagates_bounded_root_diagnostic_from_production_b
 
     monkeypatch.setattr(runner, "_worker_base_command", worker_command)
     monkeypatch.setattr(runner, "run_timed_compile_worker_command", worker_result)
+    canonical_root, canonical_record = _canonical_cache_record(tmp_path)
 
     with pytest.raises(ValueError) as raised:
         runner._run_cache_protocol(
@@ -1983,6 +2027,8 @@ def test_run_cache_protocol_propagates_bounded_root_diagnostic_from_production_b
             "ordinary_xla",
             tmp_path / "generated.json",
             tmp_path / "cache_protocol",
+            canonical_root,
+            canonical_record,
         )
 
     message = str(raised.value)
@@ -1993,6 +2039,112 @@ def test_run_cache_protocol_propagates_bounded_root_diagnostic_from_production_b
     assert len(diagnostic["roots"]) == 9
     assert "private HLO" not in message
     assert "/secret/cache" not in message
+
+
+def test_canonical_cache_preparation_is_unmeasured_and_seals_exact_worker_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _runner_config(tmp_path)
+    monkeypatch.setattr(runner, "_worker_base_command", lambda *args, **kwargs: ("worker", "canonical"))
+    timed_calls = []
+    monkeypatch.setattr(
+        runner,
+        "run_timed_compile_worker_command",
+        lambda *args, **kwargs: timed_calls.append((args, kwargs)),
+    )
+
+    def run_worker(command, *, environment, json_output):
+        assert command == ("worker", "canonical")
+        record = _materialized_cache_record(environment, b"canonical", phase="compile", final_hlo="canonical HLO")
+        json_output.write_text(json.dumps(record))
+        return record
+
+    monkeypatch.setattr(runner, "_run_worker_command", run_worker)
+    prepared = runner._prepare_canonical_cache(
+        config,
+        "contract_map_case",
+        BackendVariant.ORDINARY_XLA.value,
+        tmp_path / "generated.json",
+        tmp_path / "canonical-preparation",
+    )
+
+    assert timed_calls == []
+    sealed_root = Path(prepared["canonical_cache_root"])
+    snapshot = runner._persistent_cache_snapshot(runner._persistent_cache_files(sealed_root))
+    assert snapshot.root_identity == prepared["canonical_cache_root_identity"]
+    assert prepared["record"]["persistent_cache_events"] == dict(zip(runner._CACHE_EVENT_NAMES, (1, 0, 1), strict=True))
+
+
+def test_coordinator_starts_no_timed_cache_protocol_before_case_numerical_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _runner_config(tmp_path)
+    monkeypatch.setattr(
+        runner,
+        "require_clean_h100_preflight",
+        lambda config: runner.PreflightEvidence(
+            source_sha=config.source_sha,
+            gpu_name="H100",
+            compute_capability="9.0",
+            architecture="sm_90a",
+            tools=(),
+            source_tree=None,
+            source_capsule_manifest_sha256=None,
+        ),
+    )
+    monkeypatch.setattr(runner, "compile_generated_candidates", lambda config: ())
+    monkeypatch.setattr(runner, "audit_imported_local_modules", lambda config: None)
+    monkeypatch.setattr(
+        runner.importlib,
+        "import_module",
+        lambda name: SimpleNamespace(generated_contract_map_candidates=lambda: ()),
+    )
+    order = []
+
+    def prepare(config, case_id, backend, generated_manifest, directory):
+        order.append(f"canonical:{backend}")
+        root = directory / "sealed_root"
+        root.mkdir(parents=True)
+        key = f"jit_step-{len(order):x}" + "a" * 63
+        executable = backend.encode()
+        entry = _compressed_cache_entry(executable)
+        (root / f"{key}-cache").write_bytes(entry)
+        target, files = runner._persistent_cache_target(root)
+        snapshot = runner._persistent_cache_snapshot(files)
+        return {
+            "canonical_cache_root": str(root),
+            "canonical_cache_root_identity": snapshot.root_identity,
+            "record": {
+                **_cache_root_record(
+                    target.serialized_executable_sha256,
+                    cache_key_digest=key.removeprefix("jit_step-"),
+                    phase="compile",
+                    final_hlo=f"hlo-{backend}",
+                    file_count=snapshot.file_count,
+                    total_bytes=snapshot.total_bytes,
+                    root_identity=snapshot.root_identity,
+                ),
+                "persistent_cache_entry_sha256": target.compressed_entry_sha256,
+            },
+        }
+
+    monkeypatch.setattr(runner, "_prepare_canonical_cache", prepare)
+    monkeypatch.setattr(
+        runner,
+        "_run_cache_protocol",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("timed cache protocol ran before case")),
+    )
+
+    def stop_at_case(*args, **kwargs):
+        order.append("case")
+        raise RuntimeError("case boundary reached")
+
+    monkeypatch.setattr(runner, "_run_profiled_case", stop_at_case)
+    with pytest.raises(RuntimeError, match="case boundary reached"):
+        runner.run_coordinator(config)
+
+    assert order[-1] == "case"
+    assert len(order) == len(BackendVariant) + 1
 
 
 def test_cache_protocol_nine_distinct_roots_emit_complete_diagnostic_under_bound() -> None:
@@ -2066,6 +2218,7 @@ def test_run_cache_protocol_maximal_reachable_partition_emits_bounded_diagnostic
 
     monkeypatch.setattr(runner, "_worker_base_command", worker_command)
     monkeypatch.setattr(runner, "run_timed_compile_worker_command", worker_result)
+    canonical_root, canonical_record = _canonical_cache_record(tmp_path)
 
     with pytest.raises(ValueError) as raised:
         runner._run_cache_protocol(
@@ -2074,12 +2227,14 @@ def test_run_cache_protocol_maximal_reachable_partition_emits_bounded_diagnostic
             "b" * 64,
             tmp_path / "generated.json",
             tmp_path / "cache_protocol",
+            canonical_root,
+            canonical_record,
         )
 
     message = str(raised.value)
     diagnostic = json.loads(message.split("diagnostic=", 1)[1])
     assert len(message) <= runner._MAX_CACHE_IDENTITY_DIAGNOSTIC_CHARS
-    assert diagnostic["observed_equality_partitions"] == 6
+    assert diagnostic["observed_equality_partitions"] == 7
     assert len(diagnostic["roots"]) == 9
     assert "private" not in message
 
@@ -2104,6 +2259,7 @@ def test_run_cache_protocol_rejects_cold_hit_root_byte_change_before_semantic_me
 
     monkeypatch.setattr(runner, "_worker_base_command", worker_command)
     monkeypatch.setattr(runner, "run_timed_compile_worker_command", worker_result)
+    canonical_root, canonical_record = _canonical_cache_record(tmp_path)
 
     with pytest.raises(ValueError, match="root changed between cold and hit"):
         runner._run_cache_protocol(
@@ -2112,6 +2268,8 @@ def test_run_cache_protocol_rejects_cold_hit_root_byte_change_before_semantic_me
             "ordinary_xla",
             tmp_path / "generated.json",
             tmp_path / "cache_protocol",
+            canonical_root,
+            canonical_record,
         )
 
 
@@ -2198,14 +2356,17 @@ def test_executable_hlo_rejects_mismatch_between_timing_cache_and_profile_worker
 def test_measurement_workers_require_canonical_key_executable_root_and_public_hit() -> None:
     backends = tuple(backend.value for backend in BackendVariant)
     protocols = {
-        backend: {"compile": (_cache_root_record(f"{index + 1:x}" * 64, phase="compile"),)}
+        backend: {
+            "canonical": _cache_root_record(f"{index + 1:x}" * 64, phase="compile"),
+            "compile": (_cache_root_record(f"{index + 4:x}" * 64, phase="compile"),),
+        }
         for index, backend in enumerate(backends)
     }
     root = "f" * 64
     events = dict(zip(runner._CACHE_EVENT_NAMES, (1, 1, 0), strict=True))
 
     def evidence(backend: str) -> dict[str, object]:
-        canonical = protocols[backend]["compile"][0]
+        canonical = protocols[backend]["canonical"]
         return {
             "persistent_cache_entry_sha256": canonical["persistent_cache_entry_sha256"],
             "persistent_cache_events": events,

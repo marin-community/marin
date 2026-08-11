@@ -379,8 +379,12 @@ run. Result-evidence schema v5 retains closed H2D, D2H, and D2D count and byte
 accounting before the no-copy gate. Three independent clean-root compile
 workers retain compile and first-execution samples. They must produce one
 public target key, but their serialized executables and final-HLO hashes are
-retained as nondeterminism evidence rather than required to match. The runner
-chooses compile worker zero as the canonical populated cache for each backend.
+retained as nondeterminism evidence rather than required to match. Before the
+numerical/timing worker, one unmeasured setup worker per backend creates the
+canonical populated cache. Setup compile and first-execution durations never
+enter evidence. The timed case worker still completes every numerical and
+repeatability gate before its warmup or steady schedule; fresh compile timing
+workers run only after that case worker succeeds.
 One merged snapshot keeps the complete first backend root and adds only the
 other two validated target entries, rejecting target collisions and requiring
 one distinct target key per backend.
@@ -396,11 +400,12 @@ from a freshly copied populated snapshot, not compilation from an empty cache.
 
 The executable digest removes only JAX 0.10.1's documented four-byte big-endian
 cached compile-time prefix after bounded zlib decompression. Measurement and
-profile evidence must use compile worker zero's exact target key, compressed
-entry, and serialized-executable identity. Compile workers one and two remain
-fresh misses and timing samples but are excluded from executable convergence.
-Compile worker zero's final optimized HLO is authoritative; every cloned-cache
-consumer's final HLO must equal it before evidence can be merged.
+profile evidence must use the canonical setup worker's exact target key,
+compressed entry, and serialized-executable identity. All three fresh compile
+workers remain misses and timing samples but are excluded from executable
+convergence. The canonical setup worker's final optimized HLO is authoritative;
+every cloned-cache consumer's final HLO must equal it before evidence can be
+merged.
 
 Each compile sample begins on the coordinator's monotonic clock immediately
 before spawning its isolated worker. The worker records the same host monotonic
