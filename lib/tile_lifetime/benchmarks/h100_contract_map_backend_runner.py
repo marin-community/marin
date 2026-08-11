@@ -24,6 +24,7 @@ import re
 import shutil
 import sqlite3
 import stat
+import string
 import subprocess
 import sys
 import time
@@ -247,6 +248,11 @@ _NCU_SASS_FAILURE_PATTERN = re.compile(
     r"(?:^|\b)(?:warning|error)(?::|\b)|(?:source|sass)\s+(?:is\s+)?(?:not|un)available|\bN/A\b",
     flags=re.IGNORECASE,
 )
+_NCU_SASS_STATUS_PATTERN = re.compile(
+    r'^==PROF== (?:(?:Connected to|Disconnected from) process [0-9]+(?: \(.+\))?|Profiling ".+"(?: .*)?)$'
+)
+_NCU_SASS_PUBLIC_WORD_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+_NCU_SASS_PUBLIC_WORDS = ("Kernel", "Name", "Address", "Source", "Section", "Function")
 _MAX_NCU_SASS_BYTES = 1 << 20
 _MAX_NCU_SASS_LINE_CHARS = 1024
 _MAX_NCU_SASS_DIAGNOSTIC_BYTES = 2048
@@ -848,6 +854,7 @@ def _unrecognized_ncu_sass_record(line_number: int, line: str) -> ValueError:
     metadata = {
         "line_number": line_number,
         "line_sha256": hashlib.sha256(line_bytes).hexdigest(),
+        "line_structure": _ncu_sass_line_structure(line),
         "line_utf8_bytes": len(line_bytes),
     }
     detail = json.dumps(metadata, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
@@ -855,6 +862,63 @@ def _unrecognized_ncu_sass_record(line_number: int, line: str) -> ValueError:
     if len(message.encode("utf-8")) > _MAX_NCU_SASS_DIAGNOSTIC_BYTES:
         return ValueError("unrecognized Nsight Compute SASS export record; diagnostic exceeds reviewed bound")
     return ValueError(message)
+
+
+def _ncu_sass_line_structure(line: str) -> dict[str, object]:
+    ascii_classes = {
+        "control": 0,
+        "digit": 0,
+        "lowercase": 0,
+        "punctuation": 0,
+        "uppercase": 0,
+        "whitespace": 0,
+    }
+    for character in line:
+        codepoint = ord(character)
+        if codepoint >= 128:
+            continue
+        if "A" <= character <= "Z":
+            character_class = "uppercase"
+        elif "a" <= character <= "z":
+            character_class = "lowercase"
+        elif "0" <= character <= "9":
+            character_class = "digit"
+        elif character in " \t\r\n\v\f":
+            character_class = "whitespace"
+        elif character in string.punctuation:
+            character_class = "punctuation"
+        elif codepoint < 32 or codepoint == 127:
+            character_class = "control"
+        else:
+            raise AssertionError("ASCII character classification is incomplete")
+        ascii_classes[character_class] += 1
+
+    tokens = re.findall(r"\S+", line)
+    public_words = frozenset(_NCU_SASS_PUBLIC_WORD_PATTERN.findall(line))
+    return {
+        "ascii_classes": ascii_classes,
+        "delimiters": {
+            "colon": line.count(":"),
+            "comma": line.count(","),
+            "hyphen": line.count("-"),
+            "pipe": line.count("|"),
+        },
+        "leading_spaces": len(line) - len(line.lstrip(" ")),
+        "non_ascii_codepoints": sum(ord(character) >= 128 for character in line),
+        "public_patterns": {
+            "header": line == _NCU_SASS_HEADER,
+            "instruction": _NCU_SASS_INSTRUCTION_PATTERN.match(line) is not None,
+            "section": _NCU_SASS_SECTION_PATTERN.fullmatch(line) is not None,
+            "separator": line == _NCU_SASS_SEPARATOR,
+            "status": _NCU_SASS_STATUS_PATTERN.fullmatch(line) is not None,
+        },
+        "public_vocabulary": {word: word in public_words for word in _NCU_SASS_PUBLIC_WORDS},
+        "spaces": line.count(" "),
+        "tabs": line.count("\t"),
+        "token_count": len(tokens),
+        "token_max_utf8_bytes": max((len(token.encode("utf-8")) for token in tokens), default=0),
+        "trailing_spaces": len(line) - len(line.rstrip(" ")),
+    }
 
 
 def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassKernel, ...]:

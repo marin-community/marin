@@ -186,8 +186,29 @@ def _ncu_sass_diagnostic(error: ValueError) -> dict[str, object]:
     assert message.startswith(prefix)
     assert len(message.encode("utf-8")) <= 2048
     diagnostic = json.loads(message.removeprefix(prefix))
-    assert set(diagnostic) == {"line_number", "line_sha256", "line_utf8_bytes"}
+    assert set(diagnostic) == {"line_number", "line_sha256", "line_structure", "line_utf8_bytes"}
+    structure = diagnostic["line_structure"]
+    assert isinstance(structure, dict)
+    assert set(structure) == {
+        "ascii_classes",
+        "delimiters",
+        "leading_spaces",
+        "non_ascii_codepoints",
+        "public_patterns",
+        "public_vocabulary",
+        "spaces",
+        "tabs",
+        "token_count",
+        "token_max_utf8_bytes",
+        "trailing_spaces",
+    }
     return diagnostic
+
+
+def _ncu_sass_structure(error: ValueError) -> dict[str, object]:
+    structure = _ncu_sass_diagnostic(error)["line_structure"]
+    assert isinstance(structure, dict)
+    return structure
 
 
 def test_runner_preflight_records_exact_clean_source_tools_and_h100(tmp_path: Path) -> None:
@@ -497,6 +518,39 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
         assert _ncu_sass_diagnostic(failure.value) == {
             "line_number": 2,
             "line_sha256": hashlib.sha256(b"public-unknown-record").hexdigest(),
+            "line_structure": {
+                "ascii_classes": {
+                    "control": 0,
+                    "digit": 0,
+                    "lowercase": 19,
+                    "punctuation": 2,
+                    "uppercase": 0,
+                    "whitespace": 0,
+                },
+                "delimiters": {"colon": 0, "comma": 0, "hyphen": 2, "pipe": 0},
+                "leading_spaces": 0,
+                "non_ascii_codepoints": 0,
+                "public_patterns": {
+                    "header": False,
+                    "instruction": False,
+                    "section": False,
+                    "separator": False,
+                    "status": False,
+                },
+                "public_vocabulary": {
+                    "Address": False,
+                    "Function": False,
+                    "Kernel": False,
+                    "Name": False,
+                    "Section": False,
+                    "Source": False,
+                },
+                "spaces": 0,
+                "tabs": 0,
+                "token_count": 1,
+                "token_max_utf8_bytes": 21,
+                "trailing_spaces": 0,
+            },
             "line_utf8_bytes": 21,
         }
         assert "public-unknown-record" not in str(failure.value)
@@ -538,12 +592,171 @@ def test_runner_ncu_sass_unrecognized_record_diagnostic_is_metadata_only(record:
         runner.parse_ncu_sass(source, ("KernelA",))
 
     record_bytes = record.encode("utf-8")
-    assert _ncu_sass_diagnostic(failure.value) == {
+    diagnostic = _ncu_sass_diagnostic(failure.value)
+    structure = diagnostic.pop("line_structure")
+    assert diagnostic == {
         "line_number": 5,
         "line_sha256": hashlib.sha256(record_bytes).hexdigest(),
         "line_utf8_bytes": len(record_bytes),
     }
+    assert isinstance(structure, dict)
     assert record not in str(failure.value)
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    (
+        ("x" * 512, {"token_max_utf8_bytes": 512, "lowercase": 512}),
+        ("x" * 513, {"token_max_utf8_bytes": 513, "lowercase": 513}),
+        ('"\\' * 256, {"token_max_utf8_bytes": 512, "punctuation": 512}),
+        ("\tcontrol\x1brecord", {"tabs": 1, "control": 1, "whitespace": 1}),
+        ("unicode-" + "\N{SNOWMAN}" * 300, {"token_max_utf8_bytes": 908, "non_ascii_codepoints": 300}),
+    ),
+)
+def test_runner_ncu_sass_line_structure_counts_boundary_and_escape_classes(
+    record: str, expected: dict[str, int]
+) -> None:
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(_ncu_sass_export(("KernelA", (record,))), ("KernelA",))
+
+    structure = _ncu_sass_structure(failure.value)
+    ascii_classes = structure["ascii_classes"]
+    assert isinstance(ascii_classes, dict)
+    for field, value in expected.items():
+        if field in ascii_classes:
+            assert ascii_classes[field] == value
+        else:
+            assert structure[field] == value
+
+
+def test_runner_ncu_sass_line_structure_is_closed_aggregate_metadata() -> None:
+    record = "  Address Source:\tKernel,Name|Section-Function  "
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(_ncu_sass_export(("KernelA", (record,))), ("KernelA",))
+
+    diagnostic = _ncu_sass_diagnostic(failure.value)
+    assert diagnostic["line_structure"] == {
+        "ascii_classes": {
+            "control": 0,
+            "digit": 0,
+            "lowercase": 32,
+            "punctuation": 4,
+            "uppercase": 6,
+            "whitespace": 6,
+        },
+        "delimiters": {"colon": 1, "comma": 1, "hyphen": 1, "pipe": 1},
+        "leading_spaces": 2,
+        "non_ascii_codepoints": 0,
+        "public_patterns": {
+            "header": False,
+            "instruction": False,
+            "section": False,
+            "separator": False,
+            "status": False,
+        },
+        "public_vocabulary": {
+            "Address": True,
+            "Function": True,
+            "Kernel": True,
+            "Name": True,
+            "Section": True,
+            "Source": True,
+        },
+        "spaces": 5,
+        "tabs": 1,
+        "token_count": 3,
+        "token_max_utf8_bytes": 28,
+        "trailing_spaces": 2,
+    }
+    assert record not in str(failure.value)
+
+
+@pytest.mark.parametrize(
+    ("record", "pattern"),
+    (
+        ("==PROF== Connected to process 123 (/private/tool)", "status"),
+        ("0000000000000000 MOV R1, R2", "instruction"),
+    ),
+)
+def test_runner_ncu_sass_line_structure_reports_only_closed_public_patterns(record: str, pattern: str) -> None:
+    source = (
+        _NCU_SASS_SEPARATOR
+        + "\n"
+        + record
+        + "\n"
+        + _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))).split("\n", maxsplit=1)[1]
+    )
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, ("KernelA",))
+
+    patterns = _ncu_sass_structure(failure.value)["public_patterns"]
+    assert isinstance(patterns, dict)
+    assert patterns == {
+        "header": False,
+        "instruction": pattern == "instruction",
+        "section": False,
+        "separator": False,
+        "status": pattern == "status",
+    }
+    assert record not in str(failure.value)
+
+
+@pytest.mark.parametrize(
+    "record",
+    (
+        "==PROF== Connected to process secret",
+        "==PROF== Future status",
+        "PROF Connected to process 123",
+    ),
+)
+def test_runner_ncu_sass_line_structure_rejects_status_pattern_lookalikes(record: str) -> None:
+    source = (
+        _NCU_SASS_SEPARATOR
+        + "\n"
+        + record
+        + "\n"
+        + _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))).split("\n", maxsplit=1)[1]
+    )
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, ("KernelA",))
+
+    patterns = _ncu_sass_structure(failure.value)["public_patterns"]
+    assert isinstance(patterns, dict)
+    assert patterns["status"] is False
+    assert record not in str(failure.value)
+
+
+def test_runner_ncu_sass_line_structure_public_words_require_exact_ascii_tokens() -> None:
+    record = "Kernel_Private Name1 Address2 source Sectioned functional"
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(_ncu_sass_export(("KernelA", (record,))), ("KernelA",))
+
+    vocabulary = _ncu_sass_structure(failure.value)["public_vocabulary"]
+    assert isinstance(vocabulary, dict)
+    assert vocabulary == {
+        "Address": False,
+        "Function": False,
+        "Kernel": False,
+        "Name": False,
+        "Section": False,
+        "Source": False,
+    }
+
+
+def test_runner_ncu_sass_line_structure_does_not_encode_token_order_or_values() -> None:
+    diagnostics = []
+    for record in ("private,token", "token,private"):
+        with pytest.raises(ValueError) as failure:
+            runner.parse_ncu_sass(_ncu_sass_export(("KernelA", (record,))), ("KernelA",))
+        assert record not in str(failure.value)
+        diagnostics.append(_ncu_sass_diagnostic(failure.value))
+
+    assert diagnostics[0]["line_structure"] == diagnostics[1]["line_structure"]
+    assert diagnostics[0]["line_sha256"] != diagnostics[1]["line_sha256"]
 
 
 def test_runner_ncu_sass_unrecognized_record_diagnostic_does_not_leak_adjacent_or_environment(
