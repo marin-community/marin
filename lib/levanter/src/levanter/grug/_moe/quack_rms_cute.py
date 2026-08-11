@@ -14,7 +14,6 @@ import jax.numpy as jnp
 import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
-import quack.utils as quack_utils
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from levanter.grug._moe.quack_moe_cute import _cute_dtype
 from quack.activation import dact_fn_map
@@ -23,7 +22,6 @@ from quack.epi_ops import (
     ColVecLoad,
     ColVecReduce,
     RowVecLoad,
-    Scalar,
     TileLoad,
     TileStore,
     colvec_reduce_accumulate,
@@ -58,8 +56,6 @@ class _GemmRmsBackwardMixin(GemmActMixin):
     """CuTe epilogue that returns an unweighted cotangent and RMS row partials."""
 
     _epi_ops = (  # pyrefly: ignore[bad-override-mutable-attribute]
-        Scalar("alpha"),
-        Scalar("beta"),
         RowVecLoad("mNormWeight"),
         ColVecLoad("mInverseRms"),
         TileLoad("mDirectCotangent"),
@@ -71,8 +67,6 @@ class _GemmRmsBackwardMixin(GemmActMixin):
 
     @mlir_namedtuple
     class EpilogueArguments(NamedTuple):  # pyrefly: ignore[bad-override]
-        alpha: cutlass.Float32 | cute.Tensor | None = None
-        beta: cutlass.Float32 | cute.Tensor | None = None
         mNormWeight: cute.Tensor | None = None
         mInverseRms: cute.Tensor | None = None
         mDirectCotangent: cute.Tensor | None = None
@@ -97,11 +91,8 @@ class _GemmRmsBackwardMixin(GemmActMixin):
         tRS_rX = epi_loop_tensors.get("mX")
         tDrRowDot = epi_loop_tensors.get("mRowDotPartial")
 
-        rD = tRS_rD.load()
-        if cutlass.const_expr(params.alpha is not None):
-            rD *= quack_utils.load_scalar_or_pointer(params.alpha)
         tRS_rUnweightedCotangent = cute.make_rmem_tensor_like(tRS_rD, self.a_dtype)
-        tRS_rUnweightedCotangent.store(rD.to(self.a_dtype))
+        tRS_rUnweightedCotangent.store(tRS_rD.load().to(self.a_dtype))
         tRS_rUnweightedCotangent.store(tRS_rUnweightedCotangent.load() + tRS_rDirectCotangent.load())
         tRS_rD.store(tRS_rUnweightedCotangent.load().to(tRS_rD.element_type))
 
@@ -244,6 +235,11 @@ def quack_coda_rms_backward_producer(
         raise ValueError("GEMM and full-width tensor inputs must have the same dtype")
     if x.dtype != jnp.bfloat16:
         raise ValueError(f"RMS backward producer requires BF16 inputs, got {x.dtype}")
+    # The epilogue reads inverse_rms as the exact float32 reciprocal the forward retained; a
+    # narrower dtype has already lost the precision the reverse algebra assumes. norm_weight is
+    # unconstrained because both it and the reference promote to float32 before the row dot.
+    if inverse_rms.dtype != jnp.float32:
+        raise ValueError(f"inverse_rms must be float32, got {inverse_rms.dtype}")
 
     _, tile_n = tile_mn
     hidden_tiles = (hidden_dim + tile_n - 1) // tile_n

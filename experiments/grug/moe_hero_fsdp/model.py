@@ -34,7 +34,7 @@ from levanter.grug._moe.common import _CHECKPOINT_DISPATCH_OUTPUT, _zero_dropped
 from levanter.grug._moe.rms_gated_norm import (
     RmsGatedNormResiduals,
     exact_gated_norm_up_reverse,
-    exact_rms_backward_consumer_reference,
+    exact_rms_backward_consumer,
 )
 from levanter.grug.attention import (
     AttentionMask,
@@ -607,6 +607,9 @@ def _gated_norm_with_residuals(
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     """Apply GatedNorm and return the values required by its fused reverse."""
     gate_preactivation = jnp.einsum("...d,dr->...r", x, w_down)
+    # TODO: silu activation here isn't explored, just cargo-culted from Qwen. Likely low-hanging
+    # ablation fruit (e.g. compare no activation, relu, etc.). Note that the quack_coda_backward
+    # reverse hardcodes the matching dSiLU epilogue, so an ablation has to change both.
     gate_hidden = jax.nn.silu(gate_preactivation)
     gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, w_up))
     return x * gate.astype(x.dtype), gate_preactivation, gate_hidden, gate
@@ -682,23 +685,34 @@ def _quack_coda_rms_gated_norm_fwd(x, norm_weight, w_down, w_up, eps):
     return _rms_gated_norm_exact_forward(x, norm_weight, w_down, w_up, eps)
 
 
-def _quack_coda_rms_gated_norm_bwd(eps, residuals, output_cotangent):
+def _rms_gated_norm_backward_kernels():
+    """Return the ``(silu_backward, rms_backward_producer)`` pair driving the fused reverse.
+
+    Imported lazily so the default XLA path never pulls in the optional SM100 dependency, and
+    indirected through one function so CPU tests can substitute the pure-JAX references.
+    """
     from levanter.grug._moe.quack_rms_cute import (  # noqa: PLC0415
         quack_coda_rms_backward_producer,
         quack_silu_backward_gemm,
     )
 
+    return quack_silu_backward_gemm, quack_coda_rms_backward_producer
+
+
+def _quack_coda_rms_gated_norm_bwd(eps, residuals, output_cotangent):
+    silu_backward, rms_backward_producer = _rms_gated_norm_backward_kernels()
+
     del eps
     x = residuals.x
     x_flat = x.reshape((-1, x.shape[-1]))
     up_reverse = exact_gated_norm_up_reverse(output_cotangent, residuals)
-    gate_preactivation_cotangent, _ = quack_silu_backward_gemm(
+    gate_preactivation_cotangent, _ = silu_backward(
         up_reverse.gate_accumulator,
         residuals.w_up,
         residuals.gate_preactivation,
     )
     w_down_cotangent = jnp.einsum("td,tr->dr", residuals.normalized, gate_preactivation_cotangent)
-    unweighted_cotangent, row_dot_partial = quack_coda_rms_backward_producer(
+    unweighted_cotangent, row_dot_partial = rms_backward_producer(
         gate_preactivation_cotangent,
         residuals.w_down,
         up_reverse.direct,
@@ -711,7 +725,7 @@ def _quack_coda_rms_gated_norm_bwd(eps, residuals, output_cotangent):
     norm_weight_cotangent = jnp.sum(unweighted_cotangent.astype(jnp.float32) * normalized_x, axis=0).astype(
         residuals.norm_weight.dtype
     )
-    x_cotangent = exact_rms_backward_consumer_reference(
+    x_cotangent = exact_rms_backward_consumer(
         unweighted_cotangent,
         row_dot,
         x_flat,
@@ -1039,6 +1053,8 @@ class Block(eqx.Module):
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
 
+        # TODO: Block holds no config of its own, so the model-level knob is reached through a
+        # submodule. Give Block a `cfg` field if more block-level config lookups appear.
         norm_implementation = self.attn.cfg.rms_gated_norm_implementation
         attn_in = rms_gated_norm(x, self.rms_attn, self.attn_gated_norm, norm_implementation)
         attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)

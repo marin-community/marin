@@ -10,14 +10,16 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.sharding import AxisType, Mesh
+from jax.sharding import AxisType, Mesh, reshard
 from levanter.grug._moe.rms_gated_norm import (
     exact_gated_norm_up_reverse,
-    exact_rms_backward_consumer_reference,
+    exact_rms_backward_consumer,
     exact_rms_backward_producer_reference,
+    exact_silu_backward_reference,
 )
 
 from experiments.grug.moe_hero_fsdp import launch, train
+from experiments.grug.moe_hero_fsdp import model as model_module
 from experiments.grug.moe_hero_fsdp.model import (
     _GATED_NORM_RANK,
     GatedNorm,
@@ -143,7 +145,7 @@ def test_rms_reverse_algebra_matches_stock_autodiff(cpu_mesh, dtype, max_thresho
     _, pullback = jax.vjp(rms_norm, x_flat, inputs.norm_weight)
     expected_x, expected_weight = pullback(cotangent)
     zero_rank_cotangent = jnp.zeros((x_flat.shape[0], _GATED_NORM_RANK), dtype=dtype)
-    unweighted_cotangent, row_dot = exact_rms_backward_producer_reference(
+    unweighted_cotangent, row_dot_partial = exact_rms_backward_producer_reference(
         zero_rank_cotangent,
         inputs.w_down,
         cotangent,
@@ -151,9 +153,9 @@ def test_rms_reverse_algebra_matches_stock_autodiff(cpu_mesh, dtype, max_thresho
         inputs.norm_weight,
         inverse_rms,
     )
-    actual_x = exact_rms_backward_consumer_reference(
+    actual_x = exact_rms_backward_consumer(
         unweighted_cotangent,
-        row_dot,
+        jnp.sum(row_dot_partial, axis=-1),
         x_flat,
         inputs.norm_weight,
         inverse_rms,
@@ -191,6 +193,57 @@ def test_gated_norm_up_reverse_matches_autodiff(cpu_mesh):
     np.testing.assert_array_equal(actual.direct, expected_direct)
     np.testing.assert_array_equal(actual_gate_hidden, expected_gate_hidden)
     np.testing.assert_array_equal(actual.w_up, expected_w_up)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "max_threshold", "mean_threshold"),
+    [
+        (jnp.float32, 2e-6, 2e-7),
+        (jnp.bfloat16, 3e-2, 2e-3),
+    ],
+)
+def test_fused_reverse_matches_stock_autodiff_end_to_end(cpu_mesh, monkeypatch, dtype, max_threshold, mean_threshold):
+    """Pin the whole custom VJP -- composition, reductions and psums -- against the XLA path.
+
+    The SM100 kernels are swapped for their pure-JAX references so the composition around them
+    is exercised on CPU; the kernels themselves are covered by
+    ``lib/levanter/tests/grug/test_quack_rms_cute.py`` on a GPU backend.
+    """
+    del cpu_mesh
+    monkeypatch.setattr(
+        model_module,
+        "_rms_gated_norm_backward_kernels",
+        lambda: (exact_silu_backward_reference, exact_rms_backward_producer_reference),
+    )
+    inputs = _norm_inputs(dtype)
+    # The fused path reshards its input to the batch spec, so feed both paths an already-sharded
+    # activation and cotangent; otherwise their outputs carry different shardings.
+    batch_spec = model_module._batch_spec()
+    x = reshard(inputs.x, batch_spec)
+    cotangent = reshard(inputs.cotangent, batch_spec)
+
+    def fused(x, norm_weight, w_down, w_up):
+        return rms_gated_norm(
+            x,
+            RMSNorm(weight=norm_weight, eps=_NORM_EPS),
+            GatedNorm(w_down=w_down, w_up=w_up),
+            "quack_coda_backward",
+        )
+
+    primals = (x, inputs.norm_weight, inputs.w_down, inputs.w_up)
+    expected_out, expected_pullback = jax.vjp(_xla_rms_gated_norm, *primals)
+    actual_out, actual_pullback = jax.vjp(fused, *primals)
+    np.testing.assert_array_equal(actual_out, expected_out)
+
+    names = ("input", "norm_weight", "w_down", "w_up")
+    for name, actual, expected in zip(names, actual_pullback(cotangent), expected_pullback(cotangent), strict=True):
+        _assert_error_below(
+            actual,
+            expected,
+            max_threshold=max_threshold,
+            mean_threshold=mean_threshold,
+            label=f"{dtype} {name} gradient",
+        )
 
 
 def test_runtime_rms_implementation_is_not_serialized_in_hf_config():
