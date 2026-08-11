@@ -163,10 +163,19 @@ def test_worst_pair_failure_diagnostic_rejects_oversized_serialization() -> None
     assert error.output_name == "dx"
 
 
+_NCU_SASS_SEPARATOR = "------------------ " + "-" * 60 + " ------ ------ ------ ------"
+
+
 def _ncu_sass_export(*sections: tuple[str, tuple[str, ...]]) -> str:
     lines = []
     for name, instructions in sections:
-        lines.extend((f"Kernel Name: {name}", "Address Source", "----------------"))
+        lines.extend(
+            (
+                f"Kernel Name: {name}",
+                "Address Source",
+                _NCU_SASS_SEPARATOR,
+            )
+        )
         lines.extend(instructions)
     return "\n".join(lines) + "\n"
 
@@ -469,17 +478,63 @@ def test_runner_ncu_profile_parses_real_wide_units_contract_at_process_boundary(
 
 
 def test_runner_ncu_sass_parser_requires_valid_instruction_rows_for_exact_kernel_sections() -> None:
-    records = runner.parse_ncu_sass(
-        _ncu_sass_export(
-            ("KernelA", ("0000000000000000 MOV R1, R2", "0000000000000010 EXIT")),
-            ("KernelB", ("/*0020*/ FFMA R3, R4, R5, R6",)),
-        ),
-        ("KernelA", "KernelB"),
-    )
+    fixture = Path(__file__).parent / "fixtures/h100_contract_map_ncu_sass.txt"
+    records = runner.parse_ncu_sass(fixture.read_text(), ("KernelA", "KernelB"))
 
     assert tuple(record.name for record in records) == ("KernelA", "KernelB")
     assert tuple(instruction.mnemonic for instruction in records[0].instructions) == ("MOV", "EXIT")
     assert records[1].instructions == (runner.NcuSassInstruction(address=0x20, mnemonic="FFMA"),)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        "",
+        "----------------- ------------------------------------------------------------ ------ ------ ------ ------",
+        "------------------ ----------------------------------------------------------- ------ ------ ------ ------",
+        "------------------ ------------------------------------------------------------ ------ ------ ------",
+        "------------------ " + "-" * 60 + " ------ ------ ------ ------ ------",
+        "------------------ dashed-text ------------------------------------------------ ------ ------ ------ ------",
+    ),
+)
+def test_runner_ncu_sass_parser_rejects_missing_or_mutated_table_separator(replacement: str) -> None:
+    source = _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+
+    with pytest.raises(ValueError):
+        runner.parse_ncu_sass(source.replace(_NCU_SASS_SEPARATOR, replacement), ("KernelA",))
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        _NCU_SASS_SEPARATOR + "\n" + _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))),
+        _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))).replace(
+            "0000000000000000 MOV R1, R2",
+            _NCU_SASS_SEPARATOR + "\n0000000000000000 MOV R1, R2",
+        ),
+        _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",))) + _NCU_SASS_SEPARATOR + "\n",
+    ),
+)
+def test_runner_ncu_sass_parser_rejects_misplaced_or_duplicate_table_separator(source: str) -> None:
+    with pytest.raises(ValueError, match=r"misplaced|unrecognized"):
+        runner.parse_ncu_sass(source, ("KernelA",))
+
+
+def test_runner_ncu_sass_file_boundary_is_bounded_and_nonleaking(tmp_path: Path) -> None:
+    path = tmp_path / "ncu-sass.txt"
+    private = "/private/profiler/" + "secret" * 10_000
+    path.write_text(_ncu_sass_export(("KernelA", (private,))))
+
+    with pytest.raises(ValueError) as failure:
+        runner._parse_ncu_sass_file(path, ("KernelA",))
+    assert str(failure.value) == "Nsight Compute SASS export line 4 exceeds its reviewed bound"
+    assert private not in str(failure.value)
+
+    with path.open("wb") as stream:
+        stream.seek((1 << 20) + 1)
+        stream.write(b"x")
+    with pytest.raises(ValueError, match="bounded regular file"):
+        runner._parse_ncu_sass_file(path, ("KernelA",))
 
 
 def test_runner_ncu_sass_spills_are_read_only_from_validated_instruction_rows(tmp_path: Path) -> None:
@@ -536,12 +591,12 @@ def test_runner_ncu_sass_spills_are_read_only_from_validated_instruction_rows(tm
             "coverage differs",
         ),
         (
-            "Kernel Name: KernelA\nAddress Source\nnot-an-address MOV R1, R2\n",
+            _ncu_sass_export(("KernelA", ("not-an-address MOV R1, R2",))),
             ("KernelA",),
             "unrecognized.*line",
         ),
         (
-            "Kernel Name: KernelA\nAddress Source\n0000000000000000 NOTREAL R1, R2\n",
+            _ncu_sass_export(("KernelA", ("0000000000000000 NOTREAL R1, R2",))),
             ("KernelA",),
             "unrecognized SASS instruction mnemonic",
         ),
