@@ -6,6 +6,7 @@
  * and thread dumps render in a new window.
  */
 import { ref } from 'vue'
+import { createResource, RESOURCE_MESSAGES, RESOURCE_TYPES } from '@/composables/useResources'
 import { openSpeedscopeWindow } from '@/utils/speedscope'
 import type { ResourceAttemptIdentity } from '@/types/rpc'
 
@@ -108,14 +109,8 @@ export function useProfileAction(rpcCall: RpcCall, target: string | (() => strin
   return { profiling, profile }
 }
 
-type ResourceRpcCall = (
-  method: string,
-  body?: Record<string, unknown>,
-) => Promise<{ profileData?: string; errorMessage?: string }>
-
 /** Profile one exact resource Attempt through ResourceService. */
 export function useAttemptProfileAction(
-  rpcCall: ResourceRpcCall,
   attempt: () => ResourceAttemptIdentity | undefined,
   label: () => string,
 ) {
@@ -128,11 +123,22 @@ export function useAttemptProfileAction(
     profiling.value = true
     const pending = profilerType === 'cpu' ? openSpeedscopeWindow() : null
     try {
-      const response = await rpcCall('ProfileAttempt', {
-        attempt: current,
-        profile: buildProfileType(profilerType),
-        duration: { milliseconds: '10000' },
-      })
+      const operation = await createResource<{ profileData?: string; errorMessage?: string }>(
+        RESOURCE_TYPES.profileCapture,
+        {
+          authorityClusterId: current.task.clusterId,
+          type: RESOURCE_TYPES.attempt,
+          id: `${current.task.resourceId}:${current.attemptNumber}`,
+          uid: current.attemptUid,
+        },
+        RESOURCE_MESSAGES.profileAttemptRequest,
+        {
+          attempt: current,
+          profile: buildProfileType(profilerType),
+          duration: { milliseconds: '10000' },
+        },
+      )
+      const response = operation.result ?? {}
       if (response.errorMessage) {
         pending?.cancel()
         alert(`${profilerType.toUpperCase()} profile failed: ${response.errorMessage}`)

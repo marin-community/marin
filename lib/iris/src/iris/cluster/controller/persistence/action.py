@@ -16,13 +16,11 @@ def action_by_idempotency_key(
     tx: Tx,
     *,
     principal_id: str,
-    kind: ActionKind,
     idempotency_key: str,
 ) -> tuple[ActionReceipt, str] | None:
     row = tx.execute(
         select(action_receipts_table).where(
             action_receipts_table.c.principal_id == principal_id,
-            action_receipts_table.c.action_kind == kind.value,
             action_receipts_table.c.client_idempotency_key == idempotency_key,
         )
     ).first()
@@ -103,6 +101,7 @@ def insert_action(
             target_id=receipt.target.resource_id,
             expected_target_uid=receipt.expected_target_uid,
             expected_attempt_uid=receipt.expected_attempt_uid or "",
+            expected_attempt_number=receipt.expected_attempt_number,
             backend_id=backend_id,
             execution_cluster_id=execution_cluster_id,
             principal_id=principal_id,
@@ -131,6 +130,7 @@ def _receipt(row) -> ActionReceipt:
         created_at=Timestamp.from_ms(row.created_at_ms),
         updated_at=Timestamp.from_ms(row.updated_at_ms),
         completed_at=Timestamp.from_ms(row.completed_at_ms) if row.completed_at_ms is not None else None,
+        expected_attempt_number=row.expected_attempt_number,
     )
 
 

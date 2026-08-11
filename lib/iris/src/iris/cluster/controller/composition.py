@@ -30,6 +30,7 @@ from iris.rpc.endpoint_service import EndpointServiceImpl
 from iris.rpc.federation_client import peer_connection_factory
 from iris.rpc.legacy.controller_service import LegacyControllerService
 from iris.rpc.log_reader import FinelogLogReader
+from iris.rpc.resource_registrations import resource_catalog
 from iris.rpc.resource_service import ResourceServiceImpl
 
 
@@ -114,6 +115,8 @@ def compose_controller_process(
         backend_configs=runtime.backend_configs,
         log_reader=FinelogLogReader(runtime.log_client),
     )
+    catalog = resource_catalog(controller)
+    resource_service = ResourceServiceImpl(catalog)
     controller_service = LegacyControllerService(
         runtime=runtime,
         bundle_store=runtime.bundle_store,
@@ -121,10 +124,10 @@ def compose_controller_process(
         operations=OperationalServices.from_database(runtime.database),
         endpoint_service=endpoint_service,
         controller=controller,
+        resource_service=resource_service,
         auth=config.auth,
         user_budget_defaults=config.user_budget_defaults,
     )
-    resource_service = ResourceServiceImpl(controller)
     federation_token_provider = _federation_token_provider(config)
     federated_handoff = (
         FederatedEndpointHandoff(runtime.federation.peer_controller_address, federation_token_provider.get_token)

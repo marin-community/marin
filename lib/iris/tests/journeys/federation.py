@@ -6,6 +6,7 @@
 from pathlib import Path
 
 import pytest
+from google.protobuf import any_pb2
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
 from iris.cluster.controller.job import FederationSubmission
@@ -31,14 +32,17 @@ from iris.rpc.auth import FEDERATION_PEER_ROLE
 from iris.rpc.federation_client import federation_batch_from_legacy
 from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.rpc.resource_client_codec import (
+    exec_result_from_proto,
+    profile_result_from_proto,
+)
+from iris.rpc.resource_codec import (
     action_receipt_from_proto,
     attempt_identity_to_proto,
-    exec_result_from_proto,
-    job_identity_to_proto,
-    profile_result_from_proto,
     task_identity_to_proto,
 )
+from iris.rpc.resource_registrations import resource_catalog
 from iris.rpc.resource_service import ResourceServiceImpl
+from iris.rpc.resource_types import ATTEMPT, EXEC_SESSION, JOB, PROFILE_CAPTURE, TASK
 from iris.time_proto import duration_to_proto
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from tests.journeys.world import JobRef, JourneyWorld, TaskRef
@@ -49,12 +53,36 @@ _PEER_CONTROLLER_ADDRESS = "http://peer-b.invalid"
 _PEER_IDENTITY = VerifiedIdentity(user_id=PARENT_CLUSTER_ID, role=FEDERATION_PEER_ROLE)
 
 
+def _pack(value) -> any_pb2.Any:
+    result = any_pb2.Any()
+    result.Pack(value)
+    return result
+
+
+def _ref(cluster_id: str, resource_type: str, resource_id: str, uid: str) -> resource_pb2.ResourceRef:
+    return resource_pb2.ResourceRef(
+        authority_cluster_id=cluster_id,
+        type=resource_type,
+        id=resource_id,
+        uid=uid,
+    )
+
+
+def _attempt_ref(identity: AttemptIdentity) -> resource_pb2.ResourceRef:
+    return _ref(
+        identity.task.cluster_id,
+        ATTEMPT,
+        f"{identity.task.resource_id}:{identity.attempt_number}",
+        identity.attempt_uid,
+    )
+
+
 class InProcessPeerConnection:
     """Authenticated parent-to-peer RPCs against a real in-process service."""
 
     def __init__(self, controller: ControllerProcess) -> None:
         self._controller = controller
-        self._resources = ResourceServiceImpl(controller.controller)
+        self._resources = ResourceServiceImpl(resource_catalog(controller.controller))
         self._reachable = True
 
     def set_reachable(self, reachable: bool) -> None:
@@ -103,17 +131,20 @@ class InProcessPeerConnection:
                 principal_id=job_id.user,
             )
 
-    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt:
+    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str, reason: str) -> ActionReceipt:
         self._require_reachable()
         with identity_scope(_PEER_IDENTITY):
-            response = self._resources.cancel_job(
-                resource_pb2.CancelJobRequest(
-                    job=job_identity_to_proto(identity),
-                    idempotency_key=idempotency_key,
+            operation = self._resources.update_resource(
+                resource_pb2.UpdateResourceRequest(
+                    mutation=resource_pb2.MutationMetadata(request_id=idempotency_key, reason=reason),
+                    ref=_ref(identity.key.cluster_id, JOB, identity.key.resource_id, identity.job_uid),
+                    update=resource_pb2.ResourceUpdate(new_state=resource_pb2.REQUESTED_RESOURCE_STATE_CANCELLED),
                 ),
                 None,
             )
-        return action_receipt_from_proto(response.receipt)
+        receipt = resource_pb2.ActionReceipt()
+        assert operation.result.Unpack(receipt)
+        return action_receipt_from_proto(receipt)
 
     def retry_task(
         self,
@@ -121,30 +152,70 @@ class InProcessPeerConnection:
         *,
         expected_attempt_uid: str,
         idempotency_key: str,
+        reason: str,
     ) -> ActionReceipt:
         self._require_reachable()
         with identity_scope(_PEER_IDENTITY):
-            response = self._resources.retry_task(
-                resource_pb2.RetryTaskRequest(
-                    task=task_identity_to_proto(identity),
-                    expected_attempt_uid=expected_attempt_uid,
-                    idempotency_key=idempotency_key,
+            condition = resource_pb2.RetryTaskRequest(
+                task=task_identity_to_proto(identity),
+                expected_attempt_uid=expected_attempt_uid,
+            )
+            operation = self._resources.update_resource(
+                resource_pb2.UpdateResourceRequest(
+                    mutation=resource_pb2.MutationMetadata(request_id=idempotency_key, reason=reason),
+                    ref=_ref(identity.key.cluster_id, TASK, identity.key.resource_id, identity.task_uid),
+                    update=resource_pb2.ResourceUpdate(
+                        new_state=resource_pb2.REQUESTED_RESOURCE_STATE_PENDING,
+                        patch=_pack(condition),
+                    ),
                 ),
                 None,
             )
-        return action_receipt_from_proto(response.receipt)
+        receipt = resource_pb2.ActionReceipt()
+        assert operation.result.Unpack(receipt)
+        return action_receipt_from_proto(receipt)
 
-    def terminate_attempt(self, identity: AttemptIdentity, *, idempotency_key: str) -> ActionReceipt:
+    def terminate_attempt(
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+        reason: str,
+    ) -> ActionReceipt:
         self._require_reachable()
         with identity_scope(_PEER_IDENTITY):
-            response = self._resources.terminate_attempt(
-                resource_pb2.TerminateAttemptRequest(
-                    attempt=attempt_identity_to_proto(identity),
-                    idempotency_key=idempotency_key,
+            operation = self._resources.update_resource(
+                resource_pb2.UpdateResourceRequest(
+                    mutation=resource_pb2.MutationMetadata(request_id=idempotency_key, reason=reason),
+                    ref=_attempt_ref(identity),
+                    update=resource_pb2.ResourceUpdate(new_state=resource_pb2.REQUESTED_RESOURCE_STATE_CANCELLED),
                 ),
                 None,
             )
-        return action_receipt_from_proto(response.receipt)
+        receipt = resource_pb2.ActionReceipt()
+        assert operation.result.Unpack(receipt)
+        return action_receipt_from_proto(receipt)
+
+    def fail_attempt(
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+        reason: str,
+    ) -> ActionReceipt:
+        self._require_reachable()
+        with identity_scope(_PEER_IDENTITY):
+            operation = self._resources.update_resource(
+                resource_pb2.UpdateResourceRequest(
+                    mutation=resource_pb2.MutationMetadata(request_id=idempotency_key, reason=reason),
+                    ref=_attempt_ref(identity),
+                    update=resource_pb2.ResourceUpdate(new_state=resource_pb2.REQUESTED_RESOURCE_STATE_FAILED),
+                ),
+                None,
+            )
+        receipt = resource_pb2.ActionReceipt()
+        assert operation.result.Unpack(receipt)
+        return action_receipt_from_proto(receipt)
 
     def profile_task(self, request: ProfileRequest) -> ProfileResult:
         assert request.attempt is not None
@@ -156,7 +227,17 @@ class InProcessPeerConnection:
         if request.duration is not None:
             wire.duration.CopyFrom(duration_to_proto(request.duration))
         with identity_scope(_PEER_IDENTITY):
-            response = self._resources.profile_attempt(wire, None)
+            operation = self._resources.create_resource(
+                resource_pb2.CreateResourceRequest(
+                    mutation=resource_pb2.MutationMetadata(request_id="federation-profile"),
+                    type=PROFILE_CAPTURE,
+                    parent=_attempt_ref(request.attempt),
+                    body=_pack(wire),
+                ),
+                None,
+            )
+        response = resource_pb2.ProfileAttemptResponse()
+        assert operation.result.Unpack(response)
         return profile_result_from_proto(response)
 
     def exec_in_container(self, request: ExecRequest) -> ExecResult:
@@ -168,7 +249,17 @@ class InProcessPeerConnection:
         if request.timeout is not None:
             wire.timeout.CopyFrom(duration_to_proto(request.timeout))
         with identity_scope(_PEER_IDENTITY):
-            response = self._resources.exec_attempt(wire, None)
+            operation = self._resources.create_resource(
+                resource_pb2.CreateResourceRequest(
+                    mutation=resource_pb2.MutationMetadata(request_id="federation-exec"),
+                    type=EXEC_SESSION,
+                    parent=_attempt_ref(request.attempt),
+                    body=_pack(wire),
+                ),
+                None,
+            )
+        response = resource_pb2.ExecAttemptResponse()
+        assert operation.result.Unpack(response)
         return exec_result_from_proto(response)
 
     def get_process_status(self, target: str) -> ProcessInfo:

@@ -59,6 +59,11 @@ FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset(
         "TerminateAttempt",
         "ExecAttempt",
         "ProfileAttempt",
+        "GetResource",
+        "ListResources",
+        "BatchGetResources",
+        "UpdateResource",
+        "CreateResource",
     }
 )
 
@@ -101,6 +106,10 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         "GetCapacityStatus",
         "DescribeEndpoint",
         "BatchDescribeEndpoints",
+        "GetResource",
+        "ListResources",
+        "BatchGetResources",
+        "GetServiceInfo",
         # Federation (read-only peer observation)
         "ListPeers",
         # Identity, users, budgets (read)

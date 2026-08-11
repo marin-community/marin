@@ -3,12 +3,15 @@
 
 """Connect transport and legacy-wire codecs for native federation operations."""
 
+import uuid
 from collections.abc import Callable, Iterable
 from typing import TypeVar
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
+from google.protobuf import any_pb2
+from google.protobuf.message import Message
 from rigging.auth import TokenProvider
 from rigging.cluster_manifest import load_manifest
 from rigging.credentials import ClientCredentials, credentials_for
@@ -46,14 +49,16 @@ from iris.rpc.legacy.job_codec import (
 from iris.rpc.legacy.job_service_codec import job_spec_to_legacy_request
 from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.rpc.resource_client_codec import (
+    exec_result_from_proto,
+    profile_result_from_proto,
+)
+from iris.rpc.resource_codec import (
     action_receipt_from_proto,
     attempt_identity_to_proto,
-    exec_result_from_proto,
-    job_identity_to_proto,
-    profile_result_from_proto,
     task_identity_to_proto,
 )
 from iris.rpc.resource_connect import ResourceServiceClientSync
+from iris.rpc.resource_types import ATTEMPT, EXEC_SESSION, JOB, PROFILE_CAPTURE, TASK
 from iris.rpc.worker_client import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from iris.rpc.worker_codec import process_info_from_proto
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_from_proto, timestamp_to_proto
@@ -66,6 +71,39 @@ _DEFAULT_EXEC_TIMEOUT = 60
 _PROCESS_STATUS_PROXY_TIMEOUT_MS = 30_000
 
 _T = TypeVar("_T")
+_MessageT = TypeVar("_MessageT", bound=Message)
+
+
+def _pack(value: Message) -> any_pb2.Any:
+    result = any_pb2.Any()
+    result.Pack(value)
+    return result
+
+
+def _unpack(value: any_pb2.Any, message_type: type[_MessageT]) -> _MessageT:
+    result = message_type()
+    if not value.Is(message_type.DESCRIPTOR) or not value.Unpack(result):
+        raise ValueError(f"invalid {message_type.DESCRIPTOR.full_name} operation result")
+    return result
+
+
+def _ref(cluster_id: str, resource_type: str, resource_id: str, uid: str) -> resource_pb2.ResourceRef:
+    return resource_pb2.ResourceRef(
+        authority_cluster_id=cluster_id,
+        type=resource_type,
+        id=resource_id,
+        uid=uid,
+    )
+
+
+def _attempt_ref(identity: AttemptIdentity) -> resource_pb2.ResourceRef:
+    return _ref(
+        identity.task.cluster_id,
+        ATTEMPT,
+        f"{identity.task.resource_id}:{identity.attempt_number}",
+        identity.attempt_uid,
+    )
+
 
 _ERROR_CODES = {
     Code.ALREADY_EXISTS: PeerErrorCode.ALREADY_EXISTS,
@@ -145,16 +183,17 @@ class ConnectPeerConnection:
         )
         return federation_batch_from_legacy(response)
 
-    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt:
-        response = peer_transport_call(
-            lambda: self._resources.cancel_job(
-                resource_pb2.CancelJobRequest(
-                    job=job_identity_to_proto(identity),
-                    idempotency_key=idempotency_key,
+    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str, reason: str) -> ActionReceipt:
+        operation = peer_transport_call(
+            lambda: self._resources.update_resource(
+                resource_pb2.UpdateResourceRequest(
+                    mutation=resource_pb2.MutationMetadata(request_id=idempotency_key, reason=reason),
+                    ref=_ref(identity.key.cluster_id, JOB, identity.key.resource_id, identity.job_uid),
+                    update=resource_pb2.ResourceUpdate(new_state=resource_pb2.REQUESTED_RESOURCE_STATE_CANCELLED),
                 )
             )
         )
-        return action_receipt_from_proto(response.receipt)
+        return action_receipt_from_proto(_unpack(operation.result, resource_pb2.ActionReceipt))
 
     def retry_task(
         self,
@@ -162,28 +201,61 @@ class ConnectPeerConnection:
         *,
         expected_attempt_uid: str,
         idempotency_key: str,
+        reason: str,
     ) -> ActionReceipt:
-        response = peer_transport_call(
-            lambda: self._resources.retry_task(
-                resource_pb2.RetryTaskRequest(
-                    task=task_identity_to_proto(identity),
-                    expected_attempt_uid=expected_attempt_uid,
-                    idempotency_key=idempotency_key,
+        condition = resource_pb2.RetryTaskRequest(
+            task=task_identity_to_proto(identity),
+            expected_attempt_uid=expected_attempt_uid,
+        )
+        operation = peer_transport_call(
+            lambda: self._resources.update_resource(
+                resource_pb2.UpdateResourceRequest(
+                    mutation=resource_pb2.MutationMetadata(request_id=idempotency_key, reason=reason),
+                    ref=_ref(identity.key.cluster_id, TASK, identity.key.resource_id, identity.task_uid),
+                    update=resource_pb2.ResourceUpdate(
+                        new_state=resource_pb2.REQUESTED_RESOURCE_STATE_PENDING,
+                        patch=_pack(condition),
+                    ),
                 )
             )
         )
-        return action_receipt_from_proto(response.receipt)
+        return action_receipt_from_proto(_unpack(operation.result, resource_pb2.ActionReceipt))
 
-    def terminate_attempt(self, identity: AttemptIdentity, *, idempotency_key: str) -> ActionReceipt:
-        response = peer_transport_call(
-            lambda: self._resources.terminate_attempt(
-                resource_pb2.TerminateAttemptRequest(
-                    attempt=attempt_identity_to_proto(identity),
-                    idempotency_key=idempotency_key,
+    def terminate_attempt(
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+        reason: str,
+    ) -> ActionReceipt:
+        operation = peer_transport_call(
+            lambda: self._resources.update_resource(
+                resource_pb2.UpdateResourceRequest(
+                    mutation=resource_pb2.MutationMetadata(request_id=idempotency_key, reason=reason),
+                    ref=_attempt_ref(identity),
+                    update=resource_pb2.ResourceUpdate(new_state=resource_pb2.REQUESTED_RESOURCE_STATE_CANCELLED),
                 )
             )
         )
-        return action_receipt_from_proto(response.receipt)
+        return action_receipt_from_proto(_unpack(operation.result, resource_pb2.ActionReceipt))
+
+    def fail_attempt(
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+        reason: str,
+    ) -> ActionReceipt:
+        operation = peer_transport_call(
+            lambda: self._resources.update_resource(
+                resource_pb2.UpdateResourceRequest(
+                    mutation=resource_pb2.MutationMetadata(request_id=idempotency_key, reason=reason),
+                    ref=_attempt_ref(identity),
+                    update=resource_pb2.ResourceUpdate(new_state=resource_pb2.REQUESTED_RESOURCE_STATE_FAILED),
+                )
+            )
+        )
+        return action_receipt_from_proto(_unpack(operation.result, resource_pb2.ActionReceipt))
 
     def profile_task(self, request: ProfileRequest) -> ProfileResult:
         if request.attempt is None:
@@ -196,8 +268,18 @@ class ConnectPeerConnection:
         if request.duration is not None:
             wire_request.duration.CopyFrom(duration_to_proto(request.duration))
         timeout_ms = (duration_seconds or _DEFAULT_PROFILE_DURATION) * 1000 + _PROFILE_PROXY_TIMEOUT_MARGIN_MS
-        response = peer_transport_call(lambda: self._resources.profile_attempt(wire_request, timeout_ms=timeout_ms))
-        return profile_result_from_proto(response)
+        operation = peer_transport_call(
+            lambda: self._resources.create_resource(
+                resource_pb2.CreateResourceRequest(
+                    mutation=resource_pb2.MutationMetadata(request_id=uuid.uuid4().hex),
+                    type=PROFILE_CAPTURE,
+                    parent=_attempt_ref(request.attempt),
+                    body=_pack(wire_request),
+                ),
+                timeout_ms=timeout_ms,
+            )
+        )
+        return profile_result_from_proto(_unpack(operation.result, resource_pb2.ProfileAttemptResponse))
 
     def exec_in_container(self, request: ExecRequest) -> ExecResult:
         timeout_seconds = int(request.timeout.to_seconds()) if request.timeout is not None else 0
@@ -212,13 +294,18 @@ class ConnectPeerConnection:
             if timeout_seconds < 0
             else (timeout_seconds or _DEFAULT_EXEC_TIMEOUT) * 1000
         )
-        response = peer_transport_call(
-            lambda: self._resources.exec_attempt(
-                wire_request,
+        operation = peer_transport_call(
+            lambda: self._resources.create_resource(
+                resource_pb2.CreateResourceRequest(
+                    mutation=resource_pb2.MutationMetadata(request_id=uuid.uuid4().hex),
+                    type=EXEC_SESSION,
+                    parent=_attempt_ref(request.attempt),
+                    body=_pack(wire_request),
+                ),
                 timeout_ms=budget_ms + _EXEC_PROXY_TIMEOUT_MARGIN_MS,
             )
         )
-        return exec_result_from_proto(response)
+        return exec_result_from_proto(_unpack(operation.result, resource_pb2.ExecAttemptResponse))
 
     def get_process_status(self, target: str) -> ProcessInfo:
         response = peer_transport_call(

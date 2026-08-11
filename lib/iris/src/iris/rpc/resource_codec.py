@@ -3,10 +3,16 @@
 
 """Codecs between native public resources and the ResourceService wire."""
 
+from collections.abc import Mapping
+
+from rigging.redaction import redact_value
+
 from iris.cluster.constraints import AttributeValue, Constraint, ConstraintMode, ConstraintOp
+from iris.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
 from iris.resources.endpoint import (
     CpuProfileConfiguration,
     CpuProfileFormat,
+    EndpointAccess,
     MemoryProfileConfiguration,
     MemoryProfileFormat,
     ProfileConfiguration,
@@ -21,6 +27,18 @@ from iris.resources.execution import (
     RuntimeEntrypoint,
     TpuDevice,
 )
+from iris.resources.identity import (
+    AttemptIdentity,
+    AttemptLocator,
+    JobIdentity,
+    NodeIdentity,
+    NodeLocator,
+    ResourceKey,
+    ResourceKind,
+    SliceIdentity,
+    SliceLocator,
+    TaskIdentity,
+)
 from iris.resources.job import (
     ContainerProfile,
     CoschedulingConfig,
@@ -29,8 +47,11 @@ from iris.resources.job import (
     JobSpec,
     PriorityBand,
 )
+from iris.resources.node import NodeHealth
+from iris.resources.slice import MembershipState, SliceCapacityState, SliceLifecycle
+from iris.resources.source import Freshness, ResourceSourceStatus, SourceState
 from iris.rpc import resource_pb2
-from iris.time_proto import duration_from_proto, duration_to_proto
+from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_from_proto, timestamp_to_proto
 
 _CPU_FORMAT_TO_PROTO = {
     CpuProfileFormat.UNSPECIFIED: resource_pb2.CpuProfile.FORMAT_UNSPECIFIED,
@@ -47,6 +68,319 @@ _MEMORY_FORMAT_TO_PROTO = {
     MemoryProfileFormat.RAW: resource_pb2.MemoryProfile.RAW,
 }
 _MEMORY_FORMAT_FROM_PROTO = {value: key for key, value in _MEMORY_FORMAT_TO_PROTO.items()}
+_RESOURCE_KIND_TO_PROTO = {
+    ResourceKind.JOB: resource_pb2.RESOURCE_KIND_JOB,
+    ResourceKind.TASK: resource_pb2.RESOURCE_KIND_TASK,
+    ResourceKind.ATTEMPT: resource_pb2.RESOURCE_KIND_ATTEMPT,
+    ResourceKind.ENDPOINT: resource_pb2.RESOURCE_KIND_ENDPOINT,
+    ResourceKind.NODE: resource_pb2.RESOURCE_KIND_NODE,
+    ResourceKind.SLICE: resource_pb2.RESOURCE_KIND_SLICE,
+}
+_RESOURCE_KIND_FROM_PROTO = {value: key for key, value in _RESOURCE_KIND_TO_PROTO.items()}
+_ACTION_KIND_TO_PROTO = {
+    ActionKind.CANCEL_JOB: resource_pb2.ACTION_KIND_CANCEL_JOB,
+    ActionKind.RETRY_TASK: resource_pb2.ACTION_KIND_RETRY_TASK,
+    ActionKind.TERMINATE_ATTEMPT: resource_pb2.ACTION_KIND_TERMINATE_ATTEMPT,
+    ActionKind.FAIL_ATTEMPT: resource_pb2.ACTION_KIND_FAIL_ATTEMPT,
+}
+_ACTION_KIND_FROM_PROTO = {value: key for key, value in _ACTION_KIND_TO_PROTO.items()}
+_ACTION_STATE_TO_PROTO = {
+    ActionState.ACCEPTED: resource_pb2.ACTION_STATE_ACCEPTED,
+    ActionState.VERIFYING: resource_pb2.ACTION_STATE_VERIFYING,
+    ActionState.SUCCEEDED: resource_pb2.ACTION_STATE_SUCCEEDED,
+    ActionState.FAILED: resource_pb2.ACTION_STATE_FAILED,
+}
+_ACTION_STATE_FROM_PROTO = {value: key for key, value in _ACTION_STATE_TO_PROTO.items()}
+_ACTION_RESULT_TO_PROTO = {
+    ActionResult.NONE: resource_pb2.ACTION_RESULT_NONE,
+    ActionResult.SATISFIED: resource_pb2.ACTION_RESULT_SATISFIED,
+    ActionResult.TARGET_ABSENT: resource_pb2.ACTION_RESULT_TARGET_ABSENT,
+    ActionResult.PROVIDER_REJECTED: resource_pb2.ACTION_RESULT_PROVIDER_REJECTED,
+    ActionResult.INTERNAL_ERROR: resource_pb2.ACTION_RESULT_INTERNAL_ERROR,
+}
+_ACTION_RESULT_FROM_PROTO = {value: key for key, value in _ACTION_RESULT_TO_PROTO.items()}
+_SOURCE_STATE_TO_PROTO = {
+    SourceState.AVAILABLE: resource_pb2.SOURCE_STATE_AVAILABLE,
+    SourceState.UNAVAILABLE: resource_pb2.SOURCE_STATE_UNAVAILABLE,
+    SourceState.UNSUPPORTED: resource_pb2.SOURCE_STATE_UNSUPPORTED,
+}
+_SOURCE_STATE_FROM_PROTO = {value: key for key, value in _SOURCE_STATE_TO_PROTO.items()}
+_FRESHNESS_TO_PROTO = {
+    Freshness.CURRENT: resource_pb2.FRESHNESS_CURRENT,
+    Freshness.STALE: resource_pb2.FRESHNESS_STALE,
+    Freshness.UNKNOWN: resource_pb2.FRESHNESS_UNKNOWN,
+}
+_FRESHNESS_FROM_PROTO = {value: key for key, value in _FRESHNESS_TO_PROTO.items()}
+_NODE_HEALTH_TO_PROTO = {
+    NodeHealth.READY: resource_pb2.NODE_HEALTH_READY,
+    NodeHealth.DEGRADED: resource_pb2.NODE_HEALTH_DEGRADED,
+    NodeHealth.UNAVAILABLE: resource_pb2.NODE_HEALTH_UNAVAILABLE,
+    NodeHealth.RETIRED: resource_pb2.NODE_HEALTH_RETIRED,
+}
+_NODE_HEALTH_FROM_PROTO = {value: key for key, value in _NODE_HEALTH_TO_PROTO.items()}
+_SLICE_LIFECYCLE_TO_PROTO = {
+    SliceLifecycle.CREATING: resource_pb2.SLICE_LIFECYCLE_CREATING,
+    SliceLifecycle.READY: resource_pb2.SLICE_LIFECYCLE_READY,
+    SliceLifecycle.DELETING: resource_pb2.SLICE_LIFECYCLE_DELETING,
+    SliceLifecycle.FAILED: resource_pb2.SLICE_LIFECYCLE_FAILED,
+}
+_SLICE_LIFECYCLE_FROM_PROTO = {value: key for key, value in _SLICE_LIFECYCLE_TO_PROTO.items()}
+_MEMBERSHIP_STATE_TO_PROTO = {
+    MembershipState.UNKNOWN: resource_pb2.MEMBERSHIP_STATE_UNKNOWN,
+    MembershipState.OBSERVED: resource_pb2.MEMBERSHIP_STATE_OBSERVED,
+}
+_MEMBERSHIP_STATE_FROM_PROTO = {value: key for key, value in _MEMBERSHIP_STATE_TO_PROTO.items()}
+_SLICE_CAPACITY_STATE_TO_PROTO = {
+    SliceCapacityState.UNKNOWN: resource_pb2.SLICE_CAPACITY_STATE_UNKNOWN,
+    SliceCapacityState.AVAILABLE: resource_pb2.SLICE_CAPACITY_STATE_AVAILABLE,
+    SliceCapacityState.IN_USE: resource_pb2.SLICE_CAPACITY_STATE_IN_USE,
+    SliceCapacityState.IDLE: resource_pb2.SLICE_CAPACITY_STATE_IDLE,
+    SliceCapacityState.DEGRADED: resource_pb2.SLICE_CAPACITY_STATE_DEGRADED,
+}
+_SLICE_CAPACITY_STATE_FROM_PROTO = {value: key for key, value in _SLICE_CAPACITY_STATE_TO_PROTO.items()}
+_ENDPOINT_ACCESS_TO_PROTO = {
+    EndpointAccess.PRIVATE: resource_pb2.ENDPOINT_ACCESS_PRIVATE,
+    EndpointAccess.LINK: resource_pb2.ENDPOINT_ACCESS_LINK,
+}
+_ENDPOINT_ACCESS_FROM_PROTO = {value: key for key, value in _ENDPOINT_ACCESS_TO_PROTO.items()}
+
+
+def _enum_from_proto[T](mapping: Mapping[int, T], value: int, field_name: str) -> T:
+    try:
+        return mapping[value]
+    except KeyError as exc:
+        raise ValueError(f"{field_name} wire value is unspecified") from exc
+
+
+def resource_key_to_proto(value: ResourceKey) -> resource_pb2.ResourceKey:
+    return resource_pb2.ResourceKey(
+        cluster_id=value.cluster_id,
+        kind=_RESOURCE_KIND_TO_PROTO[value.kind],
+        resource_id=value.resource_id,
+    )
+
+
+def resource_key_from_proto(value: resource_pb2.ResourceKey) -> ResourceKey:
+    kind = _enum_from_proto(_RESOURCE_KIND_FROM_PROTO, value.kind, "resource kind")
+    return ResourceKey(value.cluster_id, kind, value.resource_id)
+
+
+def job_identity_to_proto(value: JobIdentity) -> resource_pb2.JobIdentity:
+    return resource_pb2.JobIdentity(key=resource_key_to_proto(value.key), job_uid=value.job_uid)
+
+
+def job_identity_from_proto(value: resource_pb2.JobIdentity) -> JobIdentity:
+    return JobIdentity(resource_key_from_proto(value.key), value.job_uid)
+
+
+def task_identity_to_proto(value: TaskIdentity) -> resource_pb2.TaskIdentity:
+    return resource_pb2.TaskIdentity(key=resource_key_to_proto(value.key), task_uid=value.task_uid)
+
+
+def task_identity_from_proto(value: resource_pb2.TaskIdentity) -> TaskIdentity:
+    return TaskIdentity(resource_key_from_proto(value.key), value.task_uid)
+
+
+def attempt_identity_to_proto(value: AttemptIdentity) -> resource_pb2.AttemptIdentity:
+    return resource_pb2.AttemptIdentity(
+        task=resource_key_to_proto(value.task),
+        attempt_number=value.attempt_number,
+        attempt_uid=value.attempt_uid,
+    )
+
+
+def attempt_identity_from_proto(value: resource_pb2.AttemptIdentity) -> AttemptIdentity:
+    return AttemptIdentity(resource_key_from_proto(value.task), value.attempt_number, value.attempt_uid)
+
+
+def attempt_locator_to_proto(value: AttemptLocator) -> resource_pb2.AttemptLocator:
+    result = resource_pb2.AttemptLocator(task=resource_key_to_proto(value.task))
+    if value.attempt_number is not None:
+        result.attempt_number = value.attempt_number
+    return result
+
+
+def attempt_locator_from_proto(value: resource_pb2.AttemptLocator) -> AttemptLocator:
+    return AttemptLocator(
+        resource_key_from_proto(value.task),
+        value.attempt_number if value.HasField("attempt_number") else None,
+    )
+
+
+def node_identity_to_proto(value: NodeIdentity) -> resource_pb2.NodeIdentity:
+    return resource_pb2.NodeIdentity(
+        key=resource_key_to_proto(value.key),
+        backend_id=value.backend_id,
+        node_uid=value.node_uid,
+    )
+
+
+def node_identity_from_proto(value: resource_pb2.NodeIdentity) -> NodeIdentity:
+    return NodeIdentity(resource_key_from_proto(value.key), value.backend_id, value.node_uid)
+
+
+def node_locator_to_proto(value: NodeLocator) -> resource_pb2.NodeLocator:
+    result = resource_pb2.NodeLocator(key=resource_key_to_proto(value.key), backend_id=value.backend_id)
+    if value.node_uid is not None:
+        result.node_uid = value.node_uid
+    return result
+
+
+def node_locator_from_proto(value: resource_pb2.NodeLocator) -> NodeLocator:
+    return NodeLocator(
+        key=resource_key_from_proto(value.key),
+        backend_id=value.backend_id,
+        node_uid=value.node_uid or None,
+    )
+
+
+def slice_identity_to_proto(value: SliceIdentity) -> resource_pb2.SliceIdentity:
+    return resource_pb2.SliceIdentity(
+        key=resource_key_to_proto(value.key),
+        backend_id=value.backend_id,
+        slice_uid=value.slice_uid,
+    )
+
+
+def slice_identity_from_proto(value: resource_pb2.SliceIdentity) -> SliceIdentity:
+    return SliceIdentity(resource_key_from_proto(value.key), value.backend_id, value.slice_uid)
+
+
+def slice_locator_to_proto(value: SliceLocator) -> resource_pb2.SliceLocator:
+    result = resource_pb2.SliceLocator(key=resource_key_to_proto(value.key), backend_id=value.backend_id)
+    if value.slice_uid is not None:
+        result.slice_uid = value.slice_uid
+    return result
+
+
+def slice_locator_from_proto(value: resource_pb2.SliceLocator) -> SliceLocator:
+    return SliceLocator(
+        key=resource_key_from_proto(value.key),
+        backend_id=value.backend_id,
+        slice_uid=value.slice_uid or None,
+    )
+
+
+def source_state_to_proto(value: SourceState) -> int:
+    return _SOURCE_STATE_TO_PROTO[value]
+
+
+def source_state_from_proto(value: int) -> SourceState:
+    return _enum_from_proto(_SOURCE_STATE_FROM_PROTO, value, "source state")
+
+
+def freshness_to_proto(value: Freshness) -> int:
+    return _FRESHNESS_TO_PROTO[value]
+
+
+def freshness_from_proto(value: int) -> Freshness:
+    return _enum_from_proto(_FRESHNESS_FROM_PROTO, value, "freshness")
+
+
+def node_health_to_proto(value: NodeHealth) -> int:
+    return _NODE_HEALTH_TO_PROTO[value]
+
+
+def node_health_from_proto(value: int) -> NodeHealth:
+    return _enum_from_proto(_NODE_HEALTH_FROM_PROTO, value, "node health")
+
+
+def slice_lifecycle_to_proto(value: SliceLifecycle) -> int:
+    return _SLICE_LIFECYCLE_TO_PROTO[value]
+
+
+def slice_lifecycle_from_proto(value: int) -> SliceLifecycle:
+    return _enum_from_proto(_SLICE_LIFECYCLE_FROM_PROTO, value, "slice lifecycle")
+
+
+def membership_state_to_proto(value: MembershipState) -> int:
+    return _MEMBERSHIP_STATE_TO_PROTO[value]
+
+
+def membership_state_from_proto(value: int) -> MembershipState:
+    return _enum_from_proto(_MEMBERSHIP_STATE_FROM_PROTO, value, "membership state")
+
+
+def slice_capacity_state_to_proto(value: SliceCapacityState) -> int:
+    return _SLICE_CAPACITY_STATE_TO_PROTO[value]
+
+
+def slice_capacity_state_from_proto(value: int) -> SliceCapacityState:
+    return _enum_from_proto(_SLICE_CAPACITY_STATE_FROM_PROTO, value, "slice capacity state")
+
+
+def endpoint_access_to_proto(value: EndpointAccess) -> int:
+    return _ENDPOINT_ACCESS_TO_PROTO[value]
+
+
+def endpoint_access_from_proto(value: int) -> EndpointAccess:
+    return _enum_from_proto(_ENDPOINT_ACCESS_FROM_PROTO, value, "endpoint access")
+
+
+def resource_source_status_to_proto(value: ResourceSourceStatus) -> resource_pb2.ResourceSourceStatus:
+    result = resource_pb2.ResourceSourceStatus(
+        source_id=value.source_id,
+        backend_id=value.backend_id,
+        state=source_state_to_proto(value.state),
+        freshness=freshness_to_proto(value.freshness),
+        error_code=value.error_code,
+        error_message=value.error_message,
+    )
+    if value.observed_at is not None:
+        result.observed_at.CopyFrom(timestamp_to_proto(value.observed_at))
+    return result
+
+
+def resource_source_status_from_proto(value: resource_pb2.ResourceSourceStatus) -> ResourceSourceStatus:
+    return ResourceSourceStatus(
+        source_id=value.source_id,
+        backend_id=value.backend_id,
+        state=source_state_from_proto(value.state),
+        freshness=freshness_from_proto(value.freshness),
+        observed_at=timestamp_from_proto(value.observed_at) if value.HasField("observed_at") else None,
+        error_code=value.error_code,
+        error_message=value.error_message,
+    )
+
+
+def action_receipt_to_proto(value: ActionReceipt) -> resource_pb2.ActionReceipt:
+    result = resource_pb2.ActionReceipt(
+        action_id=value.action_id,
+        kind=_ACTION_KIND_TO_PROTO[value.kind],
+        target=resource_key_to_proto(value.target),
+        expected_target_uid=value.expected_target_uid,
+        expected_attempt_uid=value.expected_attempt_uid or "",
+        state=_ACTION_STATE_TO_PROTO[value.state],
+        result_code=_ACTION_RESULT_TO_PROTO[value.result_code],
+        result_message=value.result_message,
+        created_at=timestamp_to_proto(value.created_at),
+        updated_at=timestamp_to_proto(value.updated_at),
+    )
+    if value.completed_at is not None:
+        result.completed_at.CopyFrom(timestamp_to_proto(value.completed_at))
+    if value.expected_attempt_number is not None:
+        result.expected_attempt_number = value.expected_attempt_number
+    return result
+
+
+def action_receipt_from_proto(value: resource_pb2.ActionReceipt) -> ActionReceipt:
+    kind = _enum_from_proto(_ACTION_KIND_FROM_PROTO, value.kind, "action kind")
+    state = _enum_from_proto(_ACTION_STATE_FROM_PROTO, value.state, "action state")
+    result = _enum_from_proto(_ACTION_RESULT_FROM_PROTO, value.result_code, "action result")
+    return ActionReceipt(
+        action_id=value.action_id,
+        kind=kind,
+        target=resource_key_from_proto(value.target),
+        expected_target_uid=value.expected_target_uid,
+        expected_attempt_uid=value.expected_attempt_uid or None,
+        state=state,
+        result_code=result,
+        result_message=value.result_message,
+        created_at=timestamp_from_proto(value.created_at),
+        updated_at=timestamp_from_proto(value.updated_at),
+        completed_at=timestamp_from_proto(value.completed_at) if value.HasField("completed_at") else None,
+        expected_attempt_number=value.expected_attempt_number if value.HasField("expected_attempt_number") else None,
+    )
 
 
 def device_to_proto(value: CpuDevice | GpuDevice | TpuDevice) -> resource_pb2.DeviceConfig:
@@ -192,6 +526,18 @@ def job_spec_to_proto(value: JobSpec) -> resource_pb2.JobSpec:
         result.coscheduling.group_by = value.coscheduling.group_by
     if value.timeout is not None:
         result.timeout.CopyFrom(duration_to_proto(value.timeout))
+    return result
+
+
+def redacted_job_spec_to_proto(value: JobSpec) -> resource_pb2.JobSpec:
+    """Encode a Job spec without exposing submitted secrets or workdir payloads."""
+    result = job_spec_to_proto(value)
+    redacted_env = redact_value(dict(result.environment.env_vars))
+    assert isinstance(redacted_env, dict)
+    result.environment.env_vars.clear()
+    result.environment.env_vars.update(redacted_env)
+    result.entrypoint.workdir_files.clear()
+    result.entrypoint.workdir_file_refs.clear()
     return result
 
 

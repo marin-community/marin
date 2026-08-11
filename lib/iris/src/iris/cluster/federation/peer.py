@@ -89,9 +89,9 @@ class FederationPeer:
         """Run one delta-sync round against the peer."""
         return self._connection.federation_sync(requester_id, cursor)
 
-    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt:
+    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str, reason: str) -> ActionReceipt:
         """Cancel an exact Job incarnation on the execution peer."""
-        return self._connection.cancel_job(identity, idempotency_key=idempotency_key)
+        return self._connection.cancel_job(identity, idempotency_key=idempotency_key, reason=reason)
 
     def retry_task(
         self,
@@ -99,17 +99,35 @@ class FederationPeer:
         *,
         expected_attempt_uid: str,
         idempotency_key: str,
+        reason: str,
     ) -> ActionReceipt:
         """Retry an exact Task incarnation on the execution peer."""
         return self._connection.retry_task(
             identity,
             expected_attempt_uid=expected_attempt_uid,
             idempotency_key=idempotency_key,
+            reason=reason,
         )
 
-    def terminate_attempt(self, identity: AttemptIdentity, *, idempotency_key: str) -> ActionReceipt:
+    def terminate_attempt(
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+        reason: str,
+    ) -> ActionReceipt:
         """Terminate an exact Attempt incarnation on the execution peer."""
-        return self._connection.terminate_attempt(identity, idempotency_key=idempotency_key)
+        return self._connection.terminate_attempt(identity, idempotency_key=idempotency_key, reason=reason)
+
+    def fail_attempt(
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+        reason: str,
+    ) -> ActionReceipt:
+        """Fail an exact Attempt incarnation on the execution peer."""
+        return self._connection.fail_attempt(identity, idempotency_key=idempotency_key, reason=reason)
 
     def profile_task(self, request: ProfileRequest) -> ProfileResult:
         """Profile an Attempt running on the peer."""

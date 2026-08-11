@@ -44,10 +44,13 @@ class _ResourceStub:
         self.exec_timeout_ms = 0
         self.exec_request = None
 
-    def exec_attempt(self, request, timeout_ms):
+    def create_resource(self, request, timeout_ms):
         self.exec_timeout_ms = timeout_ms
-        self.exec_request = request
-        return resource_pb2.ExecAttemptResponse()
+        self.exec_request = resource_pb2.ExecAttemptRequest()
+        assert request.body.Unpack(self.exec_request)
+        result = resource_pb2.Operation()
+        result.result.Pack(resource_pb2.ExecAttemptResponse())
+        return result
 
     def close(self):
         pass

@@ -233,6 +233,10 @@ class EndpointRegistry:
                 return row
         return None
 
+    def task_endpoint(self, endpoint_id: str) -> EndpointRow | None:
+        """Return the live task Endpoint with this exact registration ID."""
+        return self._db.caches[EndpointsProjection].get(endpoint_id)
+
     def _endpoint_mutated(self, mutation: EndpointDelta | EndpointReset) -> None:
         if isinstance(mutation, EndpointReset):
             self._publish_proxy_reset()

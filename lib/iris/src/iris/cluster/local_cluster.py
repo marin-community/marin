@@ -332,6 +332,6 @@ def make_local_cluster_config(max_workers: int) -> IrisClusterConfig:
             device_type=AcceleratorType.CPU,
         ),
     )
-    base_config = IrisClusterConfig(scale_groups={"local-cpu": sg})
+    base_config = IrisClusterConfig(name="local", scale_groups={"local-cpu": sg})
 
     return make_local_config(base_config)

@@ -17,82 +17,25 @@ from . import resource_pb2 as resource__pb2
 
 
 class ResourceService(Protocol):
-    async def submit_job(self, request: resource__pb2.SubmitJobRequest, ctx: RequestContext) -> resource__pb2.SubmitJobResponse:
+    async def create_resource(self, request: resource__pb2.CreateResourceRequest, ctx: RequestContext) -> resource__pb2.Operation:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def list_jobs(self, request: resource__pb2.ListJobsRequest, ctx: RequestContext) -> resource__pb2.ListJobsResponse:
+    async def get_resource(self, request: resource__pb2.GetResourceRequest, ctx: RequestContext) -> resource__pb2.GetResourceResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def list_users(self, request: resource__pb2.ListUsersRequest, ctx: RequestContext) -> resource__pb2.ListUsersResponse:
+    async def batch_get_resources(self, request: resource__pb2.BatchGetResourcesRequest, ctx: RequestContext) -> resource__pb2.BatchGetResourcesResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def describe_job(self, request: resource__pb2.DescribeJobRequest, ctx: RequestContext) -> resource__pb2.DescribeJobResponse:
+    async def list_resources(self, request: resource__pb2.ListResourcesRequest, ctx: RequestContext) -> resource__pb2.ListResourcesResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_job_state(self, request: resource__pb2.GetJobStateRequest, ctx: RequestContext) -> resource__pb2.GetJobStateResponse:
+    async def update_resource(self, request: resource__pb2.UpdateResourceRequest, ctx: RequestContext) -> resource__pb2.Operation:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def list_tasks(self, request: resource__pb2.ListTasksRequest, ctx: RequestContext) -> resource__pb2.ListTasksResponse:
+    async def delete_resource(self, request: resource__pb2.DeleteResourceRequest, ctx: RequestContext) -> resource__pb2.Operation:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def describe_task(self, request: resource__pb2.DescribeTaskRequest, ctx: RequestContext) -> resource__pb2.DescribeTaskResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def batch_describe_tasks(self, request: resource__pb2.BatchDescribeTasksRequest, ctx: RequestContext) -> resource__pb2.BatchDescribeTasksResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def describe_attempt(self, request: resource__pb2.DescribeAttemptRequest, ctx: RequestContext) -> resource__pb2.DescribeAttemptResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def list_nodes(self, request: resource__pb2.ListNodesRequest, ctx: RequestContext) -> resource__pb2.ListNodesResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def describe_node(self, request: resource__pb2.DescribeNodeRequest, ctx: RequestContext) -> resource__pb2.DescribeNodeResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def list_slices(self, request: resource__pb2.ListSlicesRequest, ctx: RequestContext) -> resource__pb2.ListSlicesResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def describe_slice(self, request: resource__pb2.DescribeSliceRequest, ctx: RequestContext) -> resource__pb2.DescribeSliceResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def get_capacity_status(self, request: resource__pb2.GetCapacityStatusRequest, ctx: RequestContext) -> resource__pb2.GetCapacityStatusResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def list_endpoints(self, request: resource__pb2.ListEndpointsRequest, ctx: RequestContext) -> resource__pb2.ListEndpointsResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def describe_endpoint(self, request: resource__pb2.DescribeEndpointRequest, ctx: RequestContext) -> resource__pb2.DescribeEndpointResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def batch_describe_endpoints(self, request: resource__pb2.BatchDescribeEndpointsRequest, ctx: RequestContext) -> resource__pb2.BatchDescribeEndpointsResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def mint_endpoint_token(self, request: resource__pb2.MintEndpointTokenRequest, ctx: RequestContext) -> resource__pb2.MintEndpointTokenResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def list_activity(self, request: resource__pb2.ListActivityRequest, ctx: RequestContext) -> resource__pb2.ListActivityResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def fetch_logs(self, request: resource__pb2.FetchLogsRequest, ctx: RequestContext) -> resource__pb2.FetchLogsResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def cancel_job(self, request: resource__pb2.CancelJobRequest, ctx: RequestContext) -> resource__pb2.ActionResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def retry_task(self, request: resource__pb2.RetryTaskRequest, ctx: RequestContext) -> resource__pb2.ActionResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def terminate_attempt(self, request: resource__pb2.TerminateAttemptRequest, ctx: RequestContext) -> resource__pb2.ActionResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def get_action_receipt(self, request: resource__pb2.GetActionReceiptRequest, ctx: RequestContext) -> resource__pb2.ActionResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def exec_attempt(self, request: resource__pb2.ExecAttemptRequest, ctx: RequestContext) -> resource__pb2.ExecAttemptResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def profile_attempt(self, request: resource__pb2.ProfileAttemptRequest, ctx: RequestContext) -> resource__pb2.ProfileAttemptResponse:
+    async def get_service_info(self, request: resource__pb2.GetServiceInfoRequest, ctx: RequestContext) -> resource__pb2.GetServiceInfoResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -101,265 +44,75 @@ class ResourceServiceASGIApplication(ConnectASGIApplication[ResourceService]):
         super().__init__(
             service=service,
             endpoints=lambda svc: {
-                "/iris.resource.ResourceService/SubmitJob": Endpoint.unary(
+                "/iris.resource.ResourceService/CreateResource": Endpoint.unary(
                     method=MethodInfo(
-                        name="SubmitJob",
+                        name="CreateResource",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.SubmitJobRequest,
-                        output=resource__pb2.SubmitJobResponse,
+                        input=resource__pb2.CreateResourceRequest,
+                        output=resource__pb2.Operation,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=svc.submit_job,
+                    function=svc.create_resource,
                 ),
-                "/iris.resource.ResourceService/ListJobs": Endpoint.unary(
+                "/iris.resource.ResourceService/GetResource": Endpoint.unary(
                     method=MethodInfo(
-                        name="ListJobs",
+                        name="GetResource",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListJobsRequest,
-                        output=resource__pb2.ListJobsResponse,
+                        input=resource__pb2.GetResourceRequest,
+                        output=resource__pb2.GetResourceResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=svc.list_jobs,
+                    function=svc.get_resource,
                 ),
-                "/iris.resource.ResourceService/ListUsers": Endpoint.unary(
+                "/iris.resource.ResourceService/BatchGetResources": Endpoint.unary(
                     method=MethodInfo(
-                        name="ListUsers",
+                        name="BatchGetResources",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListUsersRequest,
-                        output=resource__pb2.ListUsersResponse,
+                        input=resource__pb2.BatchGetResourcesRequest,
+                        output=resource__pb2.BatchGetResourcesResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=svc.list_users,
+                    function=svc.batch_get_resources,
                 ),
-                "/iris.resource.ResourceService/DescribeJob": Endpoint.unary(
+                "/iris.resource.ResourceService/ListResources": Endpoint.unary(
                     method=MethodInfo(
-                        name="DescribeJob",
+                        name="ListResources",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.DescribeJobRequest,
-                        output=resource__pb2.DescribeJobResponse,
+                        input=resource__pb2.ListResourcesRequest,
+                        output=resource__pb2.ListResourcesResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=svc.describe_job,
+                    function=svc.list_resources,
                 ),
-                "/iris.resource.ResourceService/GetJobState": Endpoint.unary(
+                "/iris.resource.ResourceService/UpdateResource": Endpoint.unary(
                     method=MethodInfo(
-                        name="GetJobState",
+                        name="UpdateResource",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.GetJobStateRequest,
-                        output=resource__pb2.GetJobStateResponse,
+                        input=resource__pb2.UpdateResourceRequest,
+                        output=resource__pb2.Operation,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=svc.get_job_state,
+                    function=svc.update_resource,
                 ),
-                "/iris.resource.ResourceService/ListTasks": Endpoint.unary(
+                "/iris.resource.ResourceService/DeleteResource": Endpoint.unary(
                     method=MethodInfo(
-                        name="ListTasks",
+                        name="DeleteResource",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListTasksRequest,
-                        output=resource__pb2.ListTasksResponse,
+                        input=resource__pb2.DeleteResourceRequest,
+                        output=resource__pb2.Operation,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=svc.list_tasks,
+                    function=svc.delete_resource,
                 ),
-                "/iris.resource.ResourceService/DescribeTask": Endpoint.unary(
+                "/iris.resource.ResourceService/GetServiceInfo": Endpoint.unary(
                     method=MethodInfo(
-                        name="DescribeTask",
+                        name="GetServiceInfo",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.DescribeTaskRequest,
-                        output=resource__pb2.DescribeTaskResponse,
+                        input=resource__pb2.GetServiceInfoRequest,
+                        output=resource__pb2.GetServiceInfoResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=svc.describe_task,
-                ),
-                "/iris.resource.ResourceService/BatchDescribeTasks": Endpoint.unary(
-                    method=MethodInfo(
-                        name="BatchDescribeTasks",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.BatchDescribeTasksRequest,
-                        output=resource__pb2.BatchDescribeTasksResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.batch_describe_tasks,
-                ),
-                "/iris.resource.ResourceService/DescribeAttempt": Endpoint.unary(
-                    method=MethodInfo(
-                        name="DescribeAttempt",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.DescribeAttemptRequest,
-                        output=resource__pb2.DescribeAttemptResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.describe_attempt,
-                ),
-                "/iris.resource.ResourceService/ListNodes": Endpoint.unary(
-                    method=MethodInfo(
-                        name="ListNodes",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListNodesRequest,
-                        output=resource__pb2.ListNodesResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.list_nodes,
-                ),
-                "/iris.resource.ResourceService/DescribeNode": Endpoint.unary(
-                    method=MethodInfo(
-                        name="DescribeNode",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.DescribeNodeRequest,
-                        output=resource__pb2.DescribeNodeResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.describe_node,
-                ),
-                "/iris.resource.ResourceService/ListSlices": Endpoint.unary(
-                    method=MethodInfo(
-                        name="ListSlices",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListSlicesRequest,
-                        output=resource__pb2.ListSlicesResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.list_slices,
-                ),
-                "/iris.resource.ResourceService/DescribeSlice": Endpoint.unary(
-                    method=MethodInfo(
-                        name="DescribeSlice",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.DescribeSliceRequest,
-                        output=resource__pb2.DescribeSliceResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.describe_slice,
-                ),
-                "/iris.resource.ResourceService/GetCapacityStatus": Endpoint.unary(
-                    method=MethodInfo(
-                        name="GetCapacityStatus",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.GetCapacityStatusRequest,
-                        output=resource__pb2.GetCapacityStatusResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.get_capacity_status,
-                ),
-                "/iris.resource.ResourceService/ListEndpoints": Endpoint.unary(
-                    method=MethodInfo(
-                        name="ListEndpoints",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListEndpointsRequest,
-                        output=resource__pb2.ListEndpointsResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.list_endpoints,
-                ),
-                "/iris.resource.ResourceService/DescribeEndpoint": Endpoint.unary(
-                    method=MethodInfo(
-                        name="DescribeEndpoint",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.DescribeEndpointRequest,
-                        output=resource__pb2.DescribeEndpointResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.describe_endpoint,
-                ),
-                "/iris.resource.ResourceService/BatchDescribeEndpoints": Endpoint.unary(
-                    method=MethodInfo(
-                        name="BatchDescribeEndpoints",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.BatchDescribeEndpointsRequest,
-                        output=resource__pb2.BatchDescribeEndpointsResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.batch_describe_endpoints,
-                ),
-                "/iris.resource.ResourceService/MintEndpointToken": Endpoint.unary(
-                    method=MethodInfo(
-                        name="MintEndpointToken",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.MintEndpointTokenRequest,
-                        output=resource__pb2.MintEndpointTokenResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.mint_endpoint_token,
-                ),
-                "/iris.resource.ResourceService/ListActivity": Endpoint.unary(
-                    method=MethodInfo(
-                        name="ListActivity",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListActivityRequest,
-                        output=resource__pb2.ListActivityResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.list_activity,
-                ),
-                "/iris.resource.ResourceService/FetchLogs": Endpoint.unary(
-                    method=MethodInfo(
-                        name="FetchLogs",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.FetchLogsRequest,
-                        output=resource__pb2.FetchLogsResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.fetch_logs,
-                ),
-                "/iris.resource.ResourceService/CancelJob": Endpoint.unary(
-                    method=MethodInfo(
-                        name="CancelJob",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.CancelJobRequest,
-                        output=resource__pb2.ActionResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.cancel_job,
-                ),
-                "/iris.resource.ResourceService/RetryTask": Endpoint.unary(
-                    method=MethodInfo(
-                        name="RetryTask",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.RetryTaskRequest,
-                        output=resource__pb2.ActionResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.retry_task,
-                ),
-                "/iris.resource.ResourceService/TerminateAttempt": Endpoint.unary(
-                    method=MethodInfo(
-                        name="TerminateAttempt",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.TerminateAttemptRequest,
-                        output=resource__pb2.ActionResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.terminate_attempt,
-                ),
-                "/iris.resource.ResourceService/GetActionReceipt": Endpoint.unary(
-                    method=MethodInfo(
-                        name="GetActionReceipt",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.GetActionReceiptRequest,
-                        output=resource__pb2.ActionResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.get_action_receipt,
-                ),
-                "/iris.resource.ResourceService/ExecAttempt": Endpoint.unary(
-                    method=MethodInfo(
-                        name="ExecAttempt",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ExecAttemptRequest,
-                        output=resource__pb2.ExecAttemptResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.exec_attempt,
-                ),
-                "/iris.resource.ResourceService/ProfileAttempt": Endpoint.unary(
-                    method=MethodInfo(
-                        name="ProfileAttempt",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ProfileAttemptRequest,
-                        output=resource__pb2.ProfileAttemptResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.profile_attempt,
+                    function=svc.get_service_info,
                 ),
             },
             interceptors=interceptors,
@@ -374,520 +127,140 @@ class ResourceServiceASGIApplication(ConnectASGIApplication[ResourceService]):
 
 
 class ResourceServiceClient(ConnectClient):
-    async def submit_job(
+    async def create_resource(
         self,
-        request: resource__pb2.SubmitJobRequest,
+        request: resource__pb2.CreateResourceRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.SubmitJobResponse:
+    ) -> resource__pb2.Operation:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="SubmitJob",
+                name="CreateResource",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.SubmitJobRequest,
-                output=resource__pb2.SubmitJobResponse,
+                input=resource__pb2.CreateResourceRequest,
+                output=resource__pb2.Operation,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
             timeout_ms=timeout_ms,
         )
 
-    async def list_jobs(
+    async def get_resource(
         self,
-        request: resource__pb2.ListJobsRequest,
+        request: resource__pb2.GetResourceRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.ListJobsResponse:
+    ) -> resource__pb2.GetResourceResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="ListJobs",
+                name="GetResource",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListJobsRequest,
-                output=resource__pb2.ListJobsResponse,
+                input=resource__pb2.GetResourceRequest,
+                output=resource__pb2.GetResourceResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
             timeout_ms=timeout_ms,
         )
 
-    async def list_users(
+    async def batch_get_resources(
         self,
-        request: resource__pb2.ListUsersRequest,
+        request: resource__pb2.BatchGetResourcesRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.ListUsersResponse:
+    ) -> resource__pb2.BatchGetResourcesResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="ListUsers",
+                name="BatchGetResources",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListUsersRequest,
-                output=resource__pb2.ListUsersResponse,
+                input=resource__pb2.BatchGetResourcesRequest,
+                output=resource__pb2.BatchGetResourcesResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
             timeout_ms=timeout_ms,
         )
 
-    async def describe_job(
+    async def list_resources(
         self,
-        request: resource__pb2.DescribeJobRequest,
+        request: resource__pb2.ListResourcesRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.DescribeJobResponse:
+    ) -> resource__pb2.ListResourcesResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="DescribeJob",
+                name="ListResources",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.DescribeJobRequest,
-                output=resource__pb2.DescribeJobResponse,
+                input=resource__pb2.ListResourcesRequest,
+                output=resource__pb2.ListResourcesResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
             timeout_ms=timeout_ms,
         )
 
-    async def get_job_state(
+    async def update_resource(
         self,
-        request: resource__pb2.GetJobStateRequest,
+        request: resource__pb2.UpdateResourceRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.GetJobStateResponse:
+    ) -> resource__pb2.Operation:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="GetJobState",
+                name="UpdateResource",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.GetJobStateRequest,
-                output=resource__pb2.GetJobStateResponse,
+                input=resource__pb2.UpdateResourceRequest,
+                output=resource__pb2.Operation,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
             timeout_ms=timeout_ms,
         )
 
-    async def list_tasks(
+    async def delete_resource(
         self,
-        request: resource__pb2.ListTasksRequest,
+        request: resource__pb2.DeleteResourceRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.ListTasksResponse:
+    ) -> resource__pb2.Operation:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="ListTasks",
+                name="DeleteResource",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListTasksRequest,
-                output=resource__pb2.ListTasksResponse,
+                input=resource__pb2.DeleteResourceRequest,
+                output=resource__pb2.Operation,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
             timeout_ms=timeout_ms,
         )
 
-    async def describe_task(
+    async def get_service_info(
         self,
-        request: resource__pb2.DescribeTaskRequest,
+        request: resource__pb2.GetServiceInfoRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.DescribeTaskResponse:
+    ) -> resource__pb2.GetServiceInfoResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="DescribeTask",
+                name="GetServiceInfo",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.DescribeTaskRequest,
-                output=resource__pb2.DescribeTaskResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def batch_describe_tasks(
-        self,
-        request: resource__pb2.BatchDescribeTasksRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.BatchDescribeTasksResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="BatchDescribeTasks",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.BatchDescribeTasksRequest,
-                output=resource__pb2.BatchDescribeTasksResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def describe_attempt(
-        self,
-        request: resource__pb2.DescribeAttemptRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.DescribeAttemptResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="DescribeAttempt",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.DescribeAttemptRequest,
-                output=resource__pb2.DescribeAttemptResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def list_nodes(
-        self,
-        request: resource__pb2.ListNodesRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ListNodesResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ListNodes",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListNodesRequest,
-                output=resource__pb2.ListNodesResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def describe_node(
-        self,
-        request: resource__pb2.DescribeNodeRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.DescribeNodeResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="DescribeNode",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.DescribeNodeRequest,
-                output=resource__pb2.DescribeNodeResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def list_slices(
-        self,
-        request: resource__pb2.ListSlicesRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ListSlicesResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ListSlices",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListSlicesRequest,
-                output=resource__pb2.ListSlicesResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def describe_slice(
-        self,
-        request: resource__pb2.DescribeSliceRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.DescribeSliceResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="DescribeSlice",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.DescribeSliceRequest,
-                output=resource__pb2.DescribeSliceResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def get_capacity_status(
-        self,
-        request: resource__pb2.GetCapacityStatusRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.GetCapacityStatusResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetCapacityStatus",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.GetCapacityStatusRequest,
-                output=resource__pb2.GetCapacityStatusResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def list_endpoints(
-        self,
-        request: resource__pb2.ListEndpointsRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ListEndpointsResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ListEndpoints",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListEndpointsRequest,
-                output=resource__pb2.ListEndpointsResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def describe_endpoint(
-        self,
-        request: resource__pb2.DescribeEndpointRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.DescribeEndpointResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="DescribeEndpoint",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.DescribeEndpointRequest,
-                output=resource__pb2.DescribeEndpointResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def batch_describe_endpoints(
-        self,
-        request: resource__pb2.BatchDescribeEndpointsRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.BatchDescribeEndpointsResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="BatchDescribeEndpoints",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.BatchDescribeEndpointsRequest,
-                output=resource__pb2.BatchDescribeEndpointsResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def mint_endpoint_token(
-        self,
-        request: resource__pb2.MintEndpointTokenRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.MintEndpointTokenResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="MintEndpointToken",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.MintEndpointTokenRequest,
-                output=resource__pb2.MintEndpointTokenResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def list_activity(
-        self,
-        request: resource__pb2.ListActivityRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ListActivityResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ListActivity",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListActivityRequest,
-                output=resource__pb2.ListActivityResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def fetch_logs(
-        self,
-        request: resource__pb2.FetchLogsRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.FetchLogsResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="FetchLogs",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.FetchLogsRequest,
-                output=resource__pb2.FetchLogsResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def cancel_job(
-        self,
-        request: resource__pb2.CancelJobRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ActionResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="CancelJob",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.CancelJobRequest,
-                output=resource__pb2.ActionResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def retry_task(
-        self,
-        request: resource__pb2.RetryTaskRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ActionResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="RetryTask",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.RetryTaskRequest,
-                output=resource__pb2.ActionResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def terminate_attempt(
-        self,
-        request: resource__pb2.TerminateAttemptRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ActionResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="TerminateAttempt",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.TerminateAttemptRequest,
-                output=resource__pb2.ActionResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def get_action_receipt(
-        self,
-        request: resource__pb2.GetActionReceiptRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ActionResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetActionReceipt",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.GetActionReceiptRequest,
-                output=resource__pb2.ActionResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def exec_attempt(
-        self,
-        request: resource__pb2.ExecAttemptRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ExecAttemptResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ExecAttempt",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.ExecAttemptRequest,
-                output=resource__pb2.ExecAttemptResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def profile_attempt(
-        self,
-        request: resource__pb2.ProfileAttemptRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ProfileAttemptResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ProfileAttempt",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.ProfileAttemptRequest,
-                output=resource__pb2.ProfileAttemptResponse,
+                input=resource__pb2.GetServiceInfoRequest,
+                output=resource__pb2.GetServiceInfoResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -896,57 +269,19 @@ class ResourceServiceClient(ConnectClient):
 
 
 class ResourceServiceSync(Protocol):
-    def submit_job(self, request: resource__pb2.SubmitJobRequest, ctx: RequestContext) -> resource__pb2.SubmitJobResponse:
+    def create_resource(self, request: resource__pb2.CreateResourceRequest, ctx: RequestContext) -> resource__pb2.Operation:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def list_jobs(self, request: resource__pb2.ListJobsRequest, ctx: RequestContext) -> resource__pb2.ListJobsResponse:
+    def get_resource(self, request: resource__pb2.GetResourceRequest, ctx: RequestContext) -> resource__pb2.GetResourceResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def list_users(self, request: resource__pb2.ListUsersRequest, ctx: RequestContext) -> resource__pb2.ListUsersResponse:
+    def batch_get_resources(self, request: resource__pb2.BatchGetResourcesRequest, ctx: RequestContext) -> resource__pb2.BatchGetResourcesResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def describe_job(self, request: resource__pb2.DescribeJobRequest, ctx: RequestContext) -> resource__pb2.DescribeJobResponse:
+    def list_resources(self, request: resource__pb2.ListResourcesRequest, ctx: RequestContext) -> resource__pb2.ListResourcesResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def get_job_state(self, request: resource__pb2.GetJobStateRequest, ctx: RequestContext) -> resource__pb2.GetJobStateResponse:
+    def update_resource(self, request: resource__pb2.UpdateResourceRequest, ctx: RequestContext) -> resource__pb2.Operation:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def list_tasks(self, request: resource__pb2.ListTasksRequest, ctx: RequestContext) -> resource__pb2.ListTasksResponse:
+    def delete_resource(self, request: resource__pb2.DeleteResourceRequest, ctx: RequestContext) -> resource__pb2.Operation:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def describe_task(self, request: resource__pb2.DescribeTaskRequest, ctx: RequestContext) -> resource__pb2.DescribeTaskResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def batch_describe_tasks(self, request: resource__pb2.BatchDescribeTasksRequest, ctx: RequestContext) -> resource__pb2.BatchDescribeTasksResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def describe_attempt(self, request: resource__pb2.DescribeAttemptRequest, ctx: RequestContext) -> resource__pb2.DescribeAttemptResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def list_nodes(self, request: resource__pb2.ListNodesRequest, ctx: RequestContext) -> resource__pb2.ListNodesResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def describe_node(self, request: resource__pb2.DescribeNodeRequest, ctx: RequestContext) -> resource__pb2.DescribeNodeResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def list_slices(self, request: resource__pb2.ListSlicesRequest, ctx: RequestContext) -> resource__pb2.ListSlicesResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def describe_slice(self, request: resource__pb2.DescribeSliceRequest, ctx: RequestContext) -> resource__pb2.DescribeSliceResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def get_capacity_status(self, request: resource__pb2.GetCapacityStatusRequest, ctx: RequestContext) -> resource__pb2.GetCapacityStatusResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def list_endpoints(self, request: resource__pb2.ListEndpointsRequest, ctx: RequestContext) -> resource__pb2.ListEndpointsResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def describe_endpoint(self, request: resource__pb2.DescribeEndpointRequest, ctx: RequestContext) -> resource__pb2.DescribeEndpointResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def batch_describe_endpoints(self, request: resource__pb2.BatchDescribeEndpointsRequest, ctx: RequestContext) -> resource__pb2.BatchDescribeEndpointsResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def mint_endpoint_token(self, request: resource__pb2.MintEndpointTokenRequest, ctx: RequestContext) -> resource__pb2.MintEndpointTokenResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def list_activity(self, request: resource__pb2.ListActivityRequest, ctx: RequestContext) -> resource__pb2.ListActivityResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def fetch_logs(self, request: resource__pb2.FetchLogsRequest, ctx: RequestContext) -> resource__pb2.FetchLogsResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def cancel_job(self, request: resource__pb2.CancelJobRequest, ctx: RequestContext) -> resource__pb2.ActionResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def retry_task(self, request: resource__pb2.RetryTaskRequest, ctx: RequestContext) -> resource__pb2.ActionResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def terminate_attempt(self, request: resource__pb2.TerminateAttemptRequest, ctx: RequestContext) -> resource__pb2.ActionResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def get_action_receipt(self, request: resource__pb2.GetActionReceiptRequest, ctx: RequestContext) -> resource__pb2.ActionResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def exec_attempt(self, request: resource__pb2.ExecAttemptRequest, ctx: RequestContext) -> resource__pb2.ExecAttemptResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def profile_attempt(self, request: resource__pb2.ProfileAttemptRequest, ctx: RequestContext) -> resource__pb2.ProfileAttemptResponse:
+    def get_service_info(self, request: resource__pb2.GetServiceInfoRequest, ctx: RequestContext) -> resource__pb2.GetServiceInfoResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -954,265 +289,75 @@ class ResourceServiceWSGIApplication(ConnectWSGIApplication):
     def __init__(self, service: ResourceServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
         super().__init__(
             endpoints={
-                "/iris.resource.ResourceService/SubmitJob": EndpointSync.unary(
+                "/iris.resource.ResourceService/CreateResource": EndpointSync.unary(
                     method=MethodInfo(
-                        name="SubmitJob",
+                        name="CreateResource",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.SubmitJobRequest,
-                        output=resource__pb2.SubmitJobResponse,
+                        input=resource__pb2.CreateResourceRequest,
+                        output=resource__pb2.Operation,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=service.submit_job,
+                    function=service.create_resource,
                 ),
-                "/iris.resource.ResourceService/ListJobs": EndpointSync.unary(
+                "/iris.resource.ResourceService/GetResource": EndpointSync.unary(
                     method=MethodInfo(
-                        name="ListJobs",
+                        name="GetResource",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListJobsRequest,
-                        output=resource__pb2.ListJobsResponse,
+                        input=resource__pb2.GetResourceRequest,
+                        output=resource__pb2.GetResourceResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=service.list_jobs,
+                    function=service.get_resource,
                 ),
-                "/iris.resource.ResourceService/ListUsers": EndpointSync.unary(
+                "/iris.resource.ResourceService/BatchGetResources": EndpointSync.unary(
                     method=MethodInfo(
-                        name="ListUsers",
+                        name="BatchGetResources",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListUsersRequest,
-                        output=resource__pb2.ListUsersResponse,
+                        input=resource__pb2.BatchGetResourcesRequest,
+                        output=resource__pb2.BatchGetResourcesResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=service.list_users,
+                    function=service.batch_get_resources,
                 ),
-                "/iris.resource.ResourceService/DescribeJob": EndpointSync.unary(
+                "/iris.resource.ResourceService/ListResources": EndpointSync.unary(
                     method=MethodInfo(
-                        name="DescribeJob",
+                        name="ListResources",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.DescribeJobRequest,
-                        output=resource__pb2.DescribeJobResponse,
+                        input=resource__pb2.ListResourcesRequest,
+                        output=resource__pb2.ListResourcesResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=service.describe_job,
+                    function=service.list_resources,
                 ),
-                "/iris.resource.ResourceService/GetJobState": EndpointSync.unary(
+                "/iris.resource.ResourceService/UpdateResource": EndpointSync.unary(
                     method=MethodInfo(
-                        name="GetJobState",
+                        name="UpdateResource",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.GetJobStateRequest,
-                        output=resource__pb2.GetJobStateResponse,
+                        input=resource__pb2.UpdateResourceRequest,
+                        output=resource__pb2.Operation,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=service.get_job_state,
+                    function=service.update_resource,
                 ),
-                "/iris.resource.ResourceService/ListTasks": EndpointSync.unary(
+                "/iris.resource.ResourceService/DeleteResource": EndpointSync.unary(
                     method=MethodInfo(
-                        name="ListTasks",
+                        name="DeleteResource",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListTasksRequest,
-                        output=resource__pb2.ListTasksResponse,
+                        input=resource__pb2.DeleteResourceRequest,
+                        output=resource__pb2.Operation,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=service.list_tasks,
+                    function=service.delete_resource,
                 ),
-                "/iris.resource.ResourceService/DescribeTask": EndpointSync.unary(
+                "/iris.resource.ResourceService/GetServiceInfo": EndpointSync.unary(
                     method=MethodInfo(
-                        name="DescribeTask",
+                        name="GetServiceInfo",
                         service_name="iris.resource.ResourceService",
-                        input=resource__pb2.DescribeTaskRequest,
-                        output=resource__pb2.DescribeTaskResponse,
+                        input=resource__pb2.GetServiceInfoRequest,
+                        output=resource__pb2.GetServiceInfoResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=service.describe_task,
-                ),
-                "/iris.resource.ResourceService/BatchDescribeTasks": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="BatchDescribeTasks",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.BatchDescribeTasksRequest,
-                        output=resource__pb2.BatchDescribeTasksResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.batch_describe_tasks,
-                ),
-                "/iris.resource.ResourceService/DescribeAttempt": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="DescribeAttempt",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.DescribeAttemptRequest,
-                        output=resource__pb2.DescribeAttemptResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.describe_attempt,
-                ),
-                "/iris.resource.ResourceService/ListNodes": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="ListNodes",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListNodesRequest,
-                        output=resource__pb2.ListNodesResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.list_nodes,
-                ),
-                "/iris.resource.ResourceService/DescribeNode": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="DescribeNode",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.DescribeNodeRequest,
-                        output=resource__pb2.DescribeNodeResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.describe_node,
-                ),
-                "/iris.resource.ResourceService/ListSlices": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="ListSlices",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListSlicesRequest,
-                        output=resource__pb2.ListSlicesResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.list_slices,
-                ),
-                "/iris.resource.ResourceService/DescribeSlice": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="DescribeSlice",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.DescribeSliceRequest,
-                        output=resource__pb2.DescribeSliceResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.describe_slice,
-                ),
-                "/iris.resource.ResourceService/GetCapacityStatus": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="GetCapacityStatus",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.GetCapacityStatusRequest,
-                        output=resource__pb2.GetCapacityStatusResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.get_capacity_status,
-                ),
-                "/iris.resource.ResourceService/ListEndpoints": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="ListEndpoints",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListEndpointsRequest,
-                        output=resource__pb2.ListEndpointsResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.list_endpoints,
-                ),
-                "/iris.resource.ResourceService/DescribeEndpoint": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="DescribeEndpoint",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.DescribeEndpointRequest,
-                        output=resource__pb2.DescribeEndpointResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.describe_endpoint,
-                ),
-                "/iris.resource.ResourceService/BatchDescribeEndpoints": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="BatchDescribeEndpoints",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.BatchDescribeEndpointsRequest,
-                        output=resource__pb2.BatchDescribeEndpointsResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.batch_describe_endpoints,
-                ),
-                "/iris.resource.ResourceService/MintEndpointToken": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="MintEndpointToken",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.MintEndpointTokenRequest,
-                        output=resource__pb2.MintEndpointTokenResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.mint_endpoint_token,
-                ),
-                "/iris.resource.ResourceService/ListActivity": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="ListActivity",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ListActivityRequest,
-                        output=resource__pb2.ListActivityResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.list_activity,
-                ),
-                "/iris.resource.ResourceService/FetchLogs": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="FetchLogs",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.FetchLogsRequest,
-                        output=resource__pb2.FetchLogsResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.fetch_logs,
-                ),
-                "/iris.resource.ResourceService/CancelJob": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="CancelJob",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.CancelJobRequest,
-                        output=resource__pb2.ActionResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.cancel_job,
-                ),
-                "/iris.resource.ResourceService/RetryTask": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="RetryTask",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.RetryTaskRequest,
-                        output=resource__pb2.ActionResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.retry_task,
-                ),
-                "/iris.resource.ResourceService/TerminateAttempt": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="TerminateAttempt",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.TerminateAttemptRequest,
-                        output=resource__pb2.ActionResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.terminate_attempt,
-                ),
-                "/iris.resource.ResourceService/GetActionReceipt": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="GetActionReceipt",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.GetActionReceiptRequest,
-                        output=resource__pb2.ActionResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.get_action_receipt,
-                ),
-                "/iris.resource.ResourceService/ExecAttempt": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="ExecAttempt",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ExecAttemptRequest,
-                        output=resource__pb2.ExecAttemptResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.exec_attempt,
-                ),
-                "/iris.resource.ResourceService/ProfileAttempt": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="ProfileAttempt",
-                        service_name="iris.resource.ResourceService",
-                        input=resource__pb2.ProfileAttemptRequest,
-                        output=resource__pb2.ProfileAttemptResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.profile_attempt,
+                    function=service.get_service_info,
                 ),
             },
             interceptors=interceptors,
@@ -1227,520 +372,140 @@ class ResourceServiceWSGIApplication(ConnectWSGIApplication):
 
 
 class ResourceServiceClientSync(ConnectClientSync):
-    def submit_job(
+    def create_resource(
         self,
-        request: resource__pb2.SubmitJobRequest,
+        request: resource__pb2.CreateResourceRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.SubmitJobResponse:
+    ) -> resource__pb2.Operation:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="SubmitJob",
+                name="CreateResource",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.SubmitJobRequest,
-                output=resource__pb2.SubmitJobResponse,
+                input=resource__pb2.CreateResourceRequest,
+                output=resource__pb2.Operation,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
             timeout_ms=timeout_ms,
         )
 
-    def list_jobs(
+    def get_resource(
         self,
-        request: resource__pb2.ListJobsRequest,
+        request: resource__pb2.GetResourceRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.ListJobsResponse:
+    ) -> resource__pb2.GetResourceResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="ListJobs",
+                name="GetResource",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListJobsRequest,
-                output=resource__pb2.ListJobsResponse,
+                input=resource__pb2.GetResourceRequest,
+                output=resource__pb2.GetResourceResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
             timeout_ms=timeout_ms,
         )
 
-    def list_users(
+    def batch_get_resources(
         self,
-        request: resource__pb2.ListUsersRequest,
+        request: resource__pb2.BatchGetResourcesRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.ListUsersResponse:
+    ) -> resource__pb2.BatchGetResourcesResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="ListUsers",
+                name="BatchGetResources",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListUsersRequest,
-                output=resource__pb2.ListUsersResponse,
+                input=resource__pb2.BatchGetResourcesRequest,
+                output=resource__pb2.BatchGetResourcesResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
             timeout_ms=timeout_ms,
         )
 
-    def describe_job(
+    def list_resources(
         self,
-        request: resource__pb2.DescribeJobRequest,
+        request: resource__pb2.ListResourcesRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.DescribeJobResponse:
+    ) -> resource__pb2.ListResourcesResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="DescribeJob",
+                name="ListResources",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.DescribeJobRequest,
-                output=resource__pb2.DescribeJobResponse,
+                input=resource__pb2.ListResourcesRequest,
+                output=resource__pb2.ListResourcesResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
             timeout_ms=timeout_ms,
         )
 
-    def get_job_state(
+    def update_resource(
         self,
-        request: resource__pb2.GetJobStateRequest,
+        request: resource__pb2.UpdateResourceRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.GetJobStateResponse:
+    ) -> resource__pb2.Operation:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="GetJobState",
+                name="UpdateResource",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.GetJobStateRequest,
-                output=resource__pb2.GetJobStateResponse,
+                input=resource__pb2.UpdateResourceRequest,
+                output=resource__pb2.Operation,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
             timeout_ms=timeout_ms,
         )
 
-    def list_tasks(
+    def delete_resource(
         self,
-        request: resource__pb2.ListTasksRequest,
+        request: resource__pb2.DeleteResourceRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.ListTasksResponse:
+    ) -> resource__pb2.Operation:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="ListTasks",
+                name="DeleteResource",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListTasksRequest,
-                output=resource__pb2.ListTasksResponse,
+                input=resource__pb2.DeleteResourceRequest,
+                output=resource__pb2.Operation,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
             timeout_ms=timeout_ms,
         )
 
-    def describe_task(
+    def get_service_info(
         self,
-        request: resource__pb2.DescribeTaskRequest,
+        request: resource__pb2.GetServiceInfoRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> resource__pb2.DescribeTaskResponse:
+    ) -> resource__pb2.GetServiceInfoResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="DescribeTask",
+                name="GetServiceInfo",
                 service_name="iris.resource.ResourceService",
-                input=resource__pb2.DescribeTaskRequest,
-                output=resource__pb2.DescribeTaskResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def batch_describe_tasks(
-        self,
-        request: resource__pb2.BatchDescribeTasksRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.BatchDescribeTasksResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="BatchDescribeTasks",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.BatchDescribeTasksRequest,
-                output=resource__pb2.BatchDescribeTasksResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def describe_attempt(
-        self,
-        request: resource__pb2.DescribeAttemptRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.DescribeAttemptResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="DescribeAttempt",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.DescribeAttemptRequest,
-                output=resource__pb2.DescribeAttemptResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def list_nodes(
-        self,
-        request: resource__pb2.ListNodesRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ListNodesResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ListNodes",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListNodesRequest,
-                output=resource__pb2.ListNodesResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def describe_node(
-        self,
-        request: resource__pb2.DescribeNodeRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.DescribeNodeResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="DescribeNode",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.DescribeNodeRequest,
-                output=resource__pb2.DescribeNodeResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def list_slices(
-        self,
-        request: resource__pb2.ListSlicesRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ListSlicesResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ListSlices",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListSlicesRequest,
-                output=resource__pb2.ListSlicesResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def describe_slice(
-        self,
-        request: resource__pb2.DescribeSliceRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.DescribeSliceResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="DescribeSlice",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.DescribeSliceRequest,
-                output=resource__pb2.DescribeSliceResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def get_capacity_status(
-        self,
-        request: resource__pb2.GetCapacityStatusRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.GetCapacityStatusResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetCapacityStatus",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.GetCapacityStatusRequest,
-                output=resource__pb2.GetCapacityStatusResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def list_endpoints(
-        self,
-        request: resource__pb2.ListEndpointsRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ListEndpointsResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ListEndpoints",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListEndpointsRequest,
-                output=resource__pb2.ListEndpointsResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def describe_endpoint(
-        self,
-        request: resource__pb2.DescribeEndpointRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.DescribeEndpointResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="DescribeEndpoint",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.DescribeEndpointRequest,
-                output=resource__pb2.DescribeEndpointResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def batch_describe_endpoints(
-        self,
-        request: resource__pb2.BatchDescribeEndpointsRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.BatchDescribeEndpointsResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="BatchDescribeEndpoints",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.BatchDescribeEndpointsRequest,
-                output=resource__pb2.BatchDescribeEndpointsResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def mint_endpoint_token(
-        self,
-        request: resource__pb2.MintEndpointTokenRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.MintEndpointTokenResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="MintEndpointToken",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.MintEndpointTokenRequest,
-                output=resource__pb2.MintEndpointTokenResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def list_activity(
-        self,
-        request: resource__pb2.ListActivityRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ListActivityResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ListActivity",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.ListActivityRequest,
-                output=resource__pb2.ListActivityResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def fetch_logs(
-        self,
-        request: resource__pb2.FetchLogsRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.FetchLogsResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="FetchLogs",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.FetchLogsRequest,
-                output=resource__pb2.FetchLogsResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def cancel_job(
-        self,
-        request: resource__pb2.CancelJobRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ActionResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="CancelJob",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.CancelJobRequest,
-                output=resource__pb2.ActionResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def retry_task(
-        self,
-        request: resource__pb2.RetryTaskRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ActionResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="RetryTask",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.RetryTaskRequest,
-                output=resource__pb2.ActionResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def terminate_attempt(
-        self,
-        request: resource__pb2.TerminateAttemptRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ActionResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="TerminateAttempt",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.TerminateAttemptRequest,
-                output=resource__pb2.ActionResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def get_action_receipt(
-        self,
-        request: resource__pb2.GetActionReceiptRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ActionResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetActionReceipt",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.GetActionReceiptRequest,
-                output=resource__pb2.ActionResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def exec_attempt(
-        self,
-        request: resource__pb2.ExecAttemptRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ExecAttemptResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ExecAttempt",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.ExecAttemptRequest,
-                output=resource__pb2.ExecAttemptResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def profile_attempt(
-        self,
-        request: resource__pb2.ProfileAttemptRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> resource__pb2.ProfileAttemptResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="ProfileAttempt",
-                service_name="iris.resource.ResourceService",
-                input=resource__pb2.ProfileAttemptRequest,
-                output=resource__pb2.ProfileAttemptResponse,
+                input=resource__pb2.GetServiceInfoRequest,
+                output=resource__pb2.GetServiceInfoResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

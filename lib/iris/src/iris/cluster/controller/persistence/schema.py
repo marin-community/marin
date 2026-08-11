@@ -593,6 +593,7 @@ action_receipts_table = Table(
     Column("target_id", String, nullable=False),
     Column("expected_target_uid", String, nullable=False),
     Column("expected_attempt_uid", String, nullable=False, server_default=""),
+    Column("expected_attempt_number", Integer),
     Column("backend_id", String, nullable=False, server_default=""),
     Column("execution_cluster_id", String, nullable=False),
     Column("principal_id", String, nullable=False),
@@ -605,17 +606,22 @@ action_receipts_table = Table(
     Column("updated_at_ms", Integer, nullable=False),
     Column("completed_at_ms", Integer),
     CheckConstraint("authority_cluster_id <> ''"),
-    CheckConstraint("action_kind IN ('cancel_job', 'retry_task', 'terminate_attempt')"),
+    CheckConstraint("action_kind IN ('cancel_job', 'retry_task', 'terminate_attempt', 'fail_attempt')"),
     CheckConstraint("target_kind IN ('job', 'task', 'attempt')"),
     CheckConstraint("expected_target_uid <> ''"),
     CheckConstraint("state IN ('accepted', 'verifying', 'succeeded', 'failed')"),
     CheckConstraint("result_code IN ('none', 'satisfied', 'target_absent', 'provider_rejected', 'internal_error')"),
     UniqueConstraint("authority_cluster_id", "authority_action_id"),
-    UniqueConstraint("principal_id", "action_kind", "client_idempotency_key"),
+    UniqueConstraint("principal_id", "client_idempotency_key"),
     CheckConstraint(
-        "(action_kind = 'cancel_job' AND target_kind = 'job' AND expected_attempt_uid = '') OR "
-        "(action_kind = 'retry_task' AND target_kind = 'task' AND expected_attempt_uid <> '') OR "
-        "(action_kind = 'terminate_attempt' AND target_kind = 'attempt' AND expected_attempt_uid <> '')"
+        "(action_kind = 'cancel_job' AND target_kind = 'job' "
+        "AND expected_attempt_uid = '' AND expected_attempt_number IS NULL) OR "
+        "(action_kind = 'retry_task' AND target_kind = 'task' "
+        "AND expected_attempt_uid <> '' AND expected_attempt_number >= 0) OR "
+        "(action_kind = 'terminate_attempt' AND target_kind = 'attempt' "
+        "AND expected_attempt_uid <> '' AND expected_attempt_number >= 0) OR "
+        "(action_kind = 'fail_attempt' AND target_kind = 'attempt' "
+        "AND expected_attempt_uid <> '' AND expected_attempt_number >= 0)"
     ),
     CheckConstraint("action_kind = 'cancel_job' OR backend_id <> ''"),
     CheckConstraint(

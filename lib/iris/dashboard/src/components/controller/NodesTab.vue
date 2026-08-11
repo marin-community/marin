@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { useResourceRpc } from '@/composables/useRpc'
+import { RESOURCE_MESSAGES, RESOURCE_TYPES, useListResources } from '@/composables/useResources'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
-import type { ResourceListNodesResponse, ResourceNodeSummary } from '@/types/rpc'
+import type { ResourceNodeSummary } from '@/types/rpc'
 import { formatBytes, formatRelativeTime, timestampMs } from '@/utils/formatting'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -15,14 +15,17 @@ const route = useRoute()
 const contains = ref(typeof route.query.contains === 'string' ? route.query.contains : '')
 const pageToken = ref<string | undefined>()
 const previousTokens = ref<(string | undefined)[]>([])
-const { data, loading, error, refresh } = useResourceRpc<ResourceListNodesResponse>('ListNodes', () => ({
-  query: {
+const { data, loading, error, refresh } = useListResources<ResourceNodeSummary>(
+  RESOURCE_TYPES.node,
+  RESOURCE_MESSAGES.nodeQuery,
+  () => ({
     backendId: typeof route.query.backend === 'string' ? route.query.backend : undefined,
     contains: contains.value || undefined,
     page: { pageSize: PAGE_SIZE, pageToken: pageToken.value },
-  },
-}))
-const nodes = computed(() => data.value?.nodes ?? [])
+  }),
+  'BASIC',
+)
+const nodes = computed(() => data.value?.items ?? [])
 const columns: Column[] = [
   { key: 'node', label: 'Node' },
   { key: 'health', label: 'Health' },

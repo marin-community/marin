@@ -22,7 +22,7 @@ const MAX_ERROR_DETAIL_CHARS = 500
 export type RpcBody = Record<string, unknown> | (() => Record<string, unknown>)
 
 export interface RpcState<T> {
-  data: Ref<T | null>
+  data: Readonly<Ref<T | null>>
   loading: Ref<boolean>
   error: Ref<string | null>
   refresh: () => Promise<void>

@@ -40,8 +40,10 @@ class EndpointAccess(StrEnum):
 class EndpointQuery:
     name_prefix: str | None = None
     task: ResourceKey | None = None
+    owner_id: str | None = None
     page_size: int = 100
     page_token: str | None = None
+    system_only: bool = False
 
 
 @dataclass(frozen=True, slots=True)

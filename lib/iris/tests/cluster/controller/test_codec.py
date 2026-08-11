@@ -66,6 +66,8 @@ from iris.rpc.resource_codec import (
     job_spec_to_proto,
     resource_spec_from_proto,
 )
+from iris.rpc.resource_registrations import resource_catalog
+from iris.rpc.resource_service import ResourceServiceImpl
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select, update
 from tests.cluster.controller._test_support import ControllerTestState
@@ -168,6 +170,7 @@ def _controller_boundaries(
         operations=OperationalServices.from_database(db),
         endpoint_service=endpoint_service,
         controller=resources,
+        resource_service=ResourceServiceImpl(resource_catalog(resources)),
     )
     return resources, legacy
 

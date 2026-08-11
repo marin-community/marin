@@ -37,7 +37,9 @@ from iris.resources.node import NodeHealth, NodeQuery
 from iris.resources.slice import SliceCapacityState, SliceLifecycle, SliceQuery
 from iris.resources.source import SourceState
 from iris.rpc import resource_pb2
+from iris.rpc.resource_registrations import resource_catalog
 from iris.rpc.resource_service import ResourceServiceImpl
+from iris.rpc.resource_types import CAPACITY
 from rigging.provenance import Provenance
 from rigging.timing import Timestamp
 from sqlalchemy import event
@@ -452,7 +454,14 @@ def test_slices_filter_page_and_describe_observed_membership(resources: Controll
 
 
 def test_capacity_resource_carries_backend_authored_fleet_and_routing_facts(resources: Controller) -> None:
-    capacity = ResourceServiceImpl(resources).get_capacity_status(resource_pb2.GetCapacityStatusRequest(), None)
+    response = ResourceServiceImpl(resource_catalog(resources)).get_resource(
+        resource_pb2.GetResourceRequest(
+            ref=resource_pb2.ResourceRef(authority_cluster_id="test", type=CAPACITY, id="capacity"),
+            view=resource_pb2.RESOURCE_VIEW_FULL,
+        ),
+        None,
+    )
+    capacity = resource_pb2.GetCapacityStatusResponse.FromString(response.resource.body.value)
     backend = next(item for item in capacity.backends if item.backend_id == "rpc")
     group = next(item for item in backend.scaling_groups if item.name == "pool-a")
     capacity_slice = next(item for item in group.slices if item.summary.identity.key.resource_id == "slice-a")

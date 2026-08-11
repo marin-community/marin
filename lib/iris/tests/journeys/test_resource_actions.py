@@ -5,8 +5,52 @@ import pytest
 from iris.cluster.controller.persistence.pruning import prune_old_data
 from iris.resources.action import ActionKind, ActionResult, ActionState
 from iris.resources.errors import ResourceNotFound, ResourceReplaced
-from iris.rpc import job_pb2
+from iris.resources.identity import AttemptIdentity
+from iris.rpc import job_pb2, resource_pb2
+from iris.rpc.resource_registrations import resource_catalog
+from iris.rpc.resource_service import ResourceServiceImpl
+from iris.rpc.resource_types import ATTEMPT, TASK
 from rigging.timing import Duration
+
+
+def _service(journey) -> ResourceServiceImpl:
+    return ResourceServiceImpl(resource_catalog(journey.controller.controller))
+
+
+def _current_task_update(
+    task_id: str,
+    *,
+    request_id: str,
+    new_state: int,
+    reason: str = "",
+) -> resource_pb2.UpdateResourceRequest:
+    return resource_pb2.UpdateResourceRequest(
+        mutation=resource_pb2.MutationMetadata(request_id=request_id, reason=reason),
+        ref=resource_pb2.ResourceRef(
+            authority_cluster_id="journey",
+            type=TASK,
+            id=task_id,
+        ),
+        update=resource_pb2.ResourceUpdate(new_state=new_state),
+    )
+
+
+def _exact_attempt_update(
+    identity: AttemptIdentity,
+    *,
+    request_id: str,
+    new_state: int,
+) -> resource_pb2.UpdateResourceRequest:
+    return resource_pb2.UpdateResourceRequest(
+        mutation=resource_pb2.MutationMetadata(request_id=request_id),
+        ref=resource_pb2.ResourceRef(
+            authority_cluster_id=identity.task.cluster_id,
+            type=ATTEMPT,
+            id=f"{identity.task.resource_id}:{identity.attempt_number}",
+            uid=identity.attempt_uid,
+        ),
+        update=resource_pb2.ResourceUpdate(new_state=new_state),
+    )
 
 
 def test_cancel_receipt_survives_restart_and_duplicate_request(journey):
@@ -137,3 +181,120 @@ def test_replaced_job_rejects_stale_job_and_task_actions_without_mutating_curren
     assert after.summary == replacement_task.summary
     assert after.attempts == replacement_task.attempts
     assert journey.backend_events() == backend_events
+
+
+def test_generic_current_task_update_replays_before_resolving_a_new_attempt(journey) -> None:
+    job = journey.submit("generic-current-replay", preemption_retries=2)
+    journey.settle()
+    before = journey.attempt(job[0]).summary.identity
+    service = _service(journey)
+    request = _current_task_update(
+        job[0].wire_id,
+        request_id="generic-current-replay",
+        new_state=resource_pb2.REQUESTED_RESOURCE_STATE_PENDING,
+    )
+
+    accepted = service.update_resource(request, None)
+    journey.settle()
+    replacement = journey.attempt(job[0]).summary.identity
+    duplicate = service.update_resource(request, None)
+
+    assert replacement.attempt_uid != before.attempt_uid
+    assert duplicate.ref == accepted.ref
+    assert duplicate.resolved_ref.type == TASK
+    assert len(duplicate.affected) == 1
+    assert duplicate.affected[0].type == "iris/attempt"
+    assert duplicate.affected[0].id == f"{job[0].wire_id}:{before.attempt_number}"
+    assert duplicate.affected[0].uid == before.attempt_uid
+    receipt = resource_pb2.ActionReceipt.FromString(duplicate.result.value)
+    assert receipt.action_id == accepted.ref.id
+    assert receipt.expected_attempt_uid == before.attempt_uid
+    assert receipt.expected_attempt_number == before.attempt_number
+
+
+def test_generic_failed_task_update_fails_current_attempt_without_retry(journey) -> None:
+    job = journey.submit("generic-force-fail", preemption_retries=3)
+    journey.settle()
+    before = journey.attempt(job[0]).summary.identity
+
+    operation = _service(journey).update_resource(
+        _current_task_update(
+            job[0].wire_id,
+            request_id="generic-force-fail",
+            new_state=resource_pb2.REQUESTED_RESOURCE_STATE_FAILED,
+            reason="operator diagnosed corrupt state",
+        ),
+        None,
+    )
+    journey.settle()
+    task = journey.task(job[0])
+    receipt = resource_pb2.ActionReceipt.FromString(operation.result.value)
+
+    assert operation.requested_ref.type == TASK
+    assert operation.resolved_ref.type == TASK
+    assert operation.resolved_ref.uid == task.summary.identity.task_uid
+    assert operation.affected[0].uid == before.attempt_uid
+    assert receipt.kind == resource_pb2.ACTION_KIND_FAIL_ATTEMPT
+    assert task.summary.state == job_pb2.TASK_STATE_FAILED
+    assert len(task.attempts) == 1
+    assert task.summary.error_message == "operator diagnosed corrupt state"
+
+
+def test_generic_cancelled_task_update_terminates_its_exact_current_attempt(journey) -> None:
+    job = journey.submit("generic-cancel-task", preemption_retries=3)
+    journey.settle()
+    before = journey.attempt(job[0]).summary.identity
+
+    operation = _service(journey).update_resource(
+        _current_task_update(
+            job[0].wire_id,
+            request_id="generic-cancel-task",
+            new_state=resource_pb2.REQUESTED_RESOURCE_STATE_CANCELLED,
+        ),
+        None,
+    )
+    journey.settle()
+
+    task = journey.task(job[0])
+    assert task.summary.state == job_pb2.TASK_STATE_KILLED
+    assert len(task.attempts) == 1
+    assert task.attempts[0].identity == before
+    assert operation.affected[0].id == f"{job[0].wire_id}:{before.attempt_number}"
+    assert operation.affected[0].uid == before.attempt_uid
+
+
+def test_generic_preempted_attempt_update_preserves_retry_policy(journey) -> None:
+    job = journey.submit("generic-preempt-attempt", preemption_retries=1)
+    journey.settle()
+    before = journey.attempt(job[0]).summary.identity
+    request = _exact_attempt_update(
+        before,
+        request_id="generic-preempt-attempt",
+        new_state=resource_pb2.REQUESTED_RESOURCE_STATE_PREEMPTED,
+    )
+
+    service = _service(journey)
+    operation = service.update_resource(request, None)
+    journey.settle()
+    duplicate = service.update_resource(request, None)
+
+    task = journey.task(job[0])
+    assert task.summary.current_attempt is not None
+    assert task.summary.current_attempt.attempt_uid != before.attempt_uid
+    assert task.attempts[0].identity == before
+    assert task.attempts[0].state == job_pb2.TASK_STATE_PREEMPTED
+    assert operation.resolved_ref == operation.requested_ref
+    assert operation.affected[0] == operation.requested_ref
+    assert duplicate.ref == operation.ref
+    assert duplicate.resolved_ref == operation.resolved_ref
+
+
+def test_service_info_reports_backend_contributions_to_registered_resources(journey) -> None:
+    response = _service(journey).get_service_info(resource_pb2.GetServiceInfoRequest(), None)
+    installed = {
+        (capability.backend_id, capability.type): tuple(capability.verbs) for capability in response.backend_resources
+    }
+
+    assert installed[("default", "iris/attempt")] == ("update",)
+    assert installed[("default", "iris/exec-session")] == ("create",)
+    assert installed[("default", "iris/profile-capture")] == ("create",)

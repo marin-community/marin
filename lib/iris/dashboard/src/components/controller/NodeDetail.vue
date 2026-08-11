@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useLogServerStatsRpc, useResourceRpc } from '@/composables/useRpc'
+import { useLogServerStatsRpc } from '@/composables/useRpc'
+import { RESOURCE_TYPES, useGetResource } from '@/composables/useResources'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import type { ResourceDescribeNodeResponse } from '@/types/rpc'
+import type { ResourceNodeDetail } from '@/types/rpc'
 import { formatBytes, formatTimestamp } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import PageShell from '@/components/layout/PageShell.vue'
@@ -19,14 +20,13 @@ import Sparkline from '@/components/shared/Sparkline.vue'
 const NODE_REFRESH_MS = 10_000
 
 const props = defineProps<{ clusterId: string; backendId: string; nodeUid: string; nodeId: string }>()
-const { data, loading, error, refresh } = useResourceRpc<ResourceDescribeNodeResponse>('DescribeNode', () => ({
-  node: {
-    key: { clusterId: props.clusterId, kind: 'RESOURCE_KIND_NODE', resourceId: props.nodeId },
-    backendId: props.backendId,
-    nodeUid: props.nodeUid,
-  },
-}))
-const node = computed(() => data.value?.node)
+const { data, loading, error, refresh } = useGetResource<ResourceNodeDetail>(() => ({
+  authorityClusterId: props.clusterId,
+  type: RESOURCE_TYPES.node,
+  id: `${props.backendId}:${props.nodeId}`,
+  uid: props.nodeUid,
+}), 'FULL')
+const node = computed(() => data.value)
 
 interface QueryResponse { arrowIpc?: string }
 interface WorkerUsageRow {

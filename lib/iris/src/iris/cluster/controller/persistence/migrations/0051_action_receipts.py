@@ -12,11 +12,12 @@ def migrate(raw_conn) -> None:
             authority_cluster_id VARCHAR NOT NULL CHECK (authority_cluster_id <> ''),
             authority_action_id VARCHAR NOT NULL,
             action_kind VARCHAR NOT NULL
-                CHECK (action_kind IN ('cancel_job', 'retry_task', 'terminate_attempt')),
+                CHECK (action_kind IN ('cancel_job', 'retry_task', 'terminate_attempt', 'fail_attempt')),
             target_kind VARCHAR NOT NULL CHECK (target_kind IN ('job', 'task', 'attempt')),
             target_id VARCHAR NOT NULL,
             expected_target_uid VARCHAR NOT NULL CHECK (expected_target_uid <> ''),
             expected_attempt_uid VARCHAR NOT NULL DEFAULT '',
+            expected_attempt_number INTEGER,
             backend_id VARCHAR NOT NULL DEFAULT '',
             execution_cluster_id VARCHAR NOT NULL,
             principal_id VARCHAR NOT NULL,
@@ -32,11 +33,16 @@ def migrate(raw_conn) -> None:
             updated_at_ms INTEGER NOT NULL,
             completed_at_ms INTEGER,
             UNIQUE (authority_cluster_id, authority_action_id),
-            UNIQUE (principal_id, action_kind, client_idempotency_key),
+            UNIQUE (principal_id, client_idempotency_key),
             CHECK (
-                (action_kind = 'cancel_job' AND target_kind = 'job' AND expected_attempt_uid = '') OR
-                (action_kind = 'retry_task' AND target_kind = 'task' AND expected_attempt_uid <> '') OR
-                (action_kind = 'terminate_attempt' AND target_kind = 'attempt' AND expected_attempt_uid <> '')
+                (action_kind = 'cancel_job' AND target_kind = 'job'
+                    AND expected_attempt_uid = '' AND expected_attempt_number IS NULL) OR
+                (action_kind = 'retry_task' AND target_kind = 'task'
+                    AND expected_attempt_uid <> '' AND expected_attempt_number >= 0) OR
+                (action_kind = 'terminate_attempt' AND target_kind = 'attempt'
+                    AND expected_attempt_uid <> '' AND expected_attempt_number >= 0) OR
+                (action_kind = 'fail_attempt' AND target_kind = 'attempt'
+                    AND expected_attempt_uid <> '' AND expected_attempt_number >= 0)
             ),
             CHECK (action_kind = 'cancel_job' OR backend_id <> ''),
             CHECK (

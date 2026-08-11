@@ -1,16 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { resourceRpcCall, useResourceRpc } from '@/composables/useRpc'
+import {
+  listResources,
+  RESOURCE_MESSAGES,
+  RESOURCE_TYPES,
+  updateResource,
+  useGetResource,
+} from '@/composables/useResources'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { loadJobTasks } from '@/components/controller/jobTaskPages'
 import type {
   Constraint,
   ResourceActionResponse,
-  ResourceDescribeJobResponse,
+  ResourceActionReceipt,
+  ResourceJobDetail,
   ResourceJobSummary,
-  ResourceListJobsResponse,
-  ResourceListTasksResponse,
   ResourceTaskSummary,
 } from '@/types/rpc'
 import {
@@ -42,16 +47,10 @@ const TERMINAL_STATES = new Set([
 ])
 
 const props = defineProps<{ clusterId: string; jobId: string }>()
-const key = computed(() => ({
-  clusterId: props.clusterId,
-  kind: 'RESOURCE_KIND_JOB',
-  resourceId: props.jobId,
-}))
-const { data, loading, error, refresh } = useResourceRpc<ResourceDescribeJobResponse>(
-  'DescribeJob',
-  () => ({ job: key.value }),
-)
-const job = computed(() => data.value?.job)
+const key = computed(() => ({ clusterId: props.clusterId, kind: 'RESOURCE_KIND_JOB', resourceId: props.jobId }))
+const jobRef = computed(() => ({ authorityClusterId: props.clusterId, type: RESOURCE_TYPES.job, id: props.jobId }))
+const { data, loading, error, refresh } = useGetResource<ResourceJobDetail>(() => jobRef.value, 'FULL')
+const job = computed(() => data.value)
 const tasks = ref<ResourceTaskSummary[]>([])
 const childJobs = ref<ResourceJobSummary[]>([])
 const taskLoading = ref(false)
@@ -168,10 +167,13 @@ async function loadChildJobs(): Promise<ResourceJobSummary[]> {
   const items: ResourceJobSummary[] = []
   let pageToken: string | undefined
   do {
-    const response = await resourceRpcCall<ResourceListJobsResponse>('ListJobs', {
-      query: { jobIdPrefix: `${props.jobId}/`, page: { pageSize: 100, pageToken } },
-    })
-    items.push(...(response.jobs ?? []))
+    const response = await listResources<ResourceJobSummary>(
+      RESOURCE_TYPES.job,
+      RESOURCE_MESSAGES.jobQuery,
+      { jobIdPrefix: `${props.jobId}/`, page: { pageSize: 100, pageToken } },
+      'BASIC',
+    )
+    items.push(...response.items)
     pageToken = response.page?.nextPageToken || undefined
   } while (pageToken)
   return items
@@ -184,9 +186,12 @@ async function refreshPage() {
   taskError.value = null
   childError.value = null
   const taskRequest = loadJobTasks(job.value.summary.numTasks, pageToken =>
-    resourceRpcCall<ResourceListTasksResponse>('ListTasks', {
-      query: { job: key.value, page: { pageSize: 100, pageToken } },
-    }),
+    listResources<ResourceTaskSummary>(
+      RESOURCE_TYPES.task,
+      RESOURCE_MESSAGES.taskQuery,
+      { job: key.value, page: { pageSize: 100, pageToken } },
+      'BASIC',
+    ).then(response => ({ tasks: response.items, page: response.page })),
   )
   const [taskResult, childResult] = await Promise.allSettled([taskRequest, loadChildJobs()])
   if (taskResult.status === 'fulfilled') tasks.value = taskResult.value
@@ -201,10 +206,11 @@ async function cancelJob() {
   acting.value = true
   actionError.value = null
   try {
-    action.value = await resourceRpcCall<ResourceActionResponse>('CancelJob', {
-      job: job.value.summary.identity,
-      idempotencyKey: crypto.randomUUID(),
-    })
+    const operation = await updateResource<ResourceActionReceipt>(
+      { ...jobRef.value, uid: job.value.summary.identity.jobUid },
+      'CANCELLED',
+    )
+    action.value = { receipt: operation.result }
     await refreshPage()
   } catch (cause) {
     actionError.value = cause instanceof Error ? cause.message : String(cause)

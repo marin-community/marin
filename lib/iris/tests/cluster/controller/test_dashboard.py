@@ -335,12 +335,16 @@ def client(service):
 
 def test_dashboard_serves_the_resource_service_surface(service) -> None:
     resource_service = Mock()
-    resource_service.list_jobs.return_value = resource_pb2.ListJobsResponse()
+    resource_service.list_resources.return_value = resource_pb2.ListResourcesResponse()
     client = TestClient(ControllerDashboard(service, resource_service=resource_service).app)
 
     response = client.post(
-        "/iris.resource.ResourceService/ListJobs",
-        json={"query": {"page": {"pageSize": 1}}},
+        "/iris.resource.ResourceService/ListResources",
+        json={
+            "type": "iris/job",
+            "query": {"@type": "type.googleapis.com/iris.resource.JobQuery"},
+            "view": "RESOURCE_VIEW_BASIC",
+        },
         headers={"Content-Type": "application/json"},
     )
 
@@ -2213,7 +2217,7 @@ def _proxy_dashboard_with_transport(monkeypatch, credentials=None):
     "path",
     [
         "/iris.cluster.EndpointService/ListEndpoints",
-        "/iris.resource.ResourceService/ListEndpoints",
+        "/iris.resource.ResourceService/ListResources",
     ],
 )
 def test_proxy_dashboard_forwards_resource_and_endpoint_service_rpcs(monkeypatch, path):

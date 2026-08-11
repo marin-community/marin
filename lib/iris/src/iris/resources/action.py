@@ -16,6 +16,7 @@ class ActionKind(StrEnum):
     CANCEL_JOB = "cancel_job"
     RETRY_TASK = "retry_task"
     TERMINATE_ATTEMPT = "terminate_attempt"
+    FAIL_ATTEMPT = "fail_attempt"
 
 
 class ActionState(StrEnum):
@@ -37,6 +38,7 @@ _ACTION_TARGET_KIND = {
     ActionKind.CANCEL_JOB: ResourceKind.JOB,
     ActionKind.RETRY_TASK: ResourceKind.TASK,
     ActionKind.TERMINATE_ATTEMPT: ResourceKind.ATTEMPT,
+    ActionKind.FAIL_ATTEMPT: ResourceKind.ATTEMPT,
 }
 
 
@@ -53,6 +55,7 @@ class ActionReceipt:
     created_at: Timestamp
     updated_at: Timestamp
     completed_at: Timestamp | None
+    expected_attempt_number: int | None = None
 
     def __post_init__(self) -> None:
         if not self.action_id.strip():
@@ -63,3 +66,10 @@ class ActionReceipt:
             raise InvalidResourceKey("expected_target_uid must be non-empty")
         if self.expected_attempt_uid is not None and not self.expected_attempt_uid.strip():
             raise InvalidResourceKey("expected_attempt_uid must be non-empty when present")
+        if self.kind is ActionKind.CANCEL_JOB:
+            if self.expected_attempt_uid is not None or self.expected_attempt_number is not None:
+                raise InvalidResourceKey("cancel_job cannot target an Attempt")
+        elif self.expected_attempt_uid is None or self.expected_attempt_number is None:
+            raise InvalidResourceKey(f"{self.kind.value} requires an exact Attempt")
+        elif self.expected_attempt_number < 0:
+            raise InvalidResourceKey("expected_attempt_number must be non-negative")

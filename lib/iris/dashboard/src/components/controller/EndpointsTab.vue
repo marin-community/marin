@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { resourceRpcCall, useResourceRpc } from '@/composables/useRpc'
+import {
+  getResource,
+  RESOURCE_MESSAGES,
+  RESOURCE_TYPES,
+  useListResources,
+} from '@/composables/useResources'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import type {
-  ResourceDescribeEndpointResponse,
   ResourceEndpointDetail,
   ResourceEndpointSummary,
-  ResourceListEndpointsResponse,
 } from '@/types/rpc'
 import { formatRelativeTime, timestampMs } from '@/utils/formatting'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
@@ -22,10 +25,13 @@ const pageToken = ref<string | undefined>()
 const previousTokens = ref<(string | undefined)[]>([])
 const selected = ref<ResourceEndpointDetail | null>(null)
 const detailError = ref<string | null>(null)
-const { data, loading, error, refresh } = useResourceRpc<ResourceListEndpointsResponse>('ListEndpoints', () => ({
-  query: { namePrefix: prefix.value || undefined, page: { pageSize: PAGE_SIZE, pageToken: pageToken.value } },
-}))
-const endpoints = computed(() => data.value?.endpoints ?? [])
+const { data, loading, error, refresh } = useListResources<ResourceEndpointSummary>(
+  RESOURCE_TYPES.endpoint,
+  RESOURCE_MESSAGES.endpointQuery,
+  () => ({ namePrefix: prefix.value || undefined, page: { pageSize: PAGE_SIZE, pageToken: pageToken.value } }),
+  'BASIC',
+)
+const endpoints = computed(() => data.value?.items ?? [])
 const columns: Column[] = [
   { key: 'name', label: 'Name' },
   { key: 'task', label: 'Task' },
@@ -36,7 +42,11 @@ const columns: Column[] = [
 async function describe(endpoint: ResourceEndpointSummary) {
   detailError.value = null
   try {
-    selected.value = (await resourceRpcCall<ResourceDescribeEndpointResponse>('DescribeEndpoint', { endpoint: endpoint.key })).endpoint ?? null
+    selected.value = await getResource<ResourceEndpointDetail>({
+      authorityClusterId: endpoint.key.clusterId,
+      type: RESOURCE_TYPES.endpoint,
+      id: endpoint.key.resourceId,
+    }, 'FULL')
   } catch (e) { detailError.value = e instanceof Error ? e.message : String(e) }
 }
 function jobIdForTask(taskId: string): string {

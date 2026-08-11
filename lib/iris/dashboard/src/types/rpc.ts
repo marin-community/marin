@@ -850,6 +850,7 @@ export interface ResourceActionReceipt {
   target: ResourceKey
   expectedTargetUid: string
   expectedAttemptUid?: string
+  expectedAttemptNumber?: number
   state: string
   resultCode: string
   resultMessage?: string

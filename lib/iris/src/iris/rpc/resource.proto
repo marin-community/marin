@@ -16,6 +16,7 @@ edition = "2023";
 
 package iris.resource;
 
+import "google/protobuf/any.proto";
 import "iris_logging.proto";
 import "time.proto";
 
@@ -81,6 +82,7 @@ enum ActionKind {
   ACTION_KIND_CANCEL_JOB = 1;
   ACTION_KIND_RETRY_TASK = 2;
   ACTION_KIND_TERMINATE_ATTEMPT = 3;
+  ACTION_KIND_FAIL_ATTEMPT = 4;
 }
 
 enum ActionState {
@@ -1014,6 +1016,7 @@ message ActionReceipt {
   iris.time.Timestamp created_at = 9;
   iris.time.Timestamp updated_at = 10;
   iris.time.Timestamp completed_at = 11;
+  int32 expected_attempt_number = 12;
 }
 
 message CancelJobRequest {
@@ -1064,31 +1067,172 @@ message ProfileAttemptResponse {
   string error_message = 2;
 }
 
+// ResourceService uses one open envelope. The type-specific messages above are
+// registered bodies and queries; they are not separate RPC routes.
+enum ResourceView {
+  RESOURCE_VIEW_UNSPECIFIED = 0;
+  RESOURCE_VIEW_BASIC = 1;
+  RESOURCE_VIEW_FULL = 2;
+}
+
+enum RequestedResourceState {
+  REQUESTED_RESOURCE_STATE_UNSPECIFIED = 0;
+  REQUESTED_RESOURCE_STATE_PENDING = 1;
+  REQUESTED_RESOURCE_STATE_CANCELLED = 2;
+  REQUESTED_RESOURCE_STATE_PREEMPTED = 3;
+  REQUESTED_RESOURCE_STATE_FAILED = 4;
+}
+
+enum OperationPhase {
+  OPERATION_PHASE_UNSPECIFIED = 0;
+  OPERATION_PHASE_ACCEPTED = 1;
+  OPERATION_PHASE_APPLIED = 2;
+  OPERATION_PHASE_VERIFYING = 3;
+  OPERATION_PHASE_VERIFIED = 4;
+  OPERATION_PHASE_FAILED = 5;
+}
+
+message ResourceRef {
+  string authority_cluster_id = 1;
+  string type = 2;
+  string id = 3;
+  // Absent selects the current incarnation. Present fences one exact incarnation.
+  string uid = 4;
+}
+
+message Resource {
+  ResourceRef ref = 1;
+  google.protobuf.Any body = 2;
+  string etag = 3;
+}
+
+message MutationMetadata {
+  string request_id = 1;
+  string reason = 2;
+}
+
+message ResourceError {
+  int32 code = 1;
+  string reason = 2;
+  string message = 3;
+}
+
+message GetResourceRequest {
+  ResourceRef ref = 1;
+  ResourceView view = 2;
+}
+
+message GetResourceResponse {
+  Resource resource = 1;
+  repeated ResourceSourceStatus source_statuses = 2;
+}
+
+message ListResourcesRequest {
+  string type = 1;
+  google.protobuf.Any query = 2;
+  int32 page_size = 3;
+  string page_token = 4;
+  ResourceView view = 5;
+}
+
+message ListResourcesResponse {
+  repeated Resource resources = 1;
+  string next_page_token = 2;
+  repeated ResourceSourceStatus source_statuses = 3;
+}
+
+message BatchGetResourcesRequest {
+  string type = 1;
+  repeated ResourceRef refs = 2;
+  ResourceView view = 3;
+}
+
+message BatchGetResourceResult {
+  oneof result {
+    Resource resource = 1;
+    ResourceError error = 2;
+  }
+}
+
+message BatchGetResourcesResponse {
+  repeated BatchGetResourceResult results = 1;
+  repeated ResourceSourceStatus source_statuses = 2;
+}
+
+message CreateResourceRequest {
+  MutationMetadata mutation = 1;
+  string type = 2;
+  ResourceRef parent = 3;
+  string id = 4;
+  google.protobuf.Any body = 5;
+}
+
+message ResourceUpdate {
+  RequestedResourceState new_state = 1;
+  google.protobuf.Any patch = 2;
+}
+
+message UpdateResourceRequest {
+  MutationMetadata mutation = 1;
+  ResourceRef ref = 2;
+  ResourceUpdate update = 3;
+  string if_match = 4;
+}
+
+message DeleteResourceRequest {
+  MutationMetadata mutation = 1;
+  ResourceRef ref = 2;
+  string if_match = 3;
+}
+
+message Operation {
+  ResourceRef ref = 1;
+  OperationPhase phase = 2;
+  string verb = 3;
+  ResourceRef requested_ref = 4;
+  ResourceRef resolved_ref = 5;
+  repeated ResourceRef affected = 6;
+  RequestedResourceState requested_state = 7;
+  google.protobuf.Any result = 8;
+  ResourceError error = 9;
+  iris.time.Timestamp accepted_at = 10;
+  iris.time.Timestamp applied_at = 11;
+  iris.time.Timestamp completed_at = 12;
+}
+
+message ResourceCapability {
+  string type = 1;
+  repeated string verbs = 2;
+  repeated ResourceView views = 3;
+  repeated string body_type_urls = 4;
+  repeated string query_type_urls = 5;
+  repeated string update_type_urls = 6;
+  repeated string features = 7;
+  repeated string create_type_urls = 8;
+}
+
+message BackendResourceCapability {
+  string backend_id = 1;
+  string type = 2;
+  repeated string verbs = 3;
+  repeated string features = 4;
+}
+
+message GetServiceInfoRequest {}
+
+message GetServiceInfoResponse {
+  string protocol_version = 1;
+  string controller_generation = 2;
+  repeated ResourceCapability resources = 3;
+  repeated BackendResourceCapability backend_resources = 4;
+}
+
 service ResourceService {
-  rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
-  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
-  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
-  rpc DescribeJob(DescribeJobRequest) returns (DescribeJobResponse);
-  rpc GetJobState(GetJobStateRequest) returns (GetJobStateResponse);
-  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
-  rpc DescribeTask(DescribeTaskRequest) returns (DescribeTaskResponse);
-  rpc BatchDescribeTasks(BatchDescribeTasksRequest) returns (BatchDescribeTasksResponse);
-  rpc DescribeAttempt(DescribeAttemptRequest) returns (DescribeAttemptResponse);
-  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
-  rpc DescribeNode(DescribeNodeRequest) returns (DescribeNodeResponse);
-  rpc ListSlices(ListSlicesRequest) returns (ListSlicesResponse);
-  rpc DescribeSlice(DescribeSliceRequest) returns (DescribeSliceResponse);
-  rpc GetCapacityStatus(GetCapacityStatusRequest) returns (GetCapacityStatusResponse);
-  rpc ListEndpoints(ListEndpointsRequest) returns (ListEndpointsResponse);
-  rpc DescribeEndpoint(DescribeEndpointRequest) returns (DescribeEndpointResponse);
-  rpc BatchDescribeEndpoints(BatchDescribeEndpointsRequest) returns (BatchDescribeEndpointsResponse);
-  rpc MintEndpointToken(MintEndpointTokenRequest) returns (MintEndpointTokenResponse);
-  rpc ListActivity(ListActivityRequest) returns (ListActivityResponse);
-  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
-  rpc CancelJob(CancelJobRequest) returns (ActionResponse);
-  rpc RetryTask(RetryTaskRequest) returns (ActionResponse);
-  rpc TerminateAttempt(TerminateAttemptRequest) returns (ActionResponse);
-  rpc GetActionReceipt(GetActionReceiptRequest) returns (ActionResponse);
-  rpc ExecAttempt(ExecAttemptRequest) returns (ExecAttemptResponse);
-  rpc ProfileAttempt(ProfileAttemptRequest) returns (ProfileAttemptResponse);
+  rpc CreateResource(CreateResourceRequest) returns (Operation);
+  rpc GetResource(GetResourceRequest) returns (GetResourceResponse);
+  rpc BatchGetResources(BatchGetResourcesRequest) returns (BatchGetResourcesResponse);
+  rpc ListResources(ListResourcesRequest) returns (ListResourcesResponse);
+  rpc UpdateResource(UpdateResourceRequest) returns (Operation);
+  rpc DeleteResource(DeleteResourceRequest) returns (Operation);
+  rpc GetServiceInfo(GetServiceInfoRequest) returns (GetServiceInfoResponse);
 }

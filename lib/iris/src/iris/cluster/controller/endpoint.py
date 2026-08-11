@@ -70,6 +70,8 @@ class EndpointResources:
             {
                 "name_prefix": query.name_prefix,
                 "task": query.task.resource_id if query.task is not None else None,
+                "owner_id": query.owner_id,
+                "system_only": query.system_only,
                 "page_size": page_size,
             },
         )
@@ -81,8 +83,12 @@ class EndpointResources:
             ),
             key=lambda row: (row.name, row.endpoint_id),
         )
+        if query.system_only:
+            rows = []
+        if query.owner_id is not None:
+            rows = [row for row in rows if row.task_id.user == query.owner_id]
         system_endpoints = ()
-        if query.task is None:
+        if query.task is None and query.owner_id is None:
             system_endpoints = tuple(
                 (name, address)
                 for name, address in self._dependencies.endpoint_registry.system_endpoints()
@@ -168,12 +174,12 @@ class EndpointResources:
         return tuple(details)
 
     def mint_endpoint_token(self, key: ResourceKey, ttl: Duration | None) -> EndpointToken:
-        detail = self.describe_endpoint(key)
+        self.describe_endpoint(key)
         if self._dependencies.auth.jwt_manager is None:
             raise RuntimeError("JWT manager not configured")
-        row = self._dependencies.endpoint_registry.resolve_task_endpoint(detail.summary.name)
+        row = self._dependencies.endpoint_registry.task_endpoint(key.resource_id)
         if row is None:
-            raise ResourceNotFound(detail.summary.name)
+            raise ResourceNotFound(key.resource_id)
         if self._dependencies.auth.provider:
             authorize_resource_owner(row.task_id.user)
         ttl_seconds = DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS

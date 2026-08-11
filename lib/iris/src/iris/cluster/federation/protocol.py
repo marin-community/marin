@@ -168,7 +168,7 @@ class PeerConnection(Protocol):
 
     def federation_sync(self, requester_id: str, cursor: str) -> "FederationSyncBatch": ...
 
-    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt: ...
+    def cancel_job(self, identity: JobIdentity, *, idempotency_key: str, reason: str) -> ActionReceipt: ...
 
     def retry_task(
         self,
@@ -176,9 +176,24 @@ class PeerConnection(Protocol):
         *,
         expected_attempt_uid: str,
         idempotency_key: str,
+        reason: str,
     ) -> ActionReceipt: ...
 
-    def terminate_attempt(self, identity: AttemptIdentity, *, idempotency_key: str) -> ActionReceipt: ...
+    def terminate_attempt(
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+        reason: str,
+    ) -> ActionReceipt: ...
+
+    def fail_attempt(
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+        reason: str,
+    ) -> ActionReceipt: ...
 
     def profile_task(self, request: ProfileRequest) -> ProfileResult: ...
 

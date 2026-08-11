@@ -7,7 +7,7 @@
  */
 import { ref, computed } from 'vue'
 import type { LocationQueryValue, RouteLocationNormalizedLoaded } from 'vue-router'
-import { resourceRpcCall } from '@/composables/useRpc'
+import { getResource, RESOURCE_TYPES } from '@/composables/useResources'
 import {
   LOCAL_CLUSTER,
   type BackendInfo,
@@ -107,7 +107,11 @@ export function useBackends() {
 
   /** Load the peer roster from the canonical capacity resource. */
   async function fetchPeers(): Promise<void> {
-    const resp = await resourceRpcCall<ResourceGetCapacityStatusResponse>('GetCapacityStatus')
+    const resp = await getResource<ResourceGetCapacityStatusResponse>({
+      authorityClusterId: clusterId.value || 'system',
+      type: RESOURCE_TYPES.capacity,
+      id: 'capacity',
+    }, 'FULL')
     peers.value = resp.peers ?? []
     _peersFetched = true
   }

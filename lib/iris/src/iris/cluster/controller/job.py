@@ -776,19 +776,21 @@ class JobService:
         identity: JobIdentity,
         *,
         idempotency_key: str,
+        reason: str = "Cancelled through the resource API",
         principal_id: str = LOCAL_ADMIN_SUBMITTER,
     ) -> ActionReceipt:
-        payload_hash = _action_payload_hash(ActionKind.CANCEL_JOB, identity.job_uid, None)
+        payload_hash = _action_payload_hash(ActionKind.CANCEL_JOB, identity.job_uid, None, reason)
         preparation = self._prepare_cancel_job(
             identity,
             principal_id=principal_id,
             idempotency_key=idempotency_key,
+            reason=reason,
             payload_hash=payload_hash,
         )
         if isinstance(preparation, _RemoteActionContext):
             receipt = self._dependencies.runtime.federation.proxy_to_peer(
                 preparation.peer_id,
-                lambda peer: peer.cancel_job(identity, idempotency_key=idempotency_key),
+                lambda peer: peer.cancel_job(identity, idempotency_key=idempotency_key, reason=reason),
             )
             return self._persist_remote_action(
                 receipt,
@@ -811,6 +813,7 @@ class JobService:
         *,
         principal_id: str,
         idempotency_key: str,
+        reason: str,
         payload_hash: str,
     ) -> _CompletedCancel | _RemoteActionContext:
         cancel_target: CancelTarget | None = None
@@ -835,7 +838,7 @@ class JobService:
             execution_cluster_id = _execution_cluster(self._dependencies.cluster_id, row.cluster)
             handle = reads.federated_handle(tx, row.job_id.root_job)
             if handle is None:
-                job_ops.cancel(tx, job_id=row.job_id, reason="Cancelled by resource action")
+                job_ops.cancel(tx, job_id=row.job_id, reason=reason)
                 writes.record_federation_change(tx, row.job_id)
             elif row.job_id != row.job_id.root_job:
                 return _RemoteActionContext(handle.peer_id, authority, "", execution_cluster_id)
@@ -849,7 +852,7 @@ class JobService:
                         tx,
                         row.job_id,
                         now_ms=Timestamp.now().epoch_ms(),
-                        error="Cancelled before handoff",
+                        error=reason,
                     )
                 if handle.handoff_state != int(HandoffState.QUEUED_HANDOFF):
                     cancel_target = CancelTarget(row.job_id, handle.peer_id)
@@ -858,6 +861,7 @@ class JobService:
                 target=identity.key,
                 expected_target_uid=identity.job_uid,
                 expected_attempt_uid=None,
+                expected_attempt_number=None,
                 result=ActionResult.SATISFIED,
             )
             action_persistence.insert_action(

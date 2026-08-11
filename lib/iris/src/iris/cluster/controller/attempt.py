@@ -31,6 +31,7 @@ from iris.cluster.types import LOCAL_ADMIN_SUBMITTER
 from iris.resources.action import ActionKind, ActionReceipt, ActionResult
 from iris.resources.attempt import AttemptDetail, AttemptRuntimeObject
 from iris.resources.errors import (
+    ActionIdempotencyConflict,
     ActionPolicyRejected,
     BackendIdentityUnknown,
     ResourceNotFound,
@@ -96,12 +97,14 @@ class AttemptResources:
         *,
         expected_attempt_uid: str,
         idempotency_key: str,
+        reason: str = "Requested through the resource API",
         principal_id: str = LOCAL_ADMIN_SUBMITTER,
     ) -> ActionReceipt:
         return self._terminal_action(
             identity,
             expected_attempt_uid=expected_attempt_uid,
             idempotency_key=idempotency_key,
+            reason=reason,
             principal_id=principal_id,
             kind=ActionKind.RETRY_TASK,
             terminal_kind=TerminalKind.PREEMPT,
@@ -113,6 +116,7 @@ class AttemptResources:
         identity: AttemptIdentity,
         *,
         idempotency_key: str,
+        reason: str = "Requested through the resource API",
         principal_id: str = LOCAL_ADMIN_SUBMITTER,
     ) -> ActionReceipt:
         task = self._tasks.describe_task(identity.task).summary.identity
@@ -123,9 +127,33 @@ class AttemptResources:
             expected_attempt_uid=identity.attempt_uid,
             expected_attempt_number=identity.attempt_number,
             idempotency_key=idempotency_key,
+            reason=reason,
             principal_id=principal_id,
             kind=ActionKind.TERMINATE_ATTEMPT,
             terminal_kind=TerminalKind.TERMINATE,
+            result=ActionResult.SATISFIED,
+        )
+
+    def fail_attempt(
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+        reason: str = "Failed through the resource API",
+        principal_id: str = LOCAL_ADMIN_SUBMITTER,
+    ) -> ActionReceipt:
+        task = self._tasks.describe_task(identity.task).summary.identity
+        if identity.attempt_number < 0:
+            raise ActionPolicyRejected("attempt_number must be non-negative")
+        return self._terminal_action(
+            task,
+            expected_attempt_uid=identity.attempt_uid,
+            expected_attempt_number=identity.attempt_number,
+            idempotency_key=idempotency_key,
+            reason=reason,
+            principal_id=principal_id,
+            kind=ActionKind.FAIL_ATTEMPT,
+            terminal_kind=TerminalKind.TIMEOUT,
             result=ActionResult.SATISFIED,
         )
 
@@ -136,24 +164,54 @@ class AttemptResources:
             raise ResourceNotFound(action_id)
         return receipt
 
+    def replay_action(
+        self,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        kind: ActionKind,
+        reason: str,
+    ) -> ActionReceipt | None:
+        """Return a matching accepted action before resolving a CURRENT target."""
+        with self._dependencies.db.read_snapshot() as tx:
+            existing = action_persistence.action_by_idempotency_key(
+                tx,
+                principal_id=principal_id,
+                idempotency_key=_require_idempotency_key(idempotency_key),
+            )
+        if existing is None:
+            return None
+        receipt, stored_hash = existing
+        expected_hash = _action_payload_hash(
+            kind,
+            receipt.expected_target_uid,
+            receipt.expected_attempt_uid,
+            reason,
+        )
+        if receipt.kind is not kind or stored_hash != expected_hash:
+            raise ActionIdempotencyConflict("idempotency key was already used for a different action")
+        return receipt
+
     def _terminal_action(
         self,
         identity: TaskIdentity,
         *,
         expected_attempt_uid: str,
         idempotency_key: str,
+        reason: str,
         principal_id: str,
         kind: ActionKind,
         terminal_kind: TerminalKind,
         result: ActionResult,
         expected_attempt_number: int | None = None,
     ) -> ActionReceipt:
-        payload_hash = _action_payload_hash(kind, identity.task_uid, expected_attempt_uid)
+        payload_hash = _action_payload_hash(kind, identity.task_uid, expected_attempt_uid, reason)
         preparation = self._prepare_terminal_action(
             identity,
             expected_attempt_uid=expected_attempt_uid,
             expected_attempt_number=expected_attempt_number,
             idempotency_key=idempotency_key,
+            reason=reason,
             principal_id=principal_id,
             kind=kind,
             terminal_kind=terminal_kind,
@@ -170,6 +228,7 @@ class AttemptResources:
             kind=kind,
             idempotency_key=idempotency_key,
             expected_attempt_uid=expected_attempt_uid,
+            reason=reason,
         )
         return self._persist_remote_action(
             receipt,
@@ -187,6 +246,7 @@ class AttemptResources:
         expected_attempt_uid: str,
         expected_attempt_number: int | None,
         idempotency_key: str,
+        reason: str,
         principal_id: str,
         kind: ActionKind,
         terminal_kind: TerminalKind,
@@ -238,13 +298,13 @@ class AttemptResources:
                     TerminalDecision(
                         kind=terminal_kind,
                         task_id=row.task_id,
-                        reason="Requested through the resource action API",
+                        reason=reason,
                     )
                 ],
                 now=Timestamp.now(),
             )
             target = identity.key
-            if kind is ActionKind.TERMINATE_ATTEMPT:
+            if kind in {ActionKind.TERMINATE_ATTEMPT, ActionKind.FAIL_ATTEMPT}:
                 target = ResourceKey(
                     authority,
                     ResourceKind.ATTEMPT,
@@ -255,6 +315,7 @@ class AttemptResources:
                 target=target,
                 expected_target_uid=identity.task_uid,
                 expected_attempt_uid=expected_attempt_uid,
+                expected_attempt_number=int(attempt.attempt_id),
                 result=result,
             )
             action_persistence.insert_action(
@@ -279,6 +340,7 @@ class AttemptResources:
         kind: ActionKind,
         idempotency_key: str,
         expected_attempt_uid: str,
+        reason: str,
     ) -> ActionReceipt:
         if kind is ActionKind.RETRY_TASK:
             return self._dependencies.runtime.federation.proxy_to_peer(
@@ -287,11 +349,25 @@ class AttemptResources:
                     identity,
                     expected_attempt_uid=expected_attempt_uid,
                     idempotency_key=idempotency_key,
+                    reason=reason,
+                ),
+            )
+        if kind is ActionKind.FAIL_ATTEMPT:
+            return self._dependencies.runtime.federation.proxy_to_peer(
+                remote.peer_id,
+                lambda peer: peer.fail_attempt(
+                    remote_attempt,
+                    idempotency_key=idempotency_key,
+                    reason=reason,
                 ),
             )
         return self._dependencies.runtime.federation.proxy_to_peer(
             remote.peer_id,
-            lambda peer: peer.terminate_attempt(remote_attempt, idempotency_key=idempotency_key),
+            lambda peer: peer.terminate_attempt(
+                remote_attempt,
+                idempotency_key=idempotency_key,
+                reason=reason,
+            ),
         )
 
     def _attempt_runtime(

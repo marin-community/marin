@@ -525,12 +525,16 @@ def test_dashboard_capacity_with_peer(smoke_cluster, smoke_page, smoke_screensho
     }
 
     def _fulfill_capacity(route):
+        request = route.request.post_data_json
+        if request.get("ref", {}).get("type") != "iris/capacity":
+            route.continue_()
+            return
         response = route.fetch()
         body = response.json()
-        body["peers"] = [peer]
+        body["resource"]["body"]["peers"] = [peer]
         route.fulfill(response=response, json=body)
 
-    smoke_page.route("**/GetCapacityStatus", _fulfill_capacity)
+    smoke_page.route("**/GetResource", _fulfill_capacity)
     try:
         dashboard_goto(smoke_page, f"{smoke_cluster.url}/capacity")
         smoke_page.reload()
@@ -546,7 +550,7 @@ def test_dashboard_capacity_with_peer(smoke_cluster, smoke_page, smoke_screensho
             "Capacity with a federation execution target and inward Jobs link",
         )
     finally:
-        smoke_page.unroute("**/GetCapacityStatus", _fulfill_capacity)
+        smoke_page.unroute("**/GetResource", _fulfill_capacity)
 
 
 def test_dashboard_cancel_job_returns_a_durable_action(smoke_cluster, smoke_page, smoke_screenshot):

@@ -118,6 +118,8 @@ from iris.rpc.legacy.controller_service import LegacyControllerService
 from iris.rpc.legacy.job_codec import constraint_from_proto, constraint_to_proto, resource_spec_from_proto
 from iris.rpc.legacy.job_service_codec import job_spec_from_legacy_request
 from iris.rpc.log_reader import FinelogLogReader
+from iris.rpc.resource_registrations import resource_catalog
+from iris.rpc.resource_service import ResourceServiceImpl
 from iris.rpc.worker_codec import worker_metadata_from_proto
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, RateLimiter, Timestamp
@@ -402,6 +404,7 @@ def make_controller_service(
         operations=OperationalServices.from_database(db),
         endpoint_service=endpoint_service,
         controller=resources,
+        resource_service=ResourceServiceImpl(resource_catalog(resources)),
         auth=resolved_auth,
         user_budget_defaults=user_budget_defaults,
     )

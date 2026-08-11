@@ -54,9 +54,19 @@ def _require_idempotency_key(value: str) -> str:
     return value
 
 
-def _action_payload_hash(kind: ActionKind, target_uid: str, attempt_uid: str | None) -> str:
+def _action_payload_hash(
+    kind: ActionKind,
+    target_uid: str,
+    attempt_uid: str | None,
+    reason: str,
+) -> str:
     encoded = json.dumps(
-        {"kind": kind.value, "target_uid": target_uid, "attempt_uid": attempt_uid},
+        {
+            "kind": kind.value,
+            "target_uid": target_uid,
+            "attempt_uid": attempt_uid,
+            "reason": reason,
+        },
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
@@ -74,13 +84,12 @@ def _duplicate_action(
     existing = action_persistence.action_by_idempotency_key(
         tx,
         principal_id=principal_id,
-        kind=kind,
         idempotency_key=_require_idempotency_key(idempotency_key),
     )
     if existing is None:
         return None
     receipt, stored_hash = existing
-    if stored_hash != payload_hash:
+    if receipt.kind is not kind or stored_hash != payload_hash:
         raise ActionIdempotencyConflict("idempotency key was already used for a different action")
     return receipt
 
@@ -91,6 +100,7 @@ def _completed_action(
     target: ResourceKey,
     expected_target_uid: str,
     expected_attempt_uid: str | None,
+    expected_attempt_number: int | None,
     result: ActionResult,
 ) -> ActionReceipt:
     now = Timestamp.now()
@@ -106,4 +116,5 @@ def _completed_action(
         created_at=now,
         updated_at=now,
         completed_at=now,
+        expected_attempt_number=expected_attempt_number,
     )

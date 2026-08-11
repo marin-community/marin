@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useResourceRpc } from '@/composables/useRpc'
+import { RESOURCE_MESSAGES, RESOURCE_TYPES, useListResources } from '@/composables/useResources'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
-import type { ResourceListUsersResponse, ResourceUserSummary } from '@/types/rpc'
+import type { ResourceUserSummary } from '@/types/rpc'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
 
@@ -17,7 +17,12 @@ const MAX_STARRED_USERS = 10
 
 const TERMINAL_JOB_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'preempted'])
 
-const { data, loading, error, refresh } = useResourceRpc<ResourceListUsersResponse>('ListUsers')
+const { data, loading, error, refresh } = useListResources<ResourceUserSummary>(
+  RESOURCE_TYPES.userSummary,
+  RESOURCE_MESSAGES.listUsersRequest,
+  {},
+  'BASIC',
+)
 
 onMounted(refresh)
 useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
@@ -91,7 +96,7 @@ function toRow(summary: ResourceUserSummary): UserRow {
 // Alphabetical by user id, with starred users pinned to the top.
 const rows = computed<UserRow[]>(() => {
   const term = search.value.trim().toLowerCase()
-  return (data.value?.users ?? [])
+  return (data.value?.items ?? [])
     .map(toRow)
     .filter(r => !term || r.user.toLowerCase().includes(term))
     .sort((a, b) =>

@@ -3,9 +3,28 @@
 
 """Public list and diagnostic views over completed journeys."""
 
+from google.protobuf import any_pb2
 from iris.rpc import job_pb2, resource_pb2
+from iris.rpc.resource_registrations import resource_catalog
 from iris.rpc.resource_service import ResourceServiceImpl
+from iris.rpc.resource_types import JOB, USER_SUMMARY
 from rigging.server_auth import VerifiedIdentity, identity_scope
+
+
+def _pack(value) -> any_pb2.Any:
+    result = any_pb2.Any()
+    result.Pack(value)
+    return result
+
+
+def _service(journey) -> ResourceServiceImpl:
+    return ResourceServiceImpl(resource_catalog(journey.controller.controller))
+
+
+def _body(resource: resource_pb2.Resource, message_type):
+    result = message_type()
+    assert resource.body.Unpack(result)
+    return result
 
 
 def test_resource_user_summary_groups_active_work_and_limits_ordinary_users(journey):
@@ -14,9 +33,18 @@ def test_resource_user_summary_groups_active_work_and_limits_ordinary_users(jour
     journey.set_budget("idle-user")
     journey.settle()
 
-    service = ResourceServiceImpl(journey.controller.controller)
-    response = service.list_users(resource_pb2.ListUsersRequest(), None)
-    users = {user.user_id: user for user in response.users}
+    service = _service(journey)
+    response = service.list_resources(
+        resource_pb2.ListResourcesRequest(
+            type=USER_SUMMARY,
+            query=_pack(resource_pb2.ListUsersRequest()),
+            view=resource_pb2.RESOURCE_VIEW_BASIC,
+        ),
+        None,
+    )
+    users = {
+        user.user_id: user for user in (_body(resource, resource_pb2.UserSummary) for resource in response.resources)
+    }
 
     assert set(users) == {"alice", "bob", "idle-user"}
     assert users["alice"].job_state_counts == {"running": 1}
@@ -29,21 +57,34 @@ def test_resource_user_summary_groups_active_work_and_limits_ordinary_users(jour
     assert not users["alice"].budget_configured
 
     with identity_scope(VerifiedIdentity(user_id="alice", role="user")):
-        restricted = service.list_users(resource_pb2.ListUsersRequest(), None)
+        restricted = service.list_resources(
+            resource_pb2.ListResourcesRequest(
+                type=USER_SUMMARY,
+                query=_pack(resource_pb2.ListUsersRequest()),
+                view=resource_pb2.RESOURCE_VIEW_BASIC,
+            ),
+            None,
+        )
 
-    assert [user.user_id for user in restricted.users] == ["alice"]
+    assert [_body(resource, resource_pb2.UserSummary).user_id for resource in restricted.resources] == ["alice"]
 
 
 def test_resource_job_list_can_return_only_top_level_jobs(journey):
     root = journey.submit("root", user="alice")
     journey.submit_child(root, "child")
 
-    response = ResourceServiceImpl(journey.controller.controller).list_jobs(
-        resource_pb2.ListJobsRequest(query=resource_pb2.JobQuery(owner_id="alice", top_level_only=True)),
+    response = _service(journey).list_resources(
+        resource_pb2.ListResourcesRequest(
+            type=JOB,
+            query=_pack(resource_pb2.JobQuery(owner_id="alice", top_level_only=True)),
+            view=resource_pb2.RESOURCE_VIEW_BASIC,
+        ),
         None,
     )
 
-    assert [job.identity.key.resource_id for job in response.jobs] == [root.wire_id]
+    assert [_body(resource, resource_pb2.JobSummary).identity.key.resource_id for resource in response.resources] == [
+        root.wire_id
+    ]
 
 
 def test_list_jobs_filters_terminal_and_pending_jobs_and_cancel_finished_is_noop(journey):

@@ -59,7 +59,9 @@ For a rollout across more than one cluster, use
 It fixes the order (`marin-dev`, `marin`, then CoreWeave smallest first), puts a
 human gate on every step, and drives `scripts/iris/rollout_controllers.py` for
 the credential preflight, the before/after snapshots, the 5-minute watch, and a
-one-job smoke test.
+three-Job resource lifecycle smoke test. Run `smoke-local` first to exercise the
+same submit, wait, log-read, cancel, action-wait, and post-cancel paths on an
+in-process scratch cluster.
 
 `iris cluster controller restart` restarts the controller only (seconds of downtime, workers unaffected).
 `iris cluster restart` tears down **everything** — controller + all workers. All jobs die. **Never run the full `iris cluster restart` without explicit user approval.**

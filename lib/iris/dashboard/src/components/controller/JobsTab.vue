@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { resourceRpcCall, useResourceRpc } from '@/composables/useRpc'
+import { listResources, RESOURCE_MESSAGES, RESOURCE_TYPES, useListResources } from '@/composables/useResources'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
-import type { ResourceJobSummary, ResourceListJobsResponse } from '@/types/rpc'
+import type { ResourceJobSummary } from '@/types/rpc'
 import { formatRelativeTime, timestampMs } from '@/utils/formatting'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -28,8 +28,10 @@ const expandedJobs = ref(new Set<string>())
 const childJobs = ref(new Map<string, ResourceJobSummary[]>())
 const loadingChildren = ref(new Set<string>())
 
-const { data, loading, error, refresh } = useResourceRpc<ResourceListJobsResponse>('ListJobs', () => ({
-  query: {
+const { data, loading, error, refresh } = useListResources<ResourceJobSummary>(
+  RESOURCE_TYPES.job,
+  RESOURCE_MESSAGES.jobQuery,
+  () => ({
     ownerId: selectedUser.value || owner.value || undefined,
     jobIdPrefix: jobPrefix.value || undefined,
     backendId: backendId.value || undefined,
@@ -37,10 +39,11 @@ const { data, loading, error, refresh } = useResourceRpc<ResourceListJobsRespons
     states: stateFilter.value ? [stateFilter.value] : undefined,
     topLevelOnly: true,
     page: { pageSize: PAGE_SIZE, pageToken: pageToken.value },
-  },
-}))
+  }),
+  'BASIC',
+)
 
-const jobs = computed(() => data.value?.jobs ?? [])
+const jobs = computed(() => data.value?.items ?? [])
 type JobTreeRow = ResourceJobSummary & { depth: number }
 
 const visibleJobs = computed<JobTreeRow[]>(() => {
@@ -84,13 +87,16 @@ async function fetchChildren(job: ResourceJobSummary): Promise<ResourceJobSummar
   const items: ResourceJobSummary[] = []
   let nextPageToken: string | undefined
   do {
-    const response = await resourceRpcCall<ResourceListJobsResponse>('ListJobs', {
-      query: {
+    const response = await listResources<ResourceJobSummary>(
+      RESOURCE_TYPES.job,
+      RESOURCE_MESSAGES.jobQuery,
+      {
         parent: job.identity.key,
         page: { pageSize: 500, pageToken: nextPageToken },
       },
-    })
-    items.push(...(response.jobs ?? []))
+      'BASIC',
+    )
+    items.push(...response.items)
     nextPageToken = response.page?.nextPageToken || undefined
   } while (nextPageToken)
   return items

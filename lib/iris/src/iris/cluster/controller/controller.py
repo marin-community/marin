@@ -34,7 +34,7 @@ from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     UserBudgetDefaults,
 )
-from iris.resources.action import ActionReceipt
+from iris.resources.action import ActionKind, ActionReceipt
 from iris.resources.activity import ActivityEntry, ActivityQuery
 from iris.resources.attempt import AttemptDetail
 from iris.resources.capacity import CapacityStatus
@@ -135,6 +135,11 @@ class Controller:
     def cluster_id(self) -> str:
         return self._dependencies.cluster_id
 
+    @property
+    def backends(self) -> Mapping[str, TaskBackend]:
+        """Execution providers installed behind resource registrations."""
+        return self._dependencies.backends
+
     def received_job_from_peer(self, root_job: JobName, peer_id: str) -> bool:
         return self._jobs.received_job_from_peer(root_job, peer_id)
 
@@ -168,9 +173,19 @@ class Controller:
         return self._jobs.observe_jobs(summaries)
 
     def cancel_job(
-        self, identity: JobIdentity, *, idempotency_key: str, principal_id: str = LOCAL_ADMIN_SUBMITTER
+        self,
+        identity: JobIdentity,
+        *,
+        idempotency_key: str,
+        reason: str = "Cancelled through the resource API",
+        principal_id: str = LOCAL_ADMIN_SUBMITTER,
     ) -> ActionReceipt:
-        return self._jobs.cancel_job(identity, idempotency_key=idempotency_key, principal_id=principal_id)
+        return self._jobs.cancel_job(
+            identity,
+            idempotency_key=idempotency_key,
+            reason=reason,
+            principal_id=principal_id,
+        )
 
     def list_tasks(self, query: TaskQuery = TaskQuery()) -> Page[TaskSummary]:
         return self._tasks.list_tasks(query)
@@ -196,22 +211,64 @@ class Controller:
         *,
         expected_attempt_uid: str,
         idempotency_key: str,
+        reason: str = "Requested through the resource API",
         principal_id: str = LOCAL_ADMIN_SUBMITTER,
     ) -> ActionReceipt:
         return self._attempts.retry_task(
             identity,
             expected_attempt_uid=expected_attempt_uid,
             idempotency_key=idempotency_key,
+            reason=reason,
             principal_id=principal_id,
         )
 
     def terminate_attempt(
-        self, identity: AttemptIdentity, *, idempotency_key: str, principal_id: str = LOCAL_ADMIN_SUBMITTER
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+        reason: str = "Requested through the resource API",
+        principal_id: str = LOCAL_ADMIN_SUBMITTER,
     ) -> ActionReceipt:
-        return self._attempts.terminate_attempt(identity, idempotency_key=idempotency_key, principal_id=principal_id)
+        return self._attempts.terminate_attempt(
+            identity,
+            idempotency_key=idempotency_key,
+            reason=reason,
+            principal_id=principal_id,
+        )
+
+    def fail_attempt(
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+        reason: str = "Failed through the resource API",
+        principal_id: str = LOCAL_ADMIN_SUBMITTER,
+    ) -> ActionReceipt:
+        return self._attempts.fail_attempt(
+            identity,
+            idempotency_key=idempotency_key,
+            reason=reason,
+            principal_id=principal_id,
+        )
 
     def get_action_receipt(self, action_id: str) -> ActionReceipt:
         return self._attempts.get_action_receipt(action_id)
+
+    def replay_action(
+        self,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        kind: ActionKind,
+        reason: str,
+    ) -> ActionReceipt | None:
+        return self._attempts.replay_action(
+            principal_id=principal_id,
+            idempotency_key=idempotency_key,
+            kind=kind,
+            reason=reason,
+        )
 
     def list_endpoints(self, query: EndpointQuery = EndpointQuery()) -> Page[EndpointSummary]:
         return self._endpoints.list_endpoints(query)

@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, watch } from 'vue'
-import { useResourceRpc } from '@/composables/useRpc'
-import type { ResourceKey, ResourceListActivityResponse } from '@/types/rpc'
+import { RESOURCE_MESSAGES, RESOURCE_TYPES, useListResources } from '@/composables/useResources'
+import type { ResourceActivityEntry, ResourceKey } from '@/types/rpc'
 import { formatRelativeTime, timestampMs } from '@/utils/formatting'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import SourceWarnings from '@/components/shared/SourceWarnings.vue'
 
 const props = defineProps<{ target: ResourceKey; attemptUid?: string }>()
-const { data, loading, error, refresh } = useResourceRpc<ResourceListActivityResponse>('ListActivity', () => ({
-  query: { target: props.target, attemptUid: props.attemptUid, page: { pageSize: 200 } },
-}))
-const entries = computed(() => data.value?.entries ?? [])
+const { data, loading, error, refresh } = useListResources<ResourceActivityEntry>(
+  RESOURCE_TYPES.activityEntry,
+  RESOURCE_MESSAGES.activityQuery,
+  () => ({ target: props.target, attemptUid: props.attemptUid, page: { pageSize: 200 } }),
+  'FULL',
+)
+const entries = computed(() => data.value?.items ?? [])
 onMounted(refresh)
 watch(() => props.attemptUid, refresh)
 </script>

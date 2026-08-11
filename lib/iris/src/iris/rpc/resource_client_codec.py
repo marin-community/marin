@@ -8,29 +8,15 @@ Generated protobuf messages stay at the RPC boundary because their mutable,
 presence-sensitive semantics are transport concerns rather than resource behavior.
 """
 
-from iris.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
 from iris.resources.activity import ActivityEntry, ActivityQuery
 from iris.resources.attempt import AttemptDetail, AttemptRuntimeObject, AttemptSummary
 from iris.resources.endpoint import (
-    EndpointAccess,
     EndpointDetail,
     EndpointQuery,
     EndpointSummary,
     EndpointToken,
     ExecResult,
     ProfileResult,
-)
-from iris.resources.identity import (
-    AttemptIdentity,
-    AttemptLocator,
-    JobIdentity,
-    NodeIdentity,
-    NodeLocator,
-    ResourceKey,
-    ResourceKind,
-    SliceIdentity,
-    SliceLocator,
-    TaskIdentity,
 )
 from iris.resources.job import JobDetail, JobQuery, JobSummary
 from iris.resources.log import LogEntry, LogLevel, LogPage, LogQuery
@@ -39,181 +25,45 @@ from iris.resources.node import (
     NodeAttributeKind,
     NodeCapacity,
     NodeDetail,
-    NodeHealth,
     NodeQuery,
     NodeSummary,
 )
-from iris.resources.slice import (
-    MembershipState,
-    SliceCapacityState,
-    SliceDetail,
-    SliceLifecycle,
-    SliceMember,
-    SliceQuery,
-    SliceSummary,
-)
-from iris.resources.source import Freshness, Page, ResourceSourceStatus, SourceState
+from iris.resources.slice import SliceDetail, SliceMember, SliceQuery, SliceSummary
+from iris.resources.source import Page
 from iris.resources.state import JobState, TaskState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import resource_pb2
-from iris.rpc.resource_codec import job_spec_from_proto, resource_spec_from_proto
+from iris.rpc.resource_codec import (
+    attempt_identity_from_proto as _attempt_identity_from_proto,
+)
+from iris.rpc.resource_codec import (
+    endpoint_access_from_proto,
+    job_identity_from_proto,
+    job_spec_from_proto,
+    membership_state_from_proto,
+    node_health_from_proto,
+    node_health_to_proto,
+    resource_key_to_proto,
+    resource_spec_from_proto,
+    slice_capacity_state_from_proto,
+    slice_lifecycle_from_proto,
+)
+from iris.rpc.resource_codec import (
+    node_identity_from_proto as _node_identity_from_proto,
+)
+from iris.rpc.resource_codec import (
+    resource_key_from_proto as _resource_key_from_proto,
+)
+from iris.rpc.resource_codec import (
+    resource_source_status_from_proto as _source_status_from_proto,
+)
+from iris.rpc.resource_codec import (
+    slice_identity_from_proto as _slice_identity_from_proto,
+)
+from iris.rpc.resource_codec import (
+    task_identity_from_proto as _task_identity_from_proto,
+)
 from iris.time_proto import timestamp_from_proto, timestamp_to_proto
-
-_RESOURCE_KIND_TO_PROTO = {
-    ResourceKind.JOB: resource_pb2.RESOURCE_KIND_JOB,
-    ResourceKind.TASK: resource_pb2.RESOURCE_KIND_TASK,
-    ResourceKind.ATTEMPT: resource_pb2.RESOURCE_KIND_ATTEMPT,
-    ResourceKind.ENDPOINT: resource_pb2.RESOURCE_KIND_ENDPOINT,
-    ResourceKind.NODE: resource_pb2.RESOURCE_KIND_NODE,
-    ResourceKind.SLICE: resource_pb2.RESOURCE_KIND_SLICE,
-}
-_RESOURCE_KIND_FROM_PROTO = {value: key for key, value in _RESOURCE_KIND_TO_PROTO.items()}
-_SOURCE_STATE_FROM_PROTO = {
-    resource_pb2.SOURCE_STATE_AVAILABLE: SourceState.AVAILABLE,
-    resource_pb2.SOURCE_STATE_UNAVAILABLE: SourceState.UNAVAILABLE,
-    resource_pb2.SOURCE_STATE_UNSUPPORTED: SourceState.UNSUPPORTED,
-}
-_FRESHNESS_FROM_PROTO = {
-    resource_pb2.FRESHNESS_CURRENT: Freshness.CURRENT,
-    resource_pb2.FRESHNESS_STALE: Freshness.STALE,
-    resource_pb2.FRESHNESS_UNKNOWN: Freshness.UNKNOWN,
-}
-_NODE_HEALTH_TO_PROTO = {
-    NodeHealth.READY: resource_pb2.NODE_HEALTH_READY,
-    NodeHealth.DEGRADED: resource_pb2.NODE_HEALTH_DEGRADED,
-    NodeHealth.UNAVAILABLE: resource_pb2.NODE_HEALTH_UNAVAILABLE,
-    NodeHealth.RETIRED: resource_pb2.NODE_HEALTH_RETIRED,
-}
-_NODE_HEALTH_FROM_PROTO = {value: key for key, value in _NODE_HEALTH_TO_PROTO.items()}
-_SLICE_LIFECYCLE_FROM_PROTO = {
-    resource_pb2.SLICE_LIFECYCLE_CREATING: SliceLifecycle.CREATING,
-    resource_pb2.SLICE_LIFECYCLE_READY: SliceLifecycle.READY,
-    resource_pb2.SLICE_LIFECYCLE_DELETING: SliceLifecycle.DELETING,
-    resource_pb2.SLICE_LIFECYCLE_FAILED: SliceLifecycle.FAILED,
-}
-_MEMBERSHIP_STATE_FROM_PROTO = {
-    resource_pb2.MEMBERSHIP_STATE_UNKNOWN: MembershipState.UNKNOWN,
-    resource_pb2.MEMBERSHIP_STATE_OBSERVED: MembershipState.OBSERVED,
-}
-_SLICE_CAPACITY_STATE_FROM_PROTO = {
-    resource_pb2.SLICE_CAPACITY_STATE_UNKNOWN: SliceCapacityState.UNKNOWN,
-    resource_pb2.SLICE_CAPACITY_STATE_AVAILABLE: SliceCapacityState.AVAILABLE,
-    resource_pb2.SLICE_CAPACITY_STATE_IN_USE: SliceCapacityState.IN_USE,
-    resource_pb2.SLICE_CAPACITY_STATE_IDLE: SliceCapacityState.IDLE,
-    resource_pb2.SLICE_CAPACITY_STATE_DEGRADED: SliceCapacityState.DEGRADED,
-}
-_ENDPOINT_ACCESS_FROM_PROTO = {
-    resource_pb2.ENDPOINT_ACCESS_PRIVATE: EndpointAccess.PRIVATE,
-    resource_pb2.ENDPOINT_ACCESS_LINK: EndpointAccess.LINK,
-}
-_ACTION_KIND_FROM_PROTO = {
-    resource_pb2.ACTION_KIND_CANCEL_JOB: ActionKind.CANCEL_JOB,
-    resource_pb2.ACTION_KIND_RETRY_TASK: ActionKind.RETRY_TASK,
-    resource_pb2.ACTION_KIND_TERMINATE_ATTEMPT: ActionKind.TERMINATE_ATTEMPT,
-}
-_ACTION_STATE_FROM_PROTO = {
-    resource_pb2.ACTION_STATE_ACCEPTED: ActionState.ACCEPTED,
-    resource_pb2.ACTION_STATE_VERIFYING: ActionState.VERIFYING,
-    resource_pb2.ACTION_STATE_SUCCEEDED: ActionState.SUCCEEDED,
-    resource_pb2.ACTION_STATE_FAILED: ActionState.FAILED,
-}
-_ACTION_RESULT_FROM_PROTO = {
-    resource_pb2.ACTION_RESULT_NONE: ActionResult.NONE,
-    resource_pb2.ACTION_RESULT_SATISFIED: ActionResult.SATISFIED,
-    resource_pb2.ACTION_RESULT_TARGET_ABSENT: ActionResult.TARGET_ABSENT,
-    resource_pb2.ACTION_RESULT_PROVIDER_REJECTED: ActionResult.PROVIDER_REJECTED,
-    resource_pb2.ACTION_RESULT_INTERNAL_ERROR: ActionResult.INTERNAL_ERROR,
-}
-
-
-def resource_key_to_proto(value: ResourceKey) -> resource_pb2.ResourceKey:
-    return resource_pb2.ResourceKey(
-        cluster_id=value.cluster_id,
-        kind=_RESOURCE_KIND_TO_PROTO[value.kind],
-        resource_id=value.resource_id,
-    )
-
-
-def _resource_key_from_proto(value: resource_pb2.ResourceKey) -> ResourceKey:
-    try:
-        kind = _RESOURCE_KIND_FROM_PROTO[value.kind]
-    except KeyError as exc:
-        raise ValueError("resource response contains an unspecified kind") from exc
-    return ResourceKey(value.cluster_id, kind, value.resource_id)
-
-
-def job_identity_to_proto(value: JobIdentity) -> resource_pb2.JobIdentity:
-    return resource_pb2.JobIdentity(key=resource_key_to_proto(value.key), job_uid=value.job_uid)
-
-
-def job_identity_from_proto(value: resource_pb2.JobIdentity) -> JobIdentity:
-    return JobIdentity(_resource_key_from_proto(value.key), value.job_uid)
-
-
-def task_identity_to_proto(value: TaskIdentity) -> resource_pb2.TaskIdentity:
-    return resource_pb2.TaskIdentity(key=resource_key_to_proto(value.key), task_uid=value.task_uid)
-
-
-def _task_identity_from_proto(value: resource_pb2.TaskIdentity) -> TaskIdentity:
-    return TaskIdentity(_resource_key_from_proto(value.key), value.task_uid)
-
-
-def attempt_locator_to_proto(value: AttemptLocator) -> resource_pb2.AttemptLocator:
-    result = resource_pb2.AttemptLocator(task=resource_key_to_proto(value.task))
-    if value.attempt_number is not None:
-        result.attempt_number = value.attempt_number
-    return result
-
-
-def attempt_identity_to_proto(value: AttemptIdentity) -> resource_pb2.AttemptIdentity:
-    return resource_pb2.AttemptIdentity(
-        task=resource_key_to_proto(value.task),
-        attempt_number=value.attempt_number,
-        attempt_uid=value.attempt_uid,
-    )
-
-
-def _attempt_identity_from_proto(value: resource_pb2.AttemptIdentity) -> AttemptIdentity:
-    return AttemptIdentity(_resource_key_from_proto(value.task), value.attempt_number, value.attempt_uid)
-
-
-def _node_identity_from_proto(value: resource_pb2.NodeIdentity) -> NodeIdentity:
-    return NodeIdentity(_resource_key_from_proto(value.key), value.backend_id, value.node_uid)
-
-
-def node_locator_to_proto(value: NodeLocator) -> resource_pb2.NodeLocator:
-    result = resource_pb2.NodeLocator(key=resource_key_to_proto(value.key), backend_id=value.backend_id)
-    if value.node_uid is not None:
-        result.node_uid = value.node_uid
-    return result
-
-
-def _slice_identity_from_proto(value: resource_pb2.SliceIdentity) -> SliceIdentity:
-    return SliceIdentity(_resource_key_from_proto(value.key), value.backend_id, value.slice_uid)
-
-
-def slice_locator_to_proto(value: SliceLocator) -> resource_pb2.SliceLocator:
-    result = resource_pb2.SliceLocator(key=resource_key_to_proto(value.key), backend_id=value.backend_id)
-    if value.slice_uid is not None:
-        result.slice_uid = value.slice_uid
-    return result
-
-
-def _source_status_from_proto(value: resource_pb2.ResourceSourceStatus) -> ResourceSourceStatus:
-    try:
-        state = _SOURCE_STATE_FROM_PROTO[value.state]
-        freshness = _FRESHNESS_FROM_PROTO[value.freshness]
-    except KeyError as exc:
-        raise ValueError("resource response contains an unspecified source status") from exc
-    return ResourceSourceStatus(
-        source_id=value.source_id,
-        backend_id=value.backend_id,
-        state=state,
-        freshness=freshness,
-        observed_at=timestamp_from_proto(value.observed_at) if value.HasField("observed_at") else None,
-        error_code=value.error_code,
-        error_message=value.error_message,
-    )
 
 
 def _page_request(page_size: int, page_token: str | None) -> resource_pb2.PageRequest:
@@ -364,16 +214,13 @@ def node_query_to_proto(value: NodeQuery) -> resource_pb2.NodeQuery:
     return resource_pb2.NodeQuery(
         backend_id=value.backend_id or "",
         contains=value.contains or "",
-        health=[_NODE_HEALTH_TO_PROTO[item] for item in value.health],
+        health=[node_health_to_proto(item) for item in value.health],
         page=_page_request(value.page_size, value.page_token),
     )
 
 
 def _node_summary_from_proto(value: resource_pb2.NodeSummary) -> NodeSummary:
-    try:
-        health = _NODE_HEALTH_FROM_PROTO[value.health]
-    except KeyError as exc:
-        raise ValueError("node response contains unspecified health") from exc
+    health = node_health_from_proto(value.health)
     capacity = value.capacity
     return NodeSummary(
         identity=_node_identity_from_proto(value.identity),
@@ -430,12 +277,9 @@ def slice_query_to_proto(value: SliceQuery) -> resource_pb2.SliceQuery:
 
 
 def _slice_summary_from_proto(value: resource_pb2.SliceSummary) -> SliceSummary:
-    try:
-        lifecycle = _SLICE_LIFECYCLE_FROM_PROTO[value.lifecycle]
-        membership = _MEMBERSHIP_STATE_FROM_PROTO[value.membership_state]
-        capacity_state = _SLICE_CAPACITY_STATE_FROM_PROTO[value.capacity_state]
-    except KeyError as exc:
-        raise ValueError("slice response contains an unspecified state") from exc
+    lifecycle = slice_lifecycle_from_proto(value.lifecycle)
+    membership = membership_state_from_proto(value.membership_state)
+    capacity_state = slice_capacity_state_from_proto(value.capacity_state)
     return SliceSummary(
         identity=_slice_identity_from_proto(value.identity),
         scaling_group_id=value.scaling_group_id,
@@ -488,10 +332,7 @@ def endpoint_query_to_proto(value: EndpointQuery) -> resource_pb2.EndpointQuery:
 
 
 def _endpoint_summary_from_proto(value: resource_pb2.EndpointSummary) -> EndpointSummary:
-    try:
-        access = _ENDPOINT_ACCESS_FROM_PROTO[value.access]
-    except KeyError as exc:
-        raise ValueError("endpoint response contains unspecified access") from exc
+    access = endpoint_access_from_proto(value.access)
     return EndpointSummary(
         key=_resource_key_from_proto(value.key),
         endpoint_id=value.endpoint_id,
@@ -580,28 +421,6 @@ def log_page_from_proto(value: resource_pb2.FetchLogsResponse) -> LogPage:
         ),
         next_cursor=value.next_cursor,
         source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
-    )
-
-
-def action_receipt_from_proto(value: resource_pb2.ActionReceipt) -> ActionReceipt:
-    try:
-        kind = _ACTION_KIND_FROM_PROTO[value.kind]
-        state = _ACTION_STATE_FROM_PROTO[value.state]
-        result = _ACTION_RESULT_FROM_PROTO[value.result_code]
-    except KeyError as exc:
-        raise ValueError("action response contains an unspecified state") from exc
-    return ActionReceipt(
-        action_id=value.action_id,
-        kind=kind,
-        target=_resource_key_from_proto(value.target),
-        expected_target_uid=value.expected_target_uid,
-        expected_attempt_uid=value.expected_attempt_uid or None,
-        state=state,
-        result_code=result,
-        result_message=value.result_message,
-        created_at=timestamp_from_proto(value.created_at),
-        updated_at=timestamp_from_proto(value.updated_at),
-        completed_at=timestamp_from_proto(value.completed_at) if value.HasField("completed_at") else None,
     )
 
 

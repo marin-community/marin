@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { resourceRpcCall } from '@/composables/useRpc'
+import {
+  getResource,
+  listResources,
+  RESOURCE_MESSAGES,
+  RESOURCE_TYPES,
+} from '@/composables/useResources'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { LOCAL_CLUSTER } from '@/types/rpc'
 import type {
@@ -13,8 +18,6 @@ import type {
   ResourceCapacityUnmetDemand,
   ResourceGetCapacityStatusResponse,
   ResourceJobSummary,
-  ResourceListJobsResponse,
-  ResourceListUsersResponse,
   ResourceSourceStatus,
   ResourceUserSummary,
 } from '@/types/rpc'
@@ -126,17 +129,29 @@ async function refresh() {
   loading.value = true
   errors.value = []
   const [capacityResult, userResult, jobResult] = await Promise.allSettled([
-    resourceRpcCall<ResourceGetCapacityStatusResponse>('GetCapacityStatus'),
-    resourceRpcCall<ResourceListUsersResponse>('ListUsers'),
-    resourceRpcCall<ResourceListJobsResponse>('ListJobs', {
-      query: {
+    getResource<ResourceGetCapacityStatusResponse>({
+      authorityClusterId: 'system',
+      type: RESOURCE_TYPES.capacity,
+      id: 'capacity',
+    }, 'FULL'),
+    listResources<ResourceUserSummary>(
+      RESOURCE_TYPES.userSummary,
+      RESOURCE_MESSAGES.listUsersRequest,
+      {},
+      'BASIC',
+    ),
+    listResources<ResourceJobSummary>(
+      RESOURCE_TYPES.job,
+      RESOURCE_MESSAGES.jobQuery,
+      {
         states: ['JOB_STATE_PENDING', 'JOB_STATE_BUILDING', 'JOB_STATE_UNSCHEDULABLE'],
         backendId: backendId.value || undefined,
         executionClusterId: peerId.value || undefined,
         topLevelOnly: true,
         page: { pageSize: INVENTORY_PAGE_SIZE },
       },
-    }),
+      'BASIC',
+    ),
   ])
   if (capacityResult.status === 'fulfilled') {
     backends.value = capacityResult.value.backends ?? []
@@ -146,10 +161,10 @@ async function refresh() {
     unroutableJobs.value = capacityResult.value.unroutableJobs ?? []
     sourceStatuses.value = capacityResult.value.sourceStatuses ?? []
   } else errors.value.push(resultError(capacityResult))
-  if (userResult.status === 'fulfilled') users.value = userResult.value.users ?? []
+  if (userResult.status === 'fulfilled') users.value = userResult.value.items
   else errors.value.push(resultError(userResult))
   if (jobResult.status === 'fulfilled') {
-    pendingJobs.value = jobResult.value.jobs ?? []
+    pendingJobs.value = jobResult.value.items
     pendingJobsTruncated.value = Boolean(jobResult.value.page?.nextPageToken)
   } else errors.value.push(resultError(jobResult))
   loading.value = false

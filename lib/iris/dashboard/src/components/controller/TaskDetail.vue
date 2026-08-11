@@ -1,15 +1,22 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { resourceRpcCall, useLogServerStatsRpc, useResourceRpc } from '@/composables/useRpc'
+import { useLogServerStatsRpc } from '@/composables/useRpc'
+import {
+  RESOURCE_MESSAGES,
+  RESOURCE_TYPES,
+  updateResource,
+  useGetResource,
+  useListResources,
+} from '@/composables/useResources'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type {
   ResourceActionResponse,
-  ResourceDescribeAttemptResponse,
-  ResourceDescribeJobResponse,
-  ResourceDescribeTaskResponse,
+  ResourceActionReceipt,
+  ResourceAttemptDetail,
   ResourceEndpointSummary,
-  ResourceListEndpointsResponse,
+  ResourceJobDetail,
+  ResourceTaskDetail,
 } from '@/types/rpc'
 import { formatBytes, formatDuration, formatTimestamp, timestampMs } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
@@ -38,25 +45,29 @@ const key = computed(() => ({
   kind: 'RESOURCE_KIND_TASK',
   resourceId: props.taskId,
 }))
-const { data, loading, error, refresh } = useResourceRpc<ResourceDescribeTaskResponse>(
-  'DescribeTask',
-  () => ({ task: key.value }),
-)
-const task = computed(() => data.value?.task)
-const { data: jobData, refresh: refreshJob } = useResourceRpc<ResourceDescribeJobResponse>(
-  'DescribeJob',
-  () => ({ job: task.value?.summary.job.key ?? { ...key.value, kind: 'RESOURCE_KIND_JOB' } }),
-)
+const taskRef = computed(() => ({ authorityClusterId: props.clusterId, type: RESOURCE_TYPES.task, id: props.taskId }))
+const { data, loading, error, refresh } = useGetResource<ResourceTaskDetail>(() => taskRef.value, 'FULL')
+const task = computed(() => data.value)
+const { data: jobData, refresh: refreshJob } = useGetResource<ResourceJobDetail>(() => ({
+  authorityClusterId: task.value?.summary.job.key.clusterId ?? props.clusterId,
+  type: RESOURCE_TYPES.job,
+  id: task.value?.summary.job.key.resourceId ?? props.taskId.slice(0, props.taskId.lastIndexOf('/')),
+}), 'FULL')
 const selectedAttempt = ref<number | undefined>()
 const attemptNumber = computed(() => selectedAttempt.value ?? task.value?.summary.currentAttempt?.attemptNumber)
 const { data: attemptData, error: attemptError, refresh: refreshAttempt } =
-  useResourceRpc<ResourceDescribeAttemptResponse>('DescribeAttempt', () => ({
-    attempt: { task: key.value, attemptNumber: attemptNumber.value },
-  }))
+  useGetResource<ResourceAttemptDetail>(() => ({
+    authorityClusterId: props.clusterId,
+    type: RESOURCE_TYPES.attempt,
+    id: `${props.taskId}:${attemptNumber.value ?? 'current'}`,
+  }), 'FULL')
 const { data: endpointData, error: endpointError, refresh: refreshEndpoints } =
-  useResourceRpc<ResourceListEndpointsResponse>('ListEndpoints', () => ({
-    query: { task: key.value, page: { pageSize: 100 } },
-  }))
+  useListResources<ResourceEndpointSummary>(
+    RESOURCE_TYPES.endpoint,
+    RESOURCE_MESSAGES.endpointQuery,
+    () => ({ task: key.value, page: { pageSize: 100 } }),
+    'BASIC',
+  )
 
 interface QueryResponse { arrowIpc?: string }
 interface UsageRow {
@@ -92,13 +103,12 @@ const actionError = ref<string | null>(null)
 const acting = ref(false)
 
 const summary = computed(() => task.value?.summary)
-const selected = computed(() => attemptData.value?.attempt)
+const selected = computed(() => attemptData.value)
 const { profiling, profile } = useAttemptProfileAction(
-  resourceRpcCall,
   () => selected.value?.summary.identity,
   () => `${props.taskId}:${attemptNumber.value ?? 0}`,
 )
-const endpoints = computed<ResourceEndpointSummary[]>(() => endpointData.value?.endpoints ?? [])
+const endpoints = computed<ResourceEndpointSummary[]>(() => endpointData.value?.items ?? [])
 const usageRows = computed(() => (
   decodeArrowIpc(usageData.value?.arrowIpc).rows as UsageRow[]
 ))
@@ -109,9 +119,9 @@ const cpuUsed = computed(() => Number(latestUsage.value?.cpu_millicores ?? 0) / 
 const memoryUsed = computed(() => Number(latestUsage.value?.memory_mb ?? 0) * 1024 * 1024)
 const diskUsed = computed(() => Number(latestUsage.value?.disk_mb ?? 0) * 1024 * 1024)
 const memoryPeak = computed(() => Number(latestUsage.value?.memory_peak_mb ?? 0) * 1024 * 1024)
-const cpuLimit = computed(() => Number(jobData.value?.job?.spec.resources?.cpuMillicores ?? 0) / 1_000)
-const memoryLimit = computed(() => Number(jobData.value?.job?.spec.resources?.memoryBytes ?? 0))
-const diskLimit = computed(() => Number(jobData.value?.job?.spec.resources?.diskBytes ?? 0))
+const cpuLimit = computed(() => Number(jobData.value?.spec.resources?.cpuMillicores ?? 0) / 1_000)
+const memoryLimit = computed(() => Number(jobData.value?.spec.resources?.memoryBytes ?? 0))
+const diskLimit = computed(() => Number(jobData.value?.spec.resources?.diskBytes ?? 0))
 const cpuGaugeLimit = computed(() => Math.max(cpuLimit.value, cpuUsed.value, 1))
 const memoryGaugeLimit = computed(() => Math.max(memoryLimit.value, memoryPeak.value, memoryUsed.value, 1))
 const diskGaugeLimit = computed(() => Math.max(diskLimit.value, diskUsed.value, 1))
@@ -167,11 +177,16 @@ async function retryTask() {
   acting.value = true
   actionError.value = null
   try {
-    action.value = await resourceRpcCall<ResourceActionResponse>('RetryTask', {
-      task: summary.value!.identity,
-      expectedAttemptUid: current.attemptUid,
-      idempotencyKey: crypto.randomUUID(),
-    })
+    const operation = await updateResource<ResourceActionReceipt>(
+      { ...taskRef.value, uid: summary.value!.identity.taskUid },
+      'PENDING',
+      {},
+      {
+        type: RESOURCE_MESSAGES.retryTaskRequest,
+        value: { expectedAttemptUid: current.attemptUid },
+      },
+    )
+    action.value = { receipt: operation.result }
     selectedAttempt.value = undefined
     await refreshPage()
   } catch (cause) {
@@ -187,10 +202,13 @@ async function terminateAttempt() {
   acting.value = true
   actionError.value = null
   try {
-    action.value = await resourceRpcCall<ResourceActionResponse>('TerminateAttempt', {
-      attempt,
-      idempotencyKey: crypto.randomUUID(),
-    })
+    const operation = await updateResource<ResourceActionReceipt>({
+      authorityClusterId: attempt.task.clusterId,
+      type: RESOURCE_TYPES.attempt,
+      id: `${attempt.task.resourceId}:${attempt.attemptNumber}`,
+      uid: attempt.attemptUid,
+    }, 'CANCELLED')
+    action.value = { receipt: operation.result }
     await refreshPage()
   } catch (cause) {
     actionError.value = cause instanceof Error ? cause.message : String(cause)
