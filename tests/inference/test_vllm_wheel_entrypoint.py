@@ -214,6 +214,9 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
     (cuda_nvrtc_root / "include" / "nvrtc.h").touch()
     (cuda_nvrtc_root / "lib").mkdir()
     (cuda_nvrtc_root / "lib" / "libnvrtc.so.12").touch()
+    cuda_nvcc_root = nvidia_root / "cuda_nvcc"
+    (cuda_nvcc_root / "include" / "crt").mkdir(parents=True)
+    (cuda_nvcc_root / "include" / "crt" / "host_defines.h").touch()
     curand_root = nvidia_root / "curand"
     (curand_root / "include").mkdir(parents=True)
     (curand_root / "include" / "__init__.py").touch()
@@ -241,6 +244,9 @@ def test_deep_gemm_cuda_environment_builds_packaged_toolkit_view(tmp_path):
         curand_root / "include" / "curand_kernel.h"
     ).resolve()
     assert (compatibility_include / "nvrtc.h").resolve() == (cuda_nvrtc_root / "include" / "nvrtc.h").resolve()
+    assert (compatibility_include / "crt" / "host_defines.h").resolve() == (
+        cuda_nvcc_root / "include" / "crt" / "host_defines.h"
+    ).resolve()
     assert (compatibility_home / "lib64" / "libcudart.so.12").resolve() == (
         cuda_runtime_root / "lib" / "libcudart.so.12"
     ).resolve()
@@ -270,6 +276,8 @@ def test_deep_gemm_cuda_environment_rejects_missing_nvrtc(tmp_path):
     (cublas_root / "lib").mkdir()
     (nvidia_root / "cuda_runtime" / "include").mkdir(parents=True)
     (nvidia_root / "cuda_runtime" / "lib").mkdir()
+    (nvidia_root / "cuda_nvcc" / "include" / "crt").mkdir(parents=True)
+    (nvidia_root / "cuda_nvcc" / "include" / "crt" / "host_defines.h").touch()
     (nvidia_root / "curand" / "include").mkdir(parents=True)
     (nvidia_root / "curand" / "include" / "curand_kernel.h").touch()
     (nvidia_root / "curand" / "lib").mkdir()
@@ -294,6 +302,8 @@ def test_deep_gemm_cuda_environment_rejects_missing_curand(tmp_path):
     (nvidia_root / "cuda_nvrtc" / "include").mkdir(parents=True)
     (nvidia_root / "cuda_nvrtc" / "include" / "nvrtc.h").touch()
     (nvidia_root / "cuda_nvrtc" / "lib").mkdir()
+    (nvidia_root / "cuda_nvcc" / "include" / "crt").mkdir(parents=True)
+    (nvidia_root / "cuda_nvcc" / "include" / "crt" / "host_defines.h").touch()
     with pytest.raises(RuntimeError, match="Expected one packaged cuRAND root"):
         deep_gemm_cuda_environment((nvidia_root,), tmp_path / "runtime")
 
