@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import glob
+import json
 import os
 import tempfile
 import uuid
@@ -312,3 +313,32 @@ def test_build_hf_config_dict_degrades_when_reference_unreachable(local_gpt2_tok
 
     assert dict_config["model_type"] == "gpt2"
     assert dict_config["architectures"] == ["GPT2LMHeadModel"]
+
+
+def test_save_pretrained_writes_transformers4_and_5_rope_keys(tmp_path):
+    rope_parameters = {
+        "rope_type": "llama3",
+        "rope_theta": 500000,
+        "factor": 8.0,
+        "low_freq_factor": 1.0,
+        "high_freq_factor": 4.0,
+        "original_max_position_embeddings": 8192,
+    }
+    nano_config = Gpt2Config(hidden_dim=32, num_heads=2, num_layers=2, resid_pdrop=0.0, use_flash_attention=False)
+    converter = nano_config.hf_checkpoint_converter().with_config_overrides({"rope_parameters": rope_parameters})
+
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, nano_config, key=PRNGKey(0))
+        converter.save_pretrained(model, str(tmp_path), save_tokenizer=False)
+
+    saved = json.loads((tmp_path / "config.json").read_text())
+
+    assert saved["rope_parameters"] == rope_parameters
+    assert saved["rope_theta"] == 500000
+    assert saved["rope_scaling"] == {
+        "rope_type": "llama3",
+        "factor": 8.0,
+        "low_freq_factor": 1.0,
+        "high_freq_factor": 4.0,
+        "original_max_position_embeddings": 8192,
+    }

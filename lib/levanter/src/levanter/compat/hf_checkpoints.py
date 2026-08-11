@@ -329,6 +329,20 @@ KEYS_TO_COPY_FROM_BASE_CONFIG = {
 }
 
 
+def _add_legacy_rope_keys(dict_config: dict) -> dict:
+    rope_parameters = dict_config.get("rope_parameters")
+    if not isinstance(rope_parameters, dict) or "rope_theta" not in rope_parameters:
+        return dict_config
+
+    legacy_config = dict(dict_config)
+    legacy_config.setdefault("rope_theta", rope_parameters["rope_theta"])
+
+    rope_scaling = {key: value for key, value in rope_parameters.items() if key != "rope_theta"}
+    rope_type = rope_scaling.get("rope_type")
+    legacy_config.setdefault("rope_scaling", None if rope_type in (None, "default") else rope_scaling)
+    return legacy_config
+
+
 def _causal_lm_architecture_name(hf_config_class: type) -> Optional[str]:
     """Return the HF causal-LM architecture class name for *hf_config_class*, or None.
 
@@ -1038,6 +1052,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         if self.config_overrides:
             dict_config = mergedeep.merge({}, dict_config, self.config_overrides)
+
+        dict_config = _add_legacy_rope_keys(dict_config)
 
         return dict_config
 
