@@ -41,6 +41,26 @@ _ARCHITECTURE = "sm_90a"
 _COMPUTE_CAPABILITY = "9.0"
 _NSYS_TRACE_APIS = "cuda,nvtx"
 _NSYS_EXPORT_LAZY = "true"
+_NSYS_CUDA_GRAPH_TRACE = "node"
+_NSYS_PROFILE_ARGS = (
+    f"--trace={_NSYS_TRACE_APIS}",
+    f"--cuda-graph-trace={_NSYS_CUDA_GRAPH_TRACE}",
+    "--capture-range=cudaProfilerApi",
+    "--capture-range-end=stop",
+)
+_NSYS_EXPORT_ARGS = ("--type=sqlite", f"--lazy={_NSYS_EXPORT_LAZY}")
+_MAX_NSYS_NO_KERNEL_DIAGNOSTIC_CHARS = 4096
+_NSYS_RELEVANT_TABLES = (
+    "CUDA_GRAPH_EVENTS",
+    "CUDA_GRAPH_NODE_EVENTS",
+    "CUPTI_ACTIVITY_KIND_GRAPH_TRACE",
+    "CUPTI_ACTIVITY_KIND_KERNEL",
+    "CUPTI_ACTIVITY_KIND_MEMCPY",
+    "CUPTI_ACTIVITY_KIND_RUNTIME",
+    "NVTX_EVENTS",
+    "StringIds",
+    "TARGET_INFO_GPU",
+)
 _OUTPUT_NAMES = ("forward", "dx", "dw0", "dw1")
 _MAX_NUMERICAL_WORST_PAIR_DIAGNOSTIC_CHARS = 2048
 _CACHE_ENVIRONMENT = {
@@ -299,6 +319,34 @@ class TraceRange:
     device_to_host_count: int
     device_to_host_bytes: int
     unexpected_copy_count: int
+
+
+@dataclass(frozen=True)
+class _NsysRange:
+    name: str
+    start: int
+    end: int
+    event_type: int
+    domain_id: int
+    global_tid: int
+    end_global_tid: int | None
+
+
+@dataclass(frozen=True)
+class _NsysKernel:
+    start: int
+    end: int
+    name: str
+    device_id: int
+    correlation_id: int
+
+
+@dataclass(frozen=True)
+class _NsysRuntime:
+    start: int
+    end: int
+    global_tid: int
+    correlation_id: int | None
 
 
 @dataclass(frozen=True)
@@ -782,18 +830,30 @@ def _metric_int(value: str) -> int:
     return int(parsed)
 
 
-def parse_nsys_sqlite(path: Path, expected_ranges: tuple[str, ...]) -> tuple[TraceRange, ...]:
-    """Read CUDA kernels and copies contained by each required NVTX range."""
+def parse_nsys_sqlite(
+    path: Path,
+    expected_ranges: tuple[str, ...],
+    *,
+    report_path: Path | None = None,
+) -> tuple[TraceRange, ...]:
+    """Read exactly associated CUDA kernels and copies for each required range."""
     try:
         with sqlite3.connect(path) as database:
-            tables = {row[0] for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            required = {"NVTX_EVENTS", "StringIds", "CUPTI_ACTIVITY_KIND_KERNEL"}
+            tables = {str(row[0]) for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            required = {
+                "NVTX_EVENTS",
+                "StringIds",
+                "CUPTI_ACTIVITY_KIND_KERNEL",
+                "CUPTI_ACTIVITY_KIND_RUNTIME",
+            }
             if not required.issubset(tables):
                 raise ValueError(
                     f"Nsight Systems SQLite export omits required trace tables: {tuple(sorted(required - tables))}"
                 )
             ranges = _nsys_ranges(database)
             kernels = _nsys_kernels(database)
+            runtimes = _nsys_runtimes(database)
+            runtime_by_correlation = _runtime_by_kernel_correlation(kernels, runtimes)
             if tuple(ranges) != expected_ranges:
                 raise ValueError("Nsight Systems NVTX ranges do not match the exact steady-state schedule")
             if "CUPTI_ACTIVITY_KIND_MEMCPY" in tables:
@@ -801,89 +861,326 @@ def parse_nsys_sqlite(path: Path, expected_ranges: tuple[str, ...]) -> tuple[Tra
             else:
                 _validate_lazy_memcpy_absence(database, kernels)
                 copies = ()
+
+            records = []
+            for name in expected_ranges:
+                trace_range = ranges[name]
+                contained_kernels = tuple(
+                    kernel
+                    for kernel in kernels
+                    if _kernel_is_associated(trace_range, kernel, runtime_by_correlation[kernel.correlation_id])
+                )
+                contained_copies = tuple(
+                    copy for copy in copies if trace_range.start <= copy[0] and copy[1] <= trace_range.end
+                )
+                if not contained_kernels:
+                    diagnostic = _no_kernel_diagnostic(
+                        database,
+                        tables,
+                        path,
+                        report_path,
+                        trace_range,
+                        kernels,
+                        runtime_by_correlation,
+                    )
+                    serialized = json.dumps(diagnostic, sort_keys=True, separators=(",", ":"))
+                    message = (
+                        f"Nsight Systems range {name!r} contains no associated CUDA kernels diagnostic={serialized}"
+                    )
+                    if len(message) > _MAX_NSYS_NO_KERNEL_DIAGNOSTIC_CHARS:
+                        raise AssertionError("Nsight Systems no-kernel diagnostic exceeds its reviewed bound")
+                    raise ValueError(message)
+                d2d = tuple(copy for copy in contained_copies if copy[3] == "device_to_device")
+                h2d = tuple(copy for copy in contained_copies if copy[3] == "host_to_device")
+                d2h = tuple(copy for copy in contained_copies if copy[3] == "device_to_host")
+                unexpected = tuple(
+                    copy
+                    for copy in contained_copies
+                    if copy[3] not in {"device_to_device", "host_to_device", "device_to_host"}
+                )
+                records.append(
+                    TraceRange(
+                        name=name,
+                        ordered_kernel_names=tuple(kernel.name for kernel in contained_kernels),
+                        kernel_duration_ns=sum(kernel.end - kernel.start for kernel in contained_kernels),
+                        device_to_device_count=len(d2d),
+                        device_to_device_bytes=sum(copy[2] for copy in d2d),
+                        host_to_device_count=len(h2d),
+                        host_to_device_bytes=sum(copy[2] for copy in h2d),
+                        device_to_host_count=len(d2h),
+                        device_to_host_bytes=sum(copy[2] for copy in d2h),
+                        unexpected_copy_count=len(unexpected),
+                    )
+                )
+            return tuple(records)
     except sqlite3.DatabaseError as error:
         raise ValueError(f"Nsight Systems SQLite export is unreadable: {error}") from error
 
-    records = []
-    for name in expected_ranges:
-        start, end = ranges[name]
-        contained_kernels = tuple(kernel for kernel in kernels if start <= kernel[0] and kernel[1] <= end)
-        contained_copies = tuple(copy for copy in copies if start <= copy[0] and copy[1] <= end)
-        if not contained_kernels:
-            raise ValueError(f"Nsight Systems range {name!r} contains no CUDA kernels")
-        d2d = tuple(copy for copy in contained_copies if copy[3] == "device_to_device")
-        h2d = tuple(copy for copy in contained_copies if copy[3] == "host_to_device")
-        d2h = tuple(copy for copy in contained_copies if copy[3] == "device_to_host")
-        unexpected = tuple(
-            copy for copy in contained_copies if copy[3] not in {"device_to_device", "host_to_device", "device_to_host"}
-        )
-        records.append(
-            TraceRange(
-                name=name,
-                ordered_kernel_names=tuple(kernel[2] for kernel in contained_kernels),
-                kernel_duration_ns=sum(kernel[1] - kernel[0] for kernel in contained_kernels),
-                device_to_device_count=len(d2d),
-                device_to_device_bytes=sum(copy[2] for copy in d2d),
-                host_to_device_count=len(h2d),
-                host_to_device_bytes=sum(copy[2] for copy in h2d),
-                device_to_host_count=len(d2h),
-                device_to_host_bytes=sum(copy[2] for copy in d2h),
-                unexpected_copy_count=len(unexpected),
-            )
-        )
-    return tuple(records)
 
-
-def _nsys_ranges(database: sqlite3.Connection) -> dict[str, tuple[int, int]]:
+def _nsys_ranges(database: sqlite3.Connection) -> dict[str, _NsysRange]:
     columns = _table_columns(database, "NVTX_EVENTS")
-    for required in ("start", "end", "text"):
-        if required not in columns:
-            raise ValueError(f"NVTX_EVENTS omits required column {required!r}")
-    records: dict[str, tuple[int, int]] = {}
-    for start, end, text in database.execute("SELECT start, end, text FROM NVTX_EVENTS WHERE end IS NOT NULL"):
-        if isinstance(text, str) and text.startswith("contract_map.steady."):
-            if type(start) is not int or type(end) is not int or start < 0 or end <= start:
-                raise ValueError(f"Nsight Systems has an invalid steady-state NVTX range {text!r}")
-            if text in records:
-                raise ValueError(f"Nsight Systems repeats steady-state NVTX range {text!r}")
-            records[text] = (int(start), int(end))
+    required = {"start", "end", "eventType", "text", "globalTid", "endGlobalTid", "domainId"}
+    if not required.issubset(columns):
+        raise ValueError(f"NVTX_EVENTS omits required columns: {tuple(sorted(required - columns))}")
+    records: dict[str, _NsysRange] = {}
+    query = (
+        "SELECT start, end, eventType, text, globalTid, endGlobalTid, domainId "
+        "FROM NVTX_EVENTS WHERE end IS NOT NULL ORDER BY start, end"
+    )
+    for start, end, event_type, text, global_tid, end_global_tid, domain_id in database.execute(query):
+        if not isinstance(text, str) or not text.startswith("contract_map.steady."):
+            continue
+        if type(start) is not int or type(end) is not int or start < 0 or end <= start:
+            raise ValueError(f"Nsight Systems has an invalid steady-state NVTX range {text!r}")
+        if type(event_type) is not int or event_type != 59:
+            raise ValueError(f"Nsight Systems steady range {text!r} is not an NVTX push/pop range")
+        if type(domain_id) is not int or domain_id != 0:
+            raise ValueError(f"Nsight Systems steady range {text!r} is not in the default NVTX domain")
+        if type(global_tid) is not int or global_tid < 0:
+            raise ValueError(f"Nsight Systems steady range {text!r} has an invalid start thread")
+        if end_global_tid is not None and (type(end_global_tid) is not int or end_global_tid != global_tid):
+            raise ValueError(f"Nsight Systems steady range {text!r} does not end on the same thread")
+        if text in records:
+            raise ValueError(f"Nsight Systems repeats steady-state NVTX range {text!r}")
+        records[text] = _NsysRange(text, start, end, event_type, domain_id, global_tid, end_global_tid)
+    ordered = tuple(records.values())
+    for previous, current in itertools.pairwise(ordered):
+        if current.start < previous.end:
+            raise ValueError("Nsight Systems steady ranges do not follow strict source order without overlap")
     return records
 
 
-def _nsys_kernels(database: sqlite3.Connection) -> tuple[tuple[int, int, str, int], ...]:
+def _nsys_kernels(database: sqlite3.Connection) -> tuple[_NsysKernel, ...]:
     columns = _table_columns(database, "CUPTI_ACTIVITY_KIND_KERNEL")
     name_column = "demangledName" if "demangledName" in columns else "shortName"
-    if not {"start", "end", name_column, "deviceId"}.issubset(columns):
-        raise ValueError("CUPTI kernel table omits start, end, device, or kernel-name identity")
+    if not {"start", "end", name_column, "deviceId", "correlationId"}.issubset(columns):
+        raise ValueError("CUPTI kernel table omits time, device, correlation, or kernel-name identity")
     query = (
-        f"SELECT kernel.start, kernel.end, strings.value, kernel.deviceId "
+        f"SELECT kernel.start, kernel.end, strings.value, kernel.deviceId, kernel.correlationId "
         f"FROM CUPTI_ACTIVITY_KIND_KERNEL AS kernel LEFT JOIN StringIds AS strings "
-        f"ON kernel.{name_column} = strings.id ORDER BY kernel.start"
+        f"ON kernel.{name_column} = strings.id ORDER BY kernel.start, kernel.end"
     )
     records = []
     rows = tuple(database.execute(query))
     kernel_count = database.execute("SELECT COUNT(*) FROM CUPTI_ACTIVITY_KIND_KERNEL").fetchone()[0]
     if type(kernel_count) is not int or len(rows) != kernel_count:
         raise ValueError("CUPTI kernel identities do not resolve exactly once through StringIds")
-    for start, end, name, device_id in rows:
+    previous_start: int | None = None
+    for start, end, name, device_id, correlation_id in rows:
         if (
             type(start) is not int
             or type(end) is not int
             or type(device_id) is not int
+            or type(correlation_id) is not int
             or start < 0
             or end <= start
             or device_id < 0
+            or correlation_id < 0
             or not isinstance(name, str)
             or not name.strip()
         ):
             raise ValueError("CUPTI kernel table contains an invalid activity record")
-        records.append((start, end, normalize_cuda_kernel_name(name), device_id))
+        if previous_start == start:
+            raise ValueError("CUPTI kernel launch order is ambiguous because records have equal start timestamps")
+        previous_start = start
+        records.append(_NsysKernel(start, end, normalize_cuda_kernel_name(name), device_id, correlation_id))
     return tuple(records)
+
+
+def _nsys_runtimes(database: sqlite3.Connection) -> tuple[_NsysRuntime, ...]:
+    columns = _table_columns(database, "CUPTI_ACTIVITY_KIND_RUNTIME")
+    required = {"start", "end", "globalTid", "correlationId"}
+    if not required.issubset(columns):
+        raise ValueError(f"CUPTI runtime table omits required columns: {tuple(sorted(required - columns))}")
+    records = []
+    for start, end, global_tid, correlation_id in database.execute(
+        "SELECT start, end, globalTid, correlationId FROM CUPTI_ACTIVITY_KIND_RUNTIME ORDER BY start, end"
+    ):
+        if (
+            type(start) is not int
+            or type(end) is not int
+            or type(global_tid) is not int
+            or start < 0
+            or end <= start
+            or global_tid < 0
+            or (correlation_id is not None and (type(correlation_id) is not int or correlation_id < 0))
+        ):
+            raise ValueError("CUPTI runtime table contains an invalid activity record")
+        records.append(_NsysRuntime(start, end, global_tid, correlation_id))
+    return tuple(records)
+
+
+def _runtime_by_kernel_correlation(
+    kernels: tuple[_NsysKernel, ...],
+    runtimes: tuple[_NsysRuntime, ...],
+) -> dict[int, _NsysRuntime]:
+    by_correlation: dict[int, list[_NsysRuntime]] = {}
+    for runtime in runtimes:
+        if runtime.correlation_id is not None:
+            by_correlation.setdefault(runtime.correlation_id, []).append(runtime)
+    resolved = {}
+    for correlation_id in {kernel.correlation_id for kernel in kernels}:
+        matches = by_correlation.get(correlation_id, [])
+        if len(matches) != 1:
+            raise ValueError(
+                f"CUPTI kernel correlation {correlation_id} does not resolve exactly once through runtime activity"
+            )
+        resolved[correlation_id] = matches[0]
+    return resolved
+
+
+def _kernel_is_associated(trace_range: _NsysRange, kernel: _NsysKernel, runtime: _NsysRuntime) -> bool:
+    return (
+        trace_range.start <= kernel.start
+        and kernel.end <= trace_range.end
+        and trace_range.start <= runtime.start
+        and runtime.end <= trace_range.end
+        and runtime.global_tid == trace_range.global_tid
+    )
+
+
+def _interval_counts(start: int, end: int, records: Sequence[tuple[int, int]]) -> dict[str, int]:
+    counts = {"before": 0, "contained": 0, "overlap": 0, "after": 0}
+    for record_start, record_end in records:
+        if record_end <= start:
+            counts["before"] += 1
+        elif record_start >= end:
+            counts["after"] += 1
+        elif start <= record_start and record_end <= end:
+            counts["contained"] += 1
+        else:
+            counts["overlap"] += 1
+    return counts
+
+
+def _graph_trace_intervals(database: sqlite3.Connection, tables: set[str]) -> tuple[tuple[int, int], ...]:
+    table = "CUPTI_ACTIVITY_KIND_GRAPH_TRACE"
+    if table not in tables:
+        return ()
+    columns = _table_columns(database, table)
+    required = {"start", "end", "deviceId", "correlationId", "graphId", "graphExecId"}
+    if not required.issubset(columns):
+        raise ValueError(f"CUPTI graph trace table omits required columns: {tuple(sorted(required - columns))}")
+    intervals = []
+    for start, end in database.execute(f"SELECT start, end FROM {table} ORDER BY start, end"):
+        if type(start) is not int or type(end) is not int or start < 0 or end <= start:
+            raise ValueError("CUPTI graph trace table contains an invalid activity record")
+        intervals.append((start, end))
+    return tuple(intervals)
+
+
+def _canonical_sha256(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _file_identity(path: Path | None) -> dict[str, int | str] | None:
+    if path is None:
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"retained Nsight Systems artifact is not a regular file: {path}")
+    size = path.stat().st_size
+    if size <= 0:
+        raise ValueError(f"retained Nsight Systems artifact is empty: {path}")
+    return {"bytes": size, "sha256": file_sha256(path)}
+
+
+def _no_kernel_diagnostic(
+    database: sqlite3.Connection,
+    tables: set[str],
+    sqlite_path: Path,
+    report_path: Path | None,
+    trace_range: _NsysRange,
+    kernels: tuple[_NsysKernel, ...],
+    runtime_by_correlation: Mapping[int, _NsysRuntime],
+) -> dict[str, Any]:
+    kernel_intervals = tuple((kernel.start, kernel.end) for kernel in kernels)
+    graph_intervals = _graph_trace_intervals(database, tables)
+    names = tuple(kernel.name for kernel in kernels)
+    relevant_tables = {}
+    for table in _NSYS_RELEVANT_TABLES:
+        if table not in tables:
+            relevant_tables[table] = {"present": False}
+            continue
+        columns = tuple(sorted(_table_columns(database, table)))
+        row_count = database.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        if type(row_count) is not int or row_count < 0:
+            raise ValueError(f"Nsight Systems table {table!r} has an invalid row count")
+        relevant_tables[table] = {
+            "column_count": len(columns),
+            "columns_sha256": _canonical_sha256(columns),
+            "present": True,
+            "row_count": row_count,
+        }
+    runtime_rows = tuple(runtime_by_correlation[kernel.correlation_id] for kernel in kernels)
+    return {
+        "schema": "shuttle.nsys_no_kernel_diagnostic.v1",
+        "range": {
+            "domain_id": trace_range.domain_id,
+            "duration_ns": trace_range.end - trace_range.start,
+            "end_global_tid": trace_range.end_global_tid,
+            "end_ns": trace_range.end,
+            "event_type": trace_range.event_type,
+            "global_tid": trace_range.global_tid,
+            "name": trace_range.name,
+            "start_ns": trace_range.start,
+        },
+        "kernels": {
+            "end_max_ns": max((kernel.end for kernel in kernels), default=None),
+            "interval_counts": _interval_counts(trace_range.start, trace_range.end, kernel_intervals),
+            "name_count": len(names),
+            "ordered_names_sha256": _canonical_sha256(names),
+            "nearest_next_start_offset_ns": min(
+                (kernel.start - trace_range.end for kernel in kernels if kernel.start >= trace_range.end),
+                default=None,
+            ),
+            "nearest_previous_end_offset_ns": min(
+                (trace_range.start - kernel.end for kernel in kernels if kernel.end <= trace_range.start),
+                default=None,
+            ),
+            "row_count": len(kernels),
+            "start_min_ns": min((kernel.start for kernel in kernels), default=None),
+            "unique_name_count": len(set(names)),
+            "unique_names_sha256": _canonical_sha256(tuple(sorted(set(names)))),
+        },
+        "runtime_correlation": {
+            "associated_kernel_count": sum(
+                _kernel_is_associated(
+                    trace_range,
+                    kernel,
+                    runtime_by_correlation[kernel.correlation_id],
+                )
+                for kernel in kernels
+            ),
+            "resolved_kernel_count": len(runtime_rows),
+            "same_thread_contained_count": sum(
+                trace_range.start <= runtime.start
+                and runtime.end <= trace_range.end
+                and runtime.global_tid == trace_range.global_tid
+                for runtime in runtime_rows
+            ),
+        },
+        "graph_trace": {
+            "interval_counts": _interval_counts(trace_range.start, trace_range.end, graph_intervals),
+            "row_count": len(graph_intervals),
+        },
+        "sqlite": _file_identity(sqlite_path),
+        "report": _file_identity(report_path),
+        "database": {
+            "application_id": database.execute("PRAGMA application_id").fetchone()[0],
+            "schema_version": database.execute("PRAGMA schema_version").fetchone()[0],
+            "table_count": len(tables),
+            "table_names_sha256": _canonical_sha256(tuple(sorted(tables))),
+            "user_version": database.execute("PRAGMA user_version").fetchone()[0],
+        },
+        "relevant_tables": relevant_tables,
+        "profile_args": list(_NSYS_PROFILE_ARGS),
+        "export_args": list(_NSYS_EXPORT_ARGS),
+    }
 
 
 def _validate_lazy_memcpy_absence(
     database: sqlite3.Connection,
-    kernels: tuple[tuple[int, int, str, int], ...],
+    kernels: tuple[_NsysKernel, ...],
 ) -> None:
     """Prove a lazy export omitted an empty memcpy table rather than CUDA trace data."""
     if not kernels:
@@ -900,7 +1197,7 @@ def _validate_lazy_memcpy_absence(
         devices[device_id] = name
     if not devices:
         raise ValueError("TARGET_INFO_GPU contains no CUDA device identity")
-    missing_devices = tuple(sorted({kernel[3] for kernel in kernels} - devices.keys()))
+    missing_devices = tuple(sorted({kernel.device_id for kernel in kernels} - devices.keys()))
     if missing_devices:
         raise ValueError(f"CUPTI kernels reference unknown CUDA device ids: {missing_devices}")
 
@@ -2172,9 +2469,7 @@ def _run_profiled_case(
         str(config.tools.nsys),
         "profile",
         "--force-overwrite=true",
-        f"--trace={_NSYS_TRACE_APIS}",
-        "--capture-range=cudaProfilerApi",
-        "--capture-range-end=stop",
+        *_NSYS_PROFILE_ARGS,
         "--output",
         str(report_base),
         *worker,
@@ -2194,8 +2489,7 @@ def _run_profiled_case(
         str(config.tools.nsys),
         "export",
         "--force-overwrite=true",
-        "--type=sqlite",
-        f"--lazy={_NSYS_EXPORT_LAZY}",
+        *_NSYS_EXPORT_ARGS,
         "--output",
         str(sqlite_path),
         str(report),
@@ -2207,7 +2501,7 @@ def _run_profiled_case(
         for row in result["raw_samples"]
         for backend in row["backend_order"]
     )
-    return result, parse_nsys_sqlite(sqlite_path, expected_ranges)
+    return result, parse_nsys_sqlite(sqlite_path, expected_ranges, report_path=report)
 
 
 def _run_cache_protocol(

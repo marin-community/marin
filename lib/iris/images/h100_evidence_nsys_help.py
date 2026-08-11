@@ -16,9 +16,10 @@ POSSIBLE_VALUES = re.compile(
 )
 QUOTED_VALUE = re.compile(r"['\"](?P<value>[^'\"]+)['\"]")
 REQUIRED_VALUES = {"none", "stop", "stop-shutdown"}
+CUDA_GRAPH_TRACE_VALUES = {"graph", "node"}
 
 
-def _capture_range_end_block(text: str) -> str:
+def _option_block(text: str, option: str) -> str:
     lines = text.splitlines()
     declarations = []
     for index, line in enumerate(lines):
@@ -26,16 +27,27 @@ def _capture_range_end_block(text: str) -> str:
         if match is not None:
             declarations.append((index, match.group("name")))
 
-    target_indices = [index for index, name in declarations if name == "capture-range-end"]
+    target_indices = [index for index, name in declarations if name == option]
     if len(target_indices) != 1:
-        raise ValueError("help must contain one exact --capture-range-end option declaration")
+        raise ValueError(f"help must contain one exact --{option} option declaration")
     start = target_indices[0]
     end = next((index for index, _ in declarations if index > start), len(lines))
     return "\n".join(lines[start:end])
 
 
-def validate_nsys_profile_help(text: str) -> tuple[str, ...]:
-    """Return the closed capture-range-end enum from bounded nsys profile help."""
+def _option_values(text: str, option: str) -> tuple[str, ...]:
+    block = _option_block(text, option)
+    value_lists = tuple(POSSIBLE_VALUES.finditer(block))
+    if len(value_lists) != 1:
+        raise ValueError(f"--{option} must contain one recognizable possible-values list")
+    values = tuple(match.group("value") for match in QUOTED_VALUE.finditer(value_lists[0].group("values")))
+    if not values or len(values) != len(set(values)):
+        raise ValueError(f"--{option} possible values are empty or duplicated")
+    return values
+
+
+def validate_nsys_profile_help(text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return the closed capture-end and CUDA-graph enums from nsys help."""
     if not text.strip():
         raise ValueError("help output is empty")
     if "\x00" in text:
@@ -43,19 +55,16 @@ def validate_nsys_profile_help(text: str) -> tuple[str, ...]:
     if "--stop-on-range-end" in text:
         raise ValueError("help exposes obsolete --stop-on-range-end")
 
-    block = _capture_range_end_block(text)
-    value_lists = tuple(POSSIBLE_VALUES.finditer(block))
-    if len(value_lists) != 1:
-        raise ValueError("--capture-range-end must contain one recognizable possible-values list")
-    values = tuple(match.group("value") for match in QUOTED_VALUE.finditer(value_lists[0].group("values")))
-    if len(values) != len(set(values)):
-        raise ValueError("--capture-range-end possible values are duplicated")
-    if not REQUIRED_VALUES.issubset(values) or values.count("stop") != 1:
+    capture_values = _option_values(text, "capture-range-end")
+    if not REQUIRED_VALUES.issubset(capture_values) or capture_values.count("stop") != 1:
         raise ValueError("--capture-range-end does not expose the exact stop policy")
-    return values
+    graph_values = _option_values(text, "cuda-graph-trace")
+    if set(graph_values) != CUDA_GRAPH_TRACE_VALUES or graph_values.count("node") != 1:
+        raise ValueError("--cuda-graph-trace does not expose exactly graph and node")
+    return capture_values, graph_values
 
 
-def validate_file(path: Path) -> tuple[str, ...]:
+def validate_file(path: Path) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Read and validate one bounded UTF-8 nsys profile help artifact."""
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"help artifact must be a regular file: {path}")
@@ -77,11 +86,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("artifact", type=Path)
     args = parser.parse_args(argv)
     try:
-        values = validate_file(args.artifact)
+        capture_values, graph_values = validate_file(args.artifact)
     except (OSError, ValueError) as error:
         print(f"nsys profile help validation failed: {error}", file=sys.stderr)
         return 1
-    print(f"nsys profile help validation passed: capture-range-end={','.join(values)}")
+    print(
+        "nsys profile help validation passed: "
+        f"capture-range-end={','.join(capture_values)};cuda-graph-trace={','.join(graph_values)}"
+    )
     return 0
 
 
