@@ -196,7 +196,7 @@ Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
 uv run --package marin-iris --group test pytest lib/iris/tests/
 
 # In-process memory profiling (included in the unit suite)
-uv run --package marin-iris --group test pytest lib/iris/tests/ -m memray
+uv run --package marin-iris --group test pytest lib/iris/tests/cluster/runtime/test_memray_profile.py
 
 # Focused root and Iris tests in one pytest process
 uv run --package marin-iris --group test pytest \
