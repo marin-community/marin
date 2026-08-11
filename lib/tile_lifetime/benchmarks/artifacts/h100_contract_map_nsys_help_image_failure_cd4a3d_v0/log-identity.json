@@ -1,0 +1,9 @@
+{
+  "complete_job_log": {
+    "bytes": 81018,
+    "job_id": 93753742685,
+    "sha256": "14e98e94ea5854446dda41672a2b75b7a69716bb4f47fe2abcfd02b0f91b6966",
+    "url": "https://api.github.com/repos/marin-community/marin/actions/jobs/93753742685/logs"
+  },
+  "failure_excerpt_is_complete_log": false
+}

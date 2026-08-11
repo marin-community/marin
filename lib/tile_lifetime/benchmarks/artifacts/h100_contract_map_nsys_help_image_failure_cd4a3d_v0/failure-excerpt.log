@@ -1,0 +1,6 @@
+2026-08-11T10:46:18.5121522Z #36 [task-h100-evidence 4/8] RUN --mount=type=bind,source=lib/iris/images/h100_evidence_nsys_help.py,target=/tmp/h100-evidence-nsys-help.py,ro     set -eux;     /usr/local/bin/nsys profile --help > /tmp/h100-evidence-nsys-profile-help.txt;     /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nsys-help.py       /tmp/h100-evidence-nsys-profile-help.txt;     rm -f /tmp/h100-evidence-nsys-profile-help.txt
+2026-08-11T10:46:18.5127191Z #36 0.082 + /usr/local/bin/nsys profile --help
+2026-08-11T10:46:18.5127855Z #36 0.117 + /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nsys-help.py /tmp/h100-evidence-nsys-profile-help.txt
+2026-08-11T10:46:18.6769433Z #36 0.282 nsys profile help validation failed: --capture-range-end possible values contain unrecognized syntax
+2026-08-11T10:46:18.7111051Z #36 ERROR: process "/bin/sh -c set -eux;     /usr/local/bin/nsys profile --help > /tmp/h100-evidence-nsys-profile-help.txt;     /opt/h100-evidence-runtime/bin/python /tmp/h100-evidence-nsys-help.py       /tmp/h100-evidence-nsys-profile-help.txt;     rm -f /tmp/h100-evidence-nsys-profile-help.txt" did not complete successfully: exit code: 1
+2026-08-11T10:46:18.7236312Z ##[error]Process completed with exit code 1.
