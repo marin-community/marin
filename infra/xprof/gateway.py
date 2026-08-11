@@ -285,7 +285,9 @@ class XprofGateway:
         if environ.get("REQUEST_METHOD", "GET") != "GET":
             return _response(start_response, "405 Method Not Allowed", b"GET required\n", "text/plain")
 
-        uri = parse_qs(environ.get("QUERY_STRING", "")).get("uri", [""])[0]
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        uri = query.get("uri", [""])[0]
+        tool = query.get("tool", [""])[0]
         if not uri:
             return _response(start_response, "400 Bad Request", b"missing uri query parameter\n", "text/plain")
         try:
@@ -295,7 +297,9 @@ class XprofGateway:
 
         future = self._profiles.future(normalized_uri)
         if not future.done():
-            return _response(start_response, "202 Accepted", _loading_page(normalized_uri), "text/html; charset=utf-8")
+            return _response(
+                start_response, "202 Accepted", _loading_page(normalized_uri, tool), "text/html; charset=utf-8"
+            )
         try:
             local_path = future.result()
         except Exception as exc:
@@ -305,12 +309,14 @@ class XprofGateway:
                 start_response, "502 Bad Gateway", f"profile staging failed: {exc}\n".encode(), "text/plain"
             )
 
-        location = f"./?{urlencode({'run_path': str(local_path)})}"
+        location = _xprof_location(local_path, tool)
         start_response("303 See Other", [("Location", location), ("Content-Length", "0")])
         return [b""]
 
     def _progress(self, environ: dict, start_response: StartResponse) -> Iterable[bytes]:
-        uri = parse_qs(environ.get("QUERY_STRING", "")).get("uri", [""])[0]
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        uri = query.get("uri", [""])[0]
+        tool = query.get("tool", [""])[0]
         try:
             normalized_uri = self._profiles.validate(uri)
         except ProfileSourceError as exc:
@@ -326,7 +332,7 @@ class XprofGateway:
             return _json_response(
                 start_response,
                 "200 OK",
-                {"state": "ready", "location": f"./?{urlencode({'run_path': str(local_path)})}"},
+                {"state": "ready", "location": _xprof_location(local_path, tool)},
             )
         if progress is None:
             return _json_response(start_response, "200 OK", {"state": "starting"})
@@ -389,9 +395,19 @@ def _json_response(start_response: StartResponse, status: str, value: dict) -> l
     return _response(start_response, status, json.dumps(value).encode(), "application/json")
 
 
-def _loading_page(uri: str) -> bytes:
+def _xprof_location(run_path: Path, tool: str) -> str:
+    params = {"run_path": str(run_path)}
+    if tool:
+        params["tool"] = tool
+    return f"./?{urlencode(params)}"
+
+
+def _loading_page(uri: str, tool: str) -> bytes:
     safe_uri = html.escape(uri)
-    progress_url = f"./progress?{urlencode({'uri': uri})}"
+    params = {"uri": uri}
+    if tool:
+        params["tool"] = tool
+    progress_url = f"./progress?{urlencode(params)}"
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Loading XProf profile</title>
 <style>
