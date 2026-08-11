@@ -10,9 +10,9 @@ Observed boundary
    `lib/iris/images/h100_evidence_nsys_help.py` into stage
    `task-h100-evidence`, proving that the Dockerfile-specific context included
    the newly reviewed validator.
-4. The pinned CUDA 13.2, Nsight Compute 2026.1.1, and Nsight Systems 2026.1.3
-   packages downloaded with their declared sizes and hashes. Their tool-version
-   checks passed.
+4. The pinned CUDA 13.2 and Nsight Compute 2026.1.1 packages passed their
+   declared size and hash checks. The separately version-pinned Nsight Systems
+   2026.1.3 install passed its tool-version check.
 5. The first image contract smoke ran `nsys profile --help` and invoked the
    validator with the frozen absolute Python runtime. The validator rejected
    the real capture-range-end possible-values syntax. BuildKit stopped before
