@@ -16,7 +16,6 @@ from rigging.filesystem import StoragePath
 # The vendored experiment path is the immutable training source for Snowball.
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as VendoredGrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.model import Transformer as VendoredTransformer
-
 from marin.testing.inference.snowball import SNOWBALL
 
 
