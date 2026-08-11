@@ -445,9 +445,10 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
 
             def _map(e: tuple[dict, dict]) -> GrugLmExample:
                 example, seg_ids = e
-                loss_weight = self.loss_weight_transform.apply(example[loss_weights_key])
+                segment_ids = seg_ids[input_ids_key]
+                loss_weight = self.loss_weight_transform.apply(example[loss_weights_key], segment_ids)
                 # pyrefly: ignore[bad-return, bad-argument-count]  # eqx.filter_jit wrapper hides the real signature
-                return _create_lm_example(example[input_ids_key], loss_weight, seg_ids[input_ids_key])
+                return _create_lm_example(example[input_ids_key], loss_weight, segment_ids)
 
             super().__init__(self.packed, _map)
             return

@@ -635,10 +635,13 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ArtifactSte
         {dataset_cfg.revision}\
         -{sorted(dataset_cfg.subsets)}\
         -{sorted(dataset_cfg.splits)}\
-        -{sorted(dataset_cfg.columns) if dataset_cfg.columns is not None else None}\
-        -{dataset_cfg.parquet_files}\
-        -{dataset_cfg.parquet_batch_size}\
         -{adapter_signature_str}"
+    if dataset_cfg.columns is not None or dataset_cfg.parquet_files or dataset_cfg.parquet_batch_size is not None:
+        config_str += (
+            f"-{sorted(dataset_cfg.columns) if dataset_cfg.columns is not None else None}"
+            f"-{dataset_cfg.parquet_files}"
+            f"-{dataset_cfg.parquet_batch_size}"
+        )
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
     pin = f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}"

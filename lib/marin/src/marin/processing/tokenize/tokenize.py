@@ -21,6 +21,7 @@ import re
 import time
 from collections.abc import Sequence
 
+import draccus
 from datasets import load_dataset_builder
 from fray.types import ResourceConfig
 from levanter.data.text.datasets import (
@@ -99,10 +100,10 @@ class TokenizedCache(Artifact):
 
     @property
     def format(self) -> LmDatasetFormatBase:
-        """The dataset format; marin's tokenized caches are text format (``text_key``)."""
+        """Reconstruct the dataset format recorded when this cache was built."""
         fmt = self._config.get("format")
-        if isinstance(fmt, dict) and "text_key" in fmt:
-            return TextLmDatasetFormat(text_key=fmt["text_key"])
+        if isinstance(fmt, dict):
+            return draccus.decode(LmDatasetFormatBase, fmt)
         return TextLmDatasetFormat()
 
     @property
