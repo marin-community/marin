@@ -169,6 +169,14 @@ iris job summary /user/job-name         # per-task state, exit, duration, peak m
 
 The subcommands are `list` and `summary`. There is no `job ls` and no `job info`.
 
+`job logs` returns the last 1000 lines by default. A multi-rank gang emits that
+many in seconds, so a grep for something that happened earlier in the run comes
+back empty and reads as "it never happened":
+
+```bash
+iris job logs /user/job/child --max-lines 400000 --no-tail | grep "Saving checkpoint"
+```
+
 ### Submitting a GPU gang from a workstation
 
 `--cluster cw-*` connects the CLI straight to that cluster's controller, which
