@@ -22,6 +22,9 @@ dependencies = [
     "marin-rigging[prometheus]",
     "fsspec>=2025.3.0",
     "gcsfs",
+    # Fast Rust BPE tokenizer, used as a parity-gated drop-in for HF tokenizers
+    # in the quality-scorer tokenization path.
+    "gigatoken>=0.10",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "huggingface-hub",
