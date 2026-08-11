@@ -130,3 +130,11 @@ author: Rafal Wojdyla
 - RNO progress: One source job succeeded. `climblab-ja_edc88cea` reached 1,131 of 1,787 output shards with live workers and no dead workers.
 - Error scan: No port collisions, HTTP 429 responses, connection failures, tracebacks, or memory errors.
 - Next action: Continue the 15-minute check cadence.
+
+### 2026-08-11 20:53 UTC - Routine health check
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- East progress: Three source jobs succeeded. `common-crawl-focus-2026-22_7a12c4bf` reached 1,661 of 4,573 output shards with 32 live workers and no dead workers.
+- RNO progress: Two source jobs succeeded. `common_corpus-english_0e1cf2c4` reached 5,838 of 8,018 join-side tasks with 32 live workers and no dead workers.
+- Error scan: No port collisions, HTTP 429 responses, connection failures, tracebacks, or memory errors.
+- Next action: Continue the 15-minute check cadence.
