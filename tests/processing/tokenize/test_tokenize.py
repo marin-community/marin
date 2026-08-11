@@ -11,12 +11,14 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from levanter.data.mixture import MixtureDataset
-from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.data.text.formats import LossWeightTransform, PrebuiltLmDatasetFormat, TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, TreeCache
+from marin.execution.artifact import ArtifactRecord, write_record
 from marin.processing.tokenize.tokenize import (
     MIN_GROUP_BYTES,
     HfTokenizeConfig,
     TokenizeConfig,
+    TokenizedCache,
     bundle_files_by_size,
     compute_target_group_bytes,
     tokenize,
@@ -28,6 +30,31 @@ from zephyr.readers import InputFileSpec
 DUMMY_CACHE_PATH = "/dummy/cache"
 DUMMY_TOKENIZER = "dummy_tokenizer"
 DUMMY_VALIDATION_PATHS = []
+
+
+def test_tokenized_cache_preserves_prebuilt_format(tmp_path: Path):
+    write_record(
+        ArtifactRecord(
+            output_path=str(tmp_path),
+            config={
+                "tokenizer": "passthrough",
+                "format": {
+                    "type": "prebuilt",
+                    "input_ids_key": "tokens",
+                    "loss_weights_key": "assistant_mask",
+                    "loss_weight_transform": "shift_left",
+                },
+            },
+        )
+    )
+
+    component = TokenizedCache(path=str(tmp_path)).as_component()
+
+    assert component.format == PrebuiltLmDatasetFormat(
+        input_ids_key="tokens",
+        loss_weights_key="assistant_mask",
+        loss_weight_transform=LossWeightTransform.SHIFT_LEFT,
+    )
 
 
 @pytest.mark.parametrize(

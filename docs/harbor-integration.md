@@ -192,3 +192,21 @@ performs final rendering at tokenization time.
 The checked-in Grug manifest pins the 29 sources and accepted row counts used by the historical
 `grug-67b-a2b-agentic-sft` run. Its compact 22-row source is also a data-integration golden test,
 which compares the canonical output hash with the archived training parquet.
+
+### Historical fixed-EOT training data
+
+The August 2026 fixed-EOT experiment used a separate, already-rendered training artifact. Keep
+that artifact distinct from the structured output above: changing `messages` or `tools` in place
+would make the canonical Harbor conversion depend on one trainee tokenizer and chat template.
+`experiments.datasets.grug_a2b_agentic_sft_eot` instead adopts the immutable August rendering and
+builds a versioned Levanter cache from its `input_ids` and `assistant_mask` columns. The prebuilt
+format shifts the assistant mask to causal-label positions before packing and retains the rightmost
+tokens when an archived record exceeds the training context, matching the historical run.
+
+Regenerating this rendering from the structured Harbor conversion should be a derived Datakit
+step. That step must consume every processed source in the pinned manifest, pass the serialized
+`tools` column to the target chat template, pin the trainee tokenizer and template, and write a new
+versioned output. It should verify the accepted-row count and rendered token/mask hashes against
+the archived artifact before replacing the adopted historical source. Directly reading selected
+Hugging Face Parquet files in the SFT launcher is unnecessary; the pinned Harbor conversion owns
+source ingestion and provenance.

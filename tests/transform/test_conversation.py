@@ -5,13 +5,19 @@
 
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import transform_conversation_to_dolma
 from marin.transform.conversation.preference_data_adapters import PreferenceTransformAdapter
 from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
+    get_dataset_tasks,
+    process_shard_task,
     transform_row,
 )
+
+from experiments.datasets.instruction import InstructionDatasetConfig, transform_dataset_step
 
 OPENAI_FORMAT_SAMPLE = {
     "messages": [
@@ -357,3 +363,77 @@ class TestEndToEndTransforms:
         assert all("messages" not in r for r in dolma_results)
         assert "user: Hello" in dolma_results[0]["text"]
         assert "assistant: Hi there" in dolma_results[0]["text"]
+
+
+def test_direct_parquet_source_preserves_selected_conversations(tmp_path: Path, monkeypatch, read_jsonl_gz):
+    parquet_path = tmp_path / "source.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "conversations": [
+                        {"role": "user", "content": "Run the tests."},
+                        {"role": "assistant", "content": "Done."},
+                    ],
+                    "unused": "not projected",
+                }
+            ]
+        ),
+        parquet_path,
+    )
+    adapter = TransformAdapter(
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        conversation_column="conversations",
+        role_key="role",
+        content_key="content",
+        user_value="user",
+        assistant_value="assistant",
+        system_value="system",
+    )
+    cfg = TransformSFTDatasetConfig(
+        source="example/conversations",
+        revision="deadbee",
+        output_path=str(tmp_path / "output"),
+        metadata_columns=[],
+        adapter=adapter,
+        subsets=["terminal"],
+        splits=["train"],
+        columns=["conversations"],
+        parquet_files={"terminal": [str(parquet_path)]},
+        parquet_batch_size=1,
+    )
+    monkeypatch.setattr(
+        "marin.transform.conversation.transform_conversation.hf_hub_url",
+        lambda _repo, filename, **_kwargs: filename,
+    )
+
+    tasks = list(get_dataset_tasks(cfg))
+    assert len(tasks) == 1
+    result = process_shard_task(tasks[0])
+    rows = read_jsonl_gz(Path(result["path"]))
+
+    assert result["count"] == 1
+    assert [message["content"] for message in rows[0]["messages"]] == ["Run the tests.", "Done."]
+    assert "unused" not in rows[0]
+
+
+def test_default_instruction_source_keeps_existing_cache_pin():
+    adapter = TransformAdapter(
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        conversation_column="conversations",
+        role_key="role",
+        content_key="content",
+        user_value="user",
+        assistant_value="assistant",
+        system_value="system",
+    )
+    cfg = InstructionDatasetConfig(
+        hf_dataset_id="example/conversations",
+        revision="deadbee",
+        metadata_columns=[],
+        adapter=adapter,
+        subsets=["terminal"],
+        splits=["train"],
+    )
+
+    assert transform_dataset_step(cfg).override_path == "documents/example--conversations-deadbee-28fea3"

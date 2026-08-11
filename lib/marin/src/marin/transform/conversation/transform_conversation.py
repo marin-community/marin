@@ -22,7 +22,9 @@ from typing import Any
 import datasets
 import draccus
 import fsspec
+import pyarrow.parquet as pq
 from fray.types import ResourceConfig
+from huggingface_hub import hf_hub_url
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.utils import load_dataset_with_backoff
 from rigging.filesystem import StoragePath, prefix_join, url_to_fs
@@ -38,7 +40,7 @@ from .adapters import TransformAdapter
 # 1 GiB that ZephyrContext floors an unset ``resources`` to OOM-kills the worker mid-shard. Give each
 # worker headroom; this is a runtime resource only and does not enter the transform's data
 # fingerprint or output path, so bumping it never forks an existing cache.
-_TRANSFORM_WORKER_RESOURCES = ResourceConfig(cpu=1, ram="8g")
+_TRANSFORM_WORKER_RESOURCES = ResourceConfig(cpu=1, ram="16g")
 
 _RESERVED_TOP_LEVEL_FIELDS = {"id", "source", "messages", "added", "created", "metadata"}
 DEFAULT_TEXT_REPLACEMENTS = {"<think>": "<|start_think|>", "</think>": "<|end_think|>"}
@@ -58,6 +60,9 @@ class TransformSFTDatasetConfig:
         adapter (TransformAdapter): Adapter responsible for mapping raw rows into OpenAI chat format.
         subsets (list[str]): Data subsets (from HuggingFace config) to use. Empty list indicates all/default subset(s).
         splits (list[str]): Data splits (e.g., `train`, `validation`) to use. Empty list indicates all splits.
+        columns (list[str] | None): Source columns to read. None reads every column.
+        parquet_files (dict[str, list[str]]): Hugging Face Parquet files to read directly, keyed by subset.
+        parquet_batch_size (int | None): Record-batch size for direct Parquet reads.
         max_parallelism (int | None): Maximum number of concurrent shard processing tasks.
             Set to lower values to avoid HF rate limits. Set to None for default behavior (full concurrency).
     """
@@ -69,7 +74,14 @@ class TransformSFTDatasetConfig:
     adapter: TransformAdapter
     subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
     splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
+    columns: list[str] | None = None
+    parquet_files: dict[str, list[str]] = field(default_factory=dict)
+    parquet_batch_size: int | None = None
     max_parallelism: int | None = None  # None means use default behavior (full concurrency)
+
+    def __post_init__(self) -> None:
+        if self.parquet_files and self.parquet_batch_size is None:
+            raise ValueError("parquet_batch_size is required when parquet_files are configured")
 
 
 @dataclass(frozen=True)
@@ -232,7 +244,13 @@ def _shard_filename(output_path: str, shard_idx: int) -> str:
     return prefix_join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
 
 
-def _streaming_dataset_kwargs(source: str, split: str, revision: str, subset: str | None) -> dict[str, object]:
+def _streaming_dataset_kwargs(
+    source: str,
+    split: str,
+    revision: str,
+    subset: str | None,
+    columns: list[str] | None,
+) -> dict[str, object]:
     """Build kwargs for a streaming ``datasets.load_dataset`` call.
 
     The HF config name is omitted for the default/unnamed subset so the loader
@@ -246,7 +264,20 @@ def _streaming_dataset_kwargs(source: str, split: str, revision: str, subset: st
     }
     if subset not in (None, "default"):
         kwargs["name"] = subset
+    if columns is not None:
+        kwargs["columns"] = columns
     return kwargs
+
+
+def _direct_parquet_rows(task: ShardTask, subset_name: str):
+    batch_size = task.cfg.parquet_batch_size
+    assert batch_size is not None
+    filename = task.cfg.parquet_files[subset_name][task.shard_idx]
+    url = hf_hub_url(task.source, filename, repo_type="dataset", revision=task.revision)
+    with fsspec.open(url, "rb") as source:
+        parquet = pq.ParquetFile(source)
+        for batch in parquet.iter_batches(batch_size=batch_size, columns=task.cfg.columns):
+            yield from batch.to_pylist()
 
 
 def get_shard_dir(dir_name: str, subset_name: str | None, split: str) -> str:
@@ -293,11 +324,15 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
             subset_output_path = get_shard_dir(cfg.output_path, subset_name, split)
             output_path = create_shard_output_directory(subset_output_path)
 
-            dataset = load_dataset_with_backoff(
-                context=f"{source} subset={subset_name} split={split}",
-                **_streaming_dataset_kwargs(source, split, revision, subset),
-            )
-            num_shards = dataset.num_shards
+            parquet_files = cfg.parquet_files.get(subset_name)
+            if parquet_files is not None:
+                num_shards = len(parquet_files)
+            else:
+                dataset = load_dataset_with_backoff(
+                    context=f"{source} subset={subset_name} split={split}",
+                    **_streaming_dataset_kwargs(source, split, revision, subset, cfg.columns),
+                )
+                num_shards = dataset.num_shards
             if not num_shards:
                 raise ValueError(f"Streaming dataset {source} subset={subset} split={split} does not expose num_shards.")
 
@@ -340,15 +375,18 @@ def process_shard_task(task: ShardTask) -> dict:
             "skipped": True,
         }
 
-    dataset = load_dataset_with_backoff(
-        context=f"{task.source} subset={subset_name} split={task.split} shard={task.shard_idx}",
-        **_streaming_dataset_kwargs(task.source, task.split, task.revision, task.subset),
-    )
-    shard_dataset = dataset.shard(num_shards=task.num_shards, index=task.shard_idx)
+    if subset_name in task.cfg.parquet_files:
+        raw_rows = _direct_parquet_rows(task, subset_name)
+    else:
+        dataset = load_dataset_with_backoff(
+            context=f"{task.source} subset={subset_name} split={task.split} shard={task.shard_idx}",
+            **_streaming_dataset_kwargs(task.source, task.split, task.revision, task.subset, task.cfg.columns),
+        )
+        raw_rows = dataset.shard(num_shards=task.num_shards, index=task.shard_idx)
 
     def transform_records():
         """Generator that yields transformed records."""
-        for raw_row in shard_dataset:
+        for raw_row in raw_rows:
             transformed_row = transform_row(raw_row, task.cfg, adapter)
             if transformed_row is not None:
                 yield transformed_row.model_dump()

@@ -5,7 +5,7 @@ import abc
 import dataclasses
 import functools
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import cached_property
@@ -46,6 +46,7 @@ from levanter.data.text.examples import (
 from levanter.data.text.formats import (
     ChatLmDatasetFormat,
     LmDatasetFormatBase,
+    LossWeightTransform,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
     TextLmDatasetFormat,
@@ -168,10 +169,6 @@ class CausalLmDataset(MappedAsyncDataset[TokenSeqDict, GrugLmExample]):
         return await self.dataset.async_len()
 
 
-def _identity_loss_weight(loss_weight: np.ndarray) -> np.ndarray:
-    return loss_weight
-
-
 class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
     """
     A dataset that maps prebuilt cache entries to GrugLmExample instances.
@@ -184,7 +181,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
         *,
         input_ids_key: str,
         loss_weights_key: str | None,
-        loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None,
+        loss_weight_transform: LossWeightTransform,
         eos_id: int | None = None,
         block_cross_document_attention: bool = True,
     ):
@@ -194,7 +191,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
         self.block_cross_document_attention = block_cross_document_attention
         self.input_ids_key = input_ids_key
         self.loss_weights_key = loss_weights_key
-        self.loss_weight_transform = loss_weight_transform or _identity_loss_weight
+        self.loss_weight_transform = loss_weight_transform
 
         sharding = _single_cpu_sharding()
 
@@ -229,7 +226,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
 
             def _map(example: dict) -> GrugLmExample:
                 loss_weight = example[loss_weights_key]
-                loss_weight = self.loss_weight_transform(loss_weight)
+                loss_weight = self.loss_weight_transform.apply(loss_weight)
                 # pyrefly: ignore[bad-return, bad-argument-count]  # eqx.filter_jit wrapper hides the real signature
                 return _create_lm_example(example[input_ids_key], loss_weight)
 
@@ -330,6 +327,7 @@ class DatasetComponent(DatasetComponentBase):
     cache_dir: str | None = None
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
     pack: bool | int | None = None
+    packed_slice_strategy: Literal["left", "right", "raise"] = "left"
     tags: list[str] | None = None
     split: str = "validation"
     flat_cache: bool = False
@@ -394,7 +392,9 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         Pos: Axis,
         max_segments_per_example: int = 64,
         slice_strategy: Literal["left", "right", "raise"] = "left",
+        input_ids_key: str = "input_ids",
         loss_weights_key: str | None = None,
+        loss_weight_transform: LossWeightTransform = LossWeightTransform.IDENTITY,
         block_cross_document_attention: bool = True,
     ):
         self.packed: GreedyPrepackedDataset[dict] = GreedyPrepackedDataset(
@@ -405,7 +405,9 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
+        self.input_ids_key = input_ids_key
         self.loss_weights_key = loss_weights_key
+        self.loss_weight_transform = loss_weight_transform
 
         sharding = _single_cpu_sharding()
 
@@ -414,9 +416,9 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
             @functools.partial(eqx.filter_jit)
             def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
                 example, seg_ids = e
-                tokens = example["input_ids"]
+                tokens = example[input_ids_key]
                 loss_weight = jnp.ones_like(tokens, dtype=jnp.float32)
-                seg_ids_raw = seg_ids["input_ids"]
+                seg_ids_raw = seg_ids[input_ids_key]
                 out = GrugLmExample.causal(
                     tokens=tokens,
                     loss_weight=loss_weight,
@@ -430,11 +432,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         else:
 
             @functools.partial(eqx.filter_jit)
-            def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
-                example, seg_ids = e
-                tokens = example["input_ids"]
-                loss_weight = example[loss_weights_key]
-                seg_ids_raw = seg_ids["input_ids"]
+            def _create_lm_example(tokens: jax.Array, loss_weight: jax.Array, seg_ids_raw: jax.Array) -> GrugLmExample:
                 out = GrugLmExample.causal(
                     tokens=tokens,
                     loss_weight=loss_weight,
@@ -444,6 +442,16 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
                 return out
+
+            def _map(e: tuple[dict, dict]) -> GrugLmExample:
+                example, seg_ids = e
+                segment_ids = seg_ids[input_ids_key]
+                loss_weight = self.loss_weight_transform.apply(example[loss_weights_key], segment_ids)
+                # pyrefly: ignore[bad-return, bad-argument-count]  # eqx.filter_jit wrapper hides the real signature
+                return _create_lm_example(example[input_ids_key], loss_weight, segment_ids)
+
+            super().__init__(self.packed, _map)
+            return
 
         super().__init__(self.packed, _create_lm_example)
 
@@ -513,7 +521,9 @@ def dataset_for_component(
     fmt = component.format
     if isinstance(fmt, TextLmDatasetFormat):
         if pack:
-            max_segments, slice_strategy = _resolve_pack_config(pack)
+            max_segments, slice_strategy = _resolve_pack_config(
+                pack, packed_slice_strategy=component.packed_slice_strategy
+            )
             return PackedTokenDataset(
                 cache,
                 Pos,
@@ -529,7 +539,9 @@ def dataset_for_component(
         )
     elif isinstance(fmt, ChatLmDatasetFormat):
         # Chat has no continuous-stream mode: a falsy pack means one conversation per example.
-        max_segments, slice_strategy = _resolve_pack_config(pack)
+        max_segments, slice_strategy = _resolve_pack_config(
+            pack, packed_slice_strategy=component.packed_slice_strategy
+        )
         return ChatDataset(
             cache,
             Pos,
@@ -539,6 +551,20 @@ def dataset_for_component(
             block_cross_document_attention=block_cross_document_attention,
         )  # type: ignore
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
+        if pack:
+            max_segments, slice_strategy = _resolve_pack_config(
+                pack, packed_slice_strategy=component.packed_slice_strategy
+            )
+            return PackedTokenDataset(
+                cache,
+                Pos,
+                max_segments_per_example=max_segments,
+                slice_strategy=slice_strategy,
+                input_ids_key=fmt.input_ids_key,
+                loss_weights_key=fmt.loss_weights_key,
+                loss_weight_transform=fmt.loss_weight_transform,
+                block_cross_document_attention=block_cross_document_attention,
+            )
         return PrebuiltLmDataset(
             cache,
             Pos,
