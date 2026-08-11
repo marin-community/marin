@@ -1,0 +1,14 @@
+{
+  "archive_bytes": 1110166,
+  "archive_sha256": "f5bfde4a6db220f0394fe9a705cd463e950d407fb14043f61b5e2ba28c78d4ba",
+  "capsule_expanded_bytes": 5057520,
+  "controller_bundle_id": "2ecfb010d02de83eeb5f6c75b8b1f4fc229f83b87ae7ebe5c29efab017e03229",
+  "launcher_sha256": "9c479abf75bd151a734762cf2dfd0ce542c4f059f85e67e4745d12dc474b1f63",
+  "manifest_sha256": "a1babcebc3fce37749a3dc5d31953007c70d3546a4a97a4113697c598d2da6e4",
+  "member_count": 154,
+  "pre_submit_bundle_bytes": 1106017,
+  "pre_submit_bundle_sha256": "2ecfb010d02de83eeb5f6c75b8b1f4fc229f83b87ae7ebe5c29efab017e03229",
+  "source_commit": "f6a0a9143c3238e1883875ffbbb944d641874738",
+  "source_tree": "bacdc71fe006caf303c6948350733ef43ef95740",
+  "transport_file_count": 3
+}
