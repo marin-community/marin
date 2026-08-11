@@ -23,13 +23,23 @@ class Rollout:
     test_path: str = ""
 
 
+CLOUD_RUN_DEPLOY_SERVICE_ACCOUNT = "marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com"
+IRIS_DEPLOY_SERVICE_ACCOUNT = "iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com"
+CLOUDFLARE_DNS_SECRET = "cloudflare-oa-dns-token"
+CLOUD_RUN_SOURCE_ROOTS = (
+    "infra/pulumi/src/iac/gcp/cloud_run.py",
+    "lib/rigging/src/rigging/auth.py",
+)
+IRIS_SOURCE_ROOTS = ("infra/pulumi/src/iac/iris",)
+
+
 ROLLOUTS = (
     Rollout(
         name="ducky",
         stack="ducky-marin",
         work_dir="infra/ducky",
-        service_account="iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com",
-        source_roots=("lib/ducky", "infra/pulumi/src/iac/iris"),
+        service_account=IRIS_DEPLOY_SERVICE_ACCOUNT,
+        source_roots=("lib/ducky", *IRIS_SOURCE_ROOTS),
         timeout_minutes=30,
         deploy_generation_key="ducky:deploy_generation",
     ),
@@ -37,30 +47,26 @@ ROLLOUTS = (
         name="echo",
         stack="marin-echo",
         work_dir="infra/echo",
-        service_account="marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com",
-        source_roots=(
-            "infra/pulumi/src/iac/gcp/cloud_run.py",
-            "infra/pulumi/src/iac/gcp/cloud_run_job.py",
-            "lib/rigging/src/rigging/auth.py",
-        ),
+        service_account=CLOUD_RUN_DEPLOY_SERVICE_ACCOUNT,
+        source_roots=(*CLOUD_RUN_SOURCE_ROOTS, "infra/pulumi/src/iac/gcp/cloud_run_job.py"),
         timeout_minutes=90,
-        cloudflare_secret_name="cloudflare-oa-dns-token",
+        cloudflare_secret_name=CLOUDFLARE_DNS_SECRET,
     ),
     Rollout(
         name="grafana",
         stack="marin-grafana",
         work_dir="infra/grafana",
-        service_account="marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com",
-        source_roots=("infra/pulumi/src/iac/gcp/cloud_run.py", "lib/rigging/src/rigging/auth.py"),
-        cloudflare_secret_name="cloudflare-oa-dns-token",
+        service_account=CLOUD_RUN_DEPLOY_SERVICE_ACCOUNT,
+        source_roots=CLOUD_RUN_SOURCE_ROOTS,
+        cloudflare_secret_name=CLOUDFLARE_DNS_SECRET,
         test_path="infra/grafana",
     ),
     Rollout(
         name="xprof",
         stack="xprof-marin",
         work_dir="infra/xprof",
-        service_account="iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com",
-        source_roots=("infra/pulumi/src/iac/iris", "lib/rigging/src/rigging/filesystem"),
+        service_account=IRIS_DEPLOY_SERVICE_ACCOUNT,
+        source_roots=(*IRIS_SOURCE_ROOTS, "lib/rigging/src/rigging/filesystem"),
         timeout_minutes=30,
         deploy_generation_key="xprof:deploy_generation",
     ),

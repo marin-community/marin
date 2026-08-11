@@ -4,17 +4,7 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'infra/**'
-      - 'lib/ducky/**'
-      - 'lib/rigging/src/rigging/auth.py'
-      - 'lib/rigging/src/rigging/filesystem/**'
   pull_request:
-    paths:
-      - 'infra/**'
-      - 'lib/ducky/**'
-      - 'lib/rigging/src/rigging/auth.py'
-      - 'lib/rigging/src/rigging/filesystem/**'
   workflow_dispatch:
     inputs:
       service:

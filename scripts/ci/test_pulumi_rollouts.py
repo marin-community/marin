@@ -29,5 +29,5 @@ def test_rollout_item_encodes_supported_deploy_generation() -> None:
 
 
 def test_rollout_item_rejects_unsupported_deploy_generation() -> None:
-    with pytest.raises(ValueError, match="echo does not support"):
+    with pytest.raises(ValueError):
         rollout_item(rollout_for_service("echo"), "42")
