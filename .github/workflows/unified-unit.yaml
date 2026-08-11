@@ -171,10 +171,13 @@ jobs:
 
       - name: Test torch-marked suite
         # Run directly on CPU to avoid GPU dependency issues.
-        run: >-
-          CUDA_VISIBLE_DEVICES="" ../../.venv/bin/python -m pytest
-          ${{ needs.select.outputs.levanter_torch_test_paths }}
-          -m "torch" --durations=20
+        run: |
+          status=0
+          CUDA_VISIBLE_DEVICES="" ../../.venv/bin/python -m pytest \
+            ${{ needs.select.outputs.levanter_torch_test_paths }} \
+            -m "torch" --durations=20 || status=$?
+          [ "$status" -eq 5 ] && exit 0
+          exit "$status"
 
   levanter_tpu:
     name: levanter-tpu
@@ -231,10 +234,13 @@ jobs:
                 echo '::endgroup::'; \
               fi && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
-              timeout --kill-after=5 --signal=TERM 1490 \
-              uv run --package marin-levanter --frozen --group test --extra tpu \
-              pytest -n 0 ${{ needs.select.outputs.levanter_tpu_test_paths }} \
-              -v --tb=short --log-cli-level=WARNING --durations=20"
+              ( status=0; \
+                timeout --kill-after=5 --signal=TERM 1490 \
+                uv run --package marin-levanter --frozen --group test --extra tpu \
+                pytest -n 0 ${{ needs.select.outputs.levanter_tpu_test_paths }} \
+                -v --tb=short --log-cli-level=WARNING --durations=20 || status=\$?; \
+                [ "\$status" -eq 5 ] && exit 0; \
+                exit "\$status" )"
 
   iris_e2e_smoke:
     name: iris-e2e-smoke
