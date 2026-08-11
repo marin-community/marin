@@ -27,9 +27,8 @@ from iris.rpc import job_pb2
 from jax.sharding import PartitionSpec as P
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.tokenizers import load_tokenizer
-
-from tests.cluster.vllm.backend_parity import TokenScore
-from tests.cluster.vllm.snowball import (
+from marin.testing.inference.backend_parity import TokenScore
+from marin.testing.inference.snowball import (
     TOP_K,
     RepresentativeGolden,
     RepresentativePromptFixture,
@@ -37,7 +36,7 @@ from tests.cluster.vllm.snowball import (
     read_prompt_fixture,
     read_representative_goldens,
 )
-from tests.cluster.vllm.snowball_checkpoint import (
+from marin.testing.inference.snowball_checkpoint import (
     VendoredTransformer,
     apply_pending_qb_betas,
     decode_vendored_config,
@@ -154,7 +153,7 @@ def test_snowball_checkpoint_matches_levanter_inference_goldens(marin_gpu_client
             resources=ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="256g", disk="64g"),
             environment=create_environment(
                 extras=["gpu"],
-                sync_packages=["marin-levanter"],
+                sync_packages=["marin-core", "marin-levanter"],
                 env_vars={
                     "JAX_COMPILATION_CACHE_DIR": JAX_COMPILATION_CACHE_DIR,
                     # XLA's auxiliary caches require local paths; keep only JAX's LOTA-backed cache.

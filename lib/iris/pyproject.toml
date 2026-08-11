@@ -68,7 +68,11 @@ examples = [
     "nbformat>=5.10.4",
 ]
 test = [
+    # Keep the test environment on the workspace runtime pin. The node-local
+    # XLA autotune cache requires JAX's cache-key exclusion for its directory.
+    "jax==0.11.0",
     "kubernetes>=31.0.0,<36",
+    "memray>=1.19.3",
     "playwright>=1.49.0",
     "pytest-asyncio",
     "pytest-flakefinder>=1.1.0",
@@ -105,11 +109,12 @@ packages = ["src/iris"]
 [tool.pytest.ini_options]
 timeout = 10
 timeout_method = "thread"
-addopts = "-n auto --durations=25 -m 'not slow and not docker and not requires_cluster' -v --import-mode=importlib"
-pythonpath = ["src", "."]
+addopts = "-n auto --durations=25 -m 'not slow and not docker and not requires_cluster and not manual' -v --import-mode=importlib"
+pythonpath = ["src"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "docker: marks tests requiring Docker runtime (slow, needs daemon)",
+    "manual: marks tests that run only when explicitly selected",
     "requires_cluster: mark tests that need a running iris cluster",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]

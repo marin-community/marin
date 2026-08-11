@@ -32,13 +32,12 @@ from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
+from iris.testing.controller import make_job_request, query_task, submit_job
 from iris.time_proto import duration_to_proto
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from rigging.token_authority import generate_ed25519_keypair
 from sqlalchemy import update as sa_update
-
-from .conftest import make_job_request, query_task, submit_job
 
 
 def _service(state, *, lease: Duration = ENDPOINT_LEASE) -> EndpointServiceImpl:

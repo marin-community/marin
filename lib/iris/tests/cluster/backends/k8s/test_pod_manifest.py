@@ -28,8 +28,7 @@ from iris.cluster.runtime.env import STANDARD_MOUNTS
 from iris.cluster.runtime.types import MountKind
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
-
-from .conftest import add_eq_constraint, common_env_from_req, make_batch, make_pod, make_run_req, pod_config
+from iris.testing.k8s import add_eq_constraint, common_env_from_req, make_batch, make_pod, make_run_req, pod_config
 
 INFRASTRUCTURE_FAILURE_REASONS = ("DeadlineExceeded", "Evicted", "Preempting")
 KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"

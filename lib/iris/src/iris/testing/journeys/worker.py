@@ -1,10 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic worker-daemon actions for Iris product journeys."""
+"""Worker-daemon actions for Iris product journeys."""
 
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.constraints import WellKnownAttribute
@@ -14,7 +16,6 @@ from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
-from rigging.timing import Duration, Timestamp
 
 
 @dataclass(slots=True)
