@@ -35,6 +35,7 @@ from experiments.datakit.cluster.intruder import (
     Bucket,
     BucketPool,
     default_panel,
+    openrouter_panel,
     run_intruder_test,
 )
 
@@ -187,6 +188,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="global: the scorer's own cutpoints. domain-quantile: equal-count bands within each group.",
     )
     parser.add_argument("--panel-size", type=int, default=DEFAULT_PANEL_SIZE)
+    parser.add_argument(
+        "--panel-model",
+        default=None,
+        metavar="OPENROUTER_MODEL",
+        help="judge via OpenRouter with this model instead of local headless claude "
+        "(needs OR_INTRUDER_key; use when CLI seats would starve the operator's own usage)",
+    )
     parser.add_argument("--target-trials", type=int, default=120)
     parser.add_argument("--max-trials", type=int, default=400)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -218,10 +226,11 @@ def main() -> None:
     lhs = build_pool(lhs_name, scored_root=lhs_path, **common)
     rhs = build_pool(rhs_name, scored_root=rhs_path, **common)
 
+    panel = openrouter_panel(args.panel_model, args.panel_size) if args.panel_model else default_panel(args.panel_size)
     result = run_intruder_test(
         lhs,
         rhs,
-        panel=default_panel(args.panel_size),
+        panel=panel,
         target_trials=args.target_trials,
         max_trials=args.max_trials,
         batch_size=args.batch_size,

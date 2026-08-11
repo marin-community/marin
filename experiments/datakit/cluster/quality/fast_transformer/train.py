@@ -118,9 +118,9 @@ def _metrics(scores: np.ndarray, targets: np.ndarray, threshold: float = DEFAULT
     )
 
 
-def _forward(model, ids, key):
+def _forward(model, ids, doc_embed, key):
     """Training-mode logits; pulled out so it can be gradient-checkpointed."""
-    return model(ids, key=key, inference=False)
+    return model(ids, doc_embed=doc_embed, key=key, inference=False)
 
 
 @dataclass
@@ -141,16 +141,19 @@ def train_regressor(
     val_ids: np.ndarray,
     val_scores: np.ndarray,
     hp: TrainHParams,
+    tr_doc_embed: np.ndarray | None = None,
+    val_doc_embed: np.ndarray | None = None,
 ):
-    """Train any ``(ids, key, inference) -> logits`` model on the MSE-on-sigmoid
-    regression objective.
+    """Train any ``(ids, doc_embed, key, inference) -> logits`` model on the
+    MSE-on-sigmoid regression objective.
 
     Selects the checkpoint with the best internal-val Spearman and stops early
     after ``hp.patience`` eval rounds without improvement (best epoch is typically
     < 15, so running the full epoch cap wastes most of the trial). Data-parallel
     across all chips; ``hp.remat`` gradient-checkpoints the forward for long
-    context. Works for both :class:`FastTransformer` and the pretrained encoder
-    classifier. Returns ``(best_model, best_epoch, train_seconds)``.
+    context. ``tr_doc_embed`` / ``val_doc_embed`` ride along row-for-row when the
+    model takes a per-document embedding. Returns ``(best_model, best_epoch,
+    train_seconds)``.
     """
     key = jax.random.PRNGKey(hp.seed)
     ndev, replicated, batch_shard = data_parallel_shardings()
@@ -173,9 +176,9 @@ def train_regressor(
     forward = eqx.filter_checkpoint(_forward) if hp.remat else _forward
 
     @eqx.filter_jit
-    def step(model, opt_state, ids, targets, step_key):
+    def step(model, opt_state, ids, doc_embed, targets, step_key):
         def loss_fn(m):
-            preds = jax.nn.sigmoid(forward(m, ids, step_key))
+            preds = jax.nn.sigmoid(forward(m, ids, doc_embed, step_key))
             return jnp.mean((preds - targets) ** 2)
 
         loss, grads = eqx.filter_value_and_grad(loss_fn)(model)
@@ -192,13 +195,16 @@ def train_regressor(
             batch = ep_perm[s * batch_size : (s + 1) * batch_size]
             key, step_key = jax.random.split(key)
             ids = jax.device_put(jnp.asarray(tr_ids[batch]), batch_shard)
+            emb = None if tr_doc_embed is None else jax.device_put(jnp.asarray(tr_doc_embed[batch]), batch_shard)
             targets = jax.device_put(jnp.asarray(tr_scores[batch]), batch_shard)
-            model, opt_state, loss = step(model, opt_state, ids, targets, step_key)
+            model, opt_state, loss = step(model, opt_state, ids, emb, targets, step_key)
         if epoch % hp.eval_every != 0 and epoch != hp.epochs - 1:
             continue
         # Reuse the (memory-sized) training batch for eval -- token-level encoders
         # at long context can't fit the default inference batch's O(T^2) attention.
-        val_rho = spearman_rho(predict(model, val_ids, batch_size=batch_size).tolist(), val_scores.tolist())
+        val_rho = spearman_rho(
+            predict(model, val_ids, batch_size=batch_size, doc_embed=val_doc_embed).tolist(), val_scores.tolist()
+        )
         improved = bool(np.isfinite(val_rho) and val_rho > best_val_rho)
         if improved:
             best_val_rho, best_model, best_epoch, no_improve = val_rho, model, epoch, 0

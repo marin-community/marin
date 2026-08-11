@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import subprocess
 import time
 from collections.abc import Callable, Iterable, Sequence
@@ -62,6 +63,7 @@ from itertools import islice
 from typing import Protocol, runtime_checkable
 
 import numpy as np
+import requests
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -390,6 +392,86 @@ def default_panel(size: int = DEFAULT_PANEL_SIZE, model: str | None = None) -> l
     out ``batch_size * size`` calls per side per round.
     """
     return [ClaudeCliPanelist(seat=i, model=model) for i in range(1, size + 1)]
+
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_KEY_ENV = "OR_INTRUDER_key"
+OPENROUTER_TIMEOUT = 120.0
+
+
+@dataclass
+class OpenRouterPanelist:
+    """A :class:`Panelist` backed by one OpenRouter chat completion per vote.
+
+    The fallback for when the local ``claude -p`` panel is starved: headless CLI
+    seats draw on the operator's own interactive usage allowance, so a
+    ~50-concurrent-vote round can exhaust it mid-run and void the comparison
+    with one-sided abstentions. An API seat has its own quota. The
+    self-consistency caveat is unchanged — every seat is still the same model.
+
+    The key is read from ``OR_INTRUDER_key`` at construction so a missing token
+    fails before any trial is sampled, not on the first vote.
+    """
+
+    seat: int
+    model: str
+    timeout: float = OPENROUTER_TIMEOUT
+    attempts: int = VOTE_ATTEMPTS
+
+    def __post_init__(self) -> None:
+        key = os.environ.get(OPENROUTER_KEY_ENV)
+        if not key:
+            raise ValueError(f"set {OPENROUTER_KEY_ENV} to use the OpenRouter panel")
+        self._key = key
+
+    @property
+    def name(self) -> str:
+        return f"{self.model}-{self.seat}"
+
+    def vote(self, trial: IntruderTrial, *, max_doc_chars: int) -> int:
+        user = (
+            "Below are five documents. Four belong to one group; one is an "
+            "intruder from a different group. Identify the intruder.\n\n"
+            + _format_documents(trial.documents, max_doc_chars)
+        )
+        for attempt in range(self.attempts):
+            if attempt:
+                time.sleep(VOTE_RETRY_SECONDS * attempt)
+            try:
+                return self._vote_once(user)
+            except (requests.RequestException, RuntimeError) as e:
+                if attempt == self.attempts - 1:
+                    raise
+                logger.debug("%s: vote attempt %d failed (%s), retrying", self.name, attempt + 1, e)
+        raise AssertionError("unreachable: the loop either returns or raises")
+
+    def _vote_once(self, user: str) -> int:
+        response = requests.post(
+            OPENROUTER_URL,
+            headers={"Authorization": f"Bearer {self._key}"},
+            json={
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": INTRUDER_SYSTEM_PROMPT},
+                    {"role": "user", "content": user},
+                ],
+                "temperature": 0.0,
+            },
+            timeout=self.timeout,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"{self.name}: OpenRouter {response.status_code}: {response.text[:200]}")
+        content = response.json()["choices"][0]["message"]["content"]
+        verdict = IntruderVerdict.model_validate_json(_strip_code_fence(content))
+        index = verdict.intruder - 1
+        if not 0 <= index < DOCS_PER_TRIAL:
+            raise ValueError(f"{self.name} returned out-of-range intruder index {verdict.intruder}")
+        return index
+
+
+def openrouter_panel(model: str, size: int = DEFAULT_PANEL_SIZE) -> list[OpenRouterPanelist]:
+    """``size`` OpenRouter seats of the same ``model`` (self-consistency, not diversity)."""
+    return [OpenRouterPanelist(seat=i, model=model) for i in range(1, size + 1)]
 
 
 # ---------------------------------------------------------------------------
