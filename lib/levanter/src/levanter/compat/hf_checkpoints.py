@@ -68,6 +68,7 @@ from transformers import (  # noqa: E402  # noqa: E402
     AutoProcessor,
     AutoTokenizer,
     PreTrainedTokenizerBase,
+    PreTrainedTokenizerFast,
 )
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers.dynamic_module_utils import get_class_from_dynamic_module  # noqa: E402
@@ -78,6 +79,8 @@ if TYPE_CHECKING:
     from transformers import FeatureExtractionMixin, ProcessorMixin
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
+_PORTABLE_FAST_TOKENIZER_CLASS = "PreTrainedTokenizerFast"
+_TRANSFORMERS_V5_FAST_TOKENIZER_CLASS = "TokenizersBackend"
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +221,31 @@ def _embed_chat_template_in_tokenizer_config(
         json.dump(tokenizer_config, f)
 
 
+def _normalize_fast_tokenizer_class(tokenizer: PreTrainedTokenizerBase, local_path: str) -> None:
+    """Use the cross-version class name for a generic fast-tokenizer export."""
+    if tokenizer.__class__ is not PreTrainedTokenizerFast:
+        return
+
+    tokenizer_json_path = os.path.join(local_path, "tokenizer.json")
+    if not os.path.exists(tokenizer_json_path):
+        return
+
+    config_path = os.path.join(local_path, "tokenizer_config.json")
+    with open(config_path) as f:
+        tokenizer_config = json.load(f)
+
+    # Custom tokenizers own their class resolution through auto_map.
+    if "auto_map" in tokenizer_config:
+        return
+    if tokenizer_config.get("tokenizer_class") != _TRANSFORMERS_V5_FAST_TOKENIZER_CLASS:
+        return
+
+    tokenizer_config["tokenizer_class"] = _PORTABLE_FAST_TOKENIZER_CLASS
+    with open(config_path, "w") as f:
+        json.dump(tokenizer_config, f, indent=2, sort_keys=True, ensure_ascii=False)
+        f.write("\n")
+
+
 def _save_tokenizer_pretrained(
     tokenizer: PreTrainedTokenizerBase | MarinTokenizer,
     local_path: str,
@@ -229,6 +257,7 @@ def _save_tokenizer_pretrained(
         # and chat_template.jinja.
         hf_tokenizer.chat_template = chat_template
     hf_tokenizer.save_pretrained(local_path)
+    _normalize_fast_tokenizer_class(hf_tokenizer, local_path)
     _embed_chat_template_in_tokenizer_config(hf_tokenizer, local_path, chat_template=chat_template)
 
 
