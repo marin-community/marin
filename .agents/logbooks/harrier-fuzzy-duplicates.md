@@ -173,3 +173,12 @@ author: Rafal Wojdyla
 - RNO progress: Two source jobs succeeded. `common_corpus-english_0e1cf2c4` reached 1,076 of 8,018 output shards with 32 live workers and no dead workers.
 - Retry check: East stayed at six one-time retries. RNO stayed at 109 one-time retries. No shard has retried twice.
 - Next action: Continue the 15-minute check cadence.
+
+### 2026-08-11 22:30 UTC - Routine health check
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- East progress: Six source jobs succeeded. `eai-taxonomy-code-w-dclm_39527a3d` reached 627 of 5,872 output shards with 32 live workers and no dead workers.
+- RNO progress: Two source jobs succeeded. `common_corpus-english_0e1cf2c4` reached 1,312 of 8,018 output shards with 32 live workers and no dead workers.
+- Retry check: East increased from six to 22 one-time retries. RNO increased from 109 to 131 one-time retries. No shard has retried twice.
+- Decision: Keep both roots running because shard output continues and all workers are healthy.
+- Next action: Continue the 15-minute check cadence. Escalate if a shard reaches a second retry or either root stops making progress.
