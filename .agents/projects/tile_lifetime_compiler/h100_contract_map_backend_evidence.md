@@ -339,8 +339,13 @@ Generated variants retain the emitted source, loaded shared library, PTX,
 cubin, cubin disassembly, and loaded-image disassembly. Kernel records use the
 SASS extracted from the shared object that JAX loaded. The separately compiled
 cubin remains an available cubin artifact but cannot supply the loaded-image
-SASS identity. Generated ptxas registers, spills, and static shared memory must
-agree with Nsight Compute launch evidence.
+SASS identity. Loaded-image admission requires exact unique coverage of every
+generated function with valid addressed instructions. Missing, extra,
+duplicate, lookalike, or malformed function sections reject the run.
+`cuobjdump` section order is not treated as launch order; launch order remains
+owned by the Nsight Systems trace and must match the generated topology.
+Generated ptxas registers, spills, and static shared memory must agree with
+Nsight Compute launch evidence.
 
 Ordinary XLA must expose exactly one nonempty PTX from its first isolated
 compile worker through the pinned public jaxlib dump flags. Cubin evidence is a

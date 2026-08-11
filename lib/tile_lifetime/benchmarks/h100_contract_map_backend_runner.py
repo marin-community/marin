@@ -163,6 +163,16 @@ _NCU_SASS_FAILURE_PATTERN = re.compile(
     r"(?:^|\b)(?:warning|error)(?::|\b)|(?:source|sass)\s+(?:is\s+)?(?:not|un)available|\bN/A\b",
     flags=re.IGNORECASE,
 )
+_CUOBJDUMP_FUNCTION_PATTERN = re.compile(r"^\s*Function\s*:\s*(?P<name>[A-Za-z_.$][A-Za-z0-9_.$]*)\s*$")
+_CUOBJDUMP_FUNCTION_PREFIX = re.compile(r"^\s*Function\b")
+_CUOBJDUMP_INSTRUCTION_PATTERN = re.compile(
+    r"^\s*/\*(?P<address>[0-9A-Fa-f]{4,16})\*/\s+"
+    r"(?:(?:@!?[A-Z][A-Z0-9.]*)\s+)?"
+    r"(?P<mnemonic>[A-Z][A-Z0-9]*(?:\.[A-Z0-9]+)*)\b"
+    r".*;\s*(?:/\*\s*0x[0-9A-Fa-f]+\s*\*/)?\s*$"
+)
+_CUOBJDUMP_COMMENT_PREFIX = re.compile(r"^\s*/\*")
+_CUOBJDUMP_ENCODING_CONTINUATION = re.compile(r"^\s*/\*\s*0x[0-9A-Fa-f]{16,32}\s*\*/\s*$")
 
 
 class WorkerMode(StrEnum):
@@ -337,16 +347,82 @@ def normalize_cuda_kernel_name(name: str) -> str:
 
 
 def cuda_sass_kernel_names(sass: str) -> tuple[str, ...]:
-    """Return exact normalized entry names from a cuobjdump SASS artifact."""
-    names = tuple(
-        normalize_cuda_kernel_name(match.group("name"))
-        for match in re.finditer(r"^\s*Function\s*:\s*(?P<name>\S+)\s*$", sass, flags=re.MULTILINE)
-    )
+    """Return exact normalized entry names from closed cuobjdump sections."""
+    if not sass.strip():
+        raise ValueError("cuobjdump SASS is empty")
+    if "\0" in sass:
+        raise ValueError("cuobjdump SASS contains NUL")
+    if _NCU_SASS_FAILURE_PATTERN.search(sass) is not None:
+        raise ValueError("cuobjdump SASS contains a warning, error, or unavailable source")
+
+    names: list[str] = []
+    current_name: str | None = None
+    addresses: list[int] = []
+    previous_was_instruction = False
+
+    def finish_section() -> None:
+        nonlocal current_name, addresses
+        if current_name is None:
+            return
+        if not addresses:
+            raise ValueError(f"cuobjdump SASS function {current_name!r} contains no valid instructions")
+        if addresses != sorted(set(addresses)):
+            raise ValueError(f"cuobjdump SASS function {current_name!r} has repeated or reordered addresses")
+        names.append(current_name)
+        current_name = None
+        addresses = []
+
+    for line in sass.splitlines():
+        function = _CUOBJDUMP_FUNCTION_PATTERN.fullmatch(line)
+        if function is not None:
+            finish_section()
+            current_name = normalize_cuda_kernel_name(function.group("name"))
+            previous_was_instruction = False
+            continue
+        if _CUOBJDUMP_FUNCTION_PREFIX.match(line) is not None:
+            raise ValueError(f"cuobjdump SASS contains a malformed function identity: {line!r}")
+
+        instruction = _CUOBJDUMP_INSTRUCTION_PATTERN.fullmatch(line)
+        if instruction is not None:
+            if current_name is None:
+                raise ValueError("cuobjdump SASS contains an instruction outside a function section")
+            addresses.append(int(instruction.group("address"), 16))
+            previous_was_instruction = True
+            continue
+
+        if _CUOBJDUMP_ENCODING_CONTINUATION.fullmatch(line) is not None:
+            if current_name is None or not previous_was_instruction:
+                raise ValueError("cuobjdump SASS contains a standalone instruction encoding")
+            previous_was_instruction = False
+            continue
+        if _CUOBJDUMP_COMMENT_PREFIX.match(line) is not None:
+            raise ValueError(f"cuobjdump SASS contains a malformed address-bearing instruction: {line!r}")
+        previous_was_instruction = False
+
+    finish_section()
     if not names:
         raise ValueError("cuobjdump SASS contains no function identities")
     if len(set(names)) != len(names):
         raise ValueError("cuobjdump SASS repeats a function identity")
-    return names
+    return tuple(names)
+
+
+def validate_cuda_sass_kernel_topology(sass: str, expected_names: Sequence[str]) -> tuple[str, ...]:
+    """Require exact unique kernel coverage independent of tool emission order."""
+    expected = tuple(expected_names)
+    if not expected or len(set(expected)) != len(expected):
+        raise ValueError("expected cuobjdump kernel topology must be unique and nonempty")
+    if any(normalize_cuda_kernel_name(name) != name for name in expected):
+        raise ValueError("expected cuobjdump kernel topology must use canonical CUDA symbols")
+    actual = cuda_sass_kernel_names(sass)
+    missing = tuple(name for name in expected if name not in actual)
+    unexpected = tuple(name for name in actual if name not in expected)
+    if missing or unexpected or len(actual) != len(expected):
+        raise ValueError(
+            "cuobjdump SASS kernel coverage differs from the generated topology: "
+            f"missing={missing}, unexpected={unexpected}, actual={actual}"
+        )
+    return actual
 
 
 def _load_source_capsule_manifest(config: RunnerConfig) -> dict[str, Any]:
@@ -827,9 +903,13 @@ def compile_generated_candidates(config: RunnerConfig) -> tuple[GeneratedArtifac
         plan.sass_path.write_text(cubin_sass.stdout)
         loaded_image_sass_path = plan.shared_library_path.with_suffix(".loaded.sass")
         loaded_image_sass = _run_retained((str(config.tools.cuobjdump), "--dump-sass", str(plan.shared_library_path)))
-        if cuda_sass_kernel_names(loaded_image_sass.stdout) != tuple(candidate.generated.kernel_names):
-            raise RuntimeError("loaded shared-library SASS does not contain the exact generated kernel topology")
         loaded_image_sass_path.write_text(loaded_image_sass.stdout)
+        try:
+            validate_cuda_sass_kernel_topology(loaded_image_sass.stdout, candidate.generated.kernel_names)
+        except ValueError as error:
+            raise RuntimeError(
+                f"loaded shared-library SASS does not contain the exact generated kernel topology: {error}"
+            ) from error
         for path in (
             plan.source_path,
             plan.shared_library_path,
@@ -2310,10 +2390,13 @@ def generated_kernel_records(
     artifact: GeneratedArtifact,
     metrics: tuple[NcuKernelMetrics, ...],
 ) -> list[dict[str, Any]]:
-    if cuda_sass_kernel_names(Path(artifact.loaded_image_sass_path).read_text()) != tuple(
-        candidate.generated.kernel_names
-    ):
-        raise ValueError("loaded shared-library SASS kernel identities changed after compilation")
+    shared_library_path = Path(artifact.shared_library_path)
+    if file_sha256(shared_library_path) != artifact.shared_library_sha256:
+        raise ValueError("generated shared-library content changed before evidence collection")
+    loaded_image_sass_path = Path(artifact.loaded_image_sass_path)
+    if file_sha256(loaded_image_sass_path) != artifact.loaded_image_sass_sha256:
+        raise ValueError("loaded shared-library SASS content changed before evidence collection")
+    validate_cuda_sass_kernel_topology(loaded_image_sass_path.read_text(), candidate.generated.kernel_names)
     metric_by_name = _align_generated_metrics(candidate.generated.kernel_names, metrics)
     resources = {record["kernel_name"]: record for record in artifact.ptxas_resources}
     if set(resources) != set(candidate.generated.kernel_names):

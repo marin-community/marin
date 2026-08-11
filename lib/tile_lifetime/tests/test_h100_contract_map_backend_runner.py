@@ -529,8 +529,17 @@ def test_ordinary_xla_boundary_ignores_dead_wrappers_and_rejects_reachable_unpro
 
 def test_generated_kernel_identity_is_exact_and_sass_binds_loaded_shared_object(tmp_path: Path) -> None:
     names = ("generated_first", "generated_second")
+    shared_library = tmp_path / "loaded.so"
+    shared_library.write_bytes(b"authoritative-loaded-image")
     loaded_sass = tmp_path / "loaded.sass"
-    loaded_sass.write_text("Function : generated_first\nFunction : generated_second\n")
+    loaded_sass.write_text(
+        "Function : generated_second\n"
+        '.headerflags @"EF_CUDA_SM90A"\n'
+        "/*0000*/ @!P0 MOV R1, R2 ; /* 0x0000df00ff017b82 */\n"
+        "/* 0x000fe20000000800 */\n"
+        "Function : generated_first\n"
+        "/*0000*/ EXIT ;\n"
+    )
     cubin_sass = tmp_path / "cubin.sass"
     cubin_sass.write_text("Function : unrelated_cubin_body\n")
     artifact = runner.GeneratedArtifact(
@@ -539,8 +548,8 @@ def test_generated_kernel_identity_is_exact_and_sass_binds_loaded_shared_object(
         physical_digest="a" * 64,
         source_path="source.cu",
         source_sha256="1" * 64,
-        shared_library_path="loaded.so",
-        shared_library_sha256="2" * 64,
+        shared_library_path=str(shared_library),
+        shared_library_sha256=hashlib.sha256(shared_library.read_bytes()).hexdigest(),
         ptx_path="generated.ptx",
         ptx_sha256="3" * 64,
         cubin_path="separate.cubin",
@@ -548,7 +557,7 @@ def test_generated_kernel_identity_is_exact_and_sass_binds_loaded_shared_object(
         cubin_sass_path=str(cubin_sass),
         cubin_sass_sha256="5" * 64,
         loaded_image_sass_path=str(loaded_sass),
-        loaded_image_sass_sha256="6" * 64,
+        loaded_image_sass_sha256=hashlib.sha256(loaded_sass.read_bytes()).hexdigest(),
         compiler_flags=("nvcc",),
         ptxas_resources=tuple(
             {
@@ -569,11 +578,146 @@ def test_generated_kernel_identity_is_exact_and_sass_binds_loaded_shared_object(
 
     assert [record["name"] for record in records] == list(names)
     assert all(record["sass_path"] == str(loaded_sass) for record in records)
-    assert all(record["sass_sha256"] == "6" * 64 for record in records)
+    assert all(record["sass_sha256"] == hashlib.sha256(loaded_sass.read_bytes()).hexdigest() for record in records)
     assert all(record["cubin"]["path"] == "separate.cubin" for record in records)
     lookalike = (_ncu_metric("generated_first_suffix"), metrics[1])
     with pytest.raises(ValueError, match="exactly once"):
         runner.generated_kernel_records(candidate, artifact, lookalike)
+
+
+@pytest.mark.parametrize(
+    ("sass", "message"),
+    (
+        (
+            "Function : generated_first\n/*0000*/ EXIT ;\n",
+            "coverage differs",
+        ),
+        (
+            "Function : generated_first\n/*0000*/ EXIT ;\n" "Function : generated_second_suffix\n/*0000*/ EXIT ;\n",
+            "coverage differs",
+        ),
+        (
+            "Function : generated_first\n/*0000*/ EXIT ;\n"
+            "Function : generated_second\n/*0000*/ EXIT ;\n"
+            "Function : generated_extra\n/*0000*/ EXIT ;\n",
+            "coverage differs",
+        ),
+        (
+            "Function : generated_first\n/*0000*/ EXIT ;\n"
+            "Function : generated_first\n/*0000*/ EXIT ;\n"
+            "Function : generated_second\n/*0000*/ EXIT ;\n",
+            "repeats a function identity",
+        ),
+        (
+            "Function : generated_first\n/*0000*/ EXIT ;\n" "Function - generated_second\n/*0000*/ EXIT ;\n",
+            "malformed function identity",
+        ),
+        (
+            "Function : generated_first\n/*0000*/ EXIT ;\n" "Function : generated_second\n/*0010*/ this is not SASS\n",
+            "malformed address-bearing instruction",
+        ),
+        (
+            'Function : generated_first\n/*0000*/ EXIT ;\nFunction : generated_second\n.headerflags @"SM90A"\n',
+            "contains no valid instructions",
+        ),
+        ("", "is empty"),
+        (
+            "warning: disassembly truncated\n"
+            "Function : generated_first\n/*0000*/ EXIT ;\n"
+            "Function : generated_second\n/*0000*/ EXIT ;\n",
+            "warning, error, or unavailable",
+        ),
+        (
+            "Function : generated_first\n/*0000*/ EXIT ;\n" "Function : generated_second\n/*0000*/ EXIT ;\n\0",
+            "contains NUL",
+        ),
+        (
+            "/*0000*/ EXIT ;\n"
+            "Function : generated_first\n/*0000*/ EXIT ;\n"
+            "Function : generated_second\n/*0000*/ EXIT ;\n",
+            "outside a function section",
+        ),
+        (
+            "Function : generated_first\n/* 0x000fe20000000800 */\n/*0000*/ EXIT ;\n"
+            "Function : generated_second\n/*0000*/ EXIT ;\n",
+            "standalone instruction encoding",
+        ),
+        (
+            "Function : generated_first\n/*0000*/ MOV R1, R2 ;\n/*0000*/ EXIT ;\n"
+            "Function : generated_second\n/*0000*/ EXIT ;\n",
+            "repeated or reordered addresses",
+        ),
+        (
+            "Function : generated_first\n/*0010*/ MOV R1, R2 ;\n/*0000*/ EXIT ;\n"
+            "Function : generated_second\n/*0000*/ EXIT ;\n",
+            "repeated or reordered addresses",
+        ),
+    ),
+    ids=(
+        "missing",
+        "lookalike",
+        "extra",
+        "duplicate",
+        "bad-anchor",
+        "bad-instruction",
+        "empty-section",
+        "empty-output",
+        "diagnostic",
+        "nul",
+        "instruction-before-function",
+        "standalone-encoding",
+        "duplicate-address",
+        "reordered-address",
+    ),
+)
+def test_loaded_shared_object_sass_topology_rejects_inexact_or_malformed_sections(sass: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        runner.validate_cuda_sass_kernel_topology(sass, ("generated_first", "generated_second"))
+
+
+def test_generated_kernel_records_reject_changed_loaded_image_or_sass(tmp_path: Path) -> None:
+    shared_library = tmp_path / "loaded.so"
+    shared_library.write_bytes(b"loaded-image")
+    loaded_sass = tmp_path / "loaded.sass"
+    loaded_sass.write_text("Function : generated\n/*0000*/ EXIT ;\n")
+    artifact = runner.GeneratedArtifact(
+        case_id="case",
+        backend="shuttle_fast",
+        physical_digest="a" * 64,
+        source_path="source.cu",
+        source_sha256="1" * 64,
+        shared_library_path=str(shared_library),
+        shared_library_sha256=hashlib.sha256(shared_library.read_bytes()).hexdigest(),
+        ptx_path="generated.ptx",
+        ptx_sha256="3" * 64,
+        cubin_path="separate.cubin",
+        cubin_sha256="4" * 64,
+        cubin_sass_path="separate.sass",
+        cubin_sass_sha256="5" * 64,
+        loaded_image_sass_path=str(loaded_sass),
+        loaded_image_sass_sha256=hashlib.sha256(loaded_sass.read_bytes()).hexdigest(),
+        compiler_flags=("nvcc",),
+        ptxas_resources=(
+            {
+                "kernel_name": "generated",
+                "registers_per_thread": 32,
+                "spill_load_bytes": 0,
+                "spill_store_bytes": 0,
+                "stack_frame_bytes": 0,
+                "static_shared_bytes": 0,
+            },
+        ),
+    )
+    candidate = SimpleNamespace(generated=SimpleNamespace(kernel_names=("generated",)))
+
+    shared_library.write_bytes(b"changed-loaded-image")
+    with pytest.raises(ValueError, match="shared-library content changed"):
+        runner.generated_kernel_records(candidate, artifact, (_ncu_metric("generated"),))
+
+    shared_library.write_bytes(b"loaded-image")
+    loaded_sass.write_text("Function : generated\n/*0000*/ NOP ;\n")
+    with pytest.raises(ValueError, match="SASS content changed"):
+        runner.generated_kernel_records(candidate, artifact, (_ncu_metric("generated"),))
 
 
 def test_runner_never_publishes_an_invalid_or_conforming_bundle(tmp_path: Path) -> None:
