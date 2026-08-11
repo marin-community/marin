@@ -1,0 +1,37 @@
+Observed boundary
+=================
+
+1. The workflow checked out exact source
+   eb8cf4c5cee6b288822fe6600d1702ecd7c5aa83 and resolved the same full SHA.
+2. Manual input image_set=h100-evidence ran the sole non-matrix H100 reusable
+   job. iris-tags, iris-images, iris-manifests, finelog-image, and
+   marin-tpu-ci-images were skipped.
+3. The Docker context preflight passed, and BuildKit reached the pinned
+   task-h100-evidence Nsight Systems help smoke.
+4. The validator rejected the capture-range-end possible-values syntax before
+   image export. Its diagnostic remained bounded and did not expose the whole
+   help artifact.
+5. The authoritative capture-range-end block measured 1,704 UTF-8 bytes with
+   SHA-256 bc38d47863e7aa8b6a9fab4530c35271fa479926817a9b533d95b5303bbc0052.
+   The authoritative cuda-graph-trace block measured 1,538 UTF-8 bytes with
+   SHA-256 b0046a09b5e830e9d66ee8efa3a22d010f0b949ffd40f52f1401c979d39ae8b1.
+   Both exceeded the 1,024-byte inclusion limit, so neither block's text was
+   emitted.
+
+Exact first failure
+===================
+
+nsys profile help validation failed: --capture-range-end possible values
+contain unrecognized syntax
+
+Evidence limit
+==============
+
+The retained diagnostic proves block identity and size, not the punctuation or
+line structure responsible for the grammar mismatch. A subsequent repair must
+first add a narrower bounded values-clause diagnostic; it must not infer syntax
+from these hashes.
+
+The remaining image smokes, image export, OCI digest validation, and registry
+inspection did not run. No retry, rerun, image deletion, GPU query, or H100
+evidence job occurred.
