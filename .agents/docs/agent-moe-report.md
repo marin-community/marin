@@ -12,6 +12,7 @@ Maintain a durable summary of the `Agent MoE Experiment:` issues attached to
 experiment needs:
 
 - one category and optional subsection;
+- a brief rationale stating why the change was expected to help;
 - an editorial outcome;
 - model-FLOPs and wall-clock speedup summaries;
 - a one-sentence result with the decisive evidence or caveat;
@@ -68,12 +69,13 @@ If `has_drift` is false, do not rewrite summaries only to vary wording.
 
 For every new or changed issue, read:
 
-1. The managed `experiment-tldr` block when present.
-2. The latest conclusion or verdict comments.
-3. Result tables containing loss, throughput, and speedup.
-4. Earlier comments only when the latest conclusion depends on a correction,
+1. The description, hypothesis, or initiating prompt for the proposed mechanism.
+2. The managed `experiment-tldr` block when present.
+3. The latest conclusion or verdict comments.
+4. Result tables containing loss, throughput, and speedup.
+5. Earlier comments only when the latest conclusion depends on a correction,
    discarded run, changed baseline, or superseded implementation.
-5. Linked W&B runs or reports when the issue does not contain enough evidence.
+6. Linked W&B runs or reports when the issue does not contain enough evidence.
 
 Treat the issue and linked measurements as ground truth. Do not infer success
 from open or closed state.
@@ -130,6 +132,10 @@ Formatting rules:
 - Label modeled systems results as `Modeled`.
 
 ## Summary rules
+
+Keep `rationale` distinct from `summary`. Write one short sentence explaining
+the proposed mechanism or reason the idea could help. Do not put the result or
+retrospective justification in this field.
 
 Each `summary` should fit in one table cell and answer:
 

@@ -37,6 +37,7 @@ def test_agent_moe_audit_reports_new_removed_and_changed_issues():
             Experiment(
                 issue=1,
                 title="Current",
+                rationale="The change could improve optimization.",
                 category="Modeling",
                 section=None,
                 outcome=Outcome.WORKED,
@@ -49,6 +50,7 @@ def test_agent_moe_audit_reports_new_removed_and_changed_issues():
             Experiment(
                 issue=2,
                 title="Removed",
+                rationale="The change could improve optimization.",
                 category="Modeling",
                 section=None,
                 outcome=Outcome.IN_PROGRESS,

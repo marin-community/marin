@@ -69,6 +69,7 @@ class Metadata:
 class Experiment:
     issue: int
     title: str
+    rationale: str
     category: str
     section: str | None
     outcome: Outcome
@@ -142,6 +143,7 @@ def load_report_data(path: Path) -> ReportData:
         Experiment(
             issue=int(_required(record, "issue")),
             title=str(_required(record, "title")),
+            rationale=str(_required(record, "rationale")),
             category=str(_required(record, "category")),
             section=None if record.get("section") is None else str(record["section"]),
             outcome=Outcome(_required(record, "outcome")),
@@ -177,14 +179,15 @@ def _table_text(value: str) -> str:
 
 def _experiment_table(experiments: list[Experiment], repository: str) -> list[str]:
     lines = [
-        "| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |",
-        "|---|---|---:|---:|---|",
+        "| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |",
+        "|---|---|---|---:|---:|---|",
     ]
     for experiment in experiments:
         issue_url = f"https://github.com/{repository}/issues/{experiment.issue}"
         lines.append(
             f"| [#{experiment.issue} {_table_text(experiment.title)}]({issue_url}) "
-            f"| {experiment.outcome.value} | {_table_text(experiment.model_flops_speedup)} "
+            f"| {_table_text(experiment.rationale)} | {experiment.outcome.value} "
+            f"| {_table_text(experiment.model_flops_speedup)} "
             f"| {_table_text(experiment.wall_clock_speedup)} "
             f"| {_table_text(experiment.summary)} |"
         )
@@ -212,7 +215,7 @@ def render_report(data: ReportData) -> str:
         f"and [baseline table](https://github.com/{metadata.repository}/blob/main/experiments/grug/moe/README.md)",
         "define the gates and reference runs. The",
         "[machine-readable snapshot](./data/agent-moe-experiments.jsonl) records the",
-        "editorial outcome, issue state, and reviewed GitHub timestamp for each row.",
+        "rationale, editorial outcome, issue state, and reviewed GitHub timestamp for each row.",
         "",
         "Model-FLOPs speedup is the loss-only equivalent-compute gain from the scaling-law",
         "inversion. Wall-clock speedup multiplies that gain by the measured throughput",

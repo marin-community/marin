@@ -8,14 +8,14 @@ more compute-optimal scales, then combines quality and throughput into an
 effective wall-clock speedup. Variants that survive the small-scale gate can be
 tested at larger scales and projected with a scaling-law fit.
 
-This page summarizes the 77 `Agent MoE Experiment:` sub-issues attached to
+This page summarizes the 78 `Agent MoE Experiment:` sub-issues attached to
 [the April MoE tracker](https://github.com/marin-community/marin/issues/4281)
-as of 2026-08-09. The
+as of 2026-08-11. The
 [Agent MoE playbook](https://github.com/marin-community/marin/blob/main/experiments/grug/moe/agent.md)
 and [baseline table](https://github.com/marin-community/marin/blob/main/experiments/grug/moe/README.md)
 define the gates and reference runs. The
 [machine-readable snapshot](./data/agent-moe-experiments.jsonl) records the
-editorial outcome, issue state, and reviewed GitHub timestamp for each row.
+rationale, editorial outcome, issue state, and reviewed GitHub timestamp for each row.
 
 Model-FLOPs speedup is the loss-only equivalent-compute gain from the scaling-law
 inversion. Wall-clock speedup multiplies that gain by the measured throughput
@@ -31,7 +31,7 @@ The clearest architecture wins came from partial RoPE and partial key offset (PK
 | Worked | 14 | Met the recorded effective-speedup gate or the experiment's narrower success criterion. |
 | Promising | 9 | Positive evidence, but missing a larger-scale anchor or clean isolation. |
 | Mixed | 13 | The answer changed by scale or metric, or a strict projection failed. |
-| Did not work | 31 | A completed comparison showed no net benefit. |
+| Did not work | 32 | A completed comparison showed no net benefit. |
 | Not evaluated | 5 | No usable comparison was recorded, often because the work was superseded. |
 | In progress | 5 | The issue remains active without a final verdict. |
 
@@ -42,158 +42,159 @@ results, and several open issues already have useful measurements.
 
 ### Partial key offset and RoPE
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#4802 Partial key offset](https://github.com/marin-community/marin/issues/4802) | Worked | ≈1.07–1.20x | 1.07–1.20x | Both placements passed gate 2. The every-fourth-layer variant projected better; measured speedups were about 1.07–1.20x. |
-| [#4946 Partial RoPE](https://github.com/marin-community/marin/issues/4946) | Worked | ≈1.09–1.12x | 1.09–1.12x | Rotating half the head dimensions improved macro loss with negligible throughput cost, giving about 1.09–1.12x at gate 1 and a gate-2 pass. |
-| [#4951 PKO plus partial RoPE](https://github.com/marin-community/marin/issues/4951) | Worked | ≈1.10–1.24x | 1.09–1.23x | The two changes were additive: 1.09–1.23x across four scales, with better projected loss at `1e21` and `1e23` FLOPs. |
-| [#4976 PKO plus partial RoPE on the last layer](https://github.com/marin-community/marin/issues/4976) | Worked | ≈1.20–1.25x | 1.19–1.23x | Forcing the last layer to use long attention and PKO raised the family to 1.19–1.23x across four scales. |
-| [#5152 MHA plus PKO](https://github.com/marin-community/marin/issues/5152) | Worked | — | 1.28–1.37x | MHA and PKO remained complementary without GQA, reaching 1.28–1.37x at gate 1. |
-| [#4907 Paired-head attention](https://github.com/marin-community/marin/issues/4907) | Not evaluated | — | — | A gate-1 sweep was submitted, but the issue records no usable result. |
-| [#7208 Inkling relative position](https://github.com/marin-community/marin/issues/7208) | Did not work | <1x | <1x | The corrected d512 QK-scale arm ended 13.5% worse in Paloma BPB with no throughput win; d768 also ran about 24% below baseline throughput. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#4802 Partial key offset](https://github.com/marin-community/marin/issues/4802) | Shifted stationary keys enable one-layer induction while rotated dimensions retain position. | Worked | ≈1.07–1.20x | 1.07–1.20x | Both placements passed gate 2. The every-fourth-layer variant projected better; measured speedups were about 1.07–1.20x. |
+| [#4946 Partial RoPE](https://github.com/marin-community/marin/issues/4946) | Unrotated dimensions preserve position-independent capacity alongside RoPE's positional signal. | Worked | ≈1.09–1.12x | 1.09–1.12x | Rotating half the head dimensions improved macro loss with negligible throughput cost, giving about 1.09–1.12x at gate 1 and a gate-2 pass. |
+| [#4951 PKO plus partial RoPE](https://github.com/marin-community/marin/issues/4951) | PKO supplies induction capability while partial RoPE preserves position-independent capacity. | Worked | ≈1.10–1.24x | 1.09–1.23x | The two changes were additive: 1.09–1.23x across four scales, with better projected loss at `1e21` and `1e23` FLOPs. |
+| [#4976 PKO plus partial RoPE on the last layer](https://github.com/marin-community/marin/issues/4976) | Full-context PKO in the final layer should improve output integration. | Worked | ≈1.20–1.25x | 1.19–1.23x | Forcing the last layer to use long attention and PKO raised the family to 1.19–1.23x across four scales. |
+| [#5152 MHA plus PKO](https://github.com/marin-community/marin/issues/5152) | MHA preserves per-head key/value detail while PKO adds induction capability. | Worked | — | 1.28–1.37x | MHA and PKO remained complementary without GQA, reaching 1.28–1.37x at gate 1. |
+| [#4907 Paired-head attention](https://github.com/marin-community/marin/issues/4907) | Pairing positions across heads enables cross-head querying and broader feature mixing. | Not evaluated | — | — | A gate-1 sweep was submitted, but the issue records no usable result. |
+| [#7208 Inkling relative position](https://github.com/marin-community/marin/issues/7208) | Learned query-dependent relative bias can model positional relationships more flexibly. | Did not work | <1x | <1x | The corrected d512 QK-scale arm ended 13.5% worse in Paloma BPB with no throughput win; d768 also ran about 24% below baseline throughput. |
 
 ### Attention capacity and value paths
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#4986 Value embeddings](https://github.com/marin-community/marin/issues/4986) | Did not work | Mixed | <1x | One initialization was neutral and the other split by scale; a 3–5% throughput and activation-memory cost erased the quality gain. |
-| [#5047 Wide attention](https://github.com/marin-community/marin/issues/5047) | Worked | ≈1.10–1.16x | 1.04–1.07x | More heads consistently improved quality enough to cover a 5–8% throughput cost, but the gate-2 win was marginal at 1.04–1.07x. |
-| [#5151 MHA instead of GQA](https://github.com/marin-community/marin/issues/5151) | Worked | ≈1.12–1.23x | 1.10–1.18x | MHA passed gate 2 at 1.10–1.18x. The recipe kept GQA anyway to retain a 4x smaller KV cache. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#4986 Value embeddings](https://github.com/marin-community/marin/issues/4986) | Token-indexed values inject lexical information directly into attention retrieval. | Did not work | Mixed | <1x | One initialization was neutral and the other split by scale; a 3–5% throughput and activation-memory cost erased the quality gain. |
+| [#5047 Wide attention](https://github.com/marin-community/marin/issues/5047) | More attention heads increase attention capacity without shrinking head dimension. | Worked | ≈1.10–1.16x | 1.04–1.07x | More heads consistently improved quality enough to cover a 5–8% throughput cost, but the gate-2 win was marginal at 1.04–1.07x. |
+| [#5151 MHA instead of GQA](https://github.com/marin-community/marin/issues/5151) | Independent key/value heads avoid information loss introduced by grouped-query sharing. | Worked | ≈1.12–1.23x | 1.10–1.18x | MHA passed gate 2 at 1.10–1.18x. The recipe kept GQA anyway to retain a 4x smaller KV cache. |
 
 ### QK scaling and normalization
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#5114 RoPE before QK norm](https://github.com/marin-community/marin/issues/5114) | Did not work | ≈1.00x | ≈1.00x | Reordering RoPE and QK normalization was empirically neutral at both gate-1 scales. |
-| [#5227 QK multiplier sweep](https://github.com/marin-community/marin/issues/5227) | Did not work | Mixed | <1x | Neither 1.1 nor 1.5 beat the default consistently across scales; both failed the full gate. |
-| [#5230 Remove QK norm and multiplier](https://github.com/marin-community/marin/issues/5230) | Did not work | Mixed | Mixed; 3/4 <1x | The variant improved only d768 and fell below 1x at d512, d1024, and d1280. QK norm stayed in the recipe. |
-| [#5373 Learnable per-head QK gain](https://github.com/marin-community/marin/issues/5373) | Promising | ≈1.05–1.09x | 1.054–1.086x | Full-projection normalization plus a per-layer gain reached 1.086x at d512 and 1.054x at d768, but no larger-scale runs anchored the trend. |
-| [#5381 QK gated norm](https://github.com/marin-community/marin/issues/5381) | Mixed | ≈0.99–1.06x | 0.987–1.060x | Key gating won at d512 while query gating won at d768. The scale inversion and missing larger cells prevented a recipe choice. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#5114 RoPE before QK norm](https://github.com/marin-community/marin/issues/5114) | Normalizing after RoPE may stabilize position-encoded attention logits. | Did not work | ≈1.00x | ≈1.00x | Reordering RoPE and QK normalization was empirically neutral at both gate-1 scales. |
+| [#5227 QK multiplier sweep](https://github.com/marin-community/marin/issues/5227) | Different QK scales may better calibrate attention sharpness. | Did not work | Mixed | <1x | Neither 1.1 nor 1.5 beat the default consistently across scales; both failed the full gate. |
+| [#5230 Remove QK norm and multiplier](https://github.com/marin-community/marin/issues/5230) | AdamH may keep QK magnitudes stable without explicit normalization or scaling. | Did not work | Mixed | Mixed; 3/4 <1x | The variant improved only d768 and fell below 1x at d512, d1024, and d1280. QK norm stayed in the recipe. |
+| [#5373 Learnable per-head QK gain](https://github.com/marin-community/marin/issues/5373) | Learned gains let heads or layers adapt attention sharpness during training. | Promising | ≈1.05–1.09x | 1.054–1.086x | Full-projection normalization plus a per-layer gain reached 1.086x at d512 and 1.054x at d768, but no larger-scale runs anchored the trend. |
+| [#5381 QK gated norm](https://github.com/marin-community/marin/issues/5381) | Input-dependent QK gates adapt attention strength to each token's residual state. | Mixed | ≈0.99–1.06x | 0.987–1.060x | Key gating won at d512 while query gating won at d768. The scale inversion and missing larger cells prevented a recipe choice. |
 
 ## MoE topology, experts, and routing
 
 ### Expert count and layer placement
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#4899 Finer expert granularity](https://github.com/marin-community/marin/issues/4899) | Did not work | 1.04–1.07x | 0.72–0.76x | Doubling active and total experts improved loss slightly but cut throughput by roughly 30%, producing 0.72–0.76x speedup. |
-| [#4900 Slim layers](https://github.com/marin-community/marin/issues/4900) | Promising | ≈1.00x | Best 1.059x | Replacing the first MoE layer was nearly loss-neutral and reached 1.059x at d768; most individual layers could be slimmed profitably, but a full recipe was not tested. |
-| [#5387 256 routed experts](https://github.com/marin-community/marin/issues/5387) | Mixed | 1.16–1.38x | 0.994–1.252x | E256 improved with scale, reaching 1.17x at d768 and 1.252x at d1024, but missed at d512 and OOMed at d1280. |
-| [#5399 Routed output scale and expert LR](https://github.com/marin-community/marin/issues/5399) | Not evaluated | — | — | Closed without measurements after the planned sweep was superseded. |
-| [#5409 Null experts](https://github.com/marin-community/marin/issues/5409) | Did not work | ≈1.01–1.04x | 0.74–0.91x | Null experts recovered some of the cost of picking five experts, but all tested variants remained below the simpler pick-four baseline. |
-| [#5515 Pick five with a smaller shared expert](https://github.com/marin-community/marin/issues/5515) | Did not work | ≈1.00x | 0.993–1.011x | Rebalancing shared and routed capacity made pick-five viable, but speedup moved from 1.011x at d512 to 0.993x at d768. |
-| [#6443 Alternating dense and MoE blocks](https://github.com/marin-community/marin/issues/6443) | Not evaluated | — | — | The open issue contains no usable experimental comparison yet. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#4899 Finer expert granularity](https://github.com/marin-community/marin/issues/4899) | Finer-grained experts could specialize better without increasing active model FLOPs. | Did not work | 1.04–1.07x | 0.72–0.76x | Doubling active and total experts improved loss slightly but cut throughput by roughly 30%, producing 0.72–0.76x speedup. |
+| [#4900 Slim layers](https://github.com/marin-community/marin/issues/4900) | Replacing unnecessary routed layers with dense FFNs could reduce routing overhead. | Promising | ≈1.00x | Best 1.059x | Replacing the first MoE layer was nearly loss-neutral and reached 1.059x at d768; most individual layers could be slimmed profitably, but a full recipe was not tested. |
+| [#5387 256 routed experts](https://github.com/marin-community/marin/issues/5387) | More available experts could increase specialization without activating more per token. | Mixed | 1.16–1.38x | 0.994–1.252x | E256 improved with scale, reaching 1.17x at d768 and 1.252x at d1024, but missed at d512 and OOMed at d1280. |
+| [#5399 Routed output scale and expert LR](https://github.com/marin-community/marin/issues/5399) | Stronger routed outputs and tuned expert learning rates could improve specialization. | Not evaluated | — | — | Closed without measurements after the planned sweep was superseded. |
+| [#5409 Null experts](https://github.com/marin-community/marin/issues/5409) | Null experts let easy tokens skip expert computation they do not need. | Did not work | ≈1.01–1.04x | 0.74–0.91x | Null experts recovered some of the cost of picking five experts, but all tested variants remained below the simpler pick-four baseline. |
+| [#5515 Pick five with a smaller shared expert](https://github.com/marin-community/marin/issues/5515) | Extra routed capacity, cheaper shared compute, and no z-loss could improve efficiency. | Did not work | ≈1.00x | 0.993–1.011x | Rebalancing shared and routed capacity made pick-five viable, but speedup moved from 1.011x at d512 to 0.993x at d768. |
+| [#6443 Alternating dense and MoE blocks](https://github.com/marin-community/marin/issues/6443) | Dense blocks provide universal processing while concentrated MoE blocks maximize specialization. | Not evaluated | — | — | The open issue contains no usable experimental comparison yet. |
 
 ### Router behavior and regularization
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#4849 Nonzero router-bias initialization](https://github.com/marin-community/marin/issues/4849) | Did not work | ≈1.00x | ≈1.00x | The tested initializations were neutral and failed gate 1. |
-| [#4901 Router combine activation](https://github.com/marin-community/marin/issues/4901) | Did not work | <1x | <1x | Moving the sigmoid before QB selection was catastrophically worse; compressing logits before bias selection broke routing. |
-| [#5477 Minimum expert combine weight](https://github.com/marin-community/marin/issues/5477) | Did not work | ≈0.83–1.02x | 0.83–1.02x | Floors hurt throughout the standard recipe; the only small no-z-loss gain at d512 vanished by d768. |
-| [#5486 Sqrt-softplus combine weights](https://github.com/marin-community/marin/issues/5486) | Did not work | ≈0.97–0.99x | 0.97–0.99x | All four z-loss variants were slower than baseline at 0.97–0.99x. |
-| [#5491 Selected versus non-selected router z-loss](https://github.com/marin-community/marin/issues/5491) | Promising | ≈1.02–1.04x | 1.015–1.036x | All four cells beat baseline at 1.015–1.036x. The selected-only form was scale-stable, but no d1024 or d1280 run confirmed it. |
-| [#5501 Router orthogonality loss](https://github.com/marin-community/marin/issues/5501) | Mixed | ≈1.01–1.02x | Best 1.009–1.016x | Best cells reached 1.016x and 1.009x, but the optimal coefficient moved by two orders of magnitude between scales. |
-| [#5502 Frozen router](https://github.com/marin-community/marin/issues/5502) | Did not work | <1x | 0.59–0.65x | Freezing random routing produced a 35–40% effective slowdown, showing that learned routing directions matter. |
-| [#5507 MLP router](https://github.com/marin-community/marin/issues/5507) | Did not work | <1x | 0.936–0.975x | The nonlinear router reached only 0.975x and 0.936x; the linear router was already the better model. |
-| [#5512 Frozen router with learnable expert scales](https://github.com/marin-community/marin/issues/5512) | Did not work | <1x | 0.55–0.66x | Per-expert scales did not recover the frozen-router penalty; all variants stayed near 0.55–0.66x. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#4849 Nonzero router-bias initialization](https://github.com/marin-community/marin/issues/4849) | Nonzero bias could break early routing symmetry and accelerate expert differentiation. | Did not work | ≈1.00x | ≈1.00x | The tested initializations were neutral and failed gate 1. |
+| [#4901 Router combine activation](https://github.com/marin-community/marin/issues/4901) | Alternative combine activations might preserve stronger routing signals and improve expert weighting. | Did not work | <1x | <1x | Moving the sigmoid before QB selection was catastrophically worse; compressing logits before bias selection broke routing. |
+| [#5477 Minimum expert combine weight](https://github.com/marin-community/marin/issues/5477) | A weight floor prevents selected experts from becoming effectively wasted routes. | Did not work | ≈0.83–1.02x | 0.83–1.02x | Floors hurt throughout the standard recipe; the only small no-z-loss gain at d512 vanished by d768. |
+| [#5486 Sqrt-softplus combine weights](https://github.com/marin-community/marin/issues/5486) | Sqrt-softplus avoids sigmoid saturation while keeping expert weights smooth and positive. | Did not work | ≈0.97–0.99x | 0.97–0.99x | All four z-loss variants were slower than baseline at 0.97–0.99x. |
+| [#5491 Selected versus non-selected router z-loss](https://github.com/marin-community/marin/issues/5491) | Targeted z-loss could regularize relevant logits without constraining every expert. | Promising | ≈1.02–1.04x | 1.015–1.036x | All four cells beat baseline at 1.015–1.036x. The selected-only form was scale-stable, but no d1024 or d1280 run confirmed it. |
+| [#5501 Router orthogonality loss](https://github.com/marin-community/marin/issues/5501) | Orthogonal router directions could encourage distinct expert specialization without limiting magnitude. | Mixed | ≈1.01–1.02x | Best 1.009–1.016x | Best cells reached 1.016x and 1.009x, but the optimal coefficient moved by two orders of magnitude between scales. |
+| [#5502 Frozen router](https://github.com/marin-community/marin/issues/5502) | QB bias might handle assignment without learned router directions, simplifying routing. | Did not work | <1x | 0.59–0.65x | Freezing random routing produced a 35–40% effective slowdown, showing that learned routing directions matter. |
+| [#5507 MLP router](https://github.com/marin-community/marin/issues/5507) | Nonlinear routing boundaries could improve expert specialization with negligible added parameters. | Did not work | <1x | 0.936–0.975x | The nonlinear router reached only 0.975x and 0.936x; the linear router was already the better model. |
+| [#5512 Frozen router with learnable expert scales](https://github.com/marin-community/marin/issues/5512) | Learned expert temperatures might recover useful routing despite fixed random directions. | Did not work | <1x | 0.55–0.66x | Per-expert scales did not recover the frozen-router penalty; all variants stayed near 0.55–0.66x. |
 
 ## Optimizers, scaling rules, and numerics
 
 ### Muon and MuonH
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#5115 Muon AOL coefficients](https://github.com/marin-community/marin/issues/5115) | Not evaluated | — | — | The initial Muon comparison was superseded by the MuonH path before a final metric table was recorded. |
-| [#5134 MuonH with a 2x-batch ablation](https://github.com/marin-community/marin/issues/5134) | Promising | — | — | The first run exposed and fixed an optimizer-sharding bug; the line continued with MuonH, but this issue does not contain a clean final comparison. |
-| [#5167 MuonH heuristic, AdamH 2x, and Muon search](https://github.com/marin-community/marin/issues/5167) | Mixed | Mixed | Mixed | Tuned plain Muon barely won at d512 and lost at d768; AdamH 2x lost at both. MuonH remained the follow-up direction. |
-| [#5517 GrugMuon on expert MLPs](https://github.com/marin-community/marin/issues/5517) | Promising | <1x | 1.071–1.108x | The best cells reached 1.071x and 1.108x, but the experiment changed both optimizer and expert topology, so the source of the gain is unresolved. |
-| [#5585 Nano walks: Muon versus AdamH](https://github.com/marin-community/marin/issues/5585) | Mixed | N/A (quality split) | N/A (quality split) | Muon fit the Nemotron training distribution better, while AdamH was better on out-of-distribution Paloma, especially code. |
-| [#5596 MuonH matrix optimizer](https://github.com/marin-community/marin/issues/5596) | Mixed | ≈1.17–1.30x | 1.19–1.33x | MuonH delivered 1.19–1.33x across the four measured scales, but its slightly shallower fit tied near `1e21` and projected 0.011 worse at `1e23`. |
-| [#6388 MuonH magnitude-direction decoupling](https://github.com/marin-community/marin/issues/6388) | In progress | >1x | Best ≈0.99x | Loss improved at both gate-1 scales, but roughly 6.5% throughput overhead kept the best first-pass speedup just below 1x. |
-| [#6404 Newton–Schulz coefficient ablation](https://github.com/marin-community/marin/issues/6404) | Not evaluated | — | — | The open issue has no recorded result yet. |
-| [#6505 Bfloat16 Newton–Schulz](https://github.com/marin-community/marin/issues/6505) | In progress | — | — | The experiment is set up to isolate bandwidth savings inside Newton–Schulz; no final two-scale verdict is recorded. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#5115 Muon AOL coefficients](https://github.com/marin-community/marin/issues/5115) | Orthogonalized Muon matrix updates may improve optimization over AdamH. | Not evaluated | — | — | The initial Muon comparison was superseded by the MuonH path before a final metric table was recorded. |
+| [#5134 MuonH with a 2x-batch ablation](https://github.com/marin-community/marin/issues/5134) | Larger batches should amplify MuonH's step-wise gain while amortizing its overhead. | Promising | — | — | The first run exposed and fixed an optimizer-sharding bug; the line continued with MuonH, but this issue does not contain a clean final comparison. |
+| [#5167 MuonH heuristic, AdamH 2x, and Muon search](https://github.com/marin-community/marin/issues/5167) | Optimizer-specific hyperparameter scaling may unlock Muon's advantage over AdamH. | Mixed | Mixed | Mixed | Tuned plain Muon barely won at d512 and lost at d768; AdamH 2x lost at both. MuonH remained the follow-up direction. |
+| [#5517 GrugMuon on expert MLPs](https://github.com/marin-community/marin/issues/5517) | Wider expert matrices and separate projections better suit Muon's orthogonalization. | Promising | <1x | 1.071–1.108x | The best cells reached 1.071x and 1.108x, but the experiment changed both optimizer and expert topology, so the source of the gain is unresolved. |
+| [#5585 Nano walks: Muon versus AdamH](https://github.com/marin-community/marin/issues/5585) | Feature-by-feature walks isolate which MoE changes preserve Muon's dense-model advantage. | Mixed | N/A (quality split) | N/A (quality split) | Muon fit the Nemotron training distribution better, while AdamH was better on out-of-distribution Paloma, especially code. |
+| [#5596 MuonH matrix optimizer](https://github.com/marin-community/marin/issues/5596) | MuonH could improve matrix update geometry while preserving AdamH's output-head behavior. | Mixed | ≈1.17–1.30x | 1.19–1.33x | MuonH delivered 1.19–1.33x across the four measured scales, but its slightly shallower fit tied near `1e21` and projected 0.011 worse at `1e23`. |
+| [#6388 MuonH magnitude-direction decoupling](https://github.com/marin-community/marin/issues/6388) | Separating normalized directions from learned gains could improve conditioning and LR transfer. | In progress | >1x | Best ≈0.99x | Loss improved at both gate-1 scales, but roughly 6.5% throughput overhead kept the best first-pass speedup just below 1x. |
+| [#8131 Factorized row-norm linears](https://github.com/marin-community/marin/issues/8131) | Separating output scale from direction could improve conditioning under norm-preserving updates. | Did not work | 0.915x | 0.897x | Factorized row-norm linears regressed the corrected paired d512 control by 0.0167 loss and 2.0% throughput, yielding 0.897x; d768 was not launched. |
+| [#6404 Newton–Schulz coefficient ablation](https://github.com/marin-community/marin/issues/6404) | Alternative coefficients could produce better orthogonalized Muon updates in five iterations. | Not evaluated | — | — | The open issue has no recorded result yet. |
+| [#6505 Bfloat16 Newton–Schulz](https://github.com/marin-community/marin/issues/6505) | bf16 Newton-Schulz halves matrix traffic, reducing optimizer time while retaining fp32 momentum. | In progress | — | — | The experiment is set up to isolate bandwidth savings inside Newton–Schulz; no final two-scale verdict is recorded. |
 
 ### AdamH and training heuristics
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#5178 Depth-MuP LR sensitivity](https://github.com/marin-community/marin/issues/5178) | Mixed | 0.960–1.035x | 0.963–1.040x | Depth MuP kept the best LR at 1x through d1024, but wall-clock speedup ranged from 0.963x at d512 to 1.040x at d768 and 1.039x at d1024; d1280 never finished. |
-| [#5203 AdamH embedding initialization](https://github.com/marin-community/marin/issues/5203) | Worked | ≈1.01–1.05x | 1.014–1.05x | Initializing embeddings at standard deviation 1.0 passed all four scales; the gain declined from about 5% to 1.4% but stayed positive. |
-| [#5235 Gradient clipping sweep](https://github.com/marin-community/marin/issues/5235) | Promising | ≈1.01–1.05x | Up to 1.045x | Clip values 0.1 and 0.3 marginally passed gate 1, with up to 1.045x, but the gain was too small to justify gate 2. |
-| [#5238 AdamH on the attention gate](https://github.com/marin-community/marin/issues/5238) | Did not work | <1x | <1x | Moving the attention gate into AdamH failed gate 1. |
-| [#5250 AdamH epsilon sweep](https://github.com/marin-community/marin/issues/5250) | Did not work | <1x | <1x | Every alternative failed gate 1; `1e-4` was especially poor and the existing scaled epsilon remained best. |
-| [#5251 Gradient-aware hyperball](https://github.com/marin-community/marin/issues/5251) | Did not work | <1x | <1x | Both forward-normalization variants were worse at both gate-1 scales. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#5178 Depth-MuP LR sensitivity](https://github.com/marin-community/marin/issues/5178) | Depth-scaled residuals should limit activation growth and stabilize learning rates across scale. | Mixed | 0.960–1.035x | 0.963–1.040x | Depth MuP kept the best LR at 1x through d1024, but wall-clock speedup ranged from 0.963x at d512 to 1.040x at d768 and 1.039x at d1024; d1280 never finished. |
+| [#5203 AdamH embedding initialization](https://github.com/marin-community/marin/issues/5203) | Unit-variance embeddings make initial RMSNorm neutral while AdamH preserves embedding norms. | Worked | ≈1.01–1.05x | 1.014–1.05x | Initializing embeddings at standard deviation 1.0 passed all four scales; the gain declined from about 5% to 1.4% but stayed positive. |
+| [#5235 Gradient clipping sweep](https://github.com/marin-community/marin/issues/5235) | Tighter clipping could suppress destabilizing gradient spikes and improve optimization. | Promising | ≈1.01–1.05x | Up to 1.045x | Clip values 0.1 and 0.3 marginally passed gate 1, with up to 1.045x, but the gain was too small to justify gate 2. |
+| [#5238 AdamH on the attention gate](https://github.com/marin-community/marin/issues/5238) | AdamH keeps attention-gate magnitude fixed while nonzero initialization diversifies heads. | Did not work | <1x | <1x | Moving the attention gate into AdamH failed gate 1. |
+| [#5250 AdamH epsilon sweep](https://github.com/marin-community/marin/issues/5250) | Larger epsilon may stabilize AdamH by damping poorly conditioned adaptive updates. | Did not work | <1x | <1x | Every alternative failed gate 1; `1e-4` was especially poor and the existing scaled epsilon remained best. |
+| [#5251 Gradient-aware hyperball](https://github.com/marin-community/marin/issues/5251) | Forward normalization makes AdamH's norm constraint gradient-aware and exact. | Did not work | <1x | <1x | Both forward-normalization variants were worse at both gate-1 scales. |
 
 ### Precision and pipeline systems
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#6431 Delayed-gradient pipeline parallelism](https://github.com/marin-community/marin/issues/6431) | Promising | N/A (systems model) | Modeled 1.08–1.73x | Per-stage staleness was much cheaper than a global delay, and the modeled DCN-bound regime reached 1.08–1.73x net speedup; real pipeline-parallel validation remains open. |
-| [#6486 Bfloat16 master precision](https://github.com/marin-community/marin/issues/6486) | Did not work | <1x | <1x | The remaining loss gap came from low-LR cooldown updates, and bfloat16 master weights provided no throughput or MFU gain on v4-32. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#6431 Delayed-gradient pipeline parallelism](https://github.com/marin-community/marin/issues/6431) | Delay correction could recover synchronous quality while enabling higher-throughput asynchronous pipelines. | Promising | N/A (systems model) | Modeled 1.08–1.73x | Per-stage staleness was much cheaper than a global delay, and the modeled DCN-bound regime reached 1.08–1.73x net speedup; real pipeline-parallel validation remains open. |
+| [#6486 Bfloat16 master precision](https://github.com/marin-community/marin/issues/6486) | Retaining only essential fp32 state could save HBM without losing small updates. | Did not work | <1x | <1x | The remaining loss gap came from low-LR cooldown updates, and bfloat16 master weights provided no throughput or MFU gain on v4-32. |
 
 ## Residual pathways and macro-architecture
 
 ### Cross-layer residuals and attention reuse
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#4806 X0 skip connections](https://github.com/marin-community/marin/issues/4806) | Mixed | ≈1.04–1.12x | 1.043–1.120x | The variant stayed above 1x at all four measured scales, but its gain shrank from 1.120x to 1.043x and its long-range projections were slightly worse. |
-| [#4807 Layer-grain prediction](https://github.com/marin-community/marin/issues/4807) | Did not work | ≈1.00x | ≈1.00x | Improvements were at most 0.005 macro loss and vanished at d1024; projected benefit was below 0.001. |
-| [#4905 Pseudogram residual](https://github.com/marin-community/marin/issues/4905) | Did not work | <1x | <1x | The per-position sigmoid residual failed gate 1. |
-| [#4906 Backout residual](https://github.com/marin-community/marin/issues/4906) | Did not work | <1x | <1x | Subtracting a cached midpoint activation failed gate 1. |
-| [#4987 Cached attention](https://github.com/marin-community/marin/issues/4987) | Worked | ≈1.02–1.09x | 1.02–1.10x | Reusing the attention input in the last three layers was effectively free and reached 1.02–1.10x across four scales. |
-| [#5110 Block attention residuals](https://github.com/marin-community/marin/issues/5110) | Worked | ≈1.13–1.20x | 1.06–1.12x | Grouping representations in blocks of four passed gate 2 at 1.06–1.12x despite a 4–7% throughput cost. |
-| [#5113 Full attention residuals](https://github.com/marin-community/marin/issues/5113) | Did not work | >1x | <1x | Giving every sub-operation its own residual entry improved loss but cost 9–14% throughput; the block form was better. |
-| [#7409 Identity Hyper-Connections](https://github.com/marin-community/marin/issues/7409) | Worked | 1.127–1.130x | 1.0205–1.0515x | The open issue has a completed gate-1 pass: 1.0515x at d512 and 1.0205x at d768 after charging 7–10% throughput overhead. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#4806 X0 skip connections](https://github.com/marin-community/marin/issues/4806) | A direct embedding skip preserves early information and lets layers regulate depth. | Mixed | ≈1.04–1.12x | 1.043–1.120x | The variant stayed above 1x at all four measured scales, but its gain shrank from 1.120x to 1.043x and its long-range projections were slightly worse. |
+| [#4807 Layer-grain prediction](https://github.com/marin-community/marin/issues/4807) | Learned layer weights emphasize useful residual updates and suppress harmful ones. | Did not work | ≈1.00x | ≈1.00x | Improvements were at most 0.005 macro loss and vanished at d1024; projected benefit was below 0.001. |
+| [#4905 Pseudogram residual](https://github.com/marin-community/marin/issues/4905) | A cheap engram-like feature may add useful token-dependent residual capacity. | Did not work | <1x | <1x | The per-position sigmoid residual failed gate 1. |
+| [#4906 Backout residual](https://github.com/marin-community/marin/issues/4906) | Subtracting midpoint activations may isolate later refinements from stale features. | Did not work | <1x | <1x | Subtracting a cached midpoint activation failed gate 1. |
+| [#4987 Cached attention](https://github.com/marin-community/marin/issues/4987) | Late layers may reuse stable attention features while MLPs continue refining. | Worked | ≈1.02–1.09x | 1.02–1.10x | Reusing the attention input in the last three layers was effectively free and reached 1.02–1.10x across four scales. |
+| [#5110 Block attention residuals](https://github.com/marin-community/marin/issues/5110) | Adaptive mixing across completed blocks improves information routing and gradient flow. | Worked | ≈1.13–1.20x | 1.06–1.12x | Grouping representations in blocks of four passed gate 2 at 1.06–1.12x despite a 4–7% throughput cost. |
+| [#5113 Full attention residuals](https://github.com/marin-community/marin/issues/5113) | Fine-grained mixing can preserve useful sublayer outputs across network depth. | Did not work | >1x | <1x | Giving every sub-operation its own residual entry improved loss but cost 9–14% throughput; the block form was better. |
+| [#7409 Identity Hyper-Connections](https://github.com/marin-community/marin/issues/7409) | Token-dependent residual routing improves information flow while identity mixing stabilizes optimization. | Worked | 1.127–1.130x | 1.0205–1.0515x | The open issue has a completed gate-1 pass: 1.0515x at d512 and 1.0205x at d768 after charging 7–10% throughput overhead. |
 
 ### Depth and block structure
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#5002 Depth-width shift](https://github.com/marin-community/marin/issues/5002) | Promising | ≈1.00x | >1x at gate 1 | Removing one layer raised throughput about 10% and passed both small scales, but it requires a new isoflop and LR fit before adoption. |
-| [#5154 Barebones transformer](https://github.com/marin-community/marin/issues/5154) | Did not work | <1x | <1x | Removing MoE routing, GatedNorm, and XSA cost roughly 0.10–0.14 macro loss with AdamH; the existing components were collectively useful. |
-| [#5423 Deeper networks](https://github.com/marin-community/marin/issues/5423) | Did not work | <1x | <1x | Deeper shapes were consistently 0.009–0.021 worse than the baseline scaling prediction at their best learning rates. |
-| [#5938 Gated post-norm](https://github.com/marin-community/marin/issues/5938) | Did not work | ≈0.94x | 0.906x | The extra post-sublayer RMSNorm and gate worsened d512 loss and cut throughput about 4%, yielding 0.906x. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#5002 Depth-width shift](https://github.com/marin-community/marin/issues/5002) | A different depth-to-width balance may allocate fixed compute more effectively. | Promising | ≈1.00x | >1x at gate 1 | Removing one layer raised throughput about 10% and passed both small scales, but it requires a new isoflop and LR fit before adoption. |
+| [#5154 Barebones transformer](https://github.com/marin-community/marin/issues/5154) | A stripped-down architecture isolates whether PKO gains depend on MoE-specific components. | Did not work | <1x | <1x | Removing MoE routing, GatedNorm, and XSA cost roughly 0.10–0.14 macro loss with AdamH; the existing components were collectively useful. |
+| [#5423 Deeper networks](https://github.com/marin-community/marin/issues/5423) | Additional depth may improve compositional capacity and parameter efficiency. | Did not work | <1x | <1x | Deeper shapes were consistently 0.009–0.021 worse than the baseline scaling prediction at their best learning rates. |
+| [#5938 Gated post-norm](https://github.com/marin-community/marin/issues/5938) | Post-sublayer gating should correct activation-norm drift that pre-norm cannot observe. | Did not work | ≈0.94x | 0.906x | The extra post-sublayer RMSNorm and gate worsened d512 loss and cut throughput about 4%, yielding 0.906x. |
 
 ## Activations, normalization, embeddings, and output head
 
 ### Output head and normalization
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#4803 Remove logit z-loss](https://github.com/marin-community/marin/issues/4803) | Did not work | <1x at large scales | 0.960–0.978x | Removal was neutral at gate 1 but regressed at d1024 and d1280, so logit z-loss stayed as a stabilizer. |
-| [#4973 Split router and shared-expert norms](https://github.com/marin-community/marin/issues/4973) | Did not work | ≈1.00x | ≈1.00x | Separate norms did not improve quality; the shared MLP norm was sufficient for all paths. |
-| [#5222 LM-head initialization scale](https://github.com/marin-community/marin/issues/5222) | Did not work | ≈0.88–1.02x | 0.88–1.02x | Neither 2x nor 4x passed the four-scale gate. The apparent d768 gain at 4x did not repeat. |
-| [#5224 LM-head softcap](https://github.com/marin-community/marin/issues/5224) | Mixed | 1.020–1.066x | Strict gate failed | Loss-only speedup exceeded 1x at all four points, but wall-clock cost and a worse scaling-law projection failed the strict promotion rule. |
-| [#6442 Embedding ablations](https://github.com/marin-community/marin/issues/6442) | In progress | — | — | Most equal-throughput variants have finished, but one d768 cell crashed and the remaining MLP-without-RMS arm was still running. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#4803 Remove logit z-loss](https://github.com/marin-community/marin/issues/4803) | Removing a redundant logit penalty could simplify optimization without hurting stability. | Did not work | <1x at large scales | 0.960–0.978x | Removal was neutral at gate 1 but regressed at d1024 and d1280, so logit z-loss stayed as a stabilizer. |
+| [#4973 Split router and shared-expert norms](https://github.com/marin-community/marin/issues/4973) | Separate norms could let router and expert paths learn different input scales. | Did not work | ≈1.00x | ≈1.00x | Separate norms did not improve quality; the shared MLP norm was sufficient for all paths. |
+| [#5222 LM-head initialization scale](https://github.com/marin-community/marin/issues/5222) | Larger initial logits could shorten early softmax scale calibration. | Did not work | ≈0.88–1.02x | 0.88–1.02x | Neither 2x nor 4x passed the four-scale gate. The apparent d768 gain at 4x did not repeat. |
+| [#5224 LM-head softcap](https://github.com/marin-community/marin/issues/5224) | Bounding output logits could prevent outlier blow-ups and stabilize training. | Mixed | 1.020–1.066x | Strict gate failed | Loss-only speedup exceeded 1x at all four points, but wall-clock cost and a worse scaling-law projection failed the strict promotion rule. |
+| [#6442 Embedding ablations](https://github.com/marin-community/marin/issues/6442) | Embedding-specific schedules and norms could improve scale calibration and optimization. | In progress | — | — | Most equal-throughput variants have finished, but one d768 cell crashed and the remaining MLP-without-RMS arm was still running. |
 
 ### MLP activations
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#5407 GEGLU](https://github.com/marin-community/marin/issues/5407) | Promising | ≈1.03–1.04x | 1.01–1.02x | GEGLU marginally passed both small scales at roughly 1–2%, but its 2% throughput cost left too little gain for gate 2. |
-| [#5460 Double SwiGLU](https://github.com/marin-community/marin/issues/5460) | Mixed | ≈0.972–1.056x | 0.972–1.056x | The result inverted from 0.972x at d512 to 1.056x at d768, with no larger-scale tie-breaker. |
-| [#6519 RMSNorm before the SwiGLU swish](https://github.com/marin-community/marin/issues/6519) | Mixed | ≈1.00x | ≈0.995x | The parameter-free norm was loss-neutral at about 0.5% throughput cost. It achieved scale invariance, but not a compute speedup. |
-| [#7255 SiTU](https://github.com/marin-community/marin/issues/7255) | Did not work | ≈0.72–0.76x | 0.72–0.76x | SiTU regressed quality with flat throughput, reaching only 0.76x at d512 and 0.72x at d768. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#5407 GEGLU](https://github.com/marin-community/marin/issues/5407) | GELU gating could improve expert-MLP optimization without changing parameter count. | Promising | ≈1.03–1.04x | 1.01–1.02x | GEGLU marginally passed both small scales at roughly 1–2%, but its 2% throughput cost left too little gain for gate 2. |
+| [#5460 Double SwiGLU](https://github.com/marin-community/marin/issues/5460) | Gating both projections could increase nonlinear selectivity in expert MLPs. | Mixed | ≈0.972–1.056x | 0.972–1.056x | The result inverted from 0.972x at d512 to 1.056x at d768, with no larger-scale tie-breaker. |
+| [#6519 RMSNorm before the SwiGLU swish](https://github.com/marin-community/marin/issues/6519) | Normalizing gate preactivations could make SwiGLU invariant to weight scale. | Mixed | ≈1.00x | ≈0.995x | The parameter-free norm was loss-neutral at about 0.5% throughput cost. It achieved scale invariance, but not a compute speedup. |
+| [#7255 SiTU](https://github.com/marin-community/marin/issues/7255) | Bounded sigmoid–tanh factors could stabilize expert-MLP optimization. | Did not work | ≈0.72–0.76x | 0.72–0.76x | SiTU regressed quality with flat throughput, reaching only 0.76x at d512 and 0.72x at d768. |
 
 ## Training setup, data, objective, serving, and evaluation
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#5160 FineWeb-Edu baseline plus PKO](https://github.com/marin-community/marin/issues/5160) | Worked | 1.24–1.25x | 1.25–1.28x | PKO generalized beyond the Nemotron mix: macro loss improved by 0.056 at d512 and 0.048 at d768 with flat or better throughput. |
-| [#5306 Position-weighted loss](https://github.com/marin-community/marin/issues/5306) | Mixed | ≈1.00x at d512 | <1x at d512 | Downweighting early document tokens improved training loss but not Paloma or Uncheatable evals; d512 was about 2% slower and d768 did not finish. |
-| [#5493 Sequence-length sweep](https://github.com/marin-community/marin/issues/5493) | Did not work | Mixed; no gate pass | <1x overall | None of 1k, 2k, or 8k beat the 4k baseline at both scales; 4k remained the best tradeoff. |
-| [#6509 Chunked inference throughput](https://github.com/marin-community/marin/issues/6509) | In progress | N/A (serving) | Pending | Early results suggested better 32k prefill with similar decode, but the active repeated-timing matrix superseded those measurements. |
-| [#6570 Focus crawl versus general crawl](https://github.com/marin-community/marin/issues/6570) | In progress | N/A (data tradeoff) | N/A (data tradeoff) | At d512 and d768, the focus crawl won on arXiv and S2ORC while the general crawl won on broad web, news, and Paloma macro; larger cells remain open. |
-| [#7181 MRCR context perplexity](https://github.com/marin-community/marin/issues/7181) | Worked | N/A (eval) | N/A (eval) | Retaining up to 8,192 tokens of context cut final-turn perplexity from 21.09 to 10.40, a 2.03x ratio, across the 2-, 4-, and 8-needle subsets. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#5160 FineWeb-Edu baseline plus PKO](https://github.com/marin-community/marin/issues/5160) | PKO may preserve its attention benefit across a different data distribution. | Worked | 1.24–1.25x | 1.25–1.28x | PKO generalized beyond the Nemotron mix: macro loss improved by 0.056 at d512 and 0.048 at d768 with flat or better throughput. |
+| [#5306 Position-weighted loss](https://github.com/marin-community/marin/issues/5306) | Downweighting context-poor document starts could reduce noisy gradient updates. | Mixed | ≈1.00x at d512 | <1x at d512 | Downweighting early document tokens improved training loss but not Paloma or Uncheatable evals; d512 was about 2% slower and d768 did not finish. |
+| [#5493 Sequence-length sweep](https://github.com/marin-community/marin/issues/5493) | Sequence length trades routing diversity and attention cost against usable context. | Did not work | Mixed; no gate pass | <1x overall | None of 1k, 2k, or 8k beat the 4k baseline at both scales; 4k remained the best tradeoff. |
+| [#6509 Chunked inference throughput](https://github.com/marin-community/marin/issues/6509) | Chunked routing could amortize expert selection overhead during long prefills. | In progress | N/A (serving) | Pending | Early results suggested better 32k prefill with similar decode, but the active repeated-timing matrix superseded those measurements. |
+| [#6570 Focus crawl versus general crawl](https://github.com/marin-community/marin/issues/6570) | Science-steered crawling could concentrate higher-value pretraining text. | In progress | N/A (data tradeoff) | N/A (data tradeoff) | At d512 and d768, the focus crawl won on arXiv and S2ORC while the general crawl won on broad web, news, and Paloma macro; larger cells remain open. |
+| [#7181 MRCR context perplexity](https://github.com/marin-community/marin/issues/7181) | Retained conversation context should reduce uncertainty on the final response. | Worked | N/A (eval) | N/A (eval) | Retaining up to 8,192 tokens of context cut final-turn perplexity from 21.09 to 10.40, a 2.03x ratio, across the 2-, 4-, and 8-needle subsets. |
 
 ## Compound recipes and synthesis
 
-| Experiment | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
-|---|---|---:|---:|---|
-| [#4999 Combined-best recipe](https://github.com/marin-community/marin/issues/4999) | Worked | — | 1.21–1.52x | E128, PKO, partial RoPE, last-layer PKO, and cached attention combined nearly additively, reaching 1.21–1.52x across four scales. |
-| [#5371 May architecture synthesis](https://github.com/marin-community/marin/issues/5371) | Mixed | — | 1.06–1.28x | The combined recipe beat baseline at three tested widths, but the isoflop sweep showed pick-four E256 dominated the proposed pick-six form; the synthesis changed the final configuration. |
+| Experiment | Why it might help | Outcome | Model-FLOPs speedup | Wall-clock speedup | TL;DR |
+|---|---|---|---:|---:|---|
+| [#4999 Combined-best recipe](https://github.com/marin-community/marin/issues/4999) | Individually successful changes could combine into larger additive gains. | Worked | — | 1.21–1.52x | E128, PKO, partial RoPE, last-layer PKO, and cached attention combined nearly additively, reaching 1.21–1.52x across four scales. |
+| [#5371 May architecture synthesis](https://github.com/marin-community/marin/issues/5371) | Combining promising architecture, optimizer, and expert changes could compound gains. | Mixed | — | 1.06–1.28x | The combined recipe beat baseline at three tested widths, but the isoflop sweep showed pick-four E256 dominated the proposed pick-six form; the synthesis changed the final configuration. |
 
 ## Related foundations outside the tracker
 
