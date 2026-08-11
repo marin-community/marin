@@ -4,6 +4,7 @@
 """HTTP client for an Iris-registered TEI endpoint pool."""
 
 import concurrent.futures
+import http.client
 import json
 import random
 import time
@@ -66,7 +67,7 @@ class TeiEmbeddingClient:
                 if error.code not in RETRYABLE_HTTP_CODES:
                     raise
                 last_error = error
-            except urllib.error.URLError as error:
+            except (OSError, http.client.HTTPException) as error:
                 last_error = error
 
             if attempt + 1 < REQUEST_MAX_ATTEMPTS:

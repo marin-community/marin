@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import http.client
 import io
 import json
 import urllib.error
@@ -102,7 +103,16 @@ def test_tei_fallback_ports_are_unique_within_a_pool():
     assert max(ports) < tei.TEI_FALLBACK_PORT_END
 
 
-def test_tei_client_retries_against_refreshed_endpoints(monkeypatch):
+@pytest.mark.parametrize(
+    "request_error",
+    [
+        pytest.param(lambda: urllib.error.URLError("connection refused"), id="url-error"),
+        pytest.param(lambda: http.client.RemoteDisconnected("remote end closed connection"), id="remote-disconnected"),
+        pytest.param(lambda: TimeoutError("request timed out"), id="timeout"),
+        pytest.param(lambda: http.client.IncompleteRead(b"", 1), id="incomplete-read"),
+    ],
+)
+def test_tei_client_retries_against_refreshed_endpoints(monkeypatch, request_error):
     resolver = _Resolver([["http://dead"], ["http://live"]])
     monkeypatch.setattr(tei_client, "iris_ctx", lambda: SimpleNamespace(resolver=resolver))
     monkeypatch.setattr(tei_client.time, "sleep", lambda _delay: None)
@@ -111,7 +121,7 @@ def test_tei_client_retries_against_refreshed_endpoints(monkeypatch):
     def urlopen(request, timeout):
         assert timeout == 300
         if request.full_url.startswith("http://dead"):
-            raise urllib.error.URLError("connection refused")
+            raise request_error()
         texts = json.loads(request.data)["inputs"]
         return io.BytesIO(json.dumps([_embedding(float(index)) for index, _text in enumerate(texts)]).encode())
 

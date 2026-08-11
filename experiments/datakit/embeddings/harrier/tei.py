@@ -4,6 +4,7 @@
 """Run a pool of Iris-managed TEI workers."""
 
 import contextlib
+import http.client
 import json
 import logging
 import shutil
@@ -11,7 +12,6 @@ import subprocess
 import tarfile
 import tempfile
 import time
-import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Iterator
@@ -94,7 +94,7 @@ def _wait_until_ready(process: subprocess.Popen[bytes], port: int) -> None:
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5):
                 return
-        except urllib.error.URLError:
+        except (OSError, http.client.HTTPException):
             deadline.raise_if_expired("TEI did not become healthy")
             time.sleep(1)
 
