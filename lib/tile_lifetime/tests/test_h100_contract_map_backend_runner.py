@@ -26,6 +26,7 @@ from tile_lifetime.h100_contract_map_benchmark import (
     ArchitectureStatus,
     BackendVariant,
     MeasurementBoundary,
+    NumericalFloorError,
     default_h100_contract_map_benchmark_plan,
     validate_backend_numerical_evidence,
 )
@@ -87,6 +88,74 @@ def test_output_numerical_evidence_rejects_non_bfloat16_later_repeat(bad_repeat:
         runner._output_numerical_evidence(
             0, tuple((repeat,) for repeat in repeats), np.asarray([1.0, 2.0], dtype=np.float64)
         )
+
+
+@pytest.mark.parametrize(
+    ("value", "hexadecimal", "sign", "exponent", "classification"),
+    (
+        (0.0, "0x0000", "positive", -126, "zero"),
+        (-0.0, "0x8000", "negative", -126, "zero"),
+        (float(np.asarray([1], dtype=np.uint16).view(bfloat16)[0]), "0x0001", "positive", -126, "subnormal"),
+        (-1.0, "0xbf80", "negative", 0, "normal"),
+        (np.inf, "0x7f80", "positive", None, "infinity"),
+        (np.nan, "0x7fc0", "positive", None, "nan"),
+    ),
+)
+def test_bfloat16_scalar_diagnostic_reports_canonical_bits_and_class(
+    value: float,
+    hexadecimal: str,
+    sign: str,
+    exponent: int | None,
+    classification: str,
+) -> None:
+    diagnostic = runner._bfloat16_scalar_diagnostic(value)
+
+    assert diagnostic.hexadecimal == hexadecimal
+    assert diagnostic.sign == sign
+    assert diagnostic.exponent == exponent
+    assert diagnostic.classification == classification
+
+
+def test_worst_pair_diagnostic_reports_near_zero_sign_crossing_without_arrays() -> None:
+    actual = np.asarray([1.0, -0.0003604888916015625, 2.0], dtype=bfloat16)
+    reference = np.asarray([1.0, 0.0004482269287109375, 2.0], dtype=bfloat16)
+
+    diagnostic = runner._worst_pair_diagnostic(actual, reference, absolute_threshold=0.0078125)
+
+    assert diagnostic is not None
+    assert diagnostic.index == (1,)
+    assert diagnostic.actual.hexadecimal == "0xb9bd"
+    assert diagnostic.actual.value == -0.0003604888916015625
+    assert diagnostic.actual.sign == "negative"
+    assert diagnostic.actual.exponent == -12
+    assert diagnostic.actual.classification == "normal"
+    assert diagnostic.reference.hexadecimal == "0x39eb"
+    assert diagnostic.reference.value == 0.0004482269287109375
+    assert diagnostic.reference.sign == "positive"
+    assert diagnostic.reference.exponent == -12
+    assert diagnostic.reference.classification == "normal"
+    assert diagnostic.absolute_error == 0.0008087158203125
+    assert diagnostic.ulp_distance == 29608
+    assert diagnostic.finite_values == 3
+    assert diagnostic.exact_mismatches == 1
+    assert diagnostic.one_ulp_mismatches == 1
+    assert diagnostic.absolute_threshold == 0.0078125
+    assert diagnostic.absolute_mismatches == 0
+
+
+def test_worst_pair_failure_diagnostic_rejects_oversized_serialization() -> None:
+    actual = np.asarray([1.0], dtype=bfloat16)
+    diagnostic = runner._worst_pair_diagnostic(actual, actual, absolute_threshold=0.0078125)
+    assert diagnostic is not None
+    oversized = replace(diagnostic, index=tuple(range(1_000)))
+
+    error = runner._with_worst_pair_diagnostic(
+        NumericalFloorError("base", output_name="dx"),
+        oversized,
+    )
+
+    assert str(error) == "numerical worst-pair diagnostic exceeded the closed 2048-character bound"
+    assert error.output_name == "dx"
 
 
 def _ncu_sass_export(*sections: tuple[str, tuple[str, ...]]) -> str:
@@ -388,7 +457,7 @@ def test_runner_profiles_cuda_range_with_supported_nsys_end_policy(
 
 def test_runner_numerical_failure_reports_logical_training_step_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     case = default_h100_contract_map_benchmark_plan().cases[0]
-    value = np.zeros((1,), dtype=np.float32)
+    value = np.zeros((1,), dtype=bfloat16)
     outputs = (value, value, value, value)
     source_candidate = SimpleNamespace(program=object())
     context = runner._WorkerCaseContext(
@@ -449,6 +518,71 @@ def test_runner_numerical_failure_reports_logical_training_step_boundary(monkeyp
     assert "boundary=logical_training_step" in diagnostic
     assert "output=forward" in diagnostic
     assert "metric=maximum_absolute_error" in diagnostic
+
+
+def test_runner_source_ordered_failure_reports_bounded_worst_pair_scalars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = default_h100_contract_map_benchmark_plan().cases[0]
+    zero = np.zeros((1, 3), dtype=bfloat16)
+    reference_dx = np.asarray([[1.0, 0.0004482269287109375, 2.0]], dtype=bfloat16)
+    actual_dx = np.asarray([[1.0, -0.0003604888916015625, 2.0]], dtype=bfloat16)
+    reference = (zero, reference_dx, zero, zero)
+    context = runner._WorkerCaseContext(
+        case=case,
+        inputs=(zero, zero, zero, zero),
+        candidates={BackendVariant.SHUTTLE_SOURCE_ORDERED.value: SimpleNamespace(program=object())},
+        artifacts={},
+        libraries=(),
+    )
+    executables = {
+        BackendVariant.ORDINARY_XLA.value: lambda *args: reference,
+        BackendVariant.SHUTTLE_SOURCE_ORDERED.value: lambda *args: (zero, actual_dx, zero, zero),
+        BackendVariant.SHUTTLE_FAST.value: lambda *args: reference,
+    }
+    monkeypatch.setattr(runner, "_real_algebra_reference", lambda *args: reference)
+    monkeypatch.setattr(
+        contract_map_backend,
+        "execute_contract_map_source_ordered_forward",
+        lambda *args: SimpleNamespace(output=zero),
+    )
+    monkeypatch.setattr(
+        contract_map_backend,
+        "execute_contract_map_source_ordered_reverse",
+        lambda *args: SimpleNamespace(
+            input_adjoint=reference_dx,
+            first_weight_adjoint=zero,
+            second_weight_adjoint=zero,
+        ),
+    )
+
+    with pytest.raises(ValueError) as error:
+        runner._numerical_evidence(context, executables, jax=SimpleNamespace(block_until_ready=lambda values: None))
+
+    diagnostic = str(error.value)
+    assert len(diagnostic) <= 2048
+    assert "backend=shuttle_source_ordered" in diagnostic
+    assert "boundary=logical_training_step" in diagnostic
+    assert "output=dx" in diagnostic
+    assert "worst_index=0,1" in diagnostic
+    assert "worst_actual_hex=0xb9bd" in diagnostic
+    assert "worst_actual=-0.0003604888916015625" in diagnostic
+    assert "worst_actual_sign=negative" in diagnostic
+    assert "worst_actual_exponent=-12" in diagnostic
+    assert "worst_actual_class=normal" in diagnostic
+    assert "worst_reference_hex=0x39eb" in diagnostic
+    assert "worst_reference=0.0004482269287109375" in diagnostic
+    assert "worst_reference_sign=positive" in diagnostic
+    assert "worst_reference_exponent=-12" in diagnostic
+    assert "worst_reference_class=normal" in diagnostic
+    assert "worst_absolute_error=0.0008087158203125" in diagnostic
+    assert "worst_ulp_distance=29608" in diagnostic
+    assert "finite_values=3" in diagnostic
+    assert "exact_mismatches=1" in diagnostic
+    assert "one_ulp_mismatches=1" in diagnostic
+    assert "absolute_threshold=0.0078125" in diagnostic
+    assert "absolute_mismatches=0" in diagnostic
+    assert "array" not in diagnostic
 
 
 def test_runner_merges_device_and_logical_timings_only_for_exact_copy_free_schedule() -> None:

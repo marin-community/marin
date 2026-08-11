@@ -617,9 +617,12 @@ def _render_reverse_contract_kernel(
         if external_map_inputs != (program.preactivation,):
             raise ValueError("hidden-adjoint fusion requires preactivation as the only external Map input")
         preactivation_role = _required_role(roles, external_map_inputs[0])
+        contract_output_role = _required_role(roles, operation.output)
         store = (
             f"const float z = __bfloat162float({preactivation_role}[linear]);",
-            f"{output_role}[linear] = __float2bfloat16_rn(generated_phi_vjp(z, accumulator));",
+            f"const __nv_bfloat16 {contract_output_role}_boundary = __float2bfloat16_rn(accumulator);",
+            f"{output_role}[linear] = __float2bfloat16_rn("
+            f"generated_phi_vjp(z, __bfloat162float({contract_output_role}_boundary)));",
         )
     source = _contract_kernel(
         name=name,

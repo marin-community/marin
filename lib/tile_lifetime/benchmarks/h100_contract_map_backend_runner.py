@@ -34,10 +34,12 @@ from pathlib import Path
 from typing import Any
 
 from tile_lifetime.bfloat16_metrics import bfloat16_ulp_distance
+from tile_lifetime.h100_contract_map_benchmark import NumericalFloorError
 
 _ARCHITECTURE = "sm_90a"
 _COMPUTE_CAPABILITY = "9.0"
 _OUTPUT_NAMES = ("forward", "dx", "dw0", "dw1")
+_MAX_NUMERICAL_WORST_PAIR_DIAGNOSTIC_CHARS = 2048
 _CACHE_ENVIRONMENT = {
     "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": "0",
     "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": "-1",
@@ -1302,6 +1304,7 @@ def _numerical_evidence(context: _WorkerCaseContext, executables: Mapping[str, A
         execute_contract_map_source_ordered_reverse,
     )
     from tile_lifetime.h100_contract_map_benchmark import (  # noqa: PLC0415
+        REVIEWED_NUMERICAL_FLOORS,
         REVIEWED_NUMERICAL_FLOORS_SHA256,
         BackendVariant,
         MeasurementBoundary,
@@ -1347,22 +1350,159 @@ def _numerical_evidence(context: _WorkerCaseContext, executables: Mapping[str, A
             jax.block_until_ready(outputs)
             repeats.append(tuple(np.asarray(output) for output in outputs))
         reference = source_reference if backend is BackendVariant.SHUTTLE_SOURCE_ORDERED else real_reference
-        output_evidence = {
-            name: _output_numerical_evidence(index, repeats, reference[index])
-            for index, name in enumerate(_OUTPUT_NAMES)
-        }
-        validate_backend_numerical_evidence(
-            backend,
-            output_evidence,
-            case_id=context.case.case_id,
-            measurement_boundary=MeasurementBoundary.LOGICAL_TRAINING_STEP,
-        )
+        floor = next(reviewed for reviewed in REVIEWED_NUMERICAL_FLOORS if reviewed.backend is backend)
+        output_evidence = {}
+        worst_pairs = {}
+        for index, name in enumerate(_OUTPUT_NAMES):
+            output_evidence[name] = _output_numerical_evidence(index, repeats, reference[index])
+            worst_pairs[name] = _worst_pair_diagnostic(
+                repeats[0][index],
+                reference[index],
+                absolute_threshold=floor.output_floor(name).maximum_absolute_error,
+            )
+        try:
+            validate_backend_numerical_evidence(
+                backend,
+                output_evidence,
+                case_id=context.case.case_id,
+                measurement_boundary=MeasurementBoundary.LOGICAL_TRAINING_STEP,
+            )
+        except NumericalFloorError as error:
+            raise _with_worst_pair_diagnostic(error, worst_pairs[error.output_name]) from None
         evidence[backend.value] = {
             "reviewed_floors_sha256": REVIEWED_NUMERICAL_FLOORS_SHA256,
             "floors_passed_before_timing": True,
             "outputs": output_evidence,
         }
     return evidence
+
+
+@dataclass(frozen=True)
+class _Bfloat16ScalarDiagnostic:
+    hexadecimal: str
+    value: float
+    sign: str
+    exponent: int | None
+    classification: str
+
+
+@dataclass(frozen=True)
+class _WorstPairDiagnostic:
+    index: tuple[int, ...]
+    actual: _Bfloat16ScalarDiagnostic
+    reference: _Bfloat16ScalarDiagnostic
+    absolute_error: float
+    ulp_distance: int
+    finite_values: int
+    exact_mismatches: int
+    one_ulp_mismatches: int
+    absolute_threshold: float
+    absolute_mismatches: int
+
+
+def _bfloat16_scalar_diagnostic(value: Any) -> _Bfloat16ScalarDiagnostic:
+    import numpy as np  # noqa: PLC0415
+    from ml_dtypes import bfloat16  # noqa: PLC0415
+
+    scalar = np.asarray(value, dtype=bfloat16).reshape(())
+    bits = int(scalar.view(np.uint16).item())
+    exponent_bits = (bits >> 7) & 0xFF
+    fraction = bits & 0x7F
+    if exponent_bits == 0:
+        classification = "zero" if fraction == 0 else "subnormal"
+        exponent = -126
+    elif exponent_bits == 0xFF:
+        classification = "infinity" if fraction == 0 else "nan"
+        exponent = None
+    else:
+        classification = "normal"
+        exponent = exponent_bits - 127
+    return _Bfloat16ScalarDiagnostic(
+        hexadecimal=f"0x{bits:04x}",
+        value=float(scalar.astype(np.float32)),
+        sign="negative" if bits & 0x8000 else "positive",
+        exponent=exponent,
+        classification=classification,
+    )
+
+
+def _worst_pair_diagnostic(
+    actual: Any,
+    reference: Any,
+    *,
+    absolute_threshold: float,
+) -> _WorstPairDiagnostic | None:
+    import numpy as np  # noqa: PLC0415
+    from ml_dtypes import bfloat16  # noqa: PLC0415
+
+    if not math.isfinite(absolute_threshold) or absolute_threshold < 0.0:
+        raise ValueError("worst-pair absolute threshold must be finite and nonnegative")
+    actual_array = np.asarray(actual)
+    reference_array = np.asarray(reference)
+    if actual_array.dtype.name != "bfloat16":
+        raise TypeError("worst-pair actual output must have BF16 dtype")
+    if actual_array.shape != reference_array.shape:
+        raise ValueError("worst-pair actual output and reference must have identical shapes")
+    finite = np.isfinite(actual_array) & np.isfinite(reference_array)
+    finite_flat_indices = np.flatnonzero(finite.reshape(-1))
+    if finite_flat_indices.size == 0:
+        return None
+    actual_finite = actual_array[finite]
+    reference_finite = reference_array[finite]
+    ulp = bfloat16_ulp_distance(actual_finite, reference_finite)
+    absolute = np.abs(actual_finite.astype(np.float32) - reference_finite.astype(np.float32))
+    finite_index = int(np.argmax(ulp))
+    flat_index = int(finite_flat_indices[finite_index])
+    index = tuple(int(coordinate) for coordinate in np.unravel_index(flat_index, actual_array.shape))
+    return _WorstPairDiagnostic(
+        index=index,
+        actual=_bfloat16_scalar_diagnostic(np.asarray(actual_finite, dtype=bfloat16)[finite_index]),
+        reference=_bfloat16_scalar_diagnostic(np.asarray(reference_finite, dtype=bfloat16)[finite_index]),
+        absolute_error=float(absolute[finite_index]),
+        ulp_distance=int(ulp[finite_index]),
+        finite_values=int(finite_flat_indices.size),
+        exact_mismatches=int(np.count_nonzero(ulp != 0)),
+        one_ulp_mismatches=int(np.count_nonzero(ulp > 1)),
+        absolute_threshold=absolute_threshold,
+        absolute_mismatches=int(np.count_nonzero(absolute > absolute_threshold)),
+    )
+
+
+def _with_worst_pair_diagnostic(
+    error: NumericalFloorError, diagnostic: _WorstPairDiagnostic | None
+) -> NumericalFloorError:
+    if diagnostic is None:
+        return error
+    fields = (
+        ("worst_index", ",".join(str(coordinate) for coordinate in diagnostic.index)),
+        ("worst_actual_hex", diagnostic.actual.hexadecimal),
+        ("worst_actual", repr(diagnostic.actual.value)),
+        ("worst_actual_sign", diagnostic.actual.sign),
+        ("worst_actual_exponent", "none" if diagnostic.actual.exponent is None else str(diagnostic.actual.exponent)),
+        ("worst_actual_class", diagnostic.actual.classification),
+        ("worst_reference_hex", diagnostic.reference.hexadecimal),
+        ("worst_reference", repr(diagnostic.reference.value)),
+        ("worst_reference_sign", diagnostic.reference.sign),
+        (
+            "worst_reference_exponent",
+            "none" if diagnostic.reference.exponent is None else str(diagnostic.reference.exponent),
+        ),
+        ("worst_reference_class", diagnostic.reference.classification),
+        ("worst_absolute_error", repr(diagnostic.absolute_error)),
+        ("worst_ulp_distance", str(diagnostic.ulp_distance)),
+        ("finite_values", str(diagnostic.finite_values)),
+        ("exact_mismatches", str(diagnostic.exact_mismatches)),
+        ("one_ulp_mismatches", str(diagnostic.one_ulp_mismatches)),
+        ("absolute_threshold", repr(diagnostic.absolute_threshold)),
+        ("absolute_mismatches", str(diagnostic.absolute_mismatches)),
+    )
+    message = f"{error} " + " ".join(f"{name}={value}" for name, value in fields)
+    if len(message) > _MAX_NUMERICAL_WORST_PAIR_DIAGNOSTIC_CHARS:
+        return NumericalFloorError(
+            "numerical worst-pair diagnostic exceeded the closed 2048-character bound",
+            output_name=error.output_name,
+        )
+    return NumericalFloorError(message, output_name=error.output_name)
 
 
 def _real_algebra_reference(
