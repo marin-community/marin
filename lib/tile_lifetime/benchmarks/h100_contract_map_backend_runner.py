@@ -1302,6 +1302,7 @@ def _numerical_evidence(context: _WorkerCaseContext, executables: Mapping[str, A
     from tile_lifetime.h100_contract_map_benchmark import (  # noqa: PLC0415
         REVIEWED_NUMERICAL_FLOORS_SHA256,
         BackendVariant,
+        MeasurementBoundary,
         validate_backend_numerical_evidence,
     )
 
@@ -1348,7 +1349,12 @@ def _numerical_evidence(context: _WorkerCaseContext, executables: Mapping[str, A
             name: _output_numerical_evidence(index, repeats, reference[index])
             for index, name in enumerate(_OUTPUT_NAMES)
         }
-        validate_backend_numerical_evidence(backend, output_evidence)
+        validate_backend_numerical_evidence(
+            backend,
+            output_evidence,
+            case_id=context.case.case_id,
+            measurement_boundary=MeasurementBoundary.LOGICAL_TRAINING_STEP,
+        )
         evidence[backend.value] = {
             "reviewed_floors_sha256": REVIEWED_NUMERICAL_FLOORS_SHA256,
             "floors_passed_before_timing": True,

@@ -423,6 +423,7 @@ PAIRWISE_DRIFT_REQUIRED_FIELDS = (
     "mean_ulp_distance",
 )
 RAW_SAMPLE_REQUIRED_FIELDS = ("sample_index", "backend_order", "measurements_ns")
+_MAX_NUMERICAL_DIAGNOSTIC_CHARS = 1024
 
 LOGICAL_BOUNDARY_RECORD_SCHEMAS = (
     (
@@ -659,36 +660,107 @@ def _reviewed_floor(backend: object) -> NumericalFloor:
     raise ValueError("identity.backend must name a required backend")
 
 
-def _validate_numerical_output(output: Mapping[str, Any], floor: NumericalFloor, context: str) -> None:
-    floating_metric_limits = (
-        ("maximum_absolute_error", floor.maximum_absolute_error),
-        ("mean_absolute_error", floor.mean_absolute_error),
-        ("mean_ulp_distance", floor.mean_ulp_distance),
+@dataclass(frozen=True)
+class _PairwiseDrift:
+    left_repeat_index: int
+    right_repeat_index: int
+    maximum_absolute_error: float
+    mean_absolute_error: float
+    maximum_ulp_distance: int
+    mean_ulp_distance: float
+
+
+@dataclass(frozen=True)
+class _NumericalOutputSummary:
+    maximum_absolute_error: float
+    mean_absolute_error: float
+    maximum_ulp_distance: int
+    mean_ulp_distance: float
+    nonfinite_values: int
+    repeat_count: int
+    repeat_identities_equal: bool
+    repeat_maximum_absolute_error: float
+    repeat_mean_absolute_error: float
+    repeat_maximum_ulp_distance: int
+    repeat_mean_ulp_distance: float
+
+
+def _diagnostic_value(value: float | int | bool) -> str:
+    if isinstance(value, bool):
+        return str(value).lower()
+    return repr(value)
+
+
+def _numerical_floor_error(
+    *,
+    floor: NumericalFloor,
+    floor_kind: str,
+    case_id: str,
+    measurement_boundary: str,
+    output_name: str,
+    metric: str,
+    measured: float | int | bool,
+    limit: float | int | bool,
+    summary: _NumericalOutputSummary,
+) -> ValueError:
+    prefix = (
+        "immutable bitwise-repeatability floor exceeded"
+        if floor_kind == "bitwise-repeatability"
+        else f"immutable {floor.backend.value} {floor_kind} floor exceeded"
     )
-    for field, limit in floating_metric_limits:
-        value = _require_finite_nonnegative_number(output[field], f"{context}.{field}")
-        if value > limit:
-            raise ValueError(f"{context}.{field} exceeds the immutable {floor.backend.value} numerical floor")
+    fields = (
+        ("case", case_id),
+        ("backend", floor.backend.value),
+        ("boundary", measurement_boundary),
+        ("output", output_name),
+        ("reference", floor.reference.value),
+        ("metric", metric),
+        ("measured", _diagnostic_value(measured)),
+        ("limit", _diagnostic_value(limit)),
+        ("maximum_absolute_error", _diagnostic_value(summary.maximum_absolute_error)),
+        ("mean_absolute_error", _diagnostic_value(summary.mean_absolute_error)),
+        ("maximum_ulp_distance", _diagnostic_value(summary.maximum_ulp_distance)),
+        ("mean_ulp_distance", _diagnostic_value(summary.mean_ulp_distance)),
+        ("nonfinite_values", _diagnostic_value(summary.nonfinite_values)),
+        ("repeat_count", _diagnostic_value(summary.repeat_count)),
+        ("repeat_identities_equal", _diagnostic_value(summary.repeat_identities_equal)),
+        ("repeat_maximum_absolute_error", _diagnostic_value(summary.repeat_maximum_absolute_error)),
+        ("repeat_mean_absolute_error", _diagnostic_value(summary.repeat_mean_absolute_error)),
+        ("repeat_maximum_ulp_distance", _diagnostic_value(summary.repeat_maximum_ulp_distance)),
+        ("repeat_mean_ulp_distance", _diagnostic_value(summary.repeat_mean_ulp_distance)),
+    )
+    diagnostic = f"{prefix}: " + " ".join(f"{name}={value}" for name, value in fields)
+    if len(diagnostic) > _MAX_NUMERICAL_DIAGNOSTIC_CHARS:
+        return ValueError("numerical floor diagnostic exceeded the closed 1024-character bound")
+    return ValueError(diagnostic)
+
+
+def _validate_numerical_output(
+    output: Mapping[str, Any],
+    floor: NumericalFloor,
+    *,
+    case_id: str,
+    measurement_boundary: str,
+    output_name: str,
+) -> None:
+    context = f"numerical.outputs.{output_name}"
+    maximum_absolute_error = _require_finite_nonnegative_number(
+        output["maximum_absolute_error"], f"{context}.maximum_absolute_error"
+    )
+    mean_absolute_error = _require_finite_nonnegative_number(
+        output["mean_absolute_error"], f"{context}.mean_absolute_error"
+    )
     maximum_ulp_distance = _require_nonnegative_integer(
         output["maximum_ulp_distance"], f"{context}.maximum_ulp_distance"
     )
-    if maximum_ulp_distance > floor.maximum_ulp_distance:
-        raise ValueError(f"{context}.maximum_ulp_distance exceeds the immutable {floor.backend.value} numerical floor")
-    if output["mean_absolute_error"] > output["maximum_absolute_error"]:
-        raise ValueError(f"{context}.mean_absolute_error cannot exceed maximum_absolute_error")
-    if output["mean_ulp_distance"] > output["maximum_ulp_distance"]:
-        raise ValueError(f"{context}.mean_ulp_distance cannot exceed maximum_ulp_distance")
+    mean_ulp_distance = _require_finite_nonnegative_number(output["mean_ulp_distance"], f"{context}.mean_ulp_distance")
     nonfinite_values = _require_nonnegative_integer(output["nonfinite_values"], f"{context}.nonfinite_values")
-    if nonfinite_values > floor.maximum_nonfinite_values:
-        raise ValueError(f"{context}.nonfinite_values exceeds the immutable {floor.backend.value} numerical floor")
 
     repeat_hashes = output["repeat_hashes"]
     if not isinstance(repeat_hashes, list) or len(repeat_hashes) < 2:
         raise ValueError(f"{context}.repeat_hashes must contain at least two content identities")
     for index, digest in enumerate(repeat_hashes):
         _require_lowercase_hex_digest(digest, _SHA256_LENGTH, f"{context}.repeat_hashes[{index}]")
-    if floor.repeatability is RepeatabilityMode.BITWISE and len(set(repeat_hashes)) != 1:
-        raise ValueError(f"{context}.repeat_hashes violate the immutable bitwise-repeatability floor")
 
     drift_records = output["pairwise_drift"]
     if not isinstance(drift_records, list) or not drift_records:
@@ -697,6 +769,7 @@ def _validate_numerical_output(output: Mapping[str, Any], floor: NumericalFloor,
         (left, right) for left in range(len(repeat_hashes)) for right in range(left + 1, len(repeat_hashes))
     }
     observed_pairs: set[tuple[int, int]] = set()
+    parsed_drift = []
     for index, drift_value in enumerate(drift_records):
         drift_context = f"{context}.pairwise_drift[{index}]"
         drift = _mapping(drift_value, drift_context)
@@ -707,46 +780,169 @@ def _validate_numerical_output(output: Mapping[str, Any], floor: NumericalFloor,
         if pair not in expected_pairs or pair in observed_pairs:
             raise ValueError(f"{drift_context} must identify one unique ordered repeat pair")
         observed_pairs.add(pair)
-
-        repeat_floating_limits = (
-            ("maximum_absolute_error", floor.repeat_maximum_absolute_error),
-            ("mean_absolute_error", floor.repeat_mean_absolute_error),
-            ("mean_ulp_distance", 0.0 if floor.repeatability is RepeatabilityMode.BITWISE else floor.mean_ulp_distance),
+        record = _PairwiseDrift(
+            left_repeat_index=left,
+            right_repeat_index=right,
+            maximum_absolute_error=_require_finite_nonnegative_number(
+                drift["maximum_absolute_error"], f"{drift_context}.maximum_absolute_error"
+            ),
+            mean_absolute_error=_require_finite_nonnegative_number(
+                drift["mean_absolute_error"], f"{drift_context}.mean_absolute_error"
+            ),
+            maximum_ulp_distance=_require_nonnegative_integer(
+                drift["maximum_ulp_distance"], f"{drift_context}.maximum_ulp_distance"
+            ),
+            mean_ulp_distance=_require_finite_nonnegative_number(
+                drift["mean_ulp_distance"], f"{drift_context}.mean_ulp_distance"
+            ),
         )
-        for field, limit in repeat_floating_limits:
-            value = _require_finite_nonnegative_number(drift[field], f"{drift_context}.{field}")
-            if value > limit:
-                raise ValueError(f"{drift_context}.{field} exceeds the immutable {floor.backend.value} repeat floor")
-        repeat_maximum_ulp = _require_nonnegative_integer(
-            drift["maximum_ulp_distance"], f"{drift_context}.maximum_ulp_distance"
-        )
-        repeat_maximum_ulp_limit = 0 if floor.repeatability is RepeatabilityMode.BITWISE else floor.maximum_ulp_distance
-        if repeat_maximum_ulp > repeat_maximum_ulp_limit:
-            raise ValueError(
-                f"{drift_context}.maximum_ulp_distance exceeds the immutable {floor.backend.value} repeat floor"
-            )
-        if drift["mean_absolute_error"] > drift["maximum_absolute_error"]:
-            raise ValueError(f"{drift_context}.mean_absolute_error cannot exceed maximum_absolute_error")
-        if drift["mean_ulp_distance"] > drift["maximum_ulp_distance"]:
-            raise ValueError(f"{drift_context}.mean_ulp_distance cannot exceed maximum_ulp_distance")
+        parsed_drift.append(record)
     if observed_pairs != expected_pairs:
         raise ValueError(f"{context}.pairwise_drift must cover every repeat pair exactly once")
+
+    summary = _NumericalOutputSummary(
+        maximum_absolute_error=maximum_absolute_error,
+        mean_absolute_error=mean_absolute_error,
+        maximum_ulp_distance=maximum_ulp_distance,
+        mean_ulp_distance=mean_ulp_distance,
+        nonfinite_values=nonfinite_values,
+        repeat_count=len(repeat_hashes),
+        repeat_identities_equal=len(set(repeat_hashes)) == 1,
+        repeat_maximum_absolute_error=max(record.maximum_absolute_error for record in parsed_drift),
+        repeat_mean_absolute_error=max(record.mean_absolute_error for record in parsed_drift),
+        repeat_maximum_ulp_distance=max(record.maximum_ulp_distance for record in parsed_drift),
+        repeat_mean_ulp_distance=max(record.mean_ulp_distance for record in parsed_drift),
+    )
+
+    floating_metric_limits = (
+        ("maximum_absolute_error", maximum_absolute_error, floor.maximum_absolute_error),
+        ("mean_absolute_error", mean_absolute_error, floor.mean_absolute_error),
+        ("mean_ulp_distance", mean_ulp_distance, floor.mean_ulp_distance),
+    )
+    for field, value, limit in floating_metric_limits:
+        if value > limit:
+            raise _numerical_floor_error(
+                floor=floor,
+                floor_kind="numerical",
+                case_id=case_id,
+                measurement_boundary=measurement_boundary,
+                output_name=output_name,
+                metric=field,
+                measured=value,
+                limit=limit,
+                summary=summary,
+            )
+    if maximum_ulp_distance > floor.maximum_ulp_distance:
+        raise _numerical_floor_error(
+            floor=floor,
+            floor_kind="numerical",
+            case_id=case_id,
+            measurement_boundary=measurement_boundary,
+            output_name=output_name,
+            metric="maximum_ulp_distance",
+            measured=maximum_ulp_distance,
+            limit=floor.maximum_ulp_distance,
+            summary=summary,
+        )
+    if nonfinite_values > floor.maximum_nonfinite_values:
+        raise _numerical_floor_error(
+            floor=floor,
+            floor_kind="numerical",
+            case_id=case_id,
+            measurement_boundary=measurement_boundary,
+            output_name=output_name,
+            metric="nonfinite_values",
+            measured=nonfinite_values,
+            limit=floor.maximum_nonfinite_values,
+            summary=summary,
+        )
+    if floor.repeatability is RepeatabilityMode.BITWISE and not summary.repeat_identities_equal:
+        raise _numerical_floor_error(
+            floor=floor,
+            floor_kind="bitwise-repeatability",
+            case_id=case_id,
+            measurement_boundary=measurement_boundary,
+            output_name=output_name,
+            metric="repeat_identities_equal",
+            measured=False,
+            limit=True,
+            summary=summary,
+        )
+    if mean_absolute_error > maximum_absolute_error:
+        raise ValueError(f"{context}.mean_absolute_error cannot exceed maximum_absolute_error")
+    if mean_ulp_distance > maximum_ulp_distance:
+        raise ValueError(f"{context}.mean_ulp_distance cannot exceed maximum_ulp_distance")
+
+    for drift in parsed_drift:
+        repeat_floating_limits = (
+            ("maximum_absolute_error", drift.maximum_absolute_error, floor.repeat_maximum_absolute_error),
+            ("mean_absolute_error", drift.mean_absolute_error, floor.repeat_mean_absolute_error),
+            (
+                "mean_ulp_distance",
+                drift.mean_ulp_distance,
+                0.0 if floor.repeatability is RepeatabilityMode.BITWISE else floor.mean_ulp_distance,
+            ),
+        )
+        for field, value, limit in repeat_floating_limits:
+            if value > limit:
+                raise _numerical_floor_error(
+                    floor=floor,
+                    floor_kind="repeat",
+                    case_id=case_id,
+                    measurement_boundary=measurement_boundary,
+                    output_name=output_name,
+                    metric=f"pairwise_drift[{drift.left_repeat_index}:{drift.right_repeat_index}].{field}",
+                    measured=value,
+                    limit=limit,
+                    summary=summary,
+                )
+        repeat_maximum_ulp_limit = 0 if floor.repeatability is RepeatabilityMode.BITWISE else floor.maximum_ulp_distance
+        if drift.maximum_ulp_distance > repeat_maximum_ulp_limit:
+            raise _numerical_floor_error(
+                floor=floor,
+                floor_kind="repeat",
+                case_id=case_id,
+                measurement_boundary=measurement_boundary,
+                output_name=output_name,
+                metric=(f"pairwise_drift[{drift.left_repeat_index}:{drift.right_repeat_index}].maximum_ulp_distance"),
+                measured=drift.maximum_ulp_distance,
+                limit=repeat_maximum_ulp_limit,
+                summary=summary,
+            )
+        drift_context = f"{context}.pairwise_drift[{drift.left_repeat_index}:{drift.right_repeat_index}]"
+        if drift.mean_absolute_error > drift.maximum_absolute_error:
+            raise ValueError(f"{drift_context}.mean_absolute_error cannot exceed maximum_absolute_error")
+        if drift.mean_ulp_distance > drift.maximum_ulp_distance:
+            raise ValueError(f"{drift_context}.mean_ulp_distance cannot exceed maximum_ulp_distance")
 
 
 def validate_backend_numerical_evidence(
     backend: BackendVariant,
     outputs: Mapping[str, Mapping[str, Any]],
+    *,
+    case_id: str,
+    measurement_boundary: MeasurementBoundary,
 ) -> None:
     """Apply immutable per-output floors before a runner may begin timing."""
     if type(backend) is not BackendVariant:
         raise TypeError("backend must be a BackendVariant")
+    if case_id not in {case.case_id for case in default_h100_contract_map_benchmark_plan().cases}:
+        raise ValueError("case_id must name a reviewed structural case")
+    if type(measurement_boundary) is not MeasurementBoundary:
+        raise TypeError("measurement_boundary must be a MeasurementBoundary")
     if tuple(outputs) != NUMERICAL_OUTPUT_ROLES:
         raise ValueError("numerical outputs must contain forward, dx, dw0, and dw1 in fixed order")
     floor = _reviewed_floor(backend.value)
     for role in NUMERICAL_OUTPUT_ROLES:
         output = _mapping(outputs[role], f"numerical.outputs.{role}")
         _require_fields(output, NUMERICAL_OUTPUT_REQUIRED_FIELDS, f"numerical.outputs.{role}")
-        _validate_numerical_output(output, floor, f"numerical.outputs.{role}")
+        _validate_numerical_output(
+            output,
+            floor,
+            case_id=case_id,
+            measurement_boundary=measurement_boundary.value,
+            output_name=role,
+        )
 
 
 def _serialized_schedule(timing: TimingProtocol) -> list[dict[str, Any]]:
@@ -898,7 +1094,13 @@ def validate_result_evidence(payload: Mapping[str, Any]) -> None:
         context = f"numerical.outputs.{role}"
         output = _mapping(outputs[role], context)
         _require_fields(output, NUMERICAL_OUTPUT_REQUIRED_FIELDS, context)
-        _validate_numerical_output(output, floor, context)
+        _validate_numerical_output(
+            output,
+            floor,
+            case_id=identity["case_id"],
+            measurement_boundary=identity["measurement_boundary"],
+            output_name=role,
+        )
     if numerical["floors_passed_before_timing"] is not True:
         raise ValueError("numerical floors must pass before timing")
 

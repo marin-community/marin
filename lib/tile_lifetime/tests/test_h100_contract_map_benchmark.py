@@ -36,6 +36,7 @@ from tile_lifetime.h100_contract_map_benchmark import (
     default_h100_contract_map_benchmark_plan,
     result_evidence_schema,
     staging_manifest,
+    validate_backend_numerical_evidence,
     validate_result_evidence,
     validate_result_evidence_bundle,
 )
@@ -502,6 +503,84 @@ def test_result_evidence_rejects_measured_output_that_exceeds_backend_floor(fiel
 
     with pytest.raises(ValueError, match="immutable ordinary_xla numerical floor"):
         validate_result_evidence(payload)
+
+
+def test_pre_timing_numerical_failure_reports_bounded_scalar_context() -> None:
+    payload = _complete_result_evidence()
+    case_id = payload["identity"]["case_id"]
+    output = payload["numerical"]["outputs"]["forward"]
+    output.update(
+        maximum_absolute_error=0.001953989267349243,
+        mean_absolute_error=0.0003520350146573037,
+        maximum_ulp_distance=29298,
+        mean_ulp_distance=8.55948121645796,
+        nonfinite_values=0,
+    )
+    output["repeat_hashes"] = ["a" * 64, "a" * 64, "a" * 64]
+    output["pairwise_drift"] = [
+        {
+            "left_repeat_index": left,
+            "right_repeat_index": right,
+            "maximum_absolute_error": 0.0,
+            "mean_absolute_error": 0.0,
+            "maximum_ulp_distance": 0,
+            "mean_ulp_distance": 0.0,
+        }
+        for left, right in ((0, 1), (0, 2), (1, 2))
+    ]
+
+    with pytest.raises(ValueError) as error:
+        validate_backend_numerical_evidence(
+            BackendVariant.ORDINARY_XLA,
+            payload["numerical"]["outputs"],
+            case_id=case_id,
+            measurement_boundary=MeasurementBoundary.LOGICAL_TRAINING_STEP,
+        )
+
+    diagnostic = str(error.value)
+    for field in (
+        f"case={case_id}",
+        "backend=ordinary_xla",
+        "boundary=logical_training_step",
+        "output=forward",
+        "metric=mean_ulp_distance",
+        "measured=8.55948121645796",
+        "limit=0.25",
+        "maximum_absolute_error=0.001953989267349243",
+        "mean_absolute_error=0.0003520350146573037",
+        "maximum_ulp_distance=29298",
+        "nonfinite_values=0",
+        "repeat_count=3",
+        "repeat_identities_equal=true",
+        "repeat_maximum_absolute_error=0.0",
+        "repeat_mean_absolute_error=0.0",
+        "repeat_maximum_ulp_distance=0",
+        "repeat_mean_ulp_distance=0.0",
+    ):
+        assert field in diagnostic
+    assert "a" * 64 not in diagnostic
+    assert len(diagnostic) <= 1024
+
+
+def test_result_numerical_repeat_failure_reports_pair_without_hashes() -> None:
+    payload = _complete_result_evidence()
+    drift = payload["numerical"]["outputs"]["dx"]["pairwise_drift"][0]
+    drift["maximum_absolute_error"] = 0.007813
+
+    with pytest.raises(ValueError) as error:
+        validate_result_evidence(payload)
+
+    diagnostic = str(error.value)
+    assert f"case={payload['identity']['case_id']}" in diagnostic
+    assert "backend=ordinary_xla" in diagnostic
+    assert "boundary=kernel_only" in diagnostic
+    assert "output=dx" in diagnostic
+    assert "metric=pairwise_drift[0:1].maximum_absolute_error" in diagnostic
+    assert "measured=0.007813" in diagnostic
+    assert "limit=0.0078125" in diagnostic
+    assert "repeat_identities_equal=true" in diagnostic
+    assert "3" * 64 not in diagnostic
+    assert len(diagnostic) <= 1024
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
