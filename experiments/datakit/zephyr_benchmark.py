@@ -7,9 +7,7 @@ The benchmark starts from an existing normalized Datakit sample, so its measured
 pipeline does not include Hugging Face corpus download time. It runs global exact
 deduplication, per-source tokenization and MinHash, then cross-source fuzzy dedup.
 Every generated stage output is routed under a seven-day temporary prefix keyed by
-the required run tag. This is the launcher for the workflow documented in
-``.agents/skills/ab-test-zephyr/SKILL.md``; compare its per-stage Finelog rows
-instead of treating launcher duration as the benchmark result.
+the required run tag.
 
 Example::
 
