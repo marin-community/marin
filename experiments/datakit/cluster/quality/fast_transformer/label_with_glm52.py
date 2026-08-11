@@ -135,7 +135,12 @@ def _parse_verdict(content: str) -> dict | None:
         content_type = verdict.get("content_type")
         if quality not in QUALITY_LEVELS or content_type not in CONTENT_TYPES:
             continue
-        return {"quality": int(quality), "content_type": content_type, "valid": bool(verdict.get("valid", True))}
+        return {
+            "quality": int(quality),
+            "content_type": content_type,
+            "valid": bool(verdict.get("valid", True)),
+            "why": str(verdict.get("why", "")),
+        }
     return None
 
 
