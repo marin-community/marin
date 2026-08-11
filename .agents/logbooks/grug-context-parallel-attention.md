@@ -1,5 +1,6 @@
 ---
 topic: grug-context-parallel-attention
+issue: 8141
 description: Evaluate and implement context-parallel attention for the Grug hero shape through sequence length 262144.
 author: dlwh
 ---
@@ -8,15 +9,14 @@ author: dlwh
 
 ## Current TL;DR
 
-Use NVIDIA Transformer Engine's JAX fused context-parallel attention as the first implementation
-candidate; do not write a new distributed kernel yet. Current TE already exposes Ring and AllGather
-strategies with forward/backward, causal THD packed sequences, GQA, striped load balancing, and
-sliding windows. The official CP4 example reports 57.2 ms Ring and 53.8 ms AllGather versus 126.7 ms
-without context parallelism for a 65536-token BF16 forward/backward case on four GB200 GPUs. This is
-not proof at the Grug hero's exact 262144-token shape: Marin does not currently pin TE, and its JAX
-0.11/CUDA 13/GB200 compatibility plus exact packed-document gradient parity still needs an accelerator
-run. A benchmark gate for the exact Grug shapes now exists at
-`lib/levanter/scripts/bench/bench_grug_context_parallel_attention.py`.
+NVIDIA Transformer Engine JAX remains the first implementation candidate, but the current Marin GPU
+image cannot qualify it. TE 2.17.1 fails during cuDNN backward graph construction for both the exact
+262144-token Grug cases and NVIDIA's official 65536-token CP4 control. The newer source-pinned TE
+commit cannot build because the staged CUDA toolkit lacks `cicc`. No XLA timing or HBM result exists,
+and no AllGather or 64-GPU job was submitted. The WIP branch contains the exact-shape benchmark and
+distributed launcher; [#8141](https://github.com/marin-community/marin/issues/8141) is the public
+coordination record. The next TE attempt requires a complete CUDA development toolkit. The fallback
+is a global ring plus a bounded 511-token halo for the 40 SWA512 layers.
 
 ## Scope
 
@@ -27,7 +27,8 @@ run. A benchmark gate for the exact Grug shapes now exists at
 - Constraints: BF16 compute; causal packed-document masks; 48 query heads; 12 local and 6 global KV
   heads; head dimension 128; 512-token local windows; every sixth layer global; existing GB200 hero
   layout is the first target.
-- Coordinating issue/PR: none. No direct duplicate was found on 2026-08-10.
+- Coordinating issue/PR: [#8141](https://github.com/marin-community/marin/issues/8141). No direct
+  duplicate was found on 2026-08-10.
 
 ## Baseline
 
@@ -43,30 +44,31 @@ run. A benchmark gate for the exact Grug shapes now exists at
 
 ### Active
 
-- `GCPA-001`: TE 2.17.1 can compile and run the exact Grug local and global attention shapes on the
-  current JAX 0.11/CUDA 13 GB200 image. Next test: run the checked-in harness on CP4 at 4096 and 65536
-  before scaling to 131072 and 262144.
 - `GCPA-002`: The existing Grug FA4/CuTe local kernel can be reused inside a ring protocol by
   exposing output log-sum-exp and defining a distributed custom VJP. Next test: inspect FA4 forward
   and backward residuals and identify the minimum local-kernel API change.
-- `GCPA-003`: TE AllGather may beat TE Ring for CP4 on a single NVLink domain, as it does in the
-  official 65536-token example. Next test: compare both strategies at every exact hero shape.
 - `GCPA-004`: The 40 SWA512 layers may need a bounded-halo path if TE CP communication dominates
   their small attention workload. Next test: compare TE Ring/AllGather with a local halo oracle and
   retain full CP only for the eight global layers if the result warrants the integration cost.
 
 ### Blocked
 
-- None.
+- `GCPA-003`: TE AllGather may beat TE Ring for CP4 on a single NVLink domain. Blocker: TE 2.17.1
+  fails backward graph construction before XLA, and the newer source cannot build on the current
+  image. Resume when a current TE build passes NVIDIA's official CP4 control.
+- `GCPA-005`: The newer source-pinned TE commit can run the exact Grug shape on GB200. Blocker: the
+  Iris CUDA environment lacks nvcc's `cicc` device compiler. Resume when the task image exposes a
+  complete CUDA development toolkit.
 
 ### Falsified / Dead End
 
-- None.
+- `GCPA-001`: TE 2.17.1 can run the exact Grug attention shapes on the current JAX 0.11/CUDA 13/
+  cuDNN 9.19 image. The exact cases and NVIDIA's official control reproduce the same
+  `CUDNN_STATUS_BAD_PARAM`; see [#8141](https://github.com/marin-community/marin/issues/8141).
 
 ### Promoted
 
-- `GCPA-001` source-level candidate: NVIDIA Transformer Engine JAX CP. Promotion to the model is
-  conditional on exact-shape compile, parity, memory, and throughput results.
+- None.
 
 ## Decision Log
 
@@ -85,6 +87,9 @@ run. A benchmark gate for the exact Grug shapes now exists at
 - 2026-08-10: Keep hidden states in contiguous sequence shards and apply TE's causal striping only to
   Q/K/V and sequence descriptors at the attention boundary. Grug's causal SConv, fused RoPE, labels,
   loss, and packed-segment semantics require natural token order outside attention.
+- 2026-08-10: Open [#8141](https://github.com/marin-community/marin/issues/8141) as the coordinating
+  experiment issue after the TE release and source gates failed. Keep the branch as WIP until a
+  four-GPU forward/backward control passes.
 
 ## Negative Results Index
 
