@@ -1,0 +1,3 @@
+ID,Process ID,Process Name,Host Name,Kernel Name,Context,Stream,Block Size,Grid Size,Device,CC,gpu__time_duration.sum,launch__block_size,launch__registers_per_thread,launch__shared_mem_per_block_static,launch__shared_mem_per_block_dynamic,launch__occupancy_limit_blocks,launch__occupancy_limit_registers,launch__occupancy_limit_shared_mem,launch__occupancy_limit_warps,sm__warps_active.avg.pct_of_peak_sustained_active
+,,,,,,,,,,,ns,,register/thread,byte/block,byte/block,block,block,block,block,%
+1,777,python,host,KernelA,1,7,256,1,H100,90,1234,256,48,128,0,4,2,8,2,62.5

@@ -281,10 +281,114 @@ def test_runner_ncu_parser_requires_every_closed_launch_metric(tmp_path: Path) -
             achieved_occupancy=0.625,
         ),
     )
-    lines = output.read_text().splitlines()
-    output.write_text("\n".join(line for line in lines if "launch__registers_per_thread" not in line) + "\n")
-    with pytest.raises(ValueError, match="omits metrics"):
+    fieldnames, rows = _read_ncu_csv(output)
+    fieldnames.remove("launch__registers_per_thread")
+    for row in rows:
+        del row["launch__registers_per_thread"]
+    _write_ncu_rows(output, fieldnames, rows)
+    with pytest.raises(ValueError, match="omits required columns"):
         runner.parse_ncu_metrics(output)
+
+
+def test_runner_ncu_parser_accepts_exact_units_row_only_in_first_position(tmp_path: Path) -> None:
+    fieldnames, rows = _read_ncu_csv(_NCU_RAW_FIXTURE)
+    output = tmp_path / "ncu.csv"
+
+    _write_ncu_rows(output, fieldnames, rows[1:])
+    with pytest.raises(ValueError, match="first data row must be the exact units row"):
+        runner.parse_ncu_metrics(output)
+
+    _write_ncu_rows(output, fieldnames, (rows[1], rows[0]))
+    with pytest.raises(ValueError, match="first data row must be the exact units row"):
+        runner.parse_ncu_metrics(output)
+
+    _write_ncu_rows(output, fieldnames, (rows[0], rows[0], rows[1]))
+    with pytest.raises(ValueError, match="units row may appear only once"):
+        runner.parse_ncu_metrics(output)
+
+
+@pytest.mark.parametrize(
+    ("metric", "unit"),
+    (
+        ("launch__block_size", "thread"),
+        ("launch__registers_per_thread", "register"),
+        ("launch__shared_mem_per_block_static", "byte"),
+        ("launch__shared_mem_per_block_dynamic", "byte"),
+        ("launch__occupancy_limit_blocks", "blocks"),
+        ("launch__occupancy_limit_registers", "blocks"),
+        ("launch__occupancy_limit_shared_mem", "blocks"),
+        ("launch__occupancy_limit_warps", "blocks"),
+        ("sm__warps_active.avg.pct_of_peak_sustained_active", "percent"),
+    ),
+)
+def test_runner_ncu_parser_rejects_wrong_or_extra_required_units(tmp_path: Path, metric: str, unit: str) -> None:
+    fieldnames, rows = _read_ncu_csv(_NCU_RAW_FIXTURE)
+    rows[0][metric] = unit
+    output = tmp_path / "ncu.csv"
+    _write_ncu_rows(output, fieldnames, rows)
+
+    with pytest.raises(ValueError, match="first data row must be the exact units row"):
+        runner.parse_ncu_metrics(output)
+
+
+def test_runner_ncu_parser_rejects_blank_or_units_as_kernel_data(tmp_path: Path) -> None:
+    fieldnames, rows = _read_ncu_csv(_NCU_RAW_FIXTURE)
+    output = tmp_path / "ncu.csv"
+
+    _write_ncu_rows(output, fieldnames, (rows[0], dict.fromkeys(fieldnames, "")))
+    with pytest.raises(ValueError, match="units row may appear only once"):
+        runner.parse_ncu_metrics(output)
+
+    units_as_data = dict(rows[0])
+    units_as_data["ID"] = "1"
+    units_as_data["Kernel Name"] = "KernelA"
+    _write_ncu_rows(output, fieldnames, (rows[0], units_as_data))
+    with pytest.raises(ValueError, match="units row may appear only once"):
+        runner.parse_ncu_metrics(output)
+
+
+def test_runner_ncu_profile_parses_real_wide_units_contract_at_process_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _runner_config(tmp_path)
+    cache_source, cache_contract = _worker_cache_fixture(tmp_path, ("ordinary_xla",))
+    generated_manifest = tmp_path / "generated.json"
+    generated_manifest.write_text("[]\n")
+
+    def run_ncu(command: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        arguments = tuple(str(value) for value in command)
+        assert arguments[0] == str(config.tools.ncu)
+        assert "--page=raw" in arguments
+        Path(arguments[arguments.index("--log-file") + 1]).write_bytes(_NCU_RAW_FIXTURE.read_bytes())
+        Path(arguments[arguments.index("--export") + 1]).write_bytes(b"exact-ncu-report")
+        output = Path(arguments[arguments.index("--json-output") + 1])
+        output.write_text(json.dumps({"persistent_cache": {}, "final_hlo": "exact-final-hlo"}))
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    def export_sass(command: Any) -> subprocess.CompletedProcess[str]:
+        arguments = tuple(str(value) for value in command)
+        Path(arguments[arguments.index("--log-file") + 1]).write_text(
+            _ncu_sass_export(("KernelA", ("0000000000000000 MOV R1, R2",)))
+        )
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr(runner.subprocess, "run", run_ncu)
+    monkeypatch.setattr(runner, "_run_retained", export_sass)
+
+    evidence = runner._run_ncu_profile(
+        config,
+        "contract_map_case",
+        "ordinary_xla",
+        generated_manifest,
+        tmp_path / "profile",
+        cache_source,
+        cache_contract,
+    )
+
+    assert tuple(metric.name for metric in evidence.metrics) == ("KernelA",)
+    assert evidence.metrics[0].registers_per_thread == 48
+    assert evidence.final_hlo == "exact-final-hlo"
+    assert evidence.report_sha256 == hashlib.sha256(b"exact-ncu-report").hexdigest()
 
 
 def test_runner_ncu_sass_parser_requires_valid_instruction_rows_for_exact_kernel_sections() -> None:
@@ -2867,20 +2971,23 @@ def _worker_cache_fixture(tmp_path: Path, backends: tuple[str, ...]) -> tuple[Pa
     return cache, contract
 
 
-def _write_ncu_csv(path: Path) -> None:
-    values = {
-        "launch__block_size": "256",
-        "launch__registers_per_thread": "48",
-        "launch__shared_mem_per_block_static": "128",
-        "launch__shared_mem_per_block_dynamic": "0",
-        "launch__occupancy_limit_blocks": "4",
-        "launch__occupancy_limit_registers": "2",
-        "launch__occupancy_limit_shared_mem": "8",
-        "launch__occupancy_limit_warps": "2",
-        "sm__warps_active.avg.pct_of_peak_sustained_active": "62.5",
-    }
+_NCU_RAW_FIXTURE = Path(__file__).parent / "fixtures/h100_contract_map_ncu_raw.csv"
+
+
+def _read_ncu_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    with path.open(newline="") as stream:
+        reader = csv.DictReader(stream)
+        assert reader.fieldnames is not None
+        return list(reader.fieldnames), list(reader)
+
+
+def _write_ncu_rows(path: Path, fieldnames: list[str], rows: Any) -> None:
     with path.open("w", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=("ID", "Kernel Name", "Metric Name", "Metric Value"))
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
         writer.writeheader()
-        for metric, value in values.items():
-            writer.writerow({"ID": "1", "Kernel Name": "KernelA", "Metric Name": metric, "Metric Value": value})
+        writer.writerows(rows)
+
+
+def _write_ncu_csv(path: Path) -> None:
+    fieldnames, rows = _read_ncu_csv(_NCU_RAW_FIXTURE)
+    _write_ncu_rows(path, fieldnames, rows)

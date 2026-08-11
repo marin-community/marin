@@ -109,6 +109,30 @@ _NCU_METRICS = (
     "launch__occupancy_limit_warps",
     "sm__warps_active.avg.pct_of_peak_sustained_active",
 )
+_NCU_IDENTITY_FIELDS = (
+    "ID",
+    "Process ID",
+    "Process Name",
+    "Host Name",
+    "Kernel Name",
+    "Context",
+    "Stream",
+    "Block Size",
+    "Grid Size",
+    "Device",
+    "CC",
+)
+_NCU_METRIC_UNITS = {
+    "launch__block_size": "",
+    "launch__registers_per_thread": "register/thread",
+    "launch__shared_mem_per_block_static": "byte/block",
+    "launch__shared_mem_per_block_dynamic": "byte/block",
+    "launch__occupancy_limit_blocks": "block",
+    "launch__occupancy_limit_registers": "block",
+    "launch__occupancy_limit_shared_mem": "block",
+    "launch__occupancy_limit_warps": "block",
+    "sm__warps_active.avg.pct_of_peak_sustained_active": "%",
+}
 _SASS_OPCODE_BASES = frozenset(
     {
         "ATOM",
@@ -737,32 +761,46 @@ def _checked_output(
 
 
 def parse_ncu_metrics(path: Path) -> tuple[NcuKernelMetrics, ...]:
-    """Parse the exact raw Nsight Compute metric rows and reject omissions."""
-    rows = tuple(csv.DictReader(line for line in path.read_text().splitlines() if not line.startswith("==")))
+    """Parse the pinned wide raw-page Nsight Compute CSV contract."""
+    lines = tuple(line for line in path.read_text().splitlines() if not line.startswith("=="))
+    reader = csv.DictReader(lines)
+    fieldnames = reader.fieldnames
+    if fieldnames is None or not fieldnames or any(field is None or not field for field in fieldnames):
+        raise ValueError("Nsight Compute output has no valid CSV header")
+    if len(set(fieldnames)) != len(fieldnames):
+        raise ValueError("Nsight Compute output repeats CSV columns")
+    required = (*_NCU_IDENTITY_FIELDS, *_NCU_METRICS)
+    missing = tuple(field for field in required if field not in fieldnames)
+    if missing:
+        raise ValueError(f"Nsight Compute output omits required columns: {missing}")
+    rows = tuple(reader)
     if not rows:
-        raise ValueError("Nsight Compute output contains no metric rows")
-    grouped: dict[tuple[str, str], dict[str, str]] = {}
-    order: list[tuple[str, str]] = []
-    for row in rows:
+        raise ValueError("Nsight Compute output contains no units row")
+    if any(None in row for row in rows):
+        raise ValueError("Nsight Compute output has values beyond the declared CSV columns")
+
+    units = rows[0]
+    exact_units = all(units[field] == "" for field in _NCU_IDENTITY_FIELDS) and all(
+        units[metric] == unit for metric, unit in _NCU_METRIC_UNITS.items()
+    )
+    if not exact_units:
+        raise ValueError("Nsight Compute first data row must be the exact units row")
+    if len(rows) < 2:
+        raise ValueError("Nsight Compute output contains no kernel rows after the units row")
+
+    records: list[NcuKernelMetrics] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows[1:]:
+        repeats_units = all(row[metric] == unit for metric, unit in _NCU_METRIC_UNITS.items())
+        if all(row[field] == "" for field in _NCU_IDENTITY_FIELDS) or repeats_units:
+            raise ValueError("Nsight Compute units row may appear only once and only first")
         name = normalize_cuda_kernel_name(_csv_field(row, "Kernel Name"))
         identifier = _csv_field(row, "ID")
         key = (identifier, name)
-        if key not in grouped:
-            grouped[key] = {}
-            order.append(key)
-        metric = _csv_field(row, "Metric Name")
-        value = _csv_field(row, "Metric Value")
-        if metric in grouped[key]:
-            raise ValueError(f"Nsight Compute repeats metric {metric!r} for kernel {name!r}")
-        grouped[key][metric] = value
-
-    records: list[NcuKernelMetrics] = []
-    for key in order:
-        name = key[1]
-        metrics = grouped[key]
-        missing = tuple(metric for metric in _NCU_METRICS if metric not in metrics)
-        if missing:
-            raise ValueError(f"Nsight Compute omits metrics for kernel {name!r}: {missing}")
+        if key in seen:
+            raise ValueError(f"Nsight Compute repeats wide metric row for kernel {name!r}")
+        seen.add(key)
+        metrics = {metric: _csv_field(row, metric) for metric in _NCU_METRICS}
         limits = {
             "blocks": _metric_int(metrics["launch__occupancy_limit_blocks"]),
             "registers": _metric_int(metrics["launch__occupancy_limit_registers"]),
