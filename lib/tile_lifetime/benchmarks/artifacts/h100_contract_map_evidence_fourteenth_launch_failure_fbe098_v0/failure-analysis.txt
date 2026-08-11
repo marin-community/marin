@@ -1,0 +1,42 @@
+Observed boundary
+=================
+
+1. Trusted image `sha256sum` authenticated the launcher and manifest before
+   Python execution.
+2. The capsule restored exact source commit fbe098a4e342cfa6c8795459c01d5399fbd7524b
+   and the runner completed its imported-module audit.
+3. Returning from the first case's `_run_profiled_case` requires all three
+   numerical gates, warmup, the 24-row steady schedule, balanced NVTX ranges,
+   Nsight Systems profile/export, and strict range/kernel attribution to pass.
+4. The first ordinary-XLA `_run_cache_protocol` completed three compile workers
+   and three paired cold/hit roots. Each immediate cold/hit root-identity check
+   passed before the nine-root validator ran.
+5. The validator emitted all nine fixed records and rejected six semantic
+   identity classes.
+
+Diagnostic interpretation
+=========================
+
+- Every root has four files.
+- All six classes use target-key digest
+  957860baf5e324b1fc6c3ba54a43f27e531e847102c8a68fa20ec9abb2cec491.
+- The three fresh compile workers produced three distinct serialized-executable
+  hashes. compile[0] and compile[2] have the same final-HLO hash but different
+  executable hashes and byte totals.
+- Each cold/hit pair is exact in semantic class, file count, byte total, and
+  final-HLO hash. The three pairs differ from one another.
+
+The stable target key proves the source/configuration cache identity is the
+same. Exact within-root hits prove each populated cache snapshot is reusable.
+The six executable identities prove cross-process executable bytes are not
+deterministic under the current fresh-root topology. This artifact does not
+identify the internal executable field or toolchain source of that variation.
+
+Evidence limit
+==============
+
+No accepted ordinary-XLA cache protocol returned to the coordinator. Nsight
+Compute, retained backend artifacts, source-ordered and fast cache protocols,
+the remaining three cases, and final bundle publication were not reached. The
+job had one failed attempt, no preemptions, zero configured failure retries, and
+was not relaunched.

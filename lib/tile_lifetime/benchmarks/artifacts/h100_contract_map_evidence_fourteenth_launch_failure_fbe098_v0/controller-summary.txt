@@ -1,0 +1,31 @@
+Job: /dlwh/shuttle-h100-contract-map-evidence-fbe098a-v14
+State: failed
+Submitted epoch ms: 1786456989750
+Started epoch ms: 1786456993417
+Finished epoch ms: 1786457141855
+Stored job exit: 0
+Failures: 1
+Preemptions: 0
+Tasks: 0/1 completed; failed=1
+
+Task: /dlwh/shuttle-h100-contract-map-evidence-fbe098a-v14/0
+State: failed
+Exit: 1
+Submitted epoch ms: 1786456989750
+Started epoch ms: 1786456999169
+Finished epoch ms: 1786457141855
+Failure retries: 0
+Preemption retries: 1000
+Attempt count: 1
+
+Attempt: 0
+State: failed
+Started epoch ms: 1786456999169
+Finished epoch ms: 1786457141855
+Duration: 142.686 seconds
+Exit: 1
+Attempt UID: 8adf35a71bcb4551
+
+First diagnostic:
+ValueError: all compile, cold, and hit roots must converge to one cache content identity
+Observed equality partitions: 6
