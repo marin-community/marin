@@ -1,0 +1,17 @@
+Traceback (most recent call last):
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 4092, in <module>
+    main()
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 4074, in main
+    output = run_coordinator(
+             ^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 2790, in run_coordinator
+    backend.value: _run_ncu_profile(
+                   ^^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 3641, in _run_ncu_profile
+    _parse_ncu_sass_file(sass_source_path, tuple(metric.name for metric in metrics))
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1155, in _parse_ncu_sass_file
+    return parse_ncu_sass(source, expected_names)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/source/lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py", line 1107, in parse_ncu_sass
+    raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)
+ValueError: unrecognized Nsight Compute SASS export record: {"line_number":5,"line_sha256":"f4216a396b9aabb3ac8416facab0449967742e56a45aff7f7218a0b2513d50f7","line_structure":{"ascii_classes":{"control":0,"digit":0,"lowercase":16,"punctuation":8,"uppercase":0,"whitespace":83},"delimiters":{"colon":0,"comma":0,"hyphen":0,"pipe":0},"fixed_columns":{"ascii_class_fields":["control","digit","lowercase","punctuation","uppercase","whitespace"],"column_fields":["index","trimmed_utf8_bytes","ascii_class_counts","punctuation_counts","non_ascii_bytes","token_count","Address","Source"],"column_widths":[18,60,6,6,6,6],"columns":[[0,0,[0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],0,0,false,false],[1,0,[0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],0,0,false,false],[2,6,[0,0,4,2,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0],0,1,false,false],[3,6,[0,0,4,2,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0],0,1,false,false],[4,6,[0,0,4,2,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0],0,1,false,false],[5,6,[0,0,4,2,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0],0,1,false,false]],"gap_single_ascii_space":[true,true,true,true,true],"punctuation_fields":["!","\"","#","$","%","&","'","(",")","*","+",",","-",".","/",":",";","<","=",">","?","@","[","\\","]","^","_","`","{","|","}","~"]},"leading_spaces":80,"non_ascii_codepoints":0,"public_patterns":{"header":false,"instruction":false,"section":false,"separator":false,"status":false},"public_vocabulary":{"Address":false,"Function":false,"Kernel":false,"Name":false,"Section":false,"Source":false},"spaces":83,"tabs":0,"token_count":4,"token_max_utf8_bytes":6,"trailing_spaces":0},"line_utf8_bytes":107}
