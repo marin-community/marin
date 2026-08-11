@@ -670,14 +670,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     replica_axis_size=mesh.shape["replica_dcn"],
                     model_axis_size=mesh.shape["model"],
                 )
-                dropless_evaluator = build_tagged_evaluator(
-                    data_config=config.data,
-                    max_seq_len=config.model.max_seq_len,
-                    mesh=dropless_eval_mesh,
-                    eval_cfg=eval_cfg,
-                    mp=trainer.mp,
-                    model_transform=_to_dropless_local,
-                )
+                # Build under the eval mesh so every constant the evaluator captures at construction
+                # (e.g. `log2e`, the byte-per-token table, output shardings) is bound to the eval mesh
+                # rather than the ambient train mesh; otherwise those leak a train-mesh aval into the
+                # eval jit and fail the explicit-mesh check.
+                with set_mesh(dropless_eval_mesh):
+                    dropless_evaluator = build_tagged_evaluator(
+                        data_config=config.data,
+                        max_seq_len=config.model.max_seq_len,
+                        mesh=dropless_eval_mesh,
+                        eval_cfg=eval_cfg,
+                        mp=trainer.mp,
+                        model_transform=_to_dropless_local,
+                    )
 
         # `trainer.num_train_steps` sizes the schedule; this bounds the run. Progress and the loop
         # both use it so a head-of-schedule run reports against the steps it will actually take.
