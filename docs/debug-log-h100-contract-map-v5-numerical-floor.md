@@ -61,7 +61,7 @@ but a large ordered-BF16 distance.
 
 ## Changes to make
 
-Parse and validate all scalar output and pairwise-repeat metrics before
+Parse and type-check all scalar output and pairwise-repeat metrics before
 reporting a floor violation. The bounded failure includes the reviewed case,
 backend, measurement boundary, output role, reference, exact measured scalar,
 immutable limit, absolute and ULP summaries, nonfinite count, repeat count,
@@ -80,7 +80,10 @@ pre-timing validator accepts no case or boundary and both validation paths emit
 only the rejected field name. They pass after the diagnostic change. The
 immutable floor constants and digest are unchanged.
 
-The benchmark and runner behavior suites pass all 218 tests. The package suite
+The benchmark and runner behavior suites pass all 219 tests. The runner-path
+regression induces the first numerical failure through `_numerical_evidence`
+and observes the logical-training-step boundary chosen by that production call
+site. The package suite
 passes 951 tests with one historical snapshot test deselected because its
 `SHA256SUMS` references an untracked `*.stdout.log` that is absent from the
 exact Git worktree. Running that test alone fails before exercising this change
