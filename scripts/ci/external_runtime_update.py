@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Validate and merge the generated external-runtime update pull request."""
+
+import argparse
+import json
+import subprocess
+import time
+from collections.abc import Iterable
+from dataclasses import dataclass
+from enum import StrEnum
+
+EXPECTED_BASE_BRANCH = "main"
+EXPECTED_HEAD_BRANCH = "automation/external-dependencies"
+EXPECTED_TITLE = "[dependencies] Advance external runtimes"
+EXPECTED_FILES = frozenset(
+    {
+        "config/external/MarinSkyRL/uv.lock",
+        "config/external/evalchemy/uv.lock",
+        "config/external/harbor/uv.lock",
+        "lib/marin/src/marin/external_dependencies.py",
+        "pyproject.toml",
+        "uv.lock",
+    }
+)
+REQUIRED_CHECKS = ("marin-integration", "marin-lint", "rust-checks", "unit-tests")
+
+
+@dataclass(frozen=True)
+class PullRequestSnapshot:
+    author: str
+    base_branch: str
+    files: tuple[str, ...]
+    head_branch: str
+    head_sha: str
+    state: str
+    title: str
+    url: str
+
+
+@dataclass(frozen=True)
+class RequiredCheckGate:
+    failing: tuple[str, ...]
+    missing: tuple[str, ...]
+    pending: tuple[str, ...]
+
+    @property
+    def passed(self) -> bool:
+        return not self.failing and not self.missing and not self.pending
+
+
+class MergeDecision(StrEnum):
+    WAIT = "wait"
+    FAIL = "fail"
+    MERGE = "merge"
+    DONE = "done"
+
+
+def validate_pull_request(
+    pull_request: PullRequestSnapshot,
+    *,
+    expected_app_slug: str,
+    expected_head_sha: str,
+) -> None:
+    """Reject a pull request that is not exactly the generated update boundary."""
+    expected_author = f"app/{expected_app_slug}"
+    if pull_request.author != expected_author:
+        raise ValueError(f"unexpected pull request author {pull_request.author!r}; expected {expected_author!r}")
+    if pull_request.base_branch != EXPECTED_BASE_BRANCH:
+        raise ValueError(f"unexpected base branch {pull_request.base_branch!r}")
+    if pull_request.head_branch != EXPECTED_HEAD_BRANCH:
+        raise ValueError(f"unexpected head branch {pull_request.head_branch!r}")
+    if pull_request.head_sha != expected_head_sha:
+        raise ValueError(f"unexpected head SHA {pull_request.head_sha!r}; expected {expected_head_sha!r}")
+    if pull_request.title != EXPECTED_TITLE:
+        raise ValueError(f"unexpected pull request title {pull_request.title!r}")
+    if not pull_request.files:
+        raise ValueError("pull request has no changed files")
+    unexpected_files = sorted(set(pull_request.files) - EXPECTED_FILES)
+    if unexpected_files:
+        raise ValueError(f"pull request contains unexpected files: {unexpected_files}")
+
+
+def evaluate_required_checks(rows: Iterable[dict], *, required: tuple[str, ...]) -> RequiredCheckGate:
+    """Classify the latest required GitHub check rows."""
+    check_buckets: dict[str, str] = {}
+    for row in rows:
+        name = row["name"]
+        if name in check_buckets:
+            raise ValueError(f"GitHub returned duplicate check rows for {name!r}")
+        check_buckets[name] = row["bucket"]
+    missing = tuple(name for name in required if name not in check_buckets)
+    pending = tuple(name for name in required if check_buckets.get(name) == "pending")
+    failing = tuple(
+        name for name in required if name in check_buckets and check_buckets[name] not in {"pass", "pending"}
+    )
+    return RequiredCheckGate(failing=failing, missing=missing, pending=pending)
+
+
+def evaluate_merge(state: str, checks: RequiredCheckGate) -> MergeDecision:
+    """Choose the next action from the pull-request and required-check state."""
+    if state == "MERGED":
+        return MergeDecision.DONE
+    if state != "OPEN" or checks.failing:
+        return MergeDecision.FAIL
+    if checks.passed:
+        return MergeDecision.MERGE
+    return MergeDecision.WAIT
+
+
+def _gh_json(*args: str) -> object:
+    result = subprocess.run(["gh", *args], check=True, capture_output=True, text=True)
+    return json.loads(result.stdout)
+
+
+def pull_request_snapshot(pr: str, repository: str) -> PullRequestSnapshot:
+    """Read the identity and immutable merge boundary of one pull request."""
+    payload = _gh_json(
+        "pr",
+        "view",
+        pr,
+        "--repo",
+        repository,
+        "--json",
+        "author,baseRefName,files,headRefName,headRefOid,state,title,url",
+    )
+    assert isinstance(payload, dict)
+    return PullRequestSnapshot(
+        author=payload["author"]["login"],
+        base_branch=payload["baseRefName"],
+        files=tuple(sorted(file["path"] for file in payload["files"])),
+        head_branch=payload["headRefName"],
+        head_sha=payload["headRefOid"],
+        state=payload["state"],
+        title=payload["title"],
+        url=payload["url"],
+    )
+
+
+def required_check_rows(pr: str, repository: str) -> list[dict]:
+    """Read GitHub's latest rollup row for every check on a pull request."""
+    result = subprocess.run(
+        ["gh", "pr", "checks", pr, "--repo", repository, "--json", "name,bucket"],
+        capture_output=True,
+        text=True,
+    )
+    if not result.stdout.strip():
+        return []
+    rows = json.loads(result.stdout)
+    assert isinstance(rows, list)
+    return rows
+
+
+def merge_when_green(
+    *,
+    pr: str,
+    repository: str,
+    app_slug: str,
+    expected_head_sha: str,
+    timeout: float,
+    poll_interval: float,
+) -> None:
+    """Wait for the fixed required checks, then merge with the dedicated app token."""
+    deadline = time.monotonic() + timeout
+    while True:
+        snapshot = pull_request_snapshot(pr, repository)
+        validate_pull_request(snapshot, expected_app_slug=app_slug, expected_head_sha=expected_head_sha)
+        checks = evaluate_required_checks(required_check_rows(pr, repository), required=REQUIRED_CHECKS)
+        decision = evaluate_merge(snapshot.state, checks)
+        if decision is MergeDecision.DONE:
+            return
+        if decision is MergeDecision.FAIL:
+            raise RuntimeError(
+                f"external runtime update is blocked: state={snapshot.state}, failing={list(checks.failing)}"
+            )
+        if decision is MergeDecision.MERGE:
+            subprocess.run(
+                ["gh", "pr", "merge", pr, "--repo", repository, "--squash"],
+                check=True,
+            )
+            merged = pull_request_snapshot(pr, repository)
+            if merged.state != "MERGED":
+                raise RuntimeError(f"merge command completed but pull request is {merged.state}")
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                "required checks did not finish before the merge deadline: "
+                f"missing={list(checks.missing)}, pending={list(checks.pending)}"
+            )
+        time.sleep(min(poll_interval, max(0, deadline - time.monotonic())))
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pr", required=True)
+    parser.add_argument("--repository", required=True)
+    parser.add_argument("--app-slug", required=True)
+    parser.add_argument("--expected-head-sha", required=True)
+    parser.add_argument("--timeout", type=float, default=3600)
+    parser.add_argument("--poll-interval", type=float, default=30)
+    return parser
+
+
+def main() -> None:
+    args = _parser().parse_args()
+    merge_when_green(
+        pr=args.pr,
+        repository=args.repository,
+        app_slug=args.app_slug,
+        expected_head_sha=args.expected_head_sha,
+        timeout=args.timeout,
+        poll_interval=args.poll_interval,
+    )
+
+
+if __name__ == "__main__":
+    main()

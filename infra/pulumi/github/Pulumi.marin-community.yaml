@@ -4,6 +4,8 @@ config:
   marin-github:organization: marin-community
   marin-github:repositories:
     - marin-community/marin
+  marin-github:externalRuntimeUpdater:
+    enabled: false
   marin-github:credentials:
     - name: CLAUDE_CODE_OAUTH_TOKEN
       scope: organization
@@ -220,6 +222,16 @@ config:
       source_kind: manual
       source_ref: owner-recovery:claude-nightshift-private-key
       disposition: keep
+    - name: EXTERNAL_RUNTIME_UPDATER_PRIVATE_KEY
+      scope: environment
+      repository: marin-community/marin
+      environment: external-runtime-updater
+      presence: present
+      management: pulumi
+      source_kind: configuration
+      source_ref: config:infra/pulumi/github/Pulumi.marin-community.yaml#externalRuntimeUpdater.encryptedPrivateKey
+      disposition: keep
+      note: Dedicated app key sealed to its Actions environment public key; Pulumi stores ciphertext only.
     - name: R2_ACCESS_KEY_ID
       scope: repository
       repository: marin-community/marin

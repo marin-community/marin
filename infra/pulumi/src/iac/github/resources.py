@@ -13,6 +13,7 @@ from iac.github.credentials import (
     Credential,
     CredentialManifest,
     EnvironmentCredential,
+    Management,
     OrganizationCredential,
     OrganizationVisibility,
     Presence,
@@ -39,10 +40,10 @@ def _logical_name(credential: Credential) -> str:
 
 
 def credential_resource_plans(manifest: CredentialManifest) -> tuple[CredentialResourcePlan, ...]:
-    """Compute lookup IDs for the present credential declarations."""
+    """Compute lookup IDs for present credentials managed outside Pulumi."""
     plans: list[CredentialResourcePlan] = []
     for credential in manifest.credentials:
-        if credential.presence is not Presence.PRESENT:
+        if credential.presence is not Presence.PRESENT or credential.management is Management.PULUMI:
             continue
         if isinstance(credential, OrganizationCredential):
             resource_id = credential.name

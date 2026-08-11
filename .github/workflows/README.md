@@ -56,13 +56,25 @@ when the archive or updated body would exceed GitHub's size limit.
 ## External dependency updates
 
 `ops-external-dependencies.yaml` advances the isolated Evalchemy, Harbor, and
-MarinSkyRL projects at 09:00 UTC each day. It runs
+MarinSkyRL projects at 00:17, 06:17, 12:17, and 18:17 UTC. It runs
 `uv run config/update-external.py` without a project selector, records each
 resolved version and commit in the job summary, and includes every upstream
 commit subject between the old and new revisions. It opens or refreshes one
 `automation/external-dependencies` pull request when generated state changes
-and enables squash auto-merge. The Nightshift GitHub App token lets normal pull
-request checks run on the automation branch.
+using the dedicated `marin-external-runtime-updater` GitHub App. The workflow
+checks the app author, branch, title, exact head SHA, and changed-file allowlist,
+then waits up to one hour for the four required main checks before squash
+merging. A failure or timeout leaves the pull request open and makes the
+scheduled workflow red.
+
+The app key is an environment secret released only to protected branches; a
+pull-request workflow cannot receive it. The GitHub Pulumi stack gives only this
+app a review-rule bypass. Required CI is in a separate ruleset with no bypass
+actor and is bound to the GitHub Actions integration, so the app cannot merge a
+failing update or supply the required contexts itself. An upstream commit is
+discovered within six hours under normal Actions scheduling; a green update
+lands in that run, while a blocked update raises a visible failure within the
+workflow's 90-minute deadline.
 
 ## Canonical recipe: open or update a bot PR with `git + gh`
 
