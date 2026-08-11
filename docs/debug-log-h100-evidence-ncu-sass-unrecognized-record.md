@@ -214,3 +214,33 @@ Behavioral tests cover both selected widths, mismatched widths, every gap,
 private-value and ordering nonleakage, and the production NCU subprocess
 boundary. No image build, GPU execution, v26 submission, or relaunch was
 performed for this source-only diagnostic change.
+
+## V26 fixed-column header observation
+
+The single v26 task used source
+`5a4518700a232c302f0db6029e2a045a04bea174`. It authenticated the launcher and
+manifest, selected the 107-byte separator layout, accepted the matching kernel
+identity row and identity-table close, then failed once at line 4. The bounded
+diagnostic reports six selected-width columns separated by five exact ASCII
+spaces. Column 0 contains only the exact public word `Address` and padding;
+column 1 contains only the exact public word `Source` and padding. Columns 2
+through 5 each contain one six-byte lowercase ASCII token with no padding. The
+diagnostic contains no private token value, token hash, raw row, or adjacent
+record.
+
+The parser now requires this fixed-column header immediately after every
+identity-table close. The selected separator tuple fixes all six column widths
+and total row width. Column 0 begins with exact `Address` and otherwise contains
+ASCII-space padding; column 1 trims to exact `Source` and otherwise contains
+ASCII-space padding; the remaining four columns each contain exactly six
+lowercase ASCII letters. Each inter-column gap is one ASCII space. The matching
+selected-width separator must follow immediately. The former synthetic
+`Address Source` header is no longer accepted. Kernel identity, separator, and
+instruction parsing are otherwise unchanged.
+
+Behavioral tests exercise both reviewed widths through the parser and NCU
+subprocess boundary. They reject missing, duplicated, moved, reordered, or
+lookalike public fields; altered gaps or padding; and private labels with the
+wrong length, case, character class, digit, punctuation, or encoding. No image
+build, GPU execution, v27 submission, or relaunch was performed for this source
+repair.

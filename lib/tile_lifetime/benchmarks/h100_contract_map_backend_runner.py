@@ -237,7 +237,6 @@ _SASS_OPCODE_BASES = frozenset(
         "YIELD",
     }
 )
-_NCU_SASS_HEADER = "Address Source"
 _NCU_SASS_SEPARATOR_WIDTH_OPTIONS = (
     (18, 60, 6, 6, 6, 6),
     (18, 61, 6, 6, 6, 6),
@@ -931,7 +930,7 @@ def _ncu_sass_line_structure(line: str, column_widths: tuple[int, ...]) -> dict[
         "leading_spaces": len(line) - len(line.lstrip(" ")),
         "non_ascii_codepoints": sum(ord(character) >= 128 for character in line),
         "public_patterns": {
-            "header": line == _NCU_SASS_HEADER,
+            "header": _ncu_sass_header_matches(line, column_widths),
             "instruction": _NCU_SASS_INSTRUCTION_PATTERN.match(line) is not None,
             "section": any(pattern.fullmatch(line) is not None for pattern in _NCU_SASS_SECTION_PATTERNS.values()),
             "separator": line in _NCU_SASS_SEPARATORS,
@@ -948,6 +947,30 @@ def _ncu_sass_line_structure(line: str, column_widths: tuple[int, ...]) -> dict[
     if fixed_columns is not None:
         structure["fixed_columns"] = fixed_columns
     return structure
+
+
+def _ncu_sass_header_matches(line: str, column_widths: tuple[int, ...]) -> bool:
+    line_bytes = line.encode("utf-8")
+    expected_bytes = sum(column_widths) + len(column_widths) - 1
+    if len(line_bytes) != expected_bytes:
+        return False
+
+    columns: list[bytes] = []
+    offset = 0
+    for index, width in enumerate(column_widths):
+        columns.append(line_bytes[offset : offset + width])
+        offset += width
+        if index < len(column_widths) - 1:
+            if line_bytes[offset : offset + 1] != b" ":
+                return False
+            offset += 1
+    if offset != len(line_bytes):
+        raise AssertionError("fixed Nsight Compute SASS header columns do not cover the selected width")
+    if columns[0].rstrip(b" ") != b"Address" or columns[0].startswith(b" "):
+        return False
+    if columns[1].strip(b" ") != b"Source":
+        return False
+    return all(re.fullmatch(rb"[a-z]{6}", column) is not None for column in columns[2:])
 
 
 def _ncu_sass_fixed_columns(line: bytes, column_widths: tuple[int, ...]) -> dict[str, object] | None:
@@ -1068,6 +1091,16 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
                 )
             identity_separator_seen = True
             continue
+        if current_name is not None and not header_seen:
+            if not _ncu_sass_header_matches(line, selected_separator_widths):
+                raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)
+            header_seen = True
+            continue
+        if current_name is not None and not separator_seen:
+            if not is_selected_separator(line):
+                raise ValueError(f"Nsight Compute SASS address table omits its exact close at line {line_number}")
+            separator_seen = True
+            continue
         section = selected_section_pattern.fullmatch(line)
         if section is not None:
             finish_section()
@@ -1075,16 +1108,8 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
             continue
         if not line.strip():
             continue
-        if line == _NCU_SASS_HEADER:
-            if current_name is None or header_seen or separator_seen or instructions:
-                raise ValueError(f"misplaced Nsight Compute SASS header at line {line_number}")
-            header_seen = True
-            continue
         if is_selected_separator(line):
-            if current_name is None or not header_seen or separator_seen or instructions:
-                raise ValueError(f"misplaced Nsight Compute SASS separator at line {line_number}")
-            separator_seen = True
-            continue
+            raise ValueError(f"misplaced Nsight Compute SASS separator at line {line_number}")
         instruction = _NCU_SASS_INSTRUCTION_PATTERN.match(line)
         if instruction is None or current_name is None or not separator_seen:
             raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)

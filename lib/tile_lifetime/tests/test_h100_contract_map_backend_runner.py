@@ -183,6 +183,14 @@ def _ncu_sass_kernel_row(
     return f"Kernel Name        {name}{' ' * (separator_widths[1] + 2)}"
 
 
+def _ncu_sass_header_row(
+    separator_widths: tuple[int, ...] = _NCU_SASS_COLUMN_WIDTHS,
+    columns: tuple[str, ...] = ("Address", "Source", "aaaaaa", "bbbbbb", "cccccc", "dddddd"),
+    gaps: tuple[bytes, ...] = (b" ",) * 5,
+) -> str:
+    return _ncu_sass_fixed_column_row(columns, gaps=gaps, column_widths=separator_widths)
+
+
 def _ncu_sass_export(
     *sections: tuple[str, tuple[str, ...]],
     separator_widths: tuple[int, ...] = _NCU_SASS_COLUMN_WIDTHS,
@@ -194,7 +202,7 @@ def _ncu_sass_export(
             (
                 _ncu_sass_kernel_row(name, separator_widths),
                 separator,
-                "Address Source",
+                _ncu_sass_header_row(separator_widths),
                 separator,
             )
         )
@@ -570,7 +578,7 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
             source = source.replace(section, "public-unknown-record\n" + section)
         elif variant in ("fixed-column-record", "wide-fixed-column-record"):
             source = source.replace(
-                "Address Source",
+                _ncu_sass_header_row(separator_widths),
                 _ncu_sass_fixed_column_row(
                     ("Address", "private", "Source", "", "", ""),
                     column_widths=separator_widths,
@@ -730,21 +738,22 @@ def test_runner_ncu_sass_parser_requires_immediate_exact_identity_table_close(mu
         )
         row = _ncu_sass_kernel_row(_NCU_KERNEL_B)
         expected_names = (_NCU_KERNEL_A, _NCU_KERNEL_B)
-    identity_table = row + "\n" + _NCU_SASS_SEPARATOR + "\nAddress Source"
+    header = _ncu_sass_header_row()
+    identity_table = row + "\n" + _NCU_SASS_SEPARATOR + "\n" + header
     if mutation in {"missing", "missing-second"}:
-        source = source.replace(identity_table, row + "\nAddress Source", 1)
+        source = source.replace(identity_table, row + "\n" + header, 1)
     elif mutation == "duplicate":
         source = source.replace(
             identity_table,
-            row + "\n" + _NCU_SASS_SEPARATOR + "\n" + _NCU_SASS_SEPARATOR + "\nAddress Source",
+            row + "\n" + _NCU_SASS_SEPARATOR + "\n" + _NCU_SASS_SEPARATOR + "\n" + header,
             1,
         )
     elif mutation == "moved":
-        source = source.replace(identity_table, row + "\nAddress Source\n" + _NCU_SASS_SEPARATOR, 1)
+        source = source.replace(identity_table, row + "\n" + header + "\n" + _NCU_SASS_SEPARATOR, 1)
     elif mutation == "wrong-literal":
-        source = source.replace(identity_table, row + "\n" + _NCU_SASS_SEPARATOR + " \nAddress Source", 1)
+        source = source.replace(identity_table, row + "\n" + _NCU_SASS_SEPARATOR + " \n" + header, 1)
     elif mutation == "blank-before-close":
-        source = source.replace(identity_table, row + "\n\n" + _NCU_SASS_SEPARATOR + "\nAddress Source", 1)
+        source = source.replace(identity_table, row + "\n\n" + _NCU_SASS_SEPARATOR + "\n" + header, 1)
     elif mutation == "separator-before-kernel":
         source = source.replace(
             _NCU_SASS_SEPARATOR + "\n" + row,
@@ -754,7 +763,7 @@ def test_runner_ncu_sass_parser_requires_immediate_exact_identity_table_close(mu
     else:
         raise AssertionError(f"unhandled mutation {mutation!r}")
 
-    with pytest.raises(ValueError, match=r"identity table omits|misplaced"):
+    with pytest.raises(ValueError, match=r"identity table omits|misplaced|unrecognized"):
         runner.parse_ncu_sass(source, expected_names)
 
 
@@ -815,7 +824,7 @@ def test_runner_ncu_sass_parser_rejects_kernel_identity_row_mutations(section: s
             _NCU_SASS_SEPARATOR,
             section,
             _NCU_SASS_SEPARATOR,
-            "Address Source",
+            _ncu_sass_header_row(),
             _NCU_SASS_SEPARATOR,
             "0000000000000000 MOV R1, R2",
             "",
@@ -835,7 +844,7 @@ def test_runner_ncu_sass_parser_rejects_kernel_identity_row_mutations(section: s
         ("", None),
         ("==PROF== Connected to process 123 (/public/tool)", "status"),
         (_ncu_sass_kernel_row(_NCU_KERNEL_A), "section"),
-        ("Address Source", "header"),
+        (_ncu_sass_header_row(), "header"),
         ("0000000000000000 MOV R1, R2", "instruction"),
         (_NCU_SASS_SEPARATOR[:-1] + "x", None),
         ("unicode-" + "\N{SNOWMAN}" * 3, None),
@@ -1336,11 +1345,12 @@ def test_runner_ncu_sass_unrecognized_record_diagnostic_fails_closed_at_serializ
 )
 def test_runner_ncu_sass_parser_rejects_missing_or_mutated_table_separator(replacement: str) -> None:
     source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
-    section_separator = "Address Source\n" + _NCU_SASS_SEPARATOR
+    header = _ncu_sass_header_row()
+    section_separator = header + "\n" + _NCU_SASS_SEPARATOR
 
     with pytest.raises(ValueError):
         runner.parse_ncu_sass(
-            source.replace(section_separator, "Address Source\n" + replacement),
+            source.replace(section_separator, header + "\n" + replacement),
             (_NCU_KERNEL_A,),
         )
 
@@ -1510,46 +1520,176 @@ def test_runner_ncu_sass_parser_rejects_duplicate_top_level_separator() -> None:
         runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
 
-@pytest.mark.parametrize(
-    "header",
-    ("", " Address Source", "Address Source ", "Address  Source", "Address\tSource", "address Source"),
-)
-def test_runner_ncu_sass_parser_rejects_missing_or_nonliteral_header(header: str) -> None:
+@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+def test_runner_ncu_sass_parser_accepts_selected_fixed_column_header(
+    separator_widths: tuple[int, ...],
+) -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=separator_widths,
+    )
+
+    parsed = runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    header = source.splitlines()[3]
+    assert parsed[0].name == _NCU_KERNEL_A
+    assert header == _ncu_sass_header_row(separator_widths)
+    assert len(header.encode("utf-8")) == sum(separator_widths) + 5
+
+
+def test_runner_ncu_sass_parser_accepts_unknown_source_label_padding() -> None:
     source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
-    with pytest.raises(ValueError):
-        runner.parse_ncu_sass(source.replace("Address Source", header), (_NCU_KERNEL_A,))
+    source = source.replace(
+        _ncu_sass_header_row(),
+        _ncu_sass_header_row(columns=("Address", " Source ", "aaaaaa", "bbbbbb", "cccccc", "dddddd")),
+    )
+
+    parsed = runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    assert parsed[0].name == _NCU_KERNEL_A
 
 
 @pytest.mark.parametrize(
-    "replacement",
+    "columns",
     (
-        "Address Source\nAddress Source",
-        _NCU_SASS_SEPARATOR + "\nAddress Source",
+        ("Source", "Address", "aaaaaa", "bbbbbb", "cccccc", "dddddd"),
+        ("Address", "Address", "aaaaaa", "bbbbbb", "cccccc", "dddddd"),
+        ("Source", "Source", "aaaaaa", "bbbbbb", "cccccc", "dddddd"),
+        ("", "Source", "aaaaaa", "bbbbbb", "cccccc", "dddddd"),
+        ("Address", "", "aaaaaa", "bbbbbb", "cccccc", "dddddd"),
+        ("Address", "private", "Source", "bbbbbb", "cccccc", "dddddd"),
+    ),
+    ids=("reordered", "duplicate-address", "duplicate-source", "missing-address", "missing-source", "source-moved"),
+)
+@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+def test_runner_ncu_sass_parser_rejects_header_public_identity_mutations(
+    separator_widths: tuple[int, ...],
+    columns: tuple[str, ...],
+) -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=separator_widths,
+    )
+    source = source.replace(
+        _ncu_sass_header_row(separator_widths),
+        _ncu_sass_header_row(separator_widths, columns=columns),
+    )
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    diagnostic = _ncu_sass_diagnostic(failure.value)
+    assert diagnostic["line_number"] == 4
+    assert diagnostic["line_structure"]["public_patterns"]["header"] is False
+
+
+@pytest.mark.parametrize(
+    "label",
+    ("abcde", "abcdefg", "Abcdef", "abcde0", "abcde_", "abcde-", "abcde.", "ééé"),
+    ids=("short", "long", "uppercase", "digit", "underscore", "hyphen", "dot", "non-ascii"),
+)
+@pytest.mark.parametrize("label_index", (2, 3, 4, 5))
+def test_runner_ncu_sass_parser_rejects_private_header_label_mutations(label: str, label_index: int) -> None:
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
+    columns = ["Address", "Source", "aaaaaa", "bbbbbb", "cccccc", "dddddd"]
+    columns[label_index] = label
+    if len(label.encode("utf-8")) > _NCU_SASS_COLUMN_WIDTHS[label_index]:
+        changed = _ncu_sass_header_row().replace(
+            ("aaaaaa", "bbbbbb", "cccccc", "dddddd")[label_index - 2],
+            label,
+            1,
+        )
+    else:
+        changed = _ncu_sass_header_row(columns=tuple(columns))
+    source = source.replace(_ncu_sass_header_row(), changed)
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 4
+
+
+@pytest.mark.parametrize("gap_index", range(5))
+@pytest.mark.parametrize("gap", (b"\t", b"x"), ids=("tab", "nonspace"))
+@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+def test_runner_ncu_sass_parser_rejects_header_gap_mutations(
+    separator_widths: tuple[int, ...],
+    gap: bytes,
+    gap_index: int,
+) -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=separator_widths,
+    )
+    gaps = [b" "] * 5
+    gaps[gap_index] = gap
+    changed = _ncu_sass_header_row(separator_widths, gaps=tuple(gaps))
+    source = source.replace(_ncu_sass_header_row(separator_widths), changed)
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 4
+
+
+@pytest.mark.parametrize(
+    "columns",
+    (
+        (" Address", "Source", "aaaaaa", "bbbbbb", "cccccc", "dddddd"),
+        ("Addr ess", "Source", "aaaaaa", "bbbbbb", "cccccc", "dddddd"),
+        ("address", "Source", "aaaaaa", "bbbbbb", "cccccc", "dddddd"),
+        ("Address" + "x" * 11, "Source", "aaaaaa", "bbbbbb", "cccccc", "dddddd"),
+        ("Address", "Sou rce", "aaaaaa", "bbbbbb", "cccccc", "dddddd"),
+        ("Address", "Source" + "x" * 54, "aaaaaa", "bbbbbb", "cccccc", "dddddd"),
+    ),
+    ids=(
+        "leading-space",
+        "address-internal-space",
+        "address-case",
+        "address-nonspace-pad",
+        "source-internal-space",
+        "source-nonspace-pad",
     ),
 )
-def test_runner_ncu_sass_parser_rejects_duplicate_or_misplaced_header(replacement: str) -> None:
+def test_runner_ncu_sass_parser_rejects_header_padding_mutations(columns: tuple[str, ...]) -> None:
     source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
-    with pytest.raises(ValueError, match=r"misplaced|unrecognized"):
-        runner.parse_ncu_sass(source.replace("Address Source", replacement), (_NCU_KERNEL_A,))
+    source = source.replace(_ncu_sass_header_row(), _ncu_sass_header_row(columns=columns))
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 4
 
 
-def test_runner_ncu_sass_parser_rejects_header_before_kernel_section() -> None:
-    section = _ncu_sass_kernel_row(_NCU_KERNEL_A)
-    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",))).replace(
-        section + "\n" + _NCU_SASS_SEPARATOR + "\nAddress Source",
-        "Address Source\n" + section + "\n" + _NCU_SASS_SEPARATOR,
-    )
-    with pytest.raises(ValueError, match="misplaced"):
+@pytest.mark.parametrize("mutation", ("missing", "duplicate", "before-identity-close", "blank-before", "old-synthetic"))
+def test_runner_ncu_sass_parser_requires_header_immediately_after_identity_close(mutation: str) -> None:
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
+    header = _ncu_sass_header_row()
+    if mutation == "missing":
+        source = source.replace(header + "\n", "", 1)
+    elif mutation == "duplicate":
+        source = source.replace(header, header + "\n" + header, 1)
+    elif mutation == "before-identity-close":
+        source = source.replace(_NCU_SASS_SEPARATOR + "\n" + header, header + "\n" + _NCU_SASS_SEPARATOR, 1)
+    elif mutation == "blank-before":
+        source = source.replace(header, "\n" + header, 1)
+    elif mutation == "old-synthetic":
+        source = source.replace(header, "Address Source", 1)
+    else:
+        raise AssertionError(f"unhandled mutation {mutation!r}")
+
+    with pytest.raises(ValueError):
         runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
 
 
 @pytest.mark.parametrize("separator", (" " + _NCU_SASS_SEPARATOR, _NCU_SASS_SEPARATOR + " "))
 def test_runner_ncu_sass_parser_rejects_separator_outer_whitespace(separator: str) -> None:
     source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)))
-    section_separator = "Address Source\n" + _NCU_SASS_SEPARATOR
+    header = _ncu_sass_header_row()
+    section_separator = header + "\n" + _NCU_SASS_SEPARATOR
     with pytest.raises(ValueError):
         runner.parse_ncu_sass(
-            source.replace(section_separator, "Address Source\n" + separator),
+            source.replace(section_separator, header + "\n" + separator),
             (_NCU_KERNEL_A,),
         )
 
