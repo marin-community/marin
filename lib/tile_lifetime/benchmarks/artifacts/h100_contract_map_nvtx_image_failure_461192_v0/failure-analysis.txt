@@ -1,0 +1,34 @@
+Observed boundary
+=================
+
+1. Workflow attempt 1 checked out exact source
+   4611929eab07dc8fa11294c2456b4cdfde5a46bc and resolved the same full SHA.
+2. The Docker context gate, CUDA/Nsight package installation and identity
+   probes, and the pinned `nsys profile --help` option-contract smoke passed.
+3. The CPU-only production NVTX smoke invoked the exact checked-in
+   `NvtxRange` through `libnvToolsExt.so` under pinned Nsight Systems 2026.1.3.
+4. `nvtxRangePushA` returned signed value -1. The wrapper rejected the value
+   before running its body or calling `nvtxRangePop`.
+5. Nsight Systems independently logged that the capture range started and
+   ended and generated `/tmp/h100-evidence-nvtx.nsys-rep` after the child
+   exited. The build step then failed with exit code 1.
+
+Exact first failure
+===================
+
+NVTX smoke validation failed: NVTX push rejected range
+'h100-evidence-nvtx-smoke': return_code=-1 classification=negative_error
+requested_library='/usr/local/cuda-13.2/lib64/libnvToolsExt.so'
+resolved_library='/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvtx3interop.so.1.1.0'
+dladdr_library='/usr/local/cuda-13.2/lib64/libnvToolsExt.so'
+NVTX_INJECTION64_PATH=present NVTX_INJECTION32_PATH=absent
+
+Evidence limit
+==============
+
+The local report was not exported to SQLite because the wrapper exited first,
+so this run does not prove that it contains the exact named NVTX event. The
+later SASS, shared-library, and absolute-runtime/import smokes did not run.
+BuildKit did not export or push an image, the workflow produced no OCI digest,
+and registry inspection did not run. No workflow retry, image deletion, GPU
+query, or H100 job occurred.
