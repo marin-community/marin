@@ -1409,10 +1409,16 @@ def _output_numerical_evidence(index: int, repeats: Sequence[Sequence[Any]], ref
     actual_repeats = tuple(np.asarray(outputs[index]) for outputs in repeats)
     expected = np.asarray(reference)
     first = actual_repeats[0]
-    if any(actual.shape != first.shape for actual in actual_repeats) or expected.shape != first.shape:
-        raise ValueError("numerical outputs and reference must have identical shapes")
+    for repeat_index, actual in enumerate(actual_repeats):
+        if actual.dtype.name != "bfloat16":
+            raise TypeError(f"numerical repeat {repeat_index} must have BF16 dtype")
+        if actual.shape != first.shape:
+            raise ValueError("numerical repeats must have identical shapes")
+    if expected.shape != first.shape:
+        raise ValueError("numerical output and reference must have identical shapes")
     finite = np.isfinite(first) & np.isfinite(expected)
-    nonfinite = int(first.size - np.count_nonzero(finite))
+    nonfinite = sum(int(np.count_nonzero(~np.isfinite(actual))) for actual in actual_repeats)
+    nonfinite += int(np.count_nonzero(~np.isfinite(expected)))
     finite_difference = np.abs(first[finite].astype(np.float32) - expected[finite].astype(np.float32))
     ulp = bfloat16_ulp_distance(first[finite], expected[finite])
     pairwise = []

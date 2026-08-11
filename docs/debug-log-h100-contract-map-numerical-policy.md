@@ -64,6 +64,9 @@ and
 
 The numerical policy now follows the reference contract:
 
+- Every measured repeat must be BF16 and exactly shape-matched. The zero-
+  nonfinite gate covers every repeat and the reference before finite-only
+  drift diagnostics can discard a position.
 - `source_ordered_fp32` retains hard maximum and mean BF16 ULP gates, absolute
   gates, zero nonfinite values, and bitwise repeatability.
 - `real_algebra_fp64` retains per-output maximum and mean absolute gates, zero
