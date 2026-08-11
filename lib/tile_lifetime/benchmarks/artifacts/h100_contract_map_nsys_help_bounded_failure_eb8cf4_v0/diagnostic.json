@@ -1,0 +1,17 @@
+{
+  "blocks": {
+    "capture-range-end": {
+      "available": false,
+      "bytes": 1704,
+      "reason": "exceeds_1024_byte_bound",
+      "sha256": "bc38d47863e7aa8b6a9fab4530c35271fa479926817a9b533d95b5303bbc0052"
+    },
+    "cuda-graph-trace": {
+      "available": false,
+      "bytes": 1538,
+      "reason": "exceeds_1024_byte_bound",
+      "sha256": "b0046a09b5e830e9d66ee8efa3a22d010f0b949ffd40f52f1401c979d39ae8b1"
+    }
+  },
+  "schema": "iris.h100_evidence_nsys_help_failure.v1"
+}
