@@ -206,28 +206,29 @@ def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:
     assert classify(["experiments/grug/moe/model.py"], tmp_path).src_modules == {"experiments.grug.moe.model"}
 
 
-def test_evaldash_source_emits_both_dotted_and_bare_modules(tmp_path: Path) -> None:
-    """evaldash sits under two source roots, so a change to one file names both module forms:
-    the dotted path the marin-tree tests import and the bare name the image-layout test uses."""
+def test_evaldash_source_maps_to_dotted_module(tmp_path: Path) -> None:
     write(tmp_path, "infra/evaldash/src/metrics.py")
-    assert classify(["infra/evaldash/src/metrics.py"], tmp_path).src_modules == {
-        "infra.evaldash.src.metrics",
-        "metrics",
-    }
+    assert classify(["infra/evaldash/src/metrics.py"], tmp_path).src_modules == {"infra.evaldash.src.metrics"}
 
 
 def _write_evaldash_workspace(repo_root: Path) -> None:
-    """The two ways evaldash's tests reach its out-of-package sources."""
+    """An evaldash package and the tests that import it."""
     write(repo_root, "infra/evaldash/src/metrics.py", "def build_matrix():\n    pass\n")
     write(repo_root, "infra/evaldash/src/samples.py", "def fetch_samples():\n    pass\n")
     write(repo_root, "infra/evaldash/src/fixtures.py", "def build_fixtures():\n    pass\n")
-    write(repo_root, "infra/evaldash/src/server.py", "import samples\nfrom metrics import build_matrix\n")
-    # Marin-tree tests import through the dotted package path.
+    write(
+        repo_root,
+        "infra/evaldash/src/server.py",
+        "from infra.evaldash.src import samples\nfrom infra.evaldash.src.metrics import build_matrix\n",
+    )
     write(
         repo_root, "tests/evaluation/test_evaldash_metrics.py", "from infra.evaldash.src.metrics import build_matrix\n"
     )
-    # The local-store test mirrors the deployed image and imports the modules bare.
-    write(repo_root, "tests/evaluation/test_evaldash_local_store.py", "import server\nimport fixtures\n")
+    write(
+        repo_root,
+        "tests/evaluation/test_evaldash_local_store.py",
+        "from infra.evaldash.src import fixtures, server\n",
+    )
 
 
 @pytest.mark.parametrize(
@@ -236,7 +237,7 @@ def _write_evaldash_workspace(repo_root: Path) -> None:
         ("infra/evaldash/src/metrics.py", "tests/evaluation/test_evaldash_metrics.py"),
         ("infra/evaldash/src/server.py", "tests/evaluation/test_evaldash_local_store.py"),
     ],
-    ids=["dotted-import", "bare-import"],
+    ids=["metrics", "server"],
 )
 def test_evaldash_change_selects_importing_test(tmp_path: Path, changed_file: str, selected_test: str) -> None:
     _write_evaldash_workspace(tmp_path)

@@ -43,7 +43,6 @@ SCOPES: tuple[str, ...] = (
     "finelog",
     "finestore",
 )
-EVALDASH_SOURCE_DIR = "infra/evaldash/src"
 
 
 @dataclass(frozen=True)
@@ -59,13 +58,7 @@ class SourceRoot:
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES),
     SourceRoot("experiments", "."),
-    # evaldash lives outside a workspace package and its tests reach it two ways: the
-    # marin-tree tests import ``infra.evaldash.src.<mod>`` (import root = repo root),
-    # while test_evaldash_local_store.py mirrors the deployed image and imports the
-    # modules bare (``import server``; import root = the src dir). Registering both
-    # roots ties each test style to the same files so either kind of change selects it.
-    SourceRoot(EVALDASH_SOURCE_DIR, "."),
-    SourceRoot(EVALDASH_SOURCE_DIR, EVALDASH_SOURCE_DIR),
+    SourceRoot("infra/evaldash/src", "."),
 )
 
 # Files whose change triggers running every package's full test suite. The Rust
@@ -396,15 +389,15 @@ def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
             native_changed.add(native_scope)
             continue
 
-        # A file usually sits under one source root, but evaldash is registered under two
-        # (dotted and bare image layout), so emit the module name for every matching root.
-        matching_roots = [root for root in SOURCE_ROOTS if filepath.startswith(f"{root.package_dir}/")]
-        if matching_roots:
+        source_root = next(
+            (root for root in SOURCE_ROOTS if filepath.startswith(f"{root.package_dir}/")),
+            None,
+        )
+        if source_root is not None:
             if filepath.endswith(".py"):
-                for root in matching_roots:
-                    module = path_to_module(repo_root / filepath, repo_root / root.import_root)
-                    if module:
-                        src_modules.add(module)
+                module = path_to_module(repo_root / filepath, repo_root / source_root.import_root)
+                if module:
+                    src_modules.add(module)
             continue
 
         for scope in SCOPES:
