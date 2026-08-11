@@ -124,16 +124,29 @@ patch set), or the pinned refresh branch for descriptor pins. Then, onto `new_ba
 2. Classify each meaningful delta: `carry` (still needed, not upstreamed), `drop`
    (upstream absorbed it, obsolete, or temporary), `fix` (intent needed,
    implementation must change — re-author against the current layout when upstream
-   moved or refactored the files it touches).
+   moved or refactored the files it touches). Before carrying anything, check whether
+   the new base already did it: grep the base for the symbols, APIs, or dependency
+   pins the patch introduces. If they are present it is a `drop` — a backport that has
+   landed, or a version ceiling the base now exceeds (a stale `<X` pin silently
+   downgrades upstream). On a fast-moving fork this "did upstream absorb this?" pass is
+   the highest-value step; it is what keeps the fork converging rather than re-adding
+   duplicate or obsolete code.
 3. Replay only `carry` and `fix` onto `new_base` in the old logical order: clean
    cherry-picks for carries; rewrite fixes as new commits referencing the original
-   SHA(s).
+   SHA(s). Separate genuine conflicts from cascade artifacts: a file the overlay
+   created (absent from the new base) conflicts only because an earlier commit that
+   added it was skipped. Classify each touched path as upstream-shared (exists at both
+   bases) or fork-new, resolve fork-new cascades mechanically, and count conflicts only
+   on shared files — a single abort-on-conflict pass badly overcounts and can read a
+   tractable rebase as intractable.
 4. In every retained commit body, state why it is still needed and its future drop
    condition. For non-obvious patches, leave a short code-adjacent rationale.
 5. Run `git range-diff old_base..old_tip new_base..<new_tip>` as the replay audit
    and explain every dropped or rewritten delta in the notes and PR.
 6. Keep history reviewable — no conflict artifacts, unrelated refactors, or
-   preserved commits whose behavior is now `drop`.
+   preserved commits whose behavior is now `drop`. Collapse fork-infra churn
+   (CI, workflow, or prose commits that adopt then revise then disable) to its final
+   state rather than replaying each hop.
 
 Stop and file a blocker instead of forcing a PR when the rebase is not a mechanical
 replay: our overlay is non-linear (merge commits weaving upstream in), upstream
@@ -196,6 +209,11 @@ gate workflows commonly filter `branches: ["main"]`, so such a PR gets no automa
 CI; only a workflow declaring `workflow_dispatch` and present on the default branch
 can be dispatched against the branch ref; a workflow with neither `workflow_dispatch`
 nor a matching push trigger never runs on that PR, so verify it locally.
+
+A build-heavy fork raises a second ceiling. vLLM's suite needs its compiled CUDA/TPU
+stack, and `import` fails outright when the runner has no torch, so the pre-e2e check
+there is structural only: `py_compile` the replayed tree and sweep for leftover
+conflict markers. A green structural pass is not behavioral validation — say so.
 
 Deterministic golden tests are dependency-version fragile: an upstream-mandated
 dependency floor (an upstream `litellm>=1.92` bump) can stale a golden even when the
