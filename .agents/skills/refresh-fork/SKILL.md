@@ -141,8 +141,12 @@ renamed or refactored files our `fix` commits touch (so they need re-authoring a
 the new layout), or conflicts hit many core files at once. A fork hundreds of commits
 behind upstream is usually in this state. The weekly cadence keeps a fork from ever
 drifting this far; one that already has (see `nuances`) needs a one-time manual
-catch-up outside this skill before it can be auto-migrated. The blocker issue carries
-the carry/drop/fix inventory, the conflict map, and how far behind the fork is.
+catch-up outside this skill before it can be auto-migrated. That catch-up replays
+the fork's real commits onto the new base; it never reconstructs the overlay from a
+single net diff, which silently invents drift the fork never carried. Diff each
+hand-ported `fix` file against the fork's `main` to confirm it matches intent. The
+blocker issue carries the carry/drop/fix inventory, the conflict map, and how far
+behind the fork is.
 
 ## Re-pin
 
@@ -168,6 +172,41 @@ pins change.
 
 Respect the section's `nuances`. Manual fixed-base overlay changes are a separate
 workflow; see `docs/overlay-only-pr.md`.
+
+## Check the fork's own suite
+
+Run the fork's own test suite on the rebased branch before the marin e2e. The e2e
+exercises one path; the fork suite is what catches re-porting drift across the whole
+patch set. Run it locally where the runner supports it, otherwise dispatch it on the
+fork's CI.
+
+Derive the command from the fork's CI config verbatim; do not invent a marker
+subset. A narrow marker such as `-m unit` can silently skip the thousands of unmarked
+tests the CI's real expression (`-m "not runtime"`) collects, so the narrow run reads
+green while most of the suite never ran. CI steps run in order under an implicit
+`if: success()`: a later gated step (a `-m runtime` docker leg) does not run until an
+earlier one is green, so its regressions stay hidden behind the first failure. Run
+every step's marker in order.
+
+Probe the runner before trusting a local run. This VM runs docker but its bind-mounts
+do not propagate into containers, so a container-environment trial (harbor's
+DOCKER-env golden tests) cannot complete here and has to run on the fork's CI. To
+dispatch the suite there when the review PR sits on an `upstream-base/<sha>` branch:
+gate workflows commonly filter `branches: ["main"]`, so such a PR gets no automatic
+CI; only a workflow declaring `workflow_dispatch` and present on the default branch
+can be dispatched against the branch ref; a workflow with neither `workflow_dispatch`
+nor a matching push trigger never runs on that PR, so verify it locally.
+
+Deterministic golden tests are dependency-version fragile: an upstream-mandated
+dependency floor (an upstream `litellm>=1.92` bump) can stale a golden even when the
+fork source is byte-identical. Read the deciding code path rather than the golden
+diff, and separate the dependency floor from a real port defect — never downgrade
+below the floor to make a golden pass. Prefer making the fixture dependency-independent
+by patching every version-sensitive seam the trigger reads (the sync and async token
+counters both, not just one) over re-tuning the golden to a single version. Regenerate
+in one CI run: a `workflow_dispatch` that runs the suite in update mode and then a
+comparison-mode verify step, both non-failing, uploading the regenerated goldens and
+logs as artifacts.
 
 ## Validate
 
