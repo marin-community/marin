@@ -83,17 +83,23 @@ def _wait_for_worker_calls(
     action: str,
 ) -> None:
     deadline = time.monotonic() + WORKER_CANCELLATION_TIMEOUT
+    failures: list[tuple[str, Exception]] = []
     for worker_id, future in futures.items():
         try:
             future.result(timeout=max(0.0, deadline - time.monotonic()))
-        except Exception:
-            logger.warning(
-                "[%s] Failed to %s on worker %s",
-                execution_id,
-                action,
-                worker_id,
-                exc_info=True,
-            )
+        except Exception as error:
+            failures.append((worker_id, error))
+
+    if failures:
+        sample = ", ".join(f"{worker_id}: {type(error).__name__}: {error}" for worker_id, error in failures[:3])
+        logger.warning(
+            "[%s] Failed to %s on %d of %d workers (%s)",
+            execution_id,
+            action,
+            len(failures),
+            len(futures),
+            sample,
+        )
 
 
 class WorkerState(enum.StrEnum):

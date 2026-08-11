@@ -370,14 +370,7 @@ def test_pull_task_rotates_between_executions(coordinator):
 
 
 def test_abort_execution_does_not_abort_other_execution(coordinator):
-    task = ShardTask(
-        shard_idx=0,
-        total_shards=1,
-        shard=ListShard(refs=[]),
-        operations=[],
-        stage_name="test",
-        cost=_TEST_TASK_COST,
-    )
+    task = _make_task()
     cancelled = start_test_stage(coordinator, [task], execution_id="cancelled")
     active = start_test_stage(coordinator, [task], execution_id="active")
 

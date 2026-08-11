@@ -214,16 +214,23 @@ def test_subprocess_cancellation_keeps_shared_pool_available(local_client, tmp_p
 
     with ctx, ThreadPoolExecutor(max_workers=1) as executor:
         blocked = executor.submit(run_blocked_pipeline)
-        assert ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
-            marker.exists,
-            timeout=Duration.from_seconds(10),
-        )
+        try:
+            assert ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
+                marker.exists,
+                timeout=Duration.from_seconds(10),
+            )
 
-        token.cancel("step lease lost")
+            token.cancel("step lease lost")
 
-        with pytest.raises(ZephyrWorkerError, match="step lease lost"):
-            blocked.result(timeout=10)
-        assert ctx.execute(Dataset.from_list([2]).map(lambda value: value * 3)).results == [6]
+            with pytest.raises(ZephyrWorkerError, match="step lease lost"):
+                blocked.result(timeout=10)
+            assert ctx.execute(Dataset.from_list([2]).map(lambda value: value * 3)).results == [6]
+        finally:
+            gate_fd = os.open(gate, os.O_RDWR | os.O_NONBLOCK)
+            try:
+                os.write(gate_fd, b"x")
+            finally:
+                os.close(gate_fd)
 
 
 @pytest.fixture()

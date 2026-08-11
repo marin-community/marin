@@ -30,6 +30,7 @@ from rigging.cancellation import current_cancellation_token
 from rigging.filesystem import StoragePath, url_to_fs
 from rigging.filesystem.distributed_lock import LeaseLostError
 from rigging.log_setup import configure_logging
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from marin.execution.artifact import (
     FINGERPRINT_KEY,
@@ -59,6 +60,9 @@ from marin.training.run_environment import dependency_groups_for_resources
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger(__name__)
+
+STEP_LEASE_REFRESH_ATTEMPTS = 3
+STEP_LEASE_REFRESH_BACKOFF = ExponentialBackoff(initial=0.5, maximum=2.0, factor=2.0)
 
 
 # ---------------------------------------------------------------------------
@@ -440,10 +444,19 @@ def _raise_if_step_cancelled(output_path: str) -> None:
 
 
 def _refresh_step_lease(status_file: StatusFile) -> None:
-    try:
-        status_file.refresh_lock()
-    except LeaseLostError as error:
-        raise StepLeaseLostError(status_file.output_path, str(error)) from error
+    def refresh() -> None:
+        try:
+            status_file.refresh_lock()
+        except LeaseLostError as error:
+            raise StepLeaseLostError(status_file.output_path, str(error)) from error
+
+    retry_with_backoff(
+        refresh,
+        retryable=lambda error: not isinstance(error, StepLeaseLostError),
+        max_attempts=STEP_LEASE_REFRESH_ATTEMPTS,
+        backoff=STEP_LEASE_REFRESH_BACKOFF,
+        operation=f"refresh step lease for {status_file.output_path}",
+    )
 
 
 def run_step(step: StepSpec) -> None:
@@ -469,7 +482,6 @@ def run_step(step: StepSpec) -> None:
     while True:
         try:
             with step_lock(output_path, step_label, force_rerun=mutable and not lease_was_lost) as status_file:
-                # 3. Run the function
                 try:
                     t0 = time.monotonic()
                     if step.resources is not None:
@@ -485,7 +497,6 @@ def run_step(step: StepSpec) -> None:
                             write_step_record(_step_record_identity(step), output_path=output_path, result=result)
                     elapsed = timedelta(seconds=time.monotonic() - t0)
 
-                    # 4. Refresh the lease before writing terminal status.
                     _raise_if_step_cancelled(output_path)
                     _refresh_step_lease(status_file)
                     status_file.write_status(STATUS_SUCCESS)
@@ -530,6 +541,7 @@ def _submit_iris_job(
 
     def _fn_with_artifact_save() -> None:
         result = raw_fn(output_path)
+        _raise_if_step_cancelled(output_path)
         write_step_record(identity, output_path=output_path, result=result)
 
     job_name = sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")

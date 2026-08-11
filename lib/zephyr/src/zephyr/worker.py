@@ -332,7 +332,12 @@ class ZephyrWorker:
                 work.stage_generation,
             ).result()
         except Exception:
-            logger.error("Worker %s error on shard %d", self._worker_id, task.shard_idx, exc_info=True)
+            with self._resources_lock:
+                execution_cancelled = work.execution_id in self._cancelled_executions
+            if execution_cancelled:
+                logger.info("Worker %s cancelled shard %d", self._worker_id, task.shard_idx)
+            else:
+                logger.error("Worker %s error on shard %d", self._worker_id, task.shard_idx, exc_info=True)
             self._coordinator.report_error.remote(
                 self._worker_id,
                 work.execution_id,
@@ -344,9 +349,7 @@ class ZephyrWorker:
         finally:
             with self._resources_lock:
                 self._available = self._available + task.cost
-                active_runner = _ActiveRunner(work.execution_id, runner)
-                if active_runner in self._active_runners:
-                    self._active_runners.remove(active_runner)
+                self._active_runners = [active for active in self._active_runners if active.runner is not runner]
             self._active_task_count = max(0, self._active_task_count - 1)
             self._task_completed_event.set()
 

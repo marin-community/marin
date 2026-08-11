@@ -27,6 +27,7 @@ from marin.execution.step_status import (
 from pydantic import BaseModel
 from rigging.cancellation import current_cancellation_token
 from rigging.filesystem.distributed_lock import LeaseLostError
+from rigging.timing import ExponentialBackoff
 
 
 def _make_fn():
@@ -223,40 +224,31 @@ def test_run_step_waits_for_winner_after_lease_loss(tmp_path: Path, monkeypatch)
     assert record.result == {"owner": "winner"}
 
 
-def test_run_step_requests_remote_job_termination_after_lease_loss(tmp_path: Path, monkeypatch):
-    """A lease loss requests job termination before waiting for the winner."""
+def test_run_step_local_job_does_not_save_after_lease_loss(tmp_path: Path, monkeypatch):
+    """A local job does not save its result after its step loses the lease."""
     monkeypatch.setattr(step_status_module, "HEARTBEAT_INTERVAL", 0.01)
-    submitted = threading.Event()
-    terminated = threading.Event()
+    started = threading.Event()
 
-    class BlockingHandle:
-        def wait(self, raise_on_failure: bool = False) -> None:
-            submitted.set()
-            assert terminated.wait(timeout=5.0)
-            raise RuntimeError("remote job terminated")
-
-        def terminate(self) -> None:
-            terminated.set()
-
-    class BlockingClient:
-        def submit(self, _request):
-            return BlockingHandle()
-
-    monkeypatch.setattr(step_runner_module, "current_client", lambda: BlockingClient())
+    def lose_lease(_output_path: str) -> dict[str, str]:
+        token = current_cancellation_token()
+        assert token is not None
+        started.set()
+        assert token.wait(timeout=5.0)
+        return {"owner": "loser"}
 
     spec = StepSpec(
-        name="remote-lease-loss",
+        name="local-job-lease-loss",
         output_path_prefix=tmp_path.as_posix(),
-        fn=lambda _output_path: None,
+        fn=lose_lease,
         resources=ResourceConfig.with_cpu(cpu=1, ram="1g"),
     )
 
     def complete_as_winner() -> None:
-        assert submitted.wait(timeout=5.0)
+        assert started.wait(timeout=5.0)
         Path(f"{get_status_path(spec.output_path)}.lock").unlink()
         winner = StatusFile(spec.output_path, "winner")
         assert winner.try_acquire_lock()
-        assert terminated.wait(timeout=5.0)
+        write_artifact({"owner": "winner"}, spec.output_path)
         winner.write_status(STATUS_SUCCESS)
         winner.release_lock()
 
@@ -266,7 +258,69 @@ def test_run_step_requests_remote_job_termination_after_lease_loss(tmp_path: Pat
     winner_thread.join(timeout=5.0)
 
     assert not winner_thread.is_alive()
-    assert terminated.is_set()
+    assert StatusFile(spec.output_path, "check").status == STATUS_SUCCESS
+    record = read_record(spec.output_path)
+    assert record is not None
+    assert record.result == {"owner": "winner"}
+
+
+def test_run_step_retries_transient_final_lease_refresh(tmp_path: Path, monkeypatch):
+    original_refresh = StatusFile.refresh_lock
+    refresh_count = 0
+
+    def transient_refresh(status_file: StatusFile) -> None:
+        nonlocal refresh_count
+        refresh_count += 1
+        if refresh_count == 1:
+            raise OSError("temporary storage error")
+        original_refresh(status_file)
+
+    monkeypatch.setattr(StatusFile, "refresh_lock", transient_refresh)
+    monkeypatch.setattr(
+        step_runner_module,
+        "STEP_LEASE_REFRESH_BACKOFF",
+        ExponentialBackoff(initial=0.001, maximum=0.001, jitter=0.0),
+    )
+    spec = StepSpec(
+        name="transient-final-refresh",
+        output_path_prefix=tmp_path.as_posix(),
+        fn=lambda _: {"value": 1},
+    )
+
+    run_step(spec)
+
+    assert refresh_count == 2
+    assert StatusFile(spec.output_path, "check").status == STATUS_SUCCESS
+
+
+def test_step_heartbeat_retries_transient_refresh_error(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(step_status_module, "HEARTBEAT_INTERVAL", 0.01)
+    original_refresh = StatusFile.refresh_lock
+    second_refresh = threading.Event()
+    refresh_count = 0
+
+    def transient_refresh(status_file: StatusFile) -> None:
+        nonlocal refresh_count
+        refresh_count += 1
+        if refresh_count == 1:
+            raise OSError("temporary storage error")
+        second_refresh.set()
+        original_refresh(status_file)
+
+    def wait_for_recovered_heartbeat(_output_path: str) -> dict[str, int]:
+        assert second_refresh.wait(timeout=5.0)
+        return {"value": 1}
+
+    monkeypatch.setattr(StatusFile, "refresh_lock", transient_refresh)
+    spec = StepSpec(
+        name="transient-heartbeat-refresh",
+        output_path_prefix=tmp_path.as_posix(),
+        fn=wait_for_recovered_heartbeat,
+    )
+
+    run_step(spec)
+
+    assert refresh_count >= 3
     assert StatusFile(spec.output_path, "check").status == STATUS_SUCCESS
 
 

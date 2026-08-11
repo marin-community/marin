@@ -33,6 +33,7 @@ from zephyr.coordinator import (
     MAX_CONCURRENT_PIPELINES,
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
+    WORKER_CANCELLATION_TIMEOUT,
     ZephyrCoordinator,
     ZephyrExecutionResult,
     _cleanup_execution,
@@ -70,6 +71,7 @@ V = TypeVar("V")
 # ceiling. Additional shards are pulled by these long-lived replicas.
 MAX_IRIS_WORKER_REPLICAS = 1_000
 EXECUTION_ABORT_TIMEOUT = 15.0
+EXECUTION_RELEASE_TIMEOUT = WORKER_CANCELLATION_TIMEOUT + 5.0
 
 
 def _generate_execution_id() -> str:
@@ -644,7 +646,7 @@ class ZephyrContext:
                 )
             finally:
                 with suppress(Exception):
-                    coordinator.release_execution.remote(execution_id).result(timeout=10.0)
+                    coordinator.release_execution.remote(execution_id).result(timeout=EXECUTION_RELEASE_TIMEOUT)
 
         assert state is _ContextState.NEW
         tasks_per_worker = min(

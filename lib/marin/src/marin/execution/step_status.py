@@ -282,6 +282,8 @@ def step_lock(
                 logger.error("Lease lost for %s — step must terminate", output_path, exc_info=True)
                 cancellation_token.cancel(f"Lease lost during execution of {output_path}")
                 return
+            except Exception as error:
+                logger.warning("Failed to refresh the lease for %s; the heartbeat will retry: %s", output_path, error)
 
     heartbeat_thread = Thread(target=_heartbeat, daemon=True)
     heartbeat_thread.start()

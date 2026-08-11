@@ -411,7 +411,7 @@ class InlineRunner:
         return dict(ctx._counters) if ctx is not None else {}
 
     def cancel(self) -> None:
-        """Prevent new work from starting."""
+        """Prevent new work from starting; an active call completes."""
         self._cancelled.set()
 
 
@@ -482,9 +482,9 @@ class SubprocessRunner:
                         _terminate_process(process)
                 returncode = process.wait()
 
+            if self._cancelled.is_set():
+                raise RuntimeError(f"Subprocess for shard {task.shard_idx} was cancelled")
             if returncode != 0:
-                if self._cancelled.is_set():
-                    raise RuntimeError(f"Subprocess for shard {task.shard_idx} was cancelled")
                 # Linux OOM-killer sends SIGKILL → returncode == -9. Distinguish
                 # so callers/retries can react to memory pressure specifically.
                 if returncode == -signal.SIGKILL:
