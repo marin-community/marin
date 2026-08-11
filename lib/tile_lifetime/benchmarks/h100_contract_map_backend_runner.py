@@ -870,12 +870,16 @@ def parse_ncu_metrics(path: Path) -> tuple[NcuKernelMetrics, ...]:
     return tuple(records)
 
 
-def _unrecognized_ncu_sass_record(line_number: int, line: str) -> ValueError:
+def _unrecognized_ncu_sass_record(
+    line_number: int,
+    line: str,
+    column_widths: tuple[int, ...] = _NCU_SASS_COLUMN_WIDTHS,
+) -> ValueError:
     line_bytes = line.encode("utf-8")
     metadata = {
         "line_number": line_number,
         "line_sha256": hashlib.sha256(line_bytes).hexdigest(),
-        "line_structure": _ncu_sass_line_structure(line),
+        "line_structure": _ncu_sass_line_structure(line, column_widths),
         "line_utf8_bytes": len(line_bytes),
     }
     detail = json.dumps(metadata, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
@@ -885,7 +889,7 @@ def _unrecognized_ncu_sass_record(line_number: int, line: str) -> ValueError:
     return ValueError(message)
 
 
-def _ncu_sass_line_structure(line: str) -> dict[str, object]:
+def _ncu_sass_line_structure(line: str, column_widths: tuple[int, ...]) -> dict[str, object]:
     ascii_classes = {
         "control": 0,
         "digit": 0,
@@ -940,20 +944,23 @@ def _ncu_sass_line_structure(line: str) -> dict[str, object]:
         "token_max_utf8_bytes": max((len(token.encode("utf-8")) for token in tokens), default=0),
         "trailing_spaces": len(line) - len(line.rstrip(" ")),
     }
-    fixed_columns = _ncu_sass_fixed_columns(line.encode("utf-8"))
+    fixed_columns = _ncu_sass_fixed_columns(line.encode("utf-8"), column_widths)
     if fixed_columns is not None:
         structure["fixed_columns"] = fixed_columns
     return structure
 
 
-def _ncu_sass_fixed_columns(line: bytes) -> dict[str, object] | None:
-    if len(line) != len(_NCU_SASS_SEPARATOR.encode("ascii")):
+def _ncu_sass_fixed_columns(line: bytes, column_widths: tuple[int, ...]) -> dict[str, object] | None:
+    if column_widths not in _NCU_SASS_SEPARATOR_WIDTH_OPTIONS:
+        raise AssertionError("unreviewed Nsight Compute SASS column widths")
+    expected_bytes = sum(column_widths) + len(column_widths) - 1
+    if len(line) != expected_bytes:
         return None
 
     columns: list[list[object]] = []
     gap_single_ascii_space: list[bool] = []
     offset = 0
-    for index, width in enumerate(_NCU_SASS_COLUMN_WIDTHS):
+    for index, width in enumerate(column_widths):
         column = line[offset : offset + width]
         offset += width
         trimmed = column.strip(b" ")
@@ -993,7 +1000,7 @@ def _ncu_sass_fixed_columns(line: bytes) -> dict[str, object] | None:
                 "Source" in public_words,
             ]
         )
-        if index < len(_NCU_SASS_COLUMN_WIDTHS) - 1:
+        if index < len(column_widths) - 1:
             gap_single_ascii_space.append(line[offset : offset + 1] == b" ")
             offset += 1
     if offset != len(line):
@@ -1001,7 +1008,7 @@ def _ncu_sass_fixed_columns(line: bytes) -> dict[str, object] | None:
     return {
         "ascii_class_fields": list(_NCU_SASS_COLUMN_ASCII_CLASS_FIELDS),
         "column_fields": list(_NCU_SASS_COLUMN_FIELDS),
-        "column_widths": list(_NCU_SASS_COLUMN_WIDTHS),
+        "column_widths": list(column_widths),
         "columns": columns,
         "gap_single_ascii_space": gap_single_ascii_space,
     }
@@ -1080,7 +1087,7 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
             continue
         instruction = _NCU_SASS_INSTRUCTION_PATTERN.match(line)
         if instruction is None or current_name is None or not separator_seen:
-            raise _unrecognized_ncu_sass_record(line_number, line)
+            raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)
         mnemonic = instruction.group("mnemonic")
         if mnemonic.split(".", maxsplit=1)[0] not in _SASS_OPCODE_BASES:
             raise ValueError(f"unrecognized SASS instruction mnemonic: {mnemonic!r}")

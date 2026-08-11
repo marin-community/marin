@@ -183,3 +183,34 @@ remains mandatory at both later table closes.
 Behavioral tests exercise both layouts through the parser and NCU subprocess
 boundary and reject mixed row and separator widths. No image build, GPU
 execution, v25 submission, or relaunch was performed for this source repair.
+
+## V25 selected-width header diagnostic
+
+The single v25 task used source
+`c31d2f8b16eeef716c70cffb108e560e0bc4be56`. It authenticated the launcher and
+manifest, accepted the selected 108-byte line-1 separator, matching 108-byte
+kernel identity row, and matching identity-table close, then failed once at
+line 4. The bounded diagnostic reports 108 UTF-8 bytes, six non-whitespace
+tokens, 71 ASCII spaces, and exact standalone public vocabulary tokens
+`Address` and `Source`. It contains no raw line or adjacent record. The
+aggregate does not prove token values or order beyond those public booleans,
+spacing distribution, or column boundaries.
+
+For an unrecognized row after line 1, the diagnostic now derives its six
+fixed-column slices from the selected separator tuple. Both reviewed layouts,
+`(18, 60, 6, 6, 6, 6)` and `(18, 61, 6, 6, 6, 6)`, report the same bounded
+per-column aggregate fields and one-byte gap-validity booleans. A row whose
+width differs from the selected layout receives no fixed-column report. The
+exact `Address Source` header remains the only accepted header; fixed-column
+classification is diagnostic only.
+
+The diagnostic still contains no column or token value, token sequence,
+per-column hash, raw or redacted line, adjacent record, path, or environment
+value. Its whole-line SHA-256 and 2,048-byte serialized-error bound remain.
+The aggregate fields are not a confidentiality guarantee for low-entropy
+columns.
+
+Behavioral tests cover both selected widths, mismatched widths, every gap,
+private-value and ordering nonleakage, and the production NCU subprocess
+boundary. No image build, GPU execution, v26 submission, or relaunch was
+performed for this source-only diagnostic change.
