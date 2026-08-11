@@ -33,6 +33,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from tile_lifetime.bfloat16_metrics import bfloat16_ulp_distance
+
 _ARCHITECTURE = "sm_90a"
 _COMPUTE_CAPABILITY = "9.0"
 _OUTPUT_NAMES = ("forward", "dx", "dw0", "dw1")
@@ -1407,44 +1409,39 @@ def _output_numerical_evidence(index: int, repeats: Sequence[Sequence[Any]], ref
     actual_repeats = tuple(np.asarray(outputs[index]) for outputs in repeats)
     expected = np.asarray(reference)
     first = actual_repeats[0]
-    difference = np.abs(first.astype(np.float32) - expected.astype(np.float32))
-    nonfinite = int(np.count_nonzero(~np.isfinite(first)) + np.count_nonzero(~np.isfinite(difference)))
-    ulp = _bfloat16_ulp_distance(first, expected)
+    if any(actual.shape != first.shape for actual in actual_repeats) or expected.shape != first.shape:
+        raise ValueError("numerical outputs and reference must have identical shapes")
+    finite = np.isfinite(first) & np.isfinite(expected)
+    nonfinite = int(first.size - np.count_nonzero(finite))
+    finite_difference = np.abs(first[finite].astype(np.float32) - expected[finite].astype(np.float32))
+    ulp = bfloat16_ulp_distance(first[finite], expected[finite])
     pairwise = []
     for left, right in itertools.combinations(range(len(actual_repeats)), 2):
-        drift = np.abs(actual_repeats[left].astype(np.float32) - actual_repeats[right].astype(np.float32))
-        drift_ulp = _bfloat16_ulp_distance(actual_repeats[left], actual_repeats[right])
+        drift_finite = np.isfinite(actual_repeats[left]) & np.isfinite(actual_repeats[right])
+        finite_drift = np.abs(
+            actual_repeats[left][drift_finite].astype(np.float32)
+            - actual_repeats[right][drift_finite].astype(np.float32)
+        )
+        drift_ulp = bfloat16_ulp_distance(actual_repeats[left][drift_finite], actual_repeats[right][drift_finite])
         pairwise.append(
             {
                 "left_repeat_index": left,
                 "right_repeat_index": right,
-                "maximum_absolute_error": float(drift.max(initial=0.0)),
-                "mean_absolute_error": float(drift.mean()),
+                "maximum_absolute_error": float(finite_drift.max(initial=0.0)),
+                "mean_absolute_error": float(finite_drift.mean()) if finite_drift.size else 0.0,
                 "maximum_ulp_distance": int(drift_ulp.max(initial=0)),
-                "mean_ulp_distance": float(drift_ulp.mean()),
+                "mean_ulp_distance": float(drift_ulp.mean()) if drift_ulp.size else 0.0,
             }
         )
     return {
-        "maximum_absolute_error": float(difference.max(initial=0.0)),
-        "mean_absolute_error": float(difference.mean()),
+        "maximum_absolute_error": float(finite_difference.max(initial=0.0)),
+        "mean_absolute_error": float(finite_difference.mean()) if finite_difference.size else 0.0,
         "maximum_ulp_distance": int(ulp.max(initial=0)),
-        "mean_ulp_distance": float(ulp.mean()),
+        "mean_ulp_distance": float(ulp.mean()) if ulp.size else 0.0,
         "nonfinite_values": nonfinite,
         "repeat_hashes": [hashlib.sha256(value.tobytes(order="C")).hexdigest() for value in actual_repeats],
         "pairwise_drift": pairwise,
     }
-
-
-def _bfloat16_ulp_distance(left: Any, right: Any) -> Any:
-    import numpy as np  # noqa: PLC0415
-
-    left_array = np.asarray(left)
-    right_array = np.asarray(right, dtype=left_array.dtype)
-    left_bits = left_array.view(np.uint16).astype(np.int32)
-    right_bits = right_array.view(np.uint16).astype(np.int32)
-    left_ordered = np.where(left_bits & 0x8000, 0x8000 - (left_bits & 0x7FFF), 0x8000 + left_bits)
-    right_ordered = np.where(right_bits & 0x8000, 0x8000 - (right_bits & 0x7FFF), 0x8000 + right_bits)
-    return np.abs(left_ordered - right_ordered)
 
 
 def derive_ordinary_xla_executable_evidence(
@@ -1751,7 +1748,7 @@ def run_coordinator(config: RunnerConfig) -> Path:
         raise AssertionError("dense Contract/Map execution must not admit FA4 or Grug comparators")
     audit_imported_local_modules(config)
     bundle = {
-        "schema": "shuttle.h100_contract_map_executed_bundle.v2",
+        "schema": "shuttle.h100_contract_map_executed_bundle.v3",
         "architecture_status": ArchitectureStatus.NONCONFORMING.value,
         "source_sha": config.source_sha,
         "source_tree": config.source_tree,
