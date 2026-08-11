@@ -321,3 +321,41 @@ private columns, wrong underscore counts, uppercase, digits, other punctuation,
 nonspace identity columns, every gap, cross-width records, and the production
 NCU subprocess boundary. No image build, GPU execution, v30 submission, retry,
 or relaunch was performed for this source repair.
+
+## V30 repeated opaque metric-label rows
+
+The single v30 task used source
+`0608ecc5b7b3949b5938aabb26c06c75bcdb75d4`. It selected the 108-byte layout
+and accepted the kernel identity, identity-table close, fixed-column header,
+and first opaque metric-label row. The first rejection was line 6. Its bounded
+diagnostic reports the same selected-width structure as line 5, with empty
+columns 0 and 1 followed by four six-byte tokens. Each private token has five
+lowercase ASCII letters and one underscore; every other punctuation count is
+zero. This proves a second opaque row in the same table, but it does not expose
+either row's private letters or character order.
+
+The pinned Nsight Compute Source page contract describes correlated metrics as
+columns and lets section data control the collected metric groups and their
+order. Its CLI guidance tells users to restrict selected metrics when values
+need to fit in a single output row, which is consistent with wrapped output.
+The public documentation does not specify this text export's private label
+spelling or an unlimited row count. The runner requests nine exact metrics;
+splitting the longest requested 49-byte ASCII metric name into the observed
+six-byte private columns gives a closed maximum of nine rows.
+
+The parser now requires between one and nine consecutive opaque label rows
+after each fixed-column header. For every row, the selected separator tuple
+fixes all six columns and five single-ASCII-space gaps. Columns 0 and 1 contain
+only spaces. Each remaining column contains exactly six lowercase ASCII or
+underscore bytes and at least one lowercase byte. The exact selected separator
+must immediately close the sequence. The parser retains only the row count as
+state and emits no private label value.
+
+Behavioral tests accept the exact one- and nine-row boundaries under both
+reviewed widths, including the observed four-letter/two-underscore and
+five-letter/one-underscore shapes. They reject zero and ten rows, all-underscore
+or otherwise invalid labels, mixed widths, moved labels, nonspace identity
+columns, altered gaps, and labels after the separator. The production NCU
+subprocess boundary exercises both repeated-row acceptance and over-limit
+rejection. No image build, GPU execution, v31 submission, retry, or relaunch
+was performed for this source repair.
