@@ -59,7 +59,7 @@ HERO_EP_RUNTIME_ENV = {
 }
 _XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
-DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
+DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 8
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
