@@ -4305,3 +4305,47 @@ author: dlwh
   algebra. In parallel, make the Transformer Engine oracle runner buildable and
   close the remaining local Linux dependency and image identities without
   weakening `launch_ready=false`.
+
+### 2026-08-12 - TLTC-MLIR-007 local CPU consumer and TE runner
+
+- Canonical commits `63e2237ce6` and `8ce01ba89d` add a buildable Transformer
+  Engine 2.17 oracle runner and close its result validator. The runner covers
+  both declared shapes, three timing boundaries, and four independent
+  forward/backward backend pairs. It requires 10 warmups and 50 raw CUDA-event
+  samples, but records no hardware result or tolerance. Official-header C++20
+  syntax validation passed without linking or GPU execution.
+- Canonical commits `f69adfac42`, `060370a0b0`, and `c07bc7471d` add an opt-in
+  CPU executable consumer for the complete `7x13` SOURCE_ORDERED forward
+  fixture. A closed `device_module`, `invocation_abi`, and root bundle encode 19
+  generated Map/Fold bytecode entries and 21 raw buffers. The synchronous
+  runtime executes only those stripped records; it does not consult StableHLO,
+  Shuttle algebra, materialization plans, schedule plans, symbols, workload
+  names, source references, or semantic digests.
+- Independent review found and closed three fail-open boundaries before
+  integration: low-payload FP32 NaNs could round to BF16 infinity, executable
+  construction did not bind the schedule back to its materialization plan, and
+  the runtime ignored unstripped source or plan sidecars. LLVM APFloat edge
+  cases now cover NaNs, infinities, signed zero, and ties. Separate mutations
+  reject stale source fingerprints, buffer lifetimes, self-consistent task
+  reorders, and unstripped modules in both construction and verification paths.
+- The local gates pass 41 native targets, 290 combined JAX-patch and capsule
+  tests, the existing finite CPU parity runner, and changed-files pre-commit.
+  The consumer remains outside `buildShuttleStablehloCorePipeline`; pipeline ABI
+  5 and its persistent-cache identity are unchanged. This is a local CPU proof,
+  not XLA custom-call, accelerator, or performance evidence.
+- Canonical commit `85a53acf1b` refreshes the closed source inventory to 152
+  paths with SHA-256
+  `fa71598fd71294133e6212a2df28bf3a44482530d9388165d679d31856f22c48`.
+  Two clean preparations are byte-identical: 156 members, 1,257,857 bytes, and
+  bundle SHA-256
+  `5da0cf3163300e27e87531a1a9fc6d010281a446d6551209453426fb283c39c1`.
+  The manifest remains `launch_ready=false` with 11 unresolved external
+  identities.
+- No private source upload, Iris deployment, CPU launch, GPU allocation, or
+  scorecard promotion occurred. External acceptance remains blocked on the
+  Linux `uv-build` lock and Python identity, immutable task and init images,
+  deployed Iris revision/config, reviewed environment policy, exact receipt,
+  and explicit user authorization for the named CoreWeave upload.
+- Next action: bind the closed executable bundle to a real XLA/runtime consumer
+  without weakening the local CPU contract, then resolve the remaining Linux
+  and deployment identities before requesting upload authorization.
