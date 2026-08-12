@@ -159,28 +159,26 @@ The default step-based checkpoint policy is to save a checkpoint every 10,000 st
 A checkpoint directory contains three kinds of file:
 
 * `manifest.json`: the format declaration and the inventory of arrays, each with its shape,
-  dtype and chunk grid. Written when the save starts. `format_version` is the compatibility
-  contract: a reader that meets a higher version fails with a clear error rather than
-  guessing. Checkpoints written before this file existed have none, and load through a
-  fallback that probes the store instead.
-* `metadata.json`: step, timestamp, and whether the checkpoint is temporary. Written only
-  after every process has committed, so a directory containing it is complete. Checkpoint
+  dtype and chunk grid. Written when the save starts. A reader that meets a `format_version`
+  above its own fails. Older checkpoints have no manifest and fall back to listing.
+* `metadata.json`: step, timestamp, and whether the checkpoint is temporary. Written after
+  every process has committed, so a directory containing it is complete. Checkpoint
   discovery keys off this file.
 * the array data itself, as a single OCDBT database of zarr3 arrays.
 
 #### Checkpoint Write Parallelism
 
-Every process writes the part of the state it holds. Arrays that are replicated across
-processes are split across their replicas, so a replicated parameter is written by all of
-them rather than by whichever process happens to hold replica 0. The defaults trade write
-parallelism against object count and rarely need changing.
+Every process writes the part of the state it holds, and arrays replicated across processes
+are split across their replicas. A save also bounds the host memory it stages: one whose
+share fits under `max_staged_host_bytes` returns while the commits drain, and a larger save
+rolls through it.
 
 | Parameter                                  | Description                                                                            | Default |
 |--------------------------------------------|----------------------------------------------------------------------------------------|---------|
 | `checkpointer.write.max_write_replicas`    | Cap on how many replicas of an array write part of it. `1` disables replica splitting. | 64      |
 | `checkpointer.write.min_replica_slice_bytes` | Do not split an array when doing so would give each replica less than this.          | 16 MiB  |
 | `checkpointer.write.max_chunk_bytes`       | Upper bound on one zarr3 chunk, which bounds a single object store write.              | 512 MiB |
-| `checkpointer.write.max_staged_host_bytes` | Cap on host memory one process stages at once during a save.                           | 4 GiB   |
+| `checkpointer.write.max_staged_host_bytes` | Cap on host memory one process stages at once during a save.                           | 16 GiB  |
 
 ### JAX Compilation Cache Configuration
 

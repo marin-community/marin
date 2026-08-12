@@ -43,14 +43,9 @@ ARRAY_DRIVER = "zarr3"
 KVSTORE_DRIVER = "ocdbt"
 # JAX's memory kind for host memory a device can address. Offloaded optimizer state lives here.
 _HOST_MEMORY_KIND = "pinned_host"
-# Chunks a save stages at once by default. A wider window does not make a save faster --
-# the object store, not staging, sets the rate -- so this is chosen for headroom. A staged
-# chunk costs about four times its own bytes while its upload is in flight (the snapshot,
-# the encoded chunk, and the request buffer), which is what makes the window small: a GB200
-# node measured 837 GiB of an 850 GiB limit with four processes staging 32 GiB each.
+# Chunks a save stages at once. Four processes at 32 GiB each exhausted a GB200 node.
 _DEFAULT_STAGED_CHUNKS = 32
-# Host memory a staged byte occupies while its write is in flight. Only used to report the
-# budget's expected cost, since the multiplier lives inside TensorStore.
+# Host memory a staged byte occupies while its write is in flight, for reporting only.
 _STAGED_BYTE_OVERHEAD = 4
 
 
@@ -68,18 +63,10 @@ def _estimate_array_nbytes(array: Any) -> int:
 
 
 def build_kvstore_spec(path: str) -> dict:
-    """Build a tensorstore kvstore spec for the given URI, handling S3, GCS, and local files.
+    """Build a tensorstore kvstore spec for an S3, GCS, or local URI.
 
-    For S3, tensorstore does not read AWS_ENDPOINT_URL or AWS_DEFAULT_REGION from the
-    environment, so we pass them explicitly when set. This is required for S3-compatible
-    endpoints like CoreWeave object storage.
-
-    For a custom ``endpoint`` we always use virtual-hosted-style addressing (tensorstore
-    0.1.82+, google/tensorstore#285): omit ``bucket`` and fold it into the endpoint host
-    (``https://<bucket>.<endpoint-host>``). Every S3-compatible store we target (R2, AWS,
-    CoreWeave) supports virtual-hosted style, and CoreWeave *requires* it (it rejects
-    path-style with ``PathStyleRequestNotAllowed``). Without a custom endpoint we leave
-    addressing to tensorstore's native AWS handling.
+    tensorstore reads neither AWS_ENDPOINT_URL nor AWS_DEFAULT_REGION from the environment.
+    Custom endpoints use virtual-hosted-style addressing, which CoreWeave requires.
     """
     parsed = urllib.parse.urlparse(path)
     if parsed.scheme == "s3":
@@ -115,12 +102,9 @@ def build_kvstore_spec(path: str) -> dict:
 
 
 def _slice_shard_on_device(data, axis: int, start: int, limit: int):
-    """Slice a single-device shard without tripping over the ambient mesh.
+    """Slice a single-device shard under a one-device mesh.
 
-    Slicing dispatches a jitted computation, and under a training mesh JAX rejects the
-    single-device operand as incompatible with the mesh's device list. Standing up a
-    one-device mesh from the shard's own device is what Orbax does for the same reason
-    (``replica_slices.ReplicaSlice.data``).
+    A training mesh rejects the single-device operand. Orbax does the same.
     """
     shard_mesh = jax.sharding.Mesh(np.array(list(data.sharding.device_set)), ("shard",))
     with jax.sharding.set_mesh(shard_mesh):
@@ -128,40 +112,23 @@ def _slice_shard_on_device(data, axis: int, start: int, limit: int):
 
 
 async def _transfer_shard_to_pageable_host(shard, local_slice: tuple[int, int, int] | None = None) -> np.ndarray:
-    """Return a detached pageable snapshot safe to retain during an asynchronous commit.
+    """Snapshot a shard into pageable host memory, restricted to ``local_slice``.
 
-    ``local_slice`` is an ``(axis, start, limit)`` restriction to the part of the shard this
-    process is responsible for, so a replica that writes 1/R of a shard also stages only 1/R
-    of it. Slicing happens on device, before the host copy.
-
-    JAX's own staging path puts the shard in pinned host memory, which the TPU runtime never
-    returns to the OS, so we stage in pageable memory instead (#6924).
-
-    A run that offloads its optimizer state already holds that state in host memory, and on
-    a coherent host-device part like GB200 that memory is directly readable. Asking for a
-    device-to-host copy of it would stage a second host buffer to copy out of, so the
-    snapshot is taken straight from the existing one instead. The copy itself stays: the
-    next training step donates these buffers, and a checkpoint that referenced them would
-    read bytes training is concurrently overwriting.
+    The TPU runtime never returns JAX's pinned staging to the OS (#6924). State already in
+    host memory is snapshotted in place.
     """
     data = shard.data if local_slice is None else _slice_shard_on_device(shard.data, *local_slice)
     if getattr(data.sharding, "memory_kind", None) != _HOST_MEMORY_KIND:
         data.copy_to_host_async()
         # Yield so the remaining shards' copies can be enqueued before this one blocks.
         await asyncio.sleep(0)
-    # TensorStore may retain this array until the asynchronous commit finishes. It must
-    # not keep an external reference to the JAX buffer that training donates next.
+    # TensorStore may retain this array. It must not reference the buffer training donates next.
     return np.array(data, copy=True)
 
 
 @dataclass(frozen=True)
 class TensorStoreWriteConfig:
-    """How a checkpoint save divides work across the processes that hold the state.
-
-    Every array is written by the processes that already hold it, so the defaults trade
-    write parallelism against object count: splitting a small array across 128 replicas
-    produces 128 tiny objects for no benefit.
-    """
+    """How a checkpoint save divides work across the processes that hold the state."""
 
     max_write_replicas: int = 64
     """Cap on how many replicas of an array write part of it. 1 disables replica splitting."""
@@ -175,21 +142,7 @@ class TensorStoreWriteConfig:
     max_staged_host_bytes: int = _DEFAULT_STAGED_CHUNKS * max_chunk_bytes
     """Host memory this process may hold in staged snapshots at once.
 
-    A save that fits under this never blocks: it stages everything, issues the writes and
-    returns, and the commits drain while training runs the next step. A save that does not
-    fit rolls its shards through the budget, so peak host memory is set by this number
-    rather than by model size, and training resumes once the last shard is staged.
-
-    This is a memory knob, not a throughput one. A save that rolls through the budget runs
-    at the object store's rate, and widening the window does not raise that rate: the 546B
-    EP hero staged its 62.43 GiB per-process share in 140s through a 16 GiB budget and 143s
-    through a 32 GiB one. Widening it far enough to hold a whole share would remove the
-    blocking, but a staged chunk costs more host memory than its own bytes while its upload
-    is in flight, and a budget that large ran a GB200 node out of memory. So the default
-    buys headroom, which is the thing it can actually buy.
-
-    Lower it on a host with less memory per process. Raising it only helps a save whose
-    whole share fits, which is the case that already does not block.
+    A save whose share fits returns while the commits drain. A larger save rolls through.
     """
 
     def __post_init__(self) -> None:
@@ -204,9 +157,8 @@ class TensorStoreWriteConfig:
 class _WritePlan:
     """Which bytes of one global array each process writes, and the chunk grid they land on.
 
-    When ``split_axis`` is None, ``writer_replica`` writes each shard whole and the other
-    replicas write nothing. Otherwise replica ``r`` writes block ``r`` of its shard along
-    ``split_axis``, so an array replicated R ways is written by R processes.
+    With no ``split_axis``, ``writer_replica`` writes each shard whole. Otherwise replica
+    ``r`` writes block ``r`` along ``split_axis``.
     """
 
     chunk_shape: tuple[int, ...]
@@ -215,8 +167,7 @@ class _WritePlan:
     block: int
     """Length of one replica's slice along ``split_axis``; unused when there is no split."""
     replicas: int = 1
-    """How many processes hold each shard. Above ``write_replicas`` only when a split was
-    rejected, which is what concentrates an array on fewer writers."""
+    """How many processes hold each shard. Exceeds ``write_replicas`` when a split was rejected."""
     writer_replica: int = 0
     """Which replica writes each shard whole; unused when there is a split."""
 
@@ -240,19 +191,10 @@ class _ShardWrite:
 
 
 class _HostStagingGate:
-    """Bounds the host memory a save holds in staged shard snapshots.
+    """Track staged bytes until TensorStore has committed and released them.
 
-    A snapshot stays live from the moment it is staged until TensorStore has committed it
-    and dropped its reference, so admission is held until the commit resolves rather than
-    until the copy future does. Shard writes pass
-    ``can_reference_source_data_indefinitely=True``: TensorStore never copies the snapshot,
-    so its copy future resolves while the buffer is still referenced, and releasing there
-    would bound nothing -- a save would stage its entire share of the checkpoint at once.
-
-    A save whose share fits in the budget never blocks: every shard is admitted, staged and
-    issued, and the save returns while the commits drain in the background. A larger share
-    rolls through the budget instead, which is what holds peak host memory flat as the
-    model grows.
+    Shard writes pass ``can_reference_source_data_indefinitely=True``. The copy future
+    resolves while the snapshot is still referenced.
     """
 
     def __init__(self, limit_bytes: int):
@@ -264,21 +206,19 @@ class _HostStagingGate:
 
     @property
     def peak_bytes(self) -> int:
-        """High-water mark of staged bytes, so a save can report what it actually held."""
         return self._peak
 
     async def acquire(self, num_bytes: int) -> None:
-        # The gate is built before the save's loop exists, so bind on first use instead.
+        # Built before the save's loop exists, so bind on first use.
         self._loop = asyncio.get_running_loop()
         async with self._condition:
-            # A single snapshot larger than the whole budget still has to proceed, or the
-            # save deadlocks on an array it can never admit.
+            # A snapshot larger than the whole budget proceeds anyway; it can never be admitted.
             await self._condition.wait_for(lambda: self._in_flight == 0 or self._in_flight + num_bytes <= self._limit)
             self._in_flight += num_bytes
             self._peak = max(self._peak, self._in_flight)
 
     def release(self, num_bytes: int) -> None:
-        """Return admission from any thread; TensorStore resolves commits off the loop."""
+        """Callable from any thread; TensorStore resolves commits off the loop."""
 
         async def notify() -> None:
             async with self._condition:
@@ -308,13 +248,7 @@ def _uniform_replica_count(sharding: Sharding, shape: tuple[int, ...]) -> int | 
 
 
 def _shard_shape(sharding: Sharding, shape: tuple[int, ...]) -> tuple[int, ...]:
-    """The per-device shard shape.
-
-    Raises for a sharding that does not divide the array evenly. Those give shards of
-    differing shapes, so neither a uniform chunk grid nor a uniform replica split is well
-    defined, and TensorStore serialization has never supported them: JAX's own metadata
-    builder calls this same method.
-    """
+    """The per-device shard shape; raises when the sharding does not divide the array evenly."""
     try:
         return tuple(sharding.shard_shape(shape))
     except IndivisibleError as e:
@@ -327,10 +261,7 @@ def _shard_shape(sharding: Sharding, shape: tuple[int, ...]) -> tuple[int, ...]:
 def _is_safe_to_slice(sharding: Sharding, shard_shape: tuple[int, ...]) -> bool:
     """Whether a shard can be sliced on device without risking a hang.
 
-    Slicing a small array in pinned host memory can hang on layout requirements
-    (upstream b/417243451, carried in Orbax's ``replica_slices``). This matters here because
-    a training run that offloads its optimizer state keeps that state in pinned host memory,
-    which is exactly the state a checkpoint has to write.
+    Slicing a small pinned-host array can hang on layout requirements (b/417243451).
     """
     if getattr(sharding, "memory_kind", None) != _HOST_MEMORY_KIND:
         return True
@@ -340,12 +271,8 @@ def _is_safe_to_slice(sharding: Sharding, shard_shape: tuple[int, ...]) -> bool:
 def _capped_chunk_shape(local_shape: tuple[int, ...], itemsize: int, max_chunk_bytes: int) -> tuple[int, ...]:
     """Halve ``local_shape`` down to ``max_chunk_bytes``, keeping it an exact divisor.
 
-    Only even axes are halved, so the result always divides ``local_shape`` and every
-    writer's region stays a whole number of chunks. An array whose axes are all odd keeps
-    its full shape as one chunk.
-
-    A zero-length axis becomes a chunk of 1: zarr3 requires positive chunk dimensions, and
-    such an array has no data to place in the grid anyway.
+    Only even axes halve, so every writer's region is a whole number of chunks. A zero-length
+    axis becomes a chunk of 1, which zarr3 requires.
     """
     chunk = [max(size, 1) for size in local_shape]
     while math.prod(chunk) * itemsize > max_chunk_bytes:
@@ -359,24 +286,16 @@ def _capped_chunk_shape(local_shape: tuple[int, ...], itemsize: int, max_chunk_b
 def plan_array_write(path: str, array, config: TensorStoreWriteConfig) -> _WritePlan:
     """Decide how ``array`` is divided among the processes holding it.
 
-    Every process computes this independently and must reach the same answer, so it depends
-    only on ``path`` and on the global shape and sharding. The algorithm follows Orbax's
-    replica-parallel serialization (``orbax/checkpoint/_src/serialization/replica_slices.py``),
-    which in turn follows AXLearn's: split along the first shard axis that divides evenly by
-    the replica count, and fall back to a single writer when nothing divides.
-
-    Two departures from Orbax. A replica count that divides no axis takes the widest smaller
-    count that does, so a run whose rack count is not a power of two still splits its state
-    instead of dropping to one writer. And the single writer is chosen from ``path`` rather
-    than fixed at replica 0, which keeps arrays no split applies to from piling onto one
-    process: on the 546B EP hero that is 69 arrays and 2.35 GiB, enough on its own to put
-    rank 0 over a staging budget its peers fit under.
+    Split along the first shard axis that divides evenly by the replica count, after Orbax's
+    ``replica_slices.py``. Every process must reach the same answer, so this depends only on
+    ``path`` and the global shape and sharding. A replica count dividing no axis takes the
+    widest smaller one that does. The sole writer for an un-splittable array comes from ``path``.
     """
     shape = tuple(array.shape)
     itemsize = array.dtype.itemsize
 
     if not isinstance(array, jax.Array):
-        # A host array. It is not sharded, so one process writes all of it.
+        # Unsharded host array: one process writes all of it.
         return _WritePlan(
             chunk_shape=_capped_chunk_shape(shape, itemsize, config.max_chunk_bytes),
             split_axis=None,
@@ -393,7 +312,7 @@ def plan_array_write(path: str, array, config: TensorStoreWriteConfig) -> _Write
         write_replicas=1,
         block=0,
         replicas=replica_count or 1,
-        # Every replica holds the whole shard, so any of them can write it.
+        # Every replica holds the whole shard, so any may write it.
         writer_replica=zlib.crc32(path.encode()) % replica_count if replica_count else 0,
     )
 
@@ -407,7 +326,7 @@ def plan_array_write(path: str, array, config: TensorStoreWriteConfig) -> _Write
         split_axis = next((axis for axis, size in enumerate(shard_shape) if size % replicas == 0), None)
         if split_axis is None:
             continue
-        # Fewer writers give each a larger slice, so a slice under the floor is worth retrying.
+        # Fewer writers give each a larger slice, so retry under the floor.
         if math.prod(shard_shape) * itemsize // replicas < config.min_replica_slice_bytes:
             continue
 
@@ -446,7 +365,7 @@ def _shard_write_region(shard, plan: _WritePlan) -> _ShardWrite | None:
 
 
 def _process_staged_bytes(array, plan: _WritePlan) -> int:
-    """Bytes this process stages for ``array``, which is what the staging budget sees."""
+    """Bytes this process stages for ``array``."""
     if not isinstance(array, jax.Array):
         return _estimate_array_nbytes(array) if jax.process_index() == 0 else 0
     return sum(
@@ -462,19 +381,10 @@ def _create_ocdbt_spec(
     *,
     entry: "CheckpointArray | None" = None,
 ) -> dict:
-    """
-    Create a TensorStore spec with OCDBT (Optionally-Cooperative Distributed B-Tree) enabled.
+    """Build a TensorStore spec over an OCDBT kvstore.
 
-    Args:
-        checkpoint_root: Base path for the checkpoint (e.g., "/checkpoints/step-100")
-        array_path: Relative path for this specific array (e.g., "model/layer0/weight")
-        entry: The manifest entry for this array, when writing. Supplying it pins the zarr3
-            chunk grid, which is what makes concurrent writes from several replicas of the
-            same array safe: each writer's region is a whole number of chunks, so no two
-            writers ever share one. Reads leave it None and take the grid from storage.
-
-    Returns:
-        TensorStore spec dict with OCDBT kvstore driver
+    ``entry`` pins the zarr3 chunk grid, so concurrent writers never share a chunk. Reads omit
+    it and take the grid from storage.
     """
     spec: dict[str, Any] = {
         "driver": ARRAY_DRIVER,
@@ -509,9 +419,8 @@ def _is_named_or_none(x):
 def _flatten_serializable_leaves(pytree) -> tuple[list[str], list[Any]]:
     """Flatten a pytree to (storage path, array) pairs, dropping leaves with nothing to store.
 
-    Storage paths come from the leaf's position in the tree, with dots turned into slashes:
-    ``model.layers.0.w_q`` becomes ``model/layers/0/w_q``. Python scalars become arrays so
-    everything downstream is uniform.
+    Paths come from tree position with dots turned into slashes: ``model.layers.0.w_q``
+    becomes ``model/layers/0/w_q``. Python scalars become arrays.
     """
     leaf_key_paths = jax_utils.leaf_key_paths(pytree, is_leaf=is_named_array)
     assert len(jax.tree.leaves(leaf_key_paths, is_leaf=is_named_array)) == len(
@@ -547,12 +456,7 @@ def _log_write_share(
     plans: Sequence[_WritePlan],
     total_array_bytes: int,
 ) -> None:
-    """Report what this process writes, and how much of it more processes would not relieve.
-
-    A share that does not fall as the run grows is what sets the floor on a save's slowest
-    writer: an array written alone stays whole wherever it lands, and one split across
-    ``max_write_replicas`` keeps that share once the run passes that many processes.
-    """
+    """Report this process's share, and how much of it more processes would not relieve."""
     staged = [_process_staged_bytes(array, plan) for array, plan in zip(arrays, plans)]
     solo = sorted(
         (
@@ -637,10 +541,8 @@ def tree_serialize_leaves_tensorstore(
             checkpoint_dir, build_manifest(entries, array_driver=ARRAY_DRIVER, kvstore_driver=KVSTORE_DRIVER)
         )
 
-    # Pre-charge the cross-region transfer budget before kicking off the
-    # async writes — tensorstore bypasses fsspec, so the CrossRegionGuardedFS
-    # interceptor never sees these bytes.  No-op when checkpoint_dir is local
-    # or in the same region as the VM.
+    # Pre-charge the cross-region budget: tensorstore bypasses fsspec, so CrossRegionGuardedFS
+    # never sees these bytes. No-op for a local or same-region checkpoint_dir.
     record_transfer(total_array_bytes, checkpoint_dir)
 
     if debug_checkpointer:
@@ -673,25 +575,19 @@ def _serialize_arrays(
 ) -> None:
     """Write every array according to its plan and start the asynchronous commit.
 
-    Returns once this process has copied all of its data out; ``manager`` then joins the
-    commits, waits for every other process at a barrier, and runs ``commit_callback`` on
-    process 0. Callers wait for that with ``manager.wait_until_finished()``.
+    Returns once this process has copied its data out. ``manager`` joins the commits and
+    barriers on the other processes.
     """
     manager.wait_until_finished()
 
-    # JAX serializes through one process-lifetime ts.Context, whose caches -- and the staged
-    # buffers they reference -- accumulate across saves because each save writes a new OCDBT
-    # database (#6785). Cloning its spec keeps pool sizes and concurrency limits identical.
+    # JAX's process-lifetime ts.Context accumulates caches across saves, since each save
+    # writes a new OCDBT database (#6785). Cloning the spec keeps its pools and limits.
     context = ts.Context(ts_impl._TS_CONTEXT.spec)
     gate = _HostStagingGate(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
 
     async def issue_write(num_bytes: int, stage):
-        """Admit ``num_bytes`` to the staging budget, then stage and issue one write.
-
-        The budget is held until TensorStore commits and releases the buffer, so a save
-        larger than the budget rolls its shards through it rather than staging them all.
-        """
+        """Admit ``num_bytes`` to the staging budget, then stage and issue one write."""
         await gate.acquire(num_bytes)
         try:
             write = await stage()
@@ -704,7 +600,7 @@ def _serialize_arrays(
         await write.copy
 
     async def write_host_array(store, array):
-        # Not sharded, and identical on every process, so process 0 writes all of it.
+        # Unsharded and identical everywhere, so process 0 writes all of it.
         if jax.process_index() != 0:
             return
 
@@ -721,12 +617,8 @@ def _serialize_arrays(
 
         async def stage():
             data = await _transfer_shard_to_pageable_host(shard, region.local_slice)
-            return store[region.index].write(
-                data,
-                # Our snapshot is private and never mutated, so TensorStore may hold the
-                # reference instead of copying it into the chunk cache.
-                can_reference_source_data_indefinitely=True,
-            )
+            # The snapshot is private and never mutated, so TensorStore may hold the reference.
+            return store[region.index].write(data, can_reference_source_data_indefinitely=True)
 
         await issue_write(_estimate_array_nbytes(shard.data) // plan.write_replicas, stage)
 
@@ -750,9 +642,7 @@ def _serialize_arrays(
         _STAGED_BYTE_OVERHEAD * gate.peak_bytes / 1024**3,
     )
 
-    # `_add_futures` and `_start_async_commit` are private to AsyncManager, but they are what
-    # its own `serialize` calls. We replace only its per-shard write rule ("write if
-    # replica_id == 0"), not its cross-process commit protocol.
+    # Private to AsyncManager. Its own `serialize` calls these.
     manager._add_futures(commit_futures)
     manager._start_async_commit(commit_callback)
 
@@ -802,9 +692,7 @@ def _restore_ocdbt(
     """Restore arrays from an OCDBT checkpoint."""
     manifest = read_manifest(checkpoint_root)
     if manifest is not None:
-        # The manifest already says what the checkpoint holds. Listing the kvstore instead
-        # walks every chunk key, which on a multi-terabyte checkpoint is a lot of listing to
-        # answer a question we wrote down at save time.
+        # Listing the kvstore walks every chunk key.
         present = manifest.array_paths
     else:
         keys = asyncio.run(_list_ocdbt_keys(checkpoint_root))
@@ -860,21 +748,7 @@ def _restore_old_ts(
     manager: array_ser.GlobalAsyncCheckpointManager,
     allow_missing: bool,
 ) -> tuple[list, list[int]]:
-    """
-    Restore arrays from an old (non-OCDBT) tensorstore checkpoint.
-
-    Args:
-        checkpoint_dir: Directory containing the checkpoint
-        paths: Full paths for all arrays
-        real_indices: Indices of non-None shardings
-        shardings_leaves: Flattened list of shardings
-        leaf_key_paths: Key paths for logging
-        manager: Checkpoint manager
-        allow_missing: Whether to allow missing arrays
-
-    Returns:
-        Tuple of (deserialized_leaves, indices_to_load)
-    """
+    """Restore arrays from an old (non-OCDBT) tensorstore checkpoint."""
     paths = [prefix_join(checkpoint_dir, p) for p in paths]
 
     paths_to_load = []
@@ -920,33 +794,16 @@ def tree_deserialize_leaves_tensorstore(
     *,
     allow_missing: bool = False,
 ):
-    """
-    Deserializes a PyTree of Arrays and NamedArrays from a Tensorstore checkpoint, returning a pytree with the same shape
-    as the one provided. This method is capable of deserializing NamedArrays that are the result of an eval_shape call
-    (i.e. they are not yet arrays but are ShapedDtypeStructs), provided you pass in the axis_mapping and mesh (or
-    they are available by context)
+    """Deserialize a checkpoint into the shape of ``pytree``.
 
-    Args:
-        checkpoint_dir: the directory containing the tensorstore checkpoint, can be a local path or a GCS path
-        pytree: the exemplar pytree
-        axis_mapping: optional, the axis mapping for the NamedArrays (if they are not yet arrays)
-        mesh: optional, the mesh for the NamedArrays (if they are not yet arrays)
-        manager: optional, the checkpoint manager to use. If not provided, a new one will be created
-        allow_missing: if True, missing leaves will be allowed and kept as-is
-
-    Returns:
-        A pytree with the same shape as the exemplar pytree, but with the arrays deserialized from the checkpoint
+    ``pytree`` may hold ShapeDtypeStructs from ``eval_shape``; ``axis_mapping`` and ``mesh``
+    supply the shardings. ``allow_missing`` keeps absent leaves as they are.
     """
     if manager is None:
         manager = array_ser.GlobalAsyncCheckpointManager()
 
-    # Pre-charge the cross-region transfer budget before kicking off the
-    # async reads.  Tensorstore bypasses fsspec, so the CrossRegionGuardedFS
-    # interceptor never sees these bytes.  We use the exemplar pytree's
-    # shapes/dtypes as an upper bound — if `allow_missing=True` and some
-    # leaves aren't on disk we'll over-charge slightly, but the common case
-    # (no missing arrays) is exact.  No-op when checkpoint_dir is local or
-    # in the same region as the VM.
+    # Pre-charge the cross-region budget from the exemplar pytree, an upper bound under
+    # `allow_missing=True`. See the save path.
     estimated_bytes = sum(
         _estimate_array_nbytes(leaf.array if is_named_array(leaf) else leaf)
         for leaf in jtu.tree_leaves(pytree, is_leaf=_is_named_or_none)

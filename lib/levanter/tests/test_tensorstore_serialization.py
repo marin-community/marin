@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import json
 import subprocess
 import sys
 import textwrap
@@ -20,6 +21,8 @@ from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
+from levanter.checkpoint import load_checkpoint, save_checkpoint
+from levanter.checkpoint_manifest import CHECKPOINT_FORMAT_VERSION, manifest_path, read_manifest
 from levanter.models.gpt2 import Gpt2Mlp
 from levanter.tensorstore_serialization import (
     TensorStoreWriteConfig,
@@ -218,8 +221,7 @@ def test_tensorstore_ok_with_missing():
 
 
 def test_a_staging_budget_smaller_than_one_shard_still_completes():
-    """The gate must always admit the first snapshot, or a save deadlocks on an array it
-    can never fit."""
+    """The gate must always admit the first snapshot, or a save deadlocks."""
     with use_test_mesh():
         A = hax.Axis("A", 1024)
         state = {"w": hax.full(A, 3.0)}
@@ -234,8 +236,7 @@ def test_a_staging_budget_smaller_than_one_shard_still_completes():
 
 
 def test_staged_bytes_stay_admitted_until_their_write_is_released():
-    """TensorStore holds a shard snapshot until the commit, so admission must outlive the
-    copy. Releasing earlier would let a save stage its whole share of the checkpoint."""
+    """TensorStore holds a shard snapshot until the commit, so admission must outlive the copy."""
 
     async def scenario():
         gate = _HostStagingGate(100)
@@ -253,8 +254,7 @@ def test_staged_bytes_stay_admitted_until_their_write_is_released():
 
 
 def test_a_save_larger_than_the_staging_budget_rolls_through_it():
-    """Peak host memory follows the budget, not the size of the state, and the checkpoint
-    that comes back is still complete."""
+    """Peak host memory follows the budget. The checkpoint that comes back is still complete."""
     with use_test_mesh():
         A = hax.Axis("A", 4096)
         state = {f"w{i}": hax.full(A, float(i)) for i in range(8)}
@@ -286,8 +286,8 @@ def test_capped_chunk_shape_stays_a_divisor(local_shape, itemsize, max_bytes, ex
     assert all(dim % size == 0 for dim, size in zip(local_shape, chunk)), "chunks must tile the writer's slice"
 
 
-# Eight devices are needed to give an array more than one replica, and the XLA device count is
-# process-global, so these run in a fresh interpreter (same pattern as test_snowball.py).
+# An array needs eight devices to have more than one replica, and the XLA device count is
+# process-global, so these run in a fresh interpreter (as test_snowball.py does).
 _EIGHT_DEVICE_PREAMBLE = """
 import os
 os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
@@ -323,11 +323,7 @@ def _run_eight_device_script(body: str) -> str:
 
 
 def test_every_replica_writes_a_disjoint_slice_covering_the_array():
-    """The contract replica-parallel writes rest on: no idle replicas, no byte written twice.
-
-    Without it a replicated array is written entirely by whichever process holds replica 0,
-    which is what makes large replicated parameters a host-memory problem for that process.
-    """
+    """The contract replica-parallel writes rest on: no idle replicas, no byte written twice."""
     _run_eight_device_script(
         """
         cases = {
@@ -427,7 +423,7 @@ def test_a_replica_count_that_divides_nothing_still_splits():
     """A rack count that is not a power of two must not drop an array to one writer."""
     _run_eight_device_script(
         """
-        # 8 replicas divide neither axis of a (12, 20) shard, and nor do 7; 6 divides the first.
+        # Neither 8 nor 7 divides an axis of a (12, 20) shard. 6 divides the first.
         arr = jax.device_put(
             jnp.arange(12 * 20, dtype=jnp.float32).reshape(12, 20), NamedSharding(MESH, P(None, None))
         )
@@ -447,7 +443,7 @@ def test_a_replica_count_that_divides_nothing_still_splits():
 
 
 def test_arrays_no_split_applies_to_are_spread_over_replicas():
-    """Otherwise every such array lands on replica 0, which is one process for the whole run."""
+    """Every such array otherwise lands on replica 0, one process for the whole run."""
     _run_eight_device_script(
         """
         # 11 is prime and above the replica count, so no split applies at any width.
@@ -489,3 +485,45 @@ def test_arrays_with_a_zero_length_axis_roundtrip():
 
         assert restored["empty"].shape == (0, 16)
         np.testing.assert_array_equal(np.asarray(restored["w"]), np.asarray(source["w"]))
+
+
+def test_reading_a_newer_format_version_fails_loudly(tmp_path):
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "format_version": CHECKPOINT_FORMAT_VERSION + 1,
+                "array_driver": "zarr3",
+                "kvstore_driver": "ocdbt",
+                "arrays": [],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="Upgrade levanter"):
+        read_manifest(str(tmp_path))
+
+
+def test_saving_writes_a_manifest_listing_every_array(tmp_path):
+    with use_test_mesh():
+        A = hax.Axis("A", 8)
+
+        save_checkpoint({"model": {"w": hax.zeros(A)}, "step": jnp.array(3)}, step=3, checkpoint_path=str(tmp_path))
+
+        manifest = read_manifest(str(tmp_path))
+        assert manifest is not None
+        assert {array.path: array.shape for array in manifest.arrays} == {"model/w": (8,), "step": ()}
+
+
+def test_checkpoints_without_a_manifest_still_load(tmp_path):
+    """Checkpoints predating the manifest have none, so the reader has to fall back."""
+    with use_test_mesh():
+        A = hax.Axis("A", 8)
+        state = {"model": {"w": hax.full(A, 5.0)}}
+
+        save_checkpoint(state, step=0, checkpoint_path=str(tmp_path))
+        (tmp_path / manifest_path("")).unlink()
+        assert read_manifest(str(tmp_path)) is None
+
+        restored = load_checkpoint({"model": {"w": hax.zeros(A)}}, str(tmp_path))
+
+        assert jax.numpy.array_equal(restored["model"]["w"].array, state["model"]["w"].array)

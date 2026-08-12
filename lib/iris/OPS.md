@@ -170,8 +170,7 @@ iris job summary /user/job-name         # per-task state, exit, duration, peak m
 The subcommands are `list` and `summary`. There is no `job ls` and no `job info`.
 
 `job logs` returns the last 1000 lines by default. A multi-rank gang emits that
-many in seconds, so a grep for something that happened earlier in the run comes
-back empty and reads as "it never happened":
+many in seconds, so a grep for anything earlier in the run comes back empty:
 
 ```bash
 iris job logs /user/job/child --max-lines 400000 --no-tail | grep "Saving checkpoint"
@@ -179,10 +178,10 @@ iris job logs /user/job/child --max-lines 400000 --no-tail | grep "Saving checkp
 
 ### Submitting a GPU gang from a workstation
 
-`--cluster cw-*` connects the CLI straight to that cluster's controller, which
-needs a `kubectl port-forward` the read-only CoreWeave token cannot open — it
-fails after a 90s timeout even though plain `kubectl get` works. Submit and
-query through the hub instead, which federates the job to the peer:
+`--cluster cw-*` connects the CLI to that cluster's controller, which needs a
+`kubectl port-forward` the read-only CoreWeave token cannot open. It fails after
+a 90s timeout, while plain `kubectl get` works. Submit through the hub, which
+federates the job to the peer:
 
 ```bash
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
@@ -206,14 +205,14 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   carries `MARIN_PREFIX` and the object-store credentials, and nothing else.
   `WANDB_API_KEY` is not among them: pass it, or set `WANDB_MODE=disabled` for a
   run whose metrics do not matter.
-- **`SchedulingGated` on every task means the gang is queued**, not broken — Kueue
-  admits a gang all at once, so a busy cluster holds all of it. Same-band jobs
-  queue behind each other rather than preempting.
+- **`SchedulingGated` on every task means the gang is queued.** Kueue admits a
+  gang all at once, so a busy cluster holds all of it. Same-band jobs queue
+  behind each other; they do not preempt.
 - **`--timeout` covers the queue wait, and killing the coordinator kills the
   gang.** A contested fleet can hold a gang for hours before admitting it; when
   the coordinator's deadline passes, its children are torn down mid-run (the
   tasks report `killed` with a preemption each). Size the timeout for wait plus
-  run, not run alone.
+  run.
 
 Object storage is not readable from a workstation with no cluster credentials
 (`NoCredentialsError` against `s3://marin-us-east-02a`). Validate a job's output

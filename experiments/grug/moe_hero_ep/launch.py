@@ -246,10 +246,8 @@ def build_hero_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
-            # Write under the step's output path. Levanter's default base path is pod-local, so a
-            # preempted run would find nothing to resume from and --save-checkpoints would buy
-            # nothing. `checkpoint_path` sends the write somewhere else, which is how a run that
-            # only exercises the write itself targets disposable storage.
+            # Levanter's default base path is pod-local, so a preempted run would have nothing to
+            # resume from. `checkpoint_path` overrides this for runs targeting disposable storage.
             checkpointer=CheckpointerConfig(
                 base_path=checkpoint_path or prefix_join(ctx.output_path, "checkpoints"),
                 temporary_base_path=None,
@@ -371,7 +369,7 @@ def build_hero_run(
 @click.option(
     "--checkpoint-path",
     default=None,
-    help="Write checkpoints here instead of under the step output path, e.g. a marin_temp_bucket() path.",
+    help="Checkpoint output path, e.g. a marin_temp_bucket() path. Defaults to the step output path.",
 )
 @click.option(
     "--eval-every",

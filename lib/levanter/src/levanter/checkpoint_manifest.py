@@ -1,29 +1,11 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The checkpoint manifest: a self-describing inventory of what a checkpoint contains.
+"""``manifest.json``: the storage format and every array in a checkpoint.
 
-A checkpoint directory holds three kinds of file:
-
-* ``manifest.json`` — this module. Declares the storage format and every array in the
-  checkpoint, with its shape, dtype and chunk grid. Written by process 0 when the save
-  starts.
-* ``metadata.json`` — the commit marker (step, timestamp, temporary flag). Written by
-  process 0 only after every process has committed, so its presence means the checkpoint
-  is complete. Checkpoint discovery keys off this file.
-* the TensorStore/OCDBT data itself.
-
-The manifest exists so that readers do not have to infer the format. Before it, loading
-probed the object store: list every key in the OCDBT database to find out which arrays are
-present, and stat ``manifest.ocdbt`` to decide whether the checkpoint predates OCDBT. The
-listing is proportional to the number of chunks, which on a multi-terabyte checkpoint is
-large enough to matter. With a manifest the reader knows the answer before it opens
-anything.
-
-It also gives format changes somewhere to land. ``format_version`` is the hook: a reader
-that meets a version it does not understand can say so, and a migration can rewrite the
-manifest without touching array data. Checkpoints written before the manifest existed have
-none; :func:`read_manifest` returns ``None`` for those and callers fall back to probing.
+Written by process 0 when a save starts. This contains a mirror of the information in the
+OCDBT database but can be read without reading all chunks. Older checkpoints have no
+manifest and fall back to listing.
 """
 
 import logging
