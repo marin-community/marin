@@ -8,6 +8,7 @@ from __future__ import annotations
 import ctypes
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from enum import IntEnum
 from pathlib import Path
 
 import jax
@@ -15,12 +16,13 @@ import numpy as np
 
 from levanter.kernels.mixture_of_kittens.availability import require_mok_like_available
 from levanter.kernels.mixture_of_kittens.build import build_native_library
-from levanter.kernels.mixture_of_kittens.ffi import BACKWARD_TARGET, FORWARD_TARGET
+from levanter.kernels.mixture_of_kittens.ffi import BACKWARD_TARGET, FAILURE_FENCE_TARGET, FORWARD_TARGET
 from levanter.kernels.mixture_of_kittens.source import MokLikeBuildConfig, mok_source_root
 
 _INIT_SYMBOL = "levanter_mok_init_runtime"
 _SHUTDOWN_SYMBOL = "levanter_mok_shutdown_runtime"
 _LAST_ERROR_SYMBOL = "levanter_mok_last_error"
+_ARM_TEST_FAILURE_SYMBOL = "levanter_mok_arm_test_failure"
 _RESET_CALL_COUNTS_SYMBOL = "levanter_mok_reset_call_counts"
 _FORWARD_CALL_COUNT_SYMBOL = "levanter_mok_forward_call_count"
 _BACKWARD_CALL_COUNT_SYMBOL = "levanter_mok_backward_call_count"
@@ -35,6 +37,16 @@ _MEMORY_POOL_STATS_PER_RANK = 10
 _MEMORY_POOL_TRIM_TRAILER_SIZE = 3
 _ACTIVE_RUNTIME: MokLikeRuntimeHandle | None = None
 _REGISTERED_LIBRARY_PATH: Path | None = None
+
+
+class MokLikeTestFailurePoint(IntEnum):
+    BEFORE_INPUT_READY = 0
+    BEFORE_COMPLETION = 1
+
+
+class MokLikeTestFailurePhase(IntEnum):
+    FORWARD = 0
+    BACKWARD = 1
 
 
 @dataclass(frozen=True)
@@ -102,7 +114,7 @@ def _native_last_error(library: ctypes.CDLL, default: str) -> str:
 def register_ffi_targets(library: ctypes.CDLL) -> None:
     """Register the loaded forward/backward handlers with JAX."""
 
-    for target in (FORWARD_TARGET, BACKWARD_TARGET):
+    for target in (FORWARD_TARGET, BACKWARD_TARGET, FAILURE_FENCE_TARGET):
         handler = getattr(library, target)
         handler.restype = ctypes.c_void_p
         jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(handler), platform="CUDA", api_version=1)
@@ -178,6 +190,23 @@ class MokLikeRuntimeHandle:
         function.argtypes = []
         function.restype = None
         function()
+
+    def arm_test_failure(
+        self,
+        *,
+        rank: int,
+        phase: MokLikeTestFailurePhase,
+        point: MokLikeTestFailurePoint,
+        require_two_active_slots: bool = False,
+    ) -> None:
+        """Arm one handler failure for the next matching invocation."""
+        if self._closed:
+            raise RuntimeError("mok_like runtime handle is closed")
+        function = getattr(self._library, _ARM_TEST_FAILURE_SYMBOL)
+        function.argtypes = [ctypes.c_int] * 4
+        function.restype = ctypes.c_int
+        if function(rank, int(phase), int(point), int(require_two_active_slots)) != 0:
+            raise RuntimeError(_native_last_error(self._library, "MoK-like test failure injection failed"))
 
     def call_counts(self) -> tuple[int, int]:
         """Return process-local forward and backward FFI handler invocations."""

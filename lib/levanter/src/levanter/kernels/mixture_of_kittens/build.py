@@ -9,6 +9,7 @@ import fcntl
 import hashlib
 import importlib.metadata
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -27,7 +28,7 @@ from levanter.kernels.mixture_of_kittens.source import (
 )
 
 
-_BUILD_SCHEMA = "mok_forward_backward_ffi_v12"
+_BUILD_SCHEMA = "mok_forward_backward_ffi_v14"
 _CUDA_DISTRIBUTIONS = (
     "nvidia-cuda-runtime",
     "nvidia-cuda-nvcc",
@@ -142,10 +143,12 @@ static __device__ __forceinline__ unsigned long long system_generation_load(cons
 
 static __device__ __forceinline__ unsigned long long system_generation_wait(
     const uint64_t *counter,
+    const uint64_t *cancellation,
     unsigned long long target
 ) {
     unsigned long long observed = system_generation_load(counter);
     while (observed < target) {
+        if (system_generation_load(cancellation) >= target) return target;
         __nanosleep(64);
         observed = system_generation_load(counter);
     }
@@ -160,6 +163,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
     const uint64_t *peer_input_ready;
     const uint64_t *peer_destination_ready;
     const uint64_t *input_generation;
+    const uint64_t *cancellation;
     uint64_t *peer_ready_wait_counter;
     uint64_t *generation_mismatch_counter;
     uint64_t *peer_wait_events;
@@ -176,6 +180,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
     const uint64_t *peer_input_ready;
     const uint64_t *peer_destination_ready;
     const uint64_t *input_generation;
+    const uint64_t *cancellation;
     uint64_t *peer_ready_wait_counter;
     uint64_t *generation_mismatch_counter;
     uint64_t *peer_wait_events;
@@ -190,6 +195,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
     const int buffer_ready_required_count,
     const uint64_t *peer_input_ready = nullptr,
     const uint64_t *input_generation = nullptr,
+    const uint64_t *cancellation = nullptr,
     uint64_t *peer_ready_wait_counter = nullptr,
     uint64_t *generation_mismatch_counter = nullptr,
     uint64_t *peer_wait_events = nullptr,
@@ -210,6 +216,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
     const uint64_t smem_base_addr,
     const uint64_t *peer_input_ready = nullptr,
     const uint64_t *input_generation = nullptr,
+    const uint64_t *cancellation = nullptr,
     uint64_t *peer_ready_wait_counter = nullptr,
     uint64_t *generation_mismatch_counter = nullptr,
     uint64_t *peer_wait_events = nullptr,
@@ -237,7 +244,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
             unsigned long long observed = initial;
             if (initial < target) {
                 const unsigned long long wait_start = clock64();
-                observed = system_generation_wait(peer_input_ready + tid, target);
+                observed = system_generation_wait(peer_input_ready + tid, cancellation, target);
                 const unsigned long long wait_cycles = clock64() - wait_start;
                 if (peer_ready_wait_counter != nullptr)
                     atomicAdd(reinterpret_cast<unsigned long long *>(peer_ready_wait_counter), 1ULL);
@@ -270,7 +277,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
             unsigned long long observed = initial;
             if (initial < target) {
                 const unsigned long long wait_start = clock64();
-                observed = system_generation_wait(peer_input_ready + peer_rank, target);
+                observed = system_generation_wait(peer_input_ready + peer_rank, cancellation, target);
                 const unsigned long long wait_cycles = clock64() - wait_start;
                 if (peer_ready_wait_counter != nullptr)
                     atomicAdd(reinterpret_cast<unsigned long long *>(peer_ready_wait_counter), 1ULL);
@@ -296,6 +303,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
     const uint64_t smem_base_addr,
     const uint64_t *peer_input_ready = nullptr,
     const uint64_t *input_generation = nullptr,
+    const uint64_t *cancellation = nullptr,
     uint64_t *peer_ready_wait_counter = nullptr,
     uint64_t *generation_mismatch_counter = nullptr,
     uint64_t *peer_wait_events = nullptr,
@@ -325,7 +333,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
             unsigned long long observed = initial;
             if (initial < target) {
                 const unsigned long long wait_start = clock64();
-                observed = system_generation_wait(peer_input_ready + tid, target);
+                observed = system_generation_wait(peer_input_ready + tid, cancellation, target);
                 const unsigned long long wait_cycles = clock64() - wait_start;
                 if (peer_ready_wait_counter != nullptr)
                     atomicAdd(reinterpret_cast<unsigned long long *>(peer_ready_wait_counter), 1ULL);
@@ -349,7 +357,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
                                      macrobatch_idx + 1, 0, smem_base_addr);""",
             """                                     num_tokens, macrobatch_size, g.minibatch_size, macrobatch_idx, task_idx, g.topk,
                                      macrobatch_idx + 1, 0, smem_base_addr,
-                                     g.peer_input_ready, g.input_generation, g.peer_ready_wait_counter,
+                                     g.peer_input_ready, g.input_generation, g.cancellation, g.peer_ready_wait_counter,
                                      g.generation_mismatch_counter, g.peer_wait_events, g.peer_wait_cycles,
                                      g.peer_wait_max_cycles);""",
         ),
@@ -360,7 +368,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
         auto reverse_dispatch""",
             """                                     num_tokens, macrobatch_size, g.minibatch_size, macrobatch_idx, task_idx, g.topk,
                                      -1, 0, smem_base_addr,
-                                     g.peer_input_ready, g.input_generation, g.peer_ready_wait_counter,
+                                     g.peer_input_ready, g.input_generation, g.cancellation, g.peer_ready_wait_counter,
                                      g.generation_mismatch_counter, g.peer_wait_events, g.peer_wait_cycles,
                                      g.peer_wait_max_cycles);
         };
@@ -373,7 +381,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
         preload_router_weights_kernel""",
             """                                     num_tokens, macrobatch_size, g.minibatch_size, macrobatch_idx, task_idx, g.topk,
                                      -1, 0, smem_base_addr,
-                                     g.peer_input_ready, g.input_generation, g.peer_ready_wait_counter,
+                                     g.peer_input_ready, g.input_generation, g.cancellation, g.peer_ready_wait_counter,
                                      g.generation_mismatch_counter, g.peer_wait_events, g.peer_wait_cycles,
                                      g.peer_wait_max_cycles);
         };
@@ -384,7 +392,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
                                       num_tokens, macrobatch_size, 0, comm_cta_idx, g.num_comm_sms, -1, 0);""",
             """                                      nullptr, g.router_weights_ready,
                                       num_tokens, macrobatch_size, 0, comm_cta_idx, g.num_comm_sms, -1, 0,
-                                      g.peer_input_ready, g.input_generation, g.peer_ready_wait_counter,
+                                      g.peer_input_ready, g.input_generation, g.cancellation, g.peer_ready_wait_counter,
                                       g.generation_mismatch_counter, g.peer_wait_events, g.peer_wait_cycles,
                                       g.peer_wait_max_cycles);""",
         ),
@@ -393,7 +401,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
                                               macrobatch_idx, routed_buffers_done_required_count_of(macrobatch_idx));""",
             """                                              num_tokens, macrobatch_size, macrobatch_idx + 1, comm_cta_idx, g.num_comm_sms,
                                               macrobatch_idx, routed_buffers_done_required_count_of(macrobatch_idx),
-                                              g.peer_input_ready, g.input_generation, g.peer_ready_wait_counter,
+                                              g.peer_input_ready, g.input_generation, g.cancellation, g.peer_ready_wait_counter,
                                               g.generation_mismatch_counter, g.peer_wait_events, g.peer_wait_cycles,
                                               g.peer_wait_max_cycles);""",
         ),
@@ -404,7 +412,7 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
         auto replay_dispatch""",
             """                           combine_inputs_arrived, combine_bitfield,
                            num_tokens, macrobatch_size, g.minibatch_size, macrobatch_idx, task_idx, smem_base_addr,
-                           g.peer_destination_ready, g.input_generation, g.peer_ready_wait_counter,
+                           g.peer_destination_ready, g.input_generation, g.cancellation, g.peer_ready_wait_counter,
                            g.generation_mismatch_counter, g.peer_wait_events, g.peer_wait_cycles,
                            g.peer_wait_max_cycles);
         };
@@ -475,6 +483,7 @@ using d_routed_weight_f32_gl = gl<float, 1, -1, -1, -1, mlp_f32_d_tile>;""",
             raise RuntimeError("The pinned Mixture-of-Kittens source changed at a Marin kernel edit")
         mok_text = mok_text.replace(old, new)
     mok_text += "\n};  // struct dispatch_mlp_swiglu_combiner\n"
+    _validate_cancellable_generation_waits(mok_text)
 
     mxfp8_lines = (source_root / "csrc" / "mxfp8.cuh").read_text().splitlines(keepends=True)
     first_mxfp8_host = next(index for index, line in enumerate(mxfp8_lines) if "static __host__" in line)
@@ -490,6 +499,18 @@ enum class RoutedPrecision { BF16, MXFP8 };
 }  // namespace utils
 """
     return mok_text.encode(), mxfp8_text.encode(), utils_text.encode()
+
+
+def _validate_cancellable_generation_waits(source: str) -> int:
+    """Reject generated peer waits that cannot observe invocation cancellation."""
+    calls = re.findall(r"system_generation_wait\(([^;{}]*)\)", source)
+    if len(calls) < 2:
+        raise RuntimeError("generated MoK source does not contain peer generation waits")
+    runtime_calls = calls[1:]
+    unsafe = tuple(call for call in runtime_calls if len(call.split(",")) != 3)
+    if unsafe:
+        raise RuntimeError(f"generated MoK peer waits cannot observe cancellation: {unsafe}")
+    return len(runtime_calls)
 
 
 def _build_path(build_config: MokLikeBuildConfig) -> tuple[Path, Path]:

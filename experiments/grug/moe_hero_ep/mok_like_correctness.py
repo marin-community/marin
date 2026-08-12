@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Four-GPU numerical and saved-context gate for the supported mok_like API."""
+"""Four-GPU numerical and multi-process failure gates for the supported mok_like API."""
 
 import json
 import math
+import time
 from concurrent.futures import ThreadPoolExecutor
 from enum import StrEnum
 from threading import Barrier
@@ -13,6 +14,7 @@ import click
 import jax
 import jax.numpy as jnp
 import numpy as np
+from iris.runtime.jax_init import initialize_jax
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.kernels.mixture_of_kittens import (
@@ -26,6 +28,7 @@ from levanter.kernels.mixture_of_kittens import (
     mok_like_reference,
 )
 from levanter.kernels.mixture_of_kittens.api import _fused_backward, _fused_forward_with_context
+from levanter.kernels.mixture_of_kittens.runtime import MokLikeTestFailurePhase, MokLikeTestFailurePoint
 from levanter.kernels.mixture_of_kittens.schedule import schedule_capacity
 
 WORLD_SIZE = 4
@@ -188,6 +191,29 @@ def _error_metrics(
 @click.option("--concurrent-calls", is_flag=True, help="Invoke one compiled forward executable from two host threads.")
 @click.option("--corrupt-stamp", is_flag=True, help="Deliberately corrupt the saved runtime epoch; execution must fail.")
 @click.option(
+    "--failure-gate",
+    type=click.Choice(
+        (
+            "forward_before_input_ready",
+            "forward_before_completion",
+            "backward_before_input_ready",
+            "backward_before_completion",
+        )
+    ),
+    help="Inject one synchronous rank-local handler failure and require an all-rank typed-FFI error.",
+)
+@click.option(
+    "--failure-rank",
+    type=click.IntRange(min=0, max=WORLD_SIZE - 1),
+    default=0,
+    show_default=True,
+)
+@click.option(
+    "--failure-concurrent-control",
+    is_flag=True,
+    help="Overlap a second RunId and require cancellation to remain slot-local.",
+)
+@click.option(
     "--output-gradient-scale",
     type=click.FloatRange(min=0.0, min_open=True),
     default=1.0,
@@ -211,9 +237,13 @@ def main(
     back_to_back: bool,
     concurrent_calls: bool,
     corrupt_stamp: bool,
+    failure_gate: str | None,
+    failure_rank: int,
+    failure_concurrent_control: bool,
     output_gradient_scale: float,
 ) -> None:
     """Compare every differentiable leaf with the ordinary Grug EP reference."""
+    initialize_jax()
 
     for name, value in (
         ("num_tokens", num_tokens),
@@ -230,14 +260,27 @@ def main(
         raise click.BadParameter("choose either --remat or --offload")
     if corrupt_stamp and (back_to_back or concurrent_calls):
         raise click.BadParameter("--corrupt-stamp must run as an isolated expected-failure gate")
+    if failure_gate is not None and (corrupt_stamp or back_to_back or concurrent_calls or remat or offload):
+        raise click.BadParameter("--failure-gate must run as an isolated non-rematerialized gate")
+    if failure_concurrent_control and failure_gate is None:
+        raise click.BadParameter("--failure-concurrent-control requires --failure-gate")
+    if failure_concurrent_control and workspace_slots != 2:
+        raise click.BadParameter("--failure-concurrent-control requires --workspace-slots=2")
+    if failure_concurrent_control and jax.process_count() != 1:
+        raise click.BadParameter("--failure-concurrent-control is a process-local two-slot gate")
     if concurrent_calls and workspace_slots != 2:
         raise click.BadParameter("--concurrent-calls requires --workspace-slots=2")
 
     devices = jax.devices()
-    if len(devices) != WORLD_SIZE or any(device.platform != "gpu" for device in devices):
-        raise RuntimeError(f"The correctness gate requires four visible GPUs, got {devices}")
+    process_count = jax.process_count()
+    if jax.local_device_count() != WORLD_SIZE or len(devices) != process_count * WORLD_SIZE:
+        raise RuntimeError(f"The correctness gate requires four visible GPUs per process, got {devices}")
+    if any(device.platform != "gpu" for device in devices):
+        raise RuntimeError(f"The correctness gate requires CUDA GPUs, got {devices}")
+    if process_count != 1 and failure_gate is None:
+        raise click.BadParameter("multi-process execution is supported only for --failure-gate")
     mesh = Mesh(
-        np.asarray(devices).reshape(1, 1, WORLD_SIZE, 1),
+        np.asarray(devices).reshape(process_count, 1, WORLD_SIZE, 1),
         ("replica_dcn", "data", "expert", "model"),
         axis_types=(AxisType.Explicit,) * 4,
     )
@@ -246,7 +289,7 @@ def main(
     shared_sharding = NamedSharding(mesh, P(("data", "expert"), "model"))
     router_sharding = NamedSharding(mesh, P(None, None))
     arrays = _canonical_inputs(
-        num_tokens=num_tokens,
+        num_tokens=process_count * num_tokens,
         hidden_dim=hidden_dim,
         intermediate_dim=intermediate_dim,
     )
@@ -261,7 +304,8 @@ def main(
         jax.device_put(jnp.asarray(shared_up, dtype=jnp.bfloat16), shared_sharding),
         jax.device_put(jnp.asarray(shared_down, dtype=jnp.bfloat16), shared_sharding),
     )
-    routes = _routes(num_tokens, scenario)
+    process_routes = _routes(num_tokens, scenario)
+    routes = np.tile(process_routes, (process_count, 1, 1))
     selected_experts = jax.device_put(
         jnp.asarray(routes.reshape(-1, TOP_K)),
         batch_sharding,
@@ -275,7 +319,7 @@ def main(
     )
     output_gradient = jax.device_put(
         jnp.asarray(
-            np.random.default_rng(4321).normal(size=(WORLD_SIZE * num_tokens, hidden_dim)),
+            np.random.default_rng(4321).normal(size=(process_count * WORLD_SIZE * num_tokens, hidden_dim)),
             dtype=jnp.bfloat16,
         ),
         batch_sharding,
@@ -289,13 +333,17 @@ def main(
         backward_peer_storage=backward_peer_storage,
     )
     capacity = schedule_capacity(num_tokens, TOP_K, NUM_LOCAL_EXPERTS, config)
-    required_capacity = _required_schedule_capacity(routes)
+    required_capacity = _required_schedule_capacity(process_routes)
     if capacity < required_capacity:
         raise click.BadParameter(
             f"scenario {scenario.value} requires padded schedule capacity {required_capacity}, "
             f"but the configured capacity is {capacity}; numerical parity requires zero overflow"
         )
-    real_macrobuffers = _real_macrobuffers(routes, capacity=capacity, macrobatch_size=macrobatch_size)
+    real_macrobuffers = _real_macrobuffers(
+        process_routes,
+        capacity=capacity,
+        macrobatch_size=macrobatch_size,
+    )
     build_config = MokLikeBuildConfig(
         source_root=MOK_LIKE_SOURCE_ROOT,
         cache_root=MOK_LIKE_BUILD_ROOT,
@@ -376,6 +424,164 @@ def main(
                 config=config,
                 fallback_implementation="ring",
             )
+
+        if failure_gate is not None:
+            phase = (
+                MokLikeTestFailurePhase.FORWARD
+                if failure_gate.startswith("forward_")
+                else MokLikeTestFailurePhase.BACKWARD
+            )
+            point = (
+                MokLikeTestFailurePoint.BEFORE_INPUT_READY
+                if failure_gate.endswith("input_ready")
+                else MokLikeTestFailurePoint.BEFORE_COMPLETION
+            )
+            compiled_failure = (
+                jax.jit(fused_output).lower(*differentiable).compile()
+                if phase is MokLikeTestFailurePhase.FORWARD
+                else jax.jit(jax.value_and_grad(fused_loss, argnums=tuple(range(8)))).lower(*differentiable).compile()
+            )
+            runtime.reset_call_counts()
+            runtime.reset_debug_counters()
+            # Only process zero injects. Every other process must still take the
+            # same failure branch through the process-spanning status pmax.
+            if jax.process_index() == 0:
+                runtime.arm_test_failure(
+                    rank=failure_rank,
+                    phase=phase,
+                    point=point,
+                    require_two_active_slots=failure_concurrent_control,
+                )
+            failure_started = time.monotonic()
+            if failure_concurrent_control:
+                concurrent_arguments = (
+                    differentiable,
+                    (differentiable[0] * jnp.asarray(0.5, dtype=jnp.bfloat16), *differentiable[1:]),
+                )
+                start = Barrier(2)
+
+                def run_failure_control(arguments: tuple[jax.Array, ...]) -> tuple[object | None, Exception | None]:
+                    start.wait()
+                    try:
+                        result = compiled_failure(*arguments)
+                        jax.block_until_ready(result)
+                        return result, None
+                    except Exception as failure:
+                        return None, failure
+
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    results = tuple(executor.map(run_failure_control, concurrent_arguments))
+                errors = tuple(error for _, error in results if error is not None)
+                successes = tuple((index, result) for index, (result, error) in enumerate(results) if error is None)
+                if len(errors) != 1 or len(successes) != 1:
+                    raise AssertionError(f"failure cancellation crossed RunIds: {results}")
+                captured_failure = errors[0]
+                elapsed = time.monotonic() - failure_started
+                success_index, successful_result = successes[0]
+                successful_arguments = concurrent_arguments[success_index]
+                if phase is MokLikeTestFailurePhase.FORWARD:
+                    expected_success = jax.jit(reference_output)(*successful_arguments)
+                    jax.block_until_ready(expected_success)
+                    success_metrics: object = _error_metrics(
+                        successful_result,
+                        expected_success,
+                        absolute_tolerance=BF16_ATOL,
+                    )
+                    success_matches = bool(success_metrics["allclose"])
+                else:
+                    expected_success = jax.jit(jax.value_and_grad(reference_loss, argnums=tuple(range(8))))(
+                        *successful_arguments
+                    )
+                    jax.block_until_ready(expected_success)
+                    gradient_metrics = tuple(
+                        _error_metrics(
+                            actual,
+                            expected,
+                            absolute_tolerance=(SHARED_GRADIENT_ATOL if name.startswith("shared_") else BF16_ATOL),
+                        )
+                        for name, actual, expected in zip(
+                            gradient_names,
+                            successful_result[1],
+                            expected_success[1],
+                            strict=True,
+                        )
+                    )
+                    success_metrics = {
+                        "loss_absolute_error": float(abs(successful_result[0] - expected_success[0])),
+                        "gradients": gradient_metrics,
+                    }
+                    loss_matches = bool(
+                        np.isclose(
+                            float(successful_result[0]),
+                            float(expected_success[0]),
+                            atol=BF16_ATOL,
+                            rtol=BF16_RTOL,
+                        )
+                    )
+                    success_metrics["loss_allclose"] = loss_matches
+                    success_matches = loss_matches and all(bool(metric["allclose"]) for metric in gradient_metrics)
+                if not success_matches:
+                    raise AssertionError(f"concurrent control result did not match the reference: {success_metrics}")
+            else:
+                try:
+                    failed_result = compiled_failure(*differentiable)
+                    jax.block_until_ready(failed_result)
+                except Exception as failure:
+                    captured_failure = failure
+                else:
+                    raise AssertionError("mok_like accepted an injected rank-local failure")
+                success_metrics = None
+                elapsed = time.monotonic() - failure_started
+            if elapsed >= 60:
+                raise AssertionError(f"failure gate exceeded the 60-second bound: {elapsed:.3f}s")
+            expected_calls_per_execution = (
+                (WORLD_SIZE, 0) if phase is MokLikeTestFailurePhase.FORWARD else (WORLD_SIZE, WORLD_SIZE)
+            )
+            execution_count = 2 if failure_concurrent_control else 1
+            expected_call_counts = tuple(execution_count * count for count in expected_calls_per_execution)
+            call_counts = runtime.call_counts()
+            debug_counters = runtime.debug_counters()
+            if call_counts != expected_call_counts:
+                raise AssertionError(
+                    f"failure gate had unexpected FFI calls: {call_counts}, expected {expected_call_counts}"
+                )
+            if any(debug_counters.generation_mismatches) or any(debug_counters.slot_reuse_failures):
+                raise AssertionError(f"failure gate violated generation/slot isolation: {debug_counters}")
+            phase_count = 1 if phase is MokLikeTestFailurePhase.FORWARD else 2
+            expected_acquisitions = execution_count * phase_count
+            if any(sum(acquisitions) != expected_acquisitions for acquisitions in debug_counters.slot_acquisitions):
+                raise AssertionError(f"failure gate had unexpected slot acquisitions: {debug_counters}")
+            if failure_concurrent_control:
+                expected_per_slot = (phase_count, phase_count)
+                if any(acquisitions != expected_per_slot for acquisitions in debug_counters.slot_acquisitions):
+                    raise AssertionError(f"concurrent failure gate did not isolate both slots: {debug_counters}")
+                if any(maximum < 2 for maximum in debug_counters.max_active_slots):
+                    raise AssertionError(f"concurrent failure gate did not overlap both slots: {debug_counters}")
+            elif any(maximum != 1 for maximum in debug_counters.max_active_slots):
+                raise AssertionError(f"isolated failure gate had unexpected slot overlap: {debug_counters}")
+            if "Mixture-of-Kittens failed on at least one mesh rank" in str(captured_failure):
+                metrics = {
+                    "failure_gate": failure_gate,
+                    "failure_rank": failure_rank,
+                    "process_count": process_count,
+                    "process_index": jax.process_index(),
+                    "concurrent_control": failure_concurrent_control,
+                    "ffi_call_counts": call_counts,
+                    "slot_acquisitions": debug_counters.slot_acquisitions,
+                    "max_active_slots": debug_counters.max_active_slots,
+                    "generation_mismatches": debug_counters.generation_mismatches,
+                    "slot_reuse_failures": debug_counters.slot_reuse_failures,
+                    "successful_control": success_metrics,
+                    "wall_time_seconds": elapsed,
+                }
+                # Shutdown is part of the negative gate: failure closure is not
+                # complete if the runtime cannot retire every leased slot.
+                runtime.close()
+                print(json.dumps(metrics, sort_keys=True))
+                return
+            raise AssertionError(
+                f"all-rank failure gate raised the wrong error: {captured_failure}"
+            ) from captured_failure
 
         if corrupt_stamp:
 

@@ -22,7 +22,8 @@ from levanter.kernels.mixture_of_kittens import (
     validate_mok_like_expert_groups,
     validate_mok_like_inputs,
 )
-from levanter.kernels.mixture_of_kittens import availability, runtime
+from levanter.kernels.mixture_of_kittens import availability, build as mok_build, runtime
+from levanter.kernels.mixture_of_kittens.api import _failure_agreement_axes
 from levanter.kernels.mixture_of_kittens.collective_memory_probe import (
     collective_memory_ring_u32,
     memory_space_frontend_attributes,
@@ -345,6 +346,8 @@ def test_backward_peer_storage_reaches_typed_ffi_abi(storage: MokLikeBackwardPee
         (2, 256, 512),
     )
     assert all(aval.dtype == jnp.float32 for aval in routed_gradient_avals)
+    assert ffi_equation.outvars[-1].aval.shape == (1,)
+    assert ffi_equation.outvars[-1].aval.dtype == jnp.int32
     assert all(equation.primitive.name != "reduce_sum" for equation in jaxpr.eqns)
 
 
@@ -563,6 +566,80 @@ def test_runtime_call_counters_are_explicitly_resettable(tmp_path: Path) -> None
 
     assert reset.calls == 1
     assert handle.call_counts() == (4, 4)
+
+
+def test_runtime_failure_gate_uses_rank_phase_point_and_concurrency_abi(tmp_path: Path) -> None:
+    class FakeFunction:
+        argtypes = None
+        restype = None
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, int, int, int]] = []
+
+        def __call__(self, rank: int, phase: int, point: int, concurrent: int) -> int:
+            self.calls.append((rank, phase, point, concurrent))
+            return 0
+
+    arm_failure = FakeFunction()
+    handle = MokLikeRuntimeHandle(
+        build_config=MokLikeBuildConfig(
+            source_root=str(tmp_path / "source"),
+            cache_root=str(tmp_path / "cache"),
+            cuda_arch="sm_100a",
+        ),
+        signature=(4, 256, 256, 2, 2),
+        library_path=tmp_path / "libmok.so",
+        _cuda_driver=object(),
+        _library=SimpleNamespace(levanter_mok_arm_test_failure=arm_failure),  # type: ignore[arg-type]
+    )
+
+    handle.arm_test_failure(
+        rank=2,
+        phase=runtime.MokLikeTestFailurePhase.BACKWARD,
+        point=runtime.MokLikeTestFailurePoint.BEFORE_COMPLETION,
+        require_two_active_slots=True,
+    )
+
+    assert arm_failure.calls == [(2, 1, 1, 1)]
+    assert arm_failure.argtypes == [runtime.ctypes.c_int] * 4
+
+
+def test_generated_peer_wait_validator_requires_cancellation_on_every_wait() -> None:
+    source = """
+system_generation_wait(const uint64_t *counter, const uint64_t *cancellation, uint64_t target) {}
+system_generation_wait(peer_ready, cancellation, target);
+system_generation_wait(peer_ready, target);
+"""
+
+    with pytest.raises(RuntimeError, match="cannot observe cancellation"):
+        mok_build._validate_cancellable_generation_waits(source)
+
+
+def test_generated_peer_wait_validator_counts_cancellable_waits() -> None:
+    source = """
+system_generation_wait(const uint64_t *counter, const uint64_t *cancellation, uint64_t target) {}
+system_generation_wait(peer_ready, cancellation, target);
+system_generation_wait(peer_ready, cancellation, target);
+"""
+
+    assert mok_build._validate_cancellable_generation_waits(source) == 2
+
+
+def test_failure_agreement_excludes_only_the_process_local_expert_axis() -> None:
+    mesh = jax.sharding.AbstractMesh(
+        (8, 4, 4, 2),
+        ("replica_dcn", "data", "expert", "model"),
+    )
+
+    agreement_axes = _failure_agreement_axes(mesh)
+    jaxpr = jax.make_jaxpr(
+        lambda status: jax.lax.pmax(status, agreement_axes),
+        axis_env=tuple(zip(mesh.axis_names, mesh.axis_sizes, strict=True)),
+    )(jnp.asarray(0, dtype=jnp.int32))
+
+    assert agreement_axes == ("replica_dcn", "data", "model")
+    pmax_equation = next(equation for equation in jaxpr.jaxpr.eqns if equation.primitive.name == "pmax")
+    assert pmax_equation.params["axes"] == agreement_axes
 
 
 def test_runtime_debug_counters_preserve_rank_and_phase_structure(tmp_path: Path) -> None:

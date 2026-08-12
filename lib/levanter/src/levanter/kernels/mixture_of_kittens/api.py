@@ -18,6 +18,7 @@ from levanter.kernels.mixture_of_kittens.ffi import (
     MokLikeForwardContext,
     backward_bf16_local,
     forward_bf16_local,
+    raise_mok_like_failure,
 )
 from levanter.kernels.mixture_of_kittens.runtime import MokLikeRuntimeHandle, validate_mok_like_mesh_topology
 from levanter.kernels.mixture_of_kittens.schedule import build_schedule, schedule_capacity
@@ -26,6 +27,12 @@ from levanter.utils.activation import ActivationFunctionEnum
 _EXPERT_AXIS = "expert"
 _NUM_DEVICES = 4
 MOK_CONTEXT_CHECKPOINT_NAME = "mixture_of_kittens_context"
+
+
+def _failure_agreement_axes(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> tuple[str, ...]:
+    """Return the process-spanning axes needed for global failure agreement."""
+
+    return tuple(axis_name for axis_name in mesh.axis_names if axis_name != _EXPERT_AXIS)
 
 
 def validate_mok_like_inputs(
@@ -138,7 +145,7 @@ def _fused_forward_with_context(
             schedule_capacity=capacity,
             rank=rank,
         )
-        output, context = forward_bf16_local(
+        output, context, local_failure = forward_bf16_local(
             local_x,
             local_combine_weights,
             jnp.transpose(local_shared_gate),
@@ -155,8 +162,19 @@ def _fused_forward_with_context(
             config=config,
             collective_id=collective_id,
         )
-        dropped_assignments = jax.lax.psum(schedule.dropped_assignments, _EXPERT_AXIS)
-        return output, dropped_assignments, context
+        # Native cancellation already makes the process-local four-device expert
+        # island uniform. Reduce one scalar per expert lane across every remaining
+        # (process-spanning) mesh axis instead of forming an all-device group.
+        global_failure = jax.lax.pmax(local_failure, _failure_agreement_axes(mesh))
+
+        def success(_: None) -> tuple[jax.Array, jax.Array, MokLikeForwardContext]:
+            return output, jax.lax.psum(schedule.dropped_assignments, _EXPERT_AXIS), context
+
+        def failure(_: None) -> tuple[jax.Array, jax.Array, MokLikeForwardContext]:
+            raise_mok_like_failure()
+            return output, jnp.zeros_like(schedule.dropped_assignments), context
+
+        return jax.lax.cond(global_failure == 0, success, failure, operand=None)
 
     routed_context_spec = P(_EXPERT_AXIS, None)
     context_specs = MokLikeForwardContext(
@@ -318,7 +336,7 @@ def _fused_backward(
             schedule_capacity=capacity,
             rank=rank,
         )
-        gradients = backward_bf16_local(
+        gradients, local_failure = backward_bf16_local(
             local_output_gradient,
             local_x,
             local_combine_weights,
@@ -347,19 +365,49 @@ def _fused_backward(
             d_shared_up,
             d_shared_down,
         ) = gradients
-        return (
-            d_x.astype(local_x.dtype),
-            d_combine_weights.astype(local_combine_weights.dtype),
-            jnp.transpose(d_w_gate, (0, 2, 1)).astype(local_w_gate.dtype),
-            jnp.transpose(d_w_up, (0, 2, 1)).astype(local_w_up.dtype),
-            jnp.transpose(d_w_down, (0, 2, 1)).astype(local_w_down.dtype),
-            jnp.transpose(jax.lax.psum(d_shared_gate.astype(jnp.float32), _EXPERT_AXIS)).astype(
-                local_shared_gate.dtype
-            ),
-            jnp.transpose(jax.lax.psum(d_shared_up.astype(jnp.float32), _EXPERT_AXIS)).astype(local_shared_up.dtype),
-            jnp.transpose(jax.lax.psum(d_shared_down.astype(jnp.float32), _EXPERT_AXIS)).astype(
-                local_shared_down.dtype
-            ),
+        global_failure = jax.lax.pmax(local_failure, _failure_agreement_axes(mesh))
+
+        def success(_: None) -> tuple[jax.Array, ...]:
+            return (
+                d_x.astype(local_x.dtype),
+                d_combine_weights.astype(local_combine_weights.dtype),
+                jnp.transpose(d_w_gate, (0, 2, 1)).astype(local_w_gate.dtype),
+                jnp.transpose(d_w_up, (0, 2, 1)).astype(local_w_up.dtype),
+                jnp.transpose(d_w_down, (0, 2, 1)).astype(local_w_down.dtype),
+                jnp.transpose(jax.lax.psum(d_shared_gate.astype(jnp.float32), _EXPERT_AXIS)).astype(
+                    local_shared_gate.dtype
+                ),
+                jnp.transpose(jax.lax.psum(d_shared_up.astype(jnp.float32), _EXPERT_AXIS)).astype(
+                    local_shared_up.dtype
+                ),
+                jnp.transpose(jax.lax.psum(d_shared_down.astype(jnp.float32), _EXPERT_AXIS)).astype(
+                    local_shared_down.dtype
+                ),
+            )
+
+        def failure(_: None) -> tuple[jax.Array, ...]:
+            # The process-spanning pmax makes this branch uniform across
+            # processes. It contains no collective before the typed FFI error.
+            raise_mok_like_failure()
+            return tuple(
+                jnp.zeros_like(value)
+                for value in (
+                    local_x,
+                    local_combine_weights,
+                    local_w_gate,
+                    local_w_up,
+                    local_w_down,
+                    local_shared_gate,
+                    local_shared_up,
+                    local_shared_down,
+                )
+            )
+
+        return jax.lax.cond(
+            global_failure == 0,
+            success,
+            failure,
+            operand=None,
         )
 
     gradients = jax.shard_map(

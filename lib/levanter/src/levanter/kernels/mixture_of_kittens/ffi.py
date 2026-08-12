@@ -17,6 +17,7 @@ from levanter.kernels.mixture_of_kittens.config import MokLikeConfig, MokLikeRun
 
 FORWARD_TARGET = "levanter_mok_forward_bf16_4"
 BACKWARD_TARGET = "levanter_mok_backward_bf16_4"
+FAILURE_FENCE_TARGET = "levanter_mok_failure_fence"
 _TILE_ROWS = 256
 _SWIGLU_TILE_COLUMNS = 128
 _CLUSTER_SIZE = 2
@@ -55,7 +56,7 @@ def forward_bf16_local(
     runtime: MokLikeRuntime,
     config: MokLikeConfig,
     collective_id: int,
-) -> tuple[jax.Array, MokLikeForwardContext]:
+) -> tuple[jax.Array, MokLikeForwardContext, jax.Array]:
     """Run fused dispatch, shared and routed SwiGLU, combine, and epilogue."""
     if x.ndim != 2 or router_weights.ndim != 2:
         raise ValueError("x and router_weights must be rank two")
@@ -106,6 +107,7 @@ def forward_bf16_local(
         jax.ShapeDtypeStruct((1,), jnp.int32),
         jax.ShapeDtypeStruct((1,), jnp.int32),
         jax.ShapeDtypeStruct((1,), jnp.int32),
+        jax.ShapeDtypeStruct((1,), jnp.int32),
     )
     results = jax.ffi.ffi_call(
         FORWARD_TARGET,
@@ -147,7 +149,7 @@ def forward_bf16_local(
         stamp_generation_low=results[17],
         stamp_runtime_epoch=results[18],
     )
-    return results[0], context
+    return results[0], context, results[-1][0]
 
 
 def backward_bf16_local(
@@ -169,7 +171,7 @@ def backward_bf16_local(
     runtime: MokLikeRuntime,
     config: MokLikeConfig,
     collective_id: int,
-) -> tuple[jax.Array, ...]:
+) -> tuple[tuple[jax.Array, ...], jax.Array]:
     """Run the fused BF16 backward, accumulating routed weight gradients in FP32."""
     if x.ndim != 2 or router_weights.ndim != 2 or grad_output.shape != x.shape:
         raise ValueError("x, grad_output, and router_weights must have matching rank-two token shapes")
@@ -228,6 +230,7 @@ def backward_bf16_local(
         jax.ShapeDtypeStruct((routed_row_blocks * intermediate_col_blocks,), jnp.int32),
         jax.ShapeDtypeStruct((routed_row_blocks,), jnp.int32),
         jax.ShapeDtypeStruct((num_macrobatches,), jnp.int32),
+        jax.ShapeDtypeStruct((1,), jnp.int32),
     )
     results = jax.ffi.ffi_call(
         BACKWARD_TARGET,
@@ -270,4 +273,15 @@ def backward_bf16_local(
     routed_weight_gradients = tuple(
         jnp.where(active_experts[:, None, None], gradient, 0).astype(jnp.bfloat16) for gradient in results[2:5]
     )
-    return tuple(results[:2]) + routed_weight_gradients + tuple(results[5:8])
+    gradients = tuple(results[:2]) + routed_weight_gradients + tuple(results[5:8])
+    return gradients, results[-1][0]
+
+
+def raise_mok_like_failure() -> None:
+    """Raise a typed-FFI error on the already-uniform mesh failure branch."""
+    jax.ffi.ffi_call(
+        FAILURE_FENCE_TARGET,
+        (),
+        has_side_effect=True,
+        vmap_method="broadcast_all",
+    )()

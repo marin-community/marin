@@ -8,6 +8,8 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -120,7 +122,9 @@ struct DeviceRuntime {
   uint64_t* forward_completions = nullptr;
   uint64_t* backward_completions = nullptr;
   uint64_t* last_forward_completion = nullptr;
+  uint64_t* cancellation = nullptr;
   DebugCounters* debug_counters = nullptr;
+  cudaStream_t cancellation_stream = nullptr;
   std::array<void*, kNumDevices> x_ptrs{};
   std::array<void*, kNumDevices> combine_ptrs{};
   std::array<void*, kNumDevices> d_y_ptrs{};
@@ -131,6 +135,7 @@ struct DeviceRuntime {
   std::array<uint64_t*, kNumDevices> backward_input_ready_ptrs{};
   std::array<uint64_t*, kNumDevices> forward_completion_ptrs{};
   std::array<uint64_t*, kNumDevices> backward_completion_ptrs{};
+  std::array<uint64_t*, kNumDevices> cancellation_ptrs{};
   std::array<uint64_t*, kMaxWorkspaceSlots> local_slot_forward_completion_ptrs{};
 
   DeviceRuntime() = default;
@@ -144,7 +149,9 @@ struct DeviceRuntime {
     int original_device = device;
     (void)cudaGetDevice(&original_device);
     (void)cudaSetDevice(device);
+    (void)cudaStreamDestroy(cancellation_stream);
     (void)cudaFree(debug_counters);
+    (void)cudaFree(cancellation);
     (void)cudaFree(last_forward_completion);
     (void)cudaFree(backward_completions);
     (void)cudaFree(forward_completions);
@@ -164,6 +171,11 @@ struct DeviceRuntime {
 enum class InvocationPhase : uint8_t {
   kForward = 0,
   kBackward = 1,
+};
+
+enum class TestFailurePoint : int {
+  kBeforeInputReady = 0,
+  kBeforeCompletion = 1,
 };
 
 enum class ForwardXStorage : int32_t {
@@ -357,7 +369,11 @@ class RuntimeManager {
           ThrowOnCuda(
               cudaMalloc(&runtime->last_forward_completion, sizeof(uint64_t)),
               "cudaMalloc(last forward completion)");
+          ThrowOnCuda(cudaMalloc(&runtime->cancellation, sizeof(uint64_t)), "cudaMalloc(cancellation)");
           ThrowOnCuda(cudaMalloc(&runtime->debug_counters, sizeof(DebugCounters)), "cudaMalloc(debug counters)");
+          ThrowOnCuda(
+              cudaStreamCreateWithFlags(&runtime->cancellation_stream, cudaStreamNonBlocking),
+              "cudaStreamCreateWithFlags(cancellation)");
           ThrowOnCuda(cudaMemset(runtime->generation, 0, sizeof(uint64_t)), "cudaMemset(generation)");
           ThrowOnCuda(
               cudaMemset(runtime->forward_input_ready, 0, num_devices * sizeof(uint64_t)),
@@ -374,6 +390,7 @@ class RuntimeManager {
           ThrowOnCuda(
               cudaMemset(runtime->last_forward_completion, 0, sizeof(uint64_t)),
               "cudaMemset(last forward completion)");
+          ThrowOnCuda(cudaMemset(runtime->cancellation, 0, sizeof(uint64_t)), "cudaMemset(cancellation)");
           ThrowOnCuda(cudaMemset(runtime->debug_counters, 0, sizeof(DebugCounters)), "cudaMemset(debug counters)");
           runtimes_[rank][slot] = std::move(runtime);
         }
@@ -393,6 +410,7 @@ class RuntimeManager {
             runtime.backward_input_ready_ptrs[peer] = runtimes_[peer][slot]->backward_input_ready;
             runtime.forward_completion_ptrs[peer] = runtimes_[peer][slot]->forward_completions;
             runtime.backward_completion_ptrs[peer] = runtimes_[peer][slot]->backward_completions;
+            runtime.cancellation_ptrs[peer] = runtimes_[peer][slot]->cancellation;
             if (peer == rank) {
               continue;
             }
@@ -442,6 +460,57 @@ class RuntimeManager {
     DestroyLocked();
     maintenance_ = false;
     cv_.notify_all();
+  }
+
+  void ArmTestFailure(
+      int rank,
+      InvocationPhase phase,
+      TestFailurePoint point,
+      bool require_two_active_slots) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!initialized_) {
+      throw std::runtime_error("Mixture-of-Kittens runtime is not initialized");
+    }
+    if (!invocations_.empty()) {
+      throw std::runtime_error("Mixture-of-Kittens test failure injection requires a quiescent runtime");
+    }
+    if (rank < 0 || rank >= kNumDevices) {
+      throw std::runtime_error("Mixture-of-Kittens test failure rank is out of range");
+    }
+    if (require_two_active_slots && workspace_slots_ != 2) {
+      throw std::runtime_error("Mixture-of-Kittens concurrent failure gate requires two workspace slots");
+    }
+    test_failure_rank_ = rank;
+    test_failure_phase_ = phase;
+    test_failure_point_ = point;
+    test_failure_require_two_active_slots_ = require_two_active_slots;
+    test_failure_armed_ = true;
+  }
+
+  bool ConsumeTestFailure(int rank, InvocationPhase phase, TestFailurePoint point) {
+    std::unique_lock<std::mutex> lock(mu_);
+    if (!test_failure_armed_ || test_failure_rank_ != rank || test_failure_phase_ != phase ||
+        test_failure_point_ != point) {
+      return false;
+    }
+    if (test_failure_require_two_active_slots_) {
+      const bool both_slots_active = cv_.wait_for(lock, kWorkspaceAcquireTimeout, [&] {
+        const int fully_leased_invocations = static_cast<int>(std::count_if(
+            invocations_.begin(), invocations_.end(), [](const auto& item) {
+              return !item.second->cancelled && item.second->leased_mask == kAllRanksMask;
+            }));
+        return !test_failure_armed_ || fully_leased_invocations >= 2;
+      });
+      if (!both_slots_active) {
+        test_failure_armed_ = false;
+        throw std::runtime_error("Mixture-of-Kittens concurrent failure gate did not occupy both workspace slots");
+      }
+      if (!test_failure_armed_) {
+        return false;
+      }
+    }
+    test_failure_armed_ = false;
+    return true;
   }
 
   void ResetDebugCounters() {
@@ -814,6 +883,7 @@ class RuntimeManager {
       throw std::runtime_error(state->error);
     }
     state->leased_mask |= rank_bit;
+    cv_.notify_all();
     ++host_slot_acquisitions_[rank][state->slot];
     host_max_active_slots_[rank] = std::max(
         host_max_active_slots_[rank],
@@ -859,23 +929,18 @@ class RuntimeManager {
     }
   }
 
-  void Abort(const RuntimeLease& lease) {
+  void MarkFailure(const RuntimeLease& lease, const std::string& rank_error) {
     std::lock_guard<std::mutex> lock(mu_);
     auto invocation = invocations_.find(lease.key);
     if (invocation == invocations_.end()) {
       ++host_slot_reuse_failures_[lease.rank];
       return;
     }
-    ++host_slot_reuse_failures_[lease.rank];
     const std::shared_ptr<InvocationState> state = invocation->second;
     if (!state->cancelled) {
       state->cancelled = true;
-      state->error = "Mixture-of-Kittens workspace invocation aborted after a rank-local failure";
-      if (failure_message_.empty()) {
-        failure_message_ = state->error;
-      }
+      state->error = rank_error;
     }
-    FinishRankLocked(lease.key, state, lease.rank);
     cv_.notify_all();
   }
 
@@ -1028,6 +1093,8 @@ class RuntimeManager {
     invocations_.clear();
     run_ordinals_.clear();
     failure_message_.clear();
+    test_failure_armed_ = false;
+    test_failure_require_two_active_slots_ = false;
   }
 
   std::mutex mu_;
@@ -1049,6 +1116,11 @@ class RuntimeManager {
   std::array<std::array<uint64_t, 2>, kNumDevices> host_staging_copy_calls_{};
   std::array<std::array<uint64_t, 2>, kNumDevices> host_staging_copy_bytes_{};
   std::string failure_message_;
+  bool test_failure_armed_ = false;
+  int test_failure_rank_ = -1;
+  InvocationPhase test_failure_phase_ = InvocationPhase::kForward;
+  TestFailurePoint test_failure_point_ = TestFailurePoint::kBeforeInputReady;
+  bool test_failure_require_two_active_slots_ = false;
   std::unordered_map<InvocationKey, std::shared_ptr<InvocationState>, InvocationKeyHash> invocations_;
   std::unordered_map<RunPhaseKey, std::array<uint64_t, kNumDevices>, RunPhaseKeyHash> run_ordinals_;
 };
@@ -1058,11 +1130,68 @@ struct GenerationArgs {
   std::array<uint64_t*, kNumDevices> completion_ptrs;
   uint64_t* local_completions;
   uint64_t* generation;
+  uint64_t* cancellation;
   DebugCounters* debug_counters;
   uint64_t target;
   int rank;
   PeerWaitPhase wait_phase;
 };
+
+struct CancellationArgs {
+  std::array<uint64_t*, kNumDevices> cancellation_ptrs;
+  std::array<uint64_t*, kNumDevices> input_ready_ptrs;
+  std::array<uint64_t*, kNumDevices> completion_ptrs;
+  uint64_t target;
+  int rank;
+};
+
+__global__ void PublishCancellationKernel(CancellationArgs args) {
+  if (threadIdx.x != 0 || blockIdx.x != 0) {
+    return;
+  }
+  __threadfence_system();
+  for (int peer = 0; peer < kNumDevices; ++peer) {
+    auto* cancellation = reinterpret_cast<unsigned long long*>(args.cancellation_ptrs[peer]);
+    auto* ready = reinterpret_cast<unsigned long long*>(args.input_ready_ptrs[peer] + args.rank);
+    auto* completion = reinterpret_cast<unsigned long long*>(args.completion_ptrs[peer] + args.rank);
+    atomicExch_system(cancellation, static_cast<unsigned long long>(args.target));
+    // A failed rank's buffers remain allocated for the operation lifetime. Mark
+    // its signals ready so healthy peers can finish disposable work and reach
+    // the JAX status fence instead of spinning in a native wait.
+    atomicExch_system(ready, static_cast<unsigned long long>(args.target));
+    atomicExch_system(completion, static_cast<unsigned long long>(args.target));
+  }
+}
+
+void PublishFailureSignals(DeviceRuntime& runtime, InvocationPhase phase, uint64_t generation) {
+  // This closes synchronous handler failures only while a separate CUDA stream
+  // remains usable. An asynchronous device trap can poison the CUDA context;
+  // detecting that case would require synchronizing the possibly blocked FFI
+  // stream and therefore cannot provide a bounded in-process failure protocol.
+  CancellationArgs args{
+      .cancellation_ptrs = runtime.cancellation_ptrs,
+      .input_ready_ptrs = phase == InvocationPhase::kForward
+                              ? runtime.forward_input_ready_ptrs
+                              : runtime.backward_input_ready_ptrs,
+      .completion_ptrs = phase == InvocationPhase::kForward
+                             ? runtime.forward_completion_ptrs
+                             : runtime.backward_completion_ptrs,
+      .target = generation,
+      .rank = runtime.rank,
+  };
+  PublishCancellationKernel<<<1, 1, 0, runtime.cancellation_stream>>>(args);
+  ThrowOnCuda(cudaGetLastError(), "PublishCancellationKernel");
+  ThrowOnCuda(cudaStreamSynchronize(runtime.cancellation_stream), "cudaStreamSynchronize(failure signals)");
+}
+
+[[noreturn]] void TerminalCudaFailure(const std::string& error) {
+  std::fprintf(stderr,
+               "Mixture-of-Kittens terminal CUDA failure: the CUDA context may be poisoned and "
+               "cannot be closed in process: %s\n",
+               error.c_str());
+  std::fflush(stderr);
+  std::abort();
+}
 
 __global__ void PublishForwardInputReadyKernel(GenerationArgs args) {
   if (threadIdx.x != 0 || blockIdx.x != 0) {
@@ -1109,8 +1238,14 @@ __global__ void WaitCompletionKernel(GenerationArgs args) {
     return;
   }
   const unsigned long long target = args.target;
+  auto* cancellation = reinterpret_cast<unsigned long long*>(args.cancellation);
+  if (atomicAdd_system(cancellation, 0ULL) >= target) {
+    __threadfence_system();
+    return;
+  }
   unsigned long long wait_events = 0;
   unsigned long long future_generations = 0;
+  bool cancelled = false;
   for (int peer = 0; peer < kNumDevices; ++peer) {
     auto* completion = reinterpret_cast<unsigned long long*>(args.local_completions + peer);
     unsigned long long observed = atomicAdd_system(completion, 0ULL);
@@ -1118,6 +1253,10 @@ __global__ void WaitCompletionKernel(GenerationArgs args) {
       ++wait_events;
       const unsigned long long wait_start = clock64();
       while (observed < target) {
+        if (atomicAdd_system(cancellation, 0ULL) >= target) {
+          cancelled = true;
+          break;
+        }
         __nanosleep(64);
         observed = atomicAdd_system(completion, 0ULL);
       }
@@ -1136,6 +1275,9 @@ __global__ void WaitCompletionKernel(GenerationArgs args) {
     if (observed > target) {
       ++future_generations;
     }
+    if (cancelled) {
+      break;
+    }
   }
   atomicAdd(
       reinterpret_cast<unsigned long long*>(args.debug_counters->values + kCompletionWaits),
@@ -1148,12 +1290,33 @@ __global__ void WaitCompletionKernel(GenerationArgs args) {
   __threadfence_system();
 }
 
+__global__ void WriteFailureStatusKernel(
+    const uint64_t* cancellation,
+    uint64_t generation,
+    int32_t* failure_status) {
+  if (threadIdx.x != 0 || blockIdx.x != 0) {
+    return;
+  }
+  auto* value = reinterpret_cast<unsigned long long*>(const_cast<uint64_t*>(cancellation));
+  failure_status[0] = atomicAdd_system(value, 0ULL) >= generation ? 1 : 0;
+}
+
+void LaunchFailureStatus(
+    DeviceRuntime& runtime,
+    cudaStream_t stream,
+    uint64_t generation,
+    int32_t* failure_status) {
+  WriteFailureStatusKernel<<<1, 1, 0, stream>>>(runtime.cancellation, generation, failure_status);
+  ThrowOnCuda(cudaGetLastError(), "WriteFailureStatusKernel");
+}
+
 void LaunchForwardInputReady(DeviceRuntime& runtime, cudaStream_t stream, uint64_t generation) {
   GenerationArgs args{
       .input_ready_ptrs = runtime.forward_input_ready_ptrs,
       .completion_ptrs = runtime.forward_completion_ptrs,
       .local_completions = runtime.forward_completions,
       .generation = runtime.generation,
+      .cancellation = runtime.cancellation,
       .debug_counters = runtime.debug_counters,
       .target = generation,
       .rank = runtime.rank,
@@ -1169,6 +1332,7 @@ void LaunchBackwardInputReady(DeviceRuntime& runtime, cudaStream_t stream, uint6
       .completion_ptrs = runtime.backward_completion_ptrs,
       .local_completions = runtime.backward_completions,
       .generation = runtime.generation,
+      .cancellation = runtime.cancellation,
       .debug_counters = runtime.debug_counters,
       .target = generation,
       .rank = runtime.rank,
@@ -1190,6 +1354,7 @@ void LaunchCompletion(
       .completion_ptrs = completion_ptrs,
       .local_completions = local_completions,
       .generation = runtime.generation,
+      .cancellation = runtime.cancellation,
       .debug_counters = runtime.debug_counters,
       .target = generation,
       .rank = runtime.rank,
@@ -1425,7 +1590,8 @@ ffi::Error ForwardBf16(
     ffi::Result<ffi::Buffer<ffi::S32, 1>> stamp_slot,
     ffi::Result<ffi::Buffer<ffi::S32, 1>> stamp_generation_high,
     ffi::Result<ffi::Buffer<ffi::S32, 1>> stamp_generation_low,
-    ffi::Result<ffi::Buffer<ffi::S32, 1>> stamp_runtime_epoch) {
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> stamp_runtime_epoch,
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> failure_status) {
   g_forward_calls.fetch_add(1, std::memory_order_relaxed);
   std::optional<RuntimeLease> lease;
   try {
@@ -1477,6 +1643,10 @@ ffi::Error ForwardBf16(
         });
     DeviceRuntime& runtime = RuntimeManager::Instance().Current(lease->slot);
     const ForwardXStorage active_x_storage = lease->forward_x_storage;
+    if (RuntimeManager::Instance().ConsumeTestFailure(
+            lease->rank, InvocationPhase::kForward, TestFailurePoint::kBeforeInputReady)) {
+      throw std::runtime_error("injected forward handler failure before input readiness");
+    }
 
     if (active_x_storage == ForwardXStorage::kRuntimeStaged) {
       ThrowOnCuda(
@@ -1537,6 +1707,7 @@ ffi::Error ForwardBf16(
         .peer_input_ready = runtime.forward_input_ready,
         .peer_destination_ready = nullptr,
         .input_generation = runtime.generation,
+        .cancellation = runtime.cancellation,
         .peer_ready_wait_counter = runtime.debug_counters->values + kPeerReadyWaits,
         .generation_mismatch_counter = runtime.debug_counters->values + kGenerationMismatches,
         .peer_wait_events = runtime.debug_counters->values + kPeerWaitEvents,
@@ -1569,6 +1740,10 @@ ffi::Error ForwardBf16(
     LaunchKernel<MoK::config, MoK::globals_fwd, MoK::dispatch_mlp_swiglu_combine_fwd_kernel<false>>(
         globals,
         stream);
+    if (RuntimeManager::Instance().ConsumeTestFailure(
+            lease->rank, InvocationPhase::kForward, TestFailurePoint::kBeforeCompletion)) {
+      throw std::runtime_error("injected forward handler failure before completion publication");
+    }
     LaunchCompletion(
         runtime,
         stream,
@@ -1598,13 +1773,24 @@ ffi::Error ForwardBf16(
         stamp_generation_high->typed_data(),
         stamp_generation_low->typed_data(),
         stamp_runtime_epoch->typed_data());
+    LaunchFailureStatus(runtime, stream, lease->generation, failure_status->typed_data());
     RuntimeManager::Instance().ReleaseAfterStream(*lease, stream);
     lease.reset();
     return ffi::Error::Success();
   } catch (const std::exception& exc) {
     if (lease.has_value()) {
-      (void)cudaStreamSynchronize(stream);
-      RuntimeManager::Instance().Abort(*lease);
+      DeviceRuntime& runtime = RuntimeManager::Instance().Current(lease->slot);
+      try {
+        PublishFailureSignals(runtime, lease->key.phase, lease->generation);
+        RuntimeManager::Instance().MarkFailure(*lease, exc.what());
+        LaunchFailureStatus(runtime, stream, lease->generation, failure_status->typed_data());
+        RuntimeManager::Instance().ReleaseAfterStream(*lease, stream);
+        lease.reset();
+        return ffi::Error::Success();
+      } catch (const std::exception& closure_error) {
+        TerminalCudaFailure(
+            std::string("could not close a rank-local forward failure: ") + closure_error.what());
+      }
     }
     return ffi::Error::Internal(exc.what());
   }
@@ -1669,7 +1855,8 @@ ffi::Error BackwardBf16(
     ffi::Result<ffi::Buffer<ffi::S32, 1>> replayed_x_routed_ready,
     ffi::Result<ffi::Buffer<ffi::S32, 1>> replayed_gate_up_ready,
     ffi::Result<ffi::Buffer<ffi::S32, 1>> replayed_hidden_ready,
-    ffi::Result<ffi::Buffer<ffi::S32, 1>> routed_buffers_done) {
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> routed_buffers_done,
+    ffi::Result<ffi::Buffer<ffi::S32, 1>> failure_status) {
   g_backward_calls.fetch_add(1, std::memory_order_relaxed);
   std::optional<RuntimeLease> lease;
   try {
@@ -1739,6 +1926,10 @@ ffi::Error BackwardBf16(
     const BackwardPeerStorage active_peer_storage = lease->backward_peer_storage;
     const bool direct_inputs = active_peer_storage != BackwardPeerStorage::kRuntimeStaged;
     const bool direct_router_output = active_peer_storage == BackwardPeerStorage::kXlaPeerExperimental;
+    if (RuntimeManager::Instance().ConsumeTestFailure(
+            lease->rank, InvocationPhase::kBackward, TestFailurePoint::kBeforeInputReady)) {
+      throw std::runtime_error("injected backward handler failure before input readiness");
+    }
     LaunchForwardStampValidation(
         runtime,
         stream,
@@ -1853,6 +2044,7 @@ ffi::Error BackwardBf16(
         .peer_input_ready = runtime.backward_input_ready,
         .peer_destination_ready = direct_router_output ? runtime.backward_input_ready : nullptr,
         .input_generation = runtime.generation,
+        .cancellation = runtime.cancellation,
         .peer_ready_wait_counter = runtime.debug_counters->values + kPeerReadyWaits,
         .generation_mismatch_counter = runtime.debug_counters->values + kGenerationMismatches,
         .peer_wait_events = runtime.debug_counters->values + kPeerWaitEvents +
@@ -1904,6 +2096,10 @@ ffi::Error BackwardBf16(
     LaunchKernel<MoK::config, MoK::globals_bwd, MoK::dispatch_mlp_swiglu_combine_bwd_kernel<false>>(
         globals,
         stream);
+    if (RuntimeManager::Instance().ConsumeTestFailure(
+            lease->rank, InvocationPhase::kBackward, TestFailurePoint::kBeforeCompletion)) {
+      throw std::runtime_error("injected backward handler failure before completion publication");
+    }
     LaunchCompletion(
         runtime,
         stream,
@@ -1927,13 +2123,24 @@ ffi::Error BackwardBf16(
                                   cudaMemcpyDeviceToDevice, stream),
                   "cudaMemcpyAsync(d_router output)");
     }
+    LaunchFailureStatus(runtime, stream, lease->generation, failure_status->typed_data());
     RuntimeManager::Instance().ReleaseAfterStream(*lease, stream);
     lease.reset();
     return ffi::Error::Success();
   } catch (const std::exception& exc) {
     if (lease.has_value()) {
-      (void)cudaStreamSynchronize(stream);
-      RuntimeManager::Instance().Abort(*lease);
+      DeviceRuntime& runtime = RuntimeManager::Instance().Current(lease->slot);
+      try {
+        PublishFailureSignals(runtime, lease->key.phase, lease->generation);
+        RuntimeManager::Instance().MarkFailure(*lease, exc.what());
+        LaunchFailureStatus(runtime, stream, lease->generation, failure_status->typed_data());
+        RuntimeManager::Instance().ReleaseAfterStream(*lease, stream);
+        lease.reset();
+        return ffi::Error::Success();
+      } catch (const std::exception& closure_error) {
+        TerminalCudaFailure(
+            std::string("could not close a rank-local backward failure: ") + closure_error.what());
+      }
     }
     return ffi::Error::Internal(exc.what());
   }
@@ -1971,6 +2178,7 @@ auto ForwardBinding() {
       .Ret<ffi::Buffer<ffi::BF16, 2>>()
       .Ret<ffi::Buffer<ffi::BF16, 2>>()
       .Ret<ffi::Buffer<ffi::BF16, 2>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>()
@@ -2042,8 +2250,15 @@ auto BackwardBinding() {
       .Ret<ffi::Buffer<ffi::S32, 1>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>()
+      .Ret<ffi::Buffer<ffi::S32, 1>>()
       .Ret<ffi::Buffer<ffi::S32, 1>>();
 }
+
+ffi::Error FailureFence() {
+  return ffi::Error::Internal("Mixture-of-Kittens failed on at least one mesh rank");
+}
+
+auto FailureFenceBinding() { return ffi::Ffi::Bind(); }
 
 }  // namespace
 
@@ -2075,6 +2290,29 @@ extern "C" int levanter_mok_shutdown_runtime() {
 }
 
 extern "C" const char* levanter_mok_last_error() { return LastErrorStorage().c_str(); }
+
+extern "C" int levanter_mok_arm_test_failure(int rank, int phase, int point, int require_two_active_slots) {
+  try {
+    if (phase < static_cast<int>(InvocationPhase::kForward) ||
+        phase > static_cast<int>(InvocationPhase::kBackward)) {
+      throw std::runtime_error("Mixture-of-Kittens test failure phase is out of range");
+    }
+    if (point < static_cast<int>(TestFailurePoint::kBeforeInputReady) ||
+        point > static_cast<int>(TestFailurePoint::kBeforeCompletion)) {
+      throw std::runtime_error("Mixture-of-Kittens test failure point is out of range");
+    }
+    RuntimeManager::Instance().ArmTestFailure(
+        rank,
+        static_cast<InvocationPhase>(phase),
+        static_cast<TestFailurePoint>(point),
+        require_two_active_slots != 0);
+    SetLastError("");
+    return 0;
+  } catch (const std::exception& exc) {
+    SetLastError(exc.what());
+    return 1;
+  }
+}
 
 extern "C" void levanter_mok_reset_call_counts() {
   g_forward_calls.store(0, std::memory_order_relaxed);
@@ -2135,3 +2373,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     levanter_mok_backward_bf16_4,
     BackwardBf16,
     BackwardBinding());
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    levanter_mok_failure_fence,
+    FailureFence,
+    FailureFenceBinding());
