@@ -21,6 +21,7 @@ COPY hybrid_search.py .
 COPY reranking.py .
 COPY search_config.py .
 COPY search_feedback.py .
+COPY search_history.py .
 COPY api/app.py .
 COPY api/dashboard.py .
 COPY --from=dashboard /build/dist /app/dist

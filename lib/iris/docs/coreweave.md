@@ -175,6 +175,11 @@ outranks every tier in the band below it. Pod `priorityClassName` remains the
 ordinary Iris band, so this ordering affects Kueue admission and preemption but
 does not change kube-scheduler priority within an admitted workload.
 
+For example, a `batch` CPU coordinator uses tier `0`, its separately admitted
+accelerator child uses tier `1`, and a co-scheduled CPU/GPU group uses tier `2`.
+Choose the Iris band for operational importance; Iris derives the tier from the
+request shape.
+
 The lowest batch Workload priority is `0`. CoreWeave node-health-check Pods use
 Kubernetes priority `-1`, and Iris batch Pods retain Kubernetes priority `0`.
 Kueue Workload priority and Kubernetes Pod priority are separate scheduling
@@ -382,6 +387,17 @@ job environment values can appear in the output. Inspect named keys and
 scheduling fields instead, without printing Secret values.
 
 ## Troubleshooting
+
+### Dashboard lists and capacity
+
+Worker and task lists are paginated. Use all pages or the corresponding paginated API
+when counting workers or tasks. The dashboard command blocks while its port-forward is
+active; stopping the command closes the tunnel.
+
+Configured or registered accelerator inventory is distinct from free capacity. A healthy
+controller and a large advertised GB200 inventory do not establish that a requested
+topology can be admitted now. Confirm current slices, Kueue Workloads, and Pending Pods
+with the read-only checks below.
 
 Start with Iris's retained task view. It already joins Pod, scheduler, and Kueue
 state and remains available after Kubernetes garbage collection:

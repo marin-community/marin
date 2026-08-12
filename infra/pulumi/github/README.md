@@ -51,6 +51,10 @@ Organization admins retain an always-on emergency bypass on both rulesets. The C
 GitHub Actions' own `marin-integration`, `marin-lint`, `rust-checks`, and `unit-tests` runs; matching
 context names from another integration do not satisfy it.
 
+The app review bypass must exist in both the review ruleset and classic `main` branch protection.
+GitHub enforces both controls: a ruleset-only bypass can leave an updater PR with green CI still
+waiting for review. After changing either control, inspect the preview and run the live audit below.
+
 App registration and installation remain owner-managed because GitHub's repository-selection
 endpoint requires a user-scoped token unsuitable for unattended Pulumi runs. The installation must
 select only `marin`. To recreate or rotate the app credential:
