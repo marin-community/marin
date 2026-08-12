@@ -8,22 +8,19 @@ reviewing tests, read root `AGENTS.md`, this file, the nearest module
 
 ## Running Tests Locally
 
-Run the safe default suite with:
+Run a narrow test while editing, then run all safe tests affected by the branch
+and working tree:
 
 ```bash
-uv run pytest
+uv run pytest <test path>
+uv run --no-project infra/ci/run_tests.py
 ```
 
 The repository defaults exclude `slow`, `integration`, `data_integration`,
-`cluster`, `requires_cluster`, `docker`, and `manual` tests. The same exclusions
-apply when passing a test path, for example `uv run pytest tests/foo/` or
-`uv run pytest lib/iris/tests/`.
-
-Do not pass a partial marker expression such as `-m "not slow"` for routine
-local testing. Pytest replaces the configured expression instead of combining
-with it, which can select live-cluster or integration tests. Dedicated CI jobs
-run the excluded suites; opt into one locally only when the user or the relevant
-module guide explicitly requests it.
+`cluster`, `requires_cluster`, `docker`, and `manual` tests. Do not pass a
+partial marker expression such as `-m "not slow"`; pytest replaces the default
+expression and may select live-cluster tests. Run excluded markers only when
+requested or directed by the relevant module guide.
 
 Tests run from the repository root have a 60-second per-test timeout, including
 fixture setup and teardown. On POSIX, pytest-timeout first interrupts the test

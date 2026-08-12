@@ -18,7 +18,7 @@ import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
+from levanter.testing.helpers import skip_if_module_missing, skip_if_no_torch, use_test_mesh
 from transformers import AutoModelForCausalLM
 
 from levanter.layers.attention import AttentionMask

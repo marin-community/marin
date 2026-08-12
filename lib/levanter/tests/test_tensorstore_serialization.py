@@ -18,7 +18,7 @@ import eight_device_checkpoints
 from eight_device_checkpoints import run_on_eight_devices
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
-from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
+from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.checkpoint_manifest import CHECKPOINT_FORMAT_VERSION, manifest_path, read_manifest

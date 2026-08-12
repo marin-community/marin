@@ -9,10 +9,8 @@ from pathlib import Path
 import pytest
 from tokenizers import Tokenizer as HfBaseTokenizer
 
-from levanter.testing import stage_gpt2_tokenizer
+from levanter.testing.tokenizer import stage_gpt2_tokenizer
 from levanter.tokenizers import HfMarinTokenizer, load_tokenizer
-
-pytest_plugins = ["tests.test_utils"]
 
 
 @pytest.fixture(scope="session")
