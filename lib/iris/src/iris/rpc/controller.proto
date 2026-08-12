@@ -33,12 +33,18 @@ import "vm.proto";
 message Controller {
   // --- Job Lifecycle ---
   message LaunchJobRequest {
+    message ExactBundleUpload {
+      string bundle_id = 1;  // Declared SHA256 of the exact blob bytes
+      bytes blob = 2;        // Exact reviewed workspace ZIP bytes
+    }
+
     string name = 1;
     iris.job.RuntimeEntrypoint entrypoint = 2;       // Structured entrypoint for runtime layer
     iris.job.ResourceSpecProto resources = 3;        // Full resource specification
     iris.job.EnvironmentConfig environment = 4;  // Environment configuration
 
-    // Bundle information - either provide bundle_id OR blob (not both)
+    // Legacy bundle information. The exact_bundle_upload variant below is a
+    // third, mutually exclusive source.
     string bundle_id = 5;  // Canonical bundle identifier (SHA256 of zip bytes)
     bytes bundle_blob = 6;  // Direct bundle upload (controller writes to bundle store)
 
@@ -126,6 +132,14 @@ message Controller {
     // job back only to that requester) and runs the job in its own DAG on its own
     // backends. Absent for an ordinary local submission.
     FederationHandoff federation = 38;
+
+    // Explicit exact-byte upload. This is mutually exclusive with the legacy
+    // bundle_id and bundle_blob fields and requires both members.
+    ExactBundleUpload exact_bundle_upload = 39;
+
+    // Per-job image for bundle/workdir staging on direct Kubernetes backends.
+    // When set, this must be an immutable OCI digest reference.
+    string bundle_init_image = 40;
   }
 
   // Attribution carried on a federated handoff (LaunchJobRequest.federation).

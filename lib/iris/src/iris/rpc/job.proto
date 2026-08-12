@@ -668,4 +668,5 @@ message RunTaskRequest {
   // DEFAULT. Never set directly by a client — clients request a profile via
   // LaunchJobRequest.container_profile, which the controller authorizes.
   ContainerProfile container_profile = 15;
+  string bundle_init_image = 16;
 }

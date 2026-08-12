@@ -8,6 +8,7 @@ State changes are verified via RPC calls rather than internal state inspection.
 """
 
 import concurrent.futures
+import hashlib
 import logging
 import time
 from datetime import date, timedelta
@@ -278,6 +279,104 @@ def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service, state)
     job = _query_job(state, JobName.root("test-user", "bundle-job"))
     assert job is not None
     assert len(job.bundle_id) == 64
+
+
+def test_launch_job_exact_bundle_preserves_reviewed_bytes_and_content_id(service, state):
+    blob = b"exact reviewed bundle bytes"
+    bundle_id = hashlib.sha256(blob).hexdigest()
+    request = make_job_request("exact-bundle-job")
+    request.exact_bundle_upload.bundle_id = bundle_id
+    request.exact_bundle_upload.blob = blob
+
+    service.launch_job(request, None)
+
+    job = _query_job(state, JobName.root("test-user", "exact-bundle-job"))
+    assert job is not None
+    assert job.bundle_id == bundle_id
+    assert service.bundle_zip(bundle_id) == blob
+
+
+@pytest.mark.parametrize(
+    ("bundle_id", "blob"),
+    [
+        ("0" * 64, b"exact reviewed bundle bytes"),
+        ("0" * 64, b""),
+        ("", b"exact reviewed bundle bytes"),
+    ],
+)
+def test_launch_job_exact_bundle_rejects_mismatch_or_incomplete_source(service, bundle_id, blob):
+    request = make_job_request("invalid-exact-bundle")
+    request.exact_bundle_upload.bundle_id = bundle_id
+    request.exact_bundle_upload.blob = blob
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
+@pytest.mark.parametrize("legacy_field", ["bundle_id", "bundle_blob"])
+def test_launch_job_exact_bundle_rejects_ambiguous_legacy_source(service, legacy_field):
+    blob = b"exact reviewed bundle bytes"
+    request = make_job_request("ambiguous-exact-bundle")
+    request.exact_bundle_upload.bundle_id = hashlib.sha256(blob).hexdigest()
+    request.exact_bundle_upload.blob = blob
+    if legacy_field == "bundle_id":
+        request.bundle_id = "0" * 64
+    else:
+        request.bundle_blob = b"legacy bytes"
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
+def test_launch_job_exact_bundle_reuses_identical_content_id(service):
+    blob = b"exact reviewed bundle bytes"
+    bundle_id = hashlib.sha256(blob).hexdigest()
+    for name in ("exact-bundle-first", "exact-bundle-second"):
+        request = make_job_request(name)
+        request.exact_bundle_upload.bundle_id = bundle_id
+        request.exact_bundle_upload.blob = blob
+        service.launch_job(request, None)
+
+    assert service.bundle_zip(bundle_id) == blob
+
+
+def test_launch_job_exact_bundle_rejects_unknown_wire_fields(service):
+    blob = b"exact reviewed bundle bytes"
+    request = make_job_request("unknown-exact-bundle-field")
+    request.exact_bundle_upload.bundle_id = hashlib.sha256(blob).hexdigest()
+    request.exact_bundle_upload.blob = blob
+    request.exact_bundle_upload.ParseFromString(
+        request.exact_bundle_upload.SerializeToString() + bytes([0xD8, 0x07, 0x01])
+    )
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "registry.example/iris-init:latest",
+        "registry.example/iris-init@sha256:" + "A" * 64,
+        "sha256:" + "a" * 64,
+        "https://registry.example/iris-init@sha256:" + "a" * 64,
+        "registry.example//iris-init@sha256:" + "a" * 64,
+    ],
+)
+def test_launch_job_rejects_mutable_or_incomplete_bundle_init_image(service, image):
+    request = make_job_request("invalid-bundle-init-image")
+    request.bundle_init_image = image
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
 
 
 def test_launch_job_rejects_coscheduling_without_group_by(service):

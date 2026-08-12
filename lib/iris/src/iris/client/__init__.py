@@ -24,11 +24,13 @@ from iris.client.client import (
     iris_ctx_scope,
 )
 from iris.client.resolver import ClusterResolver
+from iris.cluster.client import ExactWorkspaceBundle
 from iris.cluster.setup_scripts import default_setup_script, iris_runtime_setup_script
 
 __all__ = [
     "ClusterResolver",
     "EndpointRegistry",
+    "ExactWorkspaceBundle",
     "FixedResolver",
     "IrisClient",
     "IrisContext",

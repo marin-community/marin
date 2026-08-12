@@ -53,6 +53,7 @@ def build_run_request_fields(
     ports_json: list,
     constraints_json: str | None,
     task_image: str,
+    bundle_init_image: str,
     task_id: str = "",
     attempt_id: int = 0,
     priority: int = 0,
@@ -80,6 +81,7 @@ def build_run_request_fields(
         ports=ports_json,
         constraints=[c.to_proto() for c in constraints_from_json(constraints_json)],
         task_image=task_image,
+        bundle_init_image=bundle_init_image,
         task_id=task_id,
         attempt_id=attempt_id,
         priority=priority,
@@ -151,6 +153,7 @@ class RunTemplatesProjection(Projection):
             ports_json=job.ports_json,
             constraints_json=job.constraints_json,
             task_image=job.task_image,
+            bundle_init_image=job.bundle_init_image,
             container_profile=job.container_profile,
         )
 

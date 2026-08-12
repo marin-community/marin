@@ -3915,6 +3915,7 @@ def _submit_job_direct(
     max_retries_failure: int = 0,
     max_retries_preemption: int = 0,
     max_task_failures: int = 0,
+    bundle_init_image: str = "",
 ) -> list[JobName]:
     job_id = JobName.from_wire(job_id_str)
     request = controller_pb2.Controller.LaunchJobRequest(
@@ -3923,6 +3924,7 @@ def _submit_job_direct(
         max_retries_failure=max_retries_failure,
         max_retries_preemption=max_retries_preemption,
         max_task_failures=max_task_failures,
+        bundle_init_image=bundle_init_image,
     )
     with state._db.transaction() as cur:
         ops.job.submit(cur, job_id=job_id, request=request, ts=Timestamp.now())
@@ -3957,7 +3959,8 @@ def _run_direct_tasks(state: ControllerTestState, task_ids: list[JobName]) -> No
 
 def test_drain_pending_creates_attempt_rows(state):
     """drain_for_dispatch promotes PENDING tasks to ASSIGNED with NULL worker_id."""
-    task_ids = _submit_job_direct(state, "/user/job1")
+    bundle_init_image = "registry.example/iris-init@sha256:" + "a" * 64
+    task_ids = _submit_job_direct(state, "/user/job1", bundle_init_image=bundle_init_image)
     task_id = task_ids[0]
 
     with state._db.transaction() as cur:
@@ -3966,6 +3969,7 @@ def test_drain_pending_creates_attempt_rows(state):
     assert len(batch.tasks_to_run) == 1
     assert batch.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch.tasks_to_run[0].attempt_id == 0
+    assert batch.tasks_to_run[0].bundle_init_image == bundle_init_image
     assert _task_state_direct(state, task_id) == job_pb2.TASK_STATE_ASSIGNED
 
     # Verify attempt row was created with NULL worker_id.

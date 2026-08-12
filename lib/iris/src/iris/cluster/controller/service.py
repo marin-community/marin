@@ -10,6 +10,7 @@ aggregated from task states.
 
 import json
 import logging
+import re
 import secrets
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -25,7 +26,7 @@ from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
 
-from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore
+from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore, content_id
 from iris.cluster.config import user_admitted
 from iris.cluster.constraints import (
     Constraint,
@@ -213,6 +214,41 @@ FRESHNESS_WINDOW = timedelta(days=14)
 # interpreted as this date — already-deployed clients that don't set the field
 # start being rejected FRESHNESS_WINDOW after rollout.
 FEATURE_INTRODUCTION_DATE = date(2026, 4, 22)
+IMMUTABLE_OCI_IMAGE = re.compile(
+    r"(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?/)?"
+    r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*"
+    r"(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[0-9a-f]{64}"
+)
+
+
+def _has_unknown_fields(message: Any) -> bool:
+    known = type(message)()
+    known.CopyFrom(message)
+    known.DiscardUnknownFields()
+    return known.SerializeToString(deterministic=True) != message.SerializeToString(deterministic=True)
+
+
+def _validate_exact_submission_fields(request: controller_pb2.Controller.LaunchJobRequest) -> None:
+    has_exact_bundle = request.HasField("exact_bundle_upload")
+    if has_exact_bundle and _has_unknown_fields(request):
+        raise ConnectError(Code.INVALID_ARGUMENT, "exact bundle submission contains unknown request fields")
+    if has_exact_bundle and (request.bundle_id or request.bundle_blob):
+        raise ConnectError(Code.INVALID_ARGUMENT, "exact_bundle_upload is mutually exclusive with legacy bundle fields")
+
+    if has_exact_bundle:
+        exact = request.exact_bundle_upload
+        if _has_unknown_fields(exact):
+            raise ConnectError(Code.INVALID_ARGUMENT, "exact_bundle_upload contains unknown fields")
+        if not exact.bundle_id or not exact.blob:
+            raise ConnectError(Code.INVALID_ARGUMENT, "exact_bundle_upload requires both bundle_id and blob")
+        if content_id(exact.blob) != exact.bundle_id:
+            raise ConnectError(Code.INVALID_ARGUMENT, "exact bundle content ID does not match its blob bytes")
+
+    if request.bundle_init_image and IMMUTABLE_OCI_IMAGE.fullmatch(request.bundle_init_image) is None:
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            "bundle_init_image must be an immutable OCI reference ending in @sha256:<64 lowercase hex characters>",
+        )
 
 
 def _check_client_freshness(client_date_str: str, now: date) -> None:
@@ -1336,6 +1372,7 @@ class ControllerServiceImpl:
         """
         if not request.name:
             raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
+        _validate_exact_submission_fields(request)
 
         # Coscheduling requires a non-empty group_by: it names the topology level
         # the gang is scheduled onto. An empty group_by is permanently
@@ -1617,11 +1654,14 @@ class ControllerServiceImpl:
             with self._db.transaction() as cur:
                 ops.job.remove_finished(cur, job_id, record_tombstone=record_tombstone)
 
-        # Handle bundle_blob: upload to bundle store, then replace blob
-        # with the resulting GCS path (preserving all other fields).
-        if request.bundle_blob:
+        # Handle a bundle upload, then persist only its content ID. The explicit
+        # exact path carries reviewed bytes and their declared ID; the legacy
+        # path keeps deriving the ID from an implicit workspace upload.
+        exact_bundle = request.exact_bundle_upload if request.HasField("exact_bundle_upload") else None
+        bundle_blob = exact_bundle.blob if exact_bundle is not None else request.bundle_blob
+        if bundle_blob:
             # Validate bundle size
-            bundle_size = len(request.bundle_blob)
+            bundle_size = len(bundle_blob)
             if bundle_size > MAX_BUNDLE_SIZE_BYTES:
                 bundle_size_mb = bundle_size / (1024 * 1024)
                 max_size_mb = MAX_BUNDLE_SIZE_BYTES / (1024 * 1024)
@@ -1630,11 +1670,14 @@ class ControllerServiceImpl:
                     f"Bundle size {bundle_size_mb:.1f}MB exceeds maximum {max_size_mb:.0f}MB",
                 )
 
-            bundle_id = self._bundle_store.write(request.bundle_blob)
+            bundle_id = self._bundle_store.write(bundle_blob)
+            if exact_bundle is not None and bundle_id != exact_bundle.bundle_id:
+                raise ConnectError(Code.INVALID_ARGUMENT, "bundle store returned a different content ID")
 
             new_request = controller_pb2.Controller.LaunchJobRequest()
             new_request.CopyFrom(request)
             new_request.ClearField("bundle_blob")
+            new_request.ClearField("exact_bundle_upload")
             new_request.bundle_id = bundle_id
             request = new_request
 

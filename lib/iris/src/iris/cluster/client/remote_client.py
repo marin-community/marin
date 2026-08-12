@@ -6,6 +6,7 @@
 import logging
 import time
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from finelog.rpc import logging_pb2
 from rigging.connect import proxy_path
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
+from iris.cluster.bundle import content_id
 from iris.cluster.client.bundle import create_workspace_zip
 from iris.cluster.client.endpoint_client import EndpointClient
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
@@ -70,6 +72,20 @@ MIN_STATE_POLL_INTERVAL = 0.1
 LAUNCH_JOB_TIMEOUT_FLOOR_MS = 180_000
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExactWorkspaceBundle:
+    """Reviewed workspace ZIP bytes with their canonical content ID."""
+
+    blob: bytes
+    bundle_id: str
+
+    def __post_init__(self) -> None:
+        if not self.blob:
+            raise ValueError("exact workspace bundle must not be empty")
+        if content_id(self.blob) != self.bundle_id:
+            raise ValueError("exact workspace bundle content ID does not match its bytes")
+
+
 class RemoteClusterClient:
     """Cluster client via RPC to controller.
 
@@ -81,6 +97,7 @@ class RemoteClusterClient:
         controller_address: str,
         bundle_id: str | None = None,
         workspace: Path | None = None,
+        exact_bundle: ExactWorkspaceBundle | None = None,
         timeout_ms: int = 30000,
         interceptors: Iterable[InterceptorSync] = (),
         use_controller_proxy: bool = True,
@@ -92,6 +109,8 @@ class RemoteClusterClient:
             controller_address: Controller URL (e.g., "http://localhost:8080")
             bundle_id: Workspace bundle identifier for job inheritance
             workspace: Path to workspace directory. Bundle is created lazily on first job submission.
+            exact_bundle: Reviewed workspace ZIP bytes and their canonical content ID.
+                Mutually exclusive with ``bundle_id`` and ``workspace``.
             timeout_ms: RPC timeout in milliseconds
             interceptors: Client-side interceptors (e.g. AuthTokenInjector for token auth)
             use_controller_proxy: Route service RPCs (currently finelog
@@ -102,8 +121,13 @@ class RemoteClusterClient:
                 internal service addresses; external clients (CLI over a
                 tunnel) cannot and must keep the default proxied path.
         """
+        bundle_sources = sum(source is not None for source in (bundle_id, workspace, exact_bundle))
+        if bundle_sources > 1:
+            raise ValueError("bundle_id, workspace, and exact_bundle are mutually exclusive")
+
         self._address = controller_address
         self._bundle_id = bundle_id
+        self._exact_bundle = exact_bundle
         self._workspace = workspace.resolve() if workspace is not None else None
         self._extra_bundle_includes = extra_bundle_includes
         self._bundle_blob: bytes | None = None
@@ -162,6 +186,7 @@ class RemoteClusterClient:
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
+        bundle_init_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         submit_argv: list[str] | None = None,
@@ -190,12 +215,16 @@ class RemoteClusterClient:
             preemption_policy=preemption_policy,
             existing_job_policy=existing_job_policy,
             task_image=task_image or "",
+            bundle_init_image=bundle_init_image or "",
             priority_band=priority_band,
             container_profile=container_profile,
             submit_argv=submit_argv or [],
             client_revision_date=client_revision_date(),
         )
-        if self._bundle_id:
+        if self._exact_bundle is not None:
+            request.exact_bundle_upload.bundle_id = self._exact_bundle.bundle_id
+            request.exact_bundle_upload.blob = self._exact_bundle.blob
+        elif self._bundle_id:
             request.bundle_id = self._bundle_id
         else:
             if self._bundle_blob is None and self._workspace is not None:

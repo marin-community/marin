@@ -438,3 +438,4 @@ scale_groups:
 - [Priority Bands](docs/priority-bands.md) - production, interactive, and batch scheduling priority
 - [CoreWeave](docs/coreweave.md) - CoreWeave GPU cluster quickstart and operator guide
 - [Federation](docs/federation.md) - how a job is routed to a peer cluster, and what travels with it
+- [Exact bundle submission](docs/exact-bundle-submission.md) - reviewed ZIP bytes, content IDs, and init images

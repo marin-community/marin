@@ -529,7 +529,7 @@ def _build_init_container_spec(
     init_containers = [
         {
             "name": "stage-workdir",
-            "image": default_image,
+            "image": run_req.bundle_init_image or default_image,
             "imagePullPolicy": "IfNotPresent",
             "command": ["python", "-c", bundle_script],
             "env": init_env,

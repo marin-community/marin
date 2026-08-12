@@ -33,6 +33,7 @@ from rigging.timing import Duration, Timestamp
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
     ClusterClient,
+    ExactWorkspaceBundle,
     JobInfo,
     RemoteClusterClient,
     get_job_info,
@@ -495,6 +496,7 @@ class IrisClient:
         *,
         workspace: Path | None = None,
         bundle_id: str | None = None,
+        exact_bundle: ExactWorkspaceBundle | None = None,
         timeout_ms: int = 30000,
         credentials: ClientCredentials | None = None,
         extra_bundle_includes: Sequence[str] = (),
@@ -512,6 +514,8 @@ class IrisClient:
                 Required for external job submission.
             bundle_id: Workspace bundle identifier for sub-job inheritance.
                 When set, sub-jobs use this bundle ID instead of creating new bundles.
+            exact_bundle: Reviewed workspace ZIP bytes and their canonical content ID.
+                Mutually exclusive with ``workspace`` and ``bundle_id``.
             timeout_ms: RPC timeout in milliseconds
             credentials: Auth material for outgoing RPCs — the Iris JWT and, for
                 an IAP-fronted cluster, the IAP OIDC ID token. None sends neither
@@ -527,6 +531,7 @@ class IrisClient:
             controller_address,
             workspace=workspace,
             bundle_id=bundle_id,
+            exact_bundle=exact_bundle,
             timeout_ms=timeout_ms,
             credentials=credentials,
             use_controller_proxy=True,
@@ -540,6 +545,7 @@ class IrisClient:
         *,
         workspace: Path | None = None,
         bundle_id: str | None = None,
+        exact_bundle: ExactWorkspaceBundle | None = None,
         timeout_ms: int = 30000,
         credentials: ClientCredentials | None = None,
     ) -> "IrisClient":
@@ -555,6 +561,7 @@ class IrisClient:
             controller_address,
             workspace=workspace,
             bundle_id=bundle_id,
+            exact_bundle=exact_bundle,
             timeout_ms=timeout_ms,
             credentials=credentials,
             use_controller_proxy=False,
@@ -567,6 +574,7 @@ class IrisClient:
         *,
         workspace: Path | None,
         bundle_id: str | None,
+        exact_bundle: ExactWorkspaceBundle | None,
         timeout_ms: int,
         use_controller_proxy: bool,
         credentials: ClientCredentials | None = None,
@@ -578,6 +586,7 @@ class IrisClient:
             controller_address=controller_address,
             bundle_id=bundle_id,
             workspace=workspace,
+            exact_bundle=exact_bundle,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
             use_controller_proxy=use_controller_proxy,
@@ -626,6 +635,7 @@ class IrisClient:
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
+        bundle_init_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         submit_argv: list[str] | None = None,
@@ -655,6 +665,8 @@ class IrisClient:
                 the worker uses its cluster-configured default_task_image. Used for
                 jobs that need a custom runtime (e.g. an image with runsc/skopeo
                 for sandboxing untrusted child workloads).
+            bundle_init_image: Immutable OCI digest for the bundle/workdir staging
+                container on direct Kubernetes backends.
             container_profile: Container security profile. UNSPECIFIED resolves to
                 DEFAULT. Elevated profiles (DOCKER_ACCESS, PRIVILEGED) require the
                 admin role at submission when auth is enabled.
@@ -769,6 +781,7 @@ class IrisClient:
                 preemption_policy=preemption_policy,
                 existing_job_policy=existing_job_policy,
                 task_image=task_image,
+                bundle_init_image=bundle_init_image,
                 priority_band=priority_band,
                 container_profile=container_profile,
                 submit_argv=submit_argv,

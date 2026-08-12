@@ -106,6 +106,7 @@ class PendingDispatchRow:
     ports_json: list
     constraints_json: str | None
     task_image: str
+    bundle_init_image: str
     timeout_ms: int | None
     # Coscheduling + priority drive Kueue gang admission on the direct path.
     has_coscheduling: bool
@@ -639,6 +640,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             job_config_table.c.existing_job_policy,
             job_config_table.c.priority_band,
             job_config_table.c.task_image,
+            job_config_table.c.bundle_init_image,
             job_config_table.c.container_profile,
             job_config_table.c.submit_argv_json,
             job_config_table.c.fail_if_exists,
@@ -1652,6 +1654,7 @@ PENDING_DISPATCH_COLS = (
     job_config_table.c.ports_json,
     job_config_table.c.constraints_json,
     job_config_table.c.task_image,
+    job_config_table.c.bundle_init_image,
     job_config_table.c.timeout_ms,
     job_config_table.c.has_coscheduling,
     job_config_table.c.coscheduling_group_by,
@@ -1682,6 +1685,7 @@ def pending_dispatch_row(r) -> PendingDispatchRow:
         ports_json=r.ports_json,
         constraints_json=r.constraints_json,
         task_image=str(r.task_image),
+        bundle_init_image=str(r.bundle_init_image),
         timeout_ms=int(_tms) if _tms is not None else None,
         has_coscheduling=bool(r.has_coscheduling),
         coscheduling_group_by=str(r.coscheduling_group_by),

@@ -910,6 +910,21 @@ def test_init_container_created_when_bundle_id_present():
     assert extra_volumes == []
 
 
+def test_init_container_uses_independent_request_image_digest():
+    req = make_run_req("/my-job/task-0")
+    req.bundle_id = "bundle-abc"
+    req.bundle_init_image = "registry.example/iris-init@sha256:" + "a" * 64
+
+    init_containers, _extra_volumes, _configmap_name = _build_init_container_spec(
+        req,
+        "iris-my-job-task-0-abcd1234-0",
+        "mutable-default:latest",
+        "http://ctrl:8080",
+    )
+
+    assert init_containers[0]["image"] == req.bundle_init_image
+
+
 def test_no_init_container_when_no_bundle_or_files():
     """No init containers when neither bundle_id nor workdir_files are set."""
     req = make_run_req("/my-job/task-0")

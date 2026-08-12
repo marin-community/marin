@@ -21,6 +21,7 @@ from rigging.timing import Timestamp
 NOT_PERSISTED = {
     # Uploaded to the bundle store at submit; survives as ``bundle_id``.
     "bundle_blob",
+    "exact_bundle_upload",
     # Describes the client of the hop that submitted the request: the parent gates the
     # user's CLI build at submit, and a peer exempts a received handoff (whose wire
     # client is the parent controller, not a CLI).
@@ -50,6 +51,7 @@ def _fully_populated_request(job_id: JobName) -> controller_pb2.Controller.Launc
         existing_job_policy=job_pb2.EXISTING_JOB_POLICY_RECREATE,
         priority_band=job_pb2.PRIORITY_BAND_BATCH,
         task_image="custom/image:dev",
+        bundle_init_image="registry.example/iris-init@sha256:" + "a" * 64,
         submit_argv=["iris", "job", "run", "--", "python", "train.py"],
         client_revision_date="2026-07-12",
         container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
@@ -63,6 +65,8 @@ def _fully_populated_request(job_id: JobName) -> controller_pb2.Controller.Launc
     request.scheduling_timeout.milliseconds = 60_000
     request.timeout.milliseconds = 3_600_000
     request.federation.requester_id = "parent"
+    request.exact_bundle_upload.bundle_id = "c" * 64
+    request.exact_bundle_upload.blob = b"reviewed zip"
     return request
 
 

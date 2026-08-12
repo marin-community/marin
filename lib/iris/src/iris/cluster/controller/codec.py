@@ -176,6 +176,7 @@ def reconstruct_launch_job_request(
         existing_job_policy=job.existing_job_policy,
         priority_band=job.priority_band,
         task_image=job.task_image,
+        bundle_init_image=job.bundle_init_image,
         container_profile=job.container_profile,
         fail_if_exists=job.fail_if_exists,
     )
