@@ -13,9 +13,9 @@
       "specification": "x:f32[2,3], w0:f32[3,4], w1:f32[4,5], output_cotangent:f32[2,5]"
     },
     {
-      "id": "rmsnorm_representative_pending",
-      "declaration_status": "blocked",
-      "specification": "Representative shape and exact public layouts remain to be declared before timing."
+      "id": "rmsnorm_bf16_2048x4096",
+      "declaration_status": "accepted",
+      "specification": "x:bf16[2048,4096], gamma:bf16[4096], dy:bf16[2048,4096], y:bf16[2048,4096], dx:bf16[2048,4096], dgamma:bf16[4096], epsilon:f32=1e-5, layout:row_major_contiguous"
     },
     {
       "id": "layernorm_representative_pending",
@@ -122,7 +122,7 @@
         "composed_forward_backward"
       ],
       "required_shapes": [
-        "rmsnorm_representative_pending"
+        "rmsnorm_bf16_2048x4096"
       ],
       "required_policies": [
         "source_ordered",
@@ -134,7 +134,6 @@
       ],
       "blockers": [
         "architecture_path_unavailable",
-        "representative_shape_not_declared",
         "oracle_not_pinned"
       ]
     },
@@ -571,7 +570,7 @@
     {
       "target_id": 1,
       "boundary": "forward",
-      "shape": "rmsnorm_representative_pending",
+      "shape": "rmsnorm_bf16_2048x4096",
       "policy": "source_ordered",
       "hardware": "h100",
       "status": "blocked",
@@ -581,14 +580,13 @@
       "evidence_ids": [],
       "blockers": [
         "architecture_path_unavailable",
-        "representative_shape_not_declared",
         "oracle_not_pinned"
       ]
     },
     {
       "target_id": 1,
       "boundary": "forward",
-      "shape": "rmsnorm_representative_pending",
+      "shape": "rmsnorm_bf16_2048x4096",
       "policy": "source_ordered",
       "hardware": "gb200_or_b200",
       "status": "blocked",
@@ -598,14 +596,13 @@
       "evidence_ids": [],
       "blockers": [
         "architecture_path_unavailable",
-        "representative_shape_not_declared",
         "oracle_not_pinned"
       ]
     },
     {
       "target_id": 1,
       "boundary": "forward",
-      "shape": "rmsnorm_representative_pending",
+      "shape": "rmsnorm_bf16_2048x4096",
       "policy": "fast",
       "hardware": "h100",
       "status": "blocked",
@@ -615,14 +612,13 @@
       "evidence_ids": [],
       "blockers": [
         "architecture_path_unavailable",
-        "representative_shape_not_declared",
         "oracle_not_pinned"
       ]
     },
     {
       "target_id": 1,
       "boundary": "forward",
-      "shape": "rmsnorm_representative_pending",
+      "shape": "rmsnorm_bf16_2048x4096",
       "policy": "fast",
       "hardware": "gb200_or_b200",
       "status": "blocked",
@@ -632,14 +628,13 @@
       "evidence_ids": [],
       "blockers": [
         "architecture_path_unavailable",
-        "representative_shape_not_declared",
         "oracle_not_pinned"
       ]
     },
     {
       "target_id": 1,
       "boundary": "backward",
-      "shape": "rmsnorm_representative_pending",
+      "shape": "rmsnorm_bf16_2048x4096",
       "policy": "source_ordered",
       "hardware": "h100",
       "status": "blocked",
@@ -649,14 +644,13 @@
       "evidence_ids": [],
       "blockers": [
         "architecture_path_unavailable",
-        "representative_shape_not_declared",
         "oracle_not_pinned"
       ]
     },
     {
       "target_id": 1,
       "boundary": "backward",
-      "shape": "rmsnorm_representative_pending",
+      "shape": "rmsnorm_bf16_2048x4096",
       "policy": "source_ordered",
       "hardware": "gb200_or_b200",
       "status": "blocked",
@@ -666,14 +660,13 @@
       "evidence_ids": [],
       "blockers": [
         "architecture_path_unavailable",
-        "representative_shape_not_declared",
         "oracle_not_pinned"
       ]
     },
     {
       "target_id": 1,
       "boundary": "backward",
-      "shape": "rmsnorm_representative_pending",
+      "shape": "rmsnorm_bf16_2048x4096",
       "policy": "fast",
       "hardware": "h100",
       "status": "blocked",
@@ -683,14 +676,13 @@
       "evidence_ids": [],
       "blockers": [
         "architecture_path_unavailable",
-        "representative_shape_not_declared",
         "oracle_not_pinned"
       ]
     },
     {
       "target_id": 1,
       "boundary": "backward",
-      "shape": "rmsnorm_representative_pending",
+      "shape": "rmsnorm_bf16_2048x4096",
       "policy": "fast",
       "hardware": "gb200_or_b200",
       "status": "blocked",
@@ -700,14 +692,13 @@
       "evidence_ids": [],
       "blockers": [
         "architecture_path_unavailable",
-        "representative_shape_not_declared",
         "oracle_not_pinned"
       ]
     },
     {
       "target_id": 1,
       "boundary": "composed_forward_backward",
-      "shape": "rmsnorm_representative_pending",
+      "shape": "rmsnorm_bf16_2048x4096",
       "policy": "source_ordered",
       "hardware": "h100",
       "status": "blocked",
@@ -717,14 +708,13 @@
       "evidence_ids": [],
       "blockers": [
         "architecture_path_unavailable",
-        "representative_shape_not_declared",
         "oracle_not_pinned"
       ]
     },
     {
       "target_id": 1,
       "boundary": "composed_forward_backward",
-      "shape": "rmsnorm_representative_pending",
+      "shape": "rmsnorm_bf16_2048x4096",
       "policy": "source_ordered",
       "hardware": "gb200_or_b200",
       "status": "blocked",
@@ -734,14 +724,13 @@
       "evidence_ids": [],
       "blockers": [
         "architecture_path_unavailable",
-        "representative_shape_not_declared",
         "oracle_not_pinned"
       ]
     },
     {
       "target_id": 1,
       "boundary": "composed_forward_backward",
-      "shape": "rmsnorm_representative_pending",
+      "shape": "rmsnorm_bf16_2048x4096",
       "policy": "fast",
       "hardware": "h100",
       "status": "blocked",
@@ -751,14 +740,13 @@
       "evidence_ids": [],
       "blockers": [
         "architecture_path_unavailable",
-        "representative_shape_not_declared",
         "oracle_not_pinned"
       ]
     },
     {
       "target_id": 1,
       "boundary": "composed_forward_backward",
-      "shape": "rmsnorm_representative_pending",
+      "shape": "rmsnorm_bf16_2048x4096",
       "policy": "fast",
       "hardware": "gb200_or_b200",
       "status": "blocked",
@@ -768,7 +756,6 @@
       "evidence_ids": [],
       "blockers": [
         "architecture_path_unavailable",
-        "representative_shape_not_declared",
         "oracle_not_pinned"
       ]
     },

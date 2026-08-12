@@ -4378,3 +4378,24 @@ author: dlwh
 - Next action: decide whether to declare the proposed `2048x4096`
   representative coordinate and version the pre-run matched comparison
   contract before any H100 or GB200/B200 execution.
+
+### 2026-08-12 - TLTC-MLIR-009 Target 1 representative shape
+
+- The versioned evaluation manifest declares `rmsnorm_bf16_2048x4096` as the
+  Target 1 representative coordinate. `7x13` remains a structural fixture and
+  mutation shape outside the scorecard.
+- The ordinary-JAX and independent-reference contracts already pin the exact
+  BF16 public tensors, FP32 epsilon, output roles, and forward, recompute
+  backward, and composed boundaries. Transformer Engine 2.17 at commit
+  `2e559f062497bef768dfbe9d7e45548fadeca80a` accepts the same rank-two API and
+  registers BF16/FP32 forward and backward kernels for hidden size 4096.
+- One BF16 `2048x4096` matrix occupies 16 MiB. The largest public/state boundary
+  needs 64 MiB plus 24 KiB before queried backend workspace. Checked-in device
+  records report 80 GB HBM on H100 and 189471 MiB on GB200. Workspace remains
+  a per-device query and allocation gate.
+- All 12 Target 1 cells remain blocked. Architecture, numerical, and performance
+  gates remain `not_started`; only the representative-shape blocker is removed.
+  The remaining blockers are the unavailable architecture path and unpinned
+  oracle evidence.
+- Next action: version the pre-run matched comparison contract before any H100
+  or GB200/B200 execution.

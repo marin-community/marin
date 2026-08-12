@@ -37,7 +37,7 @@ EXPECTED_TARGET_DIMENSIONS = {
     0: ({"forward", "backward"}, {"tanh_dot_primary_f32"}, {"cpu", "h100", "gb200_or_b200"}),
     1: (
         {"forward", "backward", "composed_forward_backward"},
-        {"rmsnorm_representative_pending"},
+        {"rmsnorm_bf16_2048x4096"},
         {"h100", "gb200_or_b200"},
     ),
     2: (
@@ -343,7 +343,7 @@ def validate_evaluation_manifest(document: object, *, source_root: Path) -> Eval
         evidence_by_id=evidence_by_id,
         excluded_evidence_ids=frozenset(excluded_by_id),
     )
-    _validate_target_statuses(targets, cells)
+    _validate_target_statuses(targets, cells, shape_by_id=shape_by_id)
 
     return EvaluationManifest(
         manifest_id=manifest_id,
@@ -704,6 +704,9 @@ def _validate_cell_status(
         raise EvaluationManifestError(f"cell {cell.identity} cannot execute against an undeclared representative shape")
     if shape.id.endswith(PENDING_SHAPE_SUFFIX) and shape.declaration_status is Status.ACCEPTED:
         raise EvaluationManifestError(f"pending shape {shape.id!r} cannot be declared accepted")
+    shape_blocker = Blocker.REPRESENTATIVE_SHAPE_NOT_DECLARED in cell.blockers
+    if shape_blocker == (shape.declaration_status is Status.ACCEPTED):
+        raise EvaluationManifestError(f"cell {cell.identity} representative-shape blocker disagrees with declaration")
 
 
 def _cell_status(gate_statuses: Iterable[Status], *, has_blockers: bool) -> Status:
@@ -719,7 +722,12 @@ def _cell_status(gate_statuses: Iterable[Status], *, has_blockers: bool) -> Stat
     return Status.NOT_STARTED
 
 
-def _validate_target_statuses(targets: tuple[Target, ...], cells: tuple[EvaluationCell, ...]) -> None:
+def _validate_target_statuses(
+    targets: tuple[Target, ...],
+    cells: tuple[EvaluationCell, ...],
+    *,
+    shape_by_id: Mapping[str, ShapeDeclaration],
+) -> None:
     cells_by_target = {target.id: [] for target in targets}
     for cell in cells:
         cells_by_target[cell.identity.target_id].append(cell)
@@ -732,6 +740,12 @@ def _validate_target_statuses(targets: tuple[Target, ...], cells: tuple[Evaluati
             raise EvaluationManifestError(f"accepted target {target.id} must not retain blockers")
         if target.status is Status.BLOCKED and (not target.blockers or Status.BLOCKED not in statuses):
             raise EvaluationManifestError(f"blocked target {target.id} requires blockers and blocked cells")
+        has_undeclared_shape = any(
+            shape_by_id[shape_id].declaration_status is not Status.ACCEPTED for shape_id in target.required_shapes
+        )
+        shape_blocker = Blocker.REPRESENTATIVE_SHAPE_NOT_DECLARED in target.blockers
+        if shape_blocker is not has_undeclared_shape:
+            raise EvaluationManifestError(f"target {target.id} representative-shape blocker disagrees with declaration")
 
 
 def _target_status(cell_statuses: set[Status]) -> Status:

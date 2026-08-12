@@ -1,8 +1,7 @@
 # Shuttle Target 1 rowwise normalization plan
 
-Status: local evidence matrix audit. This note does not change the evaluation
-scorecard, declare a representative shape, pin an accepted oracle artifact, or
-promote any Target 1 cell.
+Status: `2048x4096` representative shape declared. This note does not pin an
+accepted oracle artifact or promote any Target 1 cell or gate.
 
 ## Decision
 
@@ -12,10 +11,10 @@ ordinary JAX function with JAX-owned VJP. Fixture IDs and compiler inputs use
 structural names such as `row_fold_scale_bf16_r2048_h4096`; `rmsnorm` appears
 only in the evaluation target and oracle description.
 
-The current scorecard remains accurate: Target 1 is blocked by the missing
-ordinary-JAX GPU path, undeclared representative shape, and unpinned oracle
-artifact. Historical `tile_lifetime` row-normalization results inform the
-shape and physical decomposition, but cannot accept a Shuttle cell.
+The scorecard now names this exact shape while retaining every Target 1 cell as
+blocked. The missing ordinary-JAX GPU path and unpinned oracle artifact still
+prevent acceptance. Historical `tile_lifetime` row-normalization results inform
+the physical decomposition, but cannot accept a Shuttle cell.
 
 ## Local evidence checkpoint at `12608ff8de`
 
@@ -54,9 +53,26 @@ Every row above still lacks the following hardware evidence:
   H100 and separately on GB200 or B200;
 - complete raw timing and repeatability records for Shuttle, ordinary JAX, and
   the matched expert boundary on each hardware class; and
-- a representative-shape decision. `2048x4096` remains the proposed
-  representative candidate; `7x13` is only the structural fixture and mutation
-  shape. Neither is a declared scorecard coordinate.
+- execution at the declared `2048x4096` representative coordinate. `7x13`
+  remains only the structural fixture and mutation shape and is not a scorecard
+  coordinate.
+
+The declared public/state allocation envelope is small relative to both
+hardware classes. One BF16 `[2048,4096]` matrix is 16 MiB. Forward requires
+32 MiB plus 16 KiB for `gamma` and FP32 `rsigma`; recompute-backward and
+composed each require 64 MiB plus 24 KiB for `gamma`, `dgamma`, and `rsigma`,
+before backend workspace. Checked-in device records report 80 GB HBM on H100
+and 189471 MiB on GB200. Transformer Engine queries the exact one-dimensional
+byte workspace before allocation, so an unavailable backend workspace remains
+a runtime failure rather than an assumed capacity.
+
+The pinned Transformer Engine 2.17 source accepts rank-two `[N,H]` input,
+requires matching `[H]` gamma and `[N]` FP32 `rsigma`, and registers BF16/FP32
+forward and backward kernels for `H=4096`. The ordinary-JAX contract pins the
+same contiguous BF16 public tensors, FP32 epsilon `1e-5`, forward, recompute
+backward, and composed boundaries. These source and resource checks are enough
+to declare the evaluation coordinate; they are not H100 or GB200/B200 execution
+evidence.
 
 The checked-in Transformer Engine run plan covers 24 oracle invocations: two
 shapes, three boundaries, and four independent forward/backward backend pairs.
@@ -74,17 +90,16 @@ the shared identity joining TE, Shuttle, and ordinary-JAX runs. The run plan
 must reference that reviewed contract before execution. A threshold inferred
 from the resulting 24 runs is post hoc and cannot accept them.
 
-The smallest honest scorecard action is therefore no manifest change. Keep all
-12 pending representative-shape cells blocked with architecture, shape, and
-oracle blockers. Record this local inventory in the plan and logbook; add a new
-manifest revision only after the representative coordinate and content-addressed
-H100 and GB200/B200 evidence exist.
+The versioned manifest replaces the pending Target 1 coordinate with
+`rmsnorm_bf16_2048x4096` across all 12 boundary, policy, and hardware cells and
+removes only `representative_shape_not_declared`. Every cell remains blocked
+with architecture and oracle blockers, and every gate remains `not_started`.
 
-## Proposed evaluation contract
+## Declared evaluation contract
 
 ### Shape and source
 
-The proposed contiguous row-major public tensors are:
+The declared contiguous row-major public tensors are:
 
 | Value | Shape | Dtype | Role |
 | --- | --- | --- | --- |
@@ -369,9 +384,9 @@ test contract is specified in
    execution, and dead source-region replacement. CPU and local MLIR tests
    precede any H100 or GB200 measurement.
 
-No Target 1 status changes until the representative shape, oracle artifact,
-numerical limits, ordinary-JAX generated path, and both hardware results are
-recorded in a new scorecard revision.
+No Target 1 cell or gate status changes until the oracle artifact, numerical
+limits, ordinary-JAX generated path, and both hardware results are recorded in
+a new scorecard revision.
 
 ## Evidence ledger
 

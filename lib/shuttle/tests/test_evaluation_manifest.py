@@ -56,6 +56,33 @@ def test_checked_in_scorecard_covers_the_complete_current_matrix_without_promoti
     assert excluded_evidence.source_commit == BASELINE_COMMIT
     assert excluded_evidence.record_commit == BASELINE_COMMIT
     assert all(excluded_evidence.id not in cell.evidence_ids for cell in manifest.cells)
+    target_one = next(target for target in manifest.targets if target.id == 1)
+    target_one_shape = next(shape for shape in manifest.shapes if shape.id == "rmsnorm_bf16_2048x4096")
+    target_one_cells = [cell for cell in manifest.cells if cell.identity.target_id == 1]
+    assert target_one.required_shapes == ("rmsnorm_bf16_2048x4096",)
+    assert target_one_shape.declaration_status is Status.ACCEPTED
+    assert target_one_shape.specification == (
+        "x:bf16[2048,4096], gamma:bf16[4096], dy:bf16[2048,4096], y:bf16[2048,4096], "
+        "dx:bf16[2048,4096], dgamma:bf16[4096], epsilon:f32=1e-5, layout:row_major_contiguous"
+    )
+    assert len(target_one_cells) == 12
+    assert {cell.identity.shape for cell in target_one_cells} == {"rmsnorm_bf16_2048x4096"}
+    assert {cell.identity.boundary.value for cell in target_one_cells} == {
+        "forward",
+        "backward",
+        "composed_forward_backward",
+    }
+    assert {cell.identity.policy.value for cell in target_one_cells} == {"source_ordered", "fast"}
+    assert {cell.identity.hardware.value for cell in target_one_cells} == {"h100", "gb200_or_b200"}
+    assert all(cell.status is Status.BLOCKED for cell in target_one_cells)
+    assert all(cell.architecture_status is Status.NOT_STARTED for cell in target_one_cells)
+    assert all(cell.numerical_status is Status.NOT_STARTED for cell in target_one_cells)
+    assert all(cell.performance_status is Status.NOT_STARTED for cell in target_one_cells)
+    assert all(
+        {blocker.value for blocker in cell.blockers} == {"architecture_path_unavailable", "oracle_not_pinned"}
+        for cell in target_one_cells
+    )
+    assert all("pending" not in cell.identity.shape for cell in target_one_cells)
 
 
 @pytest.mark.parametrize(
@@ -324,9 +351,82 @@ def test_scorecard_rejects_execution_against_an_undeclared_representative_shape(
     document = _document()
     cells = document["cells"]
     assert isinstance(cells, list)
-    cell = next(item for item in cells if isinstance(item, dict) and item["target_id"] == 1)
+    cell = next(item for item in cells if isinstance(item, dict) and item["target_id"] == 2)
     cell["status"] = "partial"
     cell["evidence_ids"] = ["cpu_ordinary_jax_acceptance6"]
+
+    with pytest.raises(EvaluationManifestError):
+        validate_evaluation_manifest(document, source_root=SOURCE_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("dimension", "retained"),
+    [
+        ("required_boundaries", {"forward", "backward"}),
+        ("required_policies", {"source_ordered"}),
+        ("required_hardware", {"h100"}),
+        ("required_shapes", set()),
+    ],
+)
+def test_target_one_matrix_rejects_a_self_consistent_dimension_shrink(dimension: str, retained: set[str]) -> None:
+    document = _document()
+    targets = document["targets"]
+    cells = document["cells"]
+    assert isinstance(targets, list)
+    assert isinstance(cells, list)
+    target = next(item for item in targets if isinstance(item, dict) and item["id"] == 1)
+    target[dimension] = [value for value in target[dimension] if value in retained]
+    cell_field = {
+        "required_boundaries": "boundary",
+        "required_policies": "policy",
+        "required_hardware": "hardware",
+        "required_shapes": "shape",
+    }[dimension]
+    document["cells"] = [
+        cell for cell in cells if not isinstance(cell, dict) or cell["target_id"] != 1 or cell[cell_field] in retained
+    ]
+
+    with pytest.raises(EvaluationManifestError):
+        validate_evaluation_manifest(document, source_root=SOURCE_ROOT)
+
+
+def test_target_one_matrix_rejects_a_self_consistent_shape_change() -> None:
+    document = _document()
+    shapes = document["shapes"]
+    targets = document["targets"]
+    cells = document["cells"]
+    assert isinstance(shapes, list)
+    assert isinstance(targets, list)
+    assert isinstance(cells, list)
+    shape = next(item for item in shapes if isinstance(item, dict) and item["id"] == "rmsnorm_bf16_2048x4096")
+    target = next(item for item in targets if isinstance(item, dict) and item["id"] == 1)
+    shape["id"] = "rmsnorm_bf16_7x13"
+    target["required_shapes"] = ["rmsnorm_bf16_7x13"]
+    for cell in cells:
+        if isinstance(cell, dict) and cell["target_id"] == 1:
+            cell["shape"] = "rmsnorm_bf16_7x13"
+
+    with pytest.raises(EvaluationManifestError):
+        validate_evaluation_manifest(document, source_root=SOURCE_ROOT)
+
+
+def test_declared_shape_rejects_a_representative_shape_blocker() -> None:
+    document = _document()
+    cells = document["cells"]
+    assert isinstance(cells, list)
+    cell = next(item for item in cells if isinstance(item, dict) and item["target_id"] == 1)
+    cell["blockers"].append("representative_shape_not_declared")
+
+    with pytest.raises(EvaluationManifestError):
+        validate_evaluation_manifest(document, source_root=SOURCE_ROOT)
+
+
+def test_declared_target_rejects_a_representative_shape_blocker() -> None:
+    document = _document()
+    targets = document["targets"]
+    assert isinstance(targets, list)
+    target = next(item for item in targets if isinstance(item, dict) and item["id"] == 1)
+    target["blockers"].append("representative_shape_not_declared")
 
     with pytest.raises(EvaluationManifestError):
         validate_evaluation_manifest(document, source_root=SOURCE_ROOT)
