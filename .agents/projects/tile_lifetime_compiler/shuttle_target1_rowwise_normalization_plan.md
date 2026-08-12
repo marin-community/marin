@@ -193,17 +193,69 @@ two singleton-dimension cleanup Folds emitted by JAX's transpose rules.
 ## Gap against current Shuttle MLIR
 
 `ShuttleOps.td` already defines generic `shuttle.map`, `shuttle.fold`, and
-`shuttle.contract`. The current pass implementation does not convert this
-program:
+`shuttle.contract`. Pipeline ABI 3 at `6d59f13575` selects every source result
+in the six fixtures except results of non-scalar
+`stablehlo.broadcast_in_dim`, `stablehlo.reshape`, and `stablehlo.rsqrt`.
+Zero-result source operations are tracked separately:
 
-| Layer | Implemented at `28a38e925a` | Missing for Target 1 |
+| Layer | Implemented at `6d59f13575` | Missing for Target 1 fixture coverage |
 | --- | --- | --- |
-| Structural selection | Ranked F32 `dot_general`, `tanh`, `add`, `multiply`, and `transpose` | BF16/F32 `convert`; region-bearing `reduce`; constants; broadcasts; divide; rsqrt; reshape |
-| Algebra conversion | Identity/transpose Map indexing, scalar tanh/add/multiply, F32 Contract | StableHLO reduction to Fold; scalar constant capture; projected broadcast/reshape maps; scalar divide/rsqrt; BF16 cast boundaries |
-| Algebra verification | Typed Map/Fold/Contract source references and Fold ordering field | Derivation of the exact reduction-order contract from StableHLO and per-operation provenance for reducer regions |
+| Structural selection | The fixture's BF16/F32 converts, rank-zero F32 constants, rank-zero-input F32 broadcasts, F32 add/multiply/divide, and F32 add reductions | Non-scalar broadcasts, reshape, and rsqrt |
+| Algebra conversion | Lossless scalar Map conversion plus recursive Reduce/Fold conversion | A lossless non-scalar broadcast representation, the two unit-dimension reshapes, and scalar rsqrt |
+| Algebra verification | Typed Map/Fold/Contract source references, Reduce owner provenance, nested combiner result provenance, reducer terminator provenance, and Fold ordering | Shape-operation semantics that distinguish broadcast from reshape |
 | Canonicalization | Empty pass | Policy-checked Fold/Map fusion and materialization choices |
-| Source lowering | Map tanh/add/multiply/transpose and F32 Contract back to StableHLO | Fold, casts, broadcasts/reshape, constants, divide, rsqrt |
+| Source lowering | The selected Maps and Folds back to their source StableHLO operations | Non-scalar broadcast, reshape, and rsqrt |
 | Physical lowering | None; the current pipeline reconstructs StableHLO for XLA | task/buffer/lifetime plan, row and column Fold schedules, generated GPU code, and ordinary-JAX dispatch to that code |
+
+The ABI 3 coverage manifests give the following total partition. `complete`
+includes nested reducer results. The two shapes have the same source ordinals;
+substitute `(R, H) = (2048, 4096)` for shape ID `44d152ecc3e9ff18` and `(7, 13)`
+for `81928ab3539c0f03`.
+
+| Boundary | Complete | Selected | Exact exclusions |
+| --- | ---: | ---: | --- |
+| Forward | 20 | 15 | `6`: broadcast `[R] -> [R,1]`, dims `[0]`; `11`: rsqrt `[R,1]`; `12`: broadcast `[R,1] -> [R,H]`, dims `[0,1]`; `15`: broadcast `[H] -> [1,H]`, dims `[1]`; `16`: broadcast `[1,H] -> [R,H]`, dims `[0,1]` |
+| Backward | 48 | 39 | `7`: broadcast `[R] -> [R,1]`, dims `[0]`; `12`: rsqrt `[R,1]`; `16`: broadcast `[R,1] -> [R,H]`, dims `[0,1]`; `19`: broadcast `[H] -> [1,H]`, dims `[1]`; `23`: reshape `[H] -> [1,H]`; `24`: broadcast `[1,H] -> [R,H]`, dims `[0,1]`; `30`: reshape `[R] -> [R,1]`; `31`: broadcast `[R,1] -> [R,H]`, dims `[0,1]`; `37`: broadcast `[R] -> [R,H]`, dims `[0]` |
+| Composed | 51 | 41 | `7`: broadcast `[R] -> [R,1]`, dims `[0]`; `12`: rsqrt `[R,1]`; `16`: broadcast `[R,1] -> [R,H]`, dims `[0,1]`; `19`: broadcast `[H] -> [1,H]`, dims `[1]`; `20`: broadcast `[1,H] -> [R,H]`, dims `[0,1]`; `26`: reshape `[H] -> [1,H]`; `27`: broadcast `[1,H] -> [R,H]`, dims `[0,1]`; `33`: reshape `[R] -> [R,1]`; `34`: broadcast `[R,1] -> [R,H]`, dims `[0,1]`; `40`: broadcast `[R] -> [R,H]`, dims `[0]` |
+
+The forward broadcasts split into two projected-safe and two mapped-singleton
+cases. Backward splits three and three; composed splits three and four. The
+projected-safe forms are `[R] -> [R,1]`, `[H] -> [1,H]`, and
+`[R] -> [R,H]`. The remaining broadcasts expand a size-one operand dimension
+that is explicitly named in `broadcast_dimensions`.
+
+### Lossless shape-operation boundary
+
+StableHLO 1.17 `broadcast_in_dim` indexes an operand dimension at zero when
+that operand extent is one; otherwise it uses the result dimension named by
+`broadcast_dimensions`. The attribute is unique and in range but need not be
+ordered. See the pinned
+[broadcast specification](https://github.com/openxla/stablehlo/blob/806a6844dfd92cca1ce5391c86dca0ef9e952550/docs/spec.md#broadcast_in_dim).
+The current Map verifier accepts only projected permutations of direct domain
+dimensions and requires equal static extents when two maps bind the same
+domain dimension. It can represent the three projected-safe forms above and
+source lowering can recover their exact dimension lists. A direct Map for
+`[1,H] -> [R,H]` is invalid because it binds extents `1` and `R` to the same
+domain dimension. Replacing its first input expression with constant zero is
+also insufficient: Map forbids that expression, and zero would lose which
+result dimension `broadcast_dimensions[0]` named. Mapped-singleton broadcast
+needs explicit lossless shape semantics; the implementation must not silently
+reinterpret it as today's projected Map.
+
+The two fixture reshapes only insert a unit dimension, but StableHLO reshape is
+defined by equal lexicographic position over the complete input and output
+index spaces, not by projection. See the pinned
+[reshape specification](https://github.com/openxla/stablehlo/blob/806a6844dfd92cca1ce5391c86dca0ef9e952550/docs/spec.md#reshape).
+A projected map can model these two unit insertions numerically, but current
+source lowering would reconstruct `broadcast_in_dim` from that map. The first
+shape slice must retain an explicit broadcast-versus-reshape discriminator and
+reject general reshapes that it cannot represent.
+
+The fixture rsqrt has no `result_accuracy` attribute. Its first slice may use
+an identity-indexed scalar Map with IEEE-754 reciprocal-square-root semantics,
+but must reject any accuracy contract it does not represent. StableHLO's pinned
+[rsqrt specification](https://github.com/openxla/stablehlo/blob/806a6844dfd92cca1ce5391c86dca0ef9e952550/docs/spec.md#rsqrt)
+defines the floating-point operation as IEEE-754 `rSqrt`.
 
 The old `tile_lifetime.experimental_stablehlo_row_normalization_backward` path
 has useful generic row/column Fold code and corrected H100 and GB200 timing
@@ -212,50 +264,54 @@ outside the current Shuttle MLIR path. It is reference-only for this work.
 
 ## Smallest test-first sequence
 
-The Reduce/Fold provenance, ordering, initializer, lowering, and test contract
-for steps 2 and 3 is specified in
+The implemented Reduce/Fold provenance, ordering, initializer, lowering, and
+test contract is specified in
 [`shuttle_target1_fold_conversion_design.md`](shuttle_target1_fold_conversion_design.md).
 
-1. Add audited ordinary-JAX forward, backward, and composed StableHLO fixtures
-   for `R=2048,H=4096`, plus one small shape mutation. Regeneration must pin
-   JAX/JAXlib/XLA identities and fail on normalized-fingerprint drift. Pin the
-   current failure first: structural-region formation rejects the
-   region-bearing `stablehlo.reduce` before it constructs a coverage manifest.
-2. Teach structural-region formation to traverse a `stablehlo.reduce` without
-   losing its nested provenance. The Fold's `source` represents the reduce
-   result. Each converted scalar combiner operation retains its own annotated
-   source-result reference, and `shuttle.yield` retains the nested source
-   terminator's operation reference. Extend coverage verification to audit
-   these nested references before stripping them. A mutation that drops the
-   combiner `add` or reducer terminator provenance must fail. Add
-   lossless Map support for BF16/F32 converts, constants,
-   `broadcast_in_dim`, reshape, divide, and rsqrt. Test the public outputs of
-   small Map-only CPU fixtures and require the Target 1 reduction to remain an
-   explicit exclusion; do not assert helper calls or prose.
-3. Convert `stablehlo.reduce` with its scalar add region to `shuttle.fold`,
-   including initializer, accumulator dtype, reduction dimensions, source
-   reference, and source-permitted order freedom. Add source-ordered Fold
-   lowering back to StableHLO. The forward fixture must then have total source
-   coverage and exact CPU parity.
-4. Extend the same conversion to JAX-owned backward and composed fixtures.
-   Tests compare `y`, `dx`, and `dgamma` against ordinary JAX at the public
-   boundary and require every source result to be selected or explicitly
-   excluded. A nearby scalar or shape mutation must use the same passes.
-5. Implement policy legality before optimization. `SOURCE_ORDERED` initially
+1. Freeze the ABI 3 partitions above through the coverage-manifest boundary.
+   Each test must observe the exact selected/excluded source partition, not a
+   helper call or diagnostic string. Keep the full normalized StableHLO hashes
+   and the independent ordinary-JAX fixture verifier as the round-trip oracle.
+2. Bump the pipeline ABI to version 4 with the first new selection and update
+   the registry/options and cache-identity tests. Keep acceptance blocked until
+   the complete ABI 4 algebra slice is merged.
+3. Add default-semantics F32 rsqrt as an identity-indexed scalar Map. Test
+   source-ordered normalized-fingerprint equality, CPU values including signed
+   zero, infinity, and NaN behavior, and fail-closed handling of an unsupported
+   `result_accuracy` attribute.
+4. Add the projected-safe broadcasts through the current Map indexing model:
+   `[R] -> [R,1]`, `[H] -> [1,H]`, and `[R] -> [R,H]`. Cover a nearby shape,
+   invalid duplicate/out-of-range dimensions, and a changed source reference.
+   Keep mapped-singleton expansion explicitly excluded.
+5. Add lossless semantics for mapped-singleton broadcast. Preserve every
+   `broadcast_dimensions` entry even when the corresponding operand index is
+   always zero. Cover both `[R,1] -> [R,H]` and `[1,H] -> [R,H]`, plus a legal
+   unordered-dimension mutation. Supporting only ordered dimensions is
+   acceptable if legal unordered cases remain explicit exclusions.
+6. Add only the static F32 unit-dimension insertion reshapes needed by the
+   fixtures. Preserve the reshape operation kind through source lowering.
+   Reject general equal-element-count reshapes until Shuttle represents their
+   lexicographic remapping. Test `[H] -> [1,H]`, `[R] -> [R,1]`, a nearby shape,
+   and a general `[2,3] -> [3,2]` exclusion.
+7. Require zero exclusions and exact source-ordered normalized-fingerprint
+   equality for all six fixtures, plus CPU parity for `y`, `dx`, and `dgamma`
+   against ordinary JAX. Do not produce a new acceptance artifact before these
+   checks pass.
+8. Implement policy legality before optimization. `SOURCE_ORDERED` initially
    round-trips the lossless algebra. `FAST` may add only a generic Fold/Map
    fusion with an explicit legality predicate. Tests must reject a rewrite that
    moves the final BF16 cast or changes an undeclared reduction order.
-6. Add a generic physical plan for one row Fold plus dependent Maps. Derive
+9. Add a generic physical plan for one row Fold plus dependent Maps. Derive
    schedules from affine maps, reduction dimensions, dtypes, and policy. The
    plan and generated source must contain no target or workload name. Test a
    scalar-body mutation and a reduction-axis mutation through the same
    generator.
-7. Add the reverse physical plan in three correctness-first stages: row
+10. Add the reverse physical plan in three correctness-first stages: row
    sum-square and reciprocal scratch, row correlation plus `dx`, then the
    feature-column `dgamma` Fold. Only after parity passes should the planner
    consider same-domain Fold coalescing or emitting deterministic column
    partials from the final Map.
-8. Connect these generated plans through the existing JAX/XLA registry adapter.
+11. Connect these generated plans through the existing JAX/XLA registry adapter.
    The acceptance harness must observe ordinary JAX input StableHLO, Shuttle
    algebra coverage, transformed MLIR, generated source identity, handler
    execution, and dead source-region replacement. CPU and local MLIR tests
