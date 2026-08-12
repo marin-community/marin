@@ -42,6 +42,7 @@ from experiments.datakit.cluster.quality.fast_transformer.label_with_glm52 impor
     _parse_verdict,
 )
 from experiments.datakit.cluster.quality.fast_transformer.rubric import SYSTEM_PROMPT
+from experiments.datakit.cluster.quality.fast_transformer.sample_labels import EXCERPT_NOTICE
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +56,17 @@ REQUEST_TIMEOUT = 300.0
 MAX_ATTEMPTS = 6
 RETRYABLE_STATUS = (408, 429, 500, 502, 503, 520, 524)
 
-WINDOW_COLUMNS = ["id", "source", "window", "token_start", "token_end", "text"]
+WINDOW_COLUMNS = ["id", "source", "window", "token_start", "token_end", "text", "doc_tokens"]
+BEGIN = "begin"
 
 # Framing notices for windows cut from inside a document, phrased like the
 # rubric's excerpt marker: harness slicing, not corpus damage. Without them the
 # grader reads an abrupt start as truncation and marks genuine mid-document text
-# invalid. Begin windows and short documents keep the original framing — their
-# window starts where the document does.
+# invalid. Begin windows start where the document does, so they carry no notice —
+# but one that stops short of the document's end still ends mid-text, and gets
+# the rubric's excerpt marker for the same reason (the first scale-up graded them
+# bare and the grader called 36.5% of them invalid, thousands of rationales
+# blaming the cut).
 WINDOW_NOTICES = {
     "middle": (
         "[This is a window from the MIDDLE of a longer document; it may begin and end "
@@ -81,9 +86,17 @@ def window_key(row: dict) -> str:
 
 
 def window_user_content(row: dict) -> str:
-    """The request's user message: the window in the document tag, with the
-    position notice above it for middle/end windows."""
-    document = f'<document index="0">\n{row["text"]}\n</document>'
+    """The request's user message: the window in the document tag, framed for its position.
+
+    Middle and end windows get the bracketed position notice above the tag; a
+    begin window whose document continues past ``token_end`` gets the excerpt
+    marker appended inside it. Both are the conventions the rubric names, so the
+    grader treats a harness cut as a cut rather than as damage.
+    """
+    text = row["text"]
+    if row["window"] == BEGIN and row["token_end"] < row["doc_tokens"]:
+        text += EXCERPT_NOTICE
+    document = f'<document index="0">\n{text}\n</document>'
     notice = WINDOW_NOTICES.get(row["window"])
     return f"{notice}\n{document}" if notice else document
 
@@ -154,6 +167,7 @@ def label_rows(
             "window": row["window"],
             "token_start": row["token_start"],
             "token_end": row["token_end"],
+            "doc_tokens": row["doc_tokens"],
             "text": row["text"],
             "content_type": verdict["content_type"],
             "valid": verdict["valid"],

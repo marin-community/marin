@@ -5,8 +5,9 @@
 
 The grading contract is :mod:`label_windows_openrouter`'s exactly — one window
 per request as ``<document index="0">``, the v2 rubric system prompt, the
-bracketed position notice on middle/end windows, temperature 0, one-JSON-object
-verdict — with the serving path swapped from OpenRouter to a self-hosted pool.
+bracketed position notice on middle/end windows and the excerpt marker on a
+begin window whose document continues, temperature 0, one-JSON-object verdict —
+with the serving path swapped from OpenRouter to a self-hosted pool.
 
 The pool follows the brokered-fleet shape of the OCR extraction route rather
 than static work partitioning. This driver runs as an Iris job and owns three
@@ -192,6 +193,7 @@ def label_rows(
             "window": row["window"],
             "token_start": row["token_start"],
             "token_end": row["token_end"],
+            "doc_tokens": row["doc_tokens"],
             "text": row["text"],
             "content_type": verdict["content_type"],
             "valid": verdict["valid"],

@@ -1,15 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cut the begin/middle/end 512-token grading windows for the bme labeling scheme.
+"""Cut the begin/middle/end grading windows for the bme labeling scheme.
 
-The scale-up labels windows rather than whole-document prefixes: a document over
-``LONG_DOC_TOKENS`` gemma tokens contributes three disjoint 512-token windows
-(first, middle, last), each its own training example; anything shorter
-contributes a single begin window covering its first 512 tokens (the whole
-document when it is under one window). The exact window text and its token
-offsets travel with every grade, so nothing downstream re-derives what the
-grader saw — the same principle as the PDF oracle sample's segment columns.
+Labeling grades windows rather than whole-document prefixes: a document over the
+geometry's ``long_doc_tokens`` contributes three disjoint windows (first, middle,
+last), each its own training example; anything shorter contributes a single begin
+window covering its first ``window_tokens`` tokens (the whole document when it is
+under one window). The exact window text and its token offsets travel with every
+grade, so nothing downstream re-derives what the grader saw — the same principle
+as the PDF oracle sample's segment columns.
+
+The window size is a :class:`WindowGeometry` rather than a module constant
+because two campaigns are live at once: :data:`GEOMETRY_512` is the scale-up's
+shape (and the shape its training assembly re-cuts legacy documents to), and
+:data:`GEOMETRY_2048` is the regrade campaign's, whose four-window long-document
+threshold keeps the three windows disjoint with room between them.
 
 Tokenization is the gigatoken backend of the Gemma-3 tokenizer (parity-proven
 BPE, ~7-8x faster than HF). Callers must gate a run on
@@ -28,11 +34,35 @@ from experiments.datakit.cluster.quality.fast_transformer.data import load_gigat
 logger = logging.getLogger(__name__)
 
 GEMMA_TOKENIZER = "unsloth/gemma-3-270m-it"
-WINDOW_TOKENS = 512
-# At or under three windows the slices overlap, so only the begin window is graded.
-LONG_DOC_TOKENS = 3 * WINDOW_TOKENS
 WINDOW_POSITIONS = ("begin", "middle", "end")
 PARITY_SAMPLE = 256
+
+
+@dataclass(frozen=True)
+class WindowGeometry:
+    """How wide a grading window is, and how long a document must be for three.
+
+    ``long_doc_tokens`` must be at least ``3 * window_tokens`` or the three
+    windows overlap; campaigns set it higher to leave real text between them.
+    """
+
+    window_tokens: int
+    long_doc_tokens: int
+
+    def __post_init__(self) -> None:
+        if self.long_doc_tokens < 3 * self.window_tokens:
+            raise ValueError(
+                f"long_doc_tokens={self.long_doc_tokens} is under three {self.window_tokens}-token windows, "
+                "so begin/middle/end would overlap"
+            )
+
+
+# The scale-up campaign's shape, and the shape its training assembly cuts legacy
+# 88k documents to.
+GEOMETRY_512 = WindowGeometry(window_tokens=512, long_doc_tokens=1_536)
+# The bme2048 regrade campaign: a 2048-token window, three windows only for
+# documents of 8192 tokens or more.
+GEOMETRY_2048 = WindowGeometry(window_tokens=2_048, long_doc_tokens=8_192)
 
 
 @dataclass(frozen=True)
@@ -80,25 +110,29 @@ def check_gigatoken_parity(texts: list[str], seed: int = 0) -> None:
     )
 
 
-def doc_windows(token_ids: list[int]) -> list[Window]:
+def doc_windows(token_ids: list[int], geometry: WindowGeometry) -> list[Window]:
     """The grading windows of one document, with exact token offsets.
+
+    A document of at least ``geometry.long_doc_tokens`` tokens yields three
+    windows; a shorter one yields its begin window alone.
 
     Decoding is pinned off the cleanup pass for the same reason as the PDF oracle
     sample: the decoded window is both what the grader sees and what a scorer is
     later trained on, so it has to stay the document's own text.
     """
     tokenizer = load_tokenizer(GEMMA_TOKENIZER)
+    width = geometry.window_tokens
 
     def cut(position: str, start: int, end: int) -> Window:
         text = tokenizer.decode(token_ids[start:end], clean_up_tokenization_spaces=False)
         return Window(position=position, token_start=start, token_end=end, text=text)
 
     n = len(token_ids)
-    if n <= LONG_DOC_TOKENS:
-        return [cut("begin", 0, min(n, WINDOW_TOKENS))]
-    middle = (n - WINDOW_TOKENS) // 2
+    if n < geometry.long_doc_tokens:
+        return [cut("begin", 0, min(n, width))]
+    middle = (n - width) // 2
     return [
-        cut("begin", 0, WINDOW_TOKENS),
-        cut("middle", middle, middle + WINDOW_TOKENS),
-        cut("end", n - WINDOW_TOKENS, n),
+        cut("begin", 0, width),
+        cut("middle", middle, middle + width),
+        cut("end", n - width, n),
     ]

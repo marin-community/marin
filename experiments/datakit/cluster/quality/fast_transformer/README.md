@@ -143,6 +143,33 @@ instead, narrower than the stored excerpt, and a chunk that mostly fails aborts 
 than dropping rows. A small tail of unusually dense documents still overflows (~1% on
 the 88k set), which is what the long-document retention gate measures.
 
+### Grading windows, not prefixes
+
+Later campaigns grade a **window** rather than a document prefix.
+[`bme_windows.py`](bme_windows.py) cuts a document under a `WindowGeometry`:
+three begin/middle/end windows for a document at or over `long_doc_tokens`, its
+begin window alone otherwise. Every grade carries the window text and its token
+offsets, so nothing downstream re-derives what the grader saw.
+
+Framing is what makes a window gradeable. Middle and end windows carry a
+bracketed position notice; a begin window that stops before its document ends
+carries the same `[Excerpt ends here …]` marker as an excerpted document. Both
+conventions are stated in the rubric, which tells the grader never to penalize
+them, and both are applied by `window_user_content`. Omitting the begin marker is
+not cosmetic: the 512-token scale-up graded newly mined begin windows bare, 36.5%
+came back invalid, and thousands of rationales blamed the cut rather than the
+text.
+
+```
+select_bme2048_docs.py  draw the regrade pool + cut its windows → windows/*.parquet
+label_windows_vllm.py   grade them through a brokered pool of GLM-5.2 gangs
+window_label_report.py  invalid rate by position and by whether the window was cut
+```
+
+Run the report on a labeling run's first chunks before committing a fleet to the
+rest: a framing regression shows up there as an invalid rate concentrated in one
+position, with rationales that name the cut.
+
 ## Validation
 
 `gate_labels.py` is the gate between labeling and training, because a poisoned label
@@ -196,6 +223,10 @@ Labeling:
 - [`sample_labels.py`](sample_labels.py) — stratified draw across every source, excerpted on a boundary.
 - [`label_with_glm52.py`](label_with_glm52.py) — run the grader with checkpointing and resume; aborts a chunk that mostly fails rather than dropping rows.
 - [`gate_labels.py`](gate_labels.py) — decide whether a label set is fit to train on.
+- [`bme_windows.py`](bme_windows.py) — cut a document's grading windows under a `WindowGeometry`.
+- [`select_bme2048_docs.py`](select_bme2048_docs.py) — draw the bme2048 regrade pool (20k documents per type, holdout excluded) and cut its 2048-token windows.
+- [`label_windows_vllm.py`](label_windows_vllm.py) — grade windows through a brokered pool of self-hosted GLM-5.2 gangs.
+- [`window_label_report.py`](window_label_report.py) — a run's invalid rate by window position and by whether the window was cut.
 - [`content_type.py`](content_type.py) — predict a document's content type, which the per-type calibration needs at scoring time.
 
 Evaluation:

@@ -34,7 +34,7 @@ import pyarrow.parquet as pq
 from rigging.filesystem import StoragePath
 
 from experiments.datakit.cluster.quality.fast_transformer.bme_windows import (
-    WINDOW_TOKENS,
+    GEOMETRY_512,
     doc_windows,
     encode_documents,
 )
@@ -47,7 +47,7 @@ SCALEUP_JOINED = (
 )
 WINDOW_COLUMNS = ["id", "source", "window", "text", "quality", "score_normalized", "valid", "why"]
 
-# A begin window is cut at exactly WINDOW_TOKENS with no excerpt marker, so the
+# A begin window is cut at exactly one window with no excerpt marker, so the
 # grader reads a mid-expression stop as document damage and marks the window
 # invalid — the same harness artifact the 88k campaign's excerpt marker fixed
 # (93% of invalid new-doc begin code windows cite it). These grades score the
@@ -58,7 +58,7 @@ CUT_WHY_PATTERN = re.compile(
 # Characters that always cover 512 gemma tokens (the campaign's graded
 # 10,500-char prefixes never fell short); a document whose capped prefix still
 # tokenizes under the window is re-tokenized in full.
-BEGIN_CHAR_CAP = 20 * WINDOW_TOKENS
+BEGIN_CHAR_CAP = 20 * GEOMETRY_512.window_tokens
 
 BEGIN = "begin"
 
@@ -149,19 +149,21 @@ def begin_window_texts(texts: list[str]) -> list[str]:
     """The first-512-gemma-token window of each document, cut with the bme cutter.
 
     Tokenizes a capped prefix to bound the gigatoken pass (the cut needs only
-    the first ``WINDOW_TOKENS`` ids); a document whose capped prefix tokenizes
+    the first ``GEOMETRY_512.window_tokens`` ids); a document whose capped prefix tokenizes
     under one window while more text exists is re-tokenized in full, so the
     cap can never shorten a window.
     """
     capped = [t[:BEGIN_CHAR_CAP] for t in texts]
     ids = encode_documents(capped)
-    starved = [i for i, row in enumerate(ids) if len(row) < WINDOW_TOKENS and len(texts[i]) > BEGIN_CHAR_CAP]
+    starved = [
+        i for i, row in enumerate(ids) if len(row) < GEOMETRY_512.window_tokens and len(texts[i]) > BEGIN_CHAR_CAP
+    ]
     if starved:
         logger.info("begin windows: re-tokenizing %d documents whose capped prefix fell short", len(starved))
         full = encode_documents([texts[i] for i in starved])
         for i, row in zip(starved, full, strict=True):
             ids[i] = row
-    return [doc_windows(row[:WINDOW_TOKENS])[0].text for row in ids]
+    return [doc_windows(row[: GEOMETRY_512.window_tokens], GEOMETRY_512)[0].text for row in ids]
 
 
 def assemble_training_windows(

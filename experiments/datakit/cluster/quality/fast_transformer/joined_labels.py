@@ -33,7 +33,7 @@ JOINED_COLUMNS = [
 ]
 
 
-def _walk_parquet(root: str, max_depth: int = 5) -> list[str]:
+def walk_parquet(root: str, max_depth: int = 5) -> list[str]:
     """Every ``*.parquet`` under ``root``, via single-level globs only (a recursive
     glob HeadObjects the prefix, which the CW store answers with a 400). The join
     mirrors each source's own layout, so shard depth varies from 1 to 3."""
@@ -61,7 +61,7 @@ def load_joined(joined_dir: str, columns: list[str] | None = None) -> dict[str, 
     if "id" not in columns:
         raise ValueError("load_joined columns must include 'id' (rows are deduplicated by it)")
     root = joined_dir.rstrip("/")
-    shards = _walk_parquet(f"{root}/outputs")
+    shards = walk_parquet(f"{root}/outputs")
     if not shards:
         raise ValueError(f"no parquet shards under {root}/outputs/")
     out: dict[str, list] = {c: [] for c in columns}

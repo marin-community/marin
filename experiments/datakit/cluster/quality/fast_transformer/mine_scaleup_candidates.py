@@ -46,6 +46,7 @@ from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 
 from experiments.datakit.cluster.quality.fast_transformer.bme_windows import (
+    GEOMETRY_512,
     check_gigatoken_parity,
     doc_windows,
     encode_documents,
@@ -171,7 +172,7 @@ def extract_shard(task: dict) -> dict:
     source_dir = os.path.dirname(relpath)
     windows = []
     for doc_id, ids in zip(rows.get_column("id").to_list(), token_ids, strict=True):
-        for w in doc_windows(ids):
+        for w in doc_windows(ids, GEOMETRY_512):
             windows.append(
                 {
                     "id": doc_id,

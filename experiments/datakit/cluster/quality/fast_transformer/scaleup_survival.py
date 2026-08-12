@@ -7,7 +7,8 @@ The existing labels were graded on ``excerpt(text, 10_500)`` — the first ~10.5
 characters of each document. Under the window scheme a grade is a verdict on a
 specific 512-gemma-token window, so an existing label survives as the
 *begin-window* grade exactly when the graded prefix covered at least the first
-512 gemma tokens (or the whole document). Documents over ``LONG_DOC_TOKENS``
+512 gemma tokens (or the whole document). Documents at or over the geometry's
+``long_doc_tokens``
 still need their middle and end windows graded fresh, whether or not the begin
 grade survives.
 
@@ -36,8 +37,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.fast_transformer.bme_windows import (
-    LONG_DOC_TOKENS,
-    WINDOW_TOKENS,
+    GEOMETRY_512,
     check_gigatoken_parity,
     doc_windows,
     encode_documents,
@@ -78,8 +78,8 @@ def analyze(joined: dict[str, list]) -> tuple[list[dict], list[dict]]:
     fresh: list[dict] = []
     for i, token_ids in enumerate(doc_ids_tokens):
         n = len(token_ids)
-        survives = i not in prefix_tokens or prefix_tokens[i] >= WINDOW_TOKENS
-        windows = doc_windows(token_ids)
+        survives = i not in prefix_tokens or prefix_tokens[i] >= GEOMETRY_512.window_tokens
+        windows = doc_windows(token_ids, GEOMETRY_512)
         needed = [w for w in windows if not (survives and w.position == "begin")]
         docs.append(
             {
@@ -91,7 +91,7 @@ def analyze(joined: dict[str, list]) -> tuple[list[dict], list[dict]]:
                 "doc_tokens": n,
                 "graded_prefix_tokens": prefix_tokens.get(i, n),
                 "survives_begin": survives,
-                "is_long": n > LONG_DOC_TOKENS,
+                "is_long": n >= GEOMETRY_512.long_doc_tokens,
                 "windows_total": len(windows),
                 "windows_needed": len(needed),
             }
