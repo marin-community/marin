@@ -35,7 +35,7 @@ with remote_inference(model, engine, iris) as session:
 ```
 
 `remote_inference` owns startup, liveness, Iris link registration, and teardown. Endpoint-oriented
-mechanisms such as `run_evalchemy`, `run_lm_eval`, and `run_harbor` own only their native task and
+mechanisms such as `run_evalchemy`, `run_lm_eval`, and `run_harbor_driver` own only their native task and
 result contracts. This keeps the lifecycle common without hiding mechanism-specific configuration
 or outcomes behind a universal `do_eval` interface.
 
@@ -79,8 +79,8 @@ them.
 ## Harbor-based evaluation
 
 Agentic launcher runs pass the same `RunningModel` boundary to
-`run_harbor`. Off-cluster sandboxes receive a scoped capability route resolved by the inference
-session.
+`run_harbor_driver`. Off-cluster sandboxes receive a scoped capability route resolved by the
+inference session.
 
 - Harbor supports agent-style benchmarks such as AIME, Terminal-Bench, SWE-bench Verified, and other registry datasets.
 - Marin's Harbor integration supports local Docker and hosted environments such as Daytona, E2B, and Modal.

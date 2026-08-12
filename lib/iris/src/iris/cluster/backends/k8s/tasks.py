@@ -108,6 +108,8 @@ from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
+_ARM64_ARCHITECTURES = frozenset({b"aarch64", b"arm64"})
+
 
 class PodManifestError(ValueError):
     """A RunTaskRequest cannot produce a valid Pod manifest.
@@ -2554,8 +2556,16 @@ class K8sTaskProvider:
         attempt_id = target.attempt_id
         pod_name = self._live_pod_name(target)
         duration = request.duration_seconds or 10
-        profile_type = request.profile_type
         dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
+        profile_type = job_pb2.ProfileType()
+        profile_type.CopyFrom(request.profile_type)
+        # py-spy 0.4.2's native unwinder can segfault on Linux ARM64 before it
+        # writes an output file. Keep native frames on other architectures and
+        # when explicitly requested, but default to Python frames on ARM64.
+        if profile_type.HasField("cpu") and not profile_type.cpu.HasField("native"):
+            architecture = dispatch.exec(["uname", "-m"], timeout=10)
+            if architecture.returncode == 0 and architecture.stdout.strip().lower() in _ARM64_ARCHITECTURES:
+                profile_type.cpu.native = False
 
         try:
             if profile_type.HasField("threads"):

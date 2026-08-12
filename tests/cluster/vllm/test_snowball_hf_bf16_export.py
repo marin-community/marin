@@ -31,16 +31,16 @@ from iris.rpc import job_pb2
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import validate_single_name_config
 from levanter.tokenizers import load_tokenizer
-
-from experiments.grug.moe.model import GrugModelConfig, Transformer
-from tests.cluster.vllm.snowball import SNOWBALL
-from tests.cluster.vllm.snowball_checkpoint import (
+from marin.testing.inference.snowball import SNOWBALL
+from marin.testing.inference.snowball_checkpoint import (
     VendoredTransformer,
     apply_pending_qb_betas,
     decode_vendored_config,
     load_checkpoint,
     read_executor_info,
 )
+
+from experiments.grug.moe.model import GrugModelConfig, Transformer
 
 PENDING_TIMEOUT = 5 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
@@ -142,7 +142,7 @@ def test_snowball_checkpoint_reproduces_persisted_vllm_bf16_export(marin_gpu_cli
             name=f"snowball-bf16-export-{uuid.uuid4().hex[:8]}",
             entrypoint=Entrypoint.from_callable(assert_checkpoint_reproduces_bf16_export),
             resources=ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="512g", disk="256g"),
-            environment=create_environment(extras=["gpu"], sync_packages=["marin-levanter"]),
+            environment=create_environment(extras=["gpu"], sync_packages=["marin-core", "marin-levanter"]),
             # These e2es are manually triggered and highly interactive, so they use production priority.
             # Routine or automated workloads should not copy this priority.
             priority=job_pb2.PRIORITY_BAND_PRODUCTION,

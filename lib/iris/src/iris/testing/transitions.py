@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test driver for landing task-state updates through the production path.
+"""Drivers for landing test task-state updates through the production path.
 
 The live controller lands worker-reported task states through the reconcile
 loop (``ops.worker.apply_reconcile``). To keep tests exercising
@@ -12,6 +12,9 @@ per-worker batch of :class:`WorkerTaskUpdates` into reconcile
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+
+from rigging.timing import Timestamp
+from sqlalchemy import select
 
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.ops.task import apply_dispatch_updates
@@ -29,8 +32,6 @@ from iris.cluster.controller.worker_health import (
 )
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import worker_pb2
-from rigging.timing import Timestamp
-from sqlalchemy import select
 
 
 @dataclass(frozen=True)

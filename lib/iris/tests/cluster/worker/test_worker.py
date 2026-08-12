@@ -38,13 +38,13 @@ from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
-from rigging.timing import Duration
-from tests.cluster.worker.conftest import (
+from iris.testing.worker import (
     FakeContainerHandle,
     FakeLogReader,
     create_mock_container_handle,
     create_run_task_request,
 )
+from rigging.timing import Duration
 
 pytestmark = pytest.mark.timeout(10)
 

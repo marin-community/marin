@@ -47,6 +47,7 @@ MAX_SHARD_FAILURES = 3
 MAX_SHARD_INFRA_FAILURES = 20
 MAX_STATUS_TEXT_LENGTH = 1000
 MAX_CONCURRENT_PIPELINES = 16
+MAX_CONCURRENT_RESULT_READS = 16
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
 
 _SNAPSHOT_ATTRIBUTES = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
@@ -350,7 +351,9 @@ class ZephyrCoordinator:
         self._self_handle = actor_ctx.handle
 
         self._stats_writer = StatsWriter.connect()
-        self._result_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="zephyr-result")
+        self._result_executor = ThreadPoolExecutor(
+            max_workers=MAX_CONCURRENT_RESULT_READS, thread_name_prefix="zephyr-result"
+        )
 
         logger.info("Coordinator initialized")
 
