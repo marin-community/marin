@@ -897,3 +897,14 @@ author: Rafal Wojdyla
 - RNO progress: `stack-v3_6ac1a286` got to 11,758 of 12,818 embedding shards with 32 live workers and no dead workers. Its current rate gives a rough 21:05 UTC completion estimate.
 - Issue update: None. Wait for full TEI recovery, a source-state change, or a new error level before another issue update.
 - Next action: Watch Stack v3 through completion and check the eight queued TEI jobs as H100 capacity changes.
+
+### 2026-08-12 21:11 UTC - Stack v3 and SVG completed
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 45 completed source artifacts. RNO has 16 completed source artifacts. The full run has 61 of 292 completed source artifacts.
+- RNO results: `stack-v3_6ac1a286` completed all 12,818 output shards with 26,075,490 duplicate documents and 314,413,350,203 input text bytes. The source step and all 32 worker tasks succeeded. Forty-four shards used retry one, and no shard reached retry two. `svg_5cac82e4` then completed all 27 scheduled tasks, and its source step succeeded.
+- RNO progress: `swe-rebench-openhands_8decfaa0` started with 12 live workers and no dead workers.
+- East progress: `nemotron_cc_v2-diverse_qa_016d1909` got to 3,137 of 4,416 embedding shards with 32 live workers and no dead workers. Its stable rate gives a rough 22:30 UTC completion estimate.
+- Service capacity: East has 96 healthy TEI services. RNO has 88 healthy TEI services. The remaining eight RNO services are still in the build state with zero failures and zero preemptions.
+- Issue update: None. These are routine source completions, and the partial RNO capacity recovery is already in the task record.
+- Next action: Check SWE-rebench OpenHands through completion and continue to watch the eight queued RNO TEI services.
