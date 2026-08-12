@@ -414,3 +414,15 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs. Fourteen RNO TEI jobs remain failed after replay.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of root logs.
 - Next action: Continue the 15-minute check cadence and monitor the long `finetranslations` source.
+
+### 2026-08-12 07:50 UTC - East completes sec-edgar and superior reasoning
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 16 completed source artifacts. RNO has six completed source artifacts. The full run has 22 of 292 completed source artifacts.
+- East result: `sec-edgar_e59004ca` succeeded with all 923 output shards and 7,239,019 documents.
+- East result: `superior-reasoning_13a85562` succeeded with all 42 output shards and 43,227 documents.
+- East progress: `swe-rebench-contree_fc148d90` started. It has 318 output shards, with 32 in flight, 32 live workers, and no dead workers.
+- RNO progress: `finetranslations_6ce00a47` got to 2,871 of 25,962 output shards with 32 live workers and no dead workers.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of root logs.
+- Next action: Continue the 15-minute check cadence and monitor the long `finetranslations` source.
