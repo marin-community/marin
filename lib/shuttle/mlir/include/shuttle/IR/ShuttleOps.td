@@ -29,7 +29,10 @@ def Shuttle_MapOp
                   SingleBlockImplicitTerminator<"::mlir::shuttle::YieldOp">]> {
   let summary = "Pointwise scalar computation with explicit indexing maps";
   let arguments = (ins Variadic<AnyType>:$inputs,
-      AffineMapArrayAttr:$indexing_maps, Shuttle_SourceRefAttr:$source);
+      AffineMapArrayAttr:$indexing_maps,
+      DefaultValuedAttr<Shuttle_MapSemanticsAttr,
+                        "::mlir::shuttle::MapSemantics::Pointwise">:$semantics,
+      Shuttle_SourceRefAttr:$source);
   let results = (outs Variadic<AnyType>:$results);
   let regions = (region SizedRegion<1>:$body);
   let hasRegionVerifier = 1;

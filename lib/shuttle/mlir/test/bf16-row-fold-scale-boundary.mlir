@@ -17,8 +17,8 @@
 // PROVENANCE-SAME: shuttle.operation_ref = array<i64: 0, 1, 1>
 // PROVENANCE: }) {shuttle.operation_ref = array<i64: 0, 0, 5>, shuttle.source_refs = [#shuttle.source_ref<0, 0, 5, 0>]}
 
-// The Reduce slice is selected, while the remaining non-scalar broadcasts,
-// reshape, and rsqrt operations stay explicitly outside Target 1 Steps 2/3.
+// The Reduce and copy-free Map slices are selected. Mapped-singleton expanding
+// broadcasts remain explicitly outside this Target 1 slice.
 // BOUNDARY: shuttle.coverage_manifest
 // BOUNDARY-SAME: excluded = [
 // BOUNDARY-SAME: stablehlo.broadcast_in_dim

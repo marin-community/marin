@@ -110,7 +110,7 @@ Current implemented behavior is deliberately narrow:
   composition. The `jaxacceptance6` artifact proves that CPU composition path;
   dynamically loaded GPU PJRT plugins still require their own linkage and
   registration proof. That artifact covers the earlier ABI 1 f32 slice; ABI 2
-  requires a rebuilt CPU jaxlib acceptance run; ABI 3 does as well.
+  requires a rebuilt CPU jaxlib acceptance run; ABI 3 and ABI 4 do as well.
 
 The export verifier keys operation rejection on the operation-name namespace,
 so it also covers opaque `shuttle.*` operations in a context where the Shuttle

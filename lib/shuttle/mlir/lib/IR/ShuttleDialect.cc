@@ -190,11 +190,7 @@ LogicalResult verifyMapIndexingMaps(MapOp map, TypeRange indexedTypes) {
       return map.emitOpError(
           "map indexing maps must not contain affine symbols");
     }
-    if (!indexingMap.isProjectedPermutation()) {
-      return map.emitOpError(
-          "map indexing maps must be projected permutations of direct domain "
-          "dimensions");
-    }
+    llvm::SmallDenseSet<unsigned> seenDimensions;
     if (isResultMap &&
         indexingMap.getNumResults() != indexingMap.getNumDims()) {
       resultMapProjectsDomain = true;
@@ -215,8 +211,23 @@ LogicalResult verifyMapIndexingMaps(MapOp map, TypeRange indexedTypes) {
     hasRankedTensor = true;
     for (auto [resultPosition, expression] :
          llvm::enumerate(indexingMap.getResults())) {
-      auto dimension = cast<AffineDimExpr>(expression);
+      auto dimension = dyn_cast<AffineDimExpr>(expression);
+      if (!dimension) {
+        auto constant = dyn_cast<AffineConstantExpr>(expression);
+        if (isResultMap || !constant || constant.getValue() != 0 ||
+            tensorType.getDimSize(resultPosition) != 1) {
+          return map.emitOpError(
+              "map input indexing maps may use constant zero only for "
+              "static singleton tensor dimensions");
+        }
+        continue;
+      }
       const unsigned domainPosition = dimension.getPosition();
+      if (!seenDimensions.insert(domainPosition).second) {
+        return map.emitOpError(
+            "map indexing maps must use each direct domain dimension at "
+            "most once");
+      }
       boundDimensions[domainPosition] = 1;
       const int64_t extent = tensorType.getDimSize(resultPosition);
       if (ShapedType::isDynamic(extent)) {
@@ -419,6 +430,17 @@ LogicalResult MapOp::verifyRegions() {
   if (failed(verifyScalarBody(*this, getBody(), getInputs(),
                               getResults().getTypes()))) {
     return failure();
+  }
+  if (getSemantics() != MapSemantics::Pointwise) {
+    Block &body = getBody().front();
+    auto yield = cast<YieldOp>(body.getTerminator());
+    if (getInputs().size() != 1 || getResults().size() != 1 ||
+        !body.without_terminator().empty() || yield.getValues().size() != 1 ||
+        yield.getValues()[0] != body.getArgument(0)) {
+      return emitOpError(
+          "structural semantics require one input, one result, and a direct "
+          "scalar identity body");
+    }
   }
   SmallVector<Type> indexedTypes;
   llvm::append_range(indexedTypes, getInputs().getTypes());

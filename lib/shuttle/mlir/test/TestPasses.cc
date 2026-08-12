@@ -6,6 +6,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
@@ -485,6 +486,151 @@ public:
   }
 };
 
+template <typename Derived>
+class MapMutationPass : public MutationPass<Derived> {
+protected:
+  MapOp map(MapSemantics semantics) {
+    MapOp result;
+    this->getOperation().walk([&](MapOp candidate) {
+      if (!result && candidate.getSemantics() == semantics) {
+        result = candidate;
+      }
+    });
+    if (!result) {
+      this->getOperation().emitError("test fixture has no matching shuttle.map");
+      this->signalPassFailure();
+    }
+    return result;
+  }
+
+  void replaceInputMap(MapOp operation, AffineMap inputMap) {
+    SmallVector<Attribute> maps(operation.getIndexingMaps().begin(),
+                                operation.getIndexingMaps().end());
+    maps[0] = AffineMapAttr::get(inputMap);
+    operation->setAttr("indexing_maps",
+                       ArrayAttr::get(operation.getContext(), maps));
+  }
+};
+
+class BroadcastUnorderedPass
+    : public MapMutationPass<BroadcastUnorderedPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BroadcastUnorderedPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-unorder-broadcast-map";
+  }
+  void runOnOperation() override {
+    MapOp operation = map(MapSemantics::BroadcastInDim);
+    if (!operation) {
+      return;
+    }
+    MLIRContext *context = operation.getContext();
+    replaceInputMap(operation,
+                    AffineMap::get(3, 0,
+                                   {getAffineDimExpr(2, context),
+                                    getAffineDimExpr(0, context)},
+                                   context));
+  }
+};
+
+class BroadcastDuplicatePass
+    : public MapMutationPass<BroadcastDuplicatePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BroadcastDuplicatePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-duplicate-broadcast-dimension";
+  }
+  void runOnOperation() override {
+    MapOp operation = map(MapSemantics::BroadcastInDim);
+    if (!operation) {
+      return;
+    }
+    MLIRContext *context = operation.getContext();
+    replaceInputMap(operation,
+                    AffineMap::get(3, 0,
+                                   {getAffineDimExpr(0, context),
+                                    getAffineDimExpr(0, context)},
+                                   context));
+  }
+};
+
+class ReshapeAmbiguousPass : public MapMutationPass<ReshapeAmbiguousPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ReshapeAmbiguousPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-ambiguate-reshape-map";
+  }
+  void runOnOperation() override {
+    MapOp operation;
+    getOperation().walk([&](MapOp candidate) {
+      auto input = dyn_cast<RankedTensorType>(candidate.getInputs()[0].getType());
+      auto result = dyn_cast<RankedTensorType>(candidate.getResult(0).getType());
+      if (!operation && candidate.getSemantics() == MapSemantics::Reshape &&
+          input && result && input.getRank() == 2 && result.getRank() == 3) {
+        operation = candidate;
+      }
+    });
+    if (!operation) {
+      getOperation().emitError("test fixture has no rank-two reshape Map");
+      signalPassFailure();
+      return;
+    }
+    MLIRContext *context = operation.getContext();
+    replaceInputMap(operation,
+                    AffineMap::get(3, 0,
+                                   {getAffineDimExpr(2, context),
+                                    getAffineDimExpr(0, context)},
+                                   context));
+  }
+};
+
+class MapAttributePass : public MapMutationPass<MapAttributePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MapAttributePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-add-map-attribute";
+  }
+  void runOnOperation() override {
+    if (MapOp operation = map(MapSemantics::BroadcastInDim)) {
+      operation->setAttr("shuttle.test_semantic",
+                         IntegerAttr::get(IntegerType::get(
+                                              operation.getContext(), 64),
+                                          7));
+    }
+  }
+};
+
+class MapYieldAttributePass : public MapMutationPass<MapYieldAttributePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MapYieldAttributePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-add-map-yield-attribute";
+  }
+  void runOnOperation() override {
+    if (MapOp operation = map(MapSemantics::BroadcastInDim)) {
+      operation.getBody().front().getTerminator()->setAttr(
+          "shuttle.test_semantic",
+          IntegerAttr::get(IntegerType::get(operation.getContext(), 64), 7));
+    }
+  }
+};
+
+class MapStructuralSemanticPass
+    : public MapMutationPass<MapStructuralSemanticPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MapStructuralSemanticPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-set-structural-map-semantic";
+  }
+  void runOnOperation() override {
+    if (MapOp operation = map(MapSemantics::Pointwise)) {
+      operation->setAttr("semantics",
+                         MapSemanticsAttr::get(operation.getContext(),
+                                               MapSemantics::Reshape));
+    }
+  }
+};
+
 class ManifestVersionPass : public MutationPass<ManifestVersionPass> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ManifestVersionPass)
@@ -565,6 +711,12 @@ void registerMutationPasses() {
   PassRegistration<FoldAddFastMathPass>();
   PassRegistration<FoldYieldAttributePass>();
   PassRegistration<FoldAttributePass>();
+  PassRegistration<BroadcastUnorderedPass>();
+  PassRegistration<BroadcastDuplicatePass>();
+  PassRegistration<ReshapeAmbiguousPass>();
+  PassRegistration<MapAttributePass>();
+  PassRegistration<MapYieldAttributePass>();
+  PassRegistration<MapStructuralSemanticPass>();
   PassRegistration<ManifestVersionPass>();
   PassRegistration<ManifestVersionMissingPass>();
   PassRegistration<ReportNormalizedFingerprintPass>();

@@ -51,11 +51,11 @@ module attributes {shuttle.coverage_manifest = {}} {
       -> tensor<2x3x5xf32> {
     %0 = "shuttle.region"(%arg0) ({
     ^bb0(%arg1: tensor<3x2xf32>):
-      // expected-error @+1 {{broadcast input map dimensions must be ordered and unique}}
+      // expected-error @+1 {{broadcast input map dimensions must be ordered, unique, and non-expanding}}
       %1 = "shuttle.map"(%arg1) ({
       ^bb0(%element: f32):
         "shuttle.yield"(%element) : (f32) -> ()
-      }) {indexing_maps = [#input, #result], source = #shuttle.source_ref<0, 0, 0, 0>} : (tensor<3x2xf32>) -> tensor<2x3x5xf32>
+      }) {indexing_maps = [#input, #result], semantics = #shuttle.map_semantics<broadcast_in_dim>, source = #shuttle.source_ref<0, 0, 0, 0>} : (tensor<3x2xf32>) -> tensor<2x3x5xf32>
       "shuttle.yield"(%1) : (tensor<2x3x5xf32>) -> ()
     }) {policy = #shuttle.policy<source_ordered>, source_refs = [#shuttle.source_ref<0, 0, 0, 0>]} : (tensor<3x2xf32>) -> tensor<2x3x5xf32>
     return %0 : tensor<2x3x5xf32>

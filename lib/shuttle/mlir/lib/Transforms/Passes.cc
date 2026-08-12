@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <utility>
 
@@ -63,7 +64,7 @@ ShuttlePipelineOptions commandLinePipelineOptions(NumericalPolicy numerics) {
   options.numerics = numerics;
   if (numerics == NumericalPolicy::Fast) {
     options.canonicalOptions =
-        R"json({"numerics":"fast","pipeline_abi_version":3,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+        R"json({"numerics":"fast","pipeline_abi_version":4,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
   }
   return options;
 }
@@ -305,6 +306,54 @@ bool hasValidBroadcastDimensions(Operation *operation,
   return true;
 }
 
+bool isSupportedNonExpandingBroadcast(Operation *operation) {
+  if (operation->getNumOperands() != 1 || operation->getNumResults() != 1) {
+    return false;
+  }
+  auto input = dyn_cast<RankedTensorType>(operation->getOperand(0).getType());
+  auto result = dyn_cast<RankedTensorType>(operation->getResult(0).getType());
+  auto dimensions =
+      operation->getAttrOfType<DenseI64ArrayAttr>("broadcast_dimensions");
+  DictionaryAttr attributes = sourceAttributes(operation);
+  if (!input || !result || !input.getElementType().isF32() ||
+      !result.getElementType().isF32() || !input.hasStaticShape() ||
+      !result.hasStaticShape() || !dimensions ||
+      dimensions.size() != static_cast<size_t>(input.getRank()) ||
+      attributes.size() != 1 || !attributes.get("broadcast_dimensions") ||
+      input == result || !hasValidBroadcastDimensions(operation, dimensions)) {
+    return false;
+  }
+  for (auto [inputDimension, resultDimension] :
+       llvm::enumerate(dimensions.asArrayRef())) {
+    if (input.getDimSize(inputDimension) !=
+        result.getDimSize(resultDimension)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool isCopyFreeSingletonReshape(Operation *operation) {
+  if (operation->getNumOperands() != 1 || operation->getNumResults() != 1 ||
+      !sourceAttributes(operation).empty()) {
+    return false;
+  }
+  auto input = dyn_cast<RankedTensorType>(operation->getOperand(0).getType());
+  auto result = dyn_cast<RankedTensorType>(operation->getResult(0).getType());
+  if (!input || !result || !input.getElementType().isF32() ||
+      !result.getElementType().isF32() || !input.hasStaticShape() ||
+      !result.hasStaticShape()) {
+    return false;
+  }
+  SmallVector<int64_t> inputNonSingleton;
+  SmallVector<int64_t> resultNonSingleton;
+  llvm::copy_if(input.getShape(), std::back_inserter(inputNonSingleton),
+                [](int64_t extent) { return extent != 1; });
+  llvm::copy_if(result.getShape(), std::back_inserter(resultNonSingleton),
+                [](int64_t extent) { return extent != 1; });
+  return inputNonSingleton == resultNonSingleton && input != result;
+}
+
 bool hasDefaultDotPrecision(Operation *operation) {
   auto precision = operation->getAttrOfType<ArrayAttr>("precision_config");
   if (!precision) {
@@ -415,10 +464,12 @@ bool isSupportedStablehlo(Operation *operation) {
   }
   if (name == stablehlo::TanhOp::getOperationName() ||
       name == stablehlo::ExpOp::getOperationName() ||
+      name == stablehlo::RsqrtOp::getOperationName() ||
       name == stablehlo::NegOp::getOperationName()) {
     return operation->getNumOperands() == 1 &&
            operation->getNumResults() == 1 &&
            !operation->hasAttr("result_accuracy") &&
+           sourceAttributes(operation).empty() &&
            elementType(operation->getOperand(0)).isF32() &&
            operation->getOperand(0).getType() ==
                operation->getResult(0).getType();
@@ -452,16 +503,10 @@ bool isSupportedStablehlo(Operation *operation) {
            result.getElementType().isF32() && value && value.isSplat();
   }
   if (name == stablehlo::BroadcastInDimOp::getOperationName()) {
-    auto dimensions =
-        operation->getAttrOfType<DenseI64ArrayAttr>("broadcast_dimensions");
-    auto operand = cast<RankedTensorType>(operation->getOperand(0).getType());
-    return operation->getNumOperands() == 1 &&
-           operation->getNumResults() == 1 &&
-           elementType(operation->getOperand(0)).isF32() &&
-           operand.getRank() == 0 &&
-           operation->getOperand(0).getType() !=
-               operation->getResult(0).getType() &&
-           dimensions && dimensions.empty();
+    return isSupportedNonExpandingBroadcast(operation);
+  }
+  if (name == stablehlo::ReshapeOp::getOperationName()) {
+    return isCopyFreeSingletonReshape(operation);
   }
   return false;
 }
@@ -504,7 +549,24 @@ partitionSupportedInterval(ArrayRef<Operation *> interval) {
                });
     components.push_back(std::move(component));
   }
-  return components;
+  llvm::DenseMap<Operation *, unsigned> componentFor;
+  for (auto [componentOrdinal, component] : llvm::enumerate(components)) {
+    for (Operation *operation : component.operations) {
+      componentFor[operation] = componentOrdinal;
+    }
+  }
+  SmallVector<CandidateComponent> sourceContiguousComponents;
+  unsigned previousComponent = componentFor[interval.front()];
+  sourceContiguousComponents.emplace_back();
+  for (Operation *operation : interval) {
+    unsigned component = componentFor[operation];
+    if (component != previousComponent) {
+      sourceContiguousComponents.emplace_back();
+      previousComponent = component;
+    }
+    sourceContiguousComponents.back().operations.push_back(operation);
+  }
+  return sourceContiguousComponents;
 }
 
 SmallVector<CandidateComponent> candidateComponents(ModuleOp module) {
@@ -1010,6 +1072,37 @@ FailureOr<SmallVector<AffineMap>> mapIndexingMaps(Operation *operation) {
   int64_t rank = resultType.getRank();
   AffineMap identity = AffineMap::getMultiDimIdentityMap(rank, context);
   if (operation->getName().getStringRef() ==
+      stablehlo::ReshapeOp::getOperationName()) {
+    auto inputType =
+        cast<RankedTensorType>(operation->getOperand(0).getType());
+    SmallVector<unsigned> resultNonSingleton;
+    for (auto [position, extent] : llvm::enumerate(resultType.getShape())) {
+      if (extent != 1) {
+        resultNonSingleton.push_back(position);
+      }
+    }
+    SmallVector<AffineExpr> inputExpressions;
+    unsigned nextNonSingleton = 0;
+    for (int64_t extent : inputType.getShape()) {
+      if (extent == 1) {
+        inputExpressions.push_back(getAffineConstantExpr(0, context));
+        continue;
+      }
+      if (nextNonSingleton >= resultNonSingleton.size()) {
+        operation->emitOpError("has incompatible singleton reshape shapes");
+        return failure();
+      }
+      inputExpressions.push_back(
+          getAffineDimExpr(resultNonSingleton[nextNonSingleton++], context));
+    }
+    if (nextNonSingleton != resultNonSingleton.size()) {
+      operation->emitOpError("has incompatible singleton reshape shapes");
+      return failure();
+    }
+    return SmallVector<AffineMap>{
+        AffineMap::get(rank, 0, inputExpressions, context), identity};
+  }
+  if (operation->getName().getStringRef() ==
       stablehlo::BroadcastInDimOp::getOperationName()) {
     auto dimensions =
         operation->getAttrOfType<DenseI64ArrayAttr>("broadcast_dimensions");
@@ -1073,6 +1166,8 @@ Operation *createScalarOperation(OpBuilder &builder, Operation *operation,
     scalarName = math::TanhOp::getOperationName();
   } else if (stablehloName == stablehlo::ExpOp::getOperationName()) {
     scalarName = math::ExpOp::getOperationName();
+  } else if (stablehloName == stablehlo::RsqrtOp::getOperationName()) {
+    scalarName = math::RsqrtOp::getOperationName();
   } else if (stablehloName == stablehlo::NegOp::getOperationName()) {
     scalarName = arith::NegFOp::getOperationName();
   } else if (stablehloName == stablehlo::MulOp::getOperationName()) {
@@ -1136,6 +1231,17 @@ LogicalResult convertMapOperation(Operation *operation) {
   state.addTypes(operation->getResultTypes());
   state.addAttribute("indexing_maps",
                      affineMapsAttr(operation->getContext(), *maps));
+  MapSemantics semantics =
+      llvm::StringSwitch<MapSemantics>(stablehloName)
+          .Case(stablehlo::BroadcastInDimOp::getOperationName(),
+                MapSemantics::BroadcastInDim)
+          .Case(stablehlo::ReshapeOp::getOperationName(),
+                MapSemantics::Reshape)
+          .Case(stablehlo::TransposeOp::getOperationName(),
+                MapSemantics::Transpose)
+          .Default(MapSemantics::Pointwise);
+  state.addAttribute("semantics",
+                     MapSemanticsAttr::get(operation->getContext(), semantics));
   state.addAttribute("source", source);
   state.addRegion();
   auto map = cast<MapOp>(builder.create(state));
@@ -1149,7 +1255,8 @@ LogicalResult convertMapOperation(Operation *operation) {
   builder.setInsertionPointToEnd(body);
   Value scalarResult;
   if (stablehloName == stablehlo::TransposeOp::getOperationName() ||
-      stablehloName == stablehlo::BroadcastInDimOp::getOperationName()) {
+      stablehloName == stablehlo::BroadcastInDimOp::getOperationName() ||
+      stablehloName == stablehlo::ReshapeOp::getOperationName()) {
     scalarResult = body->getArgument(0);
   } else {
     Operation *scalar =
@@ -1552,15 +1659,23 @@ bool zeroResultRecordsMatch(ArrayAttr current, ArrayAttr expected) {
   if (!current || !expected || current.size() != expected.size()) {
     return false;
   }
-  for (auto [currentAttribute, expectedAttribute] :
-       llvm::zip_equal(current, expected)) {
+  llvm::SmallDenseSet<Attribute> matchedOperationRefs;
+  for (Attribute currentAttribute : current) {
     auto currentRecord = dyn_cast<DictionaryAttr>(currentAttribute);
-    auto expectedRecord = dyn_cast<DictionaryAttr>(expectedAttribute);
-    if (!currentRecord || !expectedRecord ||
+    Attribute operationRef =
+        currentRecord ? currentRecord.get("operation_ref") : Attribute{};
+    auto expectedPosition = llvm::find_if(expected, [&](Attribute attribute) {
+      auto record = dyn_cast<DictionaryAttr>(attribute);
+      return record && record.get("operation_ref") == operationRef;
+    });
+    auto expectedRecord =
+        expectedPosition == expected.end()
+            ? DictionaryAttr{}
+            : dyn_cast<DictionaryAttr>(*expectedPosition);
+    if (!currentRecord || !operationRef || !expectedRecord ||
+        !matchedOperationRefs.insert(operationRef).second ||
         currentRecord.get("classification") !=
             expectedRecord.get("classification") ||
-        currentRecord.get("operation_ref") !=
-            expectedRecord.get("operation_ref") ||
         currentRecord.get("operands") != expectedRecord.get("operands")) {
       return false;
     }
@@ -1897,6 +2012,14 @@ FailureOr<OperationState> lowerMapState(MapOp map, ValueRange operands) {
     map.emitOpError("requires one scalar yield for StableHLO lowering");
     return failure();
   }
+  if (!map->getDiscardableAttrs().empty()) {
+    map.emitOpError("has attributes with no StableHLO Map representation");
+    return failure();
+  }
+  if (!yield->getDiscardableAttrs().empty()) {
+    yield.emitOpError("has attributes with no stablehlo.return representation");
+    return failure();
+  }
 
   SmallVector<Operation *> scalarOperations;
   for (Operation &operation : body.without_terminator()) {
@@ -1922,16 +2045,29 @@ FailureOr<OperationState> lowerMapState(MapOp map, ValueRange operands) {
       map.emitOpError("has an incompatible identity result map");
       return failure();
     }
-    if (inputMap.getNumResults() < resultMap.getNumResults()) {
+    if (map.getSemantics() == MapSemantics::BroadcastInDim) {
+      auto inputType = dyn_cast<RankedTensorType>(operands[0].getType());
+      auto resultType = dyn_cast<RankedTensorType>(map.getResult(0).getType());
+      if (!inputType || !resultType ||
+          inputMap.getNumResults() != inputType.getRank() ||
+          resultMap.getNumResults() != resultType.getRank() ||
+          inputMap.getNumResults() > resultMap.getNumResults()) {
+        map.emitOpError("has incompatible broadcast indexing maps");
+        return failure();
+      }
       SmallVector<int64_t> dimensions;
       int64_t previous = -1;
-      for (AffineExpr expression : inputMap.getResults()) {
+      for (auto [inputDimension, expression] :
+           llvm::enumerate(inputMap.getResults())) {
         auto dimension = dyn_cast<AffineDimExpr>(expression);
         const int64_t position =
             dimension ? static_cast<int64_t>(dimension.getPosition()) : -1;
-        if (!dimension || position <= previous) {
+        if (!dimension || position <= previous ||
+            inputType.getDimSize(inputDimension) !=
+                resultType.getDimSize(position)) {
           map.emitOpError(
-              "broadcast input map dimensions must be ordered and unique");
+              "broadcast input map dimensions must be ordered, unique, and "
+              "non-expanding");
           return failure();
         }
         previous = position;
@@ -1940,7 +2076,59 @@ FailureOr<OperationState> lowerMapState(MapOp map, ValueRange operands) {
       stablehloName = stablehlo::BroadcastInDimOp::getOperationName();
       attributes.append("broadcast_dimensions",
                         DenseI64ArrayAttr::get(map.getContext(), dimensions));
-    } else {
+    } else if (map.getSemantics() == MapSemantics::Reshape) {
+      auto inputType = dyn_cast<RankedTensorType>(operands[0].getType());
+      auto resultType = dyn_cast<RankedTensorType>(map.getResult(0).getType());
+      if (!inputType || !resultType || !inputType.hasStaticShape() ||
+          !resultType.hasStaticShape()) {
+        map.emitOpError("requires static singleton reshape types");
+        return failure();
+      }
+      SmallVector<int64_t> inputNonSingleton;
+      SmallVector<int64_t> resultNonSingleton;
+      llvm::copy_if(inputType.getShape(), std::back_inserter(inputNonSingleton),
+                    [](int64_t extent) { return extent != 1; });
+      llvm::copy_if(resultType.getShape(),
+                    std::back_inserter(resultNonSingleton),
+                    [](int64_t extent) { return extent != 1; });
+      SmallVector<unsigned> resultNonSingletonPositions;
+      for (auto [position, extent] : llvm::enumerate(resultType.getShape())) {
+        if (extent != 1) {
+          resultNonSingletonPositions.push_back(position);
+        }
+      }
+      if (inputNonSingleton != resultNonSingleton || inputType == resultType ||
+          inputMap.getNumResults() != inputType.getRank()) {
+        map.emitOpError("has incompatible singleton reshape types");
+        return failure();
+      }
+      unsigned nextNonSingleton = 0;
+      for (auto [inputDimension, expression] :
+           llvm::enumerate(inputMap.getResults())) {
+        if (inputType.getDimSize(inputDimension) == 1) {
+          auto constant = dyn_cast<AffineConstantExpr>(expression);
+          if (!constant || constant.getValue() != 0) {
+            map.emitOpError(
+                "singleton reshape input dimensions must use constant zero");
+            return failure();
+          }
+          continue;
+        }
+        auto dimension = dyn_cast<AffineDimExpr>(expression);
+        if (!dimension ||
+            nextNonSingleton >= resultNonSingletonPositions.size() ||
+            dimension.getPosition() !=
+                resultNonSingletonPositions[nextNonSingleton++]) {
+          map.emitOpError("has an ambiguous singleton reshape indexing map");
+          return failure();
+        }
+      }
+      if (nextNonSingleton != resultNonSingletonPositions.size()) {
+        map.emitOpError("has an incomplete singleton reshape indexing map");
+        return failure();
+      }
+      stablehloName = stablehlo::ReshapeOp::getOperationName();
+    } else if (map.getSemantics() == MapSemantics::Transpose) {
       if (inputMap.getNumResults() != resultMap.getNumResults()) {
         map.emitOpError("has incompatible transpose indexing maps");
         return failure();
@@ -1964,8 +2152,15 @@ FailureOr<OperationState> lowerMapState(MapOp map, ValueRange operands) {
       stablehloName = stablehlo::TransposeOp::getOperationName();
       attributes.append("permutation",
                         DenseI64ArrayAttr::get(map.getContext(), permutation));
+    } else {
+      map.emitOpError("has pointwise semantics but no scalar operation");
+      return failure();
     }
   } else {
+    if (map.getSemantics() != MapSemantics::Pointwise) {
+      map.emitOpError("structural Map semantics require an empty scalar body");
+      return failure();
+    }
     if (scalarOperations.size() != 1) {
       map.emitOpError("requires exactly one representable scalar operation");
       return failure();
@@ -1997,6 +2192,12 @@ FailureOr<OperationState> lowerMapState(MapOp map, ValueRange operands) {
         return failure();
       }
       stablehloName = stablehlo::ExpOp::getOperationName();
+    } else if (scalarName == math::RsqrtOp::getOperationName() &&
+               operands.size() == 1) {
+      if (failed(verifyDefaultScalarSemantics(scalar))) {
+        return failure();
+      }
+      stablehloName = stablehlo::RsqrtOp::getOperationName();
     } else if (scalarName == arith::NegFOp::getOperationName() &&
                operands.size() == 1) {
       if (failed(verifyDefaultScalarSemantics(scalar))) {

@@ -19,6 +19,7 @@ PIPELINES = (
     "shuttle-stablehlo-source-ordered-pipeline",
     "shuttle-stablehlo-fast-pipeline",
 )
+MAP_FIXTURES = (("f32-map-shape-ops.mlir", ((3,), (2, 2))),)
 
 
 def load_fixtures():
@@ -54,6 +55,16 @@ def fixed_inputs(shapes: tuple[tuple[int, ...], ...]) -> list[np.ndarray]:
     return values
 
 
+def positive_inputs(shapes: tuple[tuple[int, ...], ...]) -> list[np.ndarray]:
+    values = []
+    for ordinal, shape in enumerate(shapes):
+        size = int(np.prod(shape))
+        start = np.float32(0.25 + ordinal * 0.125)
+        stop = np.float32(1.0 + ordinal * 0.125)
+        values.append(np.linspace(start, stop, size, dtype=np.float32).reshape(shape))
+    return values
+
+
 def lower(source: Path, shuttle_opt: Path, pipeline: str) -> str:
     return subprocess.run(
         [str(shuttle_opt), f"--{pipeline}", str(source)],
@@ -69,17 +80,19 @@ def main() -> int:
     arguments = parser.parse_args()
     fixtures = load_fixtures()
     fixture_directory = Path(__file__).parent
-    for fixture in fixtures:
-        path = fixture_directory / fixture.filename
+    fixture_inputs = [(fixture.filename, fixture.shapes, fixed_inputs) for fixture in fixtures]
+    fixture_inputs.extend((filename, shapes, positive_inputs) for filename, shapes in MAP_FIXTURES)
+    for filename, shapes, input_factory in fixture_inputs:
+        path = fixture_directory / filename
         source = path.read_text()
-        inputs = fixed_inputs(fixture.shapes)
+        inputs = input_factory(shapes)
         reference = execute(source, inputs)
         for pipeline in PIPELINES:
             actual = execute(lower(path, arguments.shuttle_opt, pipeline), inputs)
             if len(actual) != len(reference) or any(
                 not np.array_equal(expected, result) for expected, result in zip(reference, actual, strict=True)
             ):
-                parser.error(f"CPU bitwise parity failed: {fixture.filename} ({pipeline})")
+                parser.error(f"CPU bitwise parity failed: {filename} ({pipeline})")
     return 0
 
 

@@ -39,6 +39,22 @@ def Shuttle_ScalarConvertSemanticsAttr
   let assemblyFormat = "`<` $value `>`";
 }
 
+def Shuttle_MapSemantics
+    : I32EnumAttr<"MapSemantics", "Map structural semantics",
+                  [I32EnumAttrCase<"Pointwise", 0, "pointwise">,
+                   I32EnumAttrCase<"BroadcastInDim", 1,
+                                   "broadcast_in_dim">,
+                   I32EnumAttrCase<"Reshape", 2, "reshape">,
+                   I32EnumAttrCase<"Transpose", 3, "transpose">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_MapSemanticsAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_MapSemantics, "map_semantics"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
 def Shuttle_SourceRefAttr : Shuttle_Attr<"SourceRef"> {
   let mnemonic = "source_ref";
   let summary = "Rename-invariant structural reference to a source result";

@@ -27,13 +27,13 @@ def test_compiler_options_have_canonical_closed_wire_format() -> None:
     assert options == {
         "xla_shuttle_enable": True,
         "xla_shuttle_options": (
-            '{"numerics":"source_ordered","pipeline_abi_version":3,"schema_version":1,'
+            '{"numerics":"source_ordered","pipeline_abi_version":4,"schema_version":1,'
             '"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion",'
             '"maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}}'
         ),
     }
     assert options_digest(numerics=Numerics.SOURCE_ORDERED, tuning=_tuning()) == (
-        "903f6abe997e8f055181375474580bba191298e8acf6d8dc42b8024d7b63675d"
+        "1869d759b616d076f223e95ac159a954702d7337c365950dd2797d579c7b43b4"
     )
 
 
@@ -59,7 +59,7 @@ def test_empty_shape_hints_leave_physical_search_unconstrained() -> None:
     options = compiler_options(numerics=Numerics.FAST, tuning=tuning)
 
     assert options["xla_shuttle_options"] == (
-        '{"numerics":"fast","pipeline_abi_version":3,"schema_version":1,'
+        '{"numerics":"fast","pipeline_abi_version":4,"schema_version":1,'
         '"tuning":{"cluster_shape":[],"materialization":"automatic",'
         '"maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}}'
     )
