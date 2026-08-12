@@ -61,7 +61,14 @@ class _Cluster:
     weight: float
 
 
-def _normalized_centroids(centroids: np.ndarray, weights: np.ndarray, config: CoarseningConfig) -> np.ndarray:
+@dataclass(frozen=True)
+class _Refinement:
+    clustering: _Clustering
+    moves: int
+    sweeps: int
+
+
+def _validated_normalized_centroids(centroids: np.ndarray, weights: np.ndarray, config: CoarseningConfig) -> np.ndarray:
     vectors = np.asarray(centroids, dtype=np.float32)
     if vectors.ndim != 2 or len(vectors) != len(weights):
         raise ValueError("centroids must be two-dimensional and aligned with weights")
@@ -231,7 +238,7 @@ def _hill_climb(
     weights: np.ndarray,
     initial: _Clustering,
     minimum_fraction: float,
-) -> tuple[_Clustering, int, int]:
+) -> _Refinement:
     current = initial.assignments.copy()
     clusters = len(initial.centers)
     minimum_weight = float(weights.sum() * minimum_fraction)
@@ -276,8 +283,9 @@ def _hill_climb(
             break
 
     if moves == 0:
-        return initial, moves, sweeps
-    return _Clustering(current, sums / norms[:, None], float(weights.sum() - norms.sum())), moves, sweeps
+        return _Refinement(initial, moves, sweeps)
+    clustering = _Clustering(current, sums / norms[:, None], float(weights.sum() - norms.sum()))
+    return _Refinement(clustering, moves, sweeps)
 
 
 def _stats(clustering: _Clustering, weights: np.ndarray) -> ClusteringStats:
@@ -301,7 +309,7 @@ def coarsen_centroids(
 ) -> CoarseningResult:
     """Run multi-seed divisive clustering followed by exact single-centroid hill climbing."""
     validated_weights = _validated_weights(weights)
-    vectors = _normalized_centroids(centroids, validated_weights, config)
+    vectors = _validated_normalized_centroids(centroids, validated_weights, config)
     divisive_runs = []
     selected = None
     selected_seed = None
@@ -314,14 +322,14 @@ def coarsen_centroids(
     if selected is None or selected_seed is None:
         raise RuntimeError("no divisive clustering run completed")
 
-    refined, moves, sweeps = _hill_climb(vectors, validated_weights, selected, config.minimum_fraction)
+    refinement = _hill_climb(vectors, validated_weights, selected, config.minimum_fraction)
     return CoarseningResult(
-        fine_to_coarse=refined.assignments,
-        centers=refined.centers,
+        fine_to_coarse=refinement.clustering.assignments,
+        centers=refinement.clustering.centers,
         selected_seed=selected_seed,
         divisive_runs=tuple(divisive_runs),
         initial=_stats(selected, validated_weights),
-        final=_stats(refined, validated_weights),
-        moves=moves,
-        sweeps=sweeps,
+        final=_stats(refinement.clustering, validated_weights),
+        moves=refinement.moves,
+        sweeps=refinement.sweeps,
     )

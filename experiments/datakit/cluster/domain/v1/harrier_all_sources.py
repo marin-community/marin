@@ -6,12 +6,11 @@
 import hashlib
 import json
 import logging
-import os
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import pyarrow as pa
@@ -21,7 +20,7 @@ from marin.datakit.source_key import datakit_source_path
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import StoragePath, open_url
+from rigging.filesystem import StoragePath, open_url, prefix_join
 from rigging.log_setup import configure_logging
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
@@ -29,7 +28,12 @@ from zephyr.execution import ZephyrContext
 from zephyr.readers import InputFileSpec, load_file
 from zephyr.runners import InlineRunner
 
-from experiments.datakit.cluster.domain.v1.coarsen import CoarseningConfig, CoarseningResult, coarsen_centroids
+from experiments.datakit.cluster.domain.v1.coarsen import (
+    ClusteringStats,
+    CoarseningConfig,
+    CoarseningResult,
+    coarsen_centroids,
+)
 from experiments.datakit.embeddings.harrier.pipeline import HARRIER_DIM, dequantize_to_fp32
 from experiments.datakit.reference_pipeline import select_sources
 
@@ -60,6 +64,18 @@ COARSENING_CONFIG = CoarseningConfig(
     split_iterations=20,
 )
 
+
+def _coarsening_cache_key(config: CoarseningConfig) -> str:
+    if config.seeds == tuple(range(config.seeds[0], config.seeds[-1] + 1)):
+        seeds = f"{config.seeds[0]}-{config.seeds[-1]}"
+    else:
+        seeds = "-".join(str(seed) for seed in config.seeds)
+    minimum_percent = config.minimum_fraction * 100
+    return f"divisive-k{config.clusters}-min{minimum_percent:g}pct-seeds{seeds}-hill-climb"
+
+
+COARSENING_CACHE_KEY = _coarsening_cache_key(COARSENING_CONFIG)
+
 DRIVER_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="16g", preemptible=False)
 SAMPLE_WORKER_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="16g")
 TRAIN_RESOURCES = ResourceConfig.with_cpu(cpu=N_THREADS, ram="256g", disk="32g", preemptible=False)
@@ -80,6 +96,40 @@ class SourceSample:
     quota: int
 
 
+@dataclass(frozen=True)
+class _TrainingData:
+    embeddings: np.ndarray
+    population: np.ndarray
+    rows_by_source: dict[str, int]
+
+
+class _SearchIndex(Protocol):
+    def search(self, values: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]: ...
+
+
+@dataclass(frozen=True)
+class _TrainedCentroids:
+    centroids: np.ndarray
+    index: _SearchIndex
+    seconds: float
+    objective: float
+
+
+def _largest_remainder_quotas(weights: tuple[int, ...], target: int) -> tuple[int, ...]:
+    total = sum(weights)
+    if target == 0:
+        return (0,) * len(weights)
+    if total == 0:
+        raise ValueError("cannot allocate a positive quota across zero available rows")
+    numerators = [target * weight for weight in weights]
+    quotas = [numerator // total for numerator in numerators]
+    leftover = target - sum(quotas)
+    order = sorted(range(len(weights)), key=lambda index: (-(numerators[index] % total), index))
+    for index in order[:leftover]:
+        quotas[index] += 1
+    return tuple(quotas)
+
+
 def proportional_quotas(counts: dict[str, int], target: int) -> dict[str, int]:
     if target < len(counts) * SMALL_SOURCE_QUOTA:
         raise ValueError("target is too small for the one-document source floor")
@@ -88,14 +138,10 @@ def proportional_quotas(counts: dict[str, int], target: int) -> dict[str, int]:
 
     small = {source for source, rows in counts.items() if rows <= SMALL_SOURCE_MAX_ROWS}
     quotas = {source: SMALL_SOURCE_QUOTA for source in small}
-    large = {source: rows for source, rows in counts.items() if source not in small}
+    large_sources = tuple(sorted(source for source in counts if source not in small))
     remaining = target - sum(quotas.values())
-    large_rows = sum(large.values())
-    numerators = {source: remaining * rows for source, rows in large.items()}
-    quotas.update({source: numerator // large_rows for source, numerator in numerators.items()})
-    leftover = target - sum(quotas.values())
-    for source in sorted(large, key=lambda name: (-(numerators[name] % large_rows), name))[:leftover]:
-        quotas[source] += 1
+    large_quotas = _largest_remainder_quotas(tuple(counts[source] for source in large_sources), remaining)
+    quotas.update(dict(zip(large_sources, large_quotas, strict=True)))
     if any(quota > counts[source] for source, quota in quotas.items()):
         raise ValueError("a source quota exceeds its document count")
     return quotas
@@ -107,18 +153,12 @@ def training_quotas(counts: dict[str, int], target: int) -> dict[str, int]:
     if target > sum(counts.values()):
         raise ValueError("target exceeds the available documents")
 
-    quotas = {source: 1 for source in counts}
+    sources = tuple(sorted(counts))
     remaining = target - len(counts)
     if remaining == 0:
-        return quotas
-    capacities = {source: rows - 1 for source, rows in counts.items()}
-    total_capacity = sum(capacities.values())
-    numerators = {source: remaining * capacity for source, capacity in capacities.items()}
-    quotas = {source: quotas[source] + numerator // total_capacity for source, numerator in numerators.items()}
-    leftover = target - sum(quotas.values())
-    for source in sorted(counts, key=lambda name: (-(numerators[name] % total_capacity), name))[:leftover]:
-        quotas[source] += 1
-    return quotas
+        return {source: 1 for source in sources}
+    extra = _largest_remainder_quotas(tuple(counts[source] - 1 for source in sources), remaining)
+    return {source: quota + 1 for source, quota in zip(sources, extra, strict=True)}
 
 
 def _stratified_indices(
@@ -146,14 +186,7 @@ def _stratified_indices(
 
 
 def _part_quotas(rows: tuple[int, ...], target: int) -> tuple[int, ...]:
-    total = sum(rows)
-    numerators = [target * count for count in rows]
-    quotas = [numerator // total for numerator in numerators]
-    leftover = target - sum(quotas)
-    order = sorted(range(len(rows)), key=lambda index: (-(numerators[index] % total), index))
-    for index in order[:leftover]:
-        quotas[index] += 1
-    return tuple(quotas)
+    return _largest_remainder_quotas(rows, target)
 
 
 def _row_count(path: str) -> int:
@@ -163,7 +196,7 @@ def _row_count(path: str) -> int:
 
 def _source_samples(embedding_paths: dict[str, str]) -> tuple[SourceSample, ...]:
     source_paths = {
-        source: tuple(sorted(str(shard) for shard in StoragePath(f"{path}/*.parquet").glob()))
+        source: tuple(sorted(str(shard) for shard in StoragePath(prefix_join(path, "*.parquet")).glob()))
         for source, path in sorted(embedding_paths.items())
     }
     if any(not paths for paths in source_paths.values()):
@@ -193,15 +226,19 @@ def _source_samples(embedding_paths: dict[str, str]) -> tuple[SourceSample, ...]
 
 
 def _completed_embedding_paths(source_names: tuple[str, ...]) -> dict[str, str]:
-    records = sorted(str(path) for path in StoragePath(f"{EMBEDDING_ROOT}/**/.artifact.json").glob())
+    embedding_root = StoragePath(EMBEDDING_ROOT)
+    records = [
+        StoragePath(path)
+        for path in sorted(str(path) for path in StoragePath(prefix_join(EMBEDDING_ROOT, "**/.artifact.json")).glob())
+    ]
     candidates: dict[str, list[str]] = {source: [] for source in source_names}
     source_prefixes = sorted(source_names, key=len, reverse=True)
     for record in records:
-        output_path = record.removesuffix("/.artifact.json")
-        relative = output_path.removeprefix(f"{EMBEDDING_ROOT}/")
+        output_path = record.parent
+        relative = output_path.relative_to(embedding_root)
         for source in source_prefixes:
             if relative.startswith(f"{source}_"):
-                candidates[source].append(output_path)
+                candidates[source].append(str(output_path))
                 break
 
     resolved = {}
@@ -248,8 +285,8 @@ def _sample_source(sample: SourceSample, output_path: str) -> None:
     selected = [
         (path, rows, quota) for path, rows, quota in zip(sample.paths, sample.rows, quotas, strict=True) if quota
     ]
-    source_dir = f"{output_path.rstrip('/')}/{sample.source.replace('/', '-')}"
-    output_paths = tuple(f"{source_dir}/sample-{index:06d}.parquet" for index in range(len(selected)))
+    source_dir = prefix_join(output_path, sample.source.replace("/", "-"))
+    output_paths = tuple(prefix_join(source_dir, f"sample-{index:06d}.parquet") for index in range(len(selected)))
     dataset = (
         Dataset.from_list([InputFileSpec(path=path, columns=["embedding"]) for path, _, _ in selected])
         .flat_map(load_file)
@@ -287,7 +324,7 @@ def sample_embeddings(output_path: str, source_names: tuple[str, ...]) -> None:
 
     source_rows = {sample.source: sum(sample.rows) for sample in samples}
     source_quotas = {sample.source: sample.quota for sample in samples}
-    with open_url(f"{output_path.rstrip('/')}/sample_stats.json", "w") as file:
+    with open_url(prefix_join(output_path, "sample_stats.json"), "w") as file:
         json.dump(
             {
                 "target_rows": TARGET_ROWS,
@@ -305,17 +342,18 @@ def sample_embeddings(output_path: str, source_names: tuple[str, ...]) -> None:
         )
 
 
-def _coarsening_payload(result: CoarseningResult) -> dict[str, Any]:
-    def stats(value: Any) -> dict[str, Any]:
-        return {
-            "loss": value.loss,
-            "weighted_mean_cosine_distance": value.weighted_mean_cosine_distance,
-            "minimum_weight_fraction": value.minimum_weight_fraction,
-            "maximum_weight_fraction": value.maximum_weight_fraction,
-            "weight_fractions": value.weight_fractions.tolist(),
-            "fine_centroid_counts": value.fine_centroid_counts.tolist(),
-        }
+def _stats_payload(value: ClusteringStats) -> dict[str, Any]:
+    return {
+        "loss": value.loss,
+        "weighted_mean_cosine_distance": value.weighted_mean_cosine_distance,
+        "minimum_weight_fraction": value.minimum_weight_fraction,
+        "maximum_weight_fraction": value.maximum_weight_fraction,
+        "weight_fractions": value.weight_fractions.tolist(),
+        "fine_centroid_counts": value.fine_centroid_counts.tolist(),
+    }
 
+
+def _coarsening_payload(result: CoarseningResult) -> dict[str, Any]:
     return {
         "method": "weighted_divisive_spherical_kmeans_then_single_centroid_hill_climb",
         "minimum_fraction": COARSENING_CONFIG.minimum_fraction,
@@ -323,9 +361,9 @@ def _coarsening_payload(result: CoarseningResult) -> dict[str, Any]:
         "split_restarts": COARSENING_CONFIG.split_restarts,
         "split_iterations": COARSENING_CONFIG.split_iterations,
         "selected_seed": result.selected_seed,
-        "divisive_runs": [{"seed": run.seed, "stats": stats(run.stats)} for run in result.divisive_runs],
-        "initial": stats(result.initial),
-        "final": stats(result.final),
+        "divisive_runs": [{"seed": run.seed, "stats": _stats_payload(run.stats)} for run in result.divisive_runs],
+        "initial": _stats_payload(result.initial),
+        "final": _stats_payload(result.final),
         "moves": result.moves,
         "sweeps": result.sweeps,
     }
@@ -340,8 +378,8 @@ def _load_training_embeddings(
     sample_path: str,
     target: int,
     seed: int,
-) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
-    paths = sorted(str(path) for path in StoragePath(f"{sample_path.rstrip('/')}/**/*.parquet").glob())
+) -> _TrainingData:
+    paths = sorted(str(path) for path in StoragePath(prefix_join(sample_path, "**/*.parquet")).glob())
     if not paths:
         raise FileNotFoundError(f"No centroid sample shards under {sample_path}")
 
@@ -366,10 +404,10 @@ def _load_training_embeddings(
         len(training_embeddings),
         time.monotonic() - started,
     )
-    return training_embeddings, quantized, quotas
+    return _TrainingData(training_embeddings, quantized, quotas)
 
 
-def _cluster_weights(index: Any, quantized: np.ndarray) -> np.ndarray:
+def _cluster_weights(index: _SearchIndex, quantized: np.ndarray) -> np.ndarray:
     weights = np.zeros(K_TRAIN, dtype=np.int64)
     for start in range(0, len(quantized), ASSIGN_BATCH_ROWS):
         batch = dequantize_to_fp32(quantized[start : start + ASSIGN_BATCH_ROWS])
@@ -379,66 +417,81 @@ def _cluster_weights(index: Any, quantized: np.ndarray) -> np.ndarray:
 
 
 def _save_npy(array: np.ndarray, output_path: str, name: str) -> None:
-    with open_url(os.path.join(output_path, name), "wb") as file:
+    with open_url(prefix_join(output_path, name), "wb") as file:
         np.save(file, array)
 
 
-def train_centroids(output_path: str, sample_path: str) -> None:
+def _train_fine_centroids(embeddings: np.ndarray) -> _TrainedCentroids:
     import faiss  # noqa: PLC0415
-    from threadpoolctl import threadpool_limits  # noqa: PLC0415
 
     faiss.omp_set_num_threads(N_THREADS)
-    embeddings, population, training_rows_by_source = _load_training_embeddings(sample_path, TRAIN_ROWS, SEED)
-    with threadpool_limits(limits=N_THREADS):
-        started = time.monotonic()
-        kmeans = faiss.Kmeans(
-            d=HARRIER_DIM,
-            k=K_TRAIN,
-            niter=N_ITER,
-            nredo=N_REDO,
-            spherical=True,
-            seed=SEED,
-            verbose=True,
-            max_points_per_centroid=TRAIN_POINTS_PER_CENTROID,
-        )
-        kmeans.train(embeddings)
-        centroids = kmeans.centroids.astype(np.float32, copy=False)
-        train_seconds = time.monotonic() - started
-        weights = _cluster_weights(kmeans.index, population).astype(np.float64)
-        if np.any(weights == 0):
-            raise ValueError("K-means produced an empty fine cluster")
-        coarsening = coarsen_centroids(
-            centroids,
-            weights,
-            COARSENING_CONFIG,
-        )
+    started = time.monotonic()
+    kmeans = faiss.Kmeans(
+        d=HARRIER_DIM,
+        k=K_TRAIN,
+        niter=N_ITER,
+        nredo=N_REDO,
+        spherical=True,
+        seed=SEED,
+        verbose=True,
+        max_points_per_centroid=TRAIN_POINTS_PER_CENTROID,
+    )
+    kmeans.train(embeddings)
+    return _TrainedCentroids(
+        centroids=kmeans.centroids.astype(np.float32, copy=False),
+        index=kmeans.index,
+        seconds=time.monotonic() - started,
+        objective=float(kmeans.obj[-1]),
+    )
 
-    _save_npy(centroids, output_path, f"centroids_{K_TRAIN}.npy")
+
+def _write_training_artifact(
+    output_path: str,
+    sample_path: str,
+    training: _TrainingData,
+    trained: _TrainedCentroids,
+    weights: np.ndarray,
+    coarsening: CoarseningResult,
+) -> None:
+    _save_npy(trained.centroids, output_path, f"centroids_{K_TRAIN}.npy")
     _save_npy(coarsening.fine_to_coarse, output_path, f"lookup_{K_TRAIN}_to_{K_COARSE}.npy")
-    with open_url(os.path.join(output_path, "fine_cluster_weights.json"), "w") as file:
+    with open_url(prefix_join(output_path, "fine_cluster_weights.json"), "w") as file:
         json.dump({"document_counts_5000": weights.astype(int).tolist()}, file)
-    with open_url(os.path.join(output_path, "train_stats.json"), "w") as file:
+    with open_url(prefix_join(output_path, "train_stats.json"), "w") as file:
         json.dump(
             {
                 "sample_path": sample_path,
                 "embedding_dim": HARRIER_DIM,
                 "k_train": K_TRAIN,
                 "k_views": [K_COARSE],
-                "n_sample": len(embeddings),
-                "population_rows": len(population),
+                "n_sample": len(training.embeddings),
+                "population_rows": len(training.population),
                 "training_points_per_centroid": TRAIN_POINTS_PER_CENTROID,
-                "training_rows_by_source": training_rows_by_source,
+                "training_rows_by_source": training.rows_by_source,
                 "n_iter": N_ITER,
                 "n_redo": N_REDO,
                 "seed": SEED,
                 "n_threads": N_THREADS,
-                "train_seconds": train_seconds,
-                "final_objective": float(kmeans.obj[-1]),
+                "train_seconds": trained.seconds,
+                "final_objective": trained.objective,
                 "coarsening": _coarsening_payload(coarsening),
             },
             file,
             indent=2,
         )
+
+
+def train_centroids(output_path: str, sample_path: str) -> None:
+    from threadpoolctl import threadpool_limits  # noqa: PLC0415
+
+    training = _load_training_embeddings(sample_path, TRAIN_ROWS, SEED)
+    with threadpool_limits(limits=N_THREADS):
+        trained = _train_fine_centroids(training.embeddings)
+        weights = _cluster_weights(trained.index, training.population).astype(np.float64)
+        if np.any(weights == 0):
+            raise ValueError("K-means produced an empty fine cluster")
+        coarsening = coarsen_centroids(trained.centroids, weights, COARSENING_CONFIG)
+    _write_training_artifact(output_path, sample_path, training, trained, weights, coarsening)
 
 
 def build_steps() -> tuple[StepSpec, StepSpec]:
@@ -474,7 +527,7 @@ def build_steps() -> tuple[StepSpec, StepSpec]:
             "n_redo": N_REDO,
             "seed": SEED,
             "n_threads": N_THREADS,
-            "coarsening": "divisive-k40-min1pct-seeds42-44-hill-climb",
+            "coarsening": COARSENING_CACHE_KEY,
             "v": 2,
         },
         fn=remote(
