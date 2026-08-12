@@ -484,28 +484,31 @@ class RuntimeManager {
     test_failure_phase_ = phase;
     test_failure_point_ = point;
     test_failure_require_two_active_slots_ = require_two_active_slots;
+    test_failure_first_key_.reset();
     test_failure_armed_ = true;
   }
 
-  bool ConsumeTestFailure(int rank, InvocationPhase phase, TestFailurePoint point) {
+  bool ConsumeTestFailure(
+      const InvocationKey& key,
+      int rank,
+      InvocationPhase phase,
+      TestFailurePoint point) {
     std::lock_guard<std::mutex> lock(mu_);
     if (!test_failure_armed_ || test_failure_rank_ != rank || test_failure_phase_ != phase ||
         test_failure_point_ != point) {
       return false;
     }
     if (test_failure_require_two_active_slots_) {
-      const int fully_leased_invocations = static_cast<int>(std::count_if(
-          invocations_.begin(), invocations_.end(), [](const auto& item) {
-            return !item.second->cancelled && item.second->leased_mask == kAllRanksMask;
-          }));
-      // PJRT may serialize host callbacks for one device. Never wait inside the
-      // target callback for that same device's next callback: leave the hook
-      // armed and let the first matching invocation proceed normally.
-      if (fully_leased_invocations < 2) {
+      if (!test_failure_first_key_.has_value()) {
+        test_failure_first_key_ = key;
+        return false;
+      }
+      if (*test_failure_first_key_ == key) {
         return false;
       }
     }
     test_failure_armed_ = false;
+    test_failure_first_key_.reset();
     return true;
   }
 
@@ -1091,6 +1094,7 @@ class RuntimeManager {
     failure_message_.clear();
     test_failure_armed_ = false;
     test_failure_require_two_active_slots_ = false;
+    test_failure_first_key_.reset();
   }
 
   std::mutex mu_;
@@ -1117,6 +1121,7 @@ class RuntimeManager {
   InvocationPhase test_failure_phase_ = InvocationPhase::kForward;
   TestFailurePoint test_failure_point_ = TestFailurePoint::kBeforeInputReady;
   bool test_failure_require_two_active_slots_ = false;
+  std::optional<InvocationKey> test_failure_first_key_;
   std::unordered_map<InvocationKey, std::shared_ptr<InvocationState>, InvocationKeyHash> invocations_;
   std::unordered_map<RunPhaseKey, std::array<uint64_t, kNumDevices>, RunPhaseKeyHash> run_ordinals_;
 };
@@ -1652,7 +1657,7 @@ ffi::Error ForwardBf16(
     DeviceRuntime& runtime = RuntimeManager::Instance().Current(lease->slot);
     const ForwardXStorage active_x_storage = lease->forward_x_storage;
     if (RuntimeManager::Instance().ConsumeTestFailure(
-            lease->rank, InvocationPhase::kForward, TestFailurePoint::kBeforeInputReady)) {
+            lease->key, lease->rank, InvocationPhase::kForward, TestFailurePoint::kBeforeInputReady)) {
       throw std::runtime_error("injected forward handler failure before input readiness");
     }
 
@@ -1749,7 +1754,7 @@ ffi::Error ForwardBf16(
         globals,
         stream);
     if (RuntimeManager::Instance().ConsumeTestFailure(
-            lease->rank, InvocationPhase::kForward, TestFailurePoint::kBeforeCompletion)) {
+            lease->key, lease->rank, InvocationPhase::kForward, TestFailurePoint::kBeforeCompletion)) {
       throw std::runtime_error("injected forward handler failure before completion publication");
     }
     LaunchCompletion(
@@ -1932,7 +1937,7 @@ ffi::Error BackwardBf16(
     const bool direct_inputs = active_peer_storage != BackwardPeerStorage::kRuntimeStaged;
     const bool direct_router_output = active_peer_storage == BackwardPeerStorage::kXlaPeerExperimental;
     if (RuntimeManager::Instance().ConsumeTestFailure(
-            lease->rank, InvocationPhase::kBackward, TestFailurePoint::kBeforeInputReady)) {
+            lease->key, lease->rank, InvocationPhase::kBackward, TestFailurePoint::kBeforeInputReady)) {
       throw std::runtime_error("injected backward handler failure before input readiness");
     }
     LaunchForwardStampValidation(
@@ -2102,7 +2107,7 @@ ffi::Error BackwardBf16(
         globals,
         stream);
     if (RuntimeManager::Instance().ConsumeTestFailure(
-            lease->rank, InvocationPhase::kBackward, TestFailurePoint::kBeforeCompletion)) {
+            lease->key, lease->rank, InvocationPhase::kBackward, TestFailurePoint::kBeforeCompletion)) {
       throw std::runtime_error("injected backward handler failure before completion publication");
     }
     LaunchCompletion(
