@@ -98,14 +98,19 @@ DEFAULT_MAX_MODEL_LEN = 8_192
 # 192 sequences measured 3.96 docs/s on this fleet at 10.5k-char prompts; windows
 # are ~5x shorter, so 192 keeps the queue full without starving KV cache.
 DEFAULT_MAX_NUM_SEQS = 192
-DEFAULT_NUM_GANGS = 8
+# Claim the GB200 fleet by default (32 gangs = 64 nodes). Gangs beyond the first
+# ride the batch band, so an idle fleet gets used and a contended one simply
+# admits fewer; a campaign that wants less takes it back with --num-gangs. Note
+# DRIVER_MAX_CONCURRENCY caps the sender below 32 x DEFAULT_GANG_IN_FLIGHT, so
+# past ~21 gangs each engine runs under its in-flight budget.
+DEFAULT_NUM_GANGS = 32
 # Requests each gang's pull worker keeps in flight against its vLLM. Matching
 # max_num_seqs keeps every engine slot fed without stacking a latency queue on
 # the server side; the broker holds the real backlog.
 DEFAULT_GANG_IN_FLIGHT = DEFAULT_MAX_NUM_SEQS
-# Windows per checkpoint. The pool's offered concurrency is gangs x in-flight
-# (1,536 at the defaults), so chunks several times that keep the pipeline full
-# while a preemption still only costs a few minutes of fleet time.
+# Windows per checkpoint. The pool's offered concurrency is gangs x in-flight,
+# capped by DRIVER_MAX_CONCURRENCY, so chunks several times that keep the
+# pipeline full while a preemption still only costs a few minutes of fleet time.
 DEFAULT_CHUNK_SIZE = 8_000
 
 # Bounds on a hung request, not load shedding; far above the tens of seconds a

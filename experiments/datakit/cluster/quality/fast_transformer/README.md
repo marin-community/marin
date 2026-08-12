@@ -170,6 +170,34 @@ Run the report on a labeling run's first chunks before committing a fleet to the
 rest: a framing regression shows up there as an invalid rate concentrated in one
 position, with rationales that name the cut.
 
+**Ask for the whole fleet.** `label_windows_vllm.py` submits `--num-gangs` gangs
+once at startup and never adds more, so the pool is exactly as large as the flag
+you launched with — there is no autoscaling to fall back on, and an
+under-requested run leaves GB200 nodes idle for hours. The default is therefore
+32 gangs (64 nodes); all but `--interactive-gangs` ride the batch band, so a
+contended cluster admits what it can and the pool starts labeling on the first
+gang that serves. Scaling *down* is deliberate — a small tranche or a smoke
+passes `--num-gangs 2`. Growing a running pool is not possible: the driver's
+sender concurrency is fixed at launch, so more capacity means restarting the
+driver, which costs a fresh 25-45 minute bring-up and keeps only what the chunk
+checkpoints already hold.
+
+```bash
+uv run iris --cluster=marin job run --target-cluster cw-us-east-08a \
+    --enable-extra-resources --cpu 4 --memory 32g --disk 64g --max-retries 6 \
+    -e MARIN_PREFIX s3://marin-us-east-02a/marin \
+    -- python -m experiments.datakit.cluster.quality.fast_transformer.label_windows_vllm \
+    --windows 's3://.../windows/*.parquet' --out s3://.../labels/windows.parquet \
+    --run-id <tag> --label-batch <batch> --interactive-gangs 2 \
+    --max-model-len 16384 --fleet gb200 --object-store-endpoint https://cwobject.com
+```
+
+`--max-model-len` must hold the window, the system prompt, and the 4k reasoning
+budget: 2048-token windows need 16384, and a prompt that overflows is rejected by
+the server rather than truncated. Individual gangs die and are retried by iris
+(port collisions, FlashInfer allreduce faults); the pool sheds their throughput
+and keeps going, so a dead gang is not a reason to stop a run.
+
 ## Validation
 
 `gate_labels.py` is the gate between labeling and training, because a poisoned label
