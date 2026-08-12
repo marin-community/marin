@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from shuttle import Materialization, Numerics, Tuning, compiler_options, options_digest
+from shuttle import ExecutionMode, Materialization, Numerics, Tuning, compiler_options, options_digest
 
 
 def _tuning() -> Tuning:
@@ -22,30 +22,88 @@ def _tuning() -> Tuning:
 
 
 def test_compiler_options_have_canonical_closed_wire_format() -> None:
-    options = compiler_options(numerics=Numerics.SOURCE_ORDERED, tuning=_tuning())
+    options = compiler_options(
+        execution_mode=ExecutionMode.STABLEHLO_ROUND_TRIP,
+        numerics=Numerics.SOURCE_ORDERED,
+        tuning=_tuning(),
+    )
 
     assert options == {
         "xla_shuttle_enable": True,
         "xla_shuttle_options": (
-            '{"numerics":"source_ordered","pipeline_abi_version":5,"schema_version":1,'
+            '{"execution_mode":"stablehlo_round_trip","numerics":"source_ordered",'
+            '"pipeline_abi_version":6,"schema_version":1,'
             '"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion",'
             '"maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}}'
         ),
     }
-    assert options_digest(numerics=Numerics.SOURCE_ORDERED, tuning=_tuning()) == (
-        "b5c3880caf67fd74f6f14e367b808a043114a783fd76ed9c6ddfb53da544809b"
+    assert (
+        options_digest(
+            execution_mode=ExecutionMode.STABLEHLO_ROUND_TRIP,
+            numerics=Numerics.SOURCE_ORDERED,
+            tuning=_tuning(),
+        )
+        == "aade2586bcfc964b34a8d7d7e88bd8af60a70b6445ac51ba121d705abd60e316"
     )
 
 
 def test_numerical_policies_have_distinct_option_payloads_and_digests() -> None:
     tuning = _tuning()
-    source_ordered = compiler_options(numerics=Numerics.SOURCE_ORDERED, tuning=tuning)
-    fast = compiler_options(numerics=Numerics.FAST, tuning=tuning)
+    source_ordered = compiler_options(
+        execution_mode=ExecutionMode.STABLEHLO_ROUND_TRIP,
+        numerics=Numerics.SOURCE_ORDERED,
+        tuning=tuning,
+    )
+    fast = compiler_options(
+        execution_mode=ExecutionMode.STABLEHLO_ROUND_TRIP,
+        numerics=Numerics.FAST,
+        tuning=tuning,
+    )
 
     assert source_ordered != fast
-    assert options_digest(numerics=Numerics.SOURCE_ORDERED, tuning=tuning) != options_digest(
-        numerics=Numerics.FAST, tuning=tuning
+    assert options_digest(
+        execution_mode=ExecutionMode.STABLEHLO_ROUND_TRIP,
+        numerics=Numerics.SOURCE_ORDERED,
+        tuning=tuning,
+    ) != options_digest(
+        execution_mode=ExecutionMode.STABLEHLO_ROUND_TRIP,
+        numerics=Numerics.FAST,
+        tuning=tuning,
     )
+
+
+def test_execution_modes_have_distinct_cache_identity() -> None:
+    tuning = _tuning()
+    roundtrip = compiler_options(
+        execution_mode=ExecutionMode.STABLEHLO_ROUND_TRIP,
+        numerics=Numerics.SOURCE_ORDERED,
+        tuning=tuning,
+    )
+    cpu_bundle = compiler_options(
+        execution_mode=ExecutionMode.CPU_EXECUTABLE_BUNDLE,
+        numerics=Numerics.SOURCE_ORDERED,
+        tuning=tuning,
+    )
+
+    assert roundtrip != cpu_bundle
+    assert options_digest(
+        execution_mode=ExecutionMode.STABLEHLO_ROUND_TRIP,
+        numerics=Numerics.SOURCE_ORDERED,
+        tuning=tuning,
+    ) != options_digest(
+        execution_mode=ExecutionMode.CPU_EXECUTABLE_BUNDLE,
+        numerics=Numerics.SOURCE_ORDERED,
+        tuning=tuning,
+    )
+
+
+def test_cpu_executable_mode_rejects_fast_numerics() -> None:
+    with pytest.raises(ValueError, match="requires source_ordered"):
+        compiler_options(
+            execution_mode=ExecutionMode.CPU_EXECUTABLE_BUNDLE,
+            numerics=Numerics.FAST,
+            tuning=_tuning(),
+        )
 
 
 def test_empty_shape_hints_leave_physical_search_unconstrained() -> None:
@@ -56,10 +114,15 @@ def test_empty_shape_hints_leave_physical_search_unconstrained() -> None:
         materialization=Materialization.AUTOMATIC,
         maximum_candidates=1,
     )
-    options = compiler_options(numerics=Numerics.FAST, tuning=tuning)
+    options = compiler_options(
+        execution_mode=ExecutionMode.STABLEHLO_ROUND_TRIP,
+        numerics=Numerics.FAST,
+        tuning=tuning,
+    )
 
     assert options["xla_shuttle_options"] == (
-        '{"numerics":"fast","pipeline_abi_version":5,"schema_version":1,'
+        '{"execution_mode":"stablehlo_round_trip","numerics":"fast",'
+        '"pipeline_abi_version":6,"schema_version":1,'
         '"tuning":{"cluster_shape":[],"materialization":"automatic",'
         '"maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}}'
     )
@@ -86,9 +149,23 @@ def test_options_reject_mutable_non_native_and_wrong_enum_values() -> None:
     with pytest.raises(TypeError):
         replace(tuning, materialization=cast(Materialization, "automatic"))
     with pytest.raises(TypeError):
-        compiler_options(numerics=cast(Numerics, "fast"), tuning=tuning)
+        compiler_options(
+            execution_mode=ExecutionMode.STABLEHLO_ROUND_TRIP,
+            numerics=cast(Numerics, "fast"),
+            tuning=tuning,
+        )
     with pytest.raises(TypeError):
-        compiler_options(numerics=Numerics.FAST, tuning=cast(Tuning, object()))
+        compiler_options(
+            execution_mode=ExecutionMode.STABLEHLO_ROUND_TRIP,
+            numerics=Numerics.FAST,
+            tuning=cast(Tuning, object()),
+        )
+    with pytest.raises(TypeError):
+        compiler_options(
+            execution_mode=cast(ExecutionMode, "cpu_executable_bundle"),
+            numerics=Numerics.FAST,
+            tuning=tuning,
+        )
 
 
 def test_tuning_rejects_values_outside_the_native_wire_bounds() -> None:
@@ -104,7 +181,11 @@ def test_tuning_rejects_values_outside_the_native_wire_bounds() -> None:
 def test_stock_jaxlib_rejects_shuttle_options_instead_of_ignoring_them() -> None:
     compiled = jax.jit(
         lambda value: value + 1,
-        compiler_options=compiler_options(numerics=Numerics.SOURCE_ORDERED, tuning=_tuning()),
+        compiler_options=compiler_options(
+            execution_mode=ExecutionMode.STABLEHLO_ROUND_TRIP,
+            numerics=Numerics.SOURCE_ORDERED,
+            tuning=_tuning(),
+        ),
     )
 
     with pytest.raises(jax.errors.JaxRuntimeError, match="No such compile option: 'xla_shuttle_enable'"):

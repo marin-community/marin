@@ -307,6 +307,32 @@ cc_test(
 )
 
 cc_test(
+    name = "cpu_transport_contract_test",
+    srcs = ["test/cpu-transport-contract-test.cc"],
+    data = [
+        "test/Inputs/cpu-forward-7x13-epsilon-quarter-transport.hex",
+        "test/Inputs/cpu-forward-7x13-epsilon-quarter.mlir",
+        "test/Inputs/cpu-forward-7x13-transport.hex",
+        "test/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir",
+    ],
+    deps = [
+        ":ShuttleCpuBytecode",
+        ":ShuttleDialect",
+        ":ShuttlePasses",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MathDialect",
+        "@llvm-project//mlir:Parser",
+        "@llvm-project//mlir:Pass",
+        "@stablehlo//:register",
+        "@bazel_tools//tools/cpp/runfiles",
+    ],
+)
+
+cc_test(
     name = "xla_registration_test",
     srcs = ["test/xla-registration-test.cc"],
     deps = [
@@ -339,6 +365,38 @@ cc_test(
         "@stablehlo//:register",
         "@xla//xla/ffi:ffi_api",
         "@xla//xla/pjrt:stablehlo_module_transform",
+    ],
+)
+
+cc_test(
+    name = "xla_cpu_ffi_test",
+    srcs = ["test/xla-cpu-ffi-test.cc"],
+    data = [
+        "test/Inputs/cpu-forward-7x13-epsilon-quarter-transport.hex",
+        "test/Inputs/cpu-forward-7x13-transport.hex",
+    ],
+    deps = [
+        ":ShuttleCpuBytecode",
+        ":ShuttleXlaRegistryAdapter",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//llvm:Support",
+        "@xla//xla:executable_run_options",
+        "@xla//xla/ffi",
+        "@xla//xla:literal",
+        "@xla//xla:literal_util",
+        "@xla//xla:shape_util",
+        "@xla//xla:xla_data_proto_cc",
+        "@xla//xla/client:client_library",
+        "@xla//xla/client:local_client",
+        "@xla//xla/hlo/builder:xla_builder",
+        "@xla//xla/service",
+        "@xla//xla/service:cpu_plugin",
+        "@xla//xla/service:platform_util",
+        "@xla//xla/stream_executor:platform",
+        "@xla//xla/stream_executor/host:host_platform",
+        "@xla//xla/tsl/lib/core:status_test_util",
+        "@xla//xla/tsl/platform:statusor",
+        "@bazel_tools//tools/cpp/runfiles",
     ],
 )
 
