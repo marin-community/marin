@@ -40,21 +40,21 @@ from marin.processing.classification.deduplication.fuzzy_verification import (
     FuzzyVerificationParams,
     PreparedVerificationText,
     VerificationResult,
-    character_ngram_jaccard,
+    line_count_ratio,
     prepare_verification_text,
     verify_prepared_candidate,
 )
 
 logger = logging.getLogger(__name__)
 
-VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION = 2
-PERCENT_HISTOGRAM_METRICS = frozenset({"member_containment", "jaccard", "char_jaccard", "local_char_jaccard"})
+VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION = 3
+PERCENT_HISTOGRAM_METRICS = frozenset({"member_containment", "jaccard", "char_jaccard", "local_line_count_ratio"})
 SCORE_HISTOGRAM_MAX_PERCENT = 100
 UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN = 33
 _COUNTER_PREFIX = "dedup/fuzzy/verification"
 _SHARED_SHARDS_KEY = "verified_fuzzy_dups_shards"
-_LOCAL_TOKEN_JACCARD_REJECTION = "local_token_jaccard_below_threshold"
-_LOCAL_CHAR_JACCARD_REJECTION = "local_char_jaccard_below_threshold"
+_LOCAL_TOKEN_SEQUENCE_REJECTION = "local_token_sequence_differs"
+_LOCAL_LINE_COUNT_REJECTION = "local_line_count_ratio_below_threshold"
 # Bounds on the head scan that picks each cluster anchor. Cluster size is
 # heavily skewed - the p99 cluster holds 13 members - so a short head covers
 # effectively every cluster while a pathological one stays bounded.
@@ -79,9 +79,7 @@ class LocalRepresentativeParams(BaseModel):
     maximum_representatives_per_cluster: int = Field(ge=1)
     maximum_local_representative_chars: int = Field(ge=1)
     maximum_local_representative_chars_per_cluster: int = Field(ge=1)
-    minimum_local_token_ngram_jaccard: float = Field(ge=0, le=1)
-    local_char_ngram_size: int = Field(ge=1)
-    minimum_local_char_jaccard: float = Field(ge=0, le=1)
+    minimum_local_line_count_ratio: float = Field(gt=0, le=1)
 
     @model_validator(mode="after")
     def comparisons_fit_representative_limit(self) -> "LocalRepresentativeParams":
@@ -93,12 +91,10 @@ class LocalRepresentativeParams(BaseModel):
 
 REFERENCE_LOCAL_REPRESENTATIVE_PARAMS = LocalRepresentativeParams(
     maximum_comparisons_per_document=2,
-    maximum_representatives_per_cluster=64,
+    maximum_representatives_per_cluster=32,
     maximum_local_representative_chars=500_000,
     maximum_local_representative_chars_per_cluster=2_000_000,
-    minimum_local_token_ngram_jaccard=0.98,
-    local_char_ngram_size=13,
-    minimum_local_char_jaccard=0.98,
+    minimum_local_line_count_ratio=0.8,
 )
 
 
@@ -178,8 +174,7 @@ _VERIFIED_DUPLICATE_SCHEMA = pa.schema(
         pa.field("dup_jaccard", pa.float64(), nullable=False),
         pa.field("dup_under_tokenized", pa.bool_(), nullable=False),
         pa.field("dup_char_jaccard", pa.float64()),
-        pa.field("dup_local_token_sequence_equal", pa.bool_()),
-        pa.field("dup_local_char_jaccard", pa.float64()),
+        pa.field("dup_local_line_count_ratio", pa.float64()),
     ]
 )
 
@@ -362,8 +357,7 @@ def _record_comparison(
     result: VerificationResult,
     representative_kind: RepresentativeKind,
     decision: str,
-    local_char_jaccard: float | None = None,
-    local_token_sequence_equal: bool | None = None,
+    local_line_count_ratio: float | None = None,
 ) -> None:
     counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/direct_comparisons", 1)
     counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/comparison/{decision}", 1)
@@ -384,14 +378,9 @@ def _record_comparison(
             f"{_COUNTER_PREFIX}/histogram/char_jaccard/{_score_bin(result.char_jaccard)}",
             1,
         )
-    if local_char_jaccard is not None:
+    if local_line_count_ratio is not None:
         counters.pipeline.update_counter(
-            f"{_COUNTER_PREFIX}/histogram/local_char_jaccard/{_score_bin(local_char_jaccard)}",
-            1,
-        )
-    if local_token_sequence_equal is not None:
-        counters.pipeline.update_counter(
-            f"{_COUNTER_PREFIX}/local_token_sequence_equal/{str(local_token_sequence_equal).lower()}",
+            f"{_COUNTER_PREFIX}/histogram/local_line_count_ratio/{_score_bin(local_line_count_ratio)}",
             1,
         )
     counters.pipeline.update_counter(
@@ -405,8 +394,7 @@ def _record_comparison(
 class _LocalVerificationDecision:
     accepted: bool
     reason: str
-    char_jaccard: float | None
-    token_sequence_equal: bool | None
+    line_count_ratio: float | None
 
 
 def _local_verification_gate(
@@ -421,43 +409,26 @@ def _local_verification_gate(
         return _LocalVerificationDecision(
             accepted=False,
             reason=result.rejection.value,
-            char_jaccard=None,
-            token_sequence_equal=None,
+            line_count_ratio=None,
         )
-    if result.jaccard < params.minimum_local_token_ngram_jaccard:
+    if member.text.casefold().split() != representative.text.casefold().split():
         return _LocalVerificationDecision(
             accepted=False,
-            reason=_LOCAL_TOKEN_JACCARD_REJECTION,
-            char_jaccard=None,
-            token_sequence_equal=None,
+            reason=_LOCAL_TOKEN_SEQUENCE_REJECTION,
+            line_count_ratio=None,
         )
 
-    token_sequence_equal = member.text.casefold().split() == representative.text.casefold().split()
-    if token_sequence_equal:
-        return _LocalVerificationDecision(
-            accepted=True,
-            reason="accepted",
-            char_jaccard=None,
-            token_sequence_equal=True,
-        )
-
-    char_jaccard = character_ngram_jaccard(
-        member.text,
-        representative.text,
-        params.local_char_ngram_size,
-    )
-    if char_jaccard < params.minimum_local_char_jaccard:
+    local_line_count_ratio = line_count_ratio(member.text, representative.text)
+    if local_line_count_ratio < params.minimum_local_line_count_ratio:
         return _LocalVerificationDecision(
             accepted=False,
-            reason=_LOCAL_CHAR_JACCARD_REJECTION,
-            char_jaccard=char_jaccard,
-            token_sequence_equal=False,
+            reason=_LOCAL_LINE_COUNT_REJECTION,
+            line_count_ratio=local_line_count_ratio,
         )
     return _LocalVerificationDecision(
         accepted=True,
         reason="accepted",
-        char_jaccard=char_jaccard,
-        token_sequence_equal=False,
+        line_count_ratio=local_line_count_ratio,
     )
 
 
@@ -607,8 +578,7 @@ def _make_cluster_verifier(
             comparison_count = 1
             matched_representative: _RetainedRepresentative | None = None
             matched_result: VerificationResult | None = None
-            matched_local_token_sequence_equal: bool | None = None
-            matched_local_char_jaccard: float | None = None
+            matched_local_line_count_ratio: float | None = None
             shared_buckets = len(member_buckets & primary.buckets)
             result = verify_prepared_candidate(prepared_member, primary.prepared, verification_params)
             comparison_decision = result.rejection.value if result.rejection is not None else "accepted"
@@ -641,14 +611,12 @@ def _make_cluster_verifier(
                         local_result,
                         local.kind,
                         local_decision.reason,
-                        local_decision.char_jaccard,
-                        local_decision.token_sequence_equal,
+                        local_decision.line_count_ratio,
                     )
                     if local_decision.accepted:
                         matched_representative = local
                         matched_result = local_result
-                        matched_local_token_sequence_equal = local_decision.token_sequence_equal
-                        matched_local_char_jaccard = local_decision.char_jaccard
+                        matched_local_line_count_ratio = local_decision.line_count_ratio
                         shared_buckets = shared_counts[representative_index]
                         break
 
@@ -680,8 +648,7 @@ def _make_cluster_verifier(
                 "dup_shared_lsh_buckets": shared_buckets,
                 "dup_comparisons": comparison_count,
                 **_result_fields(matched_result),
-                "dup_local_token_sequence_equal": matched_local_token_sequence_equal,
-                "dup_local_char_jaccard": matched_local_char_jaccard,
+                "dup_local_line_count_ratio": matched_local_line_count_ratio,
             }
 
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/cluster_size/{_size_bin(cluster_size)}", 1)

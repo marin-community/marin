@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from random import Random
+
+import pytest
 from marin.processing.classification.deduplication.fuzzy_verification import (
     FuzzyVerificationParams,
     VerificationRejection,
@@ -109,3 +112,50 @@ def test_character_guard_keeps_exact_non_whitespace_copy():
 
 def test_character_ngram_jaccard_is_case_folded():
     assert character_ngram_jaccard("Alpha Beta", "alpha beta", 5) == 1.0
+
+
+def test_saturated_token_subset_requires_normalized_sequence():
+    member = "a b c a b c"
+    representative = "a b c a b x a b c"
+
+    result = verify_candidate(member, representative, FuzzyVerificationParams())
+
+    assert result.saturated
+    assert not result.accepted
+    assert result.rejection == VerificationRejection.SATURATED
+
+
+@pytest.mark.parametrize(
+    ("vocabulary", "under_tokenized"),
+    [
+        (("0", "1"), False),
+        (("aaaaaaaaaaaa", "bbbbbbbbbbbb"), True),
+    ],
+)
+def test_saturated_independent_sequences_are_retained(vocabulary, under_tokenized):
+    def random_text(seed: int, size: int) -> str:
+        random = Random(seed)
+        return " ".join(vocabulary[random.randrange(2)] for _ in range(size))
+
+    result = verify_candidate(
+        random_text(2, 2_000),
+        random_text(1, 4_000),
+        FuzzyVerificationParams(),
+    )
+
+    assert result.saturated
+    assert result.under_tokenized is under_tokenized
+    assert not result.accepted
+    assert result.rejection == VerificationRejection.SATURATED
+
+
+def test_saturated_contained_sequence_is_verified():
+    random = Random(3)
+    member_tokens = [str(random.randrange(2)) for _ in range(2_000)]
+    member = "\n".join(member_tokens)
+    representative = "prefix " + " ".join(member_tokens) + " suffix"
+
+    result = verify_candidate(member, representative, FuzzyVerificationParams())
+
+    assert result.saturated
+    assert result.accepted

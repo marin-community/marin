@@ -36,9 +36,7 @@ TEST_LOCAL_PARAMS = LocalRepresentativeParams(
     maximum_representatives_per_cluster=8,
     maximum_local_representative_chars=10_000,
     maximum_local_representative_chars_per_cluster=40_000,
-    minimum_local_token_ngram_jaccard=0.9,
-    local_char_ngram_size=13,
-    minimum_local_char_jaccard=0.9,
+    minimum_local_line_count_ratio=0.8,
 )
 TEST_STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=30,
@@ -177,8 +175,7 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
             "dup_jaccard": 0.6,
             "dup_under_tokenized": False,
             "dup_char_jaccard": None,
-            "dup_local_token_sequence_equal": None,
-            "dup_local_char_jaccard": None,
+            "dup_local_line_count_ratio": None,
         }
     ]
     empty_path = Path(verified.sources[source_key].attr_dir) / "part-00001.parquet"
@@ -198,8 +195,7 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
         "dup_jaccard",
         "dup_under_tokenized",
         "dup_char_jaccard",
-        "dup_local_token_sequence_equal",
-        "dup_local_char_jaccard",
+        "dup_local_line_count_ratio",
     ]
     assert verified.counters["dedup/fuzzy/verification/candidate_members"] == 3
     assert verified.counters["dedup/fuzzy/verification/candidate_shards_missing"] == 1
@@ -362,7 +358,7 @@ def test_verifier_defers_exact_copies_to_global_exact_dedup(tmp_path, monkeypatc
     assert verified.counters["dedup/fuzzy/verification/decision/delegated_global_exact"] == 1
 
 
-def test_verifier_recovers_duplicate_through_local_representative(tmp_path, monkeypatch):
+def test_local_verifier_rejects_different_token_sequences(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     local_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau"
     duplicate_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma"
@@ -409,15 +405,8 @@ def test_verifier_recovers_duplicate_through_local_representative(tmp_path, monk
         local_representative_params=TEST_LOCAL_PARAMS,
     )
 
-    rows = _output_rows(verified, source_key)
-    assert [row["id"] for row in rows] == ["b-duplicate"]
-    assert rows[0]["dup_representative_id"] == "a-local"
-    assert rows[0]["dup_representative_kind"] == "local_representative"
-    assert rows[0]["dup_shared_lsh_buckets"] == 2
-    assert rows[0]["dup_comparisons"] == 2
-    assert rows[0]["dup_local_token_sequence_equal"] is False
-    assert rows[0]["dup_local_char_jaccard"] >= 0.9
-    assert verified.counters["dedup/fuzzy/verification/accepted_representative/local_representative"] == 1
+    assert _output_rows(verified, source_key) == []
+    assert verified.counters["dedup/fuzzy/verification/comparison/local_token_sequence_differs"] == 1
 
 
 def test_local_verifier_accepts_equal_token_sequences_with_different_whitespace(tmp_path, monkeypatch):
@@ -467,22 +456,68 @@ def test_local_verifier_accepts_equal_token_sequences_with_different_whitespace(
     row = _output_rows(verified, source_key)[0]
     assert row["id"] == "b-member"
     assert row["dup_representative_kind"] == "local_representative"
-    assert row["dup_local_token_sequence_equal"] is True
-    assert row["dup_local_char_jaccard"] is None
+    assert row["dup_local_line_count_ratio"] == 1.0
+
+
+def test_local_verifier_rejects_collapsed_line_structure(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    tokens = [f"t{index}" for index in range(40)]
+    representative_text = "\n".join(tokens)
+    member_text = " ".join(tokens)
+    source_key, source = _write_source(
+        root=tmp_path,
+        name="source",
+        shards={
+            "part-00000.parquet": [
+                {"id": "a-local", "text": representative_text},
+                {"id": "b-member", "text": member_text},
+                {"id": "canonical", "text": LONG_UNRELATED_CANONICAL},
+            ]
+        },
+    )
+    candidates = _write_candidates(
+        root=tmp_path,
+        rows_by_source={
+            source_key: {
+                "part-00000.parquet": [
+                    {"id": "a-local", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
+                    {"id": "b-member", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
+                    {"id": "canonical", "dup_cluster_id": "cluster-a", "is_cluster_canonical": True},
+                ]
+            }
+        },
+    )
+    minhash = _write_minhash(
+        root=tmp_path,
+        name="source",
+        source=source,
+        buckets_by_id={"a-local": ["local"], "b-member": ["local"], "canonical": ["canonical"]},
+    )
+
+    verified = verify_fuzzy_dups(
+        normalized_sources={"source": source},
+        minhash_sources={"source": minhash},
+        candidates=candidates,
+        output_path=str(tmp_path / "verified"),
+        verification_params=FuzzyVerificationParams(),
+        local_representative_params=TEST_LOCAL_PARAMS,
+    )
+
+    assert _output_rows(verified, source_key) == []
+    assert verified.counters["dedup/fuzzy/verification/comparison/local_line_count_ratio_below_threshold"] == 1
 
 
 def test_verifier_rejects_token_ngram_saturation(tmp_path, monkeypatch):
     """Two documents over a tiny vocabulary contain each other by exhaustion.
 
-    20,000 and 40,000 random digits share every distinct 3-gram, so containment
-    and Jaccard both reach 1.0 while the texts share no 13-character run. The
-    character test has to decide, and it must decide against them.
+    20,000 and 40,000 random binary tokens share every distinct token 3-gram
+    and character 13-gram. The verifier must retain the independent member.
     """
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
     def digit_text(seed: int, size: int) -> str:
         random = Random(seed)
-        return " ".join(str(random.randrange(10)) for _ in range(size))
+        return " ".join(str(random.randrange(2)) for _ in range(size))
 
     representative_text = digit_text(1, 40_000)
     member_text = digit_text(2, 20_000)
@@ -520,9 +555,7 @@ def test_verifier_rejects_token_ngram_saturation(tmp_path, monkeypatch):
         maximum_representatives_per_cluster=8,
         maximum_local_representative_chars=100_000,
         maximum_local_representative_chars_per_cluster=200_000,
-        minimum_local_token_ngram_jaccard=0.98,
-        local_char_ngram_size=13,
-        minimum_local_char_jaccard=0.98,
+        minimum_local_line_count_ratio=0.8,
     )
 
     verified = verify_fuzzy_dups(
@@ -535,13 +568,13 @@ def test_verifier_rejects_token_ngram_saturation(tmp_path, monkeypatch):
     )
 
     assert _output_rows(verified, source_key) == []
-    assert verified.counters["dedup/fuzzy/verification/comparison/saturated_char_jaccard_below_threshold"] == 1
+    assert verified.counters["dedup/fuzzy/verification/comparison/saturated_token_sequence_not_contained"] == 1
 
 
 def test_local_representative_selection_is_stable_across_input_order(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     local_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau"
-    duplicate_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma"
+    duplicate_text = "\t".join(local_text.split())
     source_a_key, source_a = _write_source(
         root=tmp_path,
         name="source-a",
@@ -616,61 +649,10 @@ def test_local_representative_selection_is_stable_across_input_order(tmp_path, m
     assert _output_rows(first, source_c_key)[0]["dup_representative_kind"] == "local_representative"
 
 
-def test_verifier_applies_the_stricter_token_jaccard_gate_to_local_matches(tmp_path, monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    local_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau"
-    member_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa"
-    source_key, source = _write_source(
-        root=tmp_path,
-        name="source",
-        shards={
-            "part-00000.parquet": [
-                {"id": "a-local", "text": local_text},
-                {"id": "b-member", "text": member_text},
-                {"id": "canonical", "text": LONG_UNRELATED_CANONICAL},
-            ]
-        },
-    )
-    candidates = _write_candidates(
-        root=tmp_path,
-        rows_by_source={
-            source_key: {
-                "part-00000.parquet": [
-                    {"id": "a-local", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
-                    {"id": "b-member", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
-                    {"id": "canonical", "dup_cluster_id": "cluster-a", "is_cluster_canonical": True},
-                ]
-            }
-        },
-    )
-    minhash = _write_minhash(
-        root=tmp_path,
-        name="source",
-        source=source,
-        buckets_by_id={
-            "a-local": ["local"],
-            "b-member": ["local"],
-            "canonical": ["canonical"],
-        },
-    )
-
-    verified = verify_fuzzy_dups(
-        normalized_sources={"source": source},
-        minhash_sources={"source": minhash},
-        candidates=candidates,
-        output_path=str(tmp_path / "verified"),
-        verification_params=FuzzyVerificationParams(),
-        local_representative_params=TEST_LOCAL_PARAMS,
-    )
-
-    assert _output_rows(verified, source_key) == []
-    assert verified.counters["dedup/fuzzy/verification/comparison/local_token_jaccard_below_threshold"] == 1
-
-
 def test_verifier_ranks_local_nominees_and_bounds_comparisons(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     b_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau"
-    target_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma"
+    target_text = "\t".join(b_text.split())
     source_key, source = _write_source(
         root=tmp_path,
         name="source",
@@ -715,9 +697,7 @@ def test_verifier_ranks_local_nominees_and_bounds_comparisons(tmp_path, monkeypa
         maximum_representatives_per_cluster=8,
         maximum_local_representative_chars=10_000,
         maximum_local_representative_chars_per_cluster=40_000,
-        minimum_local_token_ngram_jaccard=0.9,
-        local_char_ngram_size=13,
-        minimum_local_char_jaccard=0.9,
+        minimum_local_line_count_ratio=0.8,
     )
 
     verified = verify_fuzzy_dups(
@@ -793,9 +773,7 @@ def test_verifier_bounds_representative_count_and_text(tmp_path, monkeypatch):
         maximum_representatives_per_cluster=2,
         maximum_local_representative_chars=100,
         maximum_local_representative_chars_per_cluster=1_000,
-        minimum_local_token_ngram_jaccard=0.9,
-        local_char_ngram_size=13,
-        minimum_local_char_jaccard=0.9,
+        minimum_local_line_count_ratio=0.8,
     )
 
     verified = verify_fuzzy_dups(
@@ -815,7 +793,7 @@ def test_verifier_bounds_representative_count_and_text(tmp_path, monkeypatch):
 def test_repeated_noncanonical_ids_stay_available_as_local_representatives(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     exact_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau"
-    near_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma"
+    near_text = "\t".join(exact_text.split())
     source_a_key, source_a = _write_source(
         root=tmp_path,
         name="source-a",

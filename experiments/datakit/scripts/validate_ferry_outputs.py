@@ -65,8 +65,7 @@ VERIFIED_DUPS_REQUIRED_COLUMNS = frozenset(
         "dup_jaccard",
         "dup_under_tokenized",
         "dup_char_jaccard",
-        "dup_local_token_sequence_equal",
-        "dup_local_char_jaccard",
+        "dup_local_line_count_ratio",
     }
 )
 VERIFIED_DUPS_DROP_MAX_FRACTION = 0.50

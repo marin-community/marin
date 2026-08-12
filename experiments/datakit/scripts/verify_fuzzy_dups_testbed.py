@@ -37,7 +37,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
 from marin.processing.classification.deduplication.fuzzy_verification import (
     FuzzyVerificationParams,
     VerificationResult,
-    character_ngram_jaccard,
+    line_count_ratio,
     verify_candidate,
 )
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
@@ -82,8 +82,7 @@ VERIFIED_COLUMNS = (
     "dup_jaccard",
     "dup_under_tokenized",
     "dup_char_jaccard",
-    "dup_local_token_sequence_equal",
-    "dup_local_char_jaccard",
+    "dup_local_line_count_ratio",
 )
 
 
@@ -270,8 +269,7 @@ def _assert_marker(
     representative_kind: str,
     shared_lsh_buckets: int,
     comparisons: int,
-    local_token_sequence_equal: bool | None,
-    local_char_jaccard: float | None,
+    local_line_count_ratio: float | None,
 ) -> None:
     expected = {
         "dup_doc": True,
@@ -285,8 +283,7 @@ def _assert_marker(
         "dup_jaccard": result.jaccard,
         "dup_under_tokenized": result.under_tokenized,
         "dup_char_jaccard": result.char_jaccard,
-        "dup_local_token_sequence_equal": local_token_sequence_equal,
-        "dup_local_char_jaccard": local_char_jaccard,
+        "dup_local_line_count_ratio": local_line_count_ratio,
     }
     actual = {name: marker[name] for name in expected}
     if actual != expected:
@@ -396,8 +393,7 @@ def inspect_verification(
             matched = anchor if result.accepted else None
             matched_result = result if result.accepted else None
             matched_kind = anchor_kind
-            matched_local_token_sequence_equal = None
-            matched_local_char_jaccard = None
+            matched_local_line_count_ratio = None
 
             if matched is None:
                 nominees = []
@@ -412,30 +408,21 @@ def inspect_verification(
                     local = retained[retained_index]
                     comparison_count += 1
                     local_result = verify_candidate(member.text, local.text, verified.verification)
-                    token_sequence_equal = None
-                    local_char_jaccard = None
                     if not local_result.accepted:
                         assert local_result.rejection is not None
                         local_accepted = False
                         local_decision = local_result.rejection.value
-                    elif local_result.jaccard < verified.local_representatives.minimum_local_token_ngram_jaccard:
+                        local_line_count_ratio = None
+                    elif member.text.casefold().split() != local.text.casefold().split():
                         local_accepted = False
-                        local_decision = "local_token_jaccard_below_threshold"
+                        local_decision = "local_token_sequence_differs"
+                        local_line_count_ratio = None
                     else:
-                        token_sequence_equal = member.text.casefold().split() == local.text.casefold().split()
-                        if token_sequence_equal:
-                            local_accepted = True
-                            local_decision = "accepted"
-                        else:
-                            local_char_jaccard = character_ngram_jaccard(
-                                member.text,
-                                local.text,
-                                verified.local_representatives.local_char_ngram_size,
-                            )
-                            local_accepted = (
-                                local_char_jaccard >= verified.local_representatives.minimum_local_char_jaccard
-                            )
-                            local_decision = "accepted" if local_accepted else "local_char_jaccard_below_threshold"
+                        local_line_count_ratio = line_count_ratio(member.text, local.text)
+                        local_accepted = (
+                            local_line_count_ratio >= verified.local_representatives.minimum_local_line_count_ratio
+                        )
+                        local_decision = "accepted" if local_accepted else "local_line_count_ratio_below_threshold"
                     comparison_decisions[local_decision] += 1
                     attempts.append(
                         {
@@ -445,8 +432,7 @@ def inspect_verification(
                             "decision": local_decision,
                             "scores": {
                                 **_score_fields(local_result),
-                                "local_token_sequence_equal": token_sequence_equal,
-                                "local_char_jaccard": local_char_jaccard,
+                                "local_line_count_ratio": local_line_count_ratio,
                             },
                         }
                     )
@@ -454,8 +440,7 @@ def inspect_verification(
                         matched = local
                         matched_result = local_result
                         matched_kind = "local_representative"
-                        matched_local_token_sequence_equal = token_sequence_equal
-                        matched_local_char_jaccard = local_char_jaccard
+                        matched_local_line_count_ratio = local_line_count_ratio
                         shared_buckets = local_shared
                         break
 
@@ -484,8 +469,7 @@ def inspect_verification(
                     representative_kind=matched_kind,
                     shared_lsh_buckets=shared_buckets,
                     comparisons=comparison_count,
-                    local_token_sequence_equal=matched_local_token_sequence_equal,
-                    local_char_jaccard=matched_local_char_jaccard,
+                    local_line_count_ratio=matched_local_line_count_ratio,
                 )
                 representative_skip = None
 

@@ -16,7 +16,7 @@ class VerificationRejection(StrEnum):
     CONTAINMENT = "containment_below_threshold"
     MEMBER_UNIQUE = "too_many_member_unique"
     UNDER_TOKENIZED = "under_tokenized_char_jaccard_below_threshold"
-    SATURATED = "saturated_char_jaccard_below_threshold"
+    SATURATED = "saturated_token_sequence_not_contained"
 
 
 class FuzzyVerificationParams(BaseModel):
@@ -24,7 +24,7 @@ class FuzzyVerificationParams(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    rule_version: str = "whitespace_3gram_subset_v2"
+    rule_version: str = "whitespace_3gram_subset_v3"
     ngram_size: int = Field(default=3, ge=1)
     minimum_member_containment: float = Field(default=1.0, ge=0, le=1)
     maximum_member_unique_ngrams: int = Field(default=0, ge=0)
@@ -32,14 +32,9 @@ class FuzzyVerificationParams(BaseModel):
     under_tokenized_char_ngram_size: int = Field(default=5, ge=1)
     under_tokenized_minimum_char_jaccard: float = Field(default=0.90, ge=0, le=1)
     # A document that draws on a tiny vocabulary repeats its n-grams until the
-    # distinct set saturates. Two such documents then contain each other by
-    # exhaustion rather than by sharing text: 20,000 and 40,000 random digits
-    # score containment 1.0 and Jaccard 1.0 while sharing no 13-character run.
-    # Below this ratio of distinct n-grams to n-gram positions, the token test
-    # cannot separate them and the character test decides.
-    minimum_distinct_ngram_ratio: float = Field(default=0.5, ge=0, le=1)
-    saturated_char_ngram_size: int = Field(default=13, ge=1)
-    saturated_minimum_char_jaccard: float = Field(default=0.90, ge=0, le=1)
+    # distinct set saturates. Below this ratio of distinct n-grams to n-gram
+    # positions, only exact normalized token-sequence containment is accepted.
+    minimum_distinct_ngram_ratio: float = Field(default=0.9, ge=0, le=1)
 
 
 @dataclass(frozen=True)
@@ -72,6 +67,7 @@ class VerificationResult:
     jaccard: float
     under_tokenized: bool
     saturated: bool
+    normalized_token_sequence_contained: bool | None
     char_jaccard: float | None
 
 
@@ -118,6 +114,32 @@ def character_ngram_jaccard(left: str, right: str, ngram_size: int) -> float:
     return _jaccard(_char_ngrams(left, ngram_size), _char_ngrams(right, ngram_size))
 
 
+def normalized_token_sequence_is_contained(member: str, representative: str) -> bool:
+    """Test token-sequence containment after case and whitespace normalization."""
+    normalized_member = " ".join(member.casefold().split())
+    if not normalized_member:
+        return False
+    normalized_representative = " ".join(representative.casefold().split())
+    start = 0
+    while True:
+        index = normalized_representative.find(normalized_member, start)
+        if index < 0:
+            return False
+        end = index + len(normalized_member)
+        starts_at_token = index == 0 or normalized_representative[index - 1] == " "
+        ends_at_token = end == len(normalized_representative) or normalized_representative[end] == " "
+        if starts_at_token and ends_at_token:
+            return True
+        start = index + 1
+
+
+def line_count_ratio(left: str, right: str) -> float:
+    """Calculate the ratio between the smaller and larger line counts."""
+    left_lines = left.count("\n") + 1
+    right_lines = right.count("\n") + 1
+    return min(left_lines, right_lines) / max(left_lines, right_lines)
+
+
 def verify_prepared_candidate(
     member: PreparedVerificationText,
     representative: PreparedVerificationText,
@@ -134,12 +156,20 @@ def verify_prepared_candidate(
 
     rejection = None
     char_jaccard = None
+    normalized_token_sequence_contained = None
     if member.chars > representative.chars:
         rejection = VerificationRejection.MEMBER_LONGER
     elif member_containment < params.minimum_member_containment:
         rejection = VerificationRejection.CONTAINMENT
     elif member_unique > params.maximum_member_unique_ngrams:
         rejection = VerificationRejection.MEMBER_UNIQUE
+    elif saturated:
+        normalized_token_sequence_contained = normalized_token_sequence_is_contained(
+            member.text,
+            representative.text,
+        )
+        if not normalized_token_sequence_contained:
+            rejection = VerificationRejection.SATURATED
     elif under_tokenized:
         char_jaccard = character_ngram_jaccard(
             member.text,
@@ -148,14 +178,6 @@ def verify_prepared_candidate(
         )
         if char_jaccard < params.under_tokenized_minimum_char_jaccard:
             rejection = VerificationRejection.UNDER_TOKENIZED
-    elif saturated:
-        char_jaccard = character_ngram_jaccard(
-            member.text,
-            representative.text,
-            params.saturated_char_ngram_size,
-        )
-        if char_jaccard < params.saturated_minimum_char_jaccard:
-            rejection = VerificationRejection.SATURATED
 
     return VerificationResult(
         accepted=rejection is None,
@@ -172,6 +194,7 @@ def verify_prepared_candidate(
         jaccard=jaccard,
         under_tokenized=under_tokenized,
         saturated=saturated,
+        normalized_token_sequence_contained=normalized_token_sequence_contained,
         char_jaccard=char_jaccard,
     )
 

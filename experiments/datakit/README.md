@@ -45,15 +45,16 @@ normalized text.
 
 Fuzzy dedup first writes all members of each non-singleton candidate cluster.
 The next job joins these sparse attributes to normalized text and saved MinHash
-buckets. It compares each member to the connected-components canonical first.
-After a rejection, it ranks retained local representatives by their shared LSH
-buckets. The reference configuration permits two comparisons per member and
-64 representatives per cluster. It also limits local representative text to
-2,000,000 characters per cluster. A local match needs the full-text subset
-rule and token-3-gram Jaccard of at least 0.98. A different token sequence also
-needs character-13 Jaccard of at least 0.98. The job writes `dup_doc=true` only
-after a direct full-text match. The final store removes exact duplicates and
-verified fuzzy duplicates.
+buckets. It selects the longest document from a bounded cluster head as the
+primary anchor. After a rejection, it ranks retained local representatives by
+their shared LSH buckets. The reference configuration permits two comparisons
+per member and 32 representatives per cluster. It limits local representative
+text to 2,000,000 characters per cluster. A local match needs an equal
+case-folded token sequence after whitespace normalization. Its line-count ratio
+must be at least 0.8. Low-diversity text needs exact normalized token-sequence
+containment when its distinct 3-gram ratio is less than 0.9. The job writes
+`dup_doc=true` only after a direct full-text match. The final store removes
+exact duplicates and verified fuzzy duplicates.
 
 Global exact, fuzzy candidate, and fuzzy verification outputs write
 `.source_manifest.json` at the output root. The file maps each `source_NNN`
