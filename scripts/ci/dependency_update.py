@@ -19,6 +19,7 @@ from scripts.ci.dependency_update_policy import (
     DependencyUpdate,
     PullRequestPolicy,
 )
+from scripts.ci.package_release import emit_github_output
 
 MERGED_PULL_REQUEST_STATE = "MERGED"
 
@@ -196,7 +197,6 @@ def required_check_rows(pr: str, repository: str) -> tuple[CheckRow, ...]:
 
 
 def changed_worktree_files() -> tuple[str, ...]:
-    """Read files changed by a dependency generator."""
     result = subprocess.run(
         ["git", "diff", "--name-only"],
         check=True,
@@ -263,20 +263,11 @@ def prepare_update_branch(*, policy: PullRequestPolicy, repository: str) -> Upda
     )
 
 
-def publish_update(
-    *,
-    policy: PullRequestPolicy,
-    repository: str,
-    body_file: Path,
-    expected_remote_sha: str,
-    pull_request_url: str,
-    push_mode: BranchPushMode,
-) -> PublishedPullRequest:
-    """Commit the validated generator output and create or update its pull request."""
+def commit_update(policy: PullRequestPolicy) -> str:
+    """Commit the allowlisted generator output and return its SHA."""
     changed_files = validate_changed_files(changed_worktree_files(), policy=policy)
     if not changed_files:
         raise ValueError("dependency update has no changed files to publish")
-
     subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
     subprocess.run(
         ["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"],
@@ -284,6 +275,21 @@ def publish_update(
     )
     subprocess.run(["git", "add", "--", *changed_files], check=True)
     subprocess.run(["git", "commit", "-m", policy.title], check=True)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def push_update_branch(
+    *,
+    policy: PullRequestPolicy,
+    expected_remote_sha: str,
+    push_mode: BranchPushMode,
+) -> None:
+    """Push the generated commit without overwriting a concurrent branch update."""
     push_args = ["git", "push"]
     if push_mode is BranchPushMode.FORCE_WITH_LEASE:
         if not expected_remote_sha:
@@ -292,6 +298,15 @@ def publish_update(
     push_args.extend(["origin", f"HEAD:{policy.head_branch}"])
     subprocess.run(push_args, check=True)
 
+
+def upserted_pull_request_url(
+    *,
+    policy: PullRequestPolicy,
+    repository: str,
+    body_file: Path,
+    pull_request_url: str,
+) -> str:
+    """Create or refresh the generated pull request and return its URL."""
     if pull_request_url:
         subprocess.run(
             [
@@ -312,55 +327,68 @@ def publish_update(
             ],
             check=True,
         )
-    else:
-        subprocess.run(
-            [
-                "gh",
-                "pr",
-                "create",
-                "--repo",
-                repository,
-                "--base",
-                policy.base_branch,
-                "--head",
-                policy.head_branch,
-                "--title",
-                policy.title,
-                "--body-file",
-                str(body_file),
-                "--label",
-                "agent-generated",
-                "--label",
-                "dependencies",
-            ],
-            check=True,
-        )
-        payload = _gh_json(
+        return pull_request_url
+
+    subprocess.run(
+        [
+            "gh",
             "pr",
-            "view",
-            policy.head_branch,
+            "create",
             "--repo",
             repository,
-            "--json",
-            "url",
-        )
-        if not isinstance(payload, dict) or not isinstance(payload.get("url"), str):
-            raise ValueError(f"GitHub returned an invalid created pull request: {payload!r}")
-        pull_request_url = payload["url"]
-
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+            "--base",
+            policy.base_branch,
+            "--head",
+            policy.head_branch,
+            "--title",
+            policy.title,
+            "--body-file",
+            str(body_file),
+            "--label",
+            "agent-generated",
+            "--label",
+            "dependencies",
+        ],
         check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    return PublishedPullRequest(head_sha=head, url=pull_request_url)
+    )
+    payload = _gh_json(
+        "pr",
+        "view",
+        policy.head_branch,
+        "--repo",
+        repository,
+        "--json",
+        "url",
+    )
+    if not isinstance(payload, dict) or not isinstance(payload.get("url"), str):
+        raise ValueError(f"GitHub returned an invalid created pull request: {payload!r}")
+    return payload["url"]
 
 
-def _append_github_output(path: Path, **values: str) -> None:
-    with path.open("a") as output:
-        for name, value in values.items():
-            output.write(f"{name}={value}\n")
+def publish_update(
+    *,
+    policy: PullRequestPolicy,
+    repository: str,
+    body_file: Path,
+    expected_remote_sha: str,
+    pull_request_url: str,
+    push_mode: BranchPushMode,
+) -> PublishedPullRequest:
+    """Publish a generated commit and its pull request."""
+    head_sha = commit_update(policy)
+    push_update_branch(
+        policy=policy,
+        expected_remote_sha=expected_remote_sha,
+        push_mode=push_mode,
+    )
+    pull_request_url = upserted_pull_request_url(
+        policy=policy,
+        repository=repository,
+        body_file=body_file,
+        pull_request_url=pull_request_url,
+    )
+
+    return PublishedPullRequest(head_sha=head_sha, url=pull_request_url)
 
 
 def merge_when_green(
@@ -441,7 +469,7 @@ def main() -> None:
         return
     if args.command == "prepare":
         branch = prepare_update_branch(policy=policy, repository=args.repository)
-        _append_github_output(
+        emit_github_output(
             args.github_output,
             expected_remote_sha=branch.expected_remote_sha,
             pr_url=branch.pull_request_url,
@@ -457,7 +485,7 @@ def main() -> None:
             pull_request_url=args.pull_request_url,
             push_mode=BranchPushMode(args.push_mode),
         )
-        _append_github_output(
+        emit_github_output(
             args.github_output,
             head_sha=pull_request.head_sha,
             pr_url=pull_request.url,

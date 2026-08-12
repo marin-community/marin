@@ -69,12 +69,12 @@ select only `marin`. To recreate or rotate the app credential:
      < /path/to/private-key.pem
    ```
 
-3. Update `externalRuntimeUpdater` in `Pulumi.marin-community.yaml` with the app metadata, public-key
+3. Update `dependencyUpdater` in `Pulumi.marin-community.yaml` with the app metadata, public-key
    ID, and sealed ciphertext. The ciphertext is safe to commit: only GitHub can decrypt it, and
    Pulumi never receives the private key plaintext.
 
    ```yaml
-   marin-github:externalRuntimeUpdater:
+   marin-github:dependencyUpdater:
      repository: marin-community/marin
      appId: 123456
      appSlug: marin-external-runtime-updater

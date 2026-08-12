@@ -18,7 +18,7 @@ UPDATER_BRANCH = "main"
 
 
 @dataclass(frozen=True)
-class ExternalRuntimeUpdaterConfig:
+class DependencyUpdaterConfig:
     """Active configuration for the dedicated dependency updater app."""
 
     organization: str
@@ -44,7 +44,7 @@ class RulesetBypassActorPlan:
 
 
 @dataclass(frozen=True)
-class ExternalRuntimeUpdaterPlan:
+class DependencyUpdaterPlan:
     repository: str
     environment: str
     review_ruleset_import: str
@@ -56,19 +56,19 @@ class ExternalRuntimeUpdaterPlan:
 def _positive_int(settings: dict[str, object], name: str) -> int:
     value = settings[name]
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"externalRuntimeUpdater.{name} must be a positive integer")
+        raise ValueError(f"dependencyUpdater.{name} must be a positive integer")
     return value
 
 
-def external_runtime_updater_config(
+def dependency_updater_config(
     *,
     organization: str,
     settings: dict[str, object],
-) -> ExternalRuntimeUpdaterConfig:
+) -> DependencyUpdaterConfig:
     """Validate the active updater app settings."""
     repository = settings.get("repository")
     if not isinstance(repository, str):
-        raise ValueError("externalRuntimeUpdater.repository must be a string")
+        raise ValueError("dependencyUpdater.repository must be a string")
     repository_name(organization, repository)
     expected_keys = {
         "actionsKeyId",
@@ -80,19 +80,19 @@ def external_runtime_updater_config(
     }
     if set(settings) != expected_keys:
         raise ValueError(
-            "externalRuntimeUpdater settings require exactly " f"{sorted(expected_keys)!r}; found {sorted(settings)!r}"
+            "dependencyUpdater settings require exactly " f"{sorted(expected_keys)!r}; found {sorted(settings)!r}"
         )
 
     app_slug = settings["appSlug"]
     if not isinstance(app_slug, str) or APP_SLUG.fullmatch(app_slug) is None:
-        raise ValueError("externalRuntimeUpdater.appSlug must be a lowercase GitHub App slug")
+        raise ValueError("dependencyUpdater.appSlug must be a lowercase GitHub App slug")
     actions_key_id = settings["actionsKeyId"]
     if not isinstance(actions_key_id, str) or not actions_key_id:
-        raise ValueError("externalRuntimeUpdater.actionsKeyId must be a non-empty string")
+        raise ValueError("dependencyUpdater.actionsKeyId must be a non-empty string")
     encrypted_private_key = settings["encryptedPrivateKey"]
     if not isinstance(encrypted_private_key, str) or not encrypted_private_key:
-        raise ValueError("externalRuntimeUpdater.encryptedPrivateKey must be a non-empty string")
-    return ExternalRuntimeUpdaterConfig(
+        raise ValueError("dependencyUpdater.encryptedPrivateKey must be a non-empty string")
+    return DependencyUpdaterConfig(
         organization=organization,
         repository=repository,
         app_id=_positive_int(settings, "appId"),
@@ -103,14 +103,14 @@ def external_runtime_updater_config(
     )
 
 
-def external_runtime_updater_plan(config: ExternalRuntimeUpdaterConfig) -> ExternalRuntimeUpdaterPlan:
+def dependency_updater_plan(config: DependencyUpdaterConfig) -> DependencyUpdaterPlan:
     """Compute the app's credentials and non-overlapping merge rules."""
     repository = repository_name(config.organization, config.repository)
     organization_admin = RulesetBypassActorPlan(
         actor_type="OrganizationAdmin",
         bypass_mode="always",
     )
-    return ExternalRuntimeUpdaterPlan(
+    return DependencyUpdaterPlan(
         repository=repository,
         environment=UPDATER_ENVIRONMENT,
         review_ruleset_import=f"{repository}:{config.review_ruleset_id}",
@@ -146,12 +146,12 @@ def _bypass_actor_args(actor: RulesetBypassActorPlan) -> github.RepositoryRulese
     )
 
 
-def register_external_runtime_updater(
-    config: ExternalRuntimeUpdaterConfig,
+def register_dependency_updater(
+    config: DependencyUpdaterConfig,
     deployment_policy: pulumi.CustomResource,
 ) -> tuple[pulumi.CustomResource, ...]:
     """Register the app credentials and layered main-branch rules."""
-    plan = external_runtime_updater_plan(config)
+    plan = dependency_updater_plan(config)
     app_id = github.ActionsVariable(
         "external-runtime-updater-app-id",
         repository=plan.repository,
@@ -222,7 +222,7 @@ def register_external_runtime_updater(
     return app_id, app_slug, private_key, review_ruleset, required_ci_ruleset
 
 
-def register_external_runtime_updater_environment(
+def register_dependency_updater_environment(
     organization: str,
     repository: str,
 ) -> tuple[pulumi.CustomResource, pulumi.CustomResource]:

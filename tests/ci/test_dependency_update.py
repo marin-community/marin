@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -38,6 +39,31 @@ def _pull_request(policy: PullRequestPolicy = EXTERNAL_RUNTIME_POLICY, **overrid
     }
     values.update(overrides)
     return PullRequestSnapshot(**values)
+
+
+def _git(repository: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _git_repository(tmp_path: Path) -> tuple[Path, Path, str]:
+    remote = tmp_path / "remote.git"
+    repository = tmp_path / "repository"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "init", "-b", "main", str(repository)], check=True, capture_output=True)
+    _git(repository, "config", "user.name", "Test User")
+    _git(repository, "config", "user.email", "test@example.com")
+    (repository / "uv.lock").write_text("initial\n")
+    _git(repository, "add", "uv.lock")
+    _git(repository, "commit", "-m", "initial")
+    _git(repository, "remote", "add", "origin", str(remote))
+    _git(repository, "push", "-u", "origin", "main")
+    return repository, remote, _git(repository, "rev-parse", "HEAD")
 
 
 @pytest.mark.parametrize("policy", [EXTERNAL_RUNTIME_POLICY, NATIVE_PACKAGE_POLICY])
@@ -158,18 +184,15 @@ def test_changed_files_are_sorted_and_restricted_to_the_policy() -> None:
         validate_changed_files(["uv.lock", "src/backdoor.py"], policy=EXTERNAL_RUNTIME_POLICY)
 
 
-def test_prepare_update_branch_resets_main_with_a_lease_for_an_existing_branch(monkeypatch) -> None:
-    commands: list[list[str]] = []
-
-    def run(command: list[str], **_kwargs) -> subprocess.CompletedProcess:
-        commands.append(command)
-        return subprocess.CompletedProcess(
-            command,
-            0,
-            stdout=f"{EXPECTED_SHA}\trefs/heads/automation/native-package-versions\n",
-        )
-
-    monkeypatch.setattr("scripts.ci.dependency_update.subprocess.run", run)
+def test_prepare_update_branch_resets_main_with_a_lease_for_an_existing_branch(monkeypatch, tmp_path: Path) -> None:
+    repository, _remote, main_sha = _git_repository(tmp_path)
+    _git(repository, "switch", "-c", NATIVE_PACKAGE_POLICY.head_branch)
+    (repository / "uv.lock").write_text("stale update\n")
+    _git(repository, "commit", "-am", "stale update")
+    _git(repository, "push", "origin", NATIVE_PACKAGE_POLICY.head_branch)
+    remote_sha = _git(repository, "rev-parse", "HEAD")
+    _git(repository, "switch", "main")
+    monkeypatch.chdir(repository)
     monkeypatch.setattr(
         "scripts.ci.dependency_update._gh_json",
         lambda *_args: [{"url": "https://github.com/marin-community/marin/pull/123"}],
@@ -177,60 +200,51 @@ def test_prepare_update_branch_resets_main_with_a_lease_for_an_existing_branch(m
 
     branch = prepare_update_branch(policy=NATIVE_PACKAGE_POLICY, repository="marin-community/marin")
 
-    assert branch.expected_remote_sha == EXPECTED_SHA
+    assert branch.expected_remote_sha == remote_sha
     assert branch.pull_request_url == "https://github.com/marin-community/marin/pull/123"
     assert branch.push_mode is BranchPushMode.FORCE_WITH_LEASE
-    assert commands == [
-        ["git", "fetch", "origin", "main"],
-        ["git", "ls-remote", "--exit-code", "--heads", "origin", "automation/native-package-versions"],
-        ["git", "switch", "-C", "automation/native-package-versions", "origin/main"],
-    ]
+    assert _git(repository, "branch", "--show-current") == NATIVE_PACKAGE_POLICY.head_branch
+    assert _git(repository, "rev-parse", "HEAD") == main_sha
 
 
 def test_publish_update_stages_the_allowlist_and_creates_an_app_pull_request(monkeypatch, tmp_path: Path) -> None:
-    commands: list[list[str]] = []
-
-    def run(command: list[str], **_kwargs) -> subprocess.CompletedProcess:
-        commands.append(command)
-        stdout = f"{EXPECTED_SHA}\n" if command[:3] == ["git", "rev-parse", "HEAD"] else ""
-        return subprocess.CompletedProcess(command, 0, stdout=stdout)
-
-    monkeypatch.setattr("scripts.ci.dependency_update.subprocess.run", run)
-    monkeypatch.setattr(
-        "scripts.ci.dependency_update.changed_worktree_files",
-        lambda: ("uv.lock", "lib/dupekit/pyproject.toml"),
+    repository, remote, _main_sha = _git_repository(tmp_path)
+    _git(repository, "switch", "-c", NATIVE_PACKAGE_POLICY.head_branch)
+    (repository / "uv.lock").write_text("published update\n")
+    body_file = repository / "body.md"
+    body_file.write_text("Update native packages.\n")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import sys\n"
+        "if sys.argv[1:3] == ['pr', 'view']:\n"
+        "    print(json.dumps({'url': 'https://github.com/marin-community/marin/pull/123'}))\n"
     )
-    monkeypatch.setattr(
-        "scripts.ci.dependency_update._gh_json",
-        lambda *_args: {"url": "https://github.com/marin-community/marin/pull/123"},
-    )
+    fake_gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+    monkeypatch.chdir(repository)
 
     published = publish_update(
         policy=NATIVE_PACKAGE_POLICY,
         repository="marin-community/marin",
-        body_file=tmp_path / "body.md",
-        expected_remote_sha=EXPECTED_SHA,
+        body_file=body_file,
+        expected_remote_sha="",
         pull_request_url="",
-        push_mode=BranchPushMode.FORCE_WITH_LEASE,
+        push_mode=BranchPushMode.CREATE,
     )
 
-    assert published.head_sha == EXPECTED_SHA
     assert published.url == "https://github.com/marin-community/marin/pull/123"
-    assert [
-        "git",
-        "add",
-        "--",
-        "lib/dupekit/pyproject.toml",
-        "uv.lock",
-    ] in commands
-    assert [
-        "git",
-        "push",
-        f"--force-with-lease=refs/heads/automation/native-package-versions:{EXPECTED_SHA}",
-        "origin",
-        "HEAD:automation/native-package-versions",
-    ] in commands
-    assert any(command[:3] == ["gh", "pr", "create"] for command in commands)
+    remote_sha = subprocess.run(
+        ["git", "--git-dir", str(remote), "rev-parse", NATIVE_PACKAGE_POLICY.head_branch],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert published.head_sha == remote_sha
+    assert _git(repository, "show", f"{remote_sha}:uv.lock") == "published update"
 
 
 def test_native_package_policy_matches_every_compatibility_floor() -> None:

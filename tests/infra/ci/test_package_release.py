@@ -450,8 +450,5 @@ def test_dependency_update_workflows_share_scoped_app_pr_lifecycle(workflow_path
         "private-key": "${{ secrets.DEPENDENCY_UPDATER_PRIVATE_KEY }}",
         "repositories": "${{ github.event.repository.name }}",
     }
-    prepare_step = next(step for step in steps if step.get("id") == "prepare")
-    assert "scripts/ci/dependency_update.py prepare" in prepare_step["run"]
     pr_step = next(step for step in steps if step.get("name") == "Open or update pull request")
     assert pr_step["env"]["GH_TOKEN"] == "${{ steps.app-token.outputs.token }}"
-    assert "scripts/ci/dependency_update.py publish" in pr_step["run"]

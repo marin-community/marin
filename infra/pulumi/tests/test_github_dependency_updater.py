@@ -2,17 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from iac.github.external_runtime_updater import (
-    ExternalRuntimeUpdaterConfig,
+from iac.github.dependency_updater import (
+    DependencyUpdaterConfig,
     RulesetBypassActorPlan,
-    external_runtime_updater_config,
-    external_runtime_updater_plan,
+    dependency_updater_config,
+    dependency_updater_plan,
 )
 
 from scripts.ci.dependency_update_policy import GITHUB_ACTIONS_APP_ID, REQUIRED_CHECKS
 
 
-def _config(**overrides) -> ExternalRuntimeUpdaterConfig:
+def _config(**overrides) -> DependencyUpdaterConfig:
     values = {
         "organization": "marin-community",
         "repository": "marin-community/marin",
@@ -23,11 +23,11 @@ def _config(**overrides) -> ExternalRuntimeUpdaterConfig:
         "review_ruleset_id": 785435,
     }
     values.update(overrides)
-    return ExternalRuntimeUpdaterConfig(**values)
+    return DependencyUpdaterConfig(**values)
 
 
 def test_plan_preserves_admin_override_and_limits_the_updater_to_review_bypass() -> None:
-    plan = external_runtime_updater_plan(_config())
+    plan = dependency_updater_plan(_config())
 
     admin = RulesetBypassActorPlan(actor_type="OrganizationAdmin", bypass_mode="always")
     updater = RulesetBypassActorPlan(actor_type="Integration", bypass_mode="pull_request", actor_id=1234)
@@ -37,14 +37,14 @@ def test_plan_preserves_admin_override_and_limits_the_updater_to_review_bypass()
 
 
 def test_plan_binds_required_checks_to_github_actions() -> None:
-    plan = external_runtime_updater_plan(_config())
+    plan = dependency_updater_plan(_config())
 
     assert tuple(check.context for check in plan.required_checks) == REQUIRED_CHECKS
     assert {check.integration_id for check in plan.required_checks} == {GITHUB_ACTIONS_APP_ID}
 
 
-def test_plan_is_scoped_to_the_main_only_actions_environment() -> None:
-    plan = external_runtime_updater_plan(_config())
+def test_plan_targets_marins_dependency_update_environment() -> None:
+    plan = dependency_updater_plan(_config())
 
     assert plan.repository == "marin"
     assert plan.environment == "external-runtime-updater"
@@ -52,12 +52,12 @@ def test_plan_is_scoped_to_the_main_only_actions_environment() -> None:
 
 def test_plan_rejects_an_app_installation_for_another_organization() -> None:
     with pytest.raises(ValueError):
-        external_runtime_updater_plan(_config(repository="elsewhere/marin"))
+        dependency_updater_plan(_config(repository="elsewhere/marin"))
 
 
-def test_active_stack_config_requires_the_environment_sealed_private_key() -> None:
+def test_active_stack_config_requires_complete_sealed_key_metadata() -> None:
     with pytest.raises(ValueError):
-        external_runtime_updater_config(
+        dependency_updater_config(
             organization="marin-community",
             settings={
                 "repository": "marin-community/marin",

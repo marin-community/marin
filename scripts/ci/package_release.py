@@ -580,7 +580,8 @@ def validate_targeted_lock_change(
         raise ValueError(f"Expected {distribution}=={expected} to resolve from a registry")
 
 
-def _emit_github_output(path: Path | None, **values: str) -> None:
+def emit_github_output(path: Path | None, **values: str) -> None:
+    """Append single-line values to a GitHub Actions output file when configured."""
     if path is None:
         return
     with path.open("a", encoding="utf-8") as output:
@@ -918,7 +919,7 @@ def _bump_releases_command(args: argparse.Namespace) -> None:
     for name in selected:
         bump_native_requirement(name, versions[name]["version"], args.repo_root)
     changed_paths = [path for path in requirement_paths if (args.repo_root / path).read_text() != before[path]]
-    _emit_github_output(
+    emit_github_output(
         args.github_output,
         changed=str(bool(changed_paths)).lower(),
         requirement_paths=" ".join(path.as_posix() for path in changed_paths),
@@ -931,7 +932,7 @@ def _latest_native_releases_command(args: argparse.Namespace) -> None:
         separators=(",", ":"),
     )
     print(versions)
-    _emit_github_output(args.github_output, versions=versions)
+    emit_github_output(args.github_output, versions=versions)
 
 
 def _plan_command(args: argparse.Namespace) -> None:
@@ -958,7 +959,7 @@ def _plan_command(args: argparse.Namespace) -> None:
         "publish": str(next(iter(plan.versions.values())).mode != ReleaseMode.MANUAL).lower(),
     }
     print(json.dumps(values, indent=2, sort_keys=True))
-    _emit_github_output(args.github_output, **values)
+    emit_github_output(args.github_output, **values)
 
 
 def _build_command(args: argparse.Namespace) -> None:
