@@ -497,8 +497,9 @@ def build_small_run(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     # autoresearch: titrating capacity toward the 2% drop budget from the 2.5 baseline
-    # (0.63% drops measured); hero arm is 1.33, which runs ~5-6% drops and violates it.
-    default=2.0,
+    # (0.63% drops); 2.0 measured 1.32%, and histogram QB pulled it back to 1.25%.
+    # Hero arm is 1.33, which runs ~5-6% drops and violates the budget.
+    default=1.8,
     show_default=True,
     help="Fixed all-to-all capacity factor (EP hero arm is 1.33). Higher drops fewer and pads more.",
 )
