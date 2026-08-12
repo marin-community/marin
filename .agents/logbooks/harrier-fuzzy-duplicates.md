@@ -732,3 +732,13 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Decision: Take no recovery action because the East join tail cleared and both sources continue to write output.
 - Next action: Continue the 15-minute check cadence.
+
+### 2026-08-12 16:39 UTC - FinePDFs German completed
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 38 completed source artifacts. RNO has eight completed source artifacts. The full run has 46 of 292 completed source artifacts.
+- East result: `finepdfs-deu_latn_142650e9` completed all 1,170 output shards with 4,907,656 duplicate documents. The source step succeeded.
+- East progress: `finepdfs-hun_latn_5e462038` started its 191-shard join stage with live workers and no dead workers.
+- RNO progress: `hplt_v3_528b745e` got to 4,074 of 6,330 embedding shards with 32 live workers and no dead workers at 16:35 UTC.
+- Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
+- Next action: Watch the short FinePDFs Hungarian source through completion, then continue the regular check cadence.
