@@ -1,0 +1,18 @@
+{
+  "artifact_directory": "/tmp/shuttle-h100-contract-map-evidence-5370e6c-v33",
+  "container_profile": "CONTAINER_PROFILE_DEFAULT",
+  "job_id": "/dlwh/shuttle-h100-contract-map-evidence-5370e6c-v33",
+  "max_retries_failure": 0,
+  "resources": {
+    "cpu": 8,
+    "disk": "100GB",
+    "gpu": "H100x1",
+    "memory": "64GB"
+  },
+  "runner_mode": "--execute",
+  "runtime_python": "/opt/h100-evidence-runtime/bin/python",
+  "source_commit": "5370e6cc72bbef392234444214bc471452b7af31",
+  "source_tree": "cc825d677ae234bbe2ef6ab5b8afbb328f00a47a",
+  "task_image": "ghcr.io/marin-community/iris-task-h100-evidence:5238c39e7a506b919fc803046de4a9dc2c29d02f@sha256:2efa83fbf8f2073a4175eef919a9f0c6c2db435d7c1ec9ed79017e1ea0d10cef",
+  "timeout_seconds": 14400
+}
