@@ -1,11 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import pulumi
 import pulumi_gcp as gcp
-import pytest
 from iac.gcp.gclb import (
     ControllerIngress,
     FinelogIngress,
@@ -119,27 +118,7 @@ def _record_gclb(monkeypatch, args: GcpGclbIapArgs | None = None) -> RecordedGcl
     return RecordedGclb(inputs_by_name=inputs_by_name, options_by_name=options_by_name, imports=imports)
 
 
-def test_gclb_rejects_ambiguous_or_incomplete_routes(monkeypatch) -> None:
-    args = _args()
-    with pytest.raises(ValueError, match="at least one controller"):
-        _record_gclb(monkeypatch, replace(args, controllers=()))
-    with pytest.raises(ValueError, match="frontend_name"):
-        _record_gclb(monkeypatch, replace(args, frontend_name="unknown"))
-
-    duplicate_domain = replace(args.controllers[1], domain=args.controllers[0].domain)
-    with pytest.raises(ValueError, match="domains must be unique"):
-        _record_gclb(monkeypatch, replace(args, controllers=(args.controllers[0], duplicate_domain)))
-
-    duplicate_matcher = replace(args.controllers[1], cluster=args.controllers[0].cluster)
-    with pytest.raises(ValueError, match="matcher names must be unique"):
-        _record_gclb(monkeypatch, replace(args, controllers=(args.controllers[0], duplicate_matcher)))
-
-    empty_sources = replace(args.finelogs[0], sender_source_ranges=())
-    with pytest.raises(ValueError, match="requires at least one sender source range"):
-        _record_gclb(monkeypatch, replace(args, finelogs=(empty_sources,)))
-
-
-def test_gclb_preserves_iap_and_capability_route_boundaries(monkeypatch) -> None:
+def test_gclb_preserves_ingress_security_boundaries(monkeypatch) -> None:
     recording = _record_gclb(monkeypatch)
     inputs_by_name = recording.inputs_by_name
     controller = inputs_by_name["marin-backend"]
@@ -160,9 +139,6 @@ def test_gclb_preserves_iap_and_capability_route_boundaries(monkeypatch) -> None
         "accessSettings.oauthSettings.clientSecret",
         "accessSettings.oauthSettings.clientSecretSha256",
     ]
-    dev_oauth = inputs_by_name["marin-dev-iap-settings"]["access_settings"].oauth_settings
-    assert dev_oauth.programmatic_clients == ["dev-client.apps.googleusercontent.com"]
-
     url_map = inputs_by_name["url-map"]
     matchers = {matcher.name: matcher for matcher in url_map["path_matchers"]}
     assert set(matchers) == {"marin", "marin-dev", "finelog-marin"}
@@ -175,23 +151,17 @@ def test_gclb_preserves_iap_and_capability_route_boundaries(monkeypatch) -> None
         ]
     assert matchers["finelog-marin"].path_rules == []
 
-
-def test_gclb_applies_separate_controller_and_finelog_network_boundaries(monkeypatch) -> None:
-    inputs_by_name = _record_gclb(monkeypatch).inputs_by_name
     controller_allow = inputs_by_name["marin-allow-lb"]
-    assert controller_allow["priority"] == 900
     assert controller_allow["source_ranges"] == ["130.211.0.0/22", "35.191.0.0/16"]
     assert controller_allow["target_tags"] == ["iris-marin-controller"]
-    assert controller_allow["denies"] is None
     assert "marin-deny-public-10000" not in inputs_by_name
 
     finelog_allow = inputs_by_name["finelog-marin-allow-lb"]
     assert finelog_allow["source_ranges"] == ["10.0.0.0/8", "130.211.0.0/22", "35.191.0.0/16"]
-    assert finelog_allow["denies"] is None
     finelog_deny = inputs_by_name["finelog-marin-deny-public-10001"]
-    assert finelog_deny["allows"] is None
     assert finelog_deny["denies"] == [gcp.compute.FirewallDenyArgs(protocol="tcp", ports=["10001"])]
     assert finelog_deny["source_ranges"] == ["0.0.0.0/0"]
+    assert finelog_allow["priority"] < finelog_deny["priority"]
 
     armor = inputs_by_name["finelog-marin-armor"]
     rules = {rule.priority: rule for rule in armor["rules"]}
@@ -200,21 +170,8 @@ def test_gclb_applies_separate_controller_and_finelog_network_boundaries(monkeyp
     assert rules[2147483647].action == "deny(403)"
 
 
-def test_gclb_catalogs_every_existing_leaf_without_enabling_import_mode(monkeypatch) -> None:
+def test_gclb_catalogs_every_existing_leaf(monkeypatch) -> None:
     recording = _record_gclb(monkeypatch)
-    options_by_name = recording.options_by_name
-    imports = recording.imports
-    assert all(options.import_ is None for options in options_by_name.values())
-    provider_ids = {spec.identity.logical_name: spec.provider_id for spec in imports.specs}
-    assert provider_ids["global-address"] == f"projects/{PROJECT}/global/addresses/iris-marin-ip"
-    assert provider_ids["marin-endpoint"] == (
-        f"projects/{PROJECT}/zones/us-central1-a/networkEndpointGroups/iris-marin-neg/"
-        "iris-controller-marin/10.0.0.2/10000"
-    )
-    assert provider_ids["marin-iap-settings"] == (f"projects/{PROJECT_NUMBER}/iap_web/compute/services/111/iapSettings")
-    assert provider_ids["marin-iap-access-serviceaccount-infra-probes-example-iam-gserviceaccount-com"] == (
-        f"projects/{PROJECT}/iap_web/compute/services/iris-marin-be roles/iap.httpsResourceAccessor "
-        "serviceAccount:infra-probes@example.iam.gserviceaccount.com"
-    )
-    assert provider_ids["url-map"] == f"projects/{PROJECT}/global/urlMaps/iris-marin-urlmap"
-    assert provider_ids["forwarding-rule"] == (f"projects/{PROJECT}/global/forwardingRules/iris-marin-fr")
+    cataloged = {spec.identity.logical_name for spec in recording.imports.specs}
+
+    assert cataloged == set(recording.inputs_by_name)

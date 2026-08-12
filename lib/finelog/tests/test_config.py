@@ -39,7 +39,6 @@ def test_load_config_from_path(tmp_path: Path) -> None:
           gcp:
             project: my-proj
             zone: us-central1-a
-            network_tags: [finelog-test-lb]
         """,
     )
     cfg = load_finelog_config(str(cfg_path))
@@ -51,7 +50,6 @@ def test_load_config_from_path(tmp_path: Path) -> None:
     assert cfg.deployment.gcp.project == "my-proj"
     assert cfg.deployment.gcp.zone == "us-central1-a"
     assert cfg.deployment.gcp.machine_type == "n2-standard-4"  # default
-    assert cfg.deployment.gcp.network_tags == ("finelog-test-lb",)
     assert cfg.deployment.k8s is None
 
 
