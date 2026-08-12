@@ -387,3 +387,37 @@ zero- and ten-row bounds, selected-width binding, gap checks, invalid fragment
 characters, labels after the separator, and per-section state reset. No image
 build, GPU execution, v32 submission, retry, or relaunch was performed for
 this source repair.
+
+## V32 right-padded metric-label fragments
+
+The single v32 task used source
+`f3df518bece548d75227365e9b502415c666fb49`. It selected the 107-byte layout
+and accepted the kernel identity, identity-table close, fixed-column header,
+and three opaque metric-label rows. The first rejection was line 8. Its bounded
+diagnostic reports empty identity columns and an empty first metric column.
+The second metric column contains four lowercase ASCII bytes followed by two
+cell-padding spaces; the remaining metric columns each contain six nonspace
+lowercase-ASCII/underscore bytes. The observation does not disclose the
+private letters or their order.
+
+The parser now accepts a metric cell only when it is six ASCII spaces or a
+left-aligned fragment of one through six lowercase-ASCII/underscore bytes,
+including at least one lowercase byte, followed only by ASCII-space padding.
+Leading or internal padding remains invalid, as do uppercase, digits, other
+punctuation, controls, and non-ASCII bytes. At least one metric column must be
+nonempty in each row. The selected width, five exact ASCII-space gaps, and
+one-to-nine row limit remain mandatory.
+
+The longest exact requested metric name is 49 ASCII bytes. The parser now
+tracks the nonspace fragment bytes independently for all four metric columns
+and rejects a column above that bound. The count resets for every kernel
+section. It is validation state only: private fragments are not retained or
+emitted in parsed evidence.
+
+Behavioral tests exercise fragment lengths one through six under both reviewed
+layouts, exact 49-byte per-column acceptance, 50-byte rejection independently
+for every metric column, per-section reset, leading and internal padding,
+content after padding, tab and control bytes, sparse columns, row-count bounds,
+selected-width binding, and the production NCU subprocess boundary. No image
+build, GPU execution, v33 submission, retry, or relaunch was performed for
+this source repair.

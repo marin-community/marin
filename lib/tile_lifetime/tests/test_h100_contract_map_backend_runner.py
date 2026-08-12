@@ -647,15 +647,19 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
                     ),
                     _ncu_sass_metric_labels_row(
                         separator_widths,
-                        columns=("", "", "", "uvwxy_", "za__bc", "de__fg"),
+                        columns=("", "", "", "uvwx", "za__bc", "de__fg"),
                     ),
                 ),
                 separator_widths,
             )
         elif variant == "over-cap-metric-labels":
+            boundary_row = _ncu_sass_metric_labels_row(
+                separator_widths,
+                columns=("", "", "a", "b", "c", "d"),
+            )
             source = _ncu_sass_with_metric_label_rows(
                 source,
-                (_ncu_sass_metric_labels_row(separator_widths),) * 10,
+                (_ncu_sass_metric_labels_row(separator_widths),) * 8 + (boundary_row, boundary_row),
                 separator_widths,
             )
         elif variant == "wide-address-close-private":
@@ -782,7 +786,10 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
             runner._run_ncu_profile(*arguments)
         diagnostic = _ncu_sass_diagnostic(failure.value)
         assert diagnostic["line_number"] == 14
-        assert diagnostic["line_sha256"] == hashlib.sha256(_ncu_sass_metric_labels_row().encode()).hexdigest()
+        assert (
+            diagnostic["line_sha256"]
+            == hashlib.sha256(_ncu_sass_metric_labels_row(columns=("", "", "a", "b", "c", "d")).encode()).hexdigest()
+        )
         return
     if variant == "wide-address-close-private":
         with pytest.raises(ValueError) as failure:
@@ -1836,6 +1843,29 @@ def test_runner_ncu_sass_parser_accepts_independently_blank_metric_label_columns
 
 
 @pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+@pytest.mark.parametrize("fragment_bytes", range(1, 7))
+def test_runner_ncu_sass_parser_accepts_left_aligned_right_padded_metric_fragments(
+    separator_widths: tuple[int, ...],
+    fragment_bytes: int,
+) -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=separator_widths,
+    )
+    fragment = "a" + "_" * (fragment_bytes - 1)
+
+    parsed = runner.parse_ncu_sass(
+        source.replace(
+            _ncu_sass_metric_labels_row(separator_widths),
+            _ncu_sass_metric_labels_row(separator_widths, columns=("", "", fragment, "bcdef_", "ghijk_", "lmnop_")),
+        ),
+        (_NCU_KERNEL_A,),
+    )
+
+    assert parsed[0].name == _NCU_KERNEL_A
+
+
+@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
 def test_runner_ncu_sass_parser_rejects_all_blank_metric_label_row(
     separator_widths: tuple[int, ...],
 ) -> None:
@@ -1868,7 +1898,14 @@ def test_runner_ncu_sass_parser_accepts_reviewed_metric_label_row_count_bounds(
         separator_widths,
         columns=("", "", "abcde_", "_fghij", "kl_mno", "pqrst_"),
     )
-    rows = tuple((observed_four_lowercase, observed_five_lowercase)[index % 2] for index in range(row_count))
+    boundary_fragment = _ncu_sass_metric_labels_row(
+        separator_widths,
+        columns=("", "", "a", "b", "c", "d"),
+    )
+    rows = tuple(
+        boundary_fragment if index == 8 else (observed_four_lowercase, observed_five_lowercase)[index % 2]
+        for index in range(row_count)
+    )
 
     parsed = runner.parse_ncu_sass(
         _ncu_sass_with_metric_label_rows(source, rows, separator_widths),
@@ -1876,6 +1913,59 @@ def test_runner_ncu_sass_parser_accepts_reviewed_metric_label_row_count_bounds(
     )
 
     assert parsed[0].name == _NCU_KERNEL_A
+
+
+@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+@pytest.mark.parametrize("over_bound_index", (2, 3, 4, 5))
+def test_runner_ncu_sass_parser_rejects_metric_fragment_bytes_beyond_longest_requested_name(
+    separator_widths: tuple[int, ...],
+    over_bound_index: int,
+) -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=separator_widths,
+    )
+    final_columns = ["", "", "a", "b", "c", "d"]
+    final_columns[over_bound_index] = "ab"
+    rows = (_ncu_sass_metric_labels_row(separator_widths),) * 8 + (
+        _ncu_sass_metric_labels_row(separator_widths, columns=tuple(final_columns)),
+    )
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(
+            _ncu_sass_with_metric_label_rows(source, rows, separator_widths),
+            (_NCU_KERNEL_A,),
+        )
+
+    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 13
+
+
+@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+@pytest.mark.parametrize("label_index", (2, 3, 4, 5))
+@pytest.mark.parametrize(
+    "bad_fragment",
+    (" abcde", "abc de", "ab cd_", "abc\tde", "abc\x1bde"),
+    ids=("left-padded", "internal-space", "content-after-padding", "tab", "control"),
+)
+def test_runner_ncu_sass_parser_rejects_mispadded_metric_fragments(
+    separator_widths: tuple[int, ...],
+    label_index: int,
+    bad_fragment: str,
+) -> None:
+    columns = ["", "", "abcde_", "fghij_", "klmno_", "pqrst_"]
+    columns[label_index] = bad_fragment
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=separator_widths,
+    ).replace(
+        _ncu_sass_metric_labels_row(separator_widths),
+        _ncu_sass_metric_labels_row(separator_widths, columns=tuple(columns)),
+    )
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 5
 
 
 @pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
@@ -2101,6 +2191,33 @@ def test_runner_ncu_sass_parser_resets_metric_label_state_for_each_kernel(
 
     with pytest.raises(ValueError):
         runner.parse_ncu_sass("\n".join(lines) + "\n", (_NCU_KERNEL_A, _NCU_KERNEL_B))
+
+
+@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+def test_runner_ncu_sass_parser_resets_metric_fragment_byte_totals_for_each_kernel(
+    separator_widths: tuple[int, ...],
+) -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        (_NCU_KERNEL_B, ("0000000000000010 EXIT",)),
+        separator_widths=separator_widths,
+    )
+    full_row = _ncu_sass_metric_labels_row(
+        separator_widths,
+        columns=("", "", "abcde_", "fghij_", "klmno_", "pqrst_"),
+    )
+    final_row = _ncu_sass_metric_labels_row(
+        separator_widths,
+        columns=("", "", "a", "b", "c", "d"),
+    )
+    rows = (full_row,) * 8 + (final_row,)
+    marker = _ncu_sass_metric_labels_row(separator_widths) + "\n"
+    for _ in range(2):
+        source = source.replace(marker, "\n".join(rows) + "\n", 1)
+
+    parsed = runner.parse_ncu_sass(source, (_NCU_KERNEL_A, _NCU_KERNEL_B))
+
+    assert tuple(section.name for section in parsed) == (_NCU_KERNEL_A, _NCU_KERNEL_B)
 
 
 def test_runner_ncu_sass_parser_accepts_unknown_source_label_padding() -> None:
