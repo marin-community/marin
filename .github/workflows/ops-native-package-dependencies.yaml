@@ -1,0 +1,95 @@
+name: "Ops - Native Package Dependency Update"
+
+on:
+  workflow_run:
+    workflows: ["Marin - Release Packages"]
+    types: [completed]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ops-native-package-dependencies
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event != 'pull_request' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: external-runtime-updater
+    steps:
+      - name: Generate repository app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.DEPENDENCY_UPDATER_APP_ID }}
+          private-key: ${{ secrets.DEPENDENCY_UPDATER_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Prepare shared update branch
+        id: prepare
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          python -m scripts.ci.dependency_update prepare \
+            --kind native-package \
+            --repository "$GITHUB_REPOSITORY" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Resolve published native packages
+        id: releases
+        run: |
+          python scripts/ci/package_release.py latest-native-releases \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Advance compatibility floors and lock
+        id: bump
+        env:
+          VERSIONS: ${{ steps.releases.outputs.versions }}
+        run: |
+          python scripts/ci/package_release.py bump-releases \
+            --versions "$VERSIONS" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Open or update pull request
+        id: pull-request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          BODY_FILE: .github/native-package-version-pr.md
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          python -m scripts.ci.dependency_update publish \
+            --kind native-package \
+            --repository "$GITHUB_REPOSITORY" \
+            --body-file "$BODY_FILE" \
+            --expected-remote-sha "${{ steps.prepare.outputs.expected_remote_sha }}" \
+            --pull-request-url "${{ steps.prepare.outputs.pr_url }}" \
+            --push-mode "${{ steps.prepare.outputs.push_mode }}" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Merge green native package update
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          python -m scripts.ci.dependency_update merge \
+            --kind native-package \
+            --pr "${{ steps.pull-request.outputs.pr_url }}" \
+            --repository "$GITHUB_REPOSITORY" \
+            --app-slug "${{ vars.DEPENDENCY_UPDATER_APP_SLUG }}" \
+            --expected-head-sha "${{ steps.pull-request.outputs.head_sha }}" \
+            --timeout 3600

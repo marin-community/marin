@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared test helpers for provider unit tests.
+"""Fake cloud backend handles and factories for Iris tests.
 
 FakeWorkerHandle and FakeSliceHandle are in-memory implementations of the
 RemoteWorkerHandle and SliceHandle protocols. They replace MagicMock-based
@@ -12,6 +12,8 @@ but support failure injection for testing error paths.
 from collections.abc import Callable
 from dataclasses import dataclass
 from unittest.mock import MagicMock
+
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.config import SliceConfig
 from iris.cluster.platforms.types import (
@@ -25,7 +27,6 @@ from iris.cluster.platforms.types import (
     WorkerStatus as CloudWorkerStatus,
 )
 from iris.rpc import vm_pb2
-from rigging.timing import Duration, Timestamp
 
 
 def _cloud_worker_state_from_iris(state: vm_pb2.VmState) -> CloudWorkerState:

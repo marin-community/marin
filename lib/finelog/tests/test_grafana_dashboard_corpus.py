@@ -89,6 +89,7 @@ def test_accelerators_dashboard_exposes_every_panel_query_to_the_benchmark() -> 
         "gpu_power",
         "gpu_power_by_device_model",
         "gpu_power_by_training_run",
+        "gpu_temperature_distribution",
         "gpus_reporting_a_hardware_fault",
         "hbm_in_use_by_cluster",
         "hottest_gpu",
@@ -96,6 +97,7 @@ def test_accelerators_dashboard_exposes_every_panel_query_to_the_benchmark() -> 
         "mean_utilization",
         "nodes_reporting",
         "peak_gpu_temperature_by_cluster",
+        "sm_utilization_distribution",
         "telemetry_freshness",
         "tensor_core_activity_by_cluster",
     }

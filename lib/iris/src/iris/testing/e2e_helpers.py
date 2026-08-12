@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Job callables for e2e tests, organized as static methods on TestJobs.
+"""Job callables for E2E tests, organized as static methods on TestJobs.
 
 All methods use logging as the primary communication channel. They are
 serialized via cloudpickle (Entrypoint.from_callable) so static methods
@@ -11,10 +11,11 @@ import logging
 import os
 import time
 
+from rigging.timing import Duration
+
 from iris.cluster.client import get_job_info
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import EndpointServiceClientSync
-from rigging.timing import Duration
 
 
 class TestJobs:
