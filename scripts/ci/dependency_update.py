@@ -418,7 +418,18 @@ def merge_when_green(
             raise RuntimeError(f"dependency update is blocked: state={snapshot.state}, failing={list(checks.failing)}")
         if decision is MergeDecision.MERGE:
             subprocess.run(
-                ["gh", "pr", "merge", pr, "--repo", repository, "--squash"],
+                [
+                    "gh",
+                    "pr",
+                    "merge",
+                    pr,
+                    "--repo",
+                    repository,
+                    "--squash",
+                    "--admin",
+                    "--match-head-commit",
+                    expected_head_sha,
+                ],
                 check=True,
             )
             merged = pull_request_snapshot(pr, repository)

@@ -18,7 +18,12 @@ from haliax.partitioning import ResourceAxis
 from jax._src import config as jax_config
 from jax.lax import Precision
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec, use_abstract_mesh
-from test_utils import skip_if_module_missing, skip_if_no_torch, skip_if_not_enough_devices, use_test_mesh
+from levanter.testing.helpers import (
+    skip_if_module_missing,
+    skip_if_no_torch,
+    skip_if_not_enough_devices,
+    use_test_mesh,
+)
 
 from levanter.grug.attention import align_kv_heads
 from levanter.layers.attention import (
