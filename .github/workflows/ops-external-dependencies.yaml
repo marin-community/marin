@@ -16,17 +16,13 @@ jobs:
     environment: external-runtime-updater
     permissions:
       contents: read
-    env:
-      BRANCH: automation/external-dependencies
-      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-      TITLE: "[dependencies] Advance external runtimes"
     steps:
       - name: Generate app token
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.EXTERNAL_RUNTIME_UPDATER_APP_ID }}
-          private-key: ${{ secrets.EXTERNAL_RUNTIME_UPDATER_PRIVATE_KEY }}
+          app-id: ${{ vars.DEPENDENCY_UPDATER_APP_ID }}
+          private-key: ${{ secrets.DEPENDENCY_UPDATER_PRIVATE_KEY }}
           repositories: ${{ github.event.repository.name }}
 
       - name: Checkout default branch
@@ -49,31 +45,10 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          set -euo pipefail
-          git fetch origin "$DEFAULT_BRANCH"
-          pr_url=$(gh pr list \
-            --head "$BRANCH" \
-            --base "$DEFAULT_BRANCH" \
-            --state open \
-            --json url \
-            --jq '.[0].url // ""')
-
-          set +e
-          git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null
-          branch_status=$?
-          set -e
-          if [[ "$branch_status" == "0" ]]; then
-            git fetch origin "$BRANCH"
-            echo "force_push=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$branch_status" == "2" ]]; then
-            echo "force_push=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Could not inspect origin/$BRANCH"
-            exit "$branch_status"
-          fi
-
-          git switch -C "$BRANCH" "origin/$DEFAULT_BRANCH"
-          echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
+          python scripts/ci/dependency_update.py prepare \
+            --kind external-runtime \
+            --repository "$GITHUB_REPOSITORY" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Resolve external dependency heads
         id: update
@@ -99,43 +74,17 @@ jobs:
         id: pull-request
         if: steps.update.outputs.changed == 'true'
         env:
-          FORCE_PUSH: ${{ steps.prepare.outputs.force_push }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_BODY: ${{ runner.temp }}/external-dependencies.md
-          PR_URL: ${{ steps.prepare.outputs.pr_url }}
         run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add --update
-          git commit -m "$TITLE"
-
-          if [[ "$FORCE_PUSH" == "true" ]]; then
-            git push --force-with-lease origin "HEAD:$BRANCH"
-          else
-            git push origin "HEAD:$BRANCH"
-          fi
-
-          pr_url="$PR_URL"
-          if [[ -z "$pr_url" ]]; then
-            gh pr create \
-              --base "$DEFAULT_BRANCH" \
-              --head "$BRANCH" \
-              --title "$TITLE" \
-              --body-file "$PR_BODY" \
-              --label agent-generated \
-              --label dependencies >/dev/null
-            pr_url=$(gh pr view "$BRANCH" --json url --jq .url)
-          else
-            gh pr edit "$pr_url" \
-              --title "$TITLE" \
-              --body-file "$PR_BODY" \
-              --add-label agent-generated \
-              --add-label dependencies >/dev/null
-          fi
-          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
-          echo "Updated $pr_url"
+          python scripts/ci/dependency_update.py publish \
+            --kind external-runtime \
+            --repository "$GITHUB_REPOSITORY" \
+            --body-file "$PR_BODY" \
+            --expected-remote-sha "${{ steps.prepare.outputs.expected_remote_sha }}" \
+            --pull-request-url "${{ steps.prepare.outputs.pr_url }}" \
+            --push-mode "${{ steps.prepare.outputs.push_mode }}" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Merge green runtime update
         if: steps.update.outputs.changed == 'true'
@@ -146,6 +95,6 @@ jobs:
             --kind external-runtime \
             --pr "${{ steps.pull-request.outputs.pr_url }}" \
             --repository "$GITHUB_REPOSITORY" \
-            --app-slug "${{ vars.EXTERNAL_RUNTIME_UPDATER_APP_SLUG }}" \
+            --app-slug "${{ vars.DEPENDENCY_UPDATER_APP_SLUG }}" \
             --expected-head-sha "${{ steps.pull-request.outputs.head_sha }}" \
             --timeout 3600

@@ -38,46 +38,40 @@ Keep service-account JSON and SSH credentials until their workflows use OIDC. Gi
 environments, repository settings, and other non-secret resources can be added here as normally
 managed Pulumi resources.
 
-## External runtime updater app
+## Dependency updater app
 
-`Ops - External Dependency Update` uses a private, repository-scoped GitHub App instead of the
-shared Nightshift app. The app may write repository contents and pull requests; it has no webhook,
-OAuth, administration, or organization permissions. Its private key is available only through the
-`external-runtime-updater` Actions environment, whose deployment policy accepts only `main` and
-rejects pull-request branches. Pulumi makes that app the only integration that bypasses the
-one-review rule. A separate ruleset has no bypass actors and requires GitHub Actions' own
-`marin-integration`, `marin-lint`, `rust-checks`, and `unit-tests` check runs before any pull request
-can merge; matching context names from another integration do not satisfy it.
+The external-runtime and native-package dependency workflows share a private, repository-scoped
+GitHub App instead of the Nightshift app. It may write repository contents and pull requests; it has
+no webhook, OAuth, administration, or organization permissions. Its private key is available only
+through the `external-runtime-updater` Actions environment, whose deployment policy accepts `main`
+and rejects pull-request branches.
 
-GitHub App registration and initial installation require an organization owner to confirm them in
-GitHub. GitHub does not expose that confirmation through the Pulumi provider. Bootstrap the app
-once before enabling the stack resource:
+Pulumi gives the app a pull-request-only bypass of the one-review rule and no required-CI bypass.
+Organization admins retain an always-on emergency bypass on both rulesets. The CI ruleset requires
+GitHub Actions' own `marin-integration`, `marin-lint`, `rust-checks`, and `unit-tests` runs; matching
+context names from another integration do not satisfy it.
 
-1. Run `pulumi up` once with the checked-in `bootstrapIssue: 8146` settings. This creates the
-   main-only Actions environment needed to seal and hold the app key. The issue number makes the
-   incomplete state visible in Pulumi output; keep this pull request in draft until step 5 replaces
-   the bootstrap object.
-2. Open the [preconfigured organization app registration](https://github.com/organizations/marin-community/settings/apps/new?name=marin-external-runtime-updater&description=Advances%20Marin%27s%20immutable%20external%20runtime%20pins&url=https%3A%2F%2Fgithub.com%2Fmarin-community%2Fmarin&public=false&webhook_active=false&contents=write&pull_requests=write),
-   verify that only Contents and Pull requests have read/write access, and create the private app.
-3. Generate a private key on the app's General page. Install the app on `marin-community`, selecting
-   only the `marin` repository. Record the app ID and the slug from its settings URL. The installation
-   remains owner-managed because GitHub's repository-selection endpoint requires a user-scoped token;
-   unattended Pulumi runs do not receive that authority.
-4. Seal the private key to the protected environment's Actions public key. `--no-store` prints
-   ciphertext without creating the secret. Record the matching public-key ID:
+App registration and installation remain owner-managed because GitHub's repository-selection
+endpoint requires a user-scoped token unsuitable for unattended Pulumi runs. The installation must
+select only `marin`. To recreate or rotate the app credential:
+
+1. Verify that the app has only Contents and Pull requests read/write permission and remains
+   installed only on `marin`. Record the app ID and slug from its settings page.
+2. Generate a private key and seal it to the protected environment's Actions public key. `--no-store`
+   prints ciphertext without creating the secret. Record the matching public-key ID:
 
    ```bash
    repository_id=$(gh api repos/marin-community/marin --jq .id)
    gh api "repositories/$repository_id/environments/external-runtime-updater/secrets/public-key" \
      --jq .key_id
-   gh secret set EXTERNAL_RUNTIME_UPDATER_PRIVATE_KEY \
+   gh secret set DEPENDENCY_UPDATER_PRIVATE_KEY \
      --repo marin-community/marin --env external-runtime-updater --no-store \
      < /path/to/private-key.pem
    ```
 
-5. In this directory, replace the disabled bootstrap object with the values from GitHub. The
-   ciphertext is safe to commit: only GitHub can decrypt it, and Pulumi never receives the private
-   key plaintext.
+3. Update `externalRuntimeUpdater` in `Pulumi.marin-community.yaml` with the app metadata, public-key
+   ID, and sealed ciphertext. The ciphertext is safe to commit: only GitHub can decrypt it, and
+   Pulumi never receives the private key plaintext.
 
    ```yaml
    marin-github:externalRuntimeUpdater:
@@ -89,8 +83,7 @@ once before enabling the stack resource:
      encryptedPrivateKey: example-base64-ciphertext
    ```
 
-6. Run `pulumi preview`, confirm that the existing `protect main` ruleset is imported rather than
-   replaced, then run `pulumi up`. Run the live credential audit afterward:
+4. Run `pulumi preview`, verify the ruleset bypass actors, then run `pulumi up` and the live audit:
 
    ```bash
    pulumi preview

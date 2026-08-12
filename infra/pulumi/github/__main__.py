@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import pulumi
 from iac.github.credentials import credential_manifest
 from iac.github.external_runtime_updater import (
-    ExternalRuntimeUpdaterBootstrap,
     external_runtime_updater_config,
     register_external_runtime_updater,
     register_external_runtime_updater_environment,
@@ -45,15 +44,9 @@ def main() -> None:
         updater.organization,
         updater.repository,
     )
-    if isinstance(updater, ExternalRuntimeUpdaterBootstrap):
-        pulumi.log.warn(
-            f"external runtime updater bootstrap is tracked by issue #{updater.issue}; "
-            "see infra/pulumi/github/README.md"
-        )
-    else:
-        register_external_runtime_updater(updater, deployment_policy)
+    register_external_runtime_updater(updater, deployment_policy)
     pulumi.export("credential_count", len(plans))
-    pulumi.export("external_runtime_updater_enabled", not isinstance(updater, ExternalRuntimeUpdaterBootstrap))
+    pulumi.export("external_runtime_updater_enabled", True)
 
 
 main()

@@ -2,7 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Validate and merge generated dependency update pull requests."""
+"""Create, validate, and merge generated dependency update pull requests."""
 
 import argparse
 import json
@@ -11,6 +11,7 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from scripts.ci.dependency_update_policy import (
     DEPENDENCY_UPDATE_POLICIES,
@@ -18,6 +19,8 @@ from scripts.ci.dependency_update_policy import (
     DependencyUpdate,
     PullRequestPolicy,
 )
+
+MERGED_PULL_REQUEST_STATE = "MERGED"
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,24 @@ class MergeDecision(StrEnum):
     FAIL = "fail"
     MERGE = "merge"
     DONE = "done"
+
+
+class BranchPushMode(StrEnum):
+    CREATE = "create"
+    FORCE_WITH_LEASE = "force-with-lease"
+
+
+@dataclass(frozen=True)
+class UpdateBranch:
+    expected_remote_sha: str
+    pull_request_url: str
+    push_mode: BranchPushMode
+
+
+@dataclass(frozen=True)
+class PublishedPullRequest:
+    head_sha: str
+    url: str
 
 
 @dataclass(frozen=True)
@@ -122,7 +143,7 @@ def evaluate_required_checks(rows: Iterable[CheckRow], *, required: tuple[str, .
 
 def evaluate_merge(state: str, checks: RequiredCheckGate) -> MergeDecision:
     """Choose the next action from the pull-request and required-check state."""
-    if state == "MERGED":
+    if state == MERGED_PULL_REQUEST_STATE:
         return MergeDecision.DONE
     if state != "OPEN" or checks.failing:
         return MergeDecision.FAIL
@@ -185,6 +206,163 @@ def changed_worktree_files() -> tuple[str, ...]:
     return tuple(result.stdout.splitlines())
 
 
+def prepare_update_branch(*, policy: PullRequestPolicy, repository: str) -> UpdateBranch:
+    """Reset the update branch to its base and return the existing PR and push mode."""
+    subprocess.run(["git", "fetch", "origin", policy.base_branch], check=True)
+    pull_requests = _gh_json(
+        "pr",
+        "list",
+        "--repo",
+        repository,
+        "--head",
+        policy.head_branch,
+        "--base",
+        policy.base_branch,
+        "--state",
+        "open",
+        "--json",
+        "url",
+    )
+    if not isinstance(pull_requests, list) or any(not isinstance(pr, dict) for pr in pull_requests):
+        raise ValueError(f"GitHub returned an invalid pull request list: {pull_requests!r}")
+    if len(pull_requests) > 1:
+        raise ValueError(f"found multiple open pull requests for {policy.head_branch!r}")
+    pull_request_url = ""
+    if pull_requests:
+        url = pull_requests[0].get("url")
+        if not isinstance(url, str):
+            raise ValueError(f"GitHub returned an invalid pull request URL: {url!r}")
+        pull_request_url = url
+
+    remote_branch = subprocess.run(
+        ["git", "ls-remote", "--exit-code", "--heads", "origin", policy.head_branch],
+        capture_output=True,
+        text=True,
+    )
+    if remote_branch.returncode == 0:
+        fields = remote_branch.stdout.split()
+        if len(fields) != 2 or fields[1] != f"refs/heads/{policy.head_branch}":
+            raise ValueError(f"git returned an invalid remote branch: {remote_branch.stdout!r}")
+        expected_remote_sha = fields[0]
+        push_mode = BranchPushMode.FORCE_WITH_LEASE
+    elif remote_branch.returncode == 2:
+        expected_remote_sha = ""
+        push_mode = BranchPushMode.CREATE
+    else:
+        remote_branch.check_returncode()
+        raise AssertionError("unreachable")
+
+    subprocess.run(
+        ["git", "switch", "-C", policy.head_branch, f"origin/{policy.base_branch}"],
+        check=True,
+    )
+    return UpdateBranch(
+        expected_remote_sha=expected_remote_sha,
+        pull_request_url=pull_request_url,
+        push_mode=push_mode,
+    )
+
+
+def publish_update(
+    *,
+    policy: PullRequestPolicy,
+    repository: str,
+    body_file: Path,
+    expected_remote_sha: str,
+    pull_request_url: str,
+    push_mode: BranchPushMode,
+) -> PublishedPullRequest:
+    """Commit the validated generator output and create or update its pull request."""
+    changed_files = validate_changed_files(changed_worktree_files(), policy=policy)
+    if not changed_files:
+        raise ValueError("dependency update has no changed files to publish")
+
+    subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"],
+        check=True,
+    )
+    subprocess.run(["git", "add", "--", *changed_files], check=True)
+    subprocess.run(["git", "commit", "-m", policy.title], check=True)
+    push_args = ["git", "push"]
+    if push_mode is BranchPushMode.FORCE_WITH_LEASE:
+        if not expected_remote_sha:
+            raise ValueError("force-with-lease requires the expected remote SHA")
+        push_args.append(f"--force-with-lease=refs/heads/{policy.head_branch}:{expected_remote_sha}")
+    push_args.extend(["origin", f"HEAD:{policy.head_branch}"])
+    subprocess.run(push_args, check=True)
+
+    if pull_request_url:
+        subprocess.run(
+            [
+                "gh",
+                "pr",
+                "edit",
+                pull_request_url,
+                "--repo",
+                repository,
+                "--title",
+                policy.title,
+                "--body-file",
+                str(body_file),
+                "--add-label",
+                "agent-generated",
+                "--add-label",
+                "dependencies",
+            ],
+            check=True,
+        )
+    else:
+        subprocess.run(
+            [
+                "gh",
+                "pr",
+                "create",
+                "--repo",
+                repository,
+                "--base",
+                policy.base_branch,
+                "--head",
+                policy.head_branch,
+                "--title",
+                policy.title,
+                "--body-file",
+                str(body_file),
+                "--label",
+                "agent-generated",
+                "--label",
+                "dependencies",
+            ],
+            check=True,
+        )
+        payload = _gh_json(
+            "pr",
+            "view",
+            policy.head_branch,
+            "--repo",
+            repository,
+            "--json",
+            "url",
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("url"), str):
+            raise ValueError(f"GitHub returned an invalid created pull request: {payload!r}")
+        pull_request_url = payload["url"]
+
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return PublishedPullRequest(head_sha=head, url=pull_request_url)
+
+
+def _append_github_output(path: Path, **values: str) -> None:
+    with path.open("a") as output:
+        for name, value in values.items():
+            output.write(f"{name}={value}\n")
+
+
 def merge_when_green(
     *,
     pr: str,
@@ -216,7 +394,7 @@ def merge_when_green(
                 check=True,
             )
             merged = pull_request_snapshot(pr, repository)
-            if merged.state != "MERGED":
+            if merged.state != MERGED_PULL_REQUEST_STATE:
                 raise RuntimeError(f"merge command completed but pull request is {merged.state}")
             return
         if time.monotonic() >= deadline:
@@ -232,6 +410,18 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     changed_files = subparsers.add_parser("changed-files", help="validate and print generator changes")
     changed_files.add_argument("--kind", choices=DependencyUpdate, required=True)
+    prepare = subparsers.add_parser("prepare", help="reset the generated update branch")
+    prepare.add_argument("--kind", choices=DependencyUpdate, required=True)
+    prepare.add_argument("--repository", required=True)
+    prepare.add_argument("--github-output", type=Path, required=True)
+    publish = subparsers.add_parser("publish", help="commit and publish a generated update")
+    publish.add_argument("--kind", choices=DependencyUpdate, required=True)
+    publish.add_argument("--repository", required=True)
+    publish.add_argument("--body-file", type=Path, required=True)
+    publish.add_argument("--expected-remote-sha", default="")
+    publish.add_argument("--pull-request-url", default="")
+    publish.add_argument("--push-mode", choices=BranchPushMode, required=True)
+    publish.add_argument("--github-output", type=Path, required=True)
     merge = subparsers.add_parser("merge", help="wait for required checks and merge")
     merge.add_argument("--kind", choices=DependencyUpdate, required=True)
     merge.add_argument("--pr", required=True)
@@ -248,6 +438,31 @@ def main() -> None:
     policy = DEPENDENCY_UPDATE_POLICIES[DependencyUpdate(args.kind)]
     if args.command == "changed-files":
         print("\n".join(validate_changed_files(changed_worktree_files(), policy=policy)))
+        return
+    if args.command == "prepare":
+        branch = prepare_update_branch(policy=policy, repository=args.repository)
+        _append_github_output(
+            args.github_output,
+            expected_remote_sha=branch.expected_remote_sha,
+            pr_url=branch.pull_request_url,
+            push_mode=branch.push_mode,
+        )
+        return
+    if args.command == "publish":
+        pull_request = publish_update(
+            policy=policy,
+            repository=args.repository,
+            body_file=args.body_file,
+            expected_remote_sha=args.expected_remote_sha,
+            pull_request_url=args.pull_request_url,
+            push_mode=BranchPushMode(args.push_mode),
+        )
+        _append_github_output(
+            args.github_output,
+            head_sha=pull_request.head_sha,
+            pr_url=pull_request.url,
+        )
+        print(f"Updated {pull_request.url}")
         return
     merge_when_green(
         pr=args.pr,

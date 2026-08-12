@@ -3,7 +3,6 @@
 
 import pytest
 from iac.github.external_runtime_updater import (
-    ExternalRuntimeUpdaterBootstrap,
     ExternalRuntimeUpdaterConfig,
     RulesetBypassActorPlan,
     external_runtime_updater_config,
@@ -49,28 +48,11 @@ def test_plan_is_scoped_to_the_main_only_actions_environment() -> None:
 
     assert plan.repository == "marin"
     assert plan.environment == "external-runtime-updater"
-    assert plan.deployment_branch == "main"
 
 
 def test_plan_rejects_an_app_installation_for_another_organization() -> None:
     with pytest.raises(ValueError):
         external_runtime_updater_plan(_config(repository="elsewhere/marin"))
-
-
-def test_stack_config_tracks_the_incomplete_bootstrap_on_its_issue() -> None:
-    config = external_runtime_updater_config(
-        organization="marin-community",
-        settings={
-            "repository": "marin-community/marin",
-            "bootstrapIssue": 8146,
-        },
-    )
-
-    assert config == ExternalRuntimeUpdaterBootstrap(
-        organization="marin-community",
-        repository="marin-community/marin",
-        issue=8146,
-    )
 
 
 def test_active_stack_config_requires_the_environment_sealed_private_key() -> None:

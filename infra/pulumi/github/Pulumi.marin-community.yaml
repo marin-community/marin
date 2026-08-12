@@ -227,7 +227,7 @@ config:
       source_kind: manual
       source_ref: owner-recovery:claude-nightshift-private-key
       disposition: keep
-    - name: EXTERNAL_RUNTIME_UPDATER_PRIVATE_KEY
+    - name: DEPENDENCY_UPDATER_PRIVATE_KEY
       scope: environment
       repository: marin-community/marin
       environment: external-runtime-updater

@@ -35,6 +35,7 @@ from scripts.ci.package_release import (
 from scripts.python_libs_package import PACKAGES as BUNDLED_LIBRARIES
 
 RELEASE_WORKFLOW = Path(".github/workflows/marin-release-libs-wheels.yaml")
+EXTERNAL_UPDATE_WORKFLOW = Path(".github/workflows/ops-external-dependencies.yaml")
 NATIVE_UPDATE_WORKFLOW = Path(".github/workflows/ops-native-package-dependencies.yaml")
 
 PLATFORM_WHEEL_TAGS = (
@@ -433,14 +434,24 @@ def test_native_version_updates_run_from_main_after_trusted_releases() -> None:
     assert "bump" not in release_workflow["jobs"]
     assert workflow["permissions"] == {"contents": "read"}
     assert "workflow_run.event != 'pull_request'" in workflow["jobs"]["update"]["if"]
-    assert workflow["jobs"]["update"]["environment"] == "external-runtime-updater"
+
+
+@pytest.mark.parametrize("workflow_path", [EXTERNAL_UPDATE_WORKFLOW, NATIVE_UPDATE_WORKFLOW])
+def test_dependency_update_workflows_share_scoped_app_pr_lifecycle(workflow_path: Path) -> None:
+    workflow = _workflow(workflow_path)
+    job = workflow["jobs"]["update"]
+
+    assert job["environment"] == "external-runtime-updater"
     steps = workflow["jobs"]["update"]["steps"]
     token_step = next(step for step in steps if step.get("id") == "app-token")
     assert token_step["uses"] == "actions/create-github-app-token@v3"
     assert token_step["with"] == {
-        "app-id": "${{ vars.EXTERNAL_RUNTIME_UPDATER_APP_ID }}",
-        "private-key": "${{ secrets.EXTERNAL_RUNTIME_UPDATER_PRIVATE_KEY }}",
+        "app-id": "${{ vars.DEPENDENCY_UPDATER_APP_ID }}",
+        "private-key": "${{ secrets.DEPENDENCY_UPDATER_PRIVATE_KEY }}",
         "repositories": "${{ github.event.repository.name }}",
     }
+    prepare_step = next(step for step in steps if step.get("id") == "prepare")
+    assert "scripts/ci/dependency_update.py prepare" in prepare_step["run"]
     pr_step = next(step for step in steps if step.get("name") == "Open or update pull request")
     assert pr_step["env"]["GH_TOKEN"] == "${{ steps.app-token.outputs.token }}"
+    assert "scripts/ci/dependency_update.py publish" in pr_step["run"]

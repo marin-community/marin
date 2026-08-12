@@ -2,15 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from scripts.ci.dependency_update import (
+    BranchPushMode,
     CheckRow,
     MergeDecision,
     PullRequestSnapshot,
     evaluate_merge,
     evaluate_required_checks,
+    prepare_update_branch,
+    publish_update,
     required_check_rows,
     validate_changed_files,
     validated_pull_request,
@@ -152,6 +156,81 @@ def test_changed_files_are_sorted_and_restricted_to_the_policy() -> None:
     assert changed == ("config/external/harbor/uv.lock", "uv.lock")
     with pytest.raises(ValueError):
         validate_changed_files(["uv.lock", "src/backdoor.py"], policy=EXTERNAL_RUNTIME_POLICY)
+
+
+def test_prepare_update_branch_resets_main_with_a_lease_for_an_existing_branch(monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs) -> subprocess.CompletedProcess:
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=f"{EXPECTED_SHA}\trefs/heads/automation/native-package-versions\n",
+        )
+
+    monkeypatch.setattr("scripts.ci.dependency_update.subprocess.run", run)
+    monkeypatch.setattr(
+        "scripts.ci.dependency_update._gh_json",
+        lambda *_args: [{"url": "https://github.com/marin-community/marin/pull/123"}],
+    )
+
+    branch = prepare_update_branch(policy=NATIVE_PACKAGE_POLICY, repository="marin-community/marin")
+
+    assert branch.expected_remote_sha == EXPECTED_SHA
+    assert branch.pull_request_url == "https://github.com/marin-community/marin/pull/123"
+    assert branch.push_mode is BranchPushMode.FORCE_WITH_LEASE
+    assert commands == [
+        ["git", "fetch", "origin", "main"],
+        ["git", "ls-remote", "--exit-code", "--heads", "origin", "automation/native-package-versions"],
+        ["git", "switch", "-C", "automation/native-package-versions", "origin/main"],
+    ]
+
+
+def test_publish_update_stages_the_allowlist_and_creates_an_app_pull_request(monkeypatch, tmp_path: Path) -> None:
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs) -> subprocess.CompletedProcess:
+        commands.append(command)
+        stdout = f"{EXPECTED_SHA}\n" if command[:3] == ["git", "rev-parse", "HEAD"] else ""
+        return subprocess.CompletedProcess(command, 0, stdout=stdout)
+
+    monkeypatch.setattr("scripts.ci.dependency_update.subprocess.run", run)
+    monkeypatch.setattr(
+        "scripts.ci.dependency_update.changed_worktree_files",
+        lambda: ("uv.lock", "lib/dupekit/pyproject.toml"),
+    )
+    monkeypatch.setattr(
+        "scripts.ci.dependency_update._gh_json",
+        lambda *_args: {"url": "https://github.com/marin-community/marin/pull/123"},
+    )
+
+    published = publish_update(
+        policy=NATIVE_PACKAGE_POLICY,
+        repository="marin-community/marin",
+        body_file=tmp_path / "body.md",
+        expected_remote_sha=EXPECTED_SHA,
+        pull_request_url="",
+        push_mode=BranchPushMode.FORCE_WITH_LEASE,
+    )
+
+    assert published.head_sha == EXPECTED_SHA
+    assert published.url == "https://github.com/marin-community/marin/pull/123"
+    assert [
+        "git",
+        "add",
+        "--",
+        "lib/dupekit/pyproject.toml",
+        "uv.lock",
+    ] in commands
+    assert [
+        "git",
+        "push",
+        f"--force-with-lease=refs/heads/automation/native-package-versions:{EXPECTED_SHA}",
+        "origin",
+        "HEAD:automation/native-package-versions",
+    ] in commands
+    assert any(command[:3] == ["gh", "pr", "create"] for command in commands)
 
 
 def test_native_package_policy_matches_every_compatibility_floor() -> None:

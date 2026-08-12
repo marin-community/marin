@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GitHub App credentials and repository rules for external runtime updates."""
+"""GitHub App credentials and repository rules for dependency updates."""
 
 import re
 from dataclasses import dataclass
@@ -18,17 +18,8 @@ UPDATER_BRANCH = "main"
 
 
 @dataclass(frozen=True)
-class ExternalRuntimeUpdaterBootstrap:
-    """Owner-tracked configuration before the GitHub App exists."""
-
-    organization: str
-    repository: str
-    issue: int
-
-
-@dataclass(frozen=True)
 class ExternalRuntimeUpdaterConfig:
-    """Configuration produced by the dedicated GitHub App bootstrap."""
+    """Active configuration for the dedicated dependency updater app."""
 
     organization: str
     repository: str
@@ -56,7 +47,6 @@ class RulesetBypassActorPlan:
 class ExternalRuntimeUpdaterPlan:
     repository: str
     environment: str
-    deployment_branch: str
     review_ruleset_import: str
     review_bypass_actors: tuple[RulesetBypassActorPlan, ...]
     required_ci_bypass_actors: tuple[RulesetBypassActorPlan, ...]
@@ -74,20 +64,12 @@ def external_runtime_updater_config(
     *,
     organization: str,
     settings: dict[str, object],
-) -> ExternalRuntimeUpdaterBootstrap | ExternalRuntimeUpdaterConfig:
-    """Validate either the owner-tracked bootstrap or active app settings."""
+) -> ExternalRuntimeUpdaterConfig:
+    """Validate the active updater app settings."""
     repository = settings.get("repository")
     if not isinstance(repository, str):
         raise ValueError("externalRuntimeUpdater.repository must be a string")
     repository_name(organization, repository)
-    if "bootstrapIssue" in settings:
-        if set(settings) != {"bootstrapIssue", "repository"}:
-            raise ValueError("bootstrap settings accept only bootstrapIssue and repository")
-        return ExternalRuntimeUpdaterBootstrap(
-            organization=organization,
-            repository=repository,
-            issue=_positive_int(settings, "bootstrapIssue"),
-        )
     expected_keys = {
         "actionsKeyId",
         "appId",
@@ -98,8 +80,7 @@ def external_runtime_updater_config(
     }
     if set(settings) != expected_keys:
         raise ValueError(
-            "enabled externalRuntimeUpdater settings require exactly "
-            f"{sorted(expected_keys)!r}; found {sorted(settings)!r}"
+            "externalRuntimeUpdater settings require exactly " f"{sorted(expected_keys)!r}; found {sorted(settings)!r}"
         )
 
     app_slug = settings["appSlug"]
@@ -132,7 +113,6 @@ def external_runtime_updater_plan(config: ExternalRuntimeUpdaterConfig) -> Exter
     return ExternalRuntimeUpdaterPlan(
         repository=repository,
         environment=UPDATER_ENVIRONMENT,
-        deployment_branch=UPDATER_BRANCH,
         review_ruleset_import=f"{repository}:{config.review_ruleset_id}",
         review_bypass_actors=(
             organization_admin,
@@ -175,20 +155,20 @@ def register_external_runtime_updater(
     app_id = github.ActionsVariable(
         "external-runtime-updater-app-id",
         repository=plan.repository,
-        variable_name="EXTERNAL_RUNTIME_UPDATER_APP_ID",
+        variable_name="DEPENDENCY_UPDATER_APP_ID",
         value=str(config.app_id),
     )
     app_slug = github.ActionsVariable(
         "external-runtime-updater-app-slug",
         repository=plan.repository,
-        variable_name="EXTERNAL_RUNTIME_UPDATER_APP_SLUG",
+        variable_name="DEPENDENCY_UPDATER_APP_SLUG",
         value=config.app_slug,
     )
     private_key = github.ActionsEnvironmentSecret(
         "external-runtime-updater-private-key",
         repository=plan.repository,
         environment=plan.environment,
-        secret_name="EXTERNAL_RUNTIME_UPDATER_PRIVATE_KEY",
+        secret_name="DEPENDENCY_UPDATER_PRIVATE_KEY",
         key_id=config.actions_key_id,
         value_encrypted=config.encrypted_private_key,
         opts=pulumi.ResourceOptions(depends_on=[deployment_policy]),
