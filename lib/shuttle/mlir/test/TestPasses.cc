@@ -372,6 +372,22 @@ public:
   }
 };
 
+class FoldYieldAttributePass : public FoldMutationPass<FoldYieldAttributePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldYieldAttributePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-add-fold-yield-attribute";
+  }
+  void runOnOperation() override {
+    FoldOp operation = fold();
+    if (operation) {
+      operation.getCombiner().front().getTerminator()->setAttr(
+          "shuttle.test_semantic",
+          IntegerAttr::get(IntegerType::get(operation.getContext(), 64), 7));
+    }
+  }
+};
+
 class ManifestVersionPass : public MutationPass<ManifestVersionPass> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ManifestVersionPass)
@@ -446,6 +462,7 @@ void registerMutationPasses() {
   PassRegistration<FoldOwnerDuplicatePass>();
   PassRegistration<FoldYieldRewirePass>();
   PassRegistration<FoldAddFastMathPass>();
+  PassRegistration<FoldYieldAttributePass>();
   PassRegistration<ManifestVersionPass>();
   PassRegistration<ManifestVersionMissingPass>();
   PassRegistration<ReportNormalizedFingerprintPass>();

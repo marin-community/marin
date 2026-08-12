@@ -1571,7 +1571,12 @@ bool zeroResultRecordsMatch(ArrayAttr current, ArrayAttr expected) {
                             : StringAttr{};
     if (!currentName || !expectedName ||
         currentName.getValue() != YieldOp::getOperationName() ||
-        expectedName.getValue() != stablehlo::ReturnOp::getOperationName()) {
+        expectedName.getValue() != stablehlo::ReturnOp::getOperationName() ||
+        currentFingerprint.size() != expectedFingerprint.size() ||
+        currentFingerprint.get("attributes") !=
+            expectedFingerprint.get("attributes") ||
+        currentFingerprint.get("result_types") !=
+            expectedFingerprint.get("result_types")) {
       return false;
     }
   }
@@ -2182,10 +2187,15 @@ FailureOr<Operation *> lowerFold(OpBuilder &builder, FoldOp fold,
       !body.getArgument(0).getType().isF32() ||
       !body.getArgument(1).getType().isF32() ||
       (fastMath && fastMath.getValue() != arith::FastMathFlags::none) ||
-      llvm::any_of(add->getAttrs(), [](NamedAttribute attribute) {
-        StringRef name = attribute.getName().strref();
-        return name != "fastmath" && name != kSourceRefsAttribute &&
-               name != kOperationRefAttribute;
+      llvm::any_of(add->getAttrs(),
+                   [](NamedAttribute attribute) {
+                     StringRef name = attribute.getName().strref();
+                     return name != "fastmath" &&
+                            name != kSourceRefsAttribute &&
+                            name != kOperationRefAttribute;
+                   }) ||
+      llvm::any_of(yield->getAttrs(), [](NamedAttribute attribute) {
+        return attribute.getName().strref() != kOperationRefAttribute;
       })) {
     fold.emitOpError("requires the closed ordered scalar f32 add combiner");
     return failure();

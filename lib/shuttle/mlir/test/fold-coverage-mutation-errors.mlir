@@ -10,6 +10,7 @@
 // RUN: not shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-test-remove-manifest-version --shuttle-verify-source-coverage %S/Inputs/f32-reduce-add.mlir 2>&1 | FileCheck %s --check-prefix=VERSION
 // RUN: not shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-test-rewire-fold-yield --shuttle-verify-source-coverage %S/Inputs/f32-reduce-add.mlir 2>&1 | FileCheck %s --check-prefix=REWIRE
 // RUN: not shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-test-add-fold-fastmath --shuttle-lower-algebra-to-stablehlo %S/Inputs/f32-reduce-add.mlir 2>&1 | FileCheck %s --check-prefix=FASTMATH
+// RUN: not shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-test-add-fold-yield-attribute --shuttle-verify-source-coverage %S/Inputs/f32-reduce-add.mlir 2>&1 | FileCheck %s --check-prefix=YIELD-ATTRIBUTE
 
 // OWNER: requires Reduce owner operation provenance
 // ADD: represented source results do not equal manifest coverage
@@ -19,3 +20,4 @@
 // VERSION: malformed Shuttle coverage manifest
 // REWIRE: zero-result or function-result source anchors changed
 // FASTMATH: requires the closed ordered scalar f32 add combiner
+// YIELD-ATTRIBUTE: zero-result or function-result source anchors changed
