@@ -905,9 +905,11 @@ def _build_pod_manifest(
     assert config.local_queue, "K8s backend requires a Kueue LocalQueue (kubernetes_provider.kueue.cluster_queue)"
     labels[_KUEUE_QUEUE_NAME] = config.local_queue
     effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
-    if not is_gang:
+    if is_gang:
+        priority_kind = WorkloadPriorityKind.COSCHEDULED
+    else:
         priority_kind = WorkloadPriorityKind.ACCELERATOR if has_accelerator else WorkloadPriorityKind.CPU
-        labels[_KUEUE_PRIORITY_CLASS] = workload_priority_class_name(priority_band_name(effective_band), priority_kind)
+    labels[_KUEUE_PRIORITY_CLASS] = workload_priority_class_name(priority_band_name(effective_band), priority_kind)
     if is_gang:
         group_by = run_req.coscheduling.group_by
         # group_by must name a topology level this cluster provisioned. An

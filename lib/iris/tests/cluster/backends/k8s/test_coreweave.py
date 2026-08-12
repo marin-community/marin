@@ -302,18 +302,24 @@ def test_start_controller_creates_controller_resources():
         for name in (
             "iris-cpu-batch",
             "iris-accelerator-batch",
+            "iris-coscheduled-batch",
             "iris-cpu-interactive",
             "iris-accelerator-interactive",
+            "iris-coscheduled-interactive",
             "iris-cpu-production",
             "iris-accelerator-production",
+            "iris-coscheduled-production",
         )
     } == {
-        "iris-cpu-batch": -2,
-        "iris-accelerator-batch": -1,
-        "iris-cpu-interactive": 8,
-        "iris-accelerator-interactive": 9,
-        "iris-cpu-production": 998,
-        "iris-accelerator-production": 999,
+        "iris-cpu-batch": 0,
+        "iris-accelerator-batch": 1,
+        "iris-coscheduled-batch": 2,
+        "iris-cpu-interactive": 10,
+        "iris-accelerator-interactive": 11,
+        "iris-coscheduled-interactive": 12,
+        "iris-cpu-production": 1000,
+        "iris-accelerator-production": 1001,
+        "iris-coscheduled-production": 1002,
     }
 
     agent_spec = node_agent["spec"]["template"]["spec"]

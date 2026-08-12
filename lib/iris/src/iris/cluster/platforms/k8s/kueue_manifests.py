@@ -119,13 +119,15 @@ NON_BINDING_QUOTA = {
 COVERED_RESOURCES = list(NON_BINDING_QUOTA)
 
 
-# Kueue-only priorities within each Iris band. Co-scheduled gangs keep the
-# native band value; ordinary and standalone-accelerator Workloads sit one step
-# apart below it. Keeping the top tier at the native value makes rollout safe:
-# new work never sees an unfinished legacy Workload as a lower-priority victim.
+# Kueue-only priorities within each Iris band. Ordinary, standalone-accelerator,
+# and co-scheduled Workloads occupy consecutive values starting at the native
+# band. This keeps the lowest batch Workload priority at 0, above CoreWeave's
+# priority -1 node-health-check Pods even though Kueue and Pod priority are
+# separate scheduling domains.
 class WorkloadPriorityKind(StrEnum):
     CPU = "cpu"
     ACCELERATOR = "accelerator"
+    COSCHEDULED = "coscheduled"
 
 
 @dataclass(frozen=True)
@@ -150,8 +152,9 @@ IRIS_WORKLOAD_PRIORITY_CLASSES = tuple(
     for class_name, value, _ in IRIS_PRIORITY_CLASSES
     if class_name != IRIS_PRIORITY_CLASS_SYSTEM
     for kind, offset in (
-        (WorkloadPriorityKind.CPU, -2),
-        (WorkloadPriorityKind.ACCELERATOR, -1),
+        (WorkloadPriorityKind.CPU, 0),
+        (WorkloadPriorityKind.ACCELERATOR, 1),
+        (WorkloadPriorityKind.COSCHEDULED, 2),
     )
 )
 

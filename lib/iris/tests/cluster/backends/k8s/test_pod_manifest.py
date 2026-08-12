@@ -1369,13 +1369,13 @@ def test_kueue_priority_class_orders_cpu_below_standalone_accelerator(device, ex
     assert manifest["spec"]["priorityClassName"] == "iris-batch"
 
 
-def test_kueue_coscheduled_gang_keeps_native_band_above_standalone_accelerator():
+def test_kueue_coscheduled_gang_is_above_standalone_accelerator():
     req = _cosched_req("/job/task/0", num_tasks=64, priority=job_pb2.PRIORITY_BAND_BATCH)
     req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
 
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
 
-    assert _KUEUE_PRIORITY_CLASS not in manifest["metadata"]["labels"]
+    assert manifest["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == "iris-coscheduled-batch"
     assert manifest["spec"]["priorityClassName"] == "iris-batch"
 
 
