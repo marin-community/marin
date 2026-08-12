@@ -59,6 +59,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
     gpu_gang_rack_slice_size,
 )
+from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_BATCH,
@@ -103,7 +104,7 @@ from iris.cluster.stats.tables import (
 )
 from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
-from iris.rpc.proto_display import resolve_container_profile
+from iris.rpc.proto_display import priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -254,9 +255,7 @@ _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 #                 slices, each hard-bound to its own nvlink.domain, with a soft leafgroup
 #                 preference so the racks cluster on one IB leaf group.
 # A cluster whose Topology uses different levels overrides this via
-# kubernetes_provider.kueue.topologies. Priority classes have NO default: Iris
-# never invents WorkloadPriorityClass names (a missing one is rejected by
-# Kueue), so a band is stamped only when the config maps it explicitly.
+# kubernetes_provider.kueue.topologies.
 _CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
     COSCHEDULE_LEAFGROUP: KueueTopologyBinding(CW_LABEL_LEAFGROUP, TopologyMode.PREFERRED),
     COSCHEDULE_NVLINK_DOMAIN: KueueTopologyBinding(CW_LABEL_NVLINK_DOMAIN, TopologyMode.REQUIRED),
@@ -496,9 +495,6 @@ class PodConfig:
     # this: dispatching one with no LocalQueue configured raises (Kueue or
     # nothing — there is no non-Kueue colocation fallback).
     local_queue: str = ""
-    # PriorityBand -> WorkloadPriorityClass name. A band with no entry is not
-    # stamped (Kueue uses its default priority); Iris never invents class names.
-    kueue_priority_classes: dict[int, str] = field(default_factory=dict)
     # coscheduling group_by -> KueueTopologyBinding. Defaults to CoreWeave
     # conventions; a group_by with no entry carries no topology annotation.
     kueue_topologies: dict[str, KueueTopologyBinding] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
@@ -908,14 +904,12 @@ def _build_pod_manifest(
     # The composer enforces a configured LocalQueue for the K8s backend.
     assert config.local_queue, "K8s backend requires a Kueue LocalQueue (kubernetes_provider.kueue.cluster_queue)"
     labels[_KUEUE_QUEUE_NAME] = config.local_queue
-    # Stamp an explicit WorkloadPriorityClass only when the cluster maps this band.
-    # An unmapped band is not left unranked: Kueue derives the Workload's priority
-    # from the pod's own PriorityClass (spec.priorityClassName), so the
-    # iris-{production,interactive,batch} bands already order the queue. Iris never
-    # invents a WorkloadPriorityClass name (a missing one is rejected).
-    wpc = config.kueue_priority_classes.get(run_req.priority)
-    if wpc:
-        labels[_KUEUE_PRIORITY_CLASS] = wpc
+    effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
+    if is_gang:
+        priority_kind = WorkloadPriorityKind.COSCHEDULED
+    else:
+        priority_kind = WorkloadPriorityKind.ACCELERATOR if has_accelerator else WorkloadPriorityKind.CPU
+    labels[_KUEUE_PRIORITY_CLASS] = workload_priority_class_name(priority_band_name(effective_band), priority_kind)
     if is_gang:
         group_by = run_req.coscheduling.group_by
         # group_by must name a topology level this cluster provisioned. An
@@ -1011,7 +1005,6 @@ def _build_pod_manifest(
     # The INTERACTIVE floor keeps a request built outside that path (an unset field reads
     # as INHERIT) from silently dropping to the cluster default. A band with no configured
     # class name leaves priorityClassName unset.
-    effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
     priority_class_name = config.priority_class_names.get(effective_band)
     if priority_class_name:
         spec["priorityClassName"] = priority_class_name
