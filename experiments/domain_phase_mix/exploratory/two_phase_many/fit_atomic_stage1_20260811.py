@@ -17,6 +17,7 @@ Candidates, all on identical spatial folds:
   intercept   the floor any fit must clear
   exposure    benefit as a power law in exact StarCoder epochs, read at a fitted horizon
   two-bucket  the same, plus a readout of the COMPLEMENT bucket's exposure, one amplitude each
+  two-horizon both buckets read at TWO horizons, which is what makes untied optima representable
   phase-split StarCoder exposure with the two phases carrying separate amplitudes
   quadratic   a plain quadratic surface in the two mixture shares, as an EXPRESSIVITY REFERENCE only
 
@@ -83,6 +84,26 @@ def design(panel, name: str, theta: np.ndarray) -> np.ndarray:
                 (complement + offset) ** -theta[3],
             ]
         )
+    if name == "two-horizon":
+        # SINGLE-INDEX IS THE PROBLEM THIS SOLVES. With one shared horizon, both bucket exposures are
+        # monotone in the same scalar u = (1-phi)*f0*p0 + phi*f1*p1 -- measured rank correlation |rho| =
+        # 1.000 -- so predicted loss depends on the policy only through u. Every untied policy then shares
+        # its u with some tied policy, and the model cannot express ANY two-phase advantage. That is fatal
+        # here: 37 of 92 empirical atomic optima are untied, and 77 of 92 are interior rather than corners.
+        # Reading each bucket at TWO horizons gives two independent linear directions in (p0, p1), the
+        # minimum needed for an untied optimum to be representable at all.
+        second = theta[4]
+        complement_a = (1.0 - horizon) * panel.complement_epochs_phase_0 + horizon * panel.complement_epochs_phase_1
+        complement_b = (1.0 - second) * panel.complement_epochs_phase_0 + second * panel.complement_epochs_phase_1
+        return np.column_stack(
+            [
+                ones,
+                (exposure(panel, horizon) + offset) ** -gamma,
+                (exposure(panel, second) + offset) ** -gamma,
+                (complement_a + offset) ** -theta[3],
+                (complement_b + offset) ** -theta[3],
+            ]
+        )
     if name == "phase-split":
         early = (panel.epochs_phase_0 + offset) ** -gamma
         late = (panel.epochs_phase_1 + offset) ** -gamma
@@ -94,8 +115,10 @@ def bounds_for(name: str) -> list[tuple[float, float]]:
     if name in ("intercept", "quadratic"):
         return []
     box = [(0.01, 4.0), (-4.0, -0.5), (0.0, 1.0)]  # gamma, log offset, horizon
-    if name == "two-bucket":
+    if name in ("two-bucket", "two-horizon"):
         box.append((0.01, 4.0))  # complement readout exponent
+    if name == "two-horizon":
+        box.append((0.0, 1.0))  # second horizon
     return box
 
 
@@ -225,7 +248,7 @@ def main() -> None:
     targets = panel_module.atomic_targets()
     if args.targets:
         targets = targets[: args.targets]
-    names = ("intercept", "exposure", "two-bucket", "phase-split", "quadratic")
+    names = ("intercept", "two-bucket", "two-horizon", "quadratic")
 
     print("ATOM-001 Stage 1: independent atomic fits, no replay, two buckets, one objective at a time")
     print(f"{len(panels)} horizons x {len(targets)} targets, spatial leave-region-out folds")
@@ -233,11 +256,19 @@ def main() -> None:
 
     beats = {name: 0 for name in names}
     ratios = {name: [] for name in names}
+    # Whether a candidate can even PLACE an untied optimum is a structural question separate from fit:
+    # a single-index model cannot, whatever its error. 37 of 92 empirical optima here are untied.
+    untied = {name: 0 for name in names}
+    distance = {name: [] for name in names}
+    empirical_untied = 0
     for p in panels:
         folds = panel_module.spatial_folds(p)
         print(f"=== horizon {p.horizon:.3f}B ===", flush=True)
         for key in targets:
             y = p.target(key)
+            best = int(np.argmin(y))
+            truth = (float(p.phase_0[best]), float(p.phase_1[best]))
+            empirical_untied += not np.isclose(truth[0], truth[1])
             line = []
             base = None
             for name in names:
@@ -248,6 +279,10 @@ def main() -> None:
                 ratios[name].append(ratio)
                 beats[name] += ratio < 1.0
                 line.append(f"{name} {ratio:.3f}")
+                if name != "intercept":
+                    where, _gain, _theta = surface_optimum(p, name, y)
+                    untied[name] += not np.isclose(where[0], where[1], atol=1e-6)
+                    distance[name].append(float(np.hypot(where[0] - truth[0], where[1] - truth[1])))
             print(f"  {key.split('/')[-2][:34]:34s} " + "  ".join(line), flush=True)
         print()
 
