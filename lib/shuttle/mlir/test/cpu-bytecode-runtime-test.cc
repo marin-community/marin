@@ -446,8 +446,10 @@ TEST(CpuBytecodeRuntimeTest, CanonicalTransportEnforcesClosedResourceLimits) {
                 .begin();
   auto entry =
       *device.getBody().front().getOps<mlir::shuttle::DeviceEntryOp>().begin();
-  llvm::SmallVector<int64_t> repeatedBuffers(
-      mlir::shuttle::kMaximumCpuExecutableRecords + 1, 0);
+  constexpr uint64_t kExcessiveRecordCount = 257;
+  static_assert(kExcessiveRecordCount ==
+                mlir::shuttle::kMaximumCpuExecutableRecords + 1);
+  llvm::SmallVector<int64_t> repeatedBuffers(kExcessiveRecordCount, 0);
   entry.setInputBuffersAttr(mlir::DenseI64ArrayAttr::get(
       excessiveRecords->context.get(), repeatedBuffers));
   llvm::SmallVector<mlir::Attribute> repeatedAccesses(
