@@ -20,7 +20,7 @@ echo "guard[2/2]: GPU tests on one GB200 node (bundles the working tree)" >&2
 # Default pod jax is CPU-only: sync --extra gpu first (cuDNN comes with it).
 "${IRIS[@]}" job run --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
-  --gpu "GB200=4" --cpu 64 --memory 256GB --disk 128GB \
+  --gpu "GB200x4" --cpu 64 --memory 256GB --disk 128GB \
   --job-name "ar8062-guard-${SHA}" \
   -e IRIS_USER mwittmann \
   -- bash -c "uv sync --all-packages --extra gpu >&2 && uv run pytest -q -p no:randomly \
