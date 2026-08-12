@@ -9,14 +9,12 @@ import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from dataclasses import replace as _replace
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 from finelog.client.log_client import Table
 from rigging.timing import Duration, RateLimiter, Timestamp
 from sqlalchemy import func, select
-from sqlalchemy import update as sa_update
 
 from iris.cluster.backends.rpc.backend import WORKER_RECONCILE_TEARDOWN_REASON
 from iris.cluster.bundle import BundleStore
@@ -30,7 +28,6 @@ from iris.cluster.config import (
     WorkerConfig,
 )
 from iris.cluster.constraints import (
-    AttributeValue,
     Constraint,
     ConstraintOp,
     DeviceType,
@@ -78,7 +75,6 @@ from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     task_attempts_table,
     tasks_table,
-    worker_attributes_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
@@ -101,7 +97,6 @@ from iris.cluster.types import (
     JobName,
     UserBudgetDefaults,
     WorkerId,
-    is_job_finished,
 )
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
@@ -125,11 +120,6 @@ def check_task_is_finished(task) -> bool:
         task.preemption_count,
         task.max_retries_preemption,
     )
-
-
-def check_is_job_finished(j) -> bool:
-    """Whether a job row is in a terminal state."""
-    return is_job_finished(j.state)
 
 
 def run_worker_daemon_schedule(
@@ -474,37 +464,6 @@ def reconcile_once(ctrl: Controller) -> None:
     )
 
 
-def autoscale_once(ctrl: Controller) -> None:
-    """Drive one autoscale pass through the production control tick.
-
-    Autoscale runs only as a phase of ``Controller._control_tick``, always paired
-    with a fresh schedule. In dry-run the tick short-circuits to the schedule-only
-    path, so the autoscale backend call is suppressed.
-    """
-    ctrl._force_reconcile = False
-    ctrl._control_tick(
-        woken=False,
-        schedule_limiter=_spent_limiter(),
-        reconcile_limiter=_spent_limiter(),
-        autoscale_limiter=RateLimiter(interval_seconds=0.0),
-    )
-
-
-def schedule_once(ctrl: Controller) -> None:
-    """Drive exactly one schedule pass through the production control tick.
-
-    A wake forces the schedule phase while reconcile and autoscale are held off,
-    so only routing/placement (and its commit) runs this tick.
-    """
-    ctrl._force_reconcile = False
-    ctrl._control_tick(
-        woken=True,
-        schedule_limiter=RateLimiter(interval_seconds=0.0),
-        reconcile_limiter=_spent_limiter(),
-        autoscale_limiter=_spent_limiter(),
-    )
-
-
 def make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
     entrypoint = job_pb2.RuntimeEntrypoint()
     entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
@@ -589,12 +548,6 @@ def query_attempt(state: ControllerTestState, task_id: JobName, attempt_id: int)
 
 def query_job(state: ControllerTestState, job_id: JobName):
     """Return the SA Row for ``job_id`` joining jobs+job_config, or None."""
-    with state._db.read_snapshot() as tx:
-        return reads.get_job_detail(tx, job_id)
-
-
-def query_job_row(state: ControllerTestState, job_id: JobName):
-    """Return the SA Row for ``job_id`` (same as query_job; alias for scheduling projection tests)."""
     with state._db.read_snapshot() as tx:
         return reads.get_job_detail(tx, job_id)
 
@@ -734,42 +687,6 @@ def register_worker(
         )
     if not healthy:
         state._health.set_health_for_test(wid, healthy=False)
-    return wid
-
-
-def register_worker_into_backend(
-    controller: Controller,
-    worker_id: str,
-    address: str,
-    metadata: job_pb2.WorkerMetadata,
-    *,
-    scale_group: str,
-    healthy: bool = True,
-    slice_id: str = "",
-) -> WorkerId:
-    """Register a worker into the liveness tracker owned by the backend that owns
-    its scale group.
-
-    The multi-backend equivalent of :func:`register_worker`: each backend owns its
-    own tracker, so a worker's liveness must land in the backend its scale group
-    routes to.
-    """
-    backend = controller.backends[controller.backend_id_for_scale_group(scale_group)]
-    assert backend.health is not None, f"backend for scale group {scale_group!r} has no liveness tracker"
-    wid = WorkerId(worker_id)
-    with controller._db.transaction() as cur:
-        ops.worker.register(
-            cur,
-            worker_id=wid,
-            address=address,
-            metadata=metadata,
-            ts=Timestamp.now(),
-            health=backend.health,
-            slice_id=slice_id,
-            scale_group=scale_group,
-        )
-    if not healthy:
-        backend.health.set_health_for_test(wid, healthy=False)
     return wid
 
 
@@ -957,29 +874,6 @@ def worker_running_tasks(state: ControllerTestState, worker_id: WorkerId) -> fro
             )
         ).all()
     return frozenset(row.task_id for row in rows)
-
-
-def _decode_attr_value(row) -> AttributeValue:
-    """Decode a worker_attributes SA row value based on value_type."""
-    if row.value_type == "int":
-        return AttributeValue(int(row.int_value))
-    if row.value_type == "float":
-        return AttributeValue(float(row.float_value))
-    return AttributeValue(str(row.str_value or ""))
-
-
-def hydrate_worker_attributes(state: ControllerTestState, workers: list) -> list:
-    if not workers:
-        return workers
-    worker_ids = [w.worker_id for w in workers]
-    with state._db.read_snapshot() as tx:
-        attr_rows = tx.execute(
-            select(worker_attributes_table).where(worker_attributes_table.c.worker_id.in_(worker_ids))
-        ).all()
-    attrs_by_worker: dict = {}
-    for row in attr_rows:
-        attrs_by_worker.setdefault(row.worker_id, {})[row.key] = _decode_attr_value(row)
-    return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
 
 
 def healthy_active_workers(state: ControllerTestState) -> list[SchedulableWorker]:
@@ -1374,14 +1268,3 @@ def advance_all_tpus(service: InMemoryGcpService, state: str = "READY") -> None:
     for name, zone in list(service._tpus.keys()):
         if service._tpus[(name, zone)].state != state:
             service.advance_tpu_state(name, zone, state)
-
-
-def set_task_band(db: ControllerDB, task_id: JobName, band: int) -> None:
-    """Directly set priority_band on a task row for testing.
-
-    Prefer setting priority_band on the LaunchJobRequest for new submissions.
-    This helper is still needed for tests that change a task's band mid-flight
-    (e.g., simulating admin band overrides or budget-triggered demotions).
-    """
-    with db.transaction() as tx:
-        tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(priority_band=band))

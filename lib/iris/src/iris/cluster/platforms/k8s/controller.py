@@ -434,10 +434,6 @@ class K8sControllerProvider:
     def iris_labels(self) -> Labels:
         return self._iris_labels
 
-    @property
-    def s3_enabled(self) -> bool:
-        return self._s3_enabled
-
     # -- ControllerProvider protocol methods -----------------------------------
 
     def discover_controller(self, controller_config: ControllerVmConfig) -> str:

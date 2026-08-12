@@ -256,12 +256,6 @@ class WorkerHealthTracker:
             else:
                 state.consecutive_failures = max(state.consecutive_failures, 1)
 
-    def set_consecutive_failures_for_test(self, worker_id: WorkerId, count: int) -> None:
-        """Test helper: overwrite consecutive_failures directly."""
-        with self._lock:
-            state = self._states.setdefault(worker_id, WorkerLiveness())
-            state.consecutive_failures = count
-
     def set_last_heartbeat_for_test(self, worker_id: WorkerId, last_heartbeat_ms: int) -> None:
         """Test helper: backdate the last heartbeat for prune-window tests."""
         with self._lock:
