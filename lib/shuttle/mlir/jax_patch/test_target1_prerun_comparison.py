@@ -5,6 +5,7 @@
 
 import copy
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -63,6 +64,8 @@ def test_contract_predeclares_the_complete_comparison_without_claiming_execution
         "blocked_requires_new_reviewed_contract_before_execution_or_timing"
     )
     assert contract["repeatability"]["post_timing_invocations"] == 3
+    assert contract["aggregation"]["te_results"]["count"] == 24
+    assert contract["aggregation"]["candidate_records"]["count"] == 36
     assert contract["execution_state"]["launch_ready"] is False
     assert contract["execution_state"]["hardware_results"] == []
     assert contract["execution_state"]["scorecard_status_changed"] is False
@@ -101,6 +104,8 @@ def test_contract_predeclares_the_complete_comparison_without_claiming_execution
         (("execution_state", "launch_ready"), True),
         (("execution_state", "hardware_results"), [{"hardware": "h100"}]),
         (("execution_state", "scorecard_status_changed"), True),
+        (("aggregation", "te_results", "count"), 23),
+        (("aggregation", "post_hoc_te_selector"), "allowed"),
     ],
 )
 def test_contract_rejects_threshold_role_boundary_backend_and_provenance_drift(
@@ -187,3 +192,20 @@ def test_loader_rejects_duplicate_contract_keys(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="duplicate JSON key"):
         load_contract(duplicate)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("schema_version",), True),
+        (("run_matrix", "te_runs_per_hardware"), 24.0),
+        (("run_matrix", "shapes", 0, 0), 2048.0),
+        (("execution_state", "launch_ready"), 0),
+        (("thresholds", "dtype_floors", "2048x4096", "y", "max_bfloat16_ulp_error"), 1.0),
+        (("thresholds", "dtype_floors", "2048x4096", "y", "max_absolute_error"), math.nan),
+        (("thresholds", "dtype_floors", "2048x4096", "y", "max_absolute_error"), math.inf),
+    ],
+)
+def test_contract_rejects_json_type_aliases_and_nonfinite_values(path: tuple[str | int, ...], value: object) -> None:
+    with pytest.raises(ValueError, match=r"drifted|finite"):
+        validate_contract(_replace(path, value))

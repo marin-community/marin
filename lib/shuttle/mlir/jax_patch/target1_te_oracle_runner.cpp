@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -33,7 +34,7 @@ constexpr int kMeasuredInvocations = 50;
 constexpr int kPostTimingInvocations = 3;
 constexpr char kComparisonContractId[] = "target1_rowwise_bf16_prerun_comparison_v1";
 constexpr char kComparisonContractSha256[] =
-    "3886fe875da9b6445a45d1e03eb32dec242bb59d0ec58a28854e319bbdb31845";
+    "af27e9c7d1e4f6fcdf3eacc9d950459d1f627e58d9c9f0d1133b0e3dae6b1504";
 
 void check_cuda(cudaError_t status, const char* operation) {
   if (status != cudaSuccess) {
@@ -56,6 +57,13 @@ struct Config {
   std::size_t counterbalance_position;
   std::string comparison_contract_id;
   std::string comparison_contract_sha256;
+  std::string input_digest_set;
+  std::string input_x_sha256;
+  std::string input_gamma_sha256;
+  std::string input_dy_sha256;
+  std::string reference_y_sha256;
+  std::string reference_dx_sha256;
+  std::string reference_dgamma_sha256;
 };
 
 std::string boundary_name(Boundary boundary) {
@@ -146,6 +154,13 @@ Config parse_config(int argc, char** argv) {
                           "counterbalance-position"),
       .comparison_contract_id = take_flag(&flags, "comparison-contract-id"),
       .comparison_contract_sha256 = take_flag(&flags, "comparison-contract-sha256"),
+      .input_digest_set = take_flag(&flags, "input-digest-set"),
+      .input_x_sha256 = take_flag(&flags, "input-x-sha256"),
+      .input_gamma_sha256 = take_flag(&flags, "input-gamma-sha256"),
+      .input_dy_sha256 = take_flag(&flags, "input-dy-sha256"),
+      .reference_y_sha256 = take_flag(&flags, "reference-y-sha256"),
+      .reference_dx_sha256 = take_flag(&flags, "reference-dx-sha256"),
+      .reference_dgamma_sha256 = take_flag(&flags, "reference-dgamma-sha256"),
   };
   if (!flags.empty()) {
     throw std::invalid_argument("unknown argument: --" + flags.begin()->first);
@@ -161,6 +176,27 @@ Config parse_config(int argc, char** argv) {
   if (config.comparison_contract_id != kComparisonContractId ||
       config.comparison_contract_sha256 != kComparisonContractSha256) {
     throw std::invalid_argument("comparison contract identity drifted");
+  }
+  if (config.input_digest_set.size() != 64 ||
+      !std::all_of(config.input_digest_set.begin(), config.input_digest_set.end(),
+                   [](unsigned char value) { return std::isxdigit(value) && !std::isupper(value); })) {
+    throw std::invalid_argument("input digest set must be lowercase SHA-256");
+  }
+  const auto valid_optional_digest = [](const std::string& value) {
+    return value == "none" ||
+           (value.size() == 64 &&
+            std::all_of(value.begin(), value.end(), [](unsigned char item) {
+              return std::isxdigit(item) && !std::isupper(item);
+            }));
+  };
+  if (!valid_optional_digest(config.reference_y_sha256) ||
+      !valid_optional_digest(config.reference_dx_sha256) ||
+      !valid_optional_digest(config.reference_dgamma_sha256)) {
+    throw std::invalid_argument("reference digests must be lowercase SHA-256 or none");
+  }
+  if (!valid_optional_digest(config.input_x_sha256) || !valid_optional_digest(config.input_gamma_sha256) ||
+      !valid_optional_digest(config.input_dy_sha256)) {
+    throw std::invalid_argument("input digests must be lowercase SHA-256 or none");
   }
   return config;
 }
@@ -552,7 +588,29 @@ void write_result(const Config& config, int device, int multiprocessor_count,
             "\"all_outputs_bitwise_equal\":true},\n"
          << "  \"comparison\": {\"contract\":{\"id\":\""
          << kComparisonContractId << "\",\"sha256\":\"" << kComparisonContractSha256
-         << "\"},\"subject_id\":\"transformer_engine_2_17_exact_c_api\",\"reference\":"
+         << "\"},\"input_digest_set\":\"" << config.input_digest_set << "\",\"input_digests\":{";
+  bool wrote_digest = false;
+  for (const auto& item : std::vector<std::pair<std::string, std::string>>{
+           {"x", config.input_x_sha256}, {"gamma", config.input_gamma_sha256}, {"dy", config.input_dy_sha256}}) {
+    if (item.second != "none") {
+      if (wrote_digest) stream << ',';
+      stream << "\"" << item.first << "\":\"" << item.second << "\"";
+      wrote_digest = true;
+    }
+  }
+  stream << "},\"reference_digests\":{";
+  wrote_digest = false;
+  for (const auto& item : std::vector<std::pair<std::string, std::string>>{
+           {"y", config.reference_y_sha256},
+           {"dx", config.reference_dx_sha256},
+           {"dgamma", config.reference_dgamma_sha256}}) {
+    if (item.second != "none") {
+      if (wrote_digest) stream << ',';
+      stream << "\"" << item.first << "\":\"" << item.second << "\"";
+      wrote_digest = true;
+    }
+  }
+  stream << "},\"subject_id\":\"transformer_engine_2_17_exact_c_api\",\"reference\":"
             "\"independent_numpy_binary64_closed_form_then_bfloat16_outputs\","
             "\"relative_scale_floor\":0.0078125,\"outputs\":";
   write_metrics(stream, outputs);

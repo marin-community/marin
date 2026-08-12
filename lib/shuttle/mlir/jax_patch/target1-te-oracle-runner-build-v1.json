@@ -3,7 +3,7 @@
   "manifest_id": "target1_te_2_17_oracle_runner_build_v1",
   "runner": {
     "path": "lib/shuttle/mlir/jax_patch/target1_te_oracle_runner.cpp",
-    "sha256": "c0b1f96546ddad9d6fc7de0dfb7dee00fc7c8eccf99fcb29878a7c4d4995d536",
+    "sha256": "81517d828dd40048898ac93c6c8b9703c8c843621edeeb92abeb1d5a9cc0d58a",
     "language": "c++20",
     "dispatch": "boundary_shape_and_independent_backend_flags_only"
   },
@@ -20,7 +20,7 @@
   "comparison_contract": {
     "id": "target1_rowwise_bf16_prerun_comparison_v1",
     "path": "lib/shuttle/mlir/jax_patch/target1-rowwise-bf16-prerun-comparison-v1.json",
-    "sha256": "3886fe875da9b6445a45d1e03eb32dec242bb59d0ec58a28854e319bbdb31845"
+    "sha256": "af27e9c7d1e4f6fcdf3eacc9d950459d1f627e58d9c9f0d1133b0e3dae6b1504"
   },
   "static_abi_gate": {
     "status": "passed_on_clean_official_checkout",
@@ -40,6 +40,8 @@
   },
   "execution": {
     "status": "blocked_not_executed",
+    "sealing_schema": "target1_te_execution_identity_v1",
+    "required_provenance": ["marin_revision", "runner_binary_sha256", "harness_sha256", "build_manifest_sha256", "transformer_engine_library_elf_dependencies", "toolchain", "cuda", "cudnn", "device", "input_and_reference_digests"],
     "hardware_results": [],
     "oracle_relative_thresholds": null,
     "scorecard_status_changed": false

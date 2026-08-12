@@ -175,6 +175,25 @@ PERFORMANCE = {
     },
     "reason": "one_50_sample_record_per_te_backend_pair_does_not_establish_cross_run_repeatability",
 }
+AGGREGATION = {
+    "schema": "closed_complete_hardware_matrix_v1",
+    "te_results": {
+        "count": 24,
+        "path_pattern": "result-%02d.json",
+        "coordinates": "derived_only_from_sealed_run_plan_positions_0_through_23",
+        "output_records": 48,
+    },
+    "candidate_records": {
+        "count": 36,
+        "policies": ["ordinary_jax", "source_ordered", "fast_identity"],
+        "coordinates": "two_shapes_times_six_boundary_output_roles_times_three_policies",
+    },
+    "matching": "each_source_ordered_and_identity_fast_output_against_all_four_qualified_te_backend_pairs",
+    "post_hoc_te_selector": "forbidden",
+    "result_sealing": (
+        "exact_plan_binary_harness_build_te_elf_dependencies_cuda_cudnn_device_input_and_reference_identity_required"
+    ),
+}
 EXECUTION_STATE = {
     "status": "prepared_not_executed",
     "launch_ready": False,
@@ -259,6 +278,7 @@ def validate_contract(document: object, *, repository_root: Path = REPOSITORY_RO
             "rules",
             "repeatability",
             "performance",
+            "aggregation",
             "execution_state",
         },
         "contract",
@@ -310,6 +330,7 @@ def validate_contract(document: object, *, repository_root: Path = REPOSITORY_RO
     _equal(root["rules"], RULES, "rules")
     _equal(root["repeatability"], REPEATABILITY, "repeatability")
     _equal(root["performance"], PERFORMANCE, "performance")
+    _equal(root["aggregation"], AGGREGATION, "aggregation")
     _equal(root["execution_state"], EXECUTION_STATE, "execution_state")
 
 
@@ -390,8 +411,22 @@ def _closed(value: object, fields: set[str], name: str) -> Mapping[str, Any]:
 
 
 def _equal(actual: object, expected: object, name: str) -> None:
-    if actual != expected:
+    if not _exact_value(actual, expected):
         raise ValueError(f"{name} drifted")
+
+
+def _exact_value(actual: object, expected: object) -> bool:
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, float):
+        return math.isfinite(actual) and actual == expected
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(_exact_value(actual[key], value) for key, value in expected.items())
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _exact_value(actual_item, expected_item) for actual_item, expected_item in zip(actual, expected, strict=True)
+        )
+    return actual == expected
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

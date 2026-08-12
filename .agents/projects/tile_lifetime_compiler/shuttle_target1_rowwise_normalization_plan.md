@@ -91,6 +91,26 @@ provenance, ordinary-JAX and Shuttle subject results, and a separate predeclared
 cross-run performance protocol remain unresolved. No result can promote a cell
 without those records.
 
+Raw runner JSON is deliberately unqualified. Before execution, the plan must be
+sealed to one hardware class, runner binary digest, harness digest, build
+manifest digest, Marin revision, Transformer Engine library path/SHA/ELF build
+ID and complete resolved dependency list, compiler and target flags, CUDA and
+cuDNN versions and library identities, and device model/UUID/capability/SM
+count. Input and independent-reference digests are derived from the prepared
+case bytes. Result sealing checks the runner-reported CUDA driver/runtime,
+device ordinal, and physical SM count against that identity. Missing identities
+leave the plan and results unqualified rather than supplying placeholders.
+
+Hardware comparison is an aggregate operation, not 24 independent approvals.
+The validator derives `result-00.json` through `result-23.json` from the sealed
+plan, rejects any missing, duplicate, swapped, or extra coordinate, and requires
+all 48 TE output records to qualify. It also requires exactly 36 candidate
+records: ordinary JAX, SOURCE_ORDERED, and identity FAST for both shapes and the
+six boundary/output roles. Candidate shape, boundary, role, inputs, hardware,
+contract, and subject provenance must join exactly. SOURCE_ORDERED and identity
+FAST must match ordinary-JAX bytes and pass separately against all four TE
+backend pairs. No caller can nominate one favorable TE result.
+
 The versioned manifest replaces the pending Target 1 coordinate with
 `rmsnorm_bf16_2048x4096` across all 12 boundary, policy, and hardware cells and
 removes only `representative_shape_not_declared`. Every cell remains blocked

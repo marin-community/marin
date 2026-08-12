@@ -4431,3 +4431,22 @@ author: dlwh
 - Next action: independently review this contract, then complete the missing
   provenance and cross-run performance protocol before requesting any hardware
   execution authorization.
+
+#### Review closure
+
+- Independent review found that per-result validation did not prove a complete
+  matrix and that raw runner provenance still admitted null build identities.
+  The follow-up makes raw results unqualified and adds a separate sealing
+  boundary for the exact runner, harness, build manifest, Marin revision,
+  Transformer Engine and resolved ELF dependency bytes, CUDA, cuDNN, device,
+  and input/reference identities.
+- The aggregate validator derives all 24 TE result names and coordinates from
+  the sealed plan, requires all 48 public TE outputs, and requires the complete
+  36-record ordinary-JAX/SOURCE_ORDERED/identity-FAST candidate matrix. Every
+  candidate must pass all four matching TE backend pairs; no caller-selected
+  expert record or post-hoc selector remains.
+- Recursive contract comparison now distinguishes booleans, integers, and
+  floats and rejects non-finite values. Matrix, provenance, filename-position,
+  binary-byte, role, backend, input, threshold, and duplicate/missing/extra
+  mutations fail closed. Hardware results remain empty and scorecard status is
+  unchanged.

@@ -133,6 +133,23 @@
     "evaluation_manifest_ratios": {"oracle_latency_ratio": 1.2, "stretch_oracle_latency_ratio": 1.1},
     "reason": "one_50_sample_record_per_te_backend_pair_does_not_establish_cross_run_repeatability"
   },
+  "aggregation": {
+    "schema": "closed_complete_hardware_matrix_v1",
+    "te_results": {
+      "count": 24,
+      "path_pattern": "result-%02d.json",
+      "coordinates": "derived_only_from_sealed_run_plan_positions_0_through_23",
+      "output_records": 48
+    },
+    "candidate_records": {
+      "count": 36,
+      "policies": ["ordinary_jax", "source_ordered", "fast_identity"],
+      "coordinates": "two_shapes_times_six_boundary_output_roles_times_three_policies"
+    },
+    "matching": "each_source_ordered_and_identity_fast_output_against_all_four_qualified_te_backend_pairs",
+    "post_hoc_te_selector": "forbidden",
+    "result_sealing": "exact_plan_binary_harness_build_te_elf_dependencies_cuda_cudnn_device_input_and_reference_identity_required"
+  },
   "execution_state": {
     "status": "prepared_not_executed",
     "launch_ready": false,
