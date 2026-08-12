@@ -595,6 +595,8 @@ def _mtp_config(
     mtp_loss_weight=0.3,
     mtp_loss_weight_final=0.3,
     mtp_step_decay_fraction=0.9,
+    mtp_dense=False,
+    mtp_dense_intermediate_dim=0,
 ):
     return model.GrugModelConfig(
         vocab_size=128,
@@ -622,6 +624,8 @@ def _mtp_config(
         mtp_loss_weight=mtp_loss_weight,
         mtp_loss_weight_final=mtp_loss_weight_final,
         mtp_step_decay_fraction=mtp_step_decay_fraction,
+        mtp_dense=mtp_dense,
+        mtp_dense_intermediate_dim=mtp_dense_intermediate_dim,
     )
 
 
@@ -668,6 +672,37 @@ def test_mtp_depth_one_builds_a_forward_and_a_scalar_loss():
         )
     assert out.shape == (1, 8, cfg.hidden_dim)
     assert loss.shape == ()
+
+
+def test_mtp_dense_uses_a_single_dense_expert_and_no_routed_moe():
+    # The dense MTP variant must drop the routed MoE (no expert_mlp / router leaves, no all-to-all)
+    # and use a single DenseMLP, so the MTP head fits on one rack.
+    cfg = _mtp_config(mtp_depth=1, mtp_dense=True, mtp_dense_intermediate_dim=24)
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    tok = jnp.arange(8, dtype=jnp.int32)[None, :] % cfg.vocab_size
+    w = jnp.ones((1, 8), jnp.float32)
+    with set_mesh(mesh):
+        dense = model.Transformer.init(cfg, key=jax.random.key(0))
+        baseline = model.Transformer.init(_mtp_config(mtp_depth=0), key=jax.random.key(0))
+        dense_loss = float(dense.next_token_loss(tok, w, reduction="mean", mtp_progress=0.5))
+        depth0_loss = float(baseline.next_token_loss(tok, w, reduction="mean", mtp_progress=0.5))
+
+    module = dense.mtp_modules.stacked
+    assert module.dense_block is not None and module.block is None
+    assert isinstance(module.dense_block.mlp, model.DenseMLP)
+    assert module.dense_block.mlp.w_gate.shape == (1, cfg.hidden_dim, 24)  # (depth, hidden, dense_inter)
+    # No routed-MoE structure anywhere in the MTP subtree.
+    paths = [
+        ".".join(getattr(k, "name", getattr(k, "key", str(k))) for k in path)
+        for path, _ in jax.tree_util.tree_flatten_with_path(dense.mtp_modules)[0]
+    ]
+    assert not any("expert_mlp" in p or ".router" in p for p in paths), [p for p in paths if "expert" in p]
+    assert np.isfinite(dense_loss) and dense_loss > depth0_loss
+
+
+def test_mtp_dense_requires_a_positive_intermediate_dim():
+    with pytest.raises(ValueError, match="mtp_dense requires mtp_dense_intermediate_dim"):
+        _mtp_config(mtp_depth=1, mtp_dense=True, mtp_dense_intermediate_dim=0)
 
 
 def test_mtp_weight_at_follows_the_selected_schedule():

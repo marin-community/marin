@@ -107,6 +107,8 @@ def build_hero_run(
     mtp_loss_weight_final: float = 0.3,
     mtp_weight_schedule: str = "constant",
     mtp_step_decay_fraction: float = 0.9,
+    mtp_dense: bool = False,
+    mtp_dense_intermediate_dim: int = 0,
     flavor: str = "ep",
     eval_every: int = 0,
     offload_opt_state: bool = HERO_OFFLOAD_OPT_STATE,
@@ -182,6 +184,8 @@ def build_hero_run(
         mtp_loss_weight_final=mtp_loss_weight_final,
         mtp_weight_schedule=mtp_weight_schedule,
         mtp_step_decay_fraction=mtp_step_decay_fraction,
+        mtp_dense=mtp_dense,
+        mtp_dense_intermediate_dim=mtp_dense_intermediate_dim,
     )
     # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
     # already allocated and the workspace is built. Reject it here instead.
@@ -393,6 +397,19 @@ def build_hero_run(
     help="Progress fraction at which the 'step' schedule drops to --mtp-loss-weight-final.",
 )
 @click.option(
+    "--mtp-dense/--no-mtp-dense",
+    default=False,
+    show_default=True,
+    help="Use a single dense SwiGLU MLP in the MTP block (no routed MoE / all-to-all) so it fits on one rack.",
+)
+@click.option(
+    "--mtp-dense-intermediate-dim",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="SwiGLU inner width of the dense MTP MLP. Required (> 0) when --mtp-dense and --mtp-depth > 0.",
+)
+@click.option(
     "--flavor",
     type=click.Choice(sorted(FLAVORS)),
     default="ep",
@@ -477,6 +494,8 @@ def main(
     mtp_loss_weight_final: float,
     mtp_weight_schedule: str,
     mtp_step_decay_fraction: float,
+    mtp_dense: bool,
+    mtp_dense_intermediate_dim: int,
     flavor: str,
     offload_opt_state: bool,
     save_checkpoints: bool,
@@ -504,6 +523,8 @@ def main(
         mtp_loss_weight_final=mtp_loss_weight_final,
         mtp_weight_schedule=mtp_weight_schedule,
         mtp_step_decay_fraction=mtp_step_decay_fraction,
+        mtp_dense=mtp_dense,
+        mtp_dense_intermediate_dim=mtp_dense_intermediate_dim,
         flavor=flavor,
         offload_opt_state=offload_opt_state,
         save_checkpoints=save_checkpoints,

@@ -208,6 +208,15 @@ class GrugModelConfig:
     0.3-then-0.1-for-the-last-10%)."""
     mtp_step_decay_fraction: float = 0.9
     """Progress fraction at which the "step" schedule drops to ``mtp_loss_weight_final``."""
+    mtp_dense: bool = False
+    """If True, each MTP module's transformer block uses a single dense SwiGLU MLP
+    (``mtp_dense_intermediate_dim`` wide, no routed experts, no shared expert, no expert-parallel
+    all-to-all) instead of the full MoE block. Trades MTP quality for the ~20 GiB dispatch buffer the
+    routed path adds, so the MTP head fits on one rack. The attention half is unchanged. Default
+    False keeps the full MoE + shared block."""
+    mtp_dense_intermediate_dim: int = 0
+    """SwiGLU inner width of the dense MTP MLP when ``mtp_dense`` is set (e.g. 3 * hidden_dim). Must
+    be > 0 when ``mtp_dense`` and ``mtp_depth > 0``."""
 
     def mtp_weight_at(self, progress: jax.Array | float) -> jax.Array:
         """Scheduled MTP loss weight at training ``progress`` (= step / num_train_steps, in [0,1])."""
@@ -266,6 +275,8 @@ class GrugModelConfig:
             raise ValueError("mtp_depth must be non-negative")
         if not 0.0 <= self.mtp_step_decay_fraction <= 1.0:
             raise ValueError("mtp_step_decay_fraction must be in [0, 1]")
+        if self.mtp_depth > 0 and self.mtp_dense and self.mtp_dense_intermediate_dim <= 0:
+            raise ValueError("mtp_dense requires mtp_dense_intermediate_dim > 0")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -1092,15 +1103,77 @@ def _shift_left(x: jax.Array, n: int) -> jax.Array:
     return jax.lax.slice_in_dim(jnp.pad(x, pad_widths), n, n + x.shape[1], axis=1)
 
 
+class _DenseMTPBlock(eqx.Module):
+    """A grug transformer block whose MLP is a single dense SwiGLU instead of the routed MoE.
+
+    Mirrors ``Block.__call__`` exactly (attention + gated norms + SConv + the two residual adds) but
+    replaces the ``MoEMLP`` + shared-expert path with one ``DenseMLP``, so an MTP module runs without
+    the routed expert dispatch and its ~20 GiB expert-parallel all-to-all buffer. Always driven as a
+    full-causal ("global") layer.
+    """
+
+    rms_attn: RMSNorm
+    attn_gated_norm: GatedNorm
+    attn: CausalSelfAttention
+    sconv_attn: "ShortConv | None"
+    rms_mlp: RMSNorm
+    mlp_gated_norm: GatedNorm
+    mlp: DenseMLP
+    sconv_mlp: "ShortConv | None"
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "_DenseMTPBlock":
+        attn_key, mlp_key, gn_attn_key, gn_mlp_key = random.split(key, 4)
+        return _DenseMTPBlock(
+            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+            attn=CausalSelfAttention.init(cfg, key=attn_key),
+            sconv_attn=(
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "attn" in cfg.sconv_sites else None
+            ),
+            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+            mlp=DenseMLP.init(cfg.hidden_dim, cfg.mtp_dense_intermediate_dim, cfg.initializer_std, key=mlp_key),
+            sconv_mlp=(
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
+            ),
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        disable_rope: bool | jax.Array = False,
+        is_global: bool | jax.Array = True,
+    ) -> Float[Array, "B S D"]:
+        _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        sconv_segment_ids = _seg[0] if _seg is not None else None
+
+        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
+        if self.sconv_attn is not None:
+            attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
+        x = x + attn_out
+        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        mlp_out = self.mlp(mlp_in, activation=ActivationFunctionEnum.silu)
+        if self.sconv_mlp is not None:
+            mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
+        x = x + mlp_out
+        return x
+
+
 class MTPModule(eqx.Module):
     """One DeepSeek-V3 Multi-Token Prediction module (arXiv 2412.19437 2.2).
 
     For module depth k at position i: normalize the previous depth's hidden ``h_i^{k-1}`` and the
     shared-embedding of input token ``x_{i+k}``, concatenate, project 2d->d with ``proj`` (M_k), then
-    run one transformer ``Block`` (the full MoE + shared block) as a full-causal ("global") layer
-    like DeepSeek's MTP TRM. The output feeds the shared output head; the token embedding and output
-    head are the main model's -- only the fields below are new per module. Each of the three norms is
-    a gated norm (RMSNorm -> GatedNorm), matching the block's ``rms_* + *_gated_norm`` pattern.
+    run one transformer block as a full-causal ("global") layer like DeepSeek's MTP TRM. The block is
+    the full MoE + shared ``Block`` by default, or a single dense ``_DenseMTPBlock`` when
+    ``cfg.mtp_dense`` (drops the routed all-to-all so the head fits on one rack). The output feeds the
+    shared output head; the token embedding and output head are the main model's -- only the fields
+    below are new per module. Each of the three norms is a gated norm (RMSNorm -> GatedNorm), matching
+    the block's ``rms_* + *_gated_norm`` pattern.
     """
 
     h_norm: RMSNorm
@@ -1108,21 +1181,33 @@ class MTPModule(eqx.Module):
     e_norm: RMSNorm
     e_gated_norm: GatedNorm
     proj: jax.Array
-    block: Block
+    # Exactly one is populated: ``block`` (full MoE + shared) or ``dense_block`` (single dense
+    # SwiGLU), selected by ``cfg.mtp_dense``.
+    block: Block | None
+    dense_block: _DenseMTPBlock | None
     out_norm: RMSNorm
     out_gated_norm: GatedNorm
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MTPModule":
+        # One split shared by both variants (``k_block`` builds either block), so mtp_dense=False is
+        # byte-for-byte identical to the full-MoE MTP module.
         k_proj, k_block, k_hgn, k_egn, k_ogn = random.split(key, 5)
         d = cfg.hidden_dim
+        if cfg.mtp_dense:
+            block: Block | None = None
+            dense_block: _DenseMTPBlock | None = _DenseMTPBlock.init(cfg, key=k_block)
+        else:
+            block = Block.init(cfg, key=k_block)
+            dense_block = None
         return MTPModule(
             h_norm=RMSNorm.init(d, cfg.layer_norm_eps),
             h_gated_norm=GatedNorm.init(d, cfg.initializer_std, key=k_hgn),
             e_norm=RMSNorm.init(d, cfg.layer_norm_eps),
             e_gated_norm=GatedNorm.init(d, cfg.initializer_std, key=k_egn),
             proj=reshard(_init_weight(k_proj, (2 * d, d), cfg.initializer_std), P(_FSDP_AXES, "model")),
-            block=Block.init(cfg, key=k_block),
+            block=block,
+            dense_block=dense_block,
             out_norm=RMSNorm.init(d, cfg.layer_norm_eps),
             out_gated_norm=GatedNorm.init(d, cfg.initializer_std, key=k_ogn),
         )
@@ -1140,7 +1225,11 @@ class MTPModule(eqx.Module):
         combined = jnp.concatenate([h_normed, e_normed], axis=-1)
         h = jnp.einsum("bsD,Dd->bsd", combined, self.proj, out_sharding=_batch_spec())
         # Always a full-causal ("global") layer -- the main forward runs global layers rope-free.
-        h, _ = self.block(h, mask, disable_rope=disable_rope, is_global=True)
+        if self.dense_block is not None:
+            h = self.dense_block(h, mask, disable_rope=disable_rope, is_global=True)
+        else:
+            assert self.block is not None  # exactly one of block / dense_block is populated
+            h, _ = self.block(h, mask, disable_rope=disable_rope, is_global=True)
         return self.out_gated_norm(self.out_norm(h))
 
 
