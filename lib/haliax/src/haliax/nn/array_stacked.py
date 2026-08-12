@@ -45,28 +45,13 @@ def _slice_layer(x: Any, index: int, num_layers: int) -> Any:
     return x
 
 
-def _stack_layers(layers: Sequence[Any], num_layers: int, axis: int = 0) -> Any:
-    if len(layers) != num_layers:
-        raise ValueError(f"Expected {num_layers} layers, got {len(layers)}.")
-    if num_layers == 0:
-        raise ValueError("num_layers must be >= 1.")
-
-    leaves0, structure = jax.tree_util.tree_flatten(layers[0], is_leaf=is_named_array)
-    all_leaves = [jax.tree_util.tree_leaves(layer, is_leaf=is_named_array) for layer in layers]
-    stacked_leaves = []
-    for leaf_index, first_leaf in enumerate(leaves0):
-        layer_leaves = [layer[leaf_index] for layer in all_leaves]
-        if is_named_array(first_leaf):
+def _reject_named_arrays(stacked: Any) -> None:
+    for leaf in jax.tree_util.tree_leaves(stacked, is_leaf=is_named_array):
+        if is_named_array(leaf):
             raise TypeError(
                 "ArrayStacked does not support NamedArray leaves. "
                 "Use haliax.nn.Stacked for modules with named-array parameters."
             )
-        if is_jax_array_like(first_leaf):
-            stacked_leaves.append(jnp.stack(layer_leaves, axis=axis))
-        else:
-            stacked_leaves.append(first_leaf)
-
-    return jax.tree_util.tree_unflatten(structure, stacked_leaves)
 
 
 class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
@@ -90,16 +75,22 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
 
         @functools.wraps(module)
         def init_fn(*args, **kwargs):
-            layers = []
-            for i in range(num_layers):
-                layer_args, layer_kwargs = jax.tree.map(
-                    lambda x: _slice_layer(x, i, num_layers),
-                    (args, kwargs),
-                    is_leaf=is_named_array,
-                )
-                layers.append(module.init(*layer_args, **layer_kwargs))
+            # Tracing each layer separately makes the initializer's HLO grow with depth, which
+            # dominates XLA compile time for a deep stack.
+            batched, shared = eqx.partition(
+                (args, kwargs),
+                lambda x: _is_layer_batched_leaf(x, num_layers),
+                is_leaf=is_named_array,
+            )
 
-            stacked = _stack_layers(layers, num_layers)
+            def init_layer(layer_batched):
+                layer_args, layer_kwargs = eqx.combine(layer_batched, shared)
+                return module.init(*layer_args, **layer_kwargs)
+
+            # `axis_size` covers a module whose arguments carry no layer axis at all, where
+            # every layer initializes from the same inputs.
+            stacked = jax.vmap(init_layer, axis_size=num_layers)(batched)
+            _reject_named_arrays(stacked)
             return cls(stacked=stacked, num_layers=num_layers, gradient_checkpointing=gradient_checkpointing)
 
         return init_fn
