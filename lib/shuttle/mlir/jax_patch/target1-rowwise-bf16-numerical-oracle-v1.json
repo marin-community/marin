@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "contract_id": "target1_rowwise_bf16_numerical_oracle_v1",
+  "boundaries": ["forward", "backward", "composed"],
+  "shapes": [[2048, 4096], [7, 13]],
+  "inputs": {
+    "generator": "numpy.linspace(float32)->bfloat16",
+    "ranges": [[-0.75, 0.875], [-0.625, 1.0], [-0.5, 1.125]],
+    "digests": {
+      "2048x4096/forward": ["47c7e1bda25abe1f0a2e0f2c34154f0484d367d1309ae2ddb08450ed9eb4b5df", "a69953eeff9555b4a0cf42fbe2c978a4c3559eb76329b437f6bd32cdaa284e7a"],
+      "2048x4096/backward": ["47c7e1bda25abe1f0a2e0f2c34154f0484d367d1309ae2ddb08450ed9eb4b5df", "a69953eeff9555b4a0cf42fbe2c978a4c3559eb76329b437f6bd32cdaa284e7a", "7b7aa9a695993ba1df1006a94d400338b352a6536f8116707ec824a049bdb369"],
+      "2048x4096/composed": ["47c7e1bda25abe1f0a2e0f2c34154f0484d367d1309ae2ddb08450ed9eb4b5df", "a69953eeff9555b4a0cf42fbe2c978a4c3559eb76329b437f6bd32cdaa284e7a", "7b7aa9a695993ba1df1006a94d400338b352a6536f8116707ec824a049bdb369"],
+      "7x13/forward": ["000ad6855ebae83591386e08d580bbb9d9e8b37c60f34fe4d3f809b5d432afb8", "5702474f3719c6c8fc4da160d9021ee2bb07df6e5d58138366d2dcdcceb8fa2a"],
+      "7x13/backward": ["000ad6855ebae83591386e08d580bbb9d9e8b37c60f34fe4d3f809b5d432afb8", "5702474f3719c6c8fc4da160d9021ee2bb07df6e5d58138366d2dcdcceb8fa2a", "cf3f441e70210bf1c48e072c1cac37eea031804fba05a77bee4c5905352307ac"],
+      "7x13/composed": ["000ad6855ebae83591386e08d580bbb9d9e8b37c60f34fe4d3f809b5d432afb8", "5702474f3719c6c8fc4da160d9021ee2bb07df6e5d58138366d2dcdcceb8fa2a", "cf3f441e70210bf1c48e072c1cac37eea031804fba05a77bee4c5905352307ac"]
+    }
+  },
+  "reference": {
+    "implementation": "independent_numpy_closed_form",
+    "accumulation_dtype": "float64",
+    "epsilon": 0.00001,
+    "formulas": {
+      "r": "r_i = 1 / sqrt(sum_j(binary64(x_ij) * binary64(x_ij)) / features + binary64(1e-5))",
+      "y": "y_ij = bfloat16(binary64(x_ij) * r_i * binary64(gamma_j))",
+      "dx": "dx_ij = bfloat16(binary64(dy_ij) * binary64(gamma_j) * r_i - binary64(x_ij) * r_i**3 * sum_k(binary64(dy_ik) * binary64(x_ik) * binary64(gamma_k)) / features)",
+      "dgamma": "dgamma_j = bfloat16(sum_i(binary64(dy_ij) * binary64(x_ij) * r_i))"
+    },
+    "output_digests": {
+      "2048x4096/forward": ["fe18afac66306e065ebf824c52cc6d95776e49521ed6209e405b58e40c934bdd"],
+      "2048x4096/backward": ["94cae5294bf199125556aa238d3838a5c069d9a6b6bbd03760570cdabe11d751", "2525afed6ad804f42b5968c9de14ae1ee037536eb1575fa2bf8e873ee1e8a4ba"],
+      "2048x4096/composed": ["fe18afac66306e065ebf824c52cc6d95776e49521ed6209e405b58e40c934bdd", "94cae5294bf199125556aa238d3838a5c069d9a6b6bbd03760570cdabe11d751", "2525afed6ad804f42b5968c9de14ae1ee037536eb1575fa2bf8e873ee1e8a4ba"],
+      "7x13/forward": ["dfe4963f1d26353f11cb8bbca98e0dc5fd7efaa6c3cc91bddac56798fd673b25"],
+      "7x13/backward": ["25d8c57cb2e6d6692b3b182b6af56d8428a820ba329eb3a1088aae7960582222", "b4399ccc04ae6bc4f516fb16c5c04de9cd1d27b1bd1519738eac0e08dbdd80a0"],
+      "7x13/composed": ["dfe4963f1d26353f11cb8bbca98e0dc5fd7efaa6c3cc91bddac56798fd673b25", "25d8c57cb2e6d6692b3b182b6af56d8428a820ba329eb3a1088aae7960582222", "b4399ccc04ae6bc4f516fb16c5c04de9cd1d27b1bd1519738eac0e08dbdd80a0"]
+    },
+    "role": "numerical_reference_not_expert_performance_oracle"
+  },
+  "outputs": {
+    "2048x4096/forward": [{"role": "y", "shape": [2048, 4096], "dtype": "bfloat16"}],
+    "2048x4096/backward": [{"role": "dx", "shape": [2048, 4096], "dtype": "bfloat16"}, {"role": "dgamma", "shape": [4096], "dtype": "bfloat16"}],
+    "2048x4096/composed": [{"role": "y", "shape": [2048, 4096], "dtype": "bfloat16"}, {"role": "dx", "shape": [2048, 4096], "dtype": "bfloat16"}, {"role": "dgamma", "shape": [4096], "dtype": "bfloat16"}],
+    "7x13/forward": [{"role": "y", "shape": [7, 13], "dtype": "bfloat16"}],
+    "7x13/backward": [{"role": "dx", "shape": [7, 13], "dtype": "bfloat16"}, {"role": "dgamma", "shape": [13], "dtype": "bfloat16"}],
+    "7x13/composed": [{"role": "y", "shape": [7, 13], "dtype": "bfloat16"}, {"role": "dx", "shape": [7, 13], "dtype": "bfloat16"}, {"role": "dgamma", "shape": [13], "dtype": "bfloat16"}]
+  },
+  "metrics": {
+    "definitions": {
+      "max_absolute_error": "max(abs(actual-reference))",
+      "mean_absolute_error": "mean(abs(actual-reference))",
+      "relative_linf_error": "max_absolute_error/max(max(abs(reference)),relative_scale_floor)",
+      "max_bfloat16_ulp_error": "max distance between ordered finite bfloat16 encodings"
+    },
+    "relative_scale_floor": 0.0078125
+  },
+  "policies": {
+    "source_ordered": {
+      "identity_roundtrip": "bitwise_ordinary_jax_required",
+      "analytic_thresholds": {"max_absolute_error": 0.015625, "mean_absolute_error": 0.000001, "relative_linf_error": 0.0078125, "max_bfloat16_ulp_error": 8},
+      "non_identity_fast_status": "not_applicable"
+    },
+    "fast": {
+      "identity_roundtrip": "bitwise_ordinary_jax_required",
+      "analytic_thresholds": {"max_absolute_error": 0.015625, "mean_absolute_error": 0.000001, "relative_linf_error": 0.0078125, "max_bfloat16_ulp_error": 8},
+      "non_identity_fast_status": "unresolved_requires_contract_revision"
+    }
+  },
+  "provenance": {
+    "jax_version": "0.10.1",
+    "jaxlib_version": "0.10.1",
+    "jax_revision": "619764c15117fbefc4ba13ab941871cb514c23f6",
+    "xla_revision": "9b635916ecc6df6efee62d8e4b0c7ef87ef84d69",
+    "numpy_version": "2.3.5",
+    "ml_dtypes_version": "0.5.4"
+  },
+  "local_observation": {
+    "claim": "local_cpu_reference_check_not_scorecard_evidence",
+    "environment": {
+      "backend_platform": "cpu",
+      "device_kind_class": "cpu",
+      "host_architecture": "arm64",
+      "jax_enable_x64": false,
+      "python_version": "3.12.11"
+    },
+    "results": {
+      "2048x4096/forward": [{"role": "y", "output_digest": "34bcbb6e423b2adf37dc882b33bd25a9e5f5eacd3b22dcb4928ea593209a02c5", "metrics": {"max_absolute_error": 0.00390625, "mean_absolute_error": 2.561137080192566e-09, "relative_linf_error": 0.003875968992248062, "max_bfloat16_ulp_error": 1}}],
+      "2048x4096/backward": [{"role": "dx", "output_digest": "4af61c7ca043e8daeca57d3fbe92323a0a01ec1295125643eb03f8ed6a100d12", "metrics": {"max_absolute_error": 0.0078125, "mean_absolute_error": 1.963966822504659e-08, "relative_linf_error": 0.00010016025641025641, "max_bfloat16_ulp_error": 7}}, {"role": "dgamma", "output_digest": "2525afed6ad804f42b5968c9de14ae1ee037536eb1575fa2bf8e873ee1e8a4ba", "metrics": {"max_absolute_error": 0.0, "mean_absolute_error": 0.0, "relative_linf_error": 0.0, "max_bfloat16_ulp_error": 0}}],
+      "2048x4096/composed": [{"role": "y", "output_digest": "34bcbb6e423b2adf37dc882b33bd25a9e5f5eacd3b22dcb4928ea593209a02c5", "metrics": {"max_absolute_error": 0.00390625, "mean_absolute_error": 2.561137080192566e-09, "relative_linf_error": 0.003875968992248062, "max_bfloat16_ulp_error": 1}}, {"role": "dx", "output_digest": "4af61c7ca043e8daeca57d3fbe92323a0a01ec1295125643eb03f8ed6a100d12", "metrics": {"max_absolute_error": 0.0078125, "mean_absolute_error": 1.963966822504659e-08, "relative_linf_error": 0.00010016025641025641, "max_bfloat16_ulp_error": 7}}, {"role": "dgamma", "output_digest": "2525afed6ad804f42b5968c9de14ae1ee037536eb1575fa2bf8e873ee1e8a4ba", "metrics": {"max_absolute_error": 0.0, "mean_absolute_error": 0.0, "relative_linf_error": 0.0, "max_bfloat16_ulp_error": 0}}],
+      "7x13/forward": [{"role": "y", "output_digest": "dfe4963f1d26353f11cb8bbca98e0dc5fd7efaa6c3cc91bddac56798fd673b25", "metrics": {"max_absolute_error": 0.0, "mean_absolute_error": 0.0, "relative_linf_error": 0.0, "max_bfloat16_ulp_error": 0}}],
+      "7x13/backward": [{"role": "dx", "output_digest": "25d8c57cb2e6d6692b3b182b6af56d8428a820ba329eb3a1088aae7960582222", "metrics": {"max_absolute_error": 0.0, "mean_absolute_error": 0.0, "relative_linf_error": 0.0, "max_bfloat16_ulp_error": 0}}, {"role": "dgamma", "output_digest": "b4399ccc04ae6bc4f516fb16c5c04de9cd1d27b1bd1519738eac0e08dbdd80a0", "metrics": {"max_absolute_error": 0.0, "mean_absolute_error": 0.0, "relative_linf_error": 0.0, "max_bfloat16_ulp_error": 0}}],
+      "7x13/composed": [{"role": "y", "output_digest": "dfe4963f1d26353f11cb8bbca98e0dc5fd7efaa6c3cc91bddac56798fd673b25", "metrics": {"max_absolute_error": 0.0, "mean_absolute_error": 0.0, "relative_linf_error": 0.0, "max_bfloat16_ulp_error": 0}}, {"role": "dx", "output_digest": "25d8c57cb2e6d6692b3b182b6af56d8428a820ba329eb3a1088aae7960582222", "metrics": {"max_absolute_error": 0.0, "mean_absolute_error": 0.0, "relative_linf_error": 0.0, "max_bfloat16_ulp_error": 0}}, {"role": "dgamma", "output_digest": "b4399ccc04ae6bc4f516fb16c5c04de9cd1d27b1bd1519738eac0e08dbdd80a0", "metrics": {"max_absolute_error": 0.0, "mean_absolute_error": 0.0, "relative_linf_error": 0.0, "max_bfloat16_ulp_error": 0}}]
+    }
+  },
+  "scorecard_effect": {
+    "status_changed": false,
+    "reason": "No architecturally conforming hardware run or expert performance oracle is pinned."
+  }
+}
