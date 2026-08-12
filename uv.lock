@@ -3666,7 +3666,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "marin-dupekit-native", specifier = ">=0.1.5.dev30957455498" },
+    { name = "marin-dupekit-native", specifier = ">=0.1.6.dev31131847556" },
     { name = "pytest-benchmark", marker = "extra == 'benchmark'", specifier = ">=5.2.3" },
     { name = "pytest-memray", marker = "extra == 'benchmark'", specifier = ">=1.8.0" },
 ]
@@ -3690,17 +3690,17 @@ test = [
 
 [[package]]
 name = "marin-dupekit-native"
-version = "0.1.5.dev30957455498"
+version = "0.1.6.dev31131847556"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyarrow" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/50/0c/d18c67033acc09b3e46a04ed8f834c45681e2eb92d2009e6fbe06b1539d1/marin_dupekit_native-0.1.5.dev30957455498.tar.gz", hash = "sha256:769f855af0ad92d5712afd48086641e47a6eca0cfefcbb745902d89532ecc4fd", size = 22359, upload-time = "2026-08-04T22:49:25.439Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b9/21/135a244e3e38dca7d7c3ee0de49a81fa55ab1075463cc29306c7c8e52ad5/marin_dupekit_native-0.1.6.dev31131847556.tar.gz", hash = "sha256:f83dd70bc95e85870c67132432246adcc7d4810b5517277cbc12a4d134dc02ec", size = 22361, upload-time = "2026-08-07T00:12:17.139Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/23/a9/02b6a12c66f4365eab7d10e6daa68f2593465793a609922a0871db5df286/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:34e0e4892d95cb9c576838f7a92fe02315f793d8ef8bbe09b1d69be424d1f14c", size = 3964882, upload-time = "2026-08-04T22:49:17.823Z" },
-    { url = "https://files.pythonhosted.org/packages/3a/fe/0414b2d4994887c0f46cbf5933d9b48cdec447d3f8a2b667e7ea597a9a9b/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:bfc43e9decaaa7635740ef018c04802921178941f2aff8ddc105542ea3f4f3cb", size = 3654072, upload-time = "2026-08-04T22:49:19.992Z" },
-    { url = "https://files.pythonhosted.org/packages/1b/89/070afd632907acf0d1416f6dcb36f86a847c42e57a4094714c598d76db6e/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:cb49390e74a5bca1e843b5d05213b7e31891dc2d6657884de225b23773d5cd92", size = 3833758, upload-time = "2026-08-04T22:49:21.569Z" },
-    { url = "https://files.pythonhosted.org/packages/2e/99/43cf7ab011f22d047c0bd9978984dc3530ac92a29aa6f53fccbbf7632213/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:e466e25c33cb2618b4d168ac4c9e77aab32e5406e8f845dca94e4cf55e91952d", size = 4116806, upload-time = "2026-08-04T22:49:23.013Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/9c/df280af2df57e95418b74ec4d96243488293bddeff09e102cde4f3be74d7/marin_dupekit_native-0.1.6.dev31131847556-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:bcd6745aeb703e87f33ec8f0537a04a157133e07f9738d407a97e451e1b1b5cb", size = 3964994, upload-time = "2026-08-07T00:12:10.129Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/1d/3513e75a35704c7f28e0f4fe235545fd0094aeeea2991c899691db263482/marin_dupekit_native-0.1.6.dev31131847556-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:e0c3f52e240724a610161862819f2f4c92370841540d4ec98a8cd13c327cb9da", size = 3654080, upload-time = "2026-08-07T00:12:11.774Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/c3/1bf7af2fe072590d350871f6efc1c76614329ad37c70bcc83f26880b3c22/marin_dupekit_native-0.1.6.dev31131847556-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:f0fceadc72803f0512c955ce5568197fce2d804e4a64452a8471f6197276adad", size = 3833622, upload-time = "2026-08-07T00:12:13.275Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/1a/26cbda61e163eda6e247b5b56b5a781e1699e9cc0c17f7d5534cd28a7173/marin_dupekit_native-0.1.6.dev31131847556-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:62ab6a3bc5d4b1f5f794e378117ae7236de067ac44629a15a9b93e475273bd15", size = 4117115, upload-time = "2026-08-07T00:12:14.645Z" },
 ]
 
 [[package]]
@@ -3768,14 +3768,14 @@ test = [
 
 [[package]]
 name = "marin-finelog-server"
-version = "0.2.21.dev31054160190"
+version = "0.2.28.dev31271949117"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a2/93/281f14803e2784b5c96914097daf6bc8f75bacb6349ae41fae247c9d8497/marin_finelog_server-0.2.21.dev31054160190.tar.gz", hash = "sha256:dfb4086a06856ebdb30e2fb3fcfa96037dff5d53a5b429306a0693a37ad5a915", size = 311935, upload-time = "2026-08-05T23:22:16.909Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/9b/d5c6becc54bc9ce6e72a11802c308bda851a7fe4f86baf4508b5dc3c2dc3/marin_finelog_server-0.2.28.dev31271949117.tar.gz", hash = "sha256:003e5a6b0c18cc92db88fb75c573987c2232d93f895f02af8478fd54307b473f", size = 368596, upload-time = "2026-08-08T18:59:45.536Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/97/db/f8b1f856f1c227cee8d72cbaa30635a2f70f007009bdfc79b9d2d2adb03b/marin_finelog_server-0.2.21.dev31054160190-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:6c3100582a2cd391e40963459f08245d8d10a48a746e7d70e18056705a9f56c4", size = 39837009, upload-time = "2026-08-05T23:21:59.496Z" },
-    { url = "https://files.pythonhosted.org/packages/e4/6d/a9a8b38e56c93caa1806109ce08622f83bbf22c90be2eaf3cb83dd7c2279/marin_finelog_server-0.2.21.dev31054160190-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:550b28c0f7ff2dab7aa49496ccf8bc8748be6c47868b39fe0291e85be9ac6b29", size = 37720210, upload-time = "2026-08-05T23:22:03.343Z" },
-    { url = "https://files.pythonhosted.org/packages/40/e3/613f3aecb25249d47d192b5a2985a0f39ddfabd65d7d31c4d86943d92f6d/marin_finelog_server-0.2.21.dev31054160190-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:62166a32c79c8232932c06d4e52ed881c0b9953cd3ce72efbb6624fee609c6e9", size = 39266719, upload-time = "2026-08-05T23:22:07.419Z" },
-    { url = "https://files.pythonhosted.org/packages/25/c2/20b6dac041af824a53dd35bce366b686d0cab7e01ccee794d9edc9bf474c/marin_finelog_server-0.2.21.dev31054160190-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:e0855d44cf8608694a4e4ca3d42f6a12ada2e464b1f7a55f9b79be194704e5e6", size = 41700621, upload-time = "2026-08-05T23:22:12.9Z" },
+    { url = "https://files.pythonhosted.org/packages/67/bc/2ae76d392fce8462cac62a38cfc9656b7672616ffcac97da5eb32810c177/marin_finelog_server-0.2.28.dev31271949117-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:9eccaefb62233c6b2647947af7866058ea821582105348fac72d622cfdebd6d3", size = 41056093, upload-time = "2026-08-08T18:59:27.942Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/4b/d0731ad1d2169f6063d190496d8f5cc5b10a0de7d66af9ac5eb8a4b12ede/marin_finelog_server-0.2.28.dev31271949117-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:e79242cc1ed8e2ce6d096a9f4453e46873427ce504853b8f5bfb830560b2ac43", size = 38874492, upload-time = "2026-08-08T18:59:32.342Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/af/cfe41d20517eedbf0cd87d291d6ae99ddad460ed28a285ec7633a54b5c4f/marin_finelog_server-0.2.28.dev31271949117-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:b297c63782ed08644d0b573db3160fb75527f2562e579846e213a86bf9297ddd", size = 40470543, upload-time = "2026-08-08T18:59:37.006Z" },
+    { url = "https://files.pythonhosted.org/packages/60/1d/da5142a5c8e447d167f02ddd3bf6113a336699153ffc34cfc11bcb568335/marin_finelog_server-0.2.28.dev31271949117-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:09242c474b5dcc4bae076ee96c1e858755bffd8754c3065373e27443f8dc20b5", size = 43019653, upload-time = "2026-08-08T18:59:41.898Z" },
 ]
 
 [[package]]
@@ -4077,8 +4077,8 @@ requires-dist = [
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,<36" },
     { name = "marin-finelog", editable = "lib/finelog" },
-    { name = "marin-finelog-server", specifier = ">=0.2.21.dev31054160190" },
-    { name = "marin-iris-native", specifier = ">=0.1.5.dev30223685542" },
+    { name = "marin-finelog-server", specifier = ">=0.2.28.dev31271949117" },
+    { name = "marin-iris-native", specifier = ">=0.1.6.dev31131847556" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["secrets"], marker = "extra == 'controller'", editable = "lib/rigging" },
@@ -4134,14 +4134,14 @@ test = [
 
 [[package]]
 name = "marin-iris-native"
-version = "0.1.5.dev30223685542"
+version = "0.1.6.dev31131847556"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e8/d6/4a01c73b0428bb5c967593cb05222bb0c546305486cce1171c0c7a7b7eb3/marin_iris_native-0.1.5.dev30223685542.tar.gz", hash = "sha256:8928edf09177971bdf175fdfc2efdb3c354e286616c27824d1908e232c38d941", size = 39050, upload-time = "2026-07-26T23:25:20.271Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/18/6f/56a218fb6e50eda550ee63cb6d29002f435b705b98cb174e8f0235f3a792/marin_iris_native-0.1.6.dev31131847556.tar.gz", hash = "sha256:a1293b6e39b2b45a856e1f422bd4f00cd27485f205c030e6dcfa8d539a889568", size = 39046, upload-time = "2026-08-07T00:12:12.973Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/0e/2ffa0d7941a3eb8bf4b5003bff5c8798ce63f99e3af8bd5e24e4b190a321/marin_iris_native-0.1.5.dev30223685542-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:786d39a0a49625a531b3e3255275cdd15f01148aa96a1222a08f3f1a846fb666", size = 3551177, upload-time = "2026-07-26T23:25:13.398Z" },
-    { url = "https://files.pythonhosted.org/packages/d9/33/7a2fee0f825363a3493f24bdf6d17226840a23bb4e84358ecd0dab1dc69f/marin_iris_native-0.1.5.dev30223685542-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:bdbf964ff76a7066e035071bc9b5ae565a739387e95ce2cc4fdba0a3f82bd11c", size = 3348678, upload-time = "2026-07-26T23:25:14.95Z" },
-    { url = "https://files.pythonhosted.org/packages/6e/32/798194040a5d0bcbbb10c10cec9ca63c48326eb6becd100021882f4622bc/marin_iris_native-0.1.5.dev30223685542-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:2ef528df80e0605b144022a4506333ffc2e1ee2539c9381d64095c132dad084f", size = 3489655, upload-time = "2026-07-26T23:25:17.147Z" },
-    { url = "https://files.pythonhosted.org/packages/a6/77/c2f2994163fdd60e3007aa364800ac972a22c7bbed48e807892538808add/marin_iris_native-0.1.5.dev30223685542-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:b383d8aca62955de8cb064dc9a0294d8e5fc8fe01266ec573052f6f2dba69499", size = 3682223, upload-time = "2026-07-26T23:25:19.044Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/f9/eb005d6fba97e8e16fdb793dad10ef188a3c0a7fce288a7f7b39bb06511e/marin_iris_native-0.1.6.dev31131847556-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:8cdb5298301d2538b8ca24882f74ec6836b9022c8ead0343978d049dd450a47e", size = 3551136, upload-time = "2026-08-07T00:12:06.839Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/39/efc31afa16a341b3950fe6bf311d5ece9ef680939f4f599f87322e838958/marin_iris_native-0.1.6.dev31131847556-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:e07e4ebb3252751ee3029b07a7b8c3eca6e6c94f9c6fa3248e3f9d24b29f0925", size = 3348691, upload-time = "2026-08-07T00:12:08.475Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/0d/ffa8b4c0b420eb7cd3863d684e8ec6612d0f0cfe2f72116c73d4bf2b0ba5/marin_iris_native-0.1.6.dev31131847556-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e6dfd2cf6df70254a1259c9656b6ad381a481d8c0aff491629d334d018f9be1c", size = 3489782, upload-time = "2026-08-07T00:12:09.95Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/bd/d39e7be34c825ddbb4a7c798349e5062b47ebc50e2a67455c6b960146aca/marin_iris_native-0.1.6.dev31131847556-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:3a36ff1eea43e97c290df9a6ed4ec5deba78cadd962a138264b4fe1f7b4bf18a", size = 3682246, upload-time = "2026-08-07T00:12:11.498Z" },
 ]
 
 [[package]]
