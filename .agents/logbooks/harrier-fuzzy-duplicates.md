@@ -391,3 +391,13 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI pods. RNO has 82 running TEI pods. Fourteen replacement jobs still wait for interactive capacity.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the active coordinator logs.
 - Next action: Continue the 15-minute check cadence and validate replacement services when RNO capacity becomes available.
+
+### 2026-08-12 06:47 UTC - RNO completes dolma code prose
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 11 completed source artifacts. RNO has six completed source artifacts. The full run has 17 of 292 completed source artifacts.
+- RNO result: `dolma_code_prose_013b53af` succeeded. It processed all 224 output shards and 12,827,072 documents.
+- RNO progress: `finetranslations_6ce00a47` started. Its first join stage got to 4,009 of 25,962 tasks with 32 live workers and no dead workers.
+- East progress: `nemotron_code_v1-content_085c2c96` got to 1,862 of 2,341 output shards with 32 live workers and no dead workers.
+- Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the active coordinator logs.
+- Next action: Monitor the `finetranslations` join stages and verify the transition to embedding.
