@@ -27,6 +27,7 @@ def _run_gate(
     output_paths: tuple[str, ...],
     *,
     executable: bool = True,
+    verify: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     xla_source = tmp_path / "xla"
     xla_source.mkdir()
@@ -70,14 +71,29 @@ arguments = parser.parse_args()
 Path(os.environ["GENERATOR_RECORD"]).write_text(arguments.normalizer)
 """
     )
+    verifier_record = tmp_path / "verifier-normalizer.txt"
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text(
+        """import argparse
+import os
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--normalizer", required=True)
+arguments = parser.parse_args()
+Path(os.environ["VERIFIER_RECORD"]).write_text(arguments.normalizer)
+"""
+    )
     environment = os.environ.copy()
     environment.update(
         {
             "FAKE_BAZEL_LOG": str(bazel_log),
             "FAKE_BAZEL_OUTPUT": "\n".join(output_paths),
             "GENERATOR_RECORD": str(generator_record),
+            "VERIFIER_RECORD": str(verifier_record),
         }
     )
+    verifier_arguments = ["--verifier", str(verifier)] if verify else []
     result = subprocess.run(
         [
             sys.executable,
@@ -98,6 +114,7 @@ Path(os.environ["GENERATOR_RECORD"]).write_text(arguments.normalizer)
             sys.executable,
             "--generator",
             str(generator),
+            *verifier_arguments,
         ],
         check=False,
         capture_output=True,
@@ -105,6 +122,16 @@ Path(os.environ["GENERATOR_RECORD"]).write_text(arguments.normalizer)
         env=environment,
     )
     return result, bazel_log, generator_record
+
+
+def test_fixture_audit_gate_runs_independent_verifier_with_resolved_normalizer(tmp_path):
+    output_path = "bazel-out/k8-opt/bin/external/shuttle_mlir/shuttle-test-opt"
+    result, _, generator_record = _run_gate(tmp_path, (output_path,), verify=True)
+
+    assert result.returncode == 0, result.stderr
+    selected = Path(generator_record.read_text())
+    assert (tmp_path / "verifier-normalizer.txt").read_text() == str(selected)
+    assert f"fixture_verifier={tmp_path / 'verifier.py'}" in result.stdout
 
 
 def test_fixture_audit_gate_builds_and_passes_shuttle_test_opt(tmp_path):
@@ -137,7 +164,7 @@ def test_fixture_audit_gate_builds_and_passes_shuttle_test_opt(tmp_path):
     assert selected.name == "shuttle-test-opt"
     assert selected.resolve().is_relative_to(tmp_path / "real-bazel-out")
     assert f"fixture_audit_normalizer={selected}" in result.stdout
-    assert "six_fixture_default_audit=PASS" in result.stdout
+    assert "fixture_audit=PASS" in result.stdout
 
 
 def test_fixture_audit_gate_rejects_production_shuttle_opt(tmp_path):

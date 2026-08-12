@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the pinned fixture normalizer and run the six-fixture audit."""
+"""Build the pinned fixture normalizer and run one fixture audit."""
 
 import argparse
 import os
@@ -66,6 +66,7 @@ def main() -> int:
     parser.add_argument("--ram-mb", required=True, type=int)
     parser.add_argument("--python", required=True, type=Path)
     parser.add_argument("--generator", required=True, type=Path)
+    parser.add_argument("--verifier", type=Path)
     arguments = parser.parse_args()
     if arguments.jobs <= 0 or arguments.ram_mb <= 0:
         parser.error("jobs and ram-mb must be positive")
@@ -83,7 +84,13 @@ def main() -> int:
         [str(arguments.python), str(arguments.generator), "--normalizer", str(normalizer)],
         check=True,
     )
-    print("six_fixture_default_audit=PASS")
+    if arguments.verifier is not None:
+        subprocess.run(
+            [str(arguments.python), str(arguments.verifier), "--normalizer", str(normalizer)],
+            check=True,
+        )
+        print(f"fixture_verifier={arguments.verifier}")
+    print("fixture_audit=PASS")
     return 0
 
 

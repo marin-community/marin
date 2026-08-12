@@ -1,0 +1,977 @@
+{
+  "cases": [
+    {
+      "case_id": "contract_map_79045ff9bdc7c783",
+      "filename": "jax-0.10.1-bf16-contract_map_79045ff9bdc7c783-primal-vjp.mlir",
+      "hashes": {
+        "hook_normalized_sha256": "5F72B105E8DDD6CB87362A694F4ADE2A300AECCA692564A146D2B22ABF92EB80",
+        "hook_sha256": "5F92DC7FE79158D1E50440649FDD4AF3078FB460AA95D263F8EF5F51BF080650",
+        "raw_normalized_sha256": "B70E564634B02D69456293F093A9DFE0BA098545F5CD37A35EB1BF949C1E0C4D",
+        "raw_sha256": "55F00B4FF6A4168237863DE05B0ED45C7D81E54AD3E4B2917F2F42D591A5F6BC"
+      },
+      "hook_boundary": {
+        "cast_boundaries": [
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 2,
+            "result_type": "tensor<131x104xbf16>",
+            "source_type": "tensor<131x104xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 3,
+            "result_type": "tensor<131x104xf32>",
+            "source_type": "tensor<131x104xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 8,
+            "result_type": "tensor<131x104xbf16>",
+            "source_type": "tensor<131x104xf32>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 10,
+            "result_type": "tensor<131x168xbf16>",
+            "source_type": "tensor<131x168xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 11,
+            "result_type": "tensor<131x168xf32>",
+            "source_type": "tensor<131x168xbf16>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 12,
+            "result_type": "tensor<131x168xf32>",
+            "source_type": "tensor<131x168xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 13,
+            "result_type": "tensor<131x104xf32>",
+            "source_type": "tensor<131x104xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 16,
+            "result_type": "tensor<104x168xbf16>",
+            "source_type": "tensor<104x168xf32>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 17,
+            "result_type": "tensor<131x168xf32>",
+            "source_type": "tensor<131x168xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 18,
+            "result_type": "tensor<104x168xf32>",
+            "source_type": "tensor<104x168xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 20,
+            "result_type": "tensor<131x104xbf16>",
+            "source_type": "tensor<131x104xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 21,
+            "result_type": "tensor<131x104xf32>",
+            "source_type": "tensor<131x104xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 28,
+            "result_type": "tensor<131x104xbf16>",
+            "source_type": "tensor<131x104xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 29,
+            "result_type": "tensor<131x104xf32>",
+            "source_type": "tensor<131x104xbf16>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 30,
+            "result_type": "tensor<131x104xf32>",
+            "source_type": "tensor<131x104xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 31,
+            "result_type": "tensor<131x168xf32>",
+            "source_type": "tensor<131x168xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 34,
+            "result_type": "tensor<168x104xbf16>",
+            "source_type": "tensor<168x104xf32>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 35,
+            "result_type": "tensor<131x104xf32>",
+            "source_type": "tensor<131x104xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 36,
+            "result_type": "tensor<168x104xf32>",
+            "source_type": "tensor<168x104xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 38,
+            "result_type": "tensor<131x168xbf16>",
+            "source_type": "tensor<131x168xf32>"
+          }
+        ],
+        "input_signature": [
+          {
+            "role": "activation",
+            "type": "tensor<131x168xbf16>"
+          },
+          {
+            "role": "first_weight",
+            "type": "tensor<168x104xbf16>"
+          },
+          {
+            "role": "second_weight",
+            "type": "tensor<104x168xbf16>"
+          },
+          {
+            "role": "output_cotangent",
+            "type": "tensor<131x168xbf16>"
+          }
+        ],
+        "operation_count": 40,
+        "operation_inventory": {
+          "func.return": 1,
+          "stablehlo.add": 2,
+          "stablehlo.broadcast_in_dim": 1,
+          "stablehlo.constant": 1,
+          "stablehlo.convert": 20,
+          "stablehlo.dot_general": 6,
+          "stablehlo.multiply": 5,
+          "stablehlo.subtract": 1,
+          "stablehlo.tanh": 1,
+          "stablehlo.transpose": 2
+        },
+        "operation_sequence": [
+          "stablehlo.constant",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.tanh",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.subtract",
+          "stablehlo.multiply",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.transpose",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.transpose",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "func.return"
+        ],
+        "output_anchors": [
+          {
+            "operation": 10,
+            "result": 0,
+            "role": "forward",
+            "type": "tensor<131x168xbf16>"
+          },
+          {
+            "operation": 38,
+            "result": 0,
+            "role": "dx",
+            "type": "tensor<131x168xbf16>"
+          },
+          {
+            "operation": 34,
+            "result": 0,
+            "role": "dw0",
+            "type": "tensor<168x104xbf16>"
+          },
+          {
+            "operation": 16,
+            "result": 0,
+            "role": "dw1",
+            "type": "tensor<104x168xbf16>"
+          }
+        ]
+      },
+      "structural_fields": {
+        "features": 104,
+        "reduction": 168,
+        "rows": 131,
+        "scalar_map": "tanh_product"
+      }
+    },
+    {
+      "case_id": "contract_map_9836cdbed389db24",
+      "filename": "jax-0.10.1-bf16-contract_map_9836cdbed389db24-primal-vjp.mlir",
+      "hashes": {
+        "hook_normalized_sha256": "A221DCA8D47FA204F073123924B8194CE30DD354234D91F58E8055CFF9D74858",
+        "hook_sha256": "07CC868CE58CB85F8D9F579B2B527CCD1DEBA6EB314A4FE9801F29A6B5CE304E",
+        "raw_normalized_sha256": "E0DDB89478782C6A93FE75140605B9ABBE039CF305E71068DF067F3D576A5D34",
+        "raw_sha256": "8F9D9A5A41346971E0683D7AFDE80FB7A197A489F30A300D2950B1665C25AC96"
+      },
+      "hook_boundary": {
+        "cast_boundaries": [
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 2,
+            "result_type": "tensor<43x72xbf16>",
+            "source_type": "tensor<43x72xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 3,
+            "result_type": "tensor<43x72xf32>",
+            "source_type": "tensor<43x72xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 14,
+            "result_type": "tensor<43x72xbf16>",
+            "source_type": "tensor<43x72xf32>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 16,
+            "result_type": "tensor<43x104xbf16>",
+            "source_type": "tensor<43x104xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 17,
+            "result_type": "tensor<43x104xf32>",
+            "source_type": "tensor<43x104xbf16>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 18,
+            "result_type": "tensor<43x104xf32>",
+            "source_type": "tensor<43x104xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 19,
+            "result_type": "tensor<43x72xf32>",
+            "source_type": "tensor<43x72xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 22,
+            "result_type": "tensor<72x104xbf16>",
+            "source_type": "tensor<72x104xf32>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 23,
+            "result_type": "tensor<43x104xf32>",
+            "source_type": "tensor<43x104xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 24,
+            "result_type": "tensor<72x104xf32>",
+            "source_type": "tensor<72x104xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 26,
+            "result_type": "tensor<43x72xbf16>",
+            "source_type": "tensor<43x72xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 27,
+            "result_type": "tensor<43x72xf32>",
+            "source_type": "tensor<43x72xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 32,
+            "result_type": "tensor<43x72xbf16>",
+            "source_type": "tensor<43x72xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 33,
+            "result_type": "tensor<43x72xf32>",
+            "source_type": "tensor<43x72xbf16>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 34,
+            "result_type": "tensor<43x72xf32>",
+            "source_type": "tensor<43x72xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 35,
+            "result_type": "tensor<43x104xf32>",
+            "source_type": "tensor<43x104xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 38,
+            "result_type": "tensor<104x72xbf16>",
+            "source_type": "tensor<104x72xf32>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 39,
+            "result_type": "tensor<43x72xf32>",
+            "source_type": "tensor<43x72xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 40,
+            "result_type": "tensor<104x72xf32>",
+            "source_type": "tensor<104x72xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 42,
+            "result_type": "tensor<43x104xbf16>",
+            "source_type": "tensor<43x104xf32>"
+          }
+        ],
+        "input_signature": [
+          {
+            "role": "activation",
+            "type": "tensor<43x104xbf16>"
+          },
+          {
+            "role": "first_weight",
+            "type": "tensor<104x72xbf16>"
+          },
+          {
+            "role": "second_weight",
+            "type": "tensor<72x104xbf16>"
+          },
+          {
+            "role": "output_cotangent",
+            "type": "tensor<43x104xbf16>"
+          }
+        ],
+        "operation_count": 44,
+        "operation_inventory": {
+          "func.return": 1,
+          "stablehlo.add": 2,
+          "stablehlo.broadcast_in_dim": 3,
+          "stablehlo.constant": 1,
+          "stablehlo.convert": 20,
+          "stablehlo.divide": 1,
+          "stablehlo.dot_general": 6,
+          "stablehlo.exponential": 1,
+          "stablehlo.multiply": 5,
+          "stablehlo.negate": 1,
+          "stablehlo.subtract": 1,
+          "stablehlo.transpose": 2
+        },
+        "operation_sequence": [
+          "stablehlo.constant",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.negate",
+          "stablehlo.exponential",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.add",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.divide",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.subtract",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.transpose",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.transpose",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "func.return"
+        ],
+        "output_anchors": [
+          {
+            "operation": 16,
+            "result": 0,
+            "role": "forward",
+            "type": "tensor<43x104xbf16>"
+          },
+          {
+            "operation": 42,
+            "result": 0,
+            "role": "dx",
+            "type": "tensor<43x104xbf16>"
+          },
+          {
+            "operation": 38,
+            "result": 0,
+            "role": "dw0",
+            "type": "tensor<104x72xbf16>"
+          },
+          {
+            "operation": 22,
+            "result": 0,
+            "role": "dw1",
+            "type": "tensor<72x104xbf16>"
+          }
+        ]
+      },
+      "structural_fields": {
+        "features": 72,
+        "reduction": 104,
+        "rows": 43,
+        "scalar_map": "sigmoid_product"
+      }
+    },
+    {
+      "case_id": "contract_map_b4c693e52135022a",
+      "filename": "jax-0.10.1-bf16-contract_map_b4c693e52135022a-primal-vjp.mlir",
+      "hashes": {
+        "hook_normalized_sha256": "F8F4D759F6C73B8E19EA42D0DBC790C1B3E521F1EF2BDAA8978F7572BAD06617",
+        "hook_sha256": "3A1B7CE3763604ECF1404E0548BB524D2015A1E17FCF28E5DF9A9163A0999D4F",
+        "raw_normalized_sha256": "F8F4D759F6C73B8E19EA42D0DBC790C1B3E521F1EF2BDAA8978F7572BAD06617",
+        "raw_sha256": "3A1B7CE3763604ECF1404E0548BB524D2015A1E17FCF28E5DF9A9163A0999D4F"
+      },
+      "hook_boundary": {
+        "cast_boundaries": [
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 1,
+            "result_type": "tensor<269x136xbf16>",
+            "source_type": "tensor<269x136xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 2,
+            "result_type": "tensor<269x136xf32>",
+            "source_type": "tensor<269x136xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 6,
+            "result_type": "tensor<269x136xbf16>",
+            "source_type": "tensor<269x136xf32>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 8,
+            "result_type": "tensor<269x232xbf16>",
+            "source_type": "tensor<269x232xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 9,
+            "result_type": "tensor<269x232xf32>",
+            "source_type": "tensor<269x232xbf16>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 10,
+            "result_type": "tensor<269x232xf32>",
+            "source_type": "tensor<269x232xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 11,
+            "result_type": "tensor<269x136xf32>",
+            "source_type": "tensor<269x136xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 14,
+            "result_type": "tensor<136x232xbf16>",
+            "source_type": "tensor<136x232xf32>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 15,
+            "result_type": "tensor<269x232xf32>",
+            "source_type": "tensor<269x232xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 16,
+            "result_type": "tensor<136x232xf32>",
+            "source_type": "tensor<136x232xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 18,
+            "result_type": "tensor<269x136xbf16>",
+            "source_type": "tensor<269x136xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 19,
+            "result_type": "tensor<269x136xf32>",
+            "source_type": "tensor<269x136xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 27,
+            "result_type": "tensor<269x136xbf16>",
+            "source_type": "tensor<269x136xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 28,
+            "result_type": "tensor<269x136xf32>",
+            "source_type": "tensor<269x136xbf16>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 29,
+            "result_type": "tensor<269x136xf32>",
+            "source_type": "tensor<269x136xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 30,
+            "result_type": "tensor<269x232xf32>",
+            "source_type": "tensor<269x232xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 33,
+            "result_type": "tensor<232x136xbf16>",
+            "source_type": "tensor<232x136xf32>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 34,
+            "result_type": "tensor<269x136xf32>",
+            "source_type": "tensor<269x136xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 35,
+            "result_type": "tensor<232x136xf32>",
+            "source_type": "tensor<232x136xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 37,
+            "result_type": "tensor<269x232xbf16>",
+            "source_type": "tensor<269x232xf32>"
+          }
+        ],
+        "input_signature": [
+          {
+            "role": "activation",
+            "type": "tensor<269x232xbf16>"
+          },
+          {
+            "role": "first_weight",
+            "type": "tensor<232x136xbf16>"
+          },
+          {
+            "role": "second_weight",
+            "type": "tensor<136x232xbf16>"
+          },
+          {
+            "role": "output_cotangent",
+            "type": "tensor<269x232xbf16>"
+          }
+        ],
+        "operation_count": 39,
+        "operation_inventory": {
+          "func.return": 1,
+          "stablehlo.add": 4,
+          "stablehlo.convert": 20,
+          "stablehlo.dot_general": 6,
+          "stablehlo.multiply": 6,
+          "stablehlo.transpose": 2
+        },
+        "operation_sequence": [
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.transpose",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.transpose",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "func.return"
+        ],
+        "output_anchors": [
+          {
+            "operation": 8,
+            "result": 0,
+            "role": "forward",
+            "type": "tensor<269x232xbf16>"
+          },
+          {
+            "operation": 37,
+            "result": 0,
+            "role": "dx",
+            "type": "tensor<269x232xbf16>"
+          },
+          {
+            "operation": 33,
+            "result": 0,
+            "role": "dw0",
+            "type": "tensor<232x136xbf16>"
+          },
+          {
+            "operation": 14,
+            "result": 0,
+            "role": "dw1",
+            "type": "tensor<136x232xbf16>"
+          }
+        ]
+      },
+      "structural_fields": {
+        "features": 136,
+        "reduction": 232,
+        "rows": 269,
+        "scalar_map": "cubic_mix"
+      }
+    },
+    {
+      "case_id": "contract_map_eb4a28b4408cfb90",
+      "filename": "jax-0.10.1-bf16-contract_map_eb4a28b4408cfb90-primal-vjp.mlir",
+      "hashes": {
+        "hook_normalized_sha256": "617A3CC4E636241E4459B255AFFAE229B0A0D1B3C6974D858578CD655F4A387E",
+        "hook_sha256": "A1C6F4302CD35E0F551D17CD060AA90850E0B0B4FB4165D713E3A22E98A07699",
+        "raw_normalized_sha256": "A1B6D2E277D12E0BA66D8AA06C266C99B8976A60E29F672AB6BC4F985EE1A916",
+        "raw_sha256": "9EA30F51CA19BDE8C06AF0E06273BB5C49D3F4BC9B520B19F66A61C78F370D5A"
+      },
+      "hook_boundary": {
+        "cast_boundaries": [
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 2,
+            "result_type": "tensor<521x184xbf16>",
+            "source_type": "tensor<521x184xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 3,
+            "result_type": "tensor<521x184xf32>",
+            "source_type": "tensor<521x184xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 14,
+            "result_type": "tensor<521x184xbf16>",
+            "source_type": "tensor<521x184xf32>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 16,
+            "result_type": "tensor<521x328xbf16>",
+            "source_type": "tensor<521x328xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 17,
+            "result_type": "tensor<521x328xf32>",
+            "source_type": "tensor<521x328xbf16>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 18,
+            "result_type": "tensor<521x328xf32>",
+            "source_type": "tensor<521x328xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 19,
+            "result_type": "tensor<521x184xf32>",
+            "source_type": "tensor<521x184xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 22,
+            "result_type": "tensor<184x328xbf16>",
+            "source_type": "tensor<184x328xf32>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 23,
+            "result_type": "tensor<521x328xf32>",
+            "source_type": "tensor<521x328xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 24,
+            "result_type": "tensor<184x328xf32>",
+            "source_type": "tensor<184x328xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 26,
+            "result_type": "tensor<521x184xbf16>",
+            "source_type": "tensor<521x184xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 27,
+            "result_type": "tensor<521x184xf32>",
+            "source_type": "tensor<521x184xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 32,
+            "result_type": "tensor<521x184xbf16>",
+            "source_type": "tensor<521x184xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 33,
+            "result_type": "tensor<521x184xf32>",
+            "source_type": "tensor<521x184xbf16>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 34,
+            "result_type": "tensor<521x184xf32>",
+            "source_type": "tensor<521x184xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 35,
+            "result_type": "tensor<521x328xf32>",
+            "source_type": "tensor<521x328xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 38,
+            "result_type": "tensor<328x184xbf16>",
+            "source_type": "tensor<328x184xf32>"
+          },
+          {
+            "kind": "f32_to_f32_identity",
+            "operation": 39,
+            "result_type": "tensor<521x184xf32>",
+            "source_type": "tensor<521x184xf32>"
+          },
+          {
+            "kind": "bf16_to_f32_exact",
+            "operation": 40,
+            "result_type": "tensor<328x184xf32>",
+            "source_type": "tensor<328x184xbf16>"
+          },
+          {
+            "kind": "f32_to_bf16_round_nearest_even",
+            "operation": 42,
+            "result_type": "tensor<521x328xbf16>",
+            "source_type": "tensor<521x328xf32>"
+          }
+        ],
+        "input_signature": [
+          {
+            "role": "activation",
+            "type": "tensor<521x328xbf16>"
+          },
+          {
+            "role": "first_weight",
+            "type": "tensor<328x184xbf16>"
+          },
+          {
+            "role": "second_weight",
+            "type": "tensor<184x328xbf16>"
+          },
+          {
+            "role": "output_cotangent",
+            "type": "tensor<521x328xbf16>"
+          }
+        ],
+        "operation_count": 44,
+        "operation_inventory": {
+          "func.return": 1,
+          "stablehlo.add": 2,
+          "stablehlo.broadcast_in_dim": 3,
+          "stablehlo.constant": 1,
+          "stablehlo.convert": 20,
+          "stablehlo.divide": 1,
+          "stablehlo.dot_general": 6,
+          "stablehlo.exponential": 1,
+          "stablehlo.multiply": 5,
+          "stablehlo.negate": 1,
+          "stablehlo.subtract": 1,
+          "stablehlo.transpose": 2
+        },
+        "operation_sequence": [
+          "stablehlo.constant",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.negate",
+          "stablehlo.exponential",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.add",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.divide",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.subtract",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.transpose",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.transpose",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.dot_general",
+          "stablehlo.convert",
+          "func.return"
+        ],
+        "output_anchors": [
+          {
+            "operation": 16,
+            "result": 0,
+            "role": "forward",
+            "type": "tensor<521x328xbf16>"
+          },
+          {
+            "operation": 42,
+            "result": 0,
+            "role": "dx",
+            "type": "tensor<521x328xbf16>"
+          },
+          {
+            "operation": 38,
+            "result": 0,
+            "role": "dw0",
+            "type": "tensor<328x184xbf16>"
+          },
+          {
+            "operation": 22,
+            "result": 0,
+            "role": "dw1",
+            "type": "tensor<184x328xbf16>"
+          }
+        ]
+      },
+      "structural_fields": {
+        "features": 184,
+        "reduction": 328,
+        "rows": 521,
+        "scalar_map": "sigmoid_product"
+      }
+    }
+  ],
+  "provenance": {
+    "generator": "regenerate-jax-bf16-composed-fixtures.py",
+    "generator_sha256": "98A579CBDA8B09ABB72F186B19E833CF44209C4C0EB6B653DD50086B16FDBBEA",
+    "hook_pipeline": "builtin.module(func.func(stablehlo-complex-math-expander))",
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "source": "natural_jax_primal_plus_jax_owned_vjp",
+    "xla": "9b635916ecc6df6efee62d8e4b0c7ef87ef84d69"
+  },
+  "schema_version": 1
+}
