@@ -21,11 +21,14 @@ from experiments.datakit.cluster.quality.fast_transformer.inference import predi
 from experiments.datakit.cluster.quality.fast_transformer.score import TASK_RESOURCES, WORKER_RESOURCES
 from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledScorer
 from experiments.datakit.scripts.score_quality_only import (
+    COORDINATOR_RESOURCES,
     DEFAULT_MAX_WORKERS,
+    MAX_CONCURRENT_PIPELINES,
     NODE_CPU,
     NODE_RAM_GB,
     WORKER_MAX_TASK_RETRIES,
     quality_step,
+    score_all,
     tasks_per_worker,
     worker_resources,
 )
@@ -174,3 +177,37 @@ def test_the_pool_survives_preemption_at_batch_priority():
     """
     assert WORKER_MAX_TASK_RETRIES > ZephyrContext().worker_max_task_retries
     assert inspect.signature(ZephyrContext).parameters["worker_max_task_retries"]
+
+
+def test_sources_fan_out_within_the_pools_pipeline_limit():
+    """Sources run concurrently, bounded by the limit the pool itself enforces.
+
+    A pipeline past ``max_concurrent_pipelines`` is rejected rather than queued, so
+    the driver's fan-out must be read from the context instead of hardcoded. Running
+    sources one at a time is the failure this guards: the median source holds one
+    file, so a serial driver leaves ~12,000 task slots idle waiting on it.
+    """
+    src = inspect.getsource(score_all)
+    assert "ctx.max_concurrent_pipelines" in src, "fan-out must be bounded by the pool's own limit"
+    assert "ThreadPoolExecutor" in src
+
+
+def test_the_pool_admits_the_fan_out_it_is_given():
+    """The pool's pipeline limit is raised to match the driver's fan-out.
+
+    Left at zephyr's default of 16, half the fan-out would be rejected outright --
+    the pool rejects a pipeline past its limit rather than queueing it.
+    """
+    assert MAX_CONCURRENT_PIPELINES == 32
+    assert MAX_CONCURRENT_PIPELINES > ZephyrContext().max_concurrent_pipelines
+
+
+def test_the_coordinator_is_sized_for_the_fan_out_and_never_preempted():
+    """It tracks 32 pipelines, so the default 0.1 CPU / 1 GB is too small.
+
+    Preemptibility matters more than size: an evicted worker costs one shard, an
+    evicted coordinator costs every pipeline in flight.
+    """
+    assert COORDINATOR_RESOURCES.cpu == 2
+    assert COORDINATOR_RESOURCES.ram == "3g"
+    assert COORDINATOR_RESOURCES.preemptible is False

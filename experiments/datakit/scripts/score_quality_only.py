@@ -36,6 +36,7 @@ scorers never collide in one output tree.
 
 import argparse
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from fray.cluster import ResourceConfig
 from marin.datakit.normalize import NormalizedData
@@ -44,7 +45,7 @@ from marin.execution.step_spec import StepSpec
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 from zephyr.execution import ZephyrContext
-from zephyr.runners import InlineRunner
+from zephyr.runners import InlineRunner, SubprocessRunner
 
 from experiments.datakit.cluster.quality.fast_transformer.score import TASK_RESOURCES, score_normalized
 from experiments.datakit.reference_pipeline import select_sources
@@ -71,6 +72,22 @@ POOL_NAME = "score"
 # it in nine minutes and the gang was killed with "Job exceeded max_task_failures".
 # Scoring resumes per file, so an evicted shard costs its own work and nothing else.
 WORKER_MAX_TASK_RETRIES = 5_000
+# Sources scored at the same time on the shared pool. Zephyr's default of 16 is a
+# limit for a driver running a few pipelines; this one runs 292, most of them a
+# single file, so the pool sits idle unless many are in flight together. The pool
+# rejects a pipeline past its limit rather than queueing it, so the driver's
+# fan-out reads this same number off the context.
+MAX_CONCURRENT_PIPELINES = 32
+# The coordinator tracks 32 pipelines at once instead of zephyr's default handful,
+# so it gets more than the default 0.1 CPU / 1 GB. It stays non-preemptible: losing
+# it loses every in-flight pipeline, while losing a worker costs one shard.
+COORDINATOR_RESOURCES = ResourceConfig(cpu=2, ram="3g", preemptible=False)
+# ``InlineRunner`` runs every shard as a thread of the worker's own process, so one
+# worker's ~57 concurrent shards share one GIL and one cached model. ``SubprocessRunner``
+# gives each shard its own process -- real parallelism, but it re-imports JAX and
+# reloads the model per shard. Which wins is an empirical question about how much of
+# the work releases the GIL, so it is a flag rather than a decision baked into the code.
+STAGE_RUNNERS = {"inline": InlineRunner, "subprocess": SubprocessRunner}
 
 
 def worker_resources(fraction: float = WORKER_FRACTION) -> ResourceConfig:
@@ -125,6 +142,7 @@ def score_all(
     names: list[str] | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
     fraction: float = WORKER_FRACTION,
+    stage_runner: str = "inline",
 ) -> dict[str, dict[str, int | float]]:
     """Score every source through one shared pool; returns each source's counters."""
     sources = select_sources(names)
@@ -143,16 +161,21 @@ def score_all(
         packed * max_workers,
         quality_model_version,
     )
+    logger.info("score_quality_only: stage runner = %s", stage_runner)
 
     written: dict[str, dict[str, int | float]] = {}
     with ZephyrContext(
         name=POOL_NAME,
         resources=resources,
         max_workers=max_workers,
-        stage_runner_factory=InlineRunner,
+        stage_runner_factory=STAGE_RUNNERS[stage_runner],
         worker_max_task_retries=WORKER_MAX_TASK_RETRIES,
+        max_concurrent_pipelines=MAX_CONCURRENT_PIPELINES,
+        coordinator_resources=COORDINATOR_RESOURCES,
     ) as ctx:
-        for i, (name, normalize_step) in enumerate(sorted(sources.items()), start=1):
+
+        def score_one(item: tuple[str, StepSpec]) -> tuple[str, dict[str, int | float] | None]:
+            name, normalize_step = item
             out = quality_step(name, normalize_step, quality_model_version, output_prefix).output_path
             # One source failing must not take the other 291 with it: the pool is
             # shared, and a raised exception here would tear it down mid-run.
@@ -164,11 +187,24 @@ def score_all(
                     model_dir=quality_model,
                     ctx=ctx,
                 )
-                written[name] = dict(scores.counters)
             except Exception:
                 logger.exception("score_quality_only: %s failed, continuing", name)
-                continue
-            logger.info("score_quality_only: [%d/%d] %s -> %s", i, len(sources), name, out)
+                return name, None
+            logger.info("score_quality_only: %s -> %s", name, out)
+            return name, dict(scores.counters)
+
+        # A source is one pipeline, and one pipeline is capped by its own largest
+        # input file -- so running them one at a time leaves the pool almost idle:
+        # the median source holds a single file, which occupies one of ~12,000 task
+        # slots while the other sources wait. Fan them out instead. The bound is the
+        # pool's own limit because a pipeline past it is rejected, not queued.
+        lanes = min(len(sources), ctx.max_concurrent_pipelines)
+        logger.info("score_quality_only: %d sources over %d concurrent pipelines", len(sources), lanes)
+        with ThreadPoolExecutor(max_workers=lanes, thread_name_prefix="score-source") as pool:
+            for i, (name, counters) in enumerate(pool.map(score_one, sorted(sources.items())), start=1):
+                if counters is not None:
+                    written[name] = counters
+                logger.info("score_quality_only: [%d/%d] done %s", i, len(sources), name)
     return written
 
 
@@ -183,6 +219,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--quality-model-version", required=True, help="identity tag for the scorer")
     parser.add_argument("--sources", help="comma-separated source names (default: every source found)")
     parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
+    parser.add_argument(
+        "--stage-runner",
+        choices=sorted(STAGE_RUNNERS),
+        default="inline",
+        help="inline: shards are threads of one worker process, sharing a cached model. "
+        "subprocess: one process per shard, isolated but reloading the model each time.",
+    )
     parser.add_argument(
         "--worker-fraction",
         type=float,
@@ -204,6 +247,7 @@ def main() -> None:
         names=names,
         max_workers=args.max_workers,
         fraction=args.worker_fraction,
+        stage_runner=args.stage_runner,
     )
     rows = sum(int(c.get("rows_written", 0)) for c in written.values())
     logger.info("score_quality_only: scored %d sources, %d rows written", len(written), rows)
