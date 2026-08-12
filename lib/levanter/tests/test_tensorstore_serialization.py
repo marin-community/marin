@@ -3,9 +3,6 @@
 
 import asyncio
 import json
-import subprocess
-import sys
-import textwrap
 from tempfile import TemporaryDirectory
 from typing import Any
 
@@ -17,6 +14,8 @@ import numpy as np
 import optax
 import pytest
 from chex import assert_trees_all_close
+import eight_device_checkpoints
+from eight_device_checkpoints import run_on_eight_devices
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
@@ -286,179 +285,32 @@ def test_capped_chunk_shape_stays_a_divisor(local_shape, itemsize, max_bytes, ex
     assert all(dim % size == 0 for dim, size in zip(local_shape, chunk)), "chunks must tile the writer's slice"
 
 
-# An array needs eight devices to have more than one replica, and the XLA device count is
-# process-global, so these run in a fresh interpreter (as test_snowball.py does).
-_EIGHT_DEVICE_PREAMBLE = """
-import os
-os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
-os.environ["JAX_PLATFORMS"] = "cpu"
-import tempfile
-import jax
-import jax.numpy as jnp
-import numpy as np
-from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
-from levanter.tensorstore_serialization import (
-    TensorStoreWriteConfig,
-    _shard_write_region,
-    plan_array_write,
-    tree_deserialize_leaves_tensorstore,
-    tree_serialize_leaves_tensorstore,
-)
-
-assert jax.device_count() == 8
-# Small enough that every array is worth splitting, so the test exercises the split path.
-CONFIG = TensorStoreWriteConfig(min_replica_slice_bytes=1, max_chunk_bytes=4096)
-MESH = Mesh(np.array(jax.devices()).reshape(2, 4), ("replica", "expert"))
-"""
-
-
-def _run_eight_device_script(body: str) -> str:
-    result = subprocess.run(
-        [sys.executable, "-c", _EIGHT_DEVICE_PREAMBLE + textwrap.dedent(body)],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
-    return result.stdout
-
-
 def test_every_replica_writes_a_disjoint_slice_covering_the_array():
     """The contract replica-parallel writes rest on: no idle replicas, no byte written twice."""
-    _run_eight_device_script(
-        """
-        cases = {
-            # spec -> how many of the 8 devices should write part of the array
-            "replicated": (P(None, None), 8),
-            "sharded_over_expert": (P("expert", None), 8),
-            "fully_sharded": (P(("replica", "expert"), None), 8),
-        }
-        for name, (spec, expected_writers) in cases.items():
-            arr = jax.device_put(
-                jnp.arange(64 * 16, dtype=jnp.float32).reshape(64, 16), NamedSharding(MESH, spec)
-            )
-            plan = plan_array_write(name, arr, CONFIG)
-            times_written = np.zeros((64, 16), dtype=int)
-            writers = 0
-            for shard in arr.addressable_shards:
-                region = _shard_write_region(shard, plan)
-                if region is None:
-                    continue
-                writers += 1
-                times_written[region.index] += 1
-            assert writers == expected_writers, (name, writers)
-            assert (times_written == 1).all(), (name, "every byte written exactly once")
-        print("OK")
-        """
-    )
+    run_on_eight_devices(eight_device_checkpoints.disjoint_slices_cover_the_array)
 
 
 def test_replicated_arrays_survive_a_replica_parallel_roundtrip():
-    _run_eight_device_script(
-        """
-        with jax.set_mesh(MESH):
-            source = {
-                "replicated": jax.device_put(
-                    jax.random.normal(jax.random.PRNGKey(0), (64, 16)), NamedSharding(MESH, P(None, None))
-                ),
-                "sharded": jax.device_put(
-                    jax.random.normal(jax.random.PRNGKey(1), (64, 16)), NamedSharding(MESH, P("expert", None))
-                ),
-                "scalar": jnp.array(7),
-            }
-            with tempfile.TemporaryDirectory() as tmpdir:
-                tree_serialize_leaves_tensorstore(tmpdir, source, write_config=CONFIG)
-                restored = tree_deserialize_leaves_tensorstore(
-                    tmpdir, {k: jnp.zeros_like(v) for k, v in source.items()}
-                )
-            for key, value in source.items():
-                assert jnp.array_equal(restored[key], value), key
-        print("OK")
-        """
-    )
+    run_on_eight_devices(eight_device_checkpoints.replicated_arrays_survive_a_roundtrip)
 
 
 def test_checkpoint_written_on_one_mesh_loads_on_another():
     """Content must not depend on the mesh that wrote it, so writer layout can keep changing."""
-    _run_eight_device_script(
-        """
-        read_mesh = Mesh(np.array(jax.devices()).reshape(1, 8), ("replica", "expert"))
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with jax.set_mesh(MESH):
-                written = jax.device_put(
-                    jax.random.normal(jax.random.PRNGKey(0), (64, 16)), NamedSharding(MESH, P(None, None))
-                )
-                tree_serialize_leaves_tensorstore(tmpdir, {"embed": written}, write_config=CONFIG)
-                expected = np.asarray(written)
-            with jax.set_mesh(read_mesh):
-                target = {"embed": jax.device_put(jnp.zeros((64, 16)), NamedSharding(read_mesh, P("expert", None)))}
-                restored = tree_deserialize_leaves_tensorstore(tmpdir, target)
-                assert np.array_equal(np.asarray(restored["embed"]), expected)
-                assert restored["embed"].sharding.spec == P("expert", None)
-        print("OK")
-        """
-    )
+    run_on_eight_devices(eight_device_checkpoints.a_checkpoint_loads_on_another_mesh)
 
 
 def test_small_arrays_are_not_split_into_tiny_objects():
-    _run_eight_device_script(
-        """
-        arr = jax.device_put(jnp.arange(64 * 16, dtype=jnp.float32).reshape(64, 16), NamedSharding(MESH, P(None, None)))
-        # 4 KiB array, 8 replicas: a 1 MiB floor means splitting is not worth it.
-        plan = plan_array_write("w", arr, TensorStoreWriteConfig(min_replica_slice_bytes=1024**2))
-        assert plan.split_axis is None, plan
-        assert plan.write_replicas == 1, plan
-        writers = sum(1 for shard in arr.addressable_shards if _shard_write_region(shard, plan) is not None)
-        assert writers == 1, writers
-
-        # max_write_replicas caps the fan-out without disabling the split.
-        capped = plan_array_write("w", arr, TensorStoreWriteConfig(min_replica_slice_bytes=1, max_write_replicas=2))
-        assert capped.write_replicas == 2, capped
-        assert sum(1 for s in arr.addressable_shards if _shard_write_region(s, capped) is not None) == 2
-        print("OK")
-        """
-    )
+    run_on_eight_devices(eight_device_checkpoints.small_arrays_are_not_split)
 
 
 def test_a_replica_count_that_divides_nothing_still_splits():
     """A rack count that is not a power of two must not drop an array to one writer."""
-    _run_eight_device_script(
-        """
-        # Neither 8 nor 7 divides an axis of a (12, 20) shard. 6 divides the first.
-        arr = jax.device_put(
-            jnp.arange(12 * 20, dtype=jnp.float32).reshape(12, 20), NamedSharding(MESH, P(None, None))
-        )
-        plan = plan_array_write("w", arr, CONFIG)
-        assert plan.write_replicas == 6, plan
-        assert plan.split_axis == 0, plan
-
-        times_written = np.zeros((12, 20), dtype=int)
-        for shard in arr.addressable_shards:
-            region = _shard_write_region(shard, plan)
-            if region is not None:
-                times_written[region.index] += 1
-        assert (times_written == 1).all(), "every byte written exactly once"
-        print("OK")
-        """
-    )
+    run_on_eight_devices(eight_device_checkpoints.a_replica_count_that_divides_nothing_still_splits)
 
 
 def test_arrays_no_split_applies_to_are_spread_over_replicas():
     """Every such array otherwise lands on replica 0, one process for the whole run."""
-    _run_eight_device_script(
-        """
-        # 11 is prime and above the replica count, so no split applies at any width.
-        arr = jax.device_put(jnp.arange(11, dtype=jnp.float32), NamedSharding(MESH, P(None)))
-        writers = set()
-        for path in [f"w{i}" for i in range(20)]:
-            plan = plan_array_write(path, arr, CONFIG)
-            assert plan.write_replicas == 1, plan
-            written = [s.replica_id for s in arr.addressable_shards if _shard_write_region(s, plan) is not None]
-            assert len(written) == 1, (path, written)
-            writers.add(written[0])
-        assert len(writers) > 1, f"20 arrays all landed on replica {writers}"
-        print("OK")
-        """
-    )
+    run_on_eight_devices(eight_device_checkpoints.un_splittable_arrays_spread_over_replicas)
 
 
 def test_host_arrays_without_a_sharding_roundtrip():

@@ -201,7 +201,7 @@ class _HostStagingGate:
         self._limit = limit_bytes
         self._in_flight = 0
         self._peak = 0
-        self._condition = asyncio.Condition()
+        self._released = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
@@ -211,24 +211,24 @@ class _HostStagingGate:
     async def acquire(self, num_bytes: int) -> None:
         # Built before the save's loop exists, so bind on first use.
         self._loop = asyncio.get_running_loop()
-        async with self._condition:
-            # A snapshot larger than the whole budget proceeds anyway; it can never be admitted.
-            await self._condition.wait_for(lambda: self._in_flight == 0 or self._in_flight + num_bytes <= self._limit)
-            self._in_flight += num_bytes
-            self._peak = max(self._peak, self._in_flight)
+        # A snapshot larger than the whole budget proceeds alone; it can never be admitted.
+        while self._in_flight and self._in_flight + num_bytes > self._limit:
+            self._released.clear()
+            await self._released.wait()
+        self._in_flight += num_bytes
+        self._peak = max(self._peak, self._in_flight)
 
     def release(self, num_bytes: int) -> None:
         """Callable from any thread; TensorStore resolves commits off the loop."""
-
-        async def notify() -> None:
-            async with self._condition:
-                self._in_flight -= num_bytes
-                self._condition.notify_all()
-
         loop = self._loop
         if loop is None or loop.is_closed():
             return
-        asyncio.run_coroutine_threadsafe(notify(), loop)
+        loop.call_soon_threadsafe(self._release_on_loop, num_bytes)
+
+    def _release_on_loop(self, num_bytes: int) -> None:
+        # Every mutation lands on the loop thread, so acquire never observes a partial update.
+        self._in_flight -= num_bytes
+        self._released.set()
 
 
 def _hashable_index(index) -> tuple:
