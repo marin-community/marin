@@ -683,3 +683,13 @@ author: Rafal Wojdyla
 - Error check: No new transport, retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the last 15 minutes.
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Next action: Continue the 15-minute check cadence and monitor both long-running sources.
+
+### 2026-08-12 15:38 UTC - Long-source health check
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 35 completed source artifacts. RNO has eight completed source artifacts. The full run has 43 of 292 completed source artifacts.
+- East progress: `finepdfs_cf4aed04` got to 8,427 of 9,244 output shards with 32 live workers and no dead workers. Its recent rate gives a rough 16:04 UTC completion estimate.
+- RNO progress: `hplt_v3_528b745e` got to 2,777 of 6,330 embedding shards with 32 live workers and no dead workers. Its recent rate gives a rough 18:14 UTC completion estimate.
+- Error check: No new transport, retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the last 15 minutes.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Next action: Continue the 15-minute check cadence and monitor the expected FinePDFs completion.
