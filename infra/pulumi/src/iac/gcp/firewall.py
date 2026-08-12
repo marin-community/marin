@@ -56,8 +56,16 @@ def create_firewall_rule(
         priority=args.priority,
         source_ranges=list(args.source_ranges),
         target_tags=list(args.target_tags),
-        allows=[gcp.compute.FirewallAllowArgs(protocol=rule.protocol, ports=list(rule.ports)) for rule in args.allows],
-        denies=[gcp.compute.FirewallDenyArgs(protocol=rule.protocol, ports=list(rule.ports)) for rule in args.denies],
+        allows=(
+            [gcp.compute.FirewallAllowArgs(protocol=rule.protocol, ports=list(rule.ports)) for rule in args.allows]
+            if args.allows
+            else None
+        ),
+        denies=(
+            [gcp.compute.FirewallDenyArgs(protocol=rule.protocol, ports=list(rule.ports)) for rule in args.denies]
+            if args.denies
+            else None
+        ),
         opts=resource_options,
     )
     imports.register(resource, parent=parent, provider_id=f"projects/{args.project}/global/firewalls/{args.name}")

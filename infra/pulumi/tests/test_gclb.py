@@ -140,11 +140,14 @@ def test_gclb_applies_separate_controller_and_finelog_network_boundaries(monkeyp
     assert controller_allow["priority"] == 900
     assert controller_allow["source_ranges"] == ["130.211.0.0/22", "35.191.0.0/16"]
     assert controller_allow["target_tags"] == ["iris-marin-controller"]
+    assert controller_allow["denies"] is None
     assert "marin-deny-public-10000" not in inputs_by_name
 
     finelog_allow = inputs_by_name["finelog-marin-allow-lb"]
     assert finelog_allow["source_ranges"] == ["10.0.0.0/8", "130.211.0.0/22", "35.191.0.0/16"]
+    assert finelog_allow["denies"] is None
     finelog_deny = inputs_by_name["finelog-marin-deny-public-10001"]
+    assert finelog_deny["allows"] is None
     assert finelog_deny["denies"] == [gcp.compute.FirewallDenyArgs(protocol="tcp", ports=["10001"])]
     assert finelog_deny["source_ranges"] == ["0.0.0.0/0"]
 
