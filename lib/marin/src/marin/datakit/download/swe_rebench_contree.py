@@ -16,9 +16,11 @@ sidecar is excluded by the download glob.
 
 from fray.types import ResourceConfig
 from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import load_parquet_batched, text_document, write_document_shards
+from marin.datakit.download.rollout_transforms import load_parquet_batched, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -33,14 +35,14 @@ def row_to_doc(row: dict) -> list[dict]:
 
 
 def transform(input_path: str, output_path: str) -> None:
-    write_document_shards(
-        f"{input_path}/**/*.parquet",
-        output_path,
-        name="swe-rebench-contree-transform",
-        row_to_doc=row_to_doc,
-        resources=ResourceConfig(cpu=1, ram="32g"),
-        loader=load_parquet_batched,
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet_batched)
+        .flat_map(row_to_doc)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
+    ctx = ZephyrContext(name="swe-rebench-contree-transform", resources=ResourceConfig(cpu=1, ram="32g"))
+    ctx.execute(pipeline)
 
 
 def process_swe_rebench_contree_step() -> StepSpec:

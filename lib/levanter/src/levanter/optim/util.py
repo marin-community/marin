@@ -302,28 +302,17 @@ _NORM_FLOOR = 1e-10
 
 
 def norm_preserving_update(param, update, learning_rate: jax.Array | float):
-    """Turn a descent direction into an update that leaves ``norm(param)`` unchanged.
+    """Return an Optax update that preserves matrix parameter norms.
 
-    This is the "H" in AdamH/MuonH: instead of stepping along ``-learning_rate * update``,
-    step along a copy of the parameter that has been rescaled back to its original norm::
-
-        p_intermediate = p - learning_rate * u * norm(p) / norm(u)
-        p_new = p_intermediate / norm(p_intermediate) * norm(p)
-
-    Rank-2 params are treated as a single matrix (Frobenius norm). Higher-rank params are
-    treated as a stack of matrices along axis 0 — one norm per stacked layer — so that
-    scanned/stacked layers each keep their own norm.
-
-    Returns the delta to add to ``param`` (``p_new - p``), matching the optax convention
-    that updates are applied with ``optax.apply_updates``. Returns ``None`` for ``None``
-    params so it can be used directly under ``jax.tree_util.tree_map``.
+    Rank-2 parameters use one Frobenius norm. Higher-rank parameters are treated
+    as a stack along axis 0, preserving each stacked matrix's norm independently.
     """
     if param is None:
         return None
     if param.ndim == 2:
         param_norm = jnp.linalg.norm(param)
         new_param = param - learning_rate * update * param_norm / jnp.maximum(jnp.linalg.norm(update), _NORM_FLOOR)
-        return new_param / jnp.maximum(jnp.linalg.norm(new_param), _NORM_FLOOR) * param_norm - param
+        return new_param / jnp.linalg.norm(new_param) * param_norm - param
 
     axes = tuple(range(1, param.ndim))
     param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))

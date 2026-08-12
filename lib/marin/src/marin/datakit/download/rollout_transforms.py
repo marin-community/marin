@@ -6,20 +6,13 @@
 import hashlib
 import json
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 
 import pyarrow.parquet as pq
-from fray.types import ResourceConfig
-from rigging.filesystem import open_url, prefix_join
+from rigging.filesystem import open_url
 from zephyr import counters
-from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
-from zephyr.readers import load_parquet
 
 logger = logging.getLogger(__name__)
-
-DOCUMENT_SHARD_PATTERN = "data-{shard:05d}-of-{total:05d}.parquet"
-"""Filename pattern for the parquet shards a datakit download step produces."""
 
 
 def load_parquet_batched(path: str) -> Iterator[dict]:
@@ -36,43 +29,6 @@ def load_parquet_batched(path: str) -> Iterator[dict]:
             n = len(next(iter(rows.values())))
             for i in range(n):
                 yield {k: rows[k][i] for k in rows}
-
-
-def write_document_shards(
-    input_glob: str,
-    output_path: str,
-    *,
-    name: str,
-    row_to_doc: Callable[[dict], list[dict]],
-    resources: ResourceConfig,
-    loader: Callable[[str], Iterator[dict]] = load_parquet,
-    num_shards: int | None = None,
-) -> None:
-    """Render downloaded rows into documents and write them as parquet shards.
-
-    This is the shape shared by most datakit download steps: read every file matched by
-    ``input_glob``, expand each row into zero or more documents, and write the result under
-    ``output_path`` as ``DOCUMENT_SHARD_PATTERN`` shards. Writes skip shards that already
-    exist so an interrupted step resumes rather than redoing finished work.
-
-    Args:
-        input_glob: Glob matching the downloaded source files.
-        output_path: Directory the parquet shards are written to.
-        name: Zephyr context name for the transform job.
-        row_to_doc: Renders one source row into zero or more documents.
-        resources: Per-worker resources. Sources with large nested-struct columns need
-            considerably more RAM than flat text sources.
-        loader: Reads one input file into rows. Pass :func:`load_parquet_batched` for
-            sources whose rows are too large to materialize a whole file at once.
-        num_shards: Reshard the documents to this many output shards before writing. Use
-            it when the input file count is a poor fit for the output size.
-    """
-    pipeline = Dataset.from_files(input_glob).flat_map(loader).flat_map(row_to_doc)
-    if num_shards is not None:
-        pipeline = pipeline.reshard(num_shards)
-    ZephyrContext(name=name, resources=resources).execute(
-        pipeline.write_parquet(prefix_join(output_path, DOCUMENT_SHARD_PATTERN), skip_existing=True)
-    )
 
 
 def strip_think_tags(text: str) -> str:

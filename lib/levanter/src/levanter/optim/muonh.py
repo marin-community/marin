@@ -20,7 +20,7 @@ from levanter.optim.util import (
     zeropower_via_newtonschulz5,
 )
 from levanter.utils.jax_utils import leaf_key_paths
-from levanter.optim.adamh import adam_transform, adamh_transform
+from levanter.optim.adamh import scale_by_adamh
 
 
 @OptimizerConfig.register_subclass("muonH")
@@ -76,23 +76,27 @@ class MuonHConfig(OptimizerConfig):
                 optimizer = optax.chain(*components)
                 return optimizer
 
+            def adamh_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
+                optimizer = optax.chain(*components)
+                return optimizer
+
+            def adam_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-adam_lr))
+                optimizer = optax.chain(*components)
+                return optimizer
+
             transformations = {
                 "muonh": muonh_transform(),
-                "adamh": adamh_transform(
-                    max_grad_norm=self.max_grad_norm,
-                    beta1=self.beta1,
-                    beta2=self.beta2,
-                    epsilon=self.epsilon,
-                    learning_rate=learning_rate,
-                ),
-                # self.nesterov applies to the Muon momentum buffer, not to this Adam branch.
-                "adam": adam_transform(
-                    max_grad_norm=self.max_grad_norm,
-                    beta1=self.beta1,
-                    beta2=self.beta2,
-                    epsilon=self.epsilon,
-                    learning_rate=adam_lr,
-                ),
+                "adamh": adamh_transform(),
+                "adam": adam_transform(),
             }
 
             return optax.multi_transform(transformations, self.create_mask)

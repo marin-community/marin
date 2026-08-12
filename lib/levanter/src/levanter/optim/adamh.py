@@ -17,47 +17,6 @@ from levanter.optim.util import is_linear_like_module, label_linear_like_module,
 from levanter.utils.jax_utils import leaf_key_paths
 
 
-def adamh_transform(
-    *,
-    max_grad_norm: Optional[float],
-    beta1: float,
-    beta2: float,
-    epsilon: float,
-    learning_rate: jax.Array | float,
-) -> optax.GradientTransformation:
-    """Optional global-norm clipping followed by the norm-preserving AdamH step.
-
-    ``scale_by_adamh`` already folds in the learning rate and the sign flip, so no
-    ``optax.scale`` is appended here.
-    """
-    components = []
-    if max_grad_norm:
-        components.append(optax.clip_by_global_norm(max_grad_norm))
-    components.append(scale_by_adamh(beta1, beta2, epsilon, learning_rate))
-    return optax.chain(*components)
-
-
-def adam_transform(
-    *,
-    max_grad_norm: Optional[float],
-    beta1: float,
-    beta2: float,
-    epsilon: float,
-    learning_rate: jax.Array | float,
-) -> optax.GradientTransformation:
-    """Optional global-norm clipping followed by a plain Adam descent step.
-
-    Used for the parameters that AdamH/MuonH route away from the norm-preserving path
-    (embeddings, biases, norms).
-    """
-    components = []
-    if max_grad_norm:
-        components.append(optax.clip_by_global_norm(max_grad_norm))
-    components.append(optax.scale_by_adam(beta1, beta2, epsilon))
-    components.append(optax.scale(-learning_rate))
-    return optax.chain(*components)
-
-
 @OptimizerConfig.register_subclass("adamH")
 @dataclass(frozen=True)
 class AdamHConfig(OptimizerConfig):
@@ -89,21 +48,27 @@ class AdamHConfig(OptimizerConfig):
 
         # indirection makes it work with optax.inject_hyperparams so we can log the learning rate
         def optimizer(learning_rate, adam_lr):
+
+            def adamh_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
+                optimizer = optax.chain(*components)
+                return optimizer
+
+            def adam_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-adam_lr))
+                optimizer = optax.chain(*components)
+                return optimizer
+
             transformations = {
-                "adamh": adamh_transform(
-                    max_grad_norm=self.max_grad_norm,
-                    beta1=self.beta1,
-                    beta2=self.beta2,
-                    epsilon=self.epsilon,
-                    learning_rate=learning_rate,
-                ),
-                "adam": adam_transform(
-                    max_grad_norm=self.max_grad_norm,
-                    beta1=self.beta1,
-                    beta2=self.beta2,
-                    epsilon=self.epsilon,
-                    learning_rate=adam_lr,
-                ),
+                "adamh": adamh_transform(),
+                "adam": adam_transform(),
             }
 
             return optax.multi_transform(transformations, self.create_mask)
