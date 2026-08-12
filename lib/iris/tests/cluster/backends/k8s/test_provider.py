@@ -804,6 +804,33 @@ def test_profile_cpu_via_kubectl_exec(provider, k8s):
     assert len(k8s._rm_files_calls) == 1
 
 
+def test_profile_cpu_defaults_to_python_frames_when_native_profiler_fails(provider, k8s, monkeypatch):
+    """Kubernetes CPU profiles avoid unstable native unwinding unless requested."""
+    pod_name = _pod_name(JobName.from_wire("/job/0"), 1)
+    populate_pod(k8s, pod_name, "Running")
+    k8s.set_file_content(pod_name, "/tmp/iris-profile.json", b'{"profiles": [], "shared": {}}')
+    exec_in_pod = k8s.exec
+
+    def fail_native_profile(pod_name, command, *, container=None, timeout=None):
+        if "--native" in " ".join(command):
+            return _failure_cp(stderr="py-spy exited with signal 11")
+        return exec_in_pod(pod_name, command, container=container, timeout=timeout)
+
+    monkeypatch.setattr(k8s, "exec", fail_native_profile)
+    request = job_pb2.ProfileTaskRequest(
+        target="/job/0",
+        duration_seconds=10,
+        profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.SPEEDSCOPE)),
+    )
+
+    resp = provider.profile_task(
+        TaskTarget(task_id="/job/0", attempt_id=1, worker_id=None, address=None), request, timeout_ms=45000
+    )
+
+    assert not resp.error
+    assert resp.profile_data == b'{"profiles": [], "shared": {}}'
+
+
 def test_profile_memory_flamegraph_via_kubectl_exec(provider, k8s):
     """profile_task with memory flamegraph attaches memray, transforms, reads file."""
     pod_name = _pod_name(JobName.from_wire("/job/0"), 0)

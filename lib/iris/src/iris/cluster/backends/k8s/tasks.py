@@ -2554,7 +2554,13 @@ class K8sTaskProvider:
         attempt_id = target.attempt_id
         pod_name = self._live_pod_name(target)
         duration = request.duration_seconds or 10
-        profile_type = request.profile_type
+        profile_type = job_pb2.ProfileType()
+        profile_type.CopyFrom(request.profile_type)
+        # Native unwinding in py-spy can segfault on GPU training processes
+        # before it writes an output file. Keep it available when explicitly
+        # requested, but make Python frames the reliable Kubernetes default.
+        if profile_type.HasField("cpu") and not profile_type.cpu.HasField("native"):
+            profile_type.cpu.native = False
         dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
 
         try:
