@@ -1,6 +1,6 @@
 ---
 name: noslop
-description: Review and clean a complete branch diff before PR publication, with strict gates for low-value tests and agentic prose. Use when asked to deslop, simplify, clean up, make a diff minimal, review test quality, tighten comments/docs/PR text, or remove AI-writing patterns such as rhetorical "X, not Y" contrasts. Apply fixes when the task authorizes code changes; otherwise report concrete findings.
+description: Clean a branch with strict gates for low-value tests and agentic prose. Use when asked to deslop, simplify, clean up, make a diff minimal, review test quality, tighten comments/docs/PR text, or remove AI-writing patterns such as rhetorical "X, not Y" contrasts.
 ---
 
 # No-Slop Review
