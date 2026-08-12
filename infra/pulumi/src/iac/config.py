@@ -18,6 +18,7 @@ import enum
 from enum import StrEnum
 from typing import Annotated, Literal
 
+from finelog.deploy.config import FinelogConfig, load_finelog_config
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.platforms.k8s.kueue_manifests import (
     DEFAULT_CLIENT_CONNECTION_BURST,
@@ -25,7 +26,7 @@ from iris.cluster.platforms.k8s.kueue_manifests import (
 )
 from iris.cluster.platforms.k8s.network_manifests import DEFAULT_CLUSTER_ISSUER
 from iris.cluster.platforms.k8s.types import parse_k8s_quantity
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from rigging.config_discovery import resolve_cluster_config
 
 # IaC reads only the reviewed, in-tree cluster config — deliberately NOT Iris's runtime
@@ -35,6 +36,7 @@ from rigging.config_discovery import resolve_cluster_config
 # reproducible and review-gated, never from a private local override. Relative to the marin
 # project root (resolved by rigging.config_discovery).
 IAC_CLUSTER_CONFIG_DIR = "lib/iris/config"
+IAC_FINELOG_CONFIG_DIR = "lib/finelog/config"
 MIN_KUEUE_MANAGER_MEMORY = "2Gi"
 
 
@@ -214,12 +216,53 @@ class GcpRemoteRepositorySpec(BaseModel):
     )
 
 
+class GcpControllerIngressSpec(BaseModel):
+    """One Iris controller backend on the shared external HTTPS load balancer."""
+
+    cluster: str
+    token_proxy: bool = True
+    deny_public: bool = False
+    iap_members: list[str] = Field(default_factory=list)
+
+
+class GcpFinelogIngressSpec(BaseModel):
+    """One IAP-free finelog backend admitted from known sender egress ranges."""
+
+    cluster: str
+    domain: str
+    sender_source_ranges: list[str] = Field(min_length=1, max_length=10)
+
+
+class GcpGclbSpec(BaseModel):
+    """Shared GCLB frontend plus its controller and finelog routes."""
+
+    frontend_name: str
+    controllers: list[GcpControllerIngressSpec] = Field(min_length=1)
+    finelogs: list[GcpFinelogIngressSpec] = Field(default_factory=list)
+    network: str = "default"
+    subnetwork: str = "default"
+
+    @model_validator(mode="after")
+    def validate_routes(self) -> "GcpGclbSpec":
+        controller_names = [controller.cluster for controller in self.controllers]
+        if self.frontend_name not in controller_names:
+            raise ValueError("gclb.frontend_name must identify one controller")
+        route_names = [*controller_names, *(f"finelog-{finelog.cluster}" for finelog in self.finelogs)]
+        if len(route_names) != len(set(route_names)):
+            raise ValueError("gclb route names must be unique")
+        domains = [*(finelog.domain for finelog in self.finelogs)]
+        if len(domains) != len(set(domains)):
+            raise ValueError("gclb finelog domains must be unique")
+        return self
+
+
 class GcpProvisioning(BaseModel):
-    """GCP-arm provisioning: the project, reserved static IPs, and Artifact Registry mirrors."""
+    """GCP-arm provisioning for project-level and shared ingress resources."""
 
     project: str
     addresses: list[GcpAddressSpec] = Field(default_factory=list)
     registries: list[GcpRemoteRepositorySpec] = Field(default_factory=list)
+    gclb: GcpGclbSpec | None = None
 
 
 class ProvisioningConfig(BaseModel):
@@ -248,6 +291,12 @@ def load_iris_config(cluster: str) -> IrisClusterConfig:
     config (see IAC_CLUSTER_CONFIG_DIR).
     """
     return load_config(resolve_cluster_config(cluster, dirs=(IAC_CLUSTER_CONFIG_DIR,)))
+
+
+def load_iac_finelog_config(cluster: str) -> FinelogConfig:
+    """Load a finelog config from the reviewed in-tree config directory."""
+    path = resolve_cluster_config(cluster, dirs=(IAC_FINELOG_CONFIG_DIR,))
+    return load_finelog_config(str(path))
 
 
 def load_provisioning(cluster: str) -> ProvisioningConfig:

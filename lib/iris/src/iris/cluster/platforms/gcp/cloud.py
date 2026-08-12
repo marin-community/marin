@@ -578,6 +578,8 @@ class CloudGcpService:
         }
         if request.labels:
             body["labels"] = request.labels
+        if request.network_tags:
+            body["tags"] = {"items": list(request.network_tags)}
         if all_metadata:
             body["metadata"] = {"items": [{"key": k, "value": v} for k, v in all_metadata.items()]}
 
