@@ -104,6 +104,31 @@ def design(panel, name: str, theta: np.ndarray) -> np.ndarray:
                 (complement_b + offset) ** -theta[3],
             ]
         )
+    if name == "gated":
+        # ORDER WITHOUT WEIGHTING. Every exposure-weighting scheme tried reduces to linear indices in
+        # (p0, p1), which tie every untied policy to a tied one -- see ATOM-003. A gate is different in
+        # kind: late exposure is absorbed only to the extent that groundwork was laid EARLY, so the term
+        # is a PRODUCT of a phase-1 quantity with a function of phase-0 quantities and cannot be written
+        # as a function of any single weighted sum.
+        #
+        # The data motivates the specific gate. The most common untied atomic optima here are
+        # (0.000, 0.050), (0.000, 0.025) and (0.000, 0.100) -- no code early, a little code late -- which
+        # is what "build general capability first, then specialise" looks like. So the groundwork variable
+        # is the COMPLEMENT bucket's early exposure, and it gates the absorption of late StarCoder.
+        beta, kappa_log = theta[4], theta[5]
+        kappa = 10.0**kappa_log
+        groundwork = panel.complement_epochs_phase_0
+        gate = groundwork**beta / (groundwork**beta + kappa**beta)
+        absorbed = panel.epochs_phase_0 + panel.epochs_phase_1 * gate
+        complement = (1.0 - horizon) * panel.complement_epochs_phase_0 + horizon * panel.complement_epochs_phase_1
+        return np.column_stack(
+            [
+                ones,
+                (exposure(panel, horizon) + offset) ** -gamma,
+                (absorbed + offset) ** -gamma,
+                (complement + offset) ** -theta[3],
+            ]
+        )
     if name == "phase-split":
         early = (panel.epochs_phase_0 + offset) ** -gamma
         late = (panel.epochs_phase_1 + offset) ** -gamma
@@ -115,10 +140,12 @@ def bounds_for(name: str) -> list[tuple[float, float]]:
     if name in ("intercept", "quadratic"):
         return []
     box = [(0.01, 4.0), (-4.0, -0.5), (0.0, 1.0)]  # gamma, log offset, horizon
-    if name in ("two-bucket", "two-horizon"):
+    if name in ("two-bucket", "two-horizon", "gated"):
         box.append((0.01, 4.0))  # complement readout exponent
     if name == "two-horizon":
         box.append((0.0, 1.0))  # second horizon
+    if name == "gated":
+        box.extend([(0.3, 12.0), (-6.0, -1.0)])  # gate sharpness, log gate scale in epochs
     return box
 
 
@@ -163,8 +190,8 @@ def fit_predict(panel, name: str, response: np.ndarray, folds) -> np.ndarray:
                 objective,
                 box,
                 rng=np.random.default_rng(20260811),
-                popsize=12,
-                maxiter=40,
+                popsize=10,
+                maxiter=20,
                 tol=1e-10,
                 polish=True,
                 init="sobol",
@@ -196,8 +223,8 @@ def surface_optimum(panel, name: str, response: np.ndarray):
             objective,
             box,
             rng=np.random.default_rng(20260811),
-            popsize=12,
-            maxiter=40,
+            popsize=10,
+            maxiter=20,
             tol=1e-10,
             polish=True,
             init="sobol",
@@ -248,7 +275,7 @@ def main() -> None:
     targets = panel_module.atomic_targets()
     if args.targets:
         targets = targets[: args.targets]
-    names = ("intercept", "two-bucket", "two-horizon", "quadratic")
+    names = ("intercept", "two-bucket", "two-horizon", "gated")
 
     print("ATOM-001 Stage 1: independent atomic fits, no replay, two buckets, one objective at a time")
     print(f"{len(panels)} horizons x {len(targets)} targets, spatial leave-region-out folds")
