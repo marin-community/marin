@@ -15,7 +15,7 @@ import haliax.nn.scan as hnn_scan
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.scan import BlockSeq, ScanCheckpointPolicy, Stacked
 from haliax.partitioning import axis_mapping, pspec_for_axis, set_mesh
-from lib.haliax.tests.test_utils import skip_if_not_enough_devices
+from haliax.testing import skip_if_not_enough_devices
 
 
 def test_unstacked():

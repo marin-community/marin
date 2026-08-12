@@ -206,7 +206,7 @@ target-version = ["py312"]
 
 [tool.pytest.ini_options]
 addopts = "-n auto -m 'not slow and not torch' --import-mode=importlib"
-pythonpath = ["src", "tests", "../.."]
+pythonpath = ["src", "tests"]
 filterwarnings = [
     "ignore:Transparent hugepages are not enabled\\..*:UserWarning:jax._src.cloud_tpu_init",
     "ignore:Read the `app_url` setting from the appropriate Settings object\\.:DeprecationWarning:wandb.analytics.sentry",

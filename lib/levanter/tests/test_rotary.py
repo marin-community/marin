@@ -5,12 +5,12 @@ import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-from lib.levanter.tests.test_llama import _get_llama_config
-from lib.levanter.tests.test_utils import skip_if_no_torch
+from levanter.testing.helpers import skip_if_no_torch
 from transformers import LlamaConfig
 
 from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
 from levanter.layers.rotary import _rotate_half as levanter_rotate_half
+from levanter.testing.model_configs import llama_test_config
 
 
 @skip_if_no_torch
@@ -31,7 +31,7 @@ def test_apply_rotary_pos_emb(test_seq_len):
     def named_array_to_tensor(named_array):
         return torch.from_numpy(np.array(named_array.array))
 
-    _llama_config = _get_llama_config()
+    _llama_config = llama_test_config()
     Pos = _llama_config.max_Pos
     Heads = _llama_config.attention_config().Heads
     HeadSize = _llama_config.attention_config().HeadSize

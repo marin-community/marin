@@ -17,7 +17,7 @@ from fsspec import AbstractFileSystem
 from jax.random import PRNGKey
 from numpy.testing import assert_allclose
 from rigging.filesystem import filesystem
-from lib.levanter.tests.test_utils import arrays_only, skip_if_hf_model_not_accessible, skip_if_no_torch
+from levanter.testing.helpers import arrays_only, skip_if_hf_model_not_accessible, skip_if_no_torch
 from transformers import AutoModelForCausalLM
 from transformers import GPT2Config as HfGpt2Config
 from transformers import GPT2LMHeadModel as HfGpt2LMHeadModel
@@ -28,7 +28,7 @@ from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.optim.config import AdamConfig
 from levanter.utils.tree_utils import inference_mode
-from lib.levanter.tests.test_utils import use_test_mesh
+from levanter.testing.helpers import use_test_mesh
 
 TEST_GPT2_MODEL_ID = "sshleifer/tiny-gpt2"
 

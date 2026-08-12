@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import pytest
 from haliax import Axis
 from jax.random import PRNGKey
-from lib.levanter.tests.test_utils import check_load_config, check_model_works_with_seqlen, parameterize_with_configs
+from levanter.testing.helpers import check_load_config, check_model_works_with_seqlen, parameterize_with_configs
 
 from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.main.train_lm import TrainLmConfig

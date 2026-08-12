@@ -18,7 +18,7 @@ from haliax.partitioning import ResourceAxis
 from jax._src import config as jax_config
 from jax.lax import Precision
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec, use_abstract_mesh
-from lib.levanter.tests.test_utils import (
+from levanter.testing.helpers import (
     skip_if_module_missing,
     skip_if_no_torch,
     skip_if_not_enough_devices,

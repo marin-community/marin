@@ -13,7 +13,7 @@ import optax
 from chex import assert_trees_all_close
 from haliax.quantization import DefaultDotGeneralOp, DotGeneralOp
 from safetensors import safe_open
-from lib.levanter.tests.test_utils import (
+from levanter.testing.helpers import (
     skip_if_hf_model_not_accessible,
     skip_if_module_missing,
     skip_if_no_torch,

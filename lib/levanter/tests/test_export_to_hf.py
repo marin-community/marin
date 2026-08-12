@@ -16,12 +16,12 @@ from transformers import GPT2Config as HfGpt2Config
 import haliax
 
 import levanter.main.export_lm_to_hf as export_lm_to_hf
-from lib.levanter.tests import tiny_test_corpus
+from levanter.testing import tiny_corpus
 from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, SAFE_TENSORS_INDEX_NAME
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.utils.jax_utils import is_inexact_arrayish
-from lib.levanter.tests.test_utils import has_torch
+from levanter.testing.helpers import has_torch
 
 
 class TokenizerlessGpt2Config(Gpt2Config):
@@ -45,7 +45,7 @@ def test_export_lm_to_hf():
     )
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        data_config = tiny_test_corpus.tiny_corpus_config(tmpdir)
+        data_config = tiny_corpus.tiny_corpus_config(tmpdir)
         tok = data_config.the_tokenizer
         Vocab = haliax.Axis("vocab", len(tok))
         model = Gpt2LMHeadModel.init(Vocab, model_config, key=jax.random.PRNGKey(0))

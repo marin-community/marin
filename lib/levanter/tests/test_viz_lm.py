@@ -10,7 +10,7 @@ import jax
 import haliax
 
 import levanter.main.viz_logprobs as viz_logprobs
-from lib.levanter.tests import tiny_test_corpus
+from levanter.testing import tiny_corpus
 from levanter.checkpoint import save_checkpoint
 from levanter.distributed import DistributedConfig
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
@@ -27,7 +27,7 @@ def test_viz_lm():
     )
 
     with tempfile.TemporaryDirectory() as f:
-        data_config, _ = tiny_test_corpus.construct_small_data_cache(f)
+        data_config, _ = tiny_corpus.construct_small_data_cache(f)
         tok = data_config.the_tokenizer
         Vocab = haliax.Axis("vocab", len(tok))
         model = LlamaLMHeadModel.init(Vocab, model_config, key=jax.random.PRNGKey(0))

@@ -22,7 +22,7 @@ import levanter.layers.attention as attention_module
 from levanter.layers import AttentionConfig, AttentionBackend, Attention
 from levanter.layers.attention import AttentionMask, ragged_paged_attention, simple_attention_with_dropout
 from levanter.layers.kv_cache import KvPageCache
-from lib.levanter.tests.test_utils import use_test_mesh
+from levanter.testing.helpers import use_test_mesh
 
 SLOT = hax.Axis("slot", 4)  # page size
 NUM_SLOTS = SLOT.size

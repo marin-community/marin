@@ -4,8 +4,8 @@
 import glob
 import os
 from contextlib import contextmanager
-from functools import reduce
-from typing import Any, Callable, Dict, List, Optional, Sequence, TypeVar
+from pathlib import Path
+from typing import Callable, List, Optional
 
 import draccus
 import equinox as eqx
@@ -18,14 +18,10 @@ from equinox import nn as nn
 from haliax.partitioning import ResourceAxis, set_mesh
 from jax._src.random import PRNGKey
 from jax.sharding import Mesh
-from transformers import AutoConfig, BatchEncoding
+from jaxtyping import PRNGKeyArray
+from transformers import AutoConfig
 
-from levanter.checkpoint import _get_fs_and_plain_path
-from levanter.data._preprocessor import BatchProcessor
-from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.layers.attention import AttentionMask
-
-T = TypeVar("T")
 
 
 def skip_if_not_enough_devices(count: int):
@@ -52,7 +48,7 @@ class MLP(eqx.Module):
         activation: Callable = jax.nn.relu,
         final_activation: Callable = lambda x: x,
         *,
-        key: "jax.random.PRNGKey",
+        key: PRNGKeyArray,
         **kwargs,
     ):
         """**Arguments**:
@@ -87,7 +83,7 @@ class MLP(eqx.Module):
         self.activation = activation  # type: ignore
         self.final_activation = final_activation  # type: ignore
 
-    def __call__(self, x, *, key: Optional["jax.random.PRNGKey"] = None):
+    def __call__(self, x, *, key: Optional[PRNGKeyArray] = None):
         """**Arguments:**
 
         - `x`: A JAX array with shape `(in_size,)`.
@@ -158,19 +154,6 @@ def skip_if_module_missing(module: str):
     return pytest.mark.skipif(not try_import_module(module), reason=f"{module} not installed")
 
 
-def skip_if_checkpoint_not_accessible(path: str):
-    def try_load_path(path):
-        try:
-            fs, path_to_open = _get_fs_and_plain_path(path)
-            fs.open(path_to_open, "rb")
-        except Exception:
-            return False
-        else:
-            return True
-
-    return pytest.mark.skipif(not try_load_path(path), reason="Checkpoint not accessible")
-
-
 def skip_if_hf_model_not_accessible(model_id: str):
     """Skip if the HF model is not present in the local cache.
 
@@ -189,52 +172,9 @@ def skip_if_hf_model_not_accessible(model_id: str):
     return pytest.mark.skipif(not try_load_hf(model_id), reason="HuggingFace model not accessible")
 
 
-class IdentityProcessor(BatchProcessor[BatchEncoding, BatchEncoding]):
-    def __call__(self, batch: Sequence[BatchEncoding]) -> BatchEncoding:
-        stacked = reduce(_stack_batch_encodings, batch)
-        return stacked
-
-    @property
-    def output_exemplar(self):
-        return BatchEncoding({})
-
-    @property
-    def num_cpus(self) -> int:
-        return 0
-
-    @property
-    def metadata(self) -> Dict[str, Any]:
-        return {}
-
-
-class ShardsDataSource(ShardedDataSource[T]):
-    def __init__(self, docs: List[List[T]]):
-        self.docs = docs
-
-    @property
-    def shard_names(self) -> Sequence[str]:
-        return [str(i) for i in range(len(self.docs))]
-
-    def open_shard_at_row(self, shard_name: str, row: int):
-        return self.docs[int(shard_name)][row:]
-
-
-class SingleShardDocumentSource(ShardedDataSource[T]):
-    def __init__(self, docs: List[T]):
-        self.docs = docs
-
-    @property
-    def shard_names(self) -> Sequence[str]:
-        return ["0"]
-
-    def open_shard_at_row(self, shard_name: str, row: int):
-        return self.docs[row:]
-
-
 def parameterize_with_configs(pattern, config_path=None):
-    test_path = os.path.dirname(os.path.abspath(__file__))
     if config_path is None:
-        config_path = os.path.join(test_path, "..", "config")
+        config_path = Path(__file__).resolve().parents[3] / "config"
 
     configs = glob.glob(os.path.join(config_path, pattern))
     return pytest.mark.parametrize("config_file", configs, ids=lambda x: f"{os.path.basename(x)}")
@@ -255,20 +195,6 @@ def check_model_works_with_seqlen(model_type, config, input_len):
     causal_mask = AttentionMask.causal()
     a1 = model(input_ids, key=key, attn_mask=causal_mask)
     assert a1.axis_size("position") == input_len
-
-
-def _stack_batch_encodings(a: BatchEncoding, b: BatchEncoding) -> BatchEncoding:
-    """Stacks two batch encodings together, assuming that the keys are the same."""
-
-    def _ensure_batched(x):
-        if len(x) == 0:
-            return list(x)
-        elif isinstance(x[0], Sequence) or isinstance(x[0], np.ndarray):
-            return list(x)
-        else:
-            return [x]
-
-    return BatchEncoding({k: _ensure_batched(a[k]) + _ensure_batched(b[k]) for k in a.keys()})
 
 
 def create_test_mesh(tensor_parallelism: int = 1, skip_ok: bool = False) -> Mesh:

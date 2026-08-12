@@ -12,7 +12,7 @@ from jax import numpy as jnp
 
 import haliax
 
-from lib.levanter.tests.test_utils import use_test_mesh
+from levanter.testing.helpers import use_test_mesh
 
 from levanter.optim.config import AdamConfig
 from levanter.optim.skipstep import SkipStepConfig, SkipStepState

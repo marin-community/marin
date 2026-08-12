@@ -316,10 +316,9 @@ def has_static_test_items(path: Path) -> bool:
 def _test_tree(scope: str, repo_root: Path) -> dict[str, Path]:
     """Every .py under a scope's test directory, keyed by its repo-root module name.
 
-    Package test trees need distinct names when pytest collects paths from more
-    than one workspace package. For example, Levanter helpers are imported as
-    ``lib.levanter.tests.test_utils`` rather than the ambiguous ``test_utils``.
-    Relative imports resolve against the same canonical name.
+    Package test trees need distinct internal names so dependency analysis does
+    not conflate same-named helpers in different packages. Relative imports
+    resolve against the same canonical name.
     """
     test_dir = repo_root / TEST_DIR[scope]
     if not test_dir.exists():

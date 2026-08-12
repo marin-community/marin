@@ -13,7 +13,7 @@ from jax.random import PRNGKey
 
 from levanter.tracker.histogram import SummaryStats, sharded_histogram_array
 from levanter.tracker.json_logger import _to_jsonable
-from lib.levanter.tests.test_utils import use_test_mesh
+from levanter.testing.helpers import use_test_mesh
 
 
 def test_sharded_histogram_array_matches_jnp_histogram():

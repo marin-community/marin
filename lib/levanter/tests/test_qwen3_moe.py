@@ -19,7 +19,7 @@ from levanter.models.lm_model import LmExample
 from levanter.models.qwen3_moe import Qwen3MoeConfig, Qwen3MoeLMHeadModel, Qwen3MoeSparseMoeBlock
 from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.tree_utils import inference_mode
-from lib.levanter.tests.test_utils import (
+from levanter.testing.helpers import (
     moe_gate_grad_row_norms,
     single_token_moe_block_grad,
     skip_if_no_torch,

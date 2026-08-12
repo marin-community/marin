@@ -14,7 +14,7 @@ from levanter.layers.gated_deltanet import (
     _causal_depthwise_conv1d_full,
     _causal_depthwise_conv1d_update,
 )
-from lib.levanter.tests.test_utils import skip_if_no_torch
+from levanter.testing.helpers import skip_if_no_torch
 
 jax.config.update("jax_default_matmul_precision", "float32")
 

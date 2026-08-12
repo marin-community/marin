@@ -10,7 +10,7 @@ import pytest
 from chex import assert_trees_all_close
 from haliax.partitioning import ResourceAxis
 from jax.sharding import NamedSharding, PartitionSpec
-from lib.levanter.tests.test_utils import use_test_mesh
+from levanter.testing.helpers import use_test_mesh
 
 from levanter.grad_accum import microbatched
 
