@@ -4484,3 +4484,20 @@ author: dlwh
 - No H100/GB200 execution, upload, launch, scorecard promotion, or performance
   evidence occurred. ABI 6 remains limited to `7x13` forward SOURCE_ORDERED on
   the Host CPU consumer.
+
+#### Post-final wheel replay
+
+- This replay closes the wheel-evidence caveat above. The final `48ff282112`
+  source was rebuilt against pinned JAX/jaxlib 0.10.1.
+  The isolated release overlay used `_jax.so` SHA-256
+  `950d588e02daa38d9386439ba6644dc906cdded7a2f78f96e186792c3ac53556`
+  and `libjax_common.dylib` SHA-256
+  `81c24a2b1fb7b2479f65ac7d04298e6c69b89d18437322f62e08cf840a64ff98`.
+  Natural ordinary JAX executed the `7x13` SOURCE_ORDERED function twice with
+  the same bitwise digest recorded above.
+- Fresh cache processes populated one 3257-byte CPU executable entry with
+  SHA-256
+  `eb78595a8c340c9e918e6be92b72f0728c2752194261dc16b712f0acd9c82cc1`,
+  then reused it with one public cache hit and unchanged bytes. Round-trip mode
+  reported no hit and added a distinct 3583-byte entry with SHA-256
+  `e87bfa41c4c1def92f6bd15f61300580a9cc8c6d0067a8cb2b33f020c3e756f3`.
