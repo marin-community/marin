@@ -259,3 +259,12 @@ author: Rafal Wojdyla
 - Scheduler state: All 96 TEI jobs are in the running job state. Kubernetes has 82 running TEI pods and 14 pending pods with `SchedulingGated`.
 - Archive state: The restored model archive remains at the original S3 path for these worker starts.
 - Next action: Wait for RNO interactive capacity. Validate one new endpoint and then validate the full 96-worker pool.
+
+### 2026-08-12 01:32 UTC - Longer model staging lifetime
+
+- Prior evidence: A review of the first Harrier pipeline identified the one-day archive lifetime as unsafe for longer embedding runs: https://github.com/marin-community/marin/pull/7977#issuecomment-5186200794.
+- Failure match: The RNO TEI restart failure matched that prediction. The current backfill has a 3-to-5-day estimate.
+- Change: Commit `b48a81225` keeps future Harrier model archives for 14 days instead of one day.
+- Validation: All nine focused Harrier pipeline tests passed. Ruff, Black, Pyrefly, and the other changed-file checks passed.
+- Current-run caveat: The v3 workers still use the original one-day path. The monitor must keep that restored object available until v3 completes.
+- Next action: Continue the RNO capacity wait and source monitoring.
