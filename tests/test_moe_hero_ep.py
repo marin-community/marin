@@ -1233,7 +1233,7 @@ def test_mok_like_stateful_parity_rejects_gradient_on_inactive_routed_expert() -
     bad_gradient = gradients[0].at[7, 0, 0].set(1.0)
 
     with pytest.raises(AssertionError, match="inactive routed expert received a gradient"):
-        mok_like_stateful_parity._assert_inactive_expert_gradients(
+        mok_like_stateful_parity._validated_inactive_expert_gradient_maxima(
             mok_like_stateful_parity._routes(
                 1,
                 mok_like_stateful_parity.RouteScenario.ALL_TO_ONE,
@@ -1253,7 +1253,7 @@ def test_mok_like_stateful_parity_derives_inactive_experts_from_the_full_route_b
         jnp.ones((8, 1, 1)),
     )
 
-    assert mok_like_stateful_parity._assert_inactive_expert_gradients(routes, gradients) == {}
+    assert mok_like_stateful_parity._validated_inactive_expert_gradient_maxima(routes, gradients) == {}
 
 
 def test_mok_like_stateful_parity_optimizer_carries_state_across_updates() -> None:

@@ -7,6 +7,7 @@ import json
 import os
 import re
 from collections.abc import Mapping, Sequence
+from typing import NamedTuple
 
 import click
 import jax
@@ -56,6 +57,37 @@ GRADIENT_NAMES = ("x", "combine_weights", *PARAMETER_NAMES)
 _IRIS_TASK_INDEX = re.compile(r"/(\d+)(?::\d+)?$")
 
 
+class StepInputs(NamedTuple):
+    x: np.ndarray
+    combine_weights: np.ndarray
+    target: np.ndarray
+
+
+class ReducedErrorValues(NamedTuple):
+    allclose: jax.Array
+    max_absolute_error: jax.Array
+    mean_absolute_error: jax.Array
+    mismatch_fraction: jax.Array
+    relative_l2_error: jax.Array
+
+
+class FusedStepResult(NamedTuple):
+    parameters: tuple[jax.Array, ...]
+    optimizer_state: tuple[jax.Array, ...]
+    loss: jax.Array
+    output: jax.Array
+    dropped_assignments: jax.Array
+    gradients: tuple[jax.Array, ...]
+
+
+class ReferenceStepResult(NamedTuple):
+    parameters: tuple[jax.Array, ...]
+    optimizer_state: tuple[jax.Array, ...]
+    loss: jax.Array
+    output: jax.Array
+    gradients: tuple[jax.Array, ...]
+
+
 def _stateful_route_plan(num_updates: int) -> tuple[RouteScenario, ...]:
     """Alternate maximum-capacity routes with distinct imbalance patterns."""
 
@@ -103,7 +135,7 @@ def _step_inputs(
     step: int,
     num_tokens: int,
     hidden_dim: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> StepInputs:
     random = np.random.default_rng(_step_seed(seed, replica_index, step))
     global_tokens = WORLD_SIZE * num_tokens
     x = random.normal(size=(global_tokens, hidden_dim)).astype(np.float32)
@@ -111,7 +143,7 @@ def _step_inputs(
     weights = 1.0 / (1.0 + np.exp(-logits))
     combine_weights = weights * (2.5 / np.sum(weights, axis=-1, keepdims=True))
     target = random.normal(size=(global_tokens, hidden_dim)).astype(np.float32)
-    return x, combine_weights.astype(np.float32), target
+    return StepInputs(x=x, combine_weights=combine_weights.astype(np.float32), target=target)
 
 
 def _initial_parameters(
@@ -147,18 +179,18 @@ def _reduced_error_values(
     actual: jax.Array,
     expected: jax.Array,
     absolute_tolerance: jax.Array,
-) -> tuple[jax.Array, ...]:
+) -> ReducedErrorValues:
     actual_float = actual.astype(jnp.float32)
     expected_float = expected.astype(jnp.float32)
     absolute_error = jnp.abs(actual_float - expected_float)
     close = jnp.isclose(actual_float, expected_float, atol=absolute_tolerance, rtol=BF16_RTOL)
     reference_l2 = jnp.linalg.norm(expected_float)
-    return (
-        jnp.all(close),
-        jnp.max(absolute_error),
-        jnp.mean(absolute_error),
-        jnp.mean(~close),
-        jnp.linalg.norm(actual_float - expected_float) / jnp.maximum(reference_l2, 1e-12),
+    return ReducedErrorValues(
+        allclose=jnp.all(close),
+        max_absolute_error=jnp.max(absolute_error),
+        mean_absolute_error=jnp.mean(absolute_error),
+        mismatch_fraction=jnp.mean(~close),
+        relative_l2_error=jnp.linalg.norm(actual_float - expected_float) / jnp.maximum(reference_l2, 1e-12),
     )
 
 
@@ -170,12 +202,12 @@ def _reduced_error_metrics(
 ) -> dict[str, float | bool]:
     values = jax.device_get(_reduced_error_values(actual, expected, jnp.asarray(absolute_tolerance, dtype=jnp.float32)))
     return {
-        "allclose": bool(values[0]),
+        "allclose": bool(values.allclose),
         "absolute_tolerance": absolute_tolerance,
-        "max_absolute_error": float(values[1]),
-        "mean_absolute_error": float(values[2]),
-        "mismatch_fraction": float(values[3]),
-        "relative_l2_error": float(values[4]),
+        "max_absolute_error": float(values.max_absolute_error),
+        "mean_absolute_error": float(values.mean_absolute_error),
+        "mismatch_fraction": float(values.mismatch_fraction),
+        "relative_l2_error": float(values.relative_l2_error),
     }
 
 
@@ -212,7 +244,7 @@ def _assert_step_parity(step_metrics: dict[str, object]) -> None:
         )
 
 
-def _assert_inactive_expert_gradients(
+def _validated_inactive_expert_gradient_maxima(
     routes: np.ndarray,
     gradients: Sequence[jax.Array],
 ) -> dict[str, float]:
@@ -430,13 +462,13 @@ def main(
                 learning_rate=learning_rate,
                 momentum=momentum,
             )
-            return (
-                next_parameters,
-                next_momentum,
-                loss,
-                output,
-                dropped_assignments,
-                (x_gradient, combine_weights_gradient, *parameter_gradients),
+            return FusedStepResult(
+                parameters=next_parameters,
+                optimizer_state=next_momentum,
+                loss=loss,
+                output=output,
+                dropped_assignments=dropped_assignments,
+                gradients=(x_gradient, combine_weights_gradient, *parameter_gradients),
             )
 
         def reference_step(parameters, momentum_state, x, selected_experts, combine_weights, target):
@@ -466,12 +498,12 @@ def main(
                 learning_rate=learning_rate,
                 momentum=momentum,
             )
-            return (
-                next_parameters,
-                next_momentum,
-                loss,
-                output,
-                (x_gradient, combine_weights_gradient, *parameter_gradients),
+            return ReferenceStepResult(
+                parameters=next_parameters,
+                optimizer_state=next_momentum,
+                loss=loss,
+                output=output,
+                gradients=(x_gradient, combine_weights_gradient, *parameter_gradients),
             )
 
         compiled_fused_step = jax.jit(fused_step).lower(*example_arguments).compile()
@@ -501,18 +533,23 @@ def main(
             fused_result = compiled_fused_step(fused_parameters, fused_momentum, *step_arguments)
             reference_result = compiled_reference_step(reference_parameters, reference_momentum, *step_arguments)
             jax.block_until_ready((fused_result, reference_result))
-            fused_parameters, fused_momentum, fused_loss, fused_output, dropped_assignments, fused_gradients = (
-                fused_result
-            )
-            reference_parameters, reference_momentum, reference_loss, reference_output, reference_gradients = (
-                reference_result
-            )
+            fused_parameters = fused_result.parameters
+            fused_momentum = fused_result.optimizer_state
+            fused_loss = fused_result.loss
+            fused_output = fused_result.output
+            dropped_assignments = fused_result.dropped_assignments
+            fused_gradients = fused_result.gradients
+            reference_parameters = reference_result.parameters
+            reference_momentum = reference_result.optimizer_state
+            reference_loss = reference_result.loss
+            reference_output = reference_result.output
+            reference_gradients = reference_result.gradients
             output_metrics = _reduced_error_metrics(fused_output, reference_output, absolute_tolerance=BF16_ATOL)
             loss_metrics = _reduced_error_metrics(fused_loss, reference_loss, absolute_tolerance=BF16_ATOL)
             gradient_metrics = _tree_error_metrics(GRADIENT_NAMES, fused_gradients, reference_gradients)
             parameter_metrics = _tree_error_metrics(PARAMETER_NAMES, fused_parameters, reference_parameters)
             optimizer_metrics = _tree_error_metrics(PARAMETER_NAMES, fused_momentum, reference_momentum)
-            inactive_expert_gradient_maxima = _assert_inactive_expert_gradients(routes, fused_gradients[2:])
+            inactive_expert_gradient_maxima = _validated_inactive_expert_gradient_maxima(routes, fused_gradients[2:])
             call_counts = runtime.call_counts()
             debug_counters = runtime.debug_counters()
             step_metrics = {

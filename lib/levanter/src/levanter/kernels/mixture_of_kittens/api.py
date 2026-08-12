@@ -30,8 +30,6 @@ MOK_CONTEXT_CHECKPOINT_NAME = "mixture_of_kittens_context"
 
 
 def _failure_agreement_axes(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> tuple[str, ...]:
-    """Return the process-spanning axes needed for global failure agreement."""
-
     return tuple(axis_name for axis_name in mesh.axis_names if axis_name != _EXPERT_AXIS)
 
 

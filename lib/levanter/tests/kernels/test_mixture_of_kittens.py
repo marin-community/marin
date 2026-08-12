@@ -612,7 +612,7 @@ system_generation_wait(peer_ready, target);
 """
 
     with pytest.raises(RuntimeError, match="cannot observe cancellation"):
-        mok_build._validate_cancellable_generation_waits(source)
+        mok_build._validate_and_count_cancellable_generation_waits(source)
 
 
 def test_generated_peer_wait_validator_counts_cancellable_waits() -> None:
@@ -622,7 +622,7 @@ system_generation_wait(peer_ready, cancellation, target);
 system_generation_wait(peer_ready, cancellation, target);
 """
 
-    assert mok_build._validate_cancellable_generation_waits(source) == 2
+    assert mok_build._validate_and_count_cancellable_generation_waits(source) == 2
 
 
 def test_failure_agreement_excludes_only_the_process_local_expert_axis() -> None:

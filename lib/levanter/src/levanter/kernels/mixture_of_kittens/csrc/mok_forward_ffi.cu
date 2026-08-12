@@ -1310,6 +1310,18 @@ void LaunchFailureStatus(
   ThrowOnCuda(cudaGetLastError(), "WriteFailureStatusKernel");
 }
 
+void CloseSynchronousFailure(
+    const RuntimeLease& lease,
+    DeviceRuntime& runtime,
+    cudaStream_t stream,
+    int32_t* failure_status,
+    const std::string& error) {
+  PublishFailureSignals(runtime, lease.key.phase, lease.generation);
+  RuntimeManager::Instance().MarkFailure(lease, error);
+  LaunchFailureStatus(runtime, stream, lease.generation, failure_status);
+  RuntimeManager::Instance().ReleaseAfterStream(lease, stream);
+}
+
 void LaunchForwardInputReady(DeviceRuntime& runtime, cudaStream_t stream, uint64_t generation) {
   GenerationArgs args{
       .input_ready_ptrs = runtime.forward_input_ready_ptrs,
@@ -1781,10 +1793,7 @@ ffi::Error ForwardBf16(
     if (lease.has_value()) {
       DeviceRuntime& runtime = RuntimeManager::Instance().Current(lease->slot);
       try {
-        PublishFailureSignals(runtime, lease->key.phase, lease->generation);
-        RuntimeManager::Instance().MarkFailure(*lease, exc.what());
-        LaunchFailureStatus(runtime, stream, lease->generation, failure_status->typed_data());
-        RuntimeManager::Instance().ReleaseAfterStream(*lease, stream);
+        CloseSynchronousFailure(*lease, runtime, stream, failure_status->typed_data(), exc.what());
         lease.reset();
         return ffi::Error::Success();
       } catch (const std::exception& closure_error) {
@@ -2131,10 +2140,7 @@ ffi::Error BackwardBf16(
     if (lease.has_value()) {
       DeviceRuntime& runtime = RuntimeManager::Instance().Current(lease->slot);
       try {
-        PublishFailureSignals(runtime, lease->key.phase, lease->generation);
-        RuntimeManager::Instance().MarkFailure(*lease, exc.what());
-        LaunchFailureStatus(runtime, stream, lease->generation, failure_status->typed_data());
-        RuntimeManager::Instance().ReleaseAfterStream(*lease, stream);
+        CloseSynchronousFailure(*lease, runtime, stream, failure_status->typed_data(), exc.what());
         lease.reset();
         return ffi::Error::Success();
       } catch (const std::exception& closure_error) {

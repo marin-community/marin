@@ -483,7 +483,7 @@ using d_routed_weight_f32_gl = gl<float, 1, -1, -1, -1, mlp_f32_d_tile>;""",
             raise RuntimeError("The pinned Mixture-of-Kittens source changed at a Marin kernel edit")
         mok_text = mok_text.replace(old, new)
     mok_text += "\n};  // struct dispatch_mlp_swiglu_combiner\n"
-    _validate_cancellable_generation_waits(mok_text)
+    _validate_and_count_cancellable_generation_waits(mok_text)
 
     mxfp8_lines = (source_root / "csrc" / "mxfp8.cuh").read_text().splitlines(keepends=True)
     first_mxfp8_host = next(index for index, line in enumerate(mxfp8_lines) if "static __host__" in line)
@@ -501,7 +501,7 @@ enum class RoutedPrecision { BF16, MXFP8 };
     return mok_text.encode(), mxfp8_text.encode(), utils_text.encode()
 
 
-def _validate_cancellable_generation_waits(source: str) -> int:
+def _validate_and_count_cancellable_generation_waits(source: str) -> int:
     """Reject generated peer waits that cannot observe invocation cancellation."""
     calls = re.findall(r"system_generation_wait\(([^;{}]*)\)", source)
     if len(calls) < 2:

@@ -40,11 +40,13 @@ _REGISTERED_LIBRARY_PATH: Path | None = None
 
 
 class MokLikeTestFailurePoint(IntEnum):
+    # Values are part of the native failure-injection ABI.
     BEFORE_INPUT_READY = 0
     BEFORE_COMPLETION = 1
 
 
 class MokLikeTestFailurePhase(IntEnum):
+    # Values are part of the native failure-injection ABI.
     FORWARD = 0
     BACKWARD = 1
 
