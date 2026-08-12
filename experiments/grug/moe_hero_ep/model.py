@@ -1372,7 +1372,6 @@ class Transformer(eqx.Module):
         weighted-mean CE.
         """
         cfg = self.config
-        embed_all = _embedding_gather(self.token_embed, token_ids)
 
         # MTP modules are full-causal ("global") layers: build the long mask + FA4 bounds once,
         # matching how the main forward feeds a global layer (rope-free, full causal).
@@ -1395,6 +1394,16 @@ class Transformer(eqx.Module):
             if cfg.remat_mode == "save_moe"
             else None
         )
+
+        # Gather the shifted next-token embedding INSIDE the checkpointed forward, keyed on the small
+        # int32 shifted ids, so the full B*S*D embedding tensor is recomputed in backward rather than
+        # materialized up front -- at hero batch/seq it is ~one residual stream (tens of GiB) and
+        # dwarfs the module's own activations. gather(shift(ids)) == shift(gather(ids)) on the
+        # zero-weighted tail, so the loss is unchanged.
+        def _depth_forward(h_prev, shifted_ids, module):
+            emb = _embedding_gather(self.token_embed, shifted_ids)
+            return module(h_prev, emb, long_mask, True)
+
         # mtp_modules is stacked with a leading depth axis; reconstruct module k-1 by indexing the
         # stacked leaves (static fields like cfg are not leaves and pass through unchanged).
         assert self.mtp_modules is not None  # guarded by cfg.mtp_depth > 0 at the call site
@@ -1403,12 +1412,12 @@ class Transformer(eqx.Module):
         mtp_ce = jnp.zeros((), dtype=loss_dtype)
         for k in range(1, cfg.mtp_depth + 1):
             module = jax.tree_util.tree_map(lambda leaf, i=k - 1: leaf[i], stacked)
-            emb_k = _shift_left(embed_all, k)  # Embed(x_{i+k})
+            shifted_ids = _shift_left(token_ids, k).astype(jnp.int32)  # x_{i+k}; small int tensor
             target_k = _shift_left(token_ids, k + 1).astype(jnp.int32)  # x_{i+k+1}
             weight_k = _shift_left(loss_weight, k)  # loss_weight[i+k]; 0 on the last k positions
             # The module applies out_norm, so its output feeds the shared output head directly and
             # also recurs as the next depth's h_prev.
-            h_prev = eqx.filter_checkpoint(module, policy=remat_policy)(h_prev, emb_k, long_mask, True)
+            h_prev = eqx.filter_checkpoint(_depth_forward, policy=remat_policy)(h_prev, shifted_ids, module)
             ce_k = fused_linear_softmax_cross_entropy_loss(
                 h_prev,
                 self.output_proj,
