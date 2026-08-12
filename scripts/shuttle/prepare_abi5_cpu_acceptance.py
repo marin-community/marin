@@ -189,6 +189,97 @@ def _load_strict_json(path: Path) -> Any:
         raise ValueError(f"invalid JSON in {path.name}") from error
 
 
+def _exact_int(value: object, expected: int, name: str) -> None:
+    if type(value) is not int or value != expected:
+        raise ValueError(f"{name} must be the integer {expected}")
+
+
+def _exact_bool(value: object, expected: bool, name: str) -> None:
+    if type(value) is not bool or value is not expected:
+        raise ValueError(f"{name} must be the boolean {str(expected).lower()}")
+
+
+def _exact_string(value: object, expected: str, name: str) -> None:
+    if type(value) is not str or value != expected:
+        raise ValueError(f"{name} must be the declared string")
+
+
+def _exact_none(value: object, name: str) -> None:
+    if value is not None:
+        raise ValueError(f"{name} must remain null")
+
+
+def _unresolved_string(value: object, pattern: str, name: str) -> None:
+    if value is None:
+        return
+    if type(value) is not str or re.fullmatch(pattern, value) is None:
+        raise ValueError(f"{name} must be null or match its declared string pattern")
+    raise ValueError(f"{name} must remain null in the non-launch-ready manifest")
+
+
+def _closed_mapping(value: object, expected_fields: set[str], name: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != expected_fields:
+        raise ValueError(f"{name} fields changed")
+    return value
+
+
+def _validate_execution_identity(value: object) -> dict[str, Any]:
+    identity = _closed_mapping(value, set(EXPECTED_EXECUTION_IDENTITY), "execution_identity")
+    _exact_int(identity["schema_version"], 1, "execution_identity.schema_version")
+
+    python = _closed_mapping(identity["python"], set(EXPECTED_EXECUTION_IDENTITY["python"]), "execution_identity.python")
+    _unresolved_string(python["build_identity"], r"\S(?:.*\S)?", "execution_identity.python.build_identity")
+    _unresolved_string(python["executable_sha256"], r"[0-9a-f]{64}", "execution_identity.python.executable_sha256")
+
+    dependency_inputs = _closed_mapping(
+        identity["dependency_inputs"],
+        set(EXPECTED_EXECUTION_IDENTITY["dependency_inputs"]),
+        "execution_identity.dependency_inputs",
+    )
+    _exact_bool(dependency_inputs["lock_ready"], False, "execution_identity.dependency_inputs.lock_ready")
+
+    images = _closed_mapping(identity["images"], {"task_ref", "init_ref"}, "execution_identity.images")
+    immutable_image = r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?/[a-z0-9]+(?:[._/-][a-z0-9]+)*@sha256:[0-9a-f]{64}"
+    _unresolved_string(images["task_ref"], immutable_image, "execution_identity.images.task_ref")
+    _unresolved_string(images["init_ref"], immutable_image, "execution_identity.images.init_ref")
+
+    environment = _closed_mapping(
+        identity["environment"], set(EXPECTED_EXECUTION_IDENTITY["environment"]), "execution_identity.environment"
+    )
+    _exact_none(environment["allowed_names"], "execution_identity.environment.allowed_names")
+
+    iris = _closed_mapping(identity["iris"], set(EXPECTED_EXECUTION_IDENTITY["iris"]), "execution_identity.iris")
+    _unresolved_string(iris["controller_revision"], r"[0-9a-f]{40}", "execution_identity.iris.controller_revision")
+    _unresolved_string(iris["config_sha256"], r"[0-9a-f]{64}", "execution_identity.iris.config_sha256")
+
+    proof = _closed_mapping(
+        identity["post_submit_bundle_proof"],
+        set(EXPECTED_EXECUTION_IDENTITY["post_submit_bundle_proof"]),
+        "execution_identity.post_submit_bundle_proof",
+    )
+    _exact_int(proof["schema_version"], 1, "execution_identity.post_submit_bundle_proof.schema_version")
+    _exact_string(
+        proof["status"],
+        EXPECTED_EXECUTION_IDENTITY["post_submit_bundle_proof"]["status"],
+        "execution_identity.post_submit_bundle_proof.status",
+    )
+    expected_proof_fields = EXPECTED_EXECUTION_IDENTITY["post_submit_bundle_proof"]["fields"]
+    proof_fields = _closed_mapping(
+        proof["fields"], set(expected_proof_fields), "execution_identity.post_submit_bundle_proof.fields"
+    )
+    for field, expected in expected_proof_fields.items():
+        _exact_string(proof_fields[field], expected, f"execution_identity.post_submit_bundle_proof.fields.{field}")
+    _exact_string(
+        proof["identity_rule"],
+        EXPECTED_EXECUTION_IDENTITY["post_submit_bundle_proof"]["identity_rule"],
+        "execution_identity.post_submit_bundle_proof.identity_rule",
+    )
+
+    if identity != EXPECTED_EXECUTION_IDENTITY:
+        raise ValueError("execution_identity contract changed")
+    return identity
+
+
 def _validate_dependency_inputs(path: Path) -> dict[str, Any]:
     payload = _load_strict_json(path)
     if not isinstance(payload, dict):
@@ -202,17 +293,19 @@ def _validate_dependency_inputs(path: Path) -> dict[str, Any]:
         "unresolved",
         "packages",
     }
-    if set(payload) != expected_fields or payload.get("schema_version") != 1:
-        raise ValueError("dependency input contract schema changed")
+    if set(payload) != expected_fields:
+        raise ValueError("dependency input contract fields changed")
+    _exact_int(payload["schema_version"], 1, "dependency_inputs.schema_version")
     if payload.get("target") != {
         "architecture": "x86_64",
         "operating_system": "linux",
         "python_abi": "cp312",
     }:
         raise ValueError("dependency input contract target changed")
-    if payload.get("build_isolation") is not False or payload.get("install_mode") != "only_binary_require_hashes":
-        raise ValueError("dependency input contract installation mode changed")
-    if payload.get("lock_ready") is not False or payload.get("unresolved") != ["uv-build"]:
+    _exact_bool(payload["build_isolation"], False, "dependency_inputs.build_isolation")
+    _exact_string(payload["install_mode"], "only_binary_require_hashes", "dependency_inputs.install_mode")
+    _exact_bool(payload["lock_ready"], False, "dependency_inputs.lock_ready")
+    if payload.get("unresolved") != ["uv-build"]:
         raise ValueError("dependency input contract must remain incomplete until uv-build is pinned")
     packages = payload.get("packages")
     expected_names = [
@@ -248,6 +341,9 @@ def _validate_dependency_inputs(path: Path) -> dict[str, Any]:
             raise ValueError("dependency input contract has an invalid known wheel digest")
     if packages[-1] != {"name": "uv-build", "version": None, "url": None, "sha256": None}:
         raise ValueError("dependency input contract must leave only uv-build unresolved")
+    _exact_none(packages[-1]["version"], "dependency_inputs.packages.uv-build.version")
+    _exact_none(packages[-1]["url"], "dependency_inputs.packages.uv-build.url")
+    _exact_none(packages[-1]["sha256"], "dependency_inputs.packages.uv-build.sha256")
     if _sha256(path) != EXPECTED_DEPENDENCY_INPUT_SHA256:
         raise ValueError("dependency input contract digest changed")
     locked_packages = tomllib.loads((REPOSITORY_ROOT / "uv.lock").read_text())["package"]
@@ -275,14 +371,13 @@ def load_and_validate_manifest(path: Path) -> dict[str, Any]:
         raise ValueError("preparation manifest must be a JSON object")
     if set(payload) != EXPECTED_MANIFEST_FIELDS:
         raise ValueError("preparation manifest fields changed")
-    if payload.get("schema_version") != 2:
-        raise ValueError("unknown preparation manifest schema")
+    _exact_int(payload["schema_version"], 2, "schema_version")
     if payload.get("preparation_base_commit") != EXPECTED_BASE_COMMIT:
         raise ValueError("preparation base commit changed")
-    if payload.get("pipeline_abi_version") != 5:
-        raise ValueError("pipeline ABI must be 5")
-    if payload.get("retry_limits") != {"failure": 0, "preemption": 0, "task_failure": 0}:
-        raise ValueError("all retry limits must be explicit zero")
+    _exact_int(payload["pipeline_abi_version"], 5, "pipeline_abi_version")
+    retry_limits = _closed_mapping(payload["retry_limits"], {"failure", "preemption", "task_failure"}, "retry_limits")
+    for field in ("failure", "preemption", "task_failure"):
+        _exact_int(retry_limits[field], 0, f"retry_limits.{field}")
     unresolved = payload.get("unresolved_external_identities")
     if (
         not isinstance(unresolved, list)
@@ -290,26 +385,28 @@ def load_and_validate_manifest(path: Path) -> dict[str, Any]:
         or len(unresolved) != len(REQUIRED_EXTERNAL_IDENTITIES)
     ):
         raise ValueError("unresolved external identity set changed")
-    if payload.get("launch_ready") is not False:
-        raise ValueError("unresolved external identities prohibit a launch-ready manifest")
-    if payload.get("scorecard_status_changed") is not False:
-        raise ValueError("local preparation must not change scorecard status")
+    _exact_bool(payload["launch_ready"], False, "launch_ready")
+    _exact_bool(payload["scorecard_status_changed"], False, "scorecard_status_changed")
     if payload.get("sealed_artifact_prohibition") != SEALED_ARTIFACT:
         raise ValueError("sealed jaxacceptance6 artifact path changed")
     toolchain = payload.get("toolchain", {})
     if toolchain != EXPECTED_TOOLCHAIN:
         raise ValueError("pinned toolchain identity changed")
-    execution_identity = payload.get("execution_identity")
-    if not isinstance(execution_identity, dict):
-        raise ValueError("execution identity must be an object")
-    if execution_identity.get("images") != {"task_ref": None, "init_ref": None}:
-        raise ValueError("image references must remain unresolved until immutable OCI references are reviewed")
-    if execution_identity != EXPECTED_EXECUTION_IDENTITY:
-        raise ValueError("execution identity contract changed")
+    _validate_execution_identity(payload["execution_identity"])
     _validate_dependency_inputs(DEPENDENCY_INPUT_SOURCE)
     if payload.get("patch_sha256") != EXPECTED_PATCHES:
         raise ValueError("pinned patch identity changed")
     contract = payload.get("target1_contract", {})
+    if isinstance(contract, dict):
+        _exact_int(contract.get("wrapper_count"), 12, "target1_contract.wrapper_count")
+        shapes = contract.get("shapes")
+        if not isinstance(shapes, list) or len(shapes) != 2 or any(not isinstance(shape, list) for shape in shapes):
+            raise ValueError("target1_contract.shapes changed")
+        for shape_index, (shape, expected_shape) in enumerate(zip(shapes, ((2048, 4096), (7, 13)), strict=True)):
+            if len(shape) != 2:
+                raise ValueError(f"target1_contract.shapes.{shape_index} changed")
+            for dimension_index, expected in enumerate(expected_shape):
+                _exact_int(shape[dimension_index], expected, f"target1_contract.shapes.{shape_index}.{dimension_index}")
     if contract != {
         "boundaries": ["forward", "backward", "composed"],
         "dtype": "bfloat16",
@@ -322,13 +419,26 @@ def load_and_validate_manifest(path: Path) -> dict[str, Any]:
         ),
     }:
         raise ValueError("Target 1 installed-wheel contract changed")
-    if payload.get("capsule_allowlist") != {
+    capsule_allowlist = payload.get("capsule_allowlist")
+    if isinstance(capsule_allowlist, dict):
+        _exact_int(
+            capsule_allowlist.get("tracked_path_count"),
+            EXPECTED_CAPSULE_PATH_COUNT,
+            "capsule_allowlist.tracked_path_count",
+        )
+    if capsule_allowlist != {
         "root": "lib/shuttle",
         "tracked_path_count": EXPECTED_CAPSULE_PATH_COUNT,
         "tracked_path_set_sha256": EXPECTED_CAPSULE_PATH_SET_SHA256,
     }:
         raise ValueError("capsule allowlist changed")
-    if payload.get("resource_request") != {
+    resource_request = _closed_mapping(
+        payload["resource_request"], {"cpu", "disk_gb", "gpu", "memory_gib", "timeout_seconds"}, "resource_request"
+    )
+    expected_resources = {"cpu": 24, "disk_gb": 250, "gpu": 0, "memory_gib": 96, "timeout_seconds": 14400}
+    for field, expected in expected_resources.items():
+        _exact_int(resource_request[field], expected, f"resource_request.{field}")
+    if resource_request != {
         "cpu": 24,
         "disk_gb": 250,
         "gpu": 0,

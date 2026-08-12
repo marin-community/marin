@@ -5,6 +5,7 @@
 
 import json
 import os
+import re
 import subprocess
 import warnings
 import zipfile
@@ -79,19 +80,27 @@ def test_checked_in_dependency_inputs_pin_every_locally_known_wheel() -> None:
 @pytest.mark.parametrize(
     ("path", "value", "message"),
     (
-        (("pipeline_abi_version",), 4, "pipeline ABI"),
-        (("retry_limits", "preemption"), 1, "retry limits"),
-        (("launch_ready",), True, "unresolved external"),
+        (("pipeline_abi_version",), 4, "pipeline_abi_version"),
+        (("retry_limits", "preemption"), 1, "retry_limits.preemption"),
+        (("launch_ready",), True, "launch_ready"),
         (("toolchain", "jax_revision"), "0" * 40, "pinned toolchain identity"),
         (("toolchain", "stablehlo_revision"), "0" * 40, "pinned toolchain identity"),
-        (("execution_identity", "images", "task_ref"), "image:latest", "image references"),
-        (("execution_identity", "python", "version"), "3.12.12", "execution identity"),
-        (("execution_identity", "environment", "allowed_names"), ["PATH", "PATH"], "execution identity"),
-        (("execution_identity", "iris", "controller_revision"), "0" * 40, "execution identity"),
+        (("execution_identity", "images", "task_ref"), "image:latest", "execution_identity.images.task_ref"),
+        (("execution_identity", "python", "version"), "3.12.12", "execution_identity"),
+        (
+            ("execution_identity", "environment", "allowed_names"),
+            ["PATH", "PATH"],
+            "execution_identity.environment.allowed_names",
+        ),
+        (
+            ("execution_identity", "iris", "controller_revision"),
+            "0" * 40,
+            "execution_identity.iris.controller_revision",
+        ),
         (("sealed_artifact_prohibition",), "lib/shuttle/mlir/artifacts/other", "sealed jaxacceptance6"),
     ),
 )
-def test_manifest_mutations_fail_closed(tmp_path: Path, path: tuple[str, ...], value, message: str) -> None:
+def test_manifest_mutations_fail_closed(tmp_path: Path, path: tuple[str | int, ...], value, message: str) -> None:
     payload = json.loads(MANIFEST_SOURCE.read_text())
     target = payload
     for component in path[:-1]:
@@ -100,6 +109,74 @@ def test_manifest_mutations_fail_closed(tmp_path: Path, path: tuple[str, ...], v
     mutated = tmp_path / "manifest.json"
     mutated.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match=message):
+        load_and_validate_manifest(mutated)
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    (
+        (("schema_version",), True, "schema_version"),
+        (("pipeline_abi_version",), 5.0, "pipeline_abi_version"),
+        (("launch_ready",), 0, "launch_ready"),
+        (("scorecard_status_changed",), None, "scorecard_status_changed"),
+        (("retry_limits", "failure"), False, "retry_limits.failure"),
+        (("retry_limits", "preemption"), "0", "retry_limits.preemption"),
+        (("resource_request", "cpu"), 24.0, "resource_request.cpu"),
+        (("resource_request", "gpu"), False, "resource_request.gpu"),
+        (("capsule_allowlist", "tracked_path_count"), 140.0, "capsule_allowlist.tracked_path_count"),
+        (("target1_contract", "wrapper_count"), True, "target1_contract.wrapper_count"),
+        (("target1_contract", "shapes", 0, 0), 2048.0, "target1_contract.shapes.0.0"),
+        (("execution_identity", "schema_version"), True, "execution_identity.schema_version"),
+        (
+            ("execution_identity", "dependency_inputs", "lock_ready"),
+            0,
+            "execution_identity.dependency_inputs.lock_ready",
+        ),
+        (("execution_identity", "python", "build_identity"), 1, "execution_identity.python.build_identity"),
+        (
+            ("execution_identity", "python", "executable_sha256"),
+            False,
+            "execution_identity.python.executable_sha256",
+        ),
+        (("execution_identity", "images", "task_ref"), 1.0, "execution_identity.images.task_ref"),
+        (
+            ("execution_identity", "environment", "allowed_names"),
+            "PATH",
+            "execution_identity.environment.allowed_names",
+        ),
+        (
+            ("execution_identity", "iris", "controller_revision"),
+            False,
+            "execution_identity.iris.controller_revision",
+        ),
+        (
+            ("execution_identity", "post_submit_bundle_proof", "schema_version"),
+            1.0,
+            "execution_identity.post_submit_bundle_proof.schema_version",
+        ),
+        (
+            ("execution_identity", "post_submit_bundle_proof", "fields", "controller_bundle_id"),
+            None,
+            "execution_identity.post_submit_bundle_proof.fields.controller_bundle_id",
+        ),
+        (
+            ("execution_identity", "post_submit_bundle_proof", "identity_rule"),
+            None,
+            "execution_identity.post_submit_bundle_proof.identity_rule",
+        ),
+    ),
+)
+def test_manifest_rejects_cross_type_scalar_substitutions(
+    tmp_path: Path, path: tuple[str | int, ...], value: object, message: str
+) -> None:
+    payload = json.loads(MANIFEST_SOURCE.read_text())
+    target = payload
+    for component in path[:-1]:
+        target = target[component]
+    target[path[-1]] = value
+    mutated = tmp_path / "manifest.json"
+    mutated.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match=re.escape(message)):
         load_and_validate_manifest(mutated)
 
 
@@ -137,6 +214,31 @@ def test_dependency_input_mutations_fail_closed(tmp_path: Path) -> None:
     mutated = tmp_path / "dependencies.json"
     mutated.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="dependency input contract"):
+        _validate_dependency_inputs(mutated)
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    (
+        (("schema_version",), True, "schema_version"),
+        (("schema_version",), 1.0, "schema_version"),
+        (("schema_version",), "1", "schema_version"),
+        (("schema_version",), None, "schema_version"),
+        (("build_isolation",), 0, "build_isolation"),
+        (("lock_ready",), "false", "lock_ready"),
+    ),
+)
+def test_dependency_contract_rejects_cross_type_scalar_substitutions(
+    tmp_path: Path, path: tuple[str, ...], value: object, message: str
+) -> None:
+    payload = json.loads(DEPENDENCY_INPUT_SOURCE.read_text())
+    target = payload
+    for component in path[:-1]:
+        target = target[component]
+    target[path[-1]] = value
+    mutated = tmp_path / "dependencies.json"
+    mutated.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match=message):
         _validate_dependency_inputs(mutated)
 
 
