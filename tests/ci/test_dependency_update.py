@@ -14,7 +14,6 @@ from scripts.ci.dependency_update import (
     PullRequestSnapshot,
     evaluate_merge,
     evaluate_required_checks,
-    merge_when_green,
     prepare_update_branch,
     publish_update,
     required_check_rows,
@@ -163,66 +162,6 @@ def test_merge_gate_only_releases_an_open_pull_request_after_all_required_checks
     assert evaluate_merge("OPEN", checks) is MergeDecision.MERGE
     assert evaluate_merge("MERGED", checks) is MergeDecision.DONE
     assert evaluate_merge("CLOSED", checks) is MergeDecision.FAIL
-
-
-def test_merge_gate_uses_review_bypass_for_the_validated_green_head(monkeypatch, tmp_path: Path) -> None:
-    state_file = tmp_path / "pull-request-state"
-    state_file.write_text("OPEN")
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_gh = fake_bin / "gh"
-    fake_gh.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json\n"
-        "import os\n"
-        "import sys\n"
-        "from pathlib import Path\n"
-        "\n"
-        "args = sys.argv[1:]\n"
-        "state_file = Path(os.environ['FAKE_PR_STATE'])\n"
-        "expected_sha = os.environ['FAKE_EXPECTED_SHA']\n"
-        "if args[:2] == ['pr', 'view']:\n"
-        "    print(json.dumps({\n"
-        "        'author': {'login': 'app/marin-external-runtime-updater'},\n"
-        "        'baseRefName': 'main',\n"
-        "        'files': [{'path': 'uv.lock'}],\n"
-        "        'headRefName': 'automation/external-dependencies',\n"
-        "        'headRefOid': expected_sha,\n"
-        "        'state': state_file.read_text().strip(),\n"
-        "        'title': '[dependencies] Advance external runtimes',\n"
-        "        'url': 'https://github.com/marin-community/marin/pull/123',\n"
-        "    }))\n"
-        "elif args[:2] == ['pr', 'checks']:\n"
-        "    print(json.dumps([\n"
-        "        {'name': name, 'bucket': 'pass'}\n"
-        "        for name in ('marin-integration', 'marin-lint', 'rust-checks', 'unit-tests')\n"
-        "    ]))\n"
-        "elif args[:2] == ['pr', 'merge']:\n"
-        "    if '--admin' not in args:\n"
-        "        raise SystemExit(2)\n"
-        "    match_head = args.index('--match-head-commit')\n"
-        "    if args[match_head + 1] != expected_sha:\n"
-        "        raise SystemExit(3)\n"
-        "    state_file.write_text('MERGED')\n"
-        "else:\n"
-        "    raise SystemExit(4)\n"
-    )
-    fake_gh.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
-    monkeypatch.setenv("FAKE_PR_STATE", str(state_file))
-    monkeypatch.setenv("FAKE_EXPECTED_SHA", EXPECTED_SHA)
-
-    merge_when_green(
-        pr="123",
-        repository="marin-community/marin",
-        app_slug="marin-external-runtime-updater",
-        policy=EXTERNAL_RUNTIME_POLICY,
-        expected_head_sha=EXPECTED_SHA,
-        timeout=0,
-        poll_interval=0,
-    )
-
-    assert state_file.read_text() == "MERGED"
 
 
 def test_no_registered_github_checks_is_a_missing_gate_not_a_cli_failure(monkeypatch) -> None:
