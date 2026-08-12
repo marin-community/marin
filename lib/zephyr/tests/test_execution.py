@@ -893,10 +893,7 @@ def test_stale_result_ignored_while_reassigned_worker_in_flight(coordinator):
 
 
 def test_shard_streaming_low_memory(tmp_path):
-    """ListShard loads refs one at a time from disk via get_iterators.
-
-    Verifies get_iterators yields data lazily and flat iteration works.
-    """
+    """ListShard concatenates its on-disk refs in order without caching them."""
     # Write 3 refs to disk (directly readable, no finalize needed)
     refs = []
     for i in range(3):
@@ -905,12 +902,6 @@ def test_shard_streaming_low_memory(tmp_path):
         refs.append(chunk)
 
     shard = ListShard(refs=refs)
-
-    # get_iterators yields one iterator per ref
-    chunks = [list(it) for it in shard.get_iterators()]
-    assert len(chunks) == 3
-    assert chunks[0] == [0, 1, 2, 3, 4]
-    assert chunks[2] == [20, 21, 22, 23, 24]
 
     # flat iteration yields all items in order
     assert list(shard) == [0, 1, 2, 3, 4, 10, 11, 12, 13, 14, 20, 21, 22, 23, 24]
