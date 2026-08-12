@@ -41,8 +41,7 @@ import math
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, ClassVar, Protocol
-from typing import overload
+from typing import Any, ClassVar, Protocol, overload
 from urllib.parse import urlparse
 
 import cloudpickle
@@ -58,6 +57,7 @@ from rigging.timing import RateLimiter, log_time
 
 from zephyr import memory_budget
 from zephyr.expr import ColumnExpr
+from zephyr.frame_schema import assert_compatible_sort_key_dtypes, unified_schema
 from zephyr.parquet_scan import scan_parquet
 from zephyr.shard_keys import encode_key
 from zephyr.worker_context import _worker_ctx_var
@@ -366,11 +366,13 @@ def _unify_frame_schemas(frames: list[_FrameWithSchema]) -> list[pl.LazyFrame]:
     """Cast frames to a common supertype schema for sorted merging."""
     if len(frames) <= 1:
         return [frame.frame for frame in frames]
-    if all(frame.schema == frames[0].schema for frame in frames[1:]):
+    schemas = [frame.schema for frame in frames]
+    if all(schema == schemas[0] for schema in schemas[1:]):
         return [frame.frame for frame in frames]
     # Build the supertype from sidecar schemas so drift such as Null versus
     # Int64 is resolved without reading the Parquet footer for every input.
-    unified = pl.concat([pl.DataFrame(schema=frame.schema) for frame in frames], how="diagonal_relaxed").schema
+    assert_compatible_sort_key_dtypes(schemas, sort_key_col=_SORT_KEY_COL, field="key")
+    unified = unified_schema([pl.DataFrame(schema=schema) for schema in schemas], how="diagonal_relaxed")
     return [frame.frame.cast(dict(unified)) for frame in frames]
 
 
