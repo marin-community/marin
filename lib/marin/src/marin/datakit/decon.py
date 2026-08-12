@@ -667,7 +667,6 @@ def build_eval_bloom(
     required_eval_corpus_version: str | None = None,
     required_eval_names: tuple[str, ...] = (),
     best_effort_eval_manifest_path: str | None = None,
-    best_effort_eval_root: str | None = None,
     best_effort_eval_corpus_version: str | None = None,
 ) -> EvalBloom:
     """Build a reusable bloom + hash-index sidecar from one or more eval sources.
@@ -704,9 +703,8 @@ def build_eval_bloom(
         required_eval_names: Exact benchmark names that the required manifest
             must contain.
         best_effort_eval_manifest_path: Optional manifest with the exact
-            best-effort artifacts to include.
-        best_effort_eval_root: Root for artifact paths in the best-effort
-            manifest.
+            best-effort artifacts to include. Artifacts must be below the
+            manifest directory.
         best_effort_eval_corpus_version: Version that the best-effort manifest
             must report.
 
@@ -729,20 +727,17 @@ def build_eval_bloom(
         )
     best_effort_parameters = (
         best_effort_eval_manifest_path,
-        best_effort_eval_root,
         best_effort_eval_corpus_version,
     )
     if any(value is not None for value in best_effort_parameters) and not all(
         value is not None for value in best_effort_parameters
     ):
-        raise ValueError("best-effort eval manifest path, root, and corpus version must be set together")
+        raise ValueError("best-effort eval manifest path and corpus version must be set together")
     if best_effort_eval_manifest_path is not None:
-        assert best_effort_eval_root is not None
         assert best_effort_eval_corpus_version is not None
         eval_paths.extend(
             _validate_best_effort_eval_manifest(
                 best_effort_eval_manifest_path,
-                best_effort_eval_root,
                 best_effort_eval_corpus_version,
             )
         )
@@ -840,7 +835,6 @@ def _validate_required_eval_manifest(
 
 def _validate_best_effort_eval_manifest(
     manifest_path: str,
-    artifact_root: str,
     expected_corpus_version: str,
 ) -> list[str]:
     """Validate a best-effort manifest and return its exact artifact paths."""
@@ -871,6 +865,7 @@ def _validate_best_effort_eval_manifest(
     if not isinstance(artifacts, list) or not all(isinstance(entry, Mapping) for entry in artifacts):
         raise ValueError("best-effort eval manifest artifacts must be a list of objects")
 
+    manifest_parent = os.path.dirname(manifest_path)
     paths: list[str] = []
     artifact_tasks: list[str] = []
     for entry in artifacts:
@@ -881,7 +876,7 @@ def _validate_best_effort_eval_manifest(
             raise ValueError("best-effort eval artifacts need task, artifact, and records")
         if artifact.startswith("/") or ".." in artifact.split("/"):
             raise ValueError(f"{task}: best-effort artifact must be relative to its root: {artifact}")
-        artifact_path = prefix_join(artifact_root, artifact)
+        artifact_path = prefix_join(manifest_parent, artifact)
         artifact_storage = StoragePath(artifact_path)
         if not artifact_storage.exists():
             raise ValueError(f"{task}: best-effort eval artifact does not exist: {artifact_path}")
@@ -995,7 +990,6 @@ def build_eval_bloom_step(
     required_eval_corpus_version: str | None = None,
     required_eval_names: tuple[str, ...] = (),
     best_effort_eval_manifest_path: str | None = None,
-    best_effort_eval_root: str | None = None,
     best_effort_eval_corpus_version: str | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
@@ -1018,10 +1012,9 @@ def build_eval_bloom_step(
             required_eval_names: Required-suite gate passed to
             :func:`build_eval_bloom`. The path is an external input. The
             expected version and names enter the step hash.
-        best_effort_eval_manifest_path, best_effort_eval_root,
-            best_effort_eval_corpus_version: Optional best-effort suite. Only
-            the exact artifacts in its immutable, versioned manifest enter the
-            Bloom.
+        best_effort_eval_manifest_path, best_effort_eval_corpus_version:
+            Optional best-effort suite. Only the exact artifacts below its
+            immutable, versioned manifest directory enter the Bloom.
         output_path_prefix, override_output_path: StepSpec routing.
     """
     raw_paths: list[str] = []
@@ -1055,7 +1048,6 @@ def build_eval_bloom_step(
         "exclude_eval_dirs": tuple(sorted(exclude_eval_dirs)),
         "required_eval_corpus_version": required_eval_corpus_version,
         "required_eval_names": tuple(sorted(required_eval_names)),
-        "best_effort_eval_root": best_effort_eval_root,
         "best_effort_eval_corpus_version": best_effort_eval_corpus_version,
     }
 
@@ -1073,7 +1065,6 @@ def build_eval_bloom_step(
             required_eval_corpus_version=required_eval_corpus_version,
             required_eval_names=required_eval_names,
             best_effort_eval_manifest_path=best_effort_eval_manifest_path,
-            best_effort_eval_root=best_effort_eval_root,
             best_effort_eval_corpus_version=best_effort_eval_corpus_version,
         ),
         deps=step_deps,

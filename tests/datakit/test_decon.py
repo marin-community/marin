@@ -977,13 +977,12 @@ def test_build_eval_bloom_uses_only_manifested_best_effort_artifacts(tmp_path: P
         )
     )
 
-    best_effort_root = tmp_path / "best_effort"
+    best_effort_root = required_root / "lmh"
     included_artifact = best_effort_root / "included" / "eval.parquet"
     stale_artifact = best_effort_root / "stale" / "eval.parquet"
     _write_input_parquet(included_artifact, [{"id": "included-1", "text": "delta epsilon zeta"}])
     _write_input_parquet(stale_artifact, [{"id": "stale-1", "text": "eta theta iota"}])
     best_effort_manifest = required_root / "lmh" / "_manifest.json"
-    best_effort_manifest.parent.mkdir(parents=True)
     best_effort_manifest.write_text(
         json.dumps(
             {
@@ -1005,7 +1004,6 @@ def test_build_eval_bloom_uses_only_manifested_best_effort_artifacts(tmp_path: P
         required_eval_corpus_version="test-corpus-v1",
         required_eval_names=("Required Eval",),
         best_effort_eval_manifest_path=str(best_effort_manifest),
-        best_effort_eval_root=str(best_effort_root),
         best_effort_eval_corpus_version="test-corpus-v1",
     )
 

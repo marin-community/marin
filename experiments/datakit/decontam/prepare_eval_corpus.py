@@ -8,10 +8,10 @@ in ``MARIN_PREFIX``:
 
 - ``aa/<eval>/<split>.parquet`` -- all nine AA Intelligence Index v4.1.1
   benchmarks. These artifacts are mandatory.
-- ``datakit/decontam/evals/lmh/<task>/<split>.parquet`` -- every unique task in
+- ``lmh/<task>/<split>.parquet`` -- every unique task in
   ``experiments/evals/task_configs.py`` bundles, loaded via lm-eval-harness.
-  These best-effort artifacts keep their extraction-version sidecars and are
-  reused across AA corpus versions.
+  These best-effort artifacts keep their extraction-version sidecars in the
+  same immutable corpus-version root.
 
 Each record has the form ``{id: str, text: str}``. AA extraction is pinned by
 benchmark. AA preparation fails if a source cannot load or if its extracted
@@ -88,9 +88,9 @@ from experiments.evals.task_configs import (
 logger = logging.getLogger(__name__)
 
 AA_INDEX_VERSION = "4.1.1"
-EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v2"
+EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v3"
 EVALS_RELATIVE = f"datakit/decontam/evals/{EVAL_CORPUS_VERSION}"
-LMH_EVALS_RELATIVE = "datakit/decontam/evals/lmh"
+LMH_EVALS_RELATIVE = f"{EVALS_RELATIVE}/lmh"
 AA_MANIFEST_RELATIVE = "aa/_manifest.json"
 LMH_MANIFEST_RELATIVE = "lmh/_manifest.json"
 
@@ -101,7 +101,7 @@ def _output_root() -> str:
 
 
 def _lmh_output_root() -> str:
-    """Stable best-effort lm-eval artifact root."""
+    """Versioned best-effort lm-eval artifact root."""
     return f"{marin_prefix()}/{LMH_EVALS_RELATIVE}"
 
 
@@ -588,6 +588,22 @@ def _aa_manifest(status: str) -> dict[str, Any]:
 
 def _prepare_aa() -> dict[str, Any]:
     manifest_path = f"{_output_root()}/{AA_MANIFEST_RELATIVE}"
+    manifest_storage = StoragePath(manifest_path)
+    if manifest_storage.exists():
+        with manifest_storage.open("r") as source:
+            existing_manifest = json.load(source)
+        if not isinstance(existing_manifest, dict):
+            raise ValueError(f"AA manifest must be an object: {manifest_path}")
+        expected_manifest = _aa_manifest("complete")
+        if existing_manifest.get("status") == "complete":
+            if existing_manifest != expected_manifest:
+                raise ValueError(
+                    "AA manifest content changed within EVAL_CORPUS_VERSION; "
+                    "change EVAL_CORPUS_VERSION before preparation"
+                )
+            logger.info("aa: version %s is already sealed at %s", EVAL_CORPUS_VERSION, manifest_path)
+            return existing_manifest
+
     _write_json(manifest_path, _aa_manifest("building"))
 
     for cfg in AA_EVALS:
@@ -694,6 +710,16 @@ def _prepare_lmh() -> dict[str, Any]:
             )
         if existing_manifest.get("status") not in {"complete", "complete_with_failures"}:
             raise ValueError(f"lmh manifest is not complete: {manifest_path}")
+        if existing_manifest.get("artifact_root") != LMH_EVALS_RELATIVE:
+            raise ValueError(
+                f"lmh manifest artifact root is {existing_manifest.get('artifact_root')!r}, "
+                f"expected {LMH_EVALS_RELATIVE!r}"
+            )
+        if existing_manifest.get("extraction_version") != _LMH_EXTRACTION_VERSION:
+            raise ValueError(
+                f"lmh manifest extraction version is {existing_manifest.get('extraction_version')!r}, "
+                f"expected {_LMH_EXTRACTION_VERSION!r}"
+            )
         logger.info("lmh: version %s is already sealed at %s", EVAL_CORPUS_VERSION, manifest_path)
         return existing_manifest
 
@@ -701,23 +727,7 @@ def _prepare_lmh() -> dict[str, Any]:
     names = _lmh_task_names()
     logger.info("lmh: %d unique task names from task_configs.py", len(names))
 
-    try:
-        from lm_eval.tasks import get_task_dict  # noqa: PLC0415  # optional dep: lm_eval
-    except Exception as exc:
-        logger.warning("lmh: optional loader is unavailable: %s", exc)
-        manifest = {
-            "schema_version": 1,
-            "corpus_version": EVAL_CORPUS_VERSION,
-            "required": False,
-            "status": "complete_with_failures",
-            "artifact_root": LMH_EVALS_RELATIVE,
-            "configured_tasks": names,
-            "included_leaf_tasks": [],
-            "artifacts": [],
-            "failed": [{"task": "*", "reason": f"lm_eval import: {exc}"}],
-        }
-        _write_json(manifest_path, manifest)
-        return manifest
+    from lm_eval.tasks import get_task_dict  # noqa: PLC0415  # optional dep: lm_eval
 
     succeeded: list[str] = []
     skipped_existing: list[str] = []
@@ -804,6 +814,7 @@ def _prepare_lmh() -> dict[str, Any]:
         "required": False,
         "status": "complete_with_failures" if failed else "complete",
         "artifact_root": LMH_EVALS_RELATIVE,
+        "extraction_version": _LMH_EXTRACTION_VERSION,
         "configured_tasks": names,
         "included_leaf_tasks": included_leaf_tasks,
         "artifacts": artifacts,

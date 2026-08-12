@@ -8,8 +8,11 @@ but not the public passage, so a corpus doc that merely quotes the passage is
 not falsely flagged. Non-passage docs are unchanged.
 """
 
+import builtins
 import io
 import json
+import sys
+import types
 import zipfile
 from dataclasses import replace
 
@@ -231,12 +234,45 @@ def test_aa_record_count_mismatch_stops_preparation():
         _aa_records([{"question": "Only question", "answer": "Only answer"}], cfg)
 
 
+def test_aa_manifest_is_immutable_within_a_corpus_version(tmp_path, monkeypatch):
+    manifest = prepare_eval_corpus._aa_manifest("complete")
+    manifest_path = tmp_path / prepare_eval_corpus.AA_MANIFEST_RELATIVE
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(json.dumps(manifest))
+    original_bytes = manifest_path.read_bytes()
+    monkeypatch.setattr(prepare_eval_corpus, "_output_root", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        prepare_eval_corpus,
+        "_iter_aa_rows",
+        lambda _cfg: pytest.fail("a sealed corpus version must not load AA source rows"),
+    )
+
+    result = prepare_eval_corpus._prepare_aa()
+
+    assert result == manifest
+    assert manifest_path.read_bytes() == original_bytes
+
+
+def test_aa_manifest_rejects_config_change_within_a_corpus_version(tmp_path, monkeypatch):
+    manifest = prepare_eval_corpus._aa_manifest("complete")
+    manifest["benchmarks"][0]["source_revision"] = "changed-revision"
+    manifest_path = tmp_path / prepare_eval_corpus.AA_MANIFEST_RELATIVE
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(prepare_eval_corpus, "_output_root", lambda: str(tmp_path))
+
+    with pytest.raises(ValueError, match="EVAL_CORPUS_VERSION"):
+        prepare_eval_corpus._prepare_aa()
+
+
 def test_lmh_manifest_is_immutable_within_a_corpus_version(tmp_path, monkeypatch):
     manifest = {
         "schema_version": 1,
         "corpus_version": prepare_eval_corpus.EVAL_CORPUS_VERSION,
         "required": False,
         "status": "complete_with_failures",
+        "artifact_root": prepare_eval_corpus.LMH_EVALS_RELATIVE,
+        "extraction_version": prepare_eval_corpus._LMH_EXTRACTION_VERSION,
         "included_leaf_tasks": ["existing-task"],
         "artifacts": [{"task": "existing-task", "artifact": "existing-task/eval.parquet", "records": 1}],
         "failed": [],
@@ -256,3 +292,47 @@ def test_lmh_manifest_is_immutable_within_a_corpus_version(tmp_path, monkeypatch
 
     assert result == manifest
     assert manifest_path.read_bytes() == original_bytes
+
+
+def test_lmh_artifacts_are_stored_below_the_versioned_corpus_root(tmp_path, monkeypatch):
+    task = types.SimpleNamespace(
+        test_docs=lambda: [{"question": "What is two plus two?", "answer": "4"}],
+        validation_docs=lambda: [],
+        training_docs=lambda: [],
+        doc_to_text=lambda doc: doc["question"],
+        doc_to_target=lambda doc: doc["answer"],
+    )
+    lm_eval = types.ModuleType("lm_eval")
+    lm_eval_tasks = types.ModuleType("lm_eval.tasks")
+    lm_eval_tasks.get_task_dict = lambda _names: {"example-task": task}
+    lm_eval.tasks = lm_eval_tasks
+    monkeypatch.setitem(sys.modules, "lm_eval", lm_eval)
+    monkeypatch.setitem(sys.modules, "lm_eval.tasks", lm_eval_tasks)
+    monkeypatch.setattr(prepare_eval_corpus, "marin_prefix", lambda: str(tmp_path))
+    monkeypatch.setattr(prepare_eval_corpus, "trust_remote_code_for_hf", lambda: None)
+    monkeypatch.setattr(prepare_eval_corpus, "_lmh_task_names", lambda: ["example-task"])
+
+    manifest = prepare_eval_corpus._prepare_lmh()
+
+    artifact_path = tmp_path / prepare_eval_corpus.EVALS_RELATIVE / "lmh/example-task/eval.parquet"
+    assert artifact_path.exists()
+    assert manifest["artifacts"] == [{"task": "example-task", "artifact": "example-task/eval.parquet", "records": 1}]
+
+
+def test_lmh_import_failure_does_not_seal_manifest(tmp_path, monkeypatch):
+    original_import = builtins.__import__
+
+    def reject_lm_eval(name, *args, **kwargs):
+        if name == "lm_eval.tasks":
+            raise ImportError("lm_eval is unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(prepare_eval_corpus, "_output_root", lambda: str(tmp_path))
+    monkeypatch.setattr(prepare_eval_corpus, "trust_remote_code_for_hf", lambda: None)
+    monkeypatch.setattr(prepare_eval_corpus, "_lmh_task_names", lambda: ["example-task"])
+    monkeypatch.setattr(builtins, "__import__", reject_lm_eval)
+
+    with pytest.raises(ImportError, match="lm_eval is unavailable"):
+        prepare_eval_corpus._prepare_lmh()
+
+    assert not (tmp_path / prepare_eval_corpus.LMH_MANIFEST_RELATIVE).exists()

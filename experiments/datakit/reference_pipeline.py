@@ -149,7 +149,6 @@ from experiments.datakit.decontam.prepare_eval_corpus import (
     DECON_EXCLUDED_EVAL_TASKS,
     EVAL_CORPUS_VERSION,
     EVALS_RELATIVE,
-    LMH_EVALS_RELATIVE,
     LMH_MANIFEST_RELATIVE,
 )
 from experiments.datakit.embeddings.luxical.pipeline import (
@@ -195,10 +194,8 @@ TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 TOKENIZER_BACKEND = TokenizerBackend.HF
 SPLIT = "train"
 
-# Decontam. Mandatory AA artifacts use a versioned root. Best-effort lm-eval
-# artifacts use stable per-task roots with extraction-version sidecars.
+# Decontam. Mandatory AA and best-effort lm-eval artifacts use one versioned root.
 EVAL_ROOT = f"{marin_prefix()}/{EVALS_RELATIVE}"
-LMH_EVAL_ROOT = f"{marin_prefix()}/{LMH_EVALS_RELATIVE}"
 AA_MANIFEST_PATH = f"{EVAL_ROOT}/{AA_MANIFEST_RELATIVE}"
 LMH_MANIFEST_PATH = f"{EVAL_ROOT}/{LMH_MANIFEST_RELATIVE}"
 # Bloom capacity -- unique ngram hashes the filter must hold: ~21.78M unique
@@ -697,7 +694,6 @@ def reference_datakit_steps(
         required_eval_corpus_version=EVAL_CORPUS_VERSION,
         required_eval_names=AA_BENCHMARK_NAMES,
         best_effort_eval_manifest_path=LMH_MANIFEST_PATH,
-        best_effort_eval_root=LMH_EVAL_ROOT,
         best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
     )
     # Count eval-ngram document frequency across normalized sources before
