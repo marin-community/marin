@@ -401,3 +401,16 @@ author: Rafal Wojdyla
 - East progress: `nemotron_code_v1-content_085c2c96` got to 1,862 of 2,341 output shards with 32 live workers and no dead workers.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the active coordinator logs.
 - Next action: Monitor the `finetranslations` join stages and verify the transition to embedding.
+
+### 2026-08-12 07:23 UTC - East completes three sources
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 14 completed source artifacts. RNO has six completed source artifacts. The full run has 20 of 292 completed source artifacts.
+- East result: `nemotron_code_v1-content_085c2c96` succeeded with all 2,341 output shards and 160,750,583 documents.
+- East result: `nemotron-terminal_08c05d68` succeeded with all 30 output shards and 92,616 documents.
+- East result: `numinamath-1.5_a479d052` succeeded with both output shards and 50,999 documents.
+- East progress: `sec-edgar_e59004ca` started and got to 32 of 923 output shards with 32 live workers and no dead workers.
+- RNO progress: `finetranslations_6ce00a47` completed its join work and got to 1,144 of 25,962 output shards in the embedding stage. It has 32 live workers and no dead workers.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs. Fourteen RNO TEI jobs remain failed after replay.
+- Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of root logs.
+- Next action: Continue the 15-minute check cadence and monitor the long `finetranslations` source.
