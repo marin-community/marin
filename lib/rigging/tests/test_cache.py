@@ -278,7 +278,7 @@ def test_synced_directory_skips_a_truncated_archive_without_partial_extraction(t
     for index in range(100):
         (local / f"{index}.textproto").write_bytes(f"value-{index}".encode())
     writer.close()
-    archive = next(remote.rglob("*.tar.gz"))
+    archive = next(remote.rglob("*.zip"))
     archive.write_bytes(archive.read_bytes()[:-8])
 
     reloaded = tmp_path / "reloaded"

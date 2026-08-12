@@ -334,15 +334,11 @@ class CrossRegionGuardedFS:
 
     def get(self, rpath: Any, lpath: Any, recursive: bool = False, **kwargs: Any) -> None:
         """Guard each remote path before delegating the bulk download."""
-        guarded_paths = rpath
-        if recursive:
-            roots = [rpath] if isinstance(rpath, str) else rpath
-            guarded_paths = [child for root in roots for child in self._fs.find(root)]
-        if isinstance(guarded_paths, str):
-            self._guard_read(guarded_paths)
-        elif isinstance(guarded_paths, list):
-            for path in guarded_paths:
-                self._guard_read(path)
+        if isinstance(rpath, str):
+            self._guard_read(rpath)
+        elif isinstance(rpath, list):
+            for p in rpath:
+                self._guard_read(p)
         return self._fs.get(rpath, lpath, recursive=recursive, **kwargs)
 
     # -- guard logic ---------------------------------------------------------

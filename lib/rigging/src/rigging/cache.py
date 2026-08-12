@@ -21,16 +21,15 @@ mirrors newly written files back up. :func:`sync_kv_cache` namespaces it per bui
 """
 
 import atexit
-import gzip
 import hashlib
 import logging
 import os
 import pathlib
 import shutil
-import tarfile
 import tempfile
 import threading
 import uuid
+import zipfile
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_for_futures
@@ -315,14 +314,14 @@ class SyncedDirectory:
             remote_root = StoragePath(self._remote())
             try:
                 with tempfile.TemporaryDirectory(prefix="synced-cache-flush-") as staging_dir:
-                    archive = pathlib.Path(staging_dir) / f"{uuid.uuid4().hex}.tar.gz"
-                    with tarfile.open(archive, "w:gz") as tar:
+                    archive = pathlib.Path(staging_dir) / f"{uuid.uuid4().hex}.zip"
+                    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
                         for relative in pending:
-                            tar.add(base / relative, arcname=relative, recursive=False)
+                            output.write(base / relative, arcname=relative)
                     target = remote_root / _SYNC_ARCHIVE_SUBDIR / archive.name
                     target.parent.mkdirs()
                     target.upload_from(str(archive))
-            except (OSError, tarfile.TarError) as exc:
+            except (OSError, zipfile.BadZipFile) as exc:
                 logger.warning("synced cache archive upload failed: %s", exc)
                 return
             self._known.update(pending)
@@ -351,10 +350,10 @@ class SyncedDirectory:
                 staged_root = pathlib.Path(staging_dir) / remote_root.name
                 archive_root = staged_root / _SYNC_ARCHIVE_SUBDIR
                 if archive_root.is_dir():
-                    for archive in sorted(archive_root.glob("*.tar.gz")):
+                    for archive in sorted(archive_root.glob("*.zip")):
                         try:
                             self._known.update(_extract_archive(archive, pathlib.Path(self._local)))
-                        except (EOFError, OSError, tarfile.TarError, ValueError) as exc:
+                        except (OSError, zipfile.BadZipFile, ValueError) as exc:
                             logger.warning("synced cache archive fetch failed for %s: %s", archive.name, exc)
 
                 for staged_file in sorted(staged_root.rglob("*")):
@@ -372,31 +371,17 @@ class SyncedDirectory:
 def _extract_archive(archive: pathlib.Path, destination: pathlib.Path) -> set[str]:
     """Extract regular files from one cache archive and return their relative paths."""
     extracted: set[str] = set()
-    with tempfile.TemporaryDirectory(prefix="synced-cache-extract-") as staging_dir:
-        staging_root = pathlib.Path(staging_dir)
-        verified_tar = staging_root / "archive.tar"
-        with gzip.open(archive, "rb") as compressed, verified_tar.open("wb") as output:
-            shutil.copyfileobj(compressed, output)
-
-        extracted_root = staging_root / "files"
-        with tarfile.open(verified_tar, "r:") as tar:
-            for member in tar:
-                relative = pathlib.PurePosixPath(member.name)
-                if not member.isfile() or relative.is_absolute() or ".." in relative.parts:
-                    raise ValueError(f"unsafe synced-cache archive member: {member.name!r}")
-                source = tar.extractfile(member)
-                if source is None:
-                    raise ValueError(f"synced-cache archive member has no contents: {member.name!r}")
-                target = extracted_root.joinpath(*relative.parts)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with target.open("wb") as output:
-                    shutil.copyfileobj(source, output)
-                extracted.add(relative.as_posix())
-
-        for relative in sorted(extracted):
+    with zipfile.ZipFile(archive) as source_archive:
+        for member in source_archive.infolist():
+            relative = pathlib.PurePosixPath(member.filename)
+            if member.is_dir() or relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(f"unsafe synced-cache archive member: {member.filename!r}")
             target = destination / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(extracted_root / relative, target)
+            with source_archive.open(member) as source, atomic_rename(str(target)) as staged:
+                with pathlib.Path(staged).open("wb") as output:
+                    shutil.copyfileobj(source, output)
+            extracted.add(relative.as_posix())
     return extracted
 
 
