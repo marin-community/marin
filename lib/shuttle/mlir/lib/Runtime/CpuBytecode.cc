@@ -301,8 +301,7 @@ Scalar evaluate(const ParsedTask &task, ArrayRef<Scalar> arguments) {
     }
     case Opcode::F32ToBf16Rne: {
       const uint32_t bits = registers[instruction.operands[0]].bits;
-      const uint32_t rounded = bits + 0x7fffu + ((bits >> 16) & 1u);
-      registers.push_back(Scalar{ElementType::Bf16, rounded >> 16});
+      registers.push_back(Scalar{ElementType::Bf16, roundF32ToBf16Rne(bits)});
       break;
     }
     }
@@ -480,6 +479,17 @@ LogicalResult runtimeError(ModuleOp module, StringRef message) {
 }
 
 } // namespace
+
+uint16_t roundF32ToBf16Rne(uint32_t bits) {
+  constexpr uint32_t kMagnitudeMask = 0x7fffffffu;
+  constexpr uint32_t kInfinity = 0x7f800000u;
+  constexpr uint16_t kBf16QuietNaN = 0x0040u;
+  if ((bits & kMagnitudeMask) > kInfinity) {
+    return static_cast<uint16_t>(bits >> 16) | kBf16QuietNaN;
+  }
+  const uint32_t rounded = bits + 0x7fffu + ((bits >> 16) & 1u);
+  return static_cast<uint16_t>(rounded >> 16);
+}
 
 LogicalResult
 executeCpuExecutableBundle(ModuleOp module,

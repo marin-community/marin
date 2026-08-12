@@ -71,6 +71,14 @@ float fromBf16(uint16_t bits) {
   return converted.convertToFloat();
 }
 
+uint16_t apFloatToBf16(uint32_t bits) {
+  llvm::APFloat converted(llvm::APFloat::IEEEsingle(), llvm::APInt(32, bits));
+  bool losesInfo = false;
+  converted.convert(llvm::APFloat::BFloat(), llvm::APFloat::rmNearestTiesToEven,
+                    &losesInfo);
+  return converted.bitcastToAPInt().getZExtValue();
+}
+
 struct BuiltBundle {
   std::unique_ptr<mlir::MLIRContext> context;
   mlir::OwningOpRef<mlir::ModuleOp> module;
@@ -196,6 +204,17 @@ TEST(CpuBytecodeRuntimeTest, ExecutesGeneratedBodyWithRawAbiBuffers) {
   ASSERT_TRUE(mlir::succeeded(
       mlir::shuttle::executeCpuExecutableBundle(*module->module, views)));
   EXPECT_EQ(buffers.output, expected);
+}
+
+TEST(CpuBytecodeRuntimeTest, Bf16RoundingMatchesApFloatEdgeCases) {
+  constexpr std::array<uint32_t, 14> cases{
+      0x00000000u, 0x80000000u, 0x7f800000u, 0xff800000u, 0x7f800001u,
+      0xff800001u, 0x7fc00000u, 0xffc00000u, 0x3f808000u, 0x3f818000u,
+      0xbf808000u, 0xbf818000u, 0x00008000u, 0x80008000u};
+  for (uint32_t bits : cases) {
+    EXPECT_EQ(mlir::shuttle::roundF32ToBf16Rne(bits), apFloatToBf16(bits))
+        << "f32 bits: " << bits;
+  }
 }
 
 TEST(CpuBytecodeRuntimeTest, RejectsCorruptedClosedContracts) {

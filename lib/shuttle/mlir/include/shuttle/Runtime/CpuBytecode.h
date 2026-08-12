@@ -17,6 +17,10 @@ struct CpuExternalBuffer {
   llvm::MutableArrayRef<uint8_t> bytes;
 };
 
+// Converts one IEEE-754 binary32 bit pattern to BF16 with round-to-nearest,
+// ties-to-even semantics while preserving NaNs as NaNs.
+uint16_t roundF32ToBf16Rne(uint32_t bits);
+
 // Executes inline CPU bytecode synchronously. The call retains all temporary
 // storage and code views until every entry completes and returns only after
 // output writes are visible to the caller.
