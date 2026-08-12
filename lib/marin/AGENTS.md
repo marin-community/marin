@@ -10,8 +10,8 @@ Vendored Marin pipeline framework. In this file, leading `/` refers to repositor
 ## Development
 
 ```bash
-# Run tests
-uv run --package marin-core pytest
+# Full safe Marin suite
+uv run --package marin-core --group test --extra cpu --extra dedup pytest tests
 
 # Lint
 ./infra/pre-commit.py --all-files --fix

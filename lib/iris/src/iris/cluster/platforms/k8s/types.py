@@ -113,6 +113,13 @@ class K8sResource(Enum):
     # created by Iris.
     CLUSTER_QUEUES = ("kueue.x-k8s.io", "v1beta1", False, "clusterqueues", "ClusterQueue")
     RESOURCE_FLAVORS = ("kueue.x-k8s.io", "v1beta1", False, "resourceflavors", "ResourceFlavor")
+    WORKLOAD_PRIORITY_CLASSES = (
+        "kueue.x-k8s.io",
+        "v1beta1",
+        False,
+        "workloadpriorityclasses",
+        "WorkloadPriorityClass",
+    )
 
     def __init__(self, api_group: str, api_version: str, is_namespaced: bool, plural: str, kind: str) -> None:
         self.api_group = api_group

@@ -46,8 +46,8 @@ that touch its buckets; the rest keep working.
 | Command | What it does |
 |---------|--------------|
 | `ls [URL] [-l]` | Immediate children; with no URL, the declared buckets. `-l` adds size and modification time |
-| `cat URL [--raw]` | Print a file. Tabular JSON and JSONL render as a table, and `--raw` writes stored bytes to stdout |
-| `head URL [-n N]` | Print the first N lines |
+| `cat URL [--raw]` | Print a file. Tabular JSON, JSONL, and parquet render as a table, and `--raw` writes stored bytes to stdout |
+| `head URL [-n N]` | Print the first N lines, or the first N rows of a parquet file |
 | `stat URL` | The object's metadata as the backend reports it |
 | `du URL` | Total bytes and object count beneath a prefix |
 | `find PATTERN` | Paths matching a glob, e.g. `gs://marin-us-central2/x/**/*.json` |
@@ -60,6 +60,18 @@ bytes.
 
 Formatted file previews are capped at 10 MB after decompression. `cat --raw` is capped
 at 10 MB of stored bytes. Use `cp` to fetch a whole object.
+
+A `.parquet` file is read through its footer rather than from the head of the object,
+so `cat`, `head`, and the browser show its schema, its row count, and its first rows.
+`head -n` bounds the rows, not the printed lines. Parquet's smallest readable unit is a
+whole column chunk, so the rows come out of the first row group alone, and a first row
+group that decodes to more than 10 MB is reported instead of read — copy that file to
+read it. The footer itself is read whatever its size, so the 10 MB cap above bounds the
+column data rather than the whole preview.
+
+Parquet previews need pyarrow in the environment. It is not a `marin-rigging`
+dependency, because rigging sits under every other package, but the marin workspace
+installs it.
 
 ## The browser
 

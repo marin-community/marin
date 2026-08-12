@@ -18,8 +18,10 @@ Output rows have this schema::
       dup_doc: bool,
     }
 
-Output files keep the matching normalized shard names. A missing file means
-that its source shard has no exact duplicates.
+Output files keep the matching normalized shard names, one per input shard. A
+shard with no exact duplicate writes an empty file rather than none, because
+consumers such as ``consolidate`` resolve every input shard to an attribute
+path before reading and raise when one is absent.
 """
 
 from collections.abc import Iterator
@@ -105,9 +107,19 @@ def _build_shard_index(
     return entries, outputs
 
 
+# A record ID cannot contain a NUL byte, so this never collides with a real one.
+_SENTINEL_ID = "\x00shard-present\x00"
+
+
 def _read_record_ids(entry: CopartitionedShard) -> Iterator[_ExactRecord]:
     input_path = entry.input_path
     row_index = 0
+    # A shard whose records are all unique reaches the writing reducer with no
+    # group of its own, so without this it would produce no attribute file at
+    # all. Consumers such as ``consolidate`` resolve every input shard to an
+    # attribute path up front and raise when one is absent, so every shard has
+    # to arrive even when it carries no duplicate.
+    yield {"id": _SENTINEL_ID, "file_idx": entry.file_idx, "row_index": -1}
     with StoragePath(input_path).open("rb") as input_file:
         parquet = pq.ParquetFile(input_file)
         if "id" not in parquet.schema_arrow.names:
@@ -126,7 +138,12 @@ def _read_record_ids(entry: CopartitionedShard) -> Iterator[_ExactRecord]:
     counters.pipeline.update_counter(f"{COUNTER_PREFIX}/records_in", row_index)
 
 
-def _select_duplicates(_key: str, records: Iterator[_ExactRecord]) -> Iterator[_ExactRecord]:
+def _select_duplicates(key: str, records: Iterator[_ExactRecord]) -> Iterator[_ExactRecord]:
+    """Drop the canonical occurrence of an ID and keep the rest as duplicates."""
+    if key == _SENTINEL_ID:
+        # One per shard, and each must reach its own shard's writer.
+        yield from records
+        return
     next(records)
     yield from records
 
@@ -139,6 +156,8 @@ def _write_shard(file_idx: int, records: Iterator[_ExactRecord]) -> None:
     def duplicate_rows() -> Iterator[dict[str, str | bool]]:
         nonlocal duplicate_records
         for record in records:
+            if record["id"] == _SENTINEL_ID:
+                continue
             duplicate_records += 1
             yield {"id": record["id"], "dup_doc": True}
 

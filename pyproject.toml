@@ -257,6 +257,7 @@ project-includes = [
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "lib/finestore/src/**/*.py",
+    "infra/evaldash/src/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
 ]
@@ -274,9 +275,6 @@ search-path = [
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
-    # benchmark_controller.py imports controller test fixtures from lib/iris/tests
-    # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
-    "lib/iris",
 ]
 disable-search-path-heuristics = true
 
@@ -299,6 +297,13 @@ tensor-shapes = true
 # and compute deps a local venv commonly skips (torch, sympy). List both `pkg` and
 # `pkg.*`.
 ignore-missing-imports = [
+    # The evaldash server's own deps: its image installs them, no lint profile does.
+    "anthropic",
+    "anthropic.*",
+    "google.cloud.compute_v1",
+    "google.cloud.compute_v1.*",
+    "google.cloud.sql.connector",
+    "google.cloud.sql.connector.*",
     # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
     "google.cloud.secretmanager",
     "google.cloud.secretmanager.*",
@@ -417,6 +422,7 @@ packages = ["experiments"]
 packages = ["experiments"]
 
 [tool.pytest.ini_options]
+# pytest-timeout uses SIGALRM on POSIX; the timeout guard hard-kills the process if a test suppresses that failure.
 timeout = 60
 filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
@@ -442,4 +448,4 @@ pythonpath = ["."]
 # All but manual are run from dedicated CI workflows. Tests that need a TPU carry
 # @skip_if_no_tpu (tests/test_utils.py) and skip themselves when none is present;
 # the Iris markers also apply when lib/iris test paths are passed from the root.
-addopts = "--session-timeout=600 -n auto --dist=worksteal -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"
+addopts = "-p marin.pytest_timeout_guard --session-timeout=600 -n auto --dist=worksteal -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"

@@ -69,14 +69,18 @@ The same script runs on CPU, GPU, and TPU — only `--device` and `--dataset` ch
 device entry in `train_tiny_model.py` configures resources and batch size:
 
 ```python
-from fray.cluster import ResourceConfig
-from levanter.optim import AdamConfig
-from marin.experiment.train import train_lm
+from fray.types import ANY_REGION, ResourceConfig
 
 # "h100x8" entry in DEVICES (resources, batch_size)
-resources = ResourceConfig.with_gpu("H100", count=8, cpu=32, disk="128G", ram="128G")
+resources = ResourceConfig.with_gpu(
+    "H100", count=8, cpu=32, disk="128G", ram="128G", regions=[ANY_REGION]
+)
 batch_size = 256
 ```
+
+`regions=[ANY_REGION]` is not optional for the GPU entries: the fleets live in federated
+CoreWeave clusters that advertise no region, so an inherited region would exclude every host
+with the GPU and leave the job unschedulable.
 
 Whereas `--device cpu` uses `ResourceConfig.with_cpu()` and a batch size of 4, `--device h100x8`
 uses eight H100s with a larger batch. Adding a new device is one entry in the `DEVICES` dict —

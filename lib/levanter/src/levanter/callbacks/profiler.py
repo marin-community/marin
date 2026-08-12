@@ -28,7 +28,7 @@ _XPROF_TTL_SEGMENT = re.compile(r"ttl=[1-9]\d*d")
 
 def xprof_viewer_url(service_url: str, profile_uri: str) -> str:
     """Return the hosted XProf URL for an uploaded profile root."""
-    return f"{service_url.rstrip('/')}/open?{urlencode({'uri': profile_uri})}"
+    return f"{service_url.rstrip('/')}/open?{urlencode({'uri': profile_uri, 'tool': 'trace_viewer'})}"
 
 
 @dataclass(frozen=True)

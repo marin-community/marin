@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import transformers
 from jax import random
-from test_utils import (
+from levanter.testing.helpers import (
     check_load_config,
     check_model_works_with_seqlen,
     parameterize_with_configs,
@@ -25,6 +25,7 @@ from transformers import AutoModelForCausalLM, LlamaForCausalLM
 from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import Attention, LlamaConfig, LlamaDecoderLayer, LlamaLMHeadModel
+from levanter.testing.model_configs import llama_test_config
 from levanter.utils.jax_utils import parameter_count
 
 
@@ -87,7 +88,8 @@ def test_llama_attention(use_flash, num_kv_heads):
         LlamaRotaryEmbedding as HFLlamaRotaryEmbedding,
     )
 
-    config = _get_llama_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
+    attention_backend = AttentionBackend.DEFAULT if use_flash else AttentionBackend.VANILLA
+    config = llama_test_config(attention_backend=attention_backend, num_kv_heads=num_kv_heads)
 
     attention_config = config.attention_config()
     attention = Attention.init(config=attention_config, key=random.PRNGKey(0))  # type: ignore
@@ -118,15 +120,15 @@ def test_llama_attention(use_flash, num_kv_heads):
 
 
 def test_llama_param_counts_dont_change_with_seqlen():
-    model = LlamaLMHeadModel.init(hax.Axis("v", 512), _get_llama_config(seq_len=32), key=random.PRNGKey(0))
-    model2 = LlamaLMHeadModel.init(hax.Axis("v", 512), _get_llama_config(seq_len=64), key=random.PRNGKey(0))
+    model = LlamaLMHeadModel.init(hax.Axis("v", 512), llama_test_config(seq_len=32), key=random.PRNGKey(0))
+    model2 = LlamaLMHeadModel.init(hax.Axis("v", 512), llama_test_config(seq_len=64), key=random.PRNGKey(0))
     assert parameter_count(model) == parameter_count(model2)
 
 
 def test_llama_resize_vocab_grows_embeddings_and_head():
     # untied: both the input embeddings and the lm_head must be resized to the new vocab
     Vocab = hax.Axis("vocab", 50)
-    model = LlamaLMHeadModel.init(Vocab, _get_llama_config(), key=random.PRNGKey(0))
+    model = LlamaLMHeadModel.init(Vocab, llama_test_config(), key=random.PRNGKey(0))
     assert model.lm_head is not None
 
     resized = model.resize_vocab(64, key=random.PRNGKey(1))
@@ -137,7 +139,7 @@ def test_llama_resize_vocab_grows_embeddings_and_head():
     chex.assert_trees_all_close(resized.lm_head.weight["vocab", : Vocab.size].array, model.lm_head.weight.array)
 
     # tied: there is no separate lm_head, so only the embeddings are resized
-    tied_config = dataclasses.replace(_get_llama_config(), tie_word_embeddings=True)
+    tied_config = dataclasses.replace(llama_test_config(), tie_word_embeddings=True)
     tied = LlamaLMHeadModel.init(Vocab, tied_config, key=random.PRNGKey(0))
     assert tied.lm_head is None
 
@@ -154,7 +156,7 @@ def test_llama_rms_norm():
         LlamaRMSNorm as HFLlamaRMSNorm,
     )
 
-    config = _get_llama_config()
+    config = llama_test_config()
     ln = hnn.RmsNorm.init(config.Embed, eps=config.layer_norm_epsilon, use_bias=config.use_bias)
     hf_ln = HFLlamaRMSNorm(config.Embed.size, eps=config.layer_norm_epsilon)
 
@@ -180,7 +182,7 @@ def test_llama_decoder_layer(num_kv_heads):
         LlamaRotaryEmbedding as HFLlamaRotaryEmbedding,
     )
 
-    llama_config = _get_llama_config(num_kv_heads=num_kv_heads)
+    llama_config = llama_test_config(num_kv_heads=num_kv_heads)
     key = random.PRNGKey(0)
     llama_decoder_layer = LlamaDecoderLayer.init(config=llama_config, key=key)
 
@@ -220,7 +222,7 @@ def test_llama_decoder_layer(num_kv_heads):
 
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_llama_lm_head_model(num_kv_heads):
-    llama_config = _get_llama_config(num_kv_heads=num_kv_heads)
+    llama_config = llama_test_config(num_kv_heads=num_kv_heads)
     Batch = hax.Axis("batch", 2)
     Vocab = hax.Axis("vocab", 1000)
     Pos = llama_config.max_Pos
@@ -235,7 +237,8 @@ def test_llama_lm_head_model(num_kv_heads):
 @pytest.mark.parametrize("use_flash", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2])
 def test_llama_lm_head_model_bwd(use_flash, num_kv_heads):
-    llama_config = _get_llama_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
+    attention_backend = AttentionBackend.DEFAULT if use_flash else AttentionBackend.VANILLA
+    llama_config = llama_test_config(attention_backend=attention_backend, num_kv_heads=num_kv_heads)
     Batch = hax.Axis("batch", 1)
     Vocab = hax.Axis("vocab", 256)
     Pos = llama_config.max_Pos
@@ -316,20 +319,6 @@ def test_llama_roundtrip(scan_layers, num_kv_heads, local_gpt2_tokenizer_path):
         np.testing.assert_allclose(torch_out2, jax_out, rtol=1e-5, atol=1e-5)
 
 
-def _get_llama_config(use_flash=False, num_kv_heads=4, seq_len=64) -> LlamaConfig:
-    return LlamaConfig(
-        max_seq_len=seq_len,
-        hidden_dim=32,
-        intermediate_dim=64,
-        num_layers=2,
-        num_heads=4,
-        num_kv_heads=num_kv_heads,
-        gradient_checkpointing=False,  # disable for tests so debugging is easier
-        attn_backend=AttentionBackend.DEFAULT if use_flash else AttentionBackend.VANILLA,
-        flash_attention_block_size=8 if use_flash else None,
-    )
-
-
 def _get_random_inputs(config: LlamaConfig, override_Pos=None):
     Embed = config.Embed
     if override_Pos is not None:
@@ -384,7 +373,7 @@ def test_state_dict_consistency(scan_layers, num_kv_heads):
 
 @pytest.mark.parametrize("num_kv_heads", [2])
 def test_llama_seq_len_doesnt_change_predictions(num_kv_heads):
-    config = _get_llama_config(num_kv_heads=num_kv_heads, seq_len=128)
+    config = llama_test_config(num_kv_heads=num_kv_heads, seq_len=128)
     Vocab = hax.Axis("vocab", 256)
 
     # Make input and attn_mask

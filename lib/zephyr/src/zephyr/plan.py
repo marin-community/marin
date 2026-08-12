@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from itertools import groupby, islice
-from typing import Any, Protocol
+from typing import Any
 
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
@@ -49,23 +49,6 @@ from zephyr.shuffle import ScatterReader
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Shard protocol
-# ---------------------------------------------------------------------------
-
-
-class Shard(Protocol):
-    """Protocol for a shard of data assigned to a single worker.
-
-    Implementations:
-    - ListShard: backed by iterable references (source data, non-scatter)
-    - ScatterReader: backed by scatter zstd-chunk files with byte-range sidecar
-    """
-
-    def __iter__(self) -> Iterator: ...
-    def get_iterators(self) -> Iterator[Iterator]: ...
 
 
 @dataclass
@@ -805,15 +788,11 @@ def run_stage(
             return
 
         elif isinstance(op, Reduce):
-            # Build ScatterReader directly from per-mapper sidecars, then
-            # merge sorted chunks and reduce per key.
-            shard = ctx.shard
-            if not isinstance(shard, ScatterReader):
-                # Shard contains every mapper's scatter-data path — reducer
-                # reads all sidecars in parallel and filters for its target.
-                scatter_paths = list(shard)
-                shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
-            stream = _reduce_gen(shard, op.key_fn, op.reducer_fn, external_sort_dir)
+            # The shard holds every mapper's scatter-data path. The reducer
+            # reads all per-mapper sidecars in parallel, filters for its own
+            # target shard, then merges the sorted chunks and reduces per key.
+            reader = ScatterReader.from_sidecars(list(ctx.shard), ctx.shard_idx)
+            stream = _reduce_gen(reader, op.key_fn, op.reducer_fn, external_sort_dir)
             op_index += 1
 
         elif isinstance(op, Fold):
