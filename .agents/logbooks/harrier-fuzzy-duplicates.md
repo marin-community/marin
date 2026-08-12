@@ -472,3 +472,15 @@ author: Rafal Wojdyla
 - RNO progress: `finetranslations_6ce00a47` got to 13,832 of 25,962 output shards with 32 live workers and no dead workers.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of root logs.
 - Next action: Continue the 15-minute check cadence and monitor both active sources.
+
+### 2026-08-12 10:40 UTC - East completes case law and DOAB
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 25 completed source artifacts. RNO has six completed source artifacts. The full run has 31 of 292 completed source artifacts.
+- East result: `cp-caselaw_8eb43b0b` succeeded with all 89 output shards and 4,261,234 documents.
+- East result: `cp-doab_b9b530ea` succeeded with all 12 output shards and 81,119 documents.
+- East progress: `cp-github_archive_540aca13` started. It has 56 output shards, with 32 in flight, 32 live workers, and no dead workers.
+- RNO progress: `finetranslations_6ce00a47` got to 15,174 of 25,962 output shards with 32 live workers and no dead workers.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of root logs.
+- Next action: Continue the 15-minute check cadence and monitor both active sources.
