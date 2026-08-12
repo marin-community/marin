@@ -26,7 +26,7 @@ from iris.cluster.platforms.k8s.kueue_manifests import (
 )
 from iris.cluster.platforms.k8s.network_manifests import DEFAULT_CLUSTER_ISSUER
 from iris.cluster.platforms.k8s.types import parse_k8s_quantity
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 from rigging.config_discovery import resolve_cluster_config
 
 # IaC reads only the reviewed, in-tree cluster config — deliberately NOT Iris's runtime
@@ -241,19 +241,6 @@ class GcpGclbSpec(BaseModel):
     finelogs: list[GcpFinelogIngressSpec] = Field(default_factory=list)
     network: str = "default"
     subnetwork: str = "default"
-
-    @model_validator(mode="after")
-    def validate_routes(self) -> "GcpGclbSpec":
-        controller_names = [controller.cluster for controller in self.controllers]
-        if self.frontend_name not in controller_names:
-            raise ValueError("gclb.frontend_name must identify one controller")
-        route_names = [*controller_names, *(f"finelog-{finelog.cluster}" for finelog in self.finelogs)]
-        if len(route_names) != len(set(route_names)):
-            raise ValueError("gclb route names must be unique")
-        domains = [*(finelog.domain for finelog in self.finelogs)]
-        if len(domains) != len(set(domains)):
-            raise ValueError("gclb finelog domains must be unique")
-        return self
 
 
 class GcpProvisioning(BaseModel):

@@ -66,7 +66,6 @@ HEALTH_CHECK_BACKOFF_MAX = 10.0
 
 
 def controller_vm_name(label_prefix: str) -> str:
-    """Return the stable GCE VM name for a controller label namespace."""
     return f"iris-controller-{label_prefix}"
 
 

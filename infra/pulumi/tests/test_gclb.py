@@ -1,8 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass, replace
+
 import pulumi
 import pulumi_gcp as gcp
+import pytest
 from iac.gcp.gclb import (
     ControllerIngress,
     FinelogIngress,
@@ -20,6 +23,8 @@ def _args() -> GcpGclbIapArgs:
         project=PROJECT,
         project_number=PROJECT_NUMBER,
         frontend_name="marin",
+        network="default",
+        subnetwork="default",
         controllers=(
             ControllerIngress(
                 cluster="marin",
@@ -58,7 +63,16 @@ def _args() -> GcpGclbIapArgs:
     )
 
 
-def _record_gclb(monkeypatch) -> tuple[dict[str, dict], dict[str, pulumi.ResourceOptions], ImportCatalog]:
+@dataclass(frozen=True)
+class RecordedGclb:
+    inputs_by_name: dict[str, dict]
+    options_by_name: dict[str, pulumi.ResourceOptions]
+    imports: ImportCatalog
+
+
+def _record_gclb(monkeypatch, args: GcpGclbIapArgs | None = None) -> RecordedGclb:
+    if args is None:
+        args = _args()
     imports = ImportCatalog()
     options_by_name: dict[str, pulumi.ResourceOptions] = {}
     inputs_by_name: dict[str, dict] = {}
@@ -101,12 +115,33 @@ def _record_gclb(monkeypatch) -> tuple[dict[str, dict], dict[str, pulumi.Resourc
     monkeypatch.setattr(pulumi.ComponentResource, "__init__", initialize_component)
     monkeypatch.setattr(GcpGclbIap, "register_outputs", lambda *_args, **_kwargs: None)
 
-    GcpGclbIap("gclb", _args(), gcp_provider=None, imports=imports)
-    return inputs_by_name, options_by_name, imports
+    GcpGclbIap("gclb", args, gcp_provider=None, imports=imports)
+    return RecordedGclb(inputs_by_name=inputs_by_name, options_by_name=options_by_name, imports=imports)
+
+
+def test_gclb_rejects_ambiguous_or_incomplete_routes(monkeypatch) -> None:
+    args = _args()
+    with pytest.raises(ValueError, match="at least one controller"):
+        _record_gclb(monkeypatch, replace(args, controllers=()))
+    with pytest.raises(ValueError, match="frontend_name"):
+        _record_gclb(monkeypatch, replace(args, frontend_name="unknown"))
+
+    duplicate_domain = replace(args.controllers[1], domain=args.controllers[0].domain)
+    with pytest.raises(ValueError, match="domains must be unique"):
+        _record_gclb(monkeypatch, replace(args, controllers=(args.controllers[0], duplicate_domain)))
+
+    duplicate_matcher = replace(args.controllers[1], cluster=args.controllers[0].cluster)
+    with pytest.raises(ValueError, match="matcher names must be unique"):
+        _record_gclb(monkeypatch, replace(args, controllers=(args.controllers[0], duplicate_matcher)))
+
+    empty_sources = replace(args.finelogs[0], sender_source_ranges=())
+    with pytest.raises(ValueError, match="requires at least one sender source range"):
+        _record_gclb(monkeypatch, replace(args, finelogs=(empty_sources,)))
 
 
 def test_gclb_preserves_iap_and_capability_route_boundaries(monkeypatch) -> None:
-    inputs_by_name, _, _ = _record_gclb(monkeypatch)
+    recording = _record_gclb(monkeypatch)
+    inputs_by_name = recording.inputs_by_name
     controller = inputs_by_name["marin-backend"]
     controller_proxy = inputs_by_name["marin-token-proxy-backend"]
     finelog = inputs_by_name["finelog-marin-backend"]
@@ -117,7 +152,14 @@ def test_gclb_preserves_iap_and_capability_route_boundaries(monkeypatch) -> None
     settings = inputs_by_name["marin-iap-settings"]
     oauth = settings["access_settings"].oauth_settings
     assert oauth.programmatic_clients == ["desktop-client.apps.googleusercontent.com"]
-    assert "client_secret" not in str(settings)
+    assert oauth.client_id is None
+    assert oauth.client_secret is None
+    assert oauth.client_secret_sha256 is None
+    assert recording.options_by_name["marin-iap-settings"].ignore_changes == [
+        "accessSettings.oauthSettings.clientId",
+        "accessSettings.oauthSettings.clientSecret",
+        "accessSettings.oauthSettings.clientSecretSha256",
+    ]
     dev_oauth = inputs_by_name["marin-dev-iap-settings"]["access_settings"].oauth_settings
     assert dev_oauth.programmatic_clients == ["dev-client.apps.googleusercontent.com"]
 
@@ -135,7 +177,7 @@ def test_gclb_preserves_iap_and_capability_route_boundaries(monkeypatch) -> None
 
 
 def test_gclb_applies_separate_controller_and_finelog_network_boundaries(monkeypatch) -> None:
-    inputs_by_name, _, _ = _record_gclb(monkeypatch)
+    inputs_by_name = _record_gclb(monkeypatch).inputs_by_name
     controller_allow = inputs_by_name["marin-allow-lb"]
     assert controller_allow["priority"] == 900
     assert controller_allow["source_ranges"] == ["130.211.0.0/22", "35.191.0.0/16"]
@@ -159,7 +201,9 @@ def test_gclb_applies_separate_controller_and_finelog_network_boundaries(monkeyp
 
 
 def test_gclb_catalogs_every_existing_leaf_without_enabling_import_mode(monkeypatch) -> None:
-    _, options_by_name, imports = _record_gclb(monkeypatch)
+    recording = _record_gclb(monkeypatch)
+    options_by_name = recording.options_by_name
+    imports = recording.imports
     assert all(options.import_ is None for options in options_by_name.values())
     provider_ids = {spec.identity.logical_name: spec.provider_id for spec in imports.specs}
     assert provider_ids["global-address"] == f"projects/{PROJECT}/global/addresses/iris-marin-ip"

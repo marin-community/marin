@@ -181,7 +181,7 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
             cluster=cluster,
             namespace=namespace,
             service_name=controller_coreweave.service_name,
-            port=controller_coreweave.port or 10000,
+            port=controller_coreweave.port or DEFAULT_CONTROLLER_PORT,
             spec=coreweave_provisioning.ingress,
             namespace_dependency=rbac.namespace,
         ),

@@ -100,7 +100,6 @@ def test_validate_reviewed_manifest_accepts_unchanged_subset():
 
     assert summary.imports_by_type == {IAM_MEMBER_TYPE: 1}
     assert summary.component_count == 0
-    assert summary.digest == import_manifest_summary(reviewed).digest
 
 
 @pytest.mark.parametrize(

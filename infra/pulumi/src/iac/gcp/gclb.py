@@ -63,9 +63,9 @@ class GcpGclbIapArgs:
     project_number: str
     frontend_name: str
     controllers: tuple[ControllerIngress, ...]
+    network: str
+    subnetwork: str
     finelogs: tuple[FinelogIngress, ...] = ()
-    network: str = "default"
-    subnetwork: str = "default"
 
 
 @dataclass(frozen=True)
