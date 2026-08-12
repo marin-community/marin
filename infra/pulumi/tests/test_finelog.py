@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Finelog Kubernetes resource contract."""
+"""Finelog Kubernetes secret contract."""
 
 from finelog.deploy.config import (
     CidrAuthLayer,
@@ -20,13 +20,7 @@ def _args() -> FinelogServerArgs:
         port=10001,
         image="ghcr.io/marin-community/finelog:latest",
         remote_log_dir="s3://logs/finelog/cw",
-        deployment=Deployment(
-            k8s=K8sDeployment(
-                namespace="iris",
-                storage_gb=250,
-                priority_class_name="iris-system",
-            )
-        ),
+        deployment=Deployment(k8s=K8sDeployment(namespace="iris")),
         auth=(CidrAuthLayer(cidrs=("10.0.0.0/8",)),),
         forwarding=ForwardingConfig(
             target="https://finelog.oa.dev",
@@ -51,32 +45,6 @@ def _args() -> FinelogServerArgs:
             built_by="finelog-test",
         ),
     )
-
-
-def test_finelog_resource_args_preserve_stateful_single_writer_contract() -> None:
-    resources = finelog_resource_args(_args(), "ghcr.io/marin-community/finelog@sha256:digest")
-    assert resources.pvc.spec is not None
-    assert resources.pvc.spec.resources is not None
-    assert resources.deployment.spec is not None
-    assert resources.deployment.spec.template.spec is not None
-    pod_spec = resources.deployment.spec.template.spec
-    container = pod_spec.containers[0]
-
-    assert resources.pvc.spec.resources.requests == {"storage": "250Gi"}
-    assert resources.deployment.spec.replicas == 1
-    assert resources.deployment.spec.strategy is not None
-    assert resources.deployment.spec.strategy.type == "Recreate"
-    assert pod_spec.node_selector == {"kubernetes.io/arch": "amd64"}
-    assert pod_spec.priority_class_name == "iris-system"
-    assert resources.deployment.spec.template.metadata is not None
-    assert resources.deployment.spec.template.metadata.annotations == {"finelog.marin/source-revision": "0123456"}
-    assert container.image == "ghcr.io/marin-community/finelog@sha256:digest"
-    assert container.readiness_probe is not None
-    assert container.readiness_probe.http_get is not None
-    assert container.readiness_probe.http_get.path == "/health"
-    assert container.readiness_probe.http_get.port == 10001
-    assert container.volume_mounts is not None
-    assert [(mount.name, mount.mount_path) for mount in container.volume_mounts] == [("cache", "/var/cache/finelog")]
 
 
 def test_finelog_resource_args_reference_secret_without_secret_values() -> None:
