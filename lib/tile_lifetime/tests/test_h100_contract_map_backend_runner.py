@@ -659,7 +659,7 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
             )
             source = _ncu_sass_with_metric_label_rows(
                 source,
-                (_ncu_sass_metric_labels_row(separator_widths),) * 8 + (boundary_row, boundary_row),
+                (boundary_row,) * 10,
                 separator_widths,
             )
         elif variant == "wide-address-close-private":
@@ -1938,6 +1938,28 @@ def test_runner_ncu_sass_parser_rejects_metric_fragment_bytes_beyond_longest_req
         )
 
     assert _ncu_sass_diagnostic(failure.value)["line_number"] == 13
+
+
+@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+def test_runner_ncu_sass_parser_rejects_tenth_sparse_metric_label_row(
+    separator_widths: tuple[int, ...],
+) -> None:
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000000 MOV R1, R2",)),
+        separator_widths=separator_widths,
+    )
+    sparse_row = _ncu_sass_metric_labels_row(
+        separator_widths,
+        columns=("", "", "a", "b", "c", "d"),
+    )
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(
+            _ncu_sass_with_metric_label_rows(source, (sparse_row,) * 10, separator_widths),
+            (_NCU_KERNEL_A,),
+        )
+
+    assert _ncu_sass_diagnostic(failure.value)["line_number"] == 14
 
 
 @pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
