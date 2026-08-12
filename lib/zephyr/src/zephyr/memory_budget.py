@@ -15,11 +15,11 @@ from them plus already-available inputs (task memory/CPU, shard byte stats).
 1.5M rows / 150-byte payloads over 4096 target shards and comparing
 ``DataFrame.estimated_size()`` against process RSS before and after
 ``buffer.sort()`` (231.7 MiB estimated, 716.3 MiB RSS post-sort, 190.9 MiB
-process baseline). See
-https://github.com/marin-community/marin/issues/7946. ``R_READ`` and both
-``SAFETY_FRACTION`` constants are provisional placeholders pending
-calibration against ``lib/zephyr/tests/benchmark_shuffle.py``; see
-``.agents/projects/2026-08-11_zephyr_shuffle_memory_budget.md`` phase 5.
+process baseline). See https://github.com/marin-community/marin/issues/7946.
+``R_READ`` and both ``SAFETY_FRACTION`` constants are provisional
+placeholders pending calibration against
+``lib/zephyr/tests/benchmark_shuffle.py``; that same issue tracks the
+calibration work.
 """
 
 import math

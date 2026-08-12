@@ -7,8 +7,9 @@ Each source-shard's scatter output is a set of zstd-compressed Parquet files,
 one combined file per flush (``c{chunk:04d}.parquet``) containing all target
 shards' data sorted by ``(_SHARD_COL, _SORT_KEY_COL)``.  A msgpack sidecar
 (``metadata.msgpack``) records ``files -> [path, ...]``, a global
-``avg_item_bytes`` estimate, and exact per-target-shard payload bytes
-(``shard_bytes``) used by reducers to size the external-sort decision.
+``avg_item_bytes`` estimate used to size the external-sort decision, and
+exact per-target-shard payload bytes (``shard_bytes``) reported in reducer
+logs for diagnostics.
 
 On the read side, each reducer scans only its target shard via
 ``pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == target).drop(_SHARD_COL)``.
