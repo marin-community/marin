@@ -10,7 +10,6 @@ without spinning up a full coordinator.
 import itertools
 import os
 from collections import OrderedDict
-from collections.abc import Iterator
 from unittest.mock import patch
 
 import cloudpickle
@@ -20,7 +19,6 @@ import pyarrow.parquet as pq
 import pytest
 from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
-from zephyr.external_sort import external_sort_merge
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
@@ -33,6 +31,7 @@ from zephyr.shuffle import (
     _dataframe_to_items,
     _items_to_dataframe,
     _read_sidecar_slices_parallel,
+    _merge_sorted_frames,
     _write_scatter,
 )
 from zephyr.worker_context import _worker_ctx_var
@@ -452,7 +451,7 @@ def test_scatter_auto_flush_uses_task_memory_budget(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# external_sort_merge
+# _merge_sorted_frames
 # ---------------------------------------------------------------------------
 
 
@@ -466,29 +465,27 @@ def _make_sorted_frame(values: list[int]) -> pl.LazyFrame:
     ).lazy()
 
 
-def _external_sort_items(
-    batches: Iterator[pl.LazyFrame],
+def _merge_sorted_frames_items(
+    frames: list[pl.LazyFrame],
     *,
     sort_key: str,
     external_sort_dir: str,
     fan_in: int,
-    max_merge_fan_in: int = 32,
     shard: int,
 ) -> list:
-    merged = external_sort_merge(
-        batches,
+    merged = _merge_sorted_frames(
+        frames,
         sort_key=sort_key,
         external_sort_dir=external_sort_dir,
         fan_in=fan_in,
-        max_merge_fan_in=max_merge_fan_in,
         shard=shard,
     )
     return list(itertools.chain.from_iterable(map(_dataframe_to_items, merged)))
 
 
-def test_external_sort_merge_streaming(tmp_path):
+def test_merge_sorted_frames_streaming(tmp_path):
     frames = [_make_sorted_frame([1, 4, 7]), _make_sorted_frame([2, 5, 8]), _make_sorted_frame([3, 6, 9])]
-    rows = _external_sort_items(
+    rows = _merge_sorted_frames_items(
         frames,
         sort_key=_SORT_KEY_COL,
         external_sort_dir=str(tmp_path),
@@ -499,9 +496,9 @@ def test_external_sort_merge_streaming(tmp_path):
     assert result == list(range(1, 10))
 
 
-def test_external_sort_merge_single_batch(tmp_path):
+def test_merge_sorted_frames_single_batch(tmp_path):
     frames = [_make_sorted_frame([i]) for i in range(10)]
-    rows = _external_sort_items(
+    rows = _merge_sorted_frames_items(
         frames,
         sort_key=_SORT_KEY_COL,
         external_sort_dir=str(tmp_path),
@@ -512,35 +509,47 @@ def test_external_sort_merge_single_batch(tmp_path):
     assert result == list(range(10))
 
 
-def test_external_sort_merge_cleans_up(tmp_path):
+def test_merge_sorted_frames_cleans_up(tmp_path):
     fan_in = 4
     frames = [_make_sorted_frame([i]) for i in range(fan_in + 1)]
     list(
-        external_sort_merge(
+        _merge_sorted_frames(
             frames,
             sort_key=_SORT_KEY_COL,
             external_sort_dir=str(tmp_path),
             fan_in=fan_in,
-            max_merge_fan_in=32,
             shard=0,
         )
     )
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
 
 
-def test_external_sort_merge_limits_later_pass_fan_in(tmp_path):
+def test_merge_sorted_frames_limits_every_pass_fan_in(tmp_path, monkeypatch):
+    """No single merge_sorted call combines more than fan_in frames, across every pass."""
+    fan_in = 3
     frames = [_make_sorted_frame([value]) for value in range(20)]
-    rows = _external_sort_items(
+
+    call_sizes: list[int] = []
+    real_merge_sorted = pl.merge_sorted
+
+    def spy_merge_sorted(inputs, *args, **kwargs):
+        call_sizes.append(len(inputs))
+        return real_merge_sorted(inputs, *args, **kwargs)
+
+    monkeypatch.setattr(pl, "merge_sorted", spy_merge_sorted)
+
+    rows = _merge_sorted_frames_items(
         frames,
         sort_key=_SORT_KEY_COL,
         external_sort_dir=str(tmp_path),
-        fan_in=2,
-        max_merge_fan_in=2,
+        fan_in=fan_in,
         shard=0,
     )
 
     assert [row["v"] for row in rows] == list(range(20))
     assert list(tmp_path.iterdir()) == []
+    assert len(call_sizes) > 1, f"expected multiple merge_sorted calls for 20 frames at fan_in={fan_in}"
+    assert all(size <= fan_in for size in call_sizes), f"a merge_sorted call exceeded fan_in={fan_in}: {call_sizes}"
 
 
 def test_scatter_removes_partial_dir_on_write_failure(tmp_path):
@@ -557,8 +566,8 @@ def test_scatter_removes_partial_dir_on_write_failure(tmp_path):
     assert not os.path.exists(data_path), "failed shard left a partial scatter directory"
 
 
-def test_external_sort_merge_across_source_shards(tmp_path):
-    """external_sort_merge correctly merges interleaved keys from multiple source shards."""
+def test_merge_sorted_frames_across_source_shards(tmp_path):
+    """_merge_sorted_frames correctly merges interleaved keys from multiple source shards."""
     # Shard 0 writes keys [1, 3], shard 1 writes key [2].  The merge must produce [1, 2, 3].
     paths = []
     for shard_idx, items in [(0, [{"k": 3, "v": "a"}, {"k": 1, "v": "b"}]), (1, [{"k": 2, "v": "c"}])]:
@@ -574,7 +583,7 @@ def test_external_sort_merge_across_source_shards(tmp_path):
     external_dir = tmp_path / "sort_work"
     external_dir.mkdir()
 
-    rows = _external_sort_items(
+    rows = _merge_sorted_frames_items(
         shard.get_frames(),
         sort_key=_SORT_KEY_COL,
         external_sort_dir=str(external_dir),
