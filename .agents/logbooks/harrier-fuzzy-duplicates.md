@@ -749,3 +749,13 @@ author: Rafal Wojdyla
 - East result: `finepdfs-hun_latn_5e462038` completed all 191 output shards with 412,840 duplicate documents. The source step succeeded.
 - East progress: `finepdfs-ita_latn_224a9bc3` started with a running coordinator and worker group.
 - Next action: Check FinePDFs Italian startup and continue the regular health-check cadence.
+
+### 2026-08-12 16:54 UTC - Routine health check
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 39 completed source artifacts. RNO has eight completed source artifacts. The full run has 47 of 292 completed source artifacts.
+- East progress: `finepdfs-ita_latn_224a9bc3` got to 391 of 618 embedding shards with 32 live workers and no dead workers. Its recent rate gives a rough 17:00 UTC completion estimate.
+- RNO progress: `hplt_v3_528b745e` got to 4,489 of 6,330 embedding shards with 32 live workers and no dead workers. Its recent rate gives a rough 18:17 UTC completion estimate.
+- Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Next action: Watch FinePDFs Italian through completion, then continue the regular check cadence.
