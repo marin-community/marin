@@ -759,3 +759,15 @@ author: Rafal Wojdyla
 - Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Next action: Watch FinePDFs Italian through completion, then continue the regular check cadence.
+
+### 2026-08-12 17:24 UTC - Three FinePDFs language sources completed
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 42 completed source artifacts. RNO has eight completed source artifacts. The full run has 50 of 292 completed source artifacts.
+- East results: `finepdfs-ita_latn_224a9bc3` completed 618 shards with 2,997,795 duplicate documents. `finepdfs-nld_latn_b55acf48` completed 295 shards with 1,073,748 duplicate documents. `finepdfs-por_latn_554504de` completed 564 shards with 2,562,012 duplicate documents. All three source steps succeeded.
+- East progress: `finepdfs-rus_cyrl_88010315` started.
+- RNO progress: `hplt_v3_528b745e` got to 5,107 of 6,330 embedding shards with 32 live workers and no dead workers. Its recent rate gives a rough 18:15 UTC completion estimate.
+- Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Issue update: None. These are routine source completions, not a major run-state change.
+- Next action: Check FinePDFs Russian startup and continue the regular health-check cadence.
