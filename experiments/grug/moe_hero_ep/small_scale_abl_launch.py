@@ -518,7 +518,9 @@ def build_small_run(
 )
 @click.option(
     "--qb-histogram/--no-qb-histogram",
-    default=False,
+    # autoresearch: the #8062 ladder's ep64 arms ran histogram QB; it measured lower
+    # drops at neutral loss, which buys capacity-factor headroom under the drop budget.
+    default=True,
     show_default=True,
     help="Estimate the QB quantile with the histogram estimator instead of the top-k mean (the hero default).",
 )
