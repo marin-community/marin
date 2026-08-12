@@ -1400,6 +1400,59 @@ public:
   }
 };
 
+class ScheduleDeleteTaskPass : public MutationPass<ScheduleDeleteTaskPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleDeleteTaskPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-delete-schedule-task";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (!plan) {
+      getOperation().emitError("test fixture has no schedule plan");
+      return signalPassFailure();
+    }
+    auto tasks = plan.getBody().front().getOps<ScheduleTaskOp>();
+    if (tasks.empty()) {
+      getOperation().emitError("test fixture has no schedule task");
+      return signalPassFailure();
+    }
+    (*tasks.begin()).erase();
+    refreshScheduleFingerprint(plan);
+  }
+};
+
+class ScheduleSelfConsistentReorderPass
+    : public MutationPass<ScheduleSelfConsistentReorderPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      ScheduleSelfConsistentReorderPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-reorder-schedule-tasks";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    SmallVector<ScheduleTaskOp> tasks;
+    if (plan) {
+      llvm::append_range(tasks,
+                         plan.getBody().front().getOps<ScheduleTaskOp>());
+    }
+    if (tasks.size() < 3 ||
+        !llvm::is_contained(tasks[1].getDependencies(), 0) ||
+        !tasks[2].getDependencies().empty()) {
+      getOperation().emitError(
+          "test fixture lacks the expected independent task pair");
+      return signalPassFailure();
+    }
+    tasks[2]->moveBefore(tasks[1]);
+    tasks[2].setOrdinal(1);
+    tasks[2].setSourceTask(1);
+    tasks[1].setOrdinal(2);
+    tasks[1].setSourceTask(2);
+    refreshScheduleFingerprint(plan);
+  }
+};
+
 class ScheduleReplaySourceTaskPass
     : public MutationPass<ScheduleReplaySourceTaskPass> {
 public:
@@ -1675,6 +1728,8 @@ void registerMutationPasses() {
   PassRegistration<ScheduleTilePass>();
   PassRegistration<ScheduleResourcePass>();
   PassRegistration<ScheduleDependencyPass>();
+  PassRegistration<ScheduleDeleteTaskPass>();
+  PassRegistration<ScheduleSelfConsistentReorderPass>();
   PassRegistration<ScheduleReplaySourceTaskPass>();
   PassRegistration<ScheduleTypePass>();
   PassRegistration<ClonePlanPass<MaterializationPlanOp>>();

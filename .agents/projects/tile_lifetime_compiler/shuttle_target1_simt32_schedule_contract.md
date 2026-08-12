@@ -82,9 +82,9 @@ That FAST gate tests schedule binding only, not full FAST conversion,
 reassociation freedom, or numerical execution.
 
 Mutation gates reject logical iteration, reduction axis/order, tile, resource
-profile, dependency, source-task, buffer type, unknown-attribute, and
-multiple-plan corruption. Axis-zero and BF16-accumulator Folds remain outside
-the source materialization boundary.
+profile, dependency, task deletion/reorder, source-task, buffer type,
+unknown-attribute, and multiple-plan corruption. Axis-zero and BF16-accumulator
+Folds remain outside the source materialization boundary.
 
 No static GPU-code or runtime gate is meaningful yet. The next consumer must
 choose and verify a concrete Fold algorithm plus physical buffer ABI, address
