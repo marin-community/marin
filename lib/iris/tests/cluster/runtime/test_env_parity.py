@@ -35,12 +35,14 @@ def _make_req(
     tpu_count: int = 4,
     gpu_count: int = 0,
     ports: list[str] | None = None,
+    bundle_init_image: str = "",
 ) -> job_pb2.RunTaskRequest:
     req = job_pb2.RunTaskRequest()
     req.task_id = task_id
     req.attempt_id = attempt_id
     req.num_tasks = num_tasks
     req.bundle_id = bundle_id
+    req.bundle_init_image = bundle_init_image
     req.entrypoint.run_command.argv.extend(["python", "train.py"])
     req.resources.cpu_millicores = 1000
     req.resources.memory_bytes = 4 * 1024**3
@@ -64,6 +66,7 @@ def _common_env(req: job_pb2.RunTaskRequest, controller_address: str | None = No
         attempt_id=req.attempt_id,
         num_tasks=req.num_tasks,
         bundle_id=req.bundle_id,
+        bundle_init_image=req.bundle_init_image,
         controller_address=controller_address,
         environment=req.environment,
         constraints=req.constraints,
@@ -261,6 +264,13 @@ def test_setup_scripts_serialized_when_empty():
     # top-level submission with no parent at all.
     env = _common_env(_make_req())
     assert json.loads(env["IRIS_JOB_SETUP_SCRIPTS"]) == []
+
+
+def test_bundle_init_image_serialized_for_child_job_inheritance():
+    image = "registry.example/iris-init@sha256:" + "a" * 64
+    env = _common_env(_make_req(bundle_init_image=image))
+
+    assert env["IRIS_BUNDLE_INIT_IMAGE"] == image
 
 
 def test_empty_user_env_omitted():

@@ -359,6 +359,19 @@ def test_launch_job_exact_bundle_rejects_unknown_wire_fields(service):
     assert exc_info.value.code == Code.INVALID_ARGUMENT
 
 
+def test_launch_job_exact_bundle_rejects_unknown_top_level_wire_fields(service):
+    blob = b"exact reviewed bundle bytes"
+    request = make_job_request("unknown-exact-request-field")
+    request.exact_bundle_upload.bundle_id = hashlib.sha256(blob).hexdigest()
+    request.exact_bundle_upload.blob = blob
+    request.ParseFromString(request.SerializeToString() + bytes([0xF8, 0x07, 0x01]))
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
 @pytest.mark.parametrize(
     "image",
     [

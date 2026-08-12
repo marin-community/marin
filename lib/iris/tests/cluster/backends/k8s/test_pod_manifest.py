@@ -911,7 +911,7 @@ def test_init_container_created_when_bundle_id_present():
 
 
 def test_init_container_uses_independent_request_image_digest():
-    req = make_run_req("/my-job/task-0")
+    req = make_run_req("/parent/child/0")
     req.bundle_id = "bundle-abc"
     req.bundle_init_image = "registry.example/iris-init@sha256:" + "a" * 64
 
@@ -922,7 +922,11 @@ def test_init_container_uses_independent_request_image_digest():
         "http://ctrl:8080",
     )
 
+    manifest = _build_pod_manifest(req, pod_config())
+    task_env = {item["name"]: item.get("value") for item in manifest["spec"]["containers"][0]["env"]}
+
     assert init_containers[0]["image"] == req.bundle_init_image
+    assert task_env["IRIS_BUNDLE_INIT_IMAGE"] == req.bundle_init_image
 
 
 def test_no_init_container_when_no_bundle_or_files():

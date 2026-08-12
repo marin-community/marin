@@ -30,12 +30,14 @@ class _RecordingClusterClient:
 
     captured_env: dict = field(default_factory=dict)
     captured_constraints: list = field(default_factory=list)
+    captured_bundle_init_image: str | None = None
 
     def submit_job(self, *, job_id=None, environment=None, constraints=None, **kwargs) -> JobName:
         if environment:
             self.captured_env = dict(environment.env_vars)
         if constraints:
             self.captured_constraints = list(constraints)
+        self.captured_bundle_init_image = kwargs.get("bundle_init_image")
         return job_id or JobName.root("test", "dummy")
 
     def shutdown(self, wait: bool = True) -> None:
@@ -64,12 +66,14 @@ def _parent_job_info(
     env: dict[str, str],
     constraints: list[Constraint] | None = None,
     worker_region: str | None = None,
+    bundle_init_image: str | None = None,
 ) -> JobInfo:
     return JobInfo(
         task_id=JobName.from_wire("/parent-job/0"),
         env=env,
         constraints=constraints or [],
         worker_region=worker_region,
+        bundle_init_image=bundle_init_image,
     )
 
 
@@ -120,6 +124,38 @@ def test_no_env_inheritance_without_parent_context(capturing_client):
     client.submit(entrypoint, "no-parent-test", resources)
 
     assert stub.captured_env == {}
+
+
+def test_child_job_inherits_parent_bundle_init_image(capturing_client, parent_context):
+    client, stub = capturing_client
+    image = "registry.example/iris-init@sha256:" + "a" * 64
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, bundle_init_image=image)),
+    ):
+        client.submit(Entrypoint.from_callable(dummy_entrypoint), "child", ResourceSpec(cpu=1, memory="1g"))
+
+    assert stub.captured_bundle_init_image == image
+
+
+@pytest.mark.parametrize("child_image", ["registry.example/iris-init@sha256:" + "b" * 64, ""])
+def test_child_job_explicit_bundle_init_image_overrides_parent(capturing_client, parent_context, child_image):
+    client, stub = capturing_client
+    parent_image = "registry.example/iris-init@sha256:" + "a" * 64
+
+    with (
+        iris_ctx_scope(parent_context),
+        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, bundle_init_image=parent_image)),
+    ):
+        client.submit(
+            Entrypoint.from_callable(dummy_entrypoint),
+            "child",
+            ResourceSpec(cpu=1, memory="1g"),
+            bundle_init_image=child_image,
+        )
+
+    assert stub.captured_bundle_init_image == child_image
 
 
 def test_child_job_inherits_parent_constraints(capturing_client, parent_context):

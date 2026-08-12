@@ -734,6 +734,7 @@ def _build_pod_manifest(
         attempt_id=run_req.attempt_id,
         num_tasks=run_req.num_tasks,
         bundle_id=run_req.bundle_id,
+        bundle_init_image=run_req.bundle_init_image,
         controller_address=config.controller_address,
         environment=run_req.environment,
         constraints=run_req.constraints,

@@ -157,6 +157,7 @@ def build_common_iris_env(
     attempt_id: int,
     num_tasks: int,
     bundle_id: str,
+    bundle_init_image: str,
     controller_address: str | None,
     environment: job_pb2.EnvironmentConfig,
     constraints: Sequence[job_pb2.Constraint],
@@ -182,6 +183,8 @@ def build_common_iris_env(
     env["IRIS_TASK_ID"] = wire_task_id
     env["IRIS_NUM_TASKS"] = str(num_tasks)
     env["IRIS_BUNDLE_ID"] = bundle_id
+    if bundle_init_image:
+        env["IRIS_BUNDLE_INIT_IMAGE"] = bundle_init_image
 
     # Controller connectivity
     if controller_address:

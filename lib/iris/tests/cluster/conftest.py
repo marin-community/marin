@@ -170,13 +170,16 @@ class ServiceTestHarness:
         name: str,
         *,
         user: str = "test-user",
+        parent_job_id: JobName | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
         max_task_failures: int = 0,
         resources: job_pb2.ResourceSpecProto | None = None,
+        bundle_id: str = "",
+        bundle_init_image: str = "",
     ) -> JobName:
         """Submit a job via the RPC layer. Returns job_id."""
-        job_id = JobName.root(user, name)
+        job_id = parent_job_id.child(name) if parent_job_id is not None else JobName.root(user, name)
         request = controller_pb2.Controller.LaunchJobRequest(
             name=job_id.to_wire(),
             entrypoint=make_test_entrypoint(),
@@ -185,6 +188,8 @@ class ServiceTestHarness:
             replicas=replicas,
             max_retries_failure=max_retries_failure,
             max_task_failures=max_task_failures,
+            bundle_id=bundle_id,
+            bundle_init_image=bundle_init_image,
         )
         self.service.launch_job(request, None)
         return job_id
@@ -252,6 +257,14 @@ class ServiceTestHarness:
         result = self.k8s_provider.reconcile(snapshot)
         with self.state._db.transaction() as cur:
             commit_effects(cur, result.effects)
+
+    def k8s_pod_for_task(self, task_id: JobName) -> dict:
+        """Return the fake Kubernetes pod manifest for the latest task attempt."""
+        assert self.k8s is not None, "k8s_pod_for_task requires K8s harness"
+        pod_name = self._find_pod_for_task(task_id)
+        if pod_name is None:
+            raise ValueError(f"No pod found for task {task_id}")
+        return next(pod for pod in self.k8s.list_json(K8sResource.PODS) if pod["metadata"]["name"] == pod_name)
 
     # ── GCP-specific ────────────────────────────────────────────
 
@@ -519,5 +532,12 @@ def harness(request, tmp_path, embedded_log_server) -> ServiceTestHarness:
         h = _make_k8s_harness(tmp_path, embedded_log_server.address)
     else:
         h = _make_gcp_harness(tmp_path, embedded_log_server.address)
+    yield h
+    h.db.close()
+
+
+@pytest.fixture
+def k8s_harness(tmp_path, embedded_log_server) -> ServiceTestHarness:
+    h = _make_k8s_harness(tmp_path, embedded_log_server.address)
     yield h
     h.db.close()

@@ -551,6 +551,20 @@ def test_drain_multiple_tasks(state):
     assert promoted_ids == expected_ids
 
 
+def test_child_bundle_init_image_reaches_k8s_pod(k8s_harness):
+    image = "registry.example/iris-init@sha256:" + "a" * 64
+    parent_job = k8s_harness.submit("parent")
+    child_job = k8s_harness.submit("child", parent_job_id=parent_job, bundle_id="bundle-abc", bundle_init_image=image)
+
+    k8s_harness.sync_k8s()
+
+    pod = k8s_harness.k8s_pod_for_task(child_job.task(0))
+    task_env = {item["name"]: item.get("value") for item in pod["spec"]["containers"][0]["env"]}
+    staging = next(container for container in pod["spec"]["initContainers"] if container["name"] == "stage-workdir")
+    assert staging["image"] == image
+    assert task_env["IRIS_BUNDLE_INIT_IMAGE"] == image
+
+
 def test_apply_ignores_stale_attempt(state):
     """Updates with a mismatched attempt_id are silently skipped."""
     [task_id] = submit_direct_job(state, "stale-attempt")

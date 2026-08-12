@@ -31,6 +31,7 @@ class JobInfo:
     attempt_id: int = 0
     worker_id: str | None = None
     bundle_id: str | None = None
+    bundle_init_image: str | None = None
 
     controller_address: str | None = None
     """Address of the controller that started this job, if any."""
@@ -121,6 +122,7 @@ def get_job_info() -> JobInfo | None:
                 json.loads(os.environ["IRIS_JOB_SETUP_SCRIPTS"]) if "IRIS_JOB_SETUP_SCRIPTS" in os.environ else None
             ),
             bundle_id=os.environ.get("IRIS_BUNDLE_ID"),
+            bundle_init_image=os.environ.get("IRIS_BUNDLE_INIT_IMAGE"),
             ports=_parse_ports_from_env(),
             env=job_env,
             constraints=constraints,

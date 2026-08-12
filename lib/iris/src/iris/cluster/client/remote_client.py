@@ -121,9 +121,8 @@ class RemoteClusterClient:
                 internal service addresses; external clients (CLI over a
                 tunnel) cannot and must keep the default proxied path.
         """
-        bundle_sources = sum(source is not None for source in (bundle_id, workspace, exact_bundle))
-        if bundle_sources > 1:
-            raise ValueError("bundle_id, workspace, and exact_bundle are mutually exclusive")
+        if exact_bundle is not None and (bundle_id is not None or workspace is not None):
+            raise ValueError("exact_bundle is mutually exclusive with bundle_id and workspace")
 
         self._address = controller_address
         self._bundle_id = bundle_id

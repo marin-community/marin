@@ -60,6 +60,17 @@ def test_worker_region_absent_when_env_not_set(monkeypatch):
     assert info.worker_region is None
 
 
+def test_bundle_init_image_from_env(monkeypatch):
+    image = "registry.example/iris-init@sha256:" + "a" * 64
+    monkeypatch.setenv("IRIS_TASK_ID", "/test-user/my-job/0:1")
+    monkeypatch.setenv("IRIS_BUNDLE_INIT_IMAGE", image)
+
+    info = get_job_info()
+
+    assert info is not None
+    assert info.bundle_init_image == image
+
+
 def test_default_jobinfo_exposes_worker_region_attribute():
     """JobInfo.worker_region defaults to None so attribute access never raises."""
     info = JobInfo(task_id=JobName.from_wire("/alice/train/0"))

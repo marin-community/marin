@@ -145,6 +145,7 @@ def build_iris_env(
         attempt_id=task.attempt_id,
         num_tasks=task.num_tasks,
         bundle_id=req.bundle_id,
+        bundle_init_image=req.bundle_init_image,
         controller_address=controller_address,
         environment=req.environment,
         constraints=req.constraints,

@@ -31,7 +31,9 @@ content-addressed write; a different byte sequence cannot reuse the ID.
 `bundle_init_image` is independent of the task image. When present, the
 controller accepts only an OCI reference ending in
 `@sha256:<64-lowercase-hex>`, persists it with the job, and places it on the
-Kubernetes bundle/workdir staging container. An omitted value preserves the
+Kubernetes bundle/workdir staging container. Tasks receive the resolved value
+for child submission: a child inherits it when its argument is `None`, while an
+explicit child value overrides it. An omitted value on a root job preserves the
 cluster default behavior.
 
 Constructing the client and bundle does not upload data. Calling `submit`

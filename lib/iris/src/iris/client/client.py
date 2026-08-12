@@ -749,6 +749,9 @@ class IrisClient:
                 inherited_region = region_constraint([job_info.worker_region])
                 constraints = [*constraints, inherited_region]
 
+            if bundle_init_image is None and job_info is not None:
+                bundle_init_image = job_info.bundle_init_image
+
         # The ANY-region marker's only job is the inheritance opt-out above (and clearing
         # any inherited pin via merge_constraints). Once that decision is made it carries no
         # requirement, so drop it before the wire: as a hard region-EXISTS constraint it
