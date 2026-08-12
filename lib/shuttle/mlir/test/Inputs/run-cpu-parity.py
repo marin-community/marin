@@ -19,7 +19,10 @@ PIPELINES = (
     "shuttle-stablehlo-source-ordered-pipeline",
     "shuttle-stablehlo-fast-pipeline",
 )
-MAP_FIXTURES = (("f32-map-shape-ops.mlir", ((3,), (2, 2))),)
+MAP_FIXTURES = (
+    ("f32-map-shape-ops.mlir", ((3,), (2, 2))),
+    ("f32-mapped-singleton-broadcast.mlir", ((7, 1), (1, 13), (1, 7))),
+)
 
 
 def load_fixtures():

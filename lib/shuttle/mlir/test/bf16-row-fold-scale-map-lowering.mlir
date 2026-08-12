@@ -27,6 +27,19 @@
 // RUN: shuttle-test-opt --stablehlo-complex-math-expander --shuttle-stablehlo-source-ordered-pipeline --shuttle-test-report-normalized-fingerprint %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-composed.mlir | FileCheck %s --check-prefix=HOOK5
 // RUN: shuttle-test-opt --stablehlo-complex-math-expander --shuttle-stablehlo-fast-pipeline --shuttle-test-report-normalized-fingerprint %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-composed.mlir | FileCheck %s --check-prefix=HOOK5
 
+// RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-forward.mlir | FileCheck %s --check-prefix=FWD-COVERAGE
+// RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-backward.mlir | FileCheck %s --check-prefix=BWD-COVERAGE
+// RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-composed.mlir | FileCheck %s --check-prefix=COMPOSED-COVERAGE
+// RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir | FileCheck %s --check-prefix=FWD-COVERAGE
+// RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-backward.mlir | FileCheck %s --check-prefix=BWD-COVERAGE
+// RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-composed.mlir | FileCheck %s --check-prefix=COMPOSED-COVERAGE
+// RUN: shuttle-test-opt --stablehlo-complex-math-expander --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir | FileCheck %s --check-prefix=HOOK-FWD-COVERAGE
+// RUN: shuttle-test-opt --stablehlo-complex-math-expander --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-backward.mlir | FileCheck %s --check-prefix=HOOK-BWD-COVERAGE
+// RUN: shuttle-test-opt --stablehlo-complex-math-expander --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-composed.mlir | FileCheck %s --check-prefix=HOOK-COMPOSED-COVERAGE
+// RUN: shuttle-test-opt --stablehlo-complex-math-expander --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-forward.mlir | FileCheck %s --check-prefix=HOOK-FWD-COVERAGE
+// RUN: shuttle-test-opt --stablehlo-complex-math-expander --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-backward.mlir | FileCheck %s --check-prefix=HOOK-BWD-COVERAGE
+// RUN: shuttle-test-opt --stablehlo-complex-math-expander --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-composed.mlir | FileCheck %s --check-prefix=HOOK-COMPOSED-COVERAGE
+
 // RUN: shuttle-test-opt --stablehlo-complex-math-expander --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-forward.mlir | FileCheck %s --check-prefix=FWD
 // RUN: shuttle-test-opt --stablehlo-complex-math-expander --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-backward.mlir | FileCheck %s --check-prefix=BWD
 // RUN: shuttle-test-opt --stablehlo-complex-math-expander --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-verify-source-coverage --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-composed.mlir | FileCheck %s --check-prefix=COMPOSED
@@ -47,12 +60,51 @@
 // HOOK4: 048bb8757432cb7b2ed65666189861ce92f339d19981f93aa71d084ec2d5f7b1
 // HOOK5: b23d862fc56af03ec3538f32c857b84c19982b19fd3bca27111d5ff43976fe98
 
-// FWD-COUNT-4: #shuttle.map_semantics<broadcast_in_dim>
-// FWD-COUNT-2: name = "stablehlo.broadcast_in_dim"
-// BWD-COUNT-7: #shuttle.map_semantics<broadcast_in_dim>
-// BWD-COUNT-3: name = "stablehlo.broadcast_in_dim"
-// COMPOSED-COUNT-7: #shuttle.map_semantics<broadcast_in_dim>
-// COMPOSED-COUNT-4: name = "stablehlo.broadcast_in_dim"
+// FWD-COVERAGE: complete = [
+// FWD-COVERAGE-COUNT-20: #shuttle.source_ref
+// FWD-COVERAGE-SAME: ], excluded = []
+// FWD-COVERAGE: selected_regions = {{\[\[}}
+// FWD-COVERAGE-COUNT-20: #shuttle.source_ref
+// FWD-COVERAGE-SAME: {{\]\]}}
+// BWD-COVERAGE: complete = [
+// BWD-COVERAGE-COUNT-53: #shuttle.source_ref
+// BWD-COVERAGE-SAME: ], excluded = []
+// BWD-COVERAGE: selected_regions = {{\[\[}}
+// BWD-COVERAGE-COUNT-53: #shuttle.source_ref
+// BWD-COVERAGE-SAME: {{\]\]}}
+// COMPOSED-COVERAGE: complete = [
+// COMPOSED-COVERAGE-COUNT-56: #shuttle.source_ref
+// COMPOSED-COVERAGE-SAME: ], excluded = []
+// COMPOSED-COVERAGE: selected_regions = {{\[\[}}
+// COMPOSED-COVERAGE-COUNT-56: #shuttle.source_ref
+// COMPOSED-COVERAGE-SAME: {{\]\]}}
+// HOOK-FWD-COVERAGE: complete = [
+// HOOK-FWD-COVERAGE-COUNT-20: #shuttle.source_ref
+// HOOK-FWD-COVERAGE-SAME: ], excluded = []
+// HOOK-BWD-COVERAGE: complete = [
+// HOOK-BWD-COVERAGE-COUNT-48: #shuttle.source_ref
+// HOOK-BWD-COVERAGE-SAME: ], excluded = []
+// HOOK-BWD-COVERAGE: zero_result_operations = [
+// HOOK-BWD-COVERAGE-SAME: #shuttle.source_ref<0, 1, 0, 0>
+// HOOK-BWD-COVERAGE-SAME: #shuttle.source_ref<0, 2, 0, 0>
+// HOOK-BWD-COVERAGE-SAME: #shuttle.source_ref<0, 3, 0, 0>
+// HOOK-BWD-COVERAGE-SAME: #shuttle.source_ref<0, 4, 0, 0>
+// HOOK-BWD-COVERAGE-SAME: #shuttle.source_ref<0, 5, 0, 0>
+// HOOK-COMPOSED-COVERAGE: complete = [
+// HOOK-COMPOSED-COVERAGE-COUNT-51: #shuttle.source_ref
+// HOOK-COMPOSED-COVERAGE-SAME: ], excluded = []
+// HOOK-COMPOSED-COVERAGE: zero_result_operations = [
+// HOOK-COMPOSED-COVERAGE-SAME: #shuttle.source_ref<0, 1, 0, 0>
+// HOOK-COMPOSED-COVERAGE-SAME: #shuttle.source_ref<0, 2, 0, 0>
+// HOOK-COMPOSED-COVERAGE-SAME: #shuttle.source_ref<0, 3, 0, 0>
+// HOOK-COMPOSED-COVERAGE-SAME: #shuttle.source_ref<0, 4, 0, 0>
+// HOOK-COMPOSED-COVERAGE-SAME: #shuttle.source_ref<0, 5, 0, 0>
+// FWD-COUNT-6: #shuttle.map_semantics<broadcast_in_dim>
+// FWD: excluded = []
+// BWD-COUNT-10: #shuttle.map_semantics<broadcast_in_dim>
+// BWD: excluded = []
+// COMPOSED-COUNT-11: #shuttle.map_semantics<broadcast_in_dim>
+// COMPOSED: excluded = []
 // RSQRT: #shuttle.map_semantics<pointwise>
 // RSQRT: "math.rsqrt"
 // RESHAPE-COUNT-2: #shuttle.map_semantics<reshape>

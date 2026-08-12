@@ -510,26 +510,265 @@ protected:
     operation->setAttr("indexing_maps",
                        ArrayAttr::get(operation.getContext(), maps));
   }
+
+  MapOp rowSingletonBroadcast() {
+    MapOp result;
+    this->getOperation().walk([&](MapOp candidate) {
+      if (result || candidate.getSemantics() != MapSemantics::BroadcastInDim ||
+          candidate.getInputs().size() != 1) {
+        return;
+      }
+      auto input = dyn_cast<RankedTensorType>(candidate.getInputs()[0].getType());
+      auto output = dyn_cast<RankedTensorType>(candidate.getResult(0).getType());
+      if (input && output && input.getRank() == 2 && output.getRank() == 2 &&
+          input.getDimSize(0) == 7 && input.getDimSize(1) == 1 &&
+          output.getDimSize(0) == 7 && output.getDimSize(1) == 13) {
+        result = candidate;
+      }
+    });
+    if (!result) {
+      this->getOperation().emitError(
+          "test fixture has no 7x1 to 7x13 broadcast Map");
+      this->signalPassFailure();
+    }
+    return result;
+  }
 };
 
-class BroadcastUnorderedPass
-    : public MapMutationPass<BroadcastUnorderedPass> {
+class BroadcastMappedAxesSwapPass
+    : public MapMutationPass<BroadcastMappedAxesSwapPass> {
 public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BroadcastUnorderedPass)
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BroadcastMappedAxesSwapPass)
   StringRef getArgument() const final {
-    return "shuttle-test-unorder-broadcast-map";
+    return "shuttle-test-swap-mapped-broadcast-axes";
   }
   void runOnOperation() override {
-    MapOp operation = map(MapSemantics::BroadcastInDim);
+    MapOp operation = rowSingletonBroadcast();
     if (!operation) {
       return;
     }
     MLIRContext *context = operation.getContext();
+    replaceInputMap(
+        operation,
+        AffineMap::get(2, 0,
+                       {getAffineDimExpr(1, context),
+                        getAffineDimExpr(0, context).floorDiv(7)},
+                       context));
+  }
+};
+
+class BroadcastMappedAxisDuplicatePass
+    : public MapMutationPass<BroadcastMappedAxisDuplicatePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BroadcastMappedAxisDuplicatePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-duplicate-mapped-broadcast-axis";
+  }
+  void runOnOperation() override {
+    MapOp operation = rowSingletonBroadcast();
+    if (!operation) {
+      return;
+    }
+    MLIRContext *context = operation.getContext();
+    replaceInputMap(
+        operation,
+        AffineMap::get(2, 0,
+                       {getAffineDimExpr(0, context),
+                        getAffineDimExpr(0, context).floorDiv(7)},
+                       context));
+  }
+};
+
+class BroadcastWrongDivisorPass
+    : public MapMutationPass<BroadcastWrongDivisorPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BroadcastWrongDivisorPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-set-wrong-broadcast-divisor";
+  }
+  void runOnOperation() override {
+    MapOp operation = rowSingletonBroadcast();
+    if (!operation) {
+      return;
+    }
+    MLIRContext *context = operation.getContext();
+    replaceInputMap(
+        operation,
+        AffineMap::get(2, 0,
+                       {getAffineDimExpr(0, context),
+                        getAffineDimExpr(1, context).floorDiv(7)},
+                       context));
+  }
+};
+
+class BroadcastLiteralZeroPass
+    : public MapMutationPass<BroadcastLiteralZeroPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BroadcastLiteralZeroPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-set-broadcast-literal-zero";
+  }
+  void runOnOperation() override {
+    MapOp operation = rowSingletonBroadcast();
+    if (!operation) {
+      return;
+    }
+    MLIRContext *context = operation.getContext();
+    replaceInputMap(
+        operation,
+        AffineMap::get(2, 0,
+                       {getAffineDimExpr(0, context),
+                        getAffineConstantExpr(0, context)},
+                       context));
+  }
+};
+
+class BroadcastCompositeDividendPass
+    : public MapMutationPass<BroadcastCompositeDividendPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BroadcastCompositeDividendPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-set-broadcast-composite-dividend";
+  }
+  void runOnOperation() override {
+    MapOp operation = rowSingletonBroadcast();
+    if (!operation) {
+      return;
+    }
+    MLIRContext *context = operation.getContext();
+    AffineExpr shiftedDimension =
+        getAffineDimExpr(1, context) + getAffineConstantExpr(1, context);
+    replaceInputMap(
+        operation,
+        AffineMap::get(2, 0,
+                       {getAffineDimExpr(0, context),
+                        shiftedDimension.floorDiv(13)},
+                       context));
+  }
+};
+
+class BroadcastWrongResultExtentPass
+    : public MapMutationPass<BroadcastWrongResultExtentPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BroadcastWrongResultExtentPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-set-wrong-broadcast-result-extent";
+  }
+  void runOnOperation() override {
+    if (MapOp operation = rowSingletonBroadcast()) {
+      operation.getResult(0).setType(
+          RankedTensorType::get({7, 12},
+                                Float32Type::get(operation.getContext())));
+    }
+  }
+};
+
+class BroadcastDirectSingletonPass
+    : public MapMutationPass<BroadcastDirectSingletonPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BroadcastDirectSingletonPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-direct-expanded-singleton";
+  }
+  void runOnOperation() override {
+    MapOp operation = rowSingletonBroadcast();
+    if (!operation) {
+      return;
+    }
+    MLIRContext *context = operation.getContext();
+    replaceInputMap(operation, AffineMap::getMultiDimIdentityMap(2, context));
+  }
+};
+
+class BroadcastExpandNonSingletonPass
+    : public MapMutationPass<BroadcastExpandNonSingletonPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BroadcastExpandNonSingletonPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-expand-nonsingleton-axis";
+  }
+  void runOnOperation() override {
+    MapOp operation = rowSingletonBroadcast();
+    if (!operation) {
+      return;
+    }
+    MLIRContext *context = operation.getContext();
+    replaceInputMap(
+        operation,
+        AffineMap::get(2, 0,
+                       {getAffineDimExpr(0, context).floorDiv(7),
+                        getAffineDimExpr(1, context).floorDiv(13)},
+                       context));
+  }
+};
+
+class MapConstantZeroPointwisePass
+    : public MapMutationPass<MapConstantZeroPointwisePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MapConstantZeroPointwisePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-set-pointwise-constant-zero";
+  }
+  void runOnOperation() override {
+    MapOp operation = map(MapSemantics::Pointwise);
+    if (!operation) {
+      return;
+    }
+    auto input = cast<RankedTensorType>(operation.getInputs()[0].getType());
+    MLIRContext *context = operation.getContext();
+    SmallVector<AffineExpr> expressions;
+    expressions.push_back(getAffineConstantExpr(0, context));
+    for (unsigned dimension = 1; dimension < input.getRank(); ++dimension) {
+      expressions.push_back(getAffineDimExpr(dimension, context));
+    }
     replaceInputMap(operation,
-                    AffineMap::get(3, 0,
-                                   {getAffineDimExpr(2, context),
-                                    getAffineDimExpr(0, context)},
-                                   context));
+                    AffineMap::get(input.getRank(), 0, expressions, context));
+  }
+};
+
+class BroadcastReplayAsReshapePass
+    : public MapMutationPass<BroadcastReplayAsReshapePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BroadcastReplayAsReshapePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-replay-broadcast-as-reshape";
+  }
+  void runOnOperation() override {
+    if (MapOp operation = rowSingletonBroadcast()) {
+      operation->setAttr("semantics",
+                         MapSemanticsAttr::get(operation.getContext(),
+                                               MapSemantics::Reshape));
+    }
+  }
+};
+
+class ReshapeReplayAsBroadcastPass
+    : public MapMutationPass<ReshapeReplayAsBroadcastPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ReshapeReplayAsBroadcastPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-replay-reshape-as-broadcast";
+  }
+  void runOnOperation() override {
+    MapOp operation;
+    getOperation().walk([&](MapOp candidate) {
+      if (operation || candidate.getSemantics() != MapSemantics::Reshape) {
+        return;
+      }
+      auto input = dyn_cast<RankedTensorType>(candidate.getInputs()[0].getType());
+      auto result = dyn_cast<RankedTensorType>(candidate.getResult(0).getType());
+      if (input && result && input.getRank() > result.getRank()) {
+        operation = candidate;
+      }
+    });
+    if (!operation) {
+      getOperation().emitError("test fixture has no rank-reducing reshape Map");
+      signalPassFailure();
+      return;
+    }
+    operation->setAttr("semantics",
+                       MapSemanticsAttr::get(operation.getContext(),
+                                             MapSemantics::BroadcastInDim));
   }
 };
 
@@ -711,8 +950,18 @@ void registerMutationPasses() {
   PassRegistration<FoldAddFastMathPass>();
   PassRegistration<FoldYieldAttributePass>();
   PassRegistration<FoldAttributePass>();
-  PassRegistration<BroadcastUnorderedPass>();
   PassRegistration<BroadcastDuplicatePass>();
+  PassRegistration<BroadcastMappedAxesSwapPass>();
+  PassRegistration<BroadcastMappedAxisDuplicatePass>();
+  PassRegistration<BroadcastWrongDivisorPass>();
+  PassRegistration<BroadcastLiteralZeroPass>();
+  PassRegistration<BroadcastCompositeDividendPass>();
+  PassRegistration<BroadcastWrongResultExtentPass>();
+  PassRegistration<BroadcastDirectSingletonPass>();
+  PassRegistration<BroadcastExpandNonSingletonPass>();
+  PassRegistration<MapConstantZeroPointwisePass>();
+  PassRegistration<BroadcastReplayAsReshapePass>();
+  PassRegistration<ReshapeReplayAsBroadcastPass>();
   PassRegistration<ReshapeAmbiguousPass>();
   PassRegistration<MapAttributePass>();
   PassRegistration<MapYieldAttributePass>();

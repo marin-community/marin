@@ -4,6 +4,7 @@
 #include "shuttle/IR/ShuttleDialect.h"
 
 #include <cstddef>
+#include <utility>
 
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -179,6 +180,7 @@ LogicalResult verifyMapIndexingMaps(MapOp map, TypeRange indexedTypes) {
   AffineMap domain = cast<AffineMapAttr>(indexingMaps[0]).getValue();
   SmallVector<int64_t> domainExtents(domain.getNumDims(), ShapedType::kDynamic);
   SmallVector<char> boundDimensions(domain.getNumDims(), 0);
+  SmallVector<std::pair<unsigned, int64_t>> boundedZeroDivisors;
   bool hasRankedTensor = false;
   bool resultMapProjectsDomain = false;
   size_t mapPosition = 0;
@@ -212,15 +214,42 @@ LogicalResult verifyMapIndexingMaps(MapOp map, TypeRange indexedTypes) {
     for (auto [resultPosition, expression] :
          llvm::enumerate(indexingMap.getResults())) {
       auto dimension = dyn_cast<AffineDimExpr>(expression);
+      bool boundedZero = false;
       if (!dimension) {
         auto constant = dyn_cast<AffineConstantExpr>(expression);
-        if (isResultMap || !constant || constant.getValue() != 0 ||
+        if (constant) {
+          if (isResultMap || map.getSemantics() != MapSemantics::Reshape ||
+              constant.getValue() != 0 ||
+              tensorType.getDimSize(resultPosition) != 1) {
+            return map.emitOpError(
+                "constant-zero input indexing is reserved for typed static "
+                "singleton reshapes");
+          }
+          continue;
+        }
+        auto floorDiv = dyn_cast<AffineBinaryOpExpr>(expression);
+        AffineExpr dividendExpression =
+            floorDiv && floorDiv.getKind() == AffineExprKind::FloorDiv
+                ? floorDiv.getLHS()
+                : AffineExpr{};
+        AffineExpr divisorExpression =
+            floorDiv && floorDiv.getKind() == AffineExprKind::FloorDiv
+                ? floorDiv.getRHS()
+                : AffineExpr{};
+        auto dividend = dyn_cast_if_present<AffineDimExpr>(dividendExpression);
+        auto divisor =
+            dyn_cast_if_present<AffineConstantExpr>(divisorExpression);
+        if (isResultMap || map.getSemantics() != MapSemantics::BroadcastInDim ||
+            !dividend || !divisor || divisor.getValue() <= 1 ||
             tensorType.getDimSize(resultPosition) != 1) {
           return map.emitOpError(
-              "map input indexing maps may use constant zero only for "
-              "static singleton tensor dimensions");
+              "bounded-zero floordiv input indexing is reserved for typed "
+              "static singleton broadcasts");
         }
-        continue;
+        dimension = dividend;
+        boundedZero = true;
+        boundedZeroDivisors.emplace_back(dimension.getPosition(),
+                                         divisor.getValue());
       }
       const unsigned domainPosition = dimension.getPosition();
       if (!seenDimensions.insert(domainPosition).second) {
@@ -229,6 +258,9 @@ LogicalResult verifyMapIndexingMaps(MapOp map, TypeRange indexedTypes) {
             "most once");
       }
       boundDimensions[domainPosition] = 1;
+      if (boundedZero) {
+        continue;
+      }
       const int64_t extent = tensorType.getDimSize(resultPosition);
       if (ShapedType::isDynamic(extent)) {
         continue;
@@ -250,6 +282,14 @@ LogicalResult verifyMapIndexingMaps(MapOp map, TypeRange indexedTypes) {
     return map.emitOpError(
         "every map domain dimension must be bound by a ranked tensor "
         "dimension");
+  }
+  for (auto [domainPosition, divisor] : boundedZeroDivisors) {
+    if (ShapedType::isDynamic(domainExtents[domainPosition]) ||
+        domainExtents[domainPosition] != divisor) {
+      return map.emitOpError(
+          "bounded-zero broadcast divisor must equal the static domain "
+          "extent");
+    }
   }
   if (resultMapProjectsDomain) {
     return map.emitOpError(

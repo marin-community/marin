@@ -5,11 +5,46 @@
 // RUN: shuttle-test-opt --split-input-file --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra %s | not grep shuttle.map
 
 module {
-  func.func @mapped_singleton_expansion(%input: tensor<1x3xf32>)
-      -> tensor<2x3xf32> {
+  func.func @rank_three_singleton_expansion(%input: tensor<7x1x13xf32>)
+      -> tensor<7x5x13xf32> {
+    %result = stablehlo.broadcast_in_dim %input, dims = [0, 1, 2] :
+        (tensor<7x1x13xf32>) -> tensor<7x5x13xf32>
+    return %result : tensor<7x5x13xf32>
+  }
+}
+
+// -----
+
+module {
+  func.func @two_mapped_singleton_expansions(%input: tensor<1x1xf32>)
+      -> tensor<7x13xf32> {
     %result = stablehlo.broadcast_in_dim %input, dims = [0, 1] :
-        (tensor<1x3xf32>) -> tensor<2x3xf32>
-    return %result : tensor<2x3xf32>
+        (tensor<1x1xf32>) -> tensor<7x13xf32>
+    return %result : tensor<7x13xf32>
+  }
+}
+
+// -----
+
+module {
+  func.func @dynamic_mapped_singleton_expansion(
+      %input: tensor<?x1xf32, #stablehlo.bounds<7, ?>>)
+      -> tensor<?x13xf32, #stablehlo.bounds<7, ?>> {
+    %result = stablehlo.broadcast_in_dim %input, dims = [0, 1] :
+        (tensor<?x1xf32, #stablehlo.bounds<7, ?>>) ->
+        tensor<?x13xf32, #stablehlo.bounds<7, ?>>
+    return %result : tensor<?x13xf32, #stablehlo.bounds<7, ?>>
+  }
+}
+
+// -----
+
+module {
+  func.func @zero_extent_mapped_singleton_expansion(
+      %input: tensor<7x1xf32>) -> tensor<7x0xf32> {
+    %result = stablehlo.broadcast_in_dim %input, dims = [0, 1] :
+        (tensor<7x1xf32>) -> tensor<7x0xf32>
+    return %result : tensor<7x0xf32>
   }
 }
 
@@ -61,4 +96,4 @@ module {
   }
 }
 
-// CHECK-COUNT-6: shuttle.coverage_manifest = {{.*}}reason = "unsupported_operation"
+// CHECK-COUNT-9: shuttle.coverage_manifest = {{.*}}reason = "unsupported_operation"

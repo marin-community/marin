@@ -17,10 +17,7 @@
 // PROVENANCE-SAME: shuttle.operation_ref = array<i64: 0, 1, 1>
 // PROVENANCE: }) {shuttle.operation_ref = array<i64: 0, 0, 5>, shuttle.source_refs = [#shuttle.source_ref<0, 0, 5, 0>]}
 
-// The Reduce and copy-free Map slices are selected. Mapped-singleton expanding
-// broadcasts remain explicitly outside this Target 1 slice.
+// The complete Target 1 Reduce and Map source language is selected.
 // BOUNDARY: shuttle.coverage_manifest
-// BOUNDARY-SAME: excluded = [
-// BOUNDARY-SAME: stablehlo.broadcast_in_dim
-// BOUNDARY-SAME: reason = "unsupported_operation"
+// BOUNDARY-SAME: excluded = []
 // BOUNDARY-SAME: version = 2

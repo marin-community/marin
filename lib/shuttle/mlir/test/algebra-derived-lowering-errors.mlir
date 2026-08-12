@@ -43,15 +43,15 @@ module attributes {shuttle.coverage_manifest = {}} {
 
 // -----
 
-#input = affine_map<(d0, d1, d2) -> (d1, d0)>
+#input = affine_map<(d0, d1, d2) -> (d1, d1)>
 #result = affine_map<(d0, d1, d2) -> (d0, d1, d2)>
 
 module attributes {shuttle.coverage_manifest = {}} {
-  func.func @unordered_broadcast(%arg0: tensor<3x2xf32>)
+  func.func @duplicate_broadcast(%arg0: tensor<3x2xf32>)
       -> tensor<2x3x5xf32> {
     %0 = "shuttle.region"(%arg0) ({
     ^bb0(%arg1: tensor<3x2xf32>):
-      // expected-error @+1 {{broadcast input map dimensions must be ordered, unique, and non-expanding}}
+      // expected-error @+1 {{map indexing maps must use each direct domain dimension at most once}}
       %1 = "shuttle.map"(%arg1) ({
       ^bb0(%element: f32):
         "shuttle.yield"(%element) : (f32) -> ()

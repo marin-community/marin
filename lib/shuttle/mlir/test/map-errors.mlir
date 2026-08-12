@@ -33,7 +33,7 @@ module {
   func.func @non_projected(%arg: tensor<2x4xf32>) -> tensor<2x4xf32> {
     %result = "shuttle.region"(%arg) ({
     ^bb0(%region_arg: tensor<2x4xf32>):
-      // expected-error @+1 {{map input indexing maps may use constant zero only for static singleton tensor dimensions}}
+      // expected-error @+1 {{bounded-zero floordiv input indexing is reserved for typed static singleton broadcasts}}
       %mapped = "shuttle.map"(%region_arg) ({
       ^bb0(%element: f32):
         "shuttle.yield"(%element) : (f32) -> ()

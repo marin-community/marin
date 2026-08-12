@@ -64,7 +64,7 @@ ShuttlePipelineOptions commandLinePipelineOptions(NumericalPolicy numerics) {
   options.numerics = numerics;
   if (numerics == NumericalPolicy::Fast) {
     options.canonicalOptions =
-        R"json({"numerics":"fast","pipeline_abi_version":4,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+        R"json({"numerics":"fast","pipeline_abi_version":5,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
   }
   return options;
 }
@@ -296,17 +296,17 @@ bool hasEqualShapes(Operation *operation) {
 bool hasValidBroadcastDimensions(Operation *operation,
                                  DenseI64ArrayAttr dimensions) {
   auto result = cast<RankedTensorType>(operation->getResult(0).getType());
-  int64_t previous = -1;
+  llvm::SmallDenseSet<int64_t> seen;
   for (int64_t dimension : dimensions.asArrayRef()) {
-    if (dimension <= previous || dimension >= result.getRank()) {
+    if (dimension < 0 || dimension >= result.getRank() ||
+        !seen.insert(dimension).second) {
       return false;
     }
-    previous = dimension;
   }
   return true;
 }
 
-bool isSupportedNonExpandingBroadcast(Operation *operation) {
+bool isSupportedAffineBroadcast(Operation *operation) {
   if (operation->getNumOperands() != 1 || operation->getNumResults() != 1) {
     return false;
   }
@@ -323,14 +323,24 @@ bool isSupportedNonExpandingBroadcast(Operation *operation) {
       input == result || !hasValidBroadcastDimensions(operation, dimensions)) {
     return false;
   }
+  unsigned expandingSingletons = 0;
   for (auto [inputDimension, resultDimension] :
        llvm::enumerate(dimensions.asArrayRef())) {
-    if (input.getDimSize(inputDimension) !=
-        result.getDimSize(resultDimension)) {
+    const int64_t inputExtent = input.getDimSize(inputDimension);
+    const int64_t resultExtent = result.getDimSize(resultDimension);
+    if (inputExtent == resultExtent) {
+      continue;
+    }
+    if (inputExtent != 1 || resultExtent <= 1) {
       return false;
     }
+    ++expandingSingletons;
   }
-  return true;
+  if (expandingSingletons == 0) {
+    return true;
+  }
+  return input.getRank() == 2 && result.getRank() == 2 &&
+         expandingSingletons == 1;
 }
 
 bool isCopyFreeSingletonReshape(Operation *operation) {
@@ -503,7 +513,7 @@ bool isSupportedStablehlo(Operation *operation) {
            result.getElementType().isF32() && value && value.isSplat();
   }
   if (name == stablehlo::BroadcastInDimOp::getOperationName()) {
-    return isSupportedNonExpandingBroadcast(operation);
+    return isSupportedAffineBroadcast(operation);
   }
   if (name == stablehlo::ReshapeOp::getOperationName()) {
     return isCopyFreeSingletonReshape(operation);
@@ -1113,7 +1123,7 @@ FailureOr<SmallVector<AffineMap>> mapIndexingMaps(Operation *operation) {
     SmallVector<AffineExpr> inputExpressions;
     if (!hasValidBroadcastDimensions(operation, dimensions)) {
       operation->emitOpError(
-          "requires ordered unique in-range broadcast dimensions");
+          "requires unique in-range broadcast dimensions");
       return failure();
     }
     for (int64_t dimension : dimensions.asArrayRef()) {
@@ -1121,7 +1131,14 @@ FailureOr<SmallVector<AffineMap>> mapIndexingMaps(Operation *operation) {
         operation->emitOpError("has an out-of-range broadcast dimension");
         return failure();
       }
-      inputExpressions.push_back(getAffineDimExpr(dimension, context));
+      AffineExpr expression = getAffineDimExpr(dimension, context);
+      auto inputType =
+          cast<RankedTensorType>(operation->getOperand(0).getType());
+      if (inputType.getDimSize(inputExpressions.size()) == 1 &&
+          resultType.getDimSize(dimension) > 1) {
+        expression = expression.floorDiv(resultType.getDimSize(dimension));
+      }
+      inputExpressions.push_back(expression);
     }
     return SmallVector<AffineMap>{
         AffineMap::get(rank, 0, inputExpressions, context), identity};
@@ -2056,22 +2073,63 @@ FailureOr<OperationState> lowerMapState(MapOp map, ValueRange operands) {
         return failure();
       }
       SmallVector<int64_t> dimensions;
-      int64_t previous = -1;
+      llvm::SmallDenseSet<int64_t> seenDimensions;
+      unsigned expandingSingletons = 0;
       for (auto [inputDimension, expression] :
            llvm::enumerate(inputMap.getResults())) {
         auto dimension = dyn_cast<AffineDimExpr>(expression);
-        const int64_t position =
+        int64_t position =
             dimension ? static_cast<int64_t>(dimension.getPosition()) : -1;
-        if (!dimension || position <= previous ||
-            inputType.getDimSize(inputDimension) !=
-                resultType.getDimSize(position)) {
+        bool expandingSingleton = false;
+        bool boundedZero = false;
+        if (!dimension) {
+          auto floorDiv = dyn_cast<AffineBinaryOpExpr>(expression);
+          AffineExpr dividendExpression =
+              floorDiv && floorDiv.getKind() == AffineExprKind::FloorDiv
+                  ? floorDiv.getLHS()
+                  : AffineExpr{};
+          AffineExpr divisorExpression =
+              floorDiv && floorDiv.getKind() == AffineExprKind::FloorDiv
+                  ? floorDiv.getRHS()
+                  : AffineExpr{};
+          auto dividend =
+              dyn_cast_if_present<AffineDimExpr>(dividendExpression);
+          auto divisor =
+              dyn_cast_if_present<AffineConstantExpr>(divisorExpression);
+          if (!dividend || !divisor || divisor.getValue() <= 1) {
+            map.emitOpError(
+                "expanded singleton broadcast dimensions require a "
+                "bounded-zero floordiv expression");
+            return failure();
+          }
+          boundedZero = true;
+          position = dividend.getPosition();
+          expandingSingleton =
+              inputType.getDimSize(inputDimension) == 1 &&
+              position < resultType.getRank() &&
+              resultType.getDimSize(position) == divisor.getValue();
+        }
+        if (position < 0 || position >= resultType.getRank() ||
+            !seenDimensions.insert(position).second ||
+            (boundedZero && !expandingSingleton) ||
+            (!expandingSingleton &&
+             inputType.getDimSize(inputDimension) !=
+                 resultType.getDimSize(position))) {
           map.emitOpError(
-              "broadcast input map dimensions must be ordered, unique, and "
-              "non-expanding");
+              "broadcast input map dimensions must be unique, in range, and "
+              "match direct or bounded singleton extents");
           return failure();
         }
-        previous = position;
+        expandingSingletons += expandingSingleton;
         dimensions.push_back(position);
+      }
+      if (expandingSingletons != 0 &&
+          (inputType.getRank() != 2 || resultType.getRank() != 2 ||
+           dimensions.size() != 2 || expandingSingletons != 1)) {
+        map.emitOpError(
+            "mapped singleton broadcast requires one expanded axis in a "
+            "rank-two dimension permutation");
+        return failure();
       }
       stablehloName = stablehlo::BroadcastInDimOp::getOperationName();
       attributes.append("broadcast_dimensions",
