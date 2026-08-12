@@ -944,3 +944,16 @@ author: Rafal Wojdyla
 - East progress: `nemotron_cc_v2-diverse_qa_016d1909` reached 4,031 of 4,416 output shards with 32 live workers and no dead workers at 22:05 UTC.
 - Issue update: None. These are routine source completions, not a major run-state change.
 - Next action: Continue the regular health checks and count all output objects for each aggregate progress request.
+
+### 2026-08-12 22:31 UTC - Nemotron diverse QA completed
+
+- Root health: Both roots are running with zero source failures.
+- Completed artifacts: East has 46 completed source artifacts. RNO has 27 completed source artifacts. The full run has 73 of 292 completed source artifacts.
+- Aggregate progress: A direct object count found 92,097 of 166,775 output shards, or 55.22%. There are 74,678 shards left. East has written 33,804 shards, and RNO has written 58,293 shards.
+- East result: `nemotron_cc_v2-diverse_qa_016d1909` completed all 4,416 output shards with 506,433,587 duplicate documents and 1,410,848,683,168 input text bytes. The source step succeeded with zero failures and zero preemptions.
+- East progress: `nemotron_cc_v2-high_quality_synthetic_ea28c25e` started.
+- RNO results: `cp/library_of_congress_8e80a121` and `cp/news_b412d327` succeeded.
+- RNO progress: `cp/pes2o_c403b7bb` reached 116 of 211 output shards with 32 live workers and no dead workers.
+- Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
+- Issue update: None. These are routine source completions, not a major run-state change.
+- Next action: Watch `cp/pes2o` through completion and confirm that the new east source starts embedding.
