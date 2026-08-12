@@ -8,9 +8,22 @@ but not the public passage, so a corpus doc that merely quotes the passage is
 not falsely flagged. Non-passage docs are unchanged.
 """
 
+import io
+import zipfile
+from dataclasses import replace
+
 import pytest
 
-from experiments.datakit.decontam.prepare_eval_corpus import _PASSAGE_FIELDS, _lmh_doc_text
+from experiments.datakit.decontam import prepare_eval_corpus
+from experiments.datakit.decontam.prepare_eval_corpus import (
+    _PASSAGE_FIELDS,
+    AA_EVALS,
+    AAEvalConfig,
+    AARecordType,
+    _aa_records,
+    _iter_aa_rows,
+    _lmh_doc_text,
+)
 
 # A rendered prompt embeds the passage (as lm-eval-harness doc_to_text does).
 _PASSAGE = "The rain had continued for a week and a flood created a big river by the farm."
@@ -72,3 +85,146 @@ def test_lmh_doc_to_text_exception_is_tolerated():
     text = _lmh_doc_text(doc, boom, _target)
     assert "Q here" in text  # from raw fields
     assert "42" in text  # answer
+
+
+def _aa_config(**changes) -> AAEvalConfig:
+    values = {
+        "name": "Example Eval",
+        "subdir": "example",
+        "source_revision": "0123456789abcdef",
+        "expected_records": 1,
+        "official_records": 1,
+        "hf_id": "owner/example",
+        "subset": None,
+        "split": "test",
+        "text_fields": ("question", "answer"),
+    }
+    values.update(changes)
+    return AAEvalConfig(**values)
+
+
+def test_aa_hf_loader_uses_pinned_revision(monkeypatch):
+    calls = []
+
+    def load_dataset(dataset_id, *, name, split, revision):
+        calls.append((dataset_id, name, split, revision))
+        return [{"question": "Question", "answer": "Answer"}]
+
+    monkeypatch.setattr(prepare_eval_corpus, "load_dataset", load_dataset)
+
+    assert list(_iter_aa_rows(_aa_config())) == [{"question": "Question", "answer": "Answer"}]
+    assert calls == [("owner/example", None, "test", "0123456789abcdef")]
+
+
+def test_hle_includes_multimodal_rows():
+    hle = next(cfg for cfg in AA_EVALS if cfg.name == "Humanity's Last Exam")
+    cfg = replace(hle, expected_records=1, official_records=1)
+    [record] = _aa_records(
+        [{"id": "image-task", "question": "Question with a figure", "answer": "Answer", "image": {"bytes": b"x"}}],
+        cfg,
+    )
+    assert record["id"] == "hle-image-task"
+    assert record["text"] == "Question with a figure\n\nAnswer"
+
+
+def test_scicode_expands_each_subproblem_with_its_prompt_context():
+    cfg = _aa_config(
+        name="SciCode",
+        subdir="scicode",
+        expected_records=2,
+        official_records=2,
+        record_type=AARecordType.SCICODE_SUBPROBLEM,
+        text_fields=(),
+    )
+    rows = [
+        {
+            "problem_id": "7",
+            "problem_description_main": "Main problem",
+            "problem_background_main": "Main background",
+            "required_dependencies": "import numpy as np",
+            "sub_steps": [
+                {
+                    "step_number": "7.1",
+                    "step_description_prompt": "First prompt",
+                    "step_background": "First background",
+                    "function_header": "def first():",
+                    "test_cases": ["assert first() == 1"],
+                },
+                {
+                    "step_number": "7.2",
+                    "step_description_prompt": "Second prompt",
+                    "step_background": "Second background",
+                    "function_header": "def second():",
+                    "test_cases": ["assert second() == 2"],
+                },
+            ],
+        }
+    ]
+
+    records = _aa_records(rows, cfg)
+
+    assert [record["id"] for record in records] == ["scicode-7.1", "scicode-7.2"]
+    assert "Main problem" in records[0]["text"]
+    assert "First background" in records[0]["text"]
+    assert "def first():" in records[0]["text"]
+    assert "assert first() == 1" in records[0]["text"]
+    assert "Second prompt" not in records[0]["text"]
+
+
+def test_tau3_records_include_user_scenario_and_hidden_criteria():
+    cfg = _aa_config(
+        name="tau3-Banking",
+        subdir="tau3_banking",
+        expected_records=1,
+        official_records=1,
+        record_type=AARecordType.TAU3_TASK,
+        text_fields=(),
+    )
+    rows = [
+        {
+            "id": "task_001",
+            "user_scenario": {"instructions": "Ask for the highest cash-back card."},
+            "evaluation_criteria": {"actions": [{"name": "apply_for_credit_card"}]},
+        }
+    ]
+
+    [record] = _aa_records(rows, cfg)
+
+    assert record["id"] == "tau3_banking-task_001"
+    assert "highest cash-back card" in record["text"]
+    assert "apply_for_credit_card" in record["text"]
+
+
+def test_terminal_bench_archive_pairs_each_instruction_with_its_solution(monkeypatch):
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("terminal-bench/tasks/task-b/instruction.md", "Instruction B")
+        zf.writestr("terminal-bench/tasks/task-b/solution/solve.sh", "Solution B")
+        zf.writestr("terminal-bench/tasks/task-a/instruction.md", "Instruction A")
+        zf.writestr("terminal-bench/tasks/task-a/solution/solve.sh", "Solution A")
+    archive.seek(0)
+    monkeypatch.setattr(prepare_eval_corpus.urllib.request, "urlopen", lambda _url: archive)
+    cfg = _aa_config(
+        name="Terminal-Bench v2.1",
+        subdir="terminal_bench_2_1",
+        source_url="https://example.test/archive.zip",
+        expected_records=2,
+        official_records=2,
+        record_type=AARecordType.TERMINAL_BENCH_TASK,
+        hf_id=None,
+        text_fields=("instruction", "solution"),
+    )
+
+    records = _aa_records(list(_iter_aa_rows(cfg)), cfg)
+
+    assert records == [
+        {"id": "terminal_bench_2_1-task-a", "text": "Instruction A\n\nSolution A"},
+        {"id": "terminal_bench_2_1-task-b", "text": "Instruction B\n\nSolution B"},
+    ]
+
+
+def test_aa_record_count_mismatch_stops_preparation():
+    cfg = _aa_config(expected_records=2, official_records=2)
+
+    with pytest.raises(ValueError, match="Example Eval: expected 2 records, extracted 1"):
+        _aa_records([{"question": "Only question", "answer": "Only answer"}], cfg)

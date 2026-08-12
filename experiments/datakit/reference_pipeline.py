@@ -143,7 +143,15 @@ from experiments.datakit.decontam.config import (
     SOURCE_DF_COMMON_MIN_ABS,
     SOURCE_DF_SAMPLE_DOCS,
 )
-from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
+from experiments.datakit.decontam.prepare_eval_corpus import (
+    AA_BENCHMARK_NAMES,
+    AA_MANIFEST_RELATIVE,
+    DECON_EXCLUDED_EVAL_TASKS,
+    EVAL_CORPUS_VERSION,
+    EVALS_RELATIVE,
+    LMH_EVALS_RELATIVE,
+    LMH_MANIFEST_RELATIVE,
+)
 from experiments.datakit.embeddings.luxical.pipeline import (
     EMBED_DOC_SAMPLE_CHARS,
     EMBEDDING_ATTR_DATA_VERSION,
@@ -187,9 +195,12 @@ TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 TOKENIZER_BACKEND = TokenizerBackend.HF
 SPLIT = "train"
 
-# Decontam. The combined eval corpus written by decontam/prepare_eval_corpus.py,
-# staged per-region (``aa/<eval>/<split>.parquet`` + ``lmh/<task>/eval.parquet``).
-EVAL_ROOT = f"{marin_prefix()}/datakit/decontam/evals"
+# Decontam. Mandatory AA artifacts use a versioned root. Best-effort lm-eval
+# artifacts use stable per-task roots with extraction-version sidecars.
+EVAL_ROOT = f"{marin_prefix()}/{EVALS_RELATIVE}"
+LMH_EVAL_ROOT = f"{marin_prefix()}/{LMH_EVALS_RELATIVE}"
+AA_MANIFEST_PATH = f"{EVAL_ROOT}/{AA_MANIFEST_RELATIVE}"
+LMH_MANIFEST_PATH = f"{EVAL_ROOT}/{LMH_MANIFEST_RELATIVE}"
 # Bloom capacity -- unique ngram hashes the filter must hold: ~21.78M unique
 # hashes across the AA + LMH corpus, with 2.3x headroom. At FPR=1e-9 this is a
 # ~270 MB filter.
@@ -682,6 +693,12 @@ def reference_datakit_steps(
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
         exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
+        required_eval_manifest_path=AA_MANIFEST_PATH,
+        required_eval_corpus_version=EVAL_CORPUS_VERSION,
+        required_eval_names=AA_BENCHMARK_NAMES,
+        best_effort_eval_manifest_path=LMH_MANIFEST_PATH,
+        best_effort_eval_root=LMH_EVAL_ROOT,
+        best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
     )
     # Count eval-ngram document frequency across normalized sources before
     # marking. Each decon consumes its source-local set and the global set.
