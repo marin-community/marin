@@ -721,3 +721,14 @@ author: Rafal Wojdyla
 - East result: `finepdfs-ces_latn_b5488bfa` completed all 194 output shards with 596,382 duplicate documents. The source step succeeded.
 - East progress: `finepdfs-deu_latn_142650e9` started with a running coordinator and worker group.
 - Next action: Return to the 15-minute health-check cadence.
+
+### 2026-08-12 16:22 UTC - FinePDFs German join tail cleared
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 37 completed source artifacts. RNO has eight completed source artifacts. The full run has 45 of 292 completed source artifacts.
+- East progress: `finepdfs-deu_latn_142650e9` completed its 1,170-shard join stage after two long-tail shards. One tail shard completed at 16:20:22 UTC, and the embedding stage then started. Embedding got to 73 of 1,170 shards with 32 live workers and no dead workers.
+- RNO progress: `hplt_v3_528b745e` got to 3,774 of 6,330 embedding shards with 32 live workers and no dead workers. Its recent rate gives a rough 18:14 UTC completion estimate.
+- Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Decision: Take no recovery action because the East join tail cleared and both sources continue to write output.
+- Next action: Continue the 15-minute check cadence.
