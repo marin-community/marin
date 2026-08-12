@@ -3,6 +3,7 @@
 
 """Administrative sweeps over the eval archive fleet.
 
+``upgrade-format`` moves sealed FineStore v1 archives onto transactional manifests;
 ``backfill-samples`` brings archives up to the current contract from each run's kept
 ``samples_*.jsonl``; ``rebuild-samples`` re-derives them from the sources preserved inside the
 archive, for a run whose results tree is gone. Both are operator tools, not part of launching an
@@ -19,7 +20,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import click
-from finestore.eval import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION
+from evalstore.archive import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION
+from finestore.migrate import migrate_v1
 from finestore.reader import CompositeReader
 from marin.evaluation.lm_eval_samples import (
     export_lm_eval_samples,
@@ -48,6 +50,31 @@ class SweepOutcome:
 
     category: str
     detail: str
+
+
+@cli.command("upgrade-format")
+@click.argument("results_paths", nargs=-1)
+@click.option(
+    "--prefix",
+    "prefixes",
+    multiple=True,
+    help=f"Object-store prefix(es) to scan for records; repeatable. Defaults to {DEFAULT_SCAN_PREFIXES}.",
+)
+@click.option(
+    "--workers",
+    default=_DEFAULT_BACKFILL_WORKERS,
+    show_default=True,
+    help="Sealed archives to migrate concurrently.",
+)
+def upgrade_format(results_paths: tuple[str, ...], prefixes: tuple[str, ...], workers: int) -> None:
+    """Upgrade named RESULTS_PATHS, or every recorded run, from FineStore v1 to v2."""
+    configure_coreweave_s3()
+    _sweep_archives(selected_archives(_resolve_prefixes(prefixes, results_paths), results_paths), workers, _upgrade_one)
+
+
+def _upgrade_one(results_path: str) -> SweepOutcome:
+    token = migrate_v1(results_path)
+    return SweepOutcome("upgraded", f"commit {token.sequence}:{token.commit_id}")
 
 
 @cli.command("backfill-samples")

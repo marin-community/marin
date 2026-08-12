@@ -16,10 +16,11 @@ Focused submodules with one-directional imports:
   points with fresh cloud listings, ``atomic_rename``, and ``fetch_file_atomic``.
 - ``mirror`` — the ``mirror://`` :class:`MirrorFileSystem`.
 - ``distributed_lock`` — lease-based distributed locks (used by ``mirror``).
+- ``conditional_object`` — compare-and-swap bytes for local files, GCS, and S3.
 
 This module re-exports the public API of the first five so
 ``from rigging.filesystem import …`` keeps working. ``mirror`` and
-``distributed_lock`` are reached by their submodule path; the lazy ``mirror://``
+``distributed_lock`` and ``conditional_object`` are reached by their submodule path; the lazy ``mirror://``
 registration below keeps them — and the ``botocore`` import they pull in for the
 S3 lock backend — off a plain ``import rigging.filesystem``.
 """

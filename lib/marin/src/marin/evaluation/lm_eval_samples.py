@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Convert lm-eval's ``--log_samples`` output into the :mod:`finestore.eval` contract.
+"""Convert lm-eval's ``--log_samples`` output into the :mod:`evalstore.archive` contract.
 
 lm-eval (and evalchemy, which drives it) writes one ``samples_<task>_<timestamp>.jsonl`` row per
 evaluated question in its own native shape. This module normalizes those rows into
-:class:`~finestore.eval.EvalSample` and exports them into the run's finestore archive, preserving
-each source file it read so the archive can be rebuilt from itself. ``finestore.eval`` owns the
+:class:`~evalstore.archive.EvalSample` and exports them into the run's finestore archive, preserving
+each source file it read so the archive can be rebuilt from itself. ``evalstore.archive`` owns the
 contract and the archive tables; knowledge of lm-eval's row shape lives here.
 
 The same pass measures each task's coverage. lm-eval publishes no attempted-item count in its
@@ -24,7 +24,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
-from finestore.eval import (
+from evalstore.archive import (
     ARCHIVE_SAMPLES_TABLE,
     ARCHIVE_STEPS_TABLE,
     SAMPLES_PREFIX,
@@ -40,7 +40,7 @@ from finestore.eval import (
     primary_filter,
     primary_metric,
 )
-from finestore.layout import ARCHIVE_FILE, BLOBS_TABLE, SEALED_MARKER
+from finestore.layout import ARCHIVE_FILE, BLOBS_TABLE, HEAD_FILE
 from finestore.reader import CompositeReader
 from rigging.filesystem import StoragePath, factory, prefix_join
 
@@ -53,8 +53,8 @@ RESULTS_PREFIX = "results_"
 
 # The archive's own objects, which share the run's results root and must never be preserved into
 # themselves. See :func:`run_artifacts`.
-_ARCHIVE_TABLES = frozenset({ARCHIVE_SAMPLES_TABLE, ARCHIVE_STEPS_TABLE, BLOBS_TABLE})
-_ARCHIVE_MARKERS = frozenset({ARCHIVE_FILE, SEALED_MARKER})
+_ARCHIVE_DIRS = frozenset({"data", "manifests", "schemas", ARCHIVE_SAMPLES_TABLE, ARCHIVE_STEPS_TABLE, BLOBS_TABLE})
+_ARCHIVE_MARKERS = frozenset({ARCHIVE_FILE, HEAD_FILE, "SEALED"})
 
 _CONTENT_TYPES = {
     ".jsonl": "application/x-ndjson",
@@ -314,7 +314,7 @@ def task_coverage(samples: Sequence[EvalSample]) -> TaskCoverage:
     A document that yielded no grading is counted as attempted but unscored, and one whose grader
     extracted no answer is counted as unanswered -- it scored, but on nothing the model actually
     supplied. A task scoring each document under several extraction filters holds one sample per
-    (document, filter); the tallies come from the filter :func:`~finestore.eval.primary_filter`
+    (document, filter); the tallies come from the filter :func:`~evalstore.archive.primary_filter`
     picks, which is the one the run's headline metric is also reported under.
     """
     graded: dict[str, list[EvalSample]] = {}
@@ -385,7 +385,7 @@ def run_artifacts(out_path: str) -> list[str]:
     artifacts = []
     for path in fs.find(key):
         relative = path[len(key) :].strip("/")
-        if relative in _ARCHIVE_MARKERS or relative.split("/", 1)[0] in _ARCHIVE_TABLES:
+        if relative in _ARCHIVE_MARKERS or relative.split("/", 1)[0] in _ARCHIVE_DIRS:
             continue
         artifacts.append(relative)
     return sorted(artifacts)

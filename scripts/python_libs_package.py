@@ -2,11 +2,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the marin-* lib wheels for PyPI publication.
+"""Build the pure-Python marin-* library wheels for PyPI publication.
 
-Builds the eight pure-Python marin-* lib packages (marin-core, marin-iris,
+Builds the pure-Python marin-* lib packages (marin-core, marin-iris,
 marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr,
-marin-finestore) into
+marin-finestore, marin-evalstore) into
 dist/. The package release engine passes one exact version to this builder.
 Publication is done by `.github/workflows/marin-release-libs-wheels.yaml` via
 `pypa/gh-action-pypi-publish` with OIDC trusted publishing. This script never
@@ -61,6 +61,7 @@ PACKAGES: dict[str, dict[str, str]] = {
     "marin-fray": {"path": "lib/fray", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-rigging": {"path": "lib/rigging", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-finestore": {"path": "lib/finestore", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "marin-evalstore": {"path": "lib/evalstore", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-zephyr": {"path": "lib/zephyr", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-levanter": {"path": "lib/levanter", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-haliax": {"path": "lib/haliax", "version_file": "src/haliax/__about__.py", "kind": "about_py"},

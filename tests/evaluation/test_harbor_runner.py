@@ -26,6 +26,7 @@ from marin.evaluation.runner import EvaluationError
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
+from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes
 
 
 def _running_model() -> RunningModel:
@@ -214,6 +215,7 @@ def _memory_remote(protocol: str, monkeypatch) -> None:
     RemoteMemoryFileSystem.store = {}
     RemoteMemoryFileSystem.pseudo_dirs = [""]
     remote_fs = RemoteMemoryFileSystem()
+    versions: dict[str, int] = {}
 
     def remote_url_to_fs(url: str, **_kwargs):
         path = StoragePath(url)
@@ -224,8 +226,29 @@ def _memory_remote(protocol: str, monkeypatch) -> None:
         fs, path = remote_url_to_fs(url)
         return fs.open(path, mode, **kwargs)
 
+    class MemoryConditionalObject:
+        def __init__(self, path: str) -> None:
+            self.path = path
+
+        def read(self) -> VersionedBytes | None:
+            _, key = remote_url_to_fs(self.path)
+            if not remote_fs.exists(key):
+                return None
+            return VersionedBytes(remote_fs.cat(key), str(versions[self.path]))
+
+        def write(self, data: bytes, *, expected_version: str | None) -> str:
+            current = versions.get(self.path)
+            if (None if current is None else str(current)) != expected_version:
+                raise ConditionalWriteError(f"stale version for {self.path}")
+            version = (current or 0) + 1
+            _, key = remote_url_to_fs(self.path)
+            remote_fs.pipe(key, data)
+            versions[self.path] = version
+            return str(version)
+
     monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", remote_url_to_fs)
     monkeypatch.setattr("rigging.filesystem.factory.open_url", remote_open_url)
+    monkeypatch.setattr("finestore.commit.conditional_object", MemoryConditionalObject)
 
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
@@ -271,7 +294,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     # The resumed driver produced no trials, so total==1 means the durable trial was read back.
     assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
     assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 1.0
-    assert StoragePath(f"{output_dir}/SEALED").exists()
+    assert CompositeReader(output_dir).is_sealed()
     assert StoragePath(f"{output_dir}/harbor_result.json").exists()
 
 

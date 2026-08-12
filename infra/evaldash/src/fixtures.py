@@ -22,7 +22,7 @@ import json
 import sys
 from datetime import datetime, timedelta
 
-from finestore.eval import (
+from evalstore.archive import (
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
     Choice,

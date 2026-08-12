@@ -112,6 +112,7 @@ members = [
     "marin-core",
     "marin-ducky",
     "marin-dupekit",
+    "marin-evalstore",
     "marin-finelog",
     "marin-finestore",
     "marin-fray",
@@ -3352,6 +3353,7 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "jax" },
     { name = "jaxopt" },
+    { name = "marin-evalstore" },
     { name = "marin-finestore" },
     { name = "marin-fray" },
     { name = "marin-haliax" },
@@ -3501,6 +3503,7 @@ requires-dist = [
     { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.44.*" },
     { name = "luxical", marker = "extra == 'datakit'" },
     { name = "marin-dupekit", marker = "extra == 'dedup'", editable = "lib/dupekit" },
+    { name = "marin-evalstore", editable = "lib/evalstore" },
     { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
@@ -3701,6 +3704,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b0/1d/3513e75a35704c7f28e0f4fe235545fd0094aeeea2991c899691db263482/marin_dupekit_native-0.1.6.dev31131847556-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:e0c3f52e240724a610161862819f2f4c92370841540d4ec98a8cd13c327cb9da", size = 3654080, upload-time = "2026-08-07T00:12:11.774Z" },
     { url = "https://files.pythonhosted.org/packages/4c/c3/1bf7af2fe072590d350871f6efc1c76614329ad37c70bcc83f26880b3c22/marin_dupekit_native-0.1.6.dev31131847556-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:f0fceadc72803f0512c955ce5568197fce2d804e4a64452a8471f6197276adad", size = 3833622, upload-time = "2026-08-07T00:12:13.275Z" },
     { url = "https://files.pythonhosted.org/packages/9e/1a/26cbda61e163eda6e247b5b56b5a781e1699e9cc0c17f7d5534cd28a7173/marin_dupekit_native-0.1.6.dev31131847556-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:62ab6a3bc5d4b1f5f794e378117ae7236de067ac44629a15a9b93e475273bd15", size = 4117115, upload-time = "2026-08-07T00:12:14.645Z" },
+]
+
+[[package]]
+name = "marin-evalstore"
+version = "0.1.0"
+source = { editable = "lib/evalstore" }
+dependencies = [
+    { name = "marin-finestore" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "marin-finestore", editable = "lib/finestore" },
+    { name = "pyarrow", specifier = ">=23.0.0" },
+    { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [[package]]
@@ -4003,6 +4023,7 @@ dependencies = [
     { name = "humanfriendly" },
     { name = "marin-finelog" },
     { name = "marin-finelog-server" },
+    { name = "marin-finestore" },
     { name = "marin-iris-native" },
     { name = "marin-rigging" },
     { name = "pydantic" },
@@ -4078,6 +4099,7 @@ requires-dist = [
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,<36" },
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-finelog-server", specifier = ">=0.2.28.dev31271949117" },
+    { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-iris-native", specifier = ">=0.1.6.dev31131847556" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
@@ -4169,6 +4191,7 @@ dependencies = [
     { name = "jinja2" },
     { name = "jmp" },
     { name = "lenses" },
+    { name = "marin-finestore" },
     { name = "marin-fray" },
     { name = "marin-haliax" },
     { name = "marin-iris" },
@@ -4304,6 +4327,7 @@ requires-dist = [
     { name = "lenses" },
     { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.44.*" },
     { name = "lm-eval", marker = "extra == 'lm-eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness.git?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
+    { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },

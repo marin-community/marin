@@ -62,8 +62,15 @@ winogrande, truthfulqa, boolq, piqa, openbookqa at OpenLLM-v1 shot counts, plus 
 math500): one model boot, eleven evals against the shared endpoint, eleven records — the dashboard
 shows the full model x task grid of runs.
 
+Before deploying a format-v2 evaluation reader, upgrade the sealed archive fleet. The migration
+publishes existing Parquet shards through `HEAD` and does not copy their payload data:
+
+```bash
+uv run python -m experiments.evaluation.migrations.cli upgrade-format --prefix gs://marin-eval-metadata/evals
+```
+
 `backfill-samples` rewrites every run's per-sample parquets from its kept `samples_*.jsonl` sources --
-useful after a change to the contract in `finestore.eval` (the parquet files are
+useful after a change to the contract in `evalstore.archive` (the parquet files are
 regenerated in place; the source jsonl is untouched):
 
 ```bash
@@ -90,7 +97,7 @@ dashboard) without cluster access.
 Alongside the results tree, each task's individually-scored questions are exported as parquet:
 lm-eval runs with `--log_samples`, and the orchestrator converts every `samples_*.jsonl` into a
 parquet sibling (`marin.evaluation.lm_eval_samples` normalizes lm-eval's native row shape into
-`EvalSample`, the per-sample contract in `finestore.eval`, with the parquet schema *being* the
+`EvalSample`, the per-sample contract in `evalstore.archive`, with the parquet schema *being* the
 Pydantic model) -- load them with pandas/duckdb, or read them back with `EvalSample.model_validate`,
 to zoom into any run.
 

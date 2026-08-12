@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 
 import click
 import pyarrow.parquet as pq
-from finestore.eval import (
+from evalstore.archive import (
     ARCHIVE_SAMPLES_TABLE,
     ARCHIVE_STEPS_TABLE,
     SAMPLES_PREFIX,

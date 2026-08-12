@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from finestore.eval import EvalSample, SampleKind, write_sample_parquet
+from evalstore.archive import EvalSample, SampleKind, write_sample_parquet
 from fsspec.core import url_to_fs
 from marin.evaluation.lm_eval_samples import sample_from_lm_eval
 

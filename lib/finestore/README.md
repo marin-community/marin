@@ -1,221 +1,146 @@
-finestore
----
-Raison d'être: an append-only columnar archive of Parquet shards on object
-storage, for eval output that is written as many small batches and read back
-with column projection and predicate filtering. It targets stores that only
-create whole objects (no seek, no rewrite): a write is one immutable Parquet
-object, and there is no manifest to keep consistent.
+# FineStore
 
-## Data model
+FineStore is a small transactional store for immutable Parquet data on local disk,
+GCS, and S3-compatible object storage. It covers workloads that need to batch many
+small records or named byte objects without running a catalog service.
 
-- `DataStore` — a writable archive under one URL prefix, written by one
-  `writer_id`. It holds typed `DataTable`s and a reserved `blobs` table.
-- `DataTable` — an append-only stream of rows. Appends buffer in memory; a
-  background thread flushes each buffer to an immutable Parquet shard.
-- `CompositeReader` — composes every writer's shards for a table, unifies their
-  schemas, deduplicates by primary key, and projects/filters on read.
+One conditional mutable object, `HEAD`, is the visibility boundary. It points to an
+immutable manifest containing the complete active file set for every table. A
+successful write returns the version of `HEAD` as a `CommitToken`. Readers resolve
+`HEAD` once and keep that manifest for the lifetime of their `ReadView`.
 
-Rows carry a caller-defined schema plus two stamped columns: `_writer` (the
-producing writer) and `_seq` (a per-writer monotonic id). A table declares a
-`primary_key`; the reader keeps one row per key (the latest write wins).
+## Transactions
 
-`DataStore.write(name, metadata, data)` stores an opaque payload in the `blobs`
-table and returns a `finestore://blobs/<name>` reference. A sample row holds
-that reference in place of the payload (e.g. an agent trajectory), and
-`CompositeReader.resolve(uri)` reads it back. Everything the archive owns lives
-inside the archive, addressable by a `finestore://` URI.
-
-Import from the submodules directly; the package re-exports nothing.
+Register table contracts on the store, then use a transaction when several tables
+and objects must become visible together:
 
 ```python
 from finestore.store import DataStore
-from finestore.reader import CompositeReader
 
-with DataStore.open("gs://bucket/run/results", writer_id="evalchemy") as store:
-    samples = store.table("samples", primary_key=("task", "doc_id"))
-    samples.append({"task": "arc", "doc_id": "1", "correct": True})
-    store.seal()  # mark the run complete
+with DataStore.open("gs://bucket/purchases", writer_id="worker-0") as store:
+    store.table("purchases", primary_key=("order_id",))
 
-reader = CompositeReader("gs://bucket/run/results")
-table = reader.scan("samples", columns=["task", "doc_id", "correct"],
-                    where=[("task", "==", "arc")])
+    with store.transaction() as transaction:
+        receipt_uri = transaction.write_object("receipts/o-1", b"paid")
+        transaction.table("purchases").add(
+            {"order_id": "o-1", "amount": 12, "receipt_uri": receipt_uri}
+        )
+        assert transaction.lookup("receipts/o-1") == b"paid"
+
+    token = transaction.token
 ```
 
-## On-disk layout
+The transaction buffers its rows and object bytes in memory. Each participating
+table produces one level-zero Parquet shard. FineStore writes every shard and an
+immutable full manifest before it conditionally advances `HEAD`. Until that final
+write succeeds, none of the transaction is visible. A caller should split a
+transaction when its payload would exceed a safe process-memory bound.
 
-An archive owns its root directory. Each table is a subdirectory of immutable
-shards, partitioned by the writer that produced them and the compaction
-generation they belong to:
+Ordinary table appends use the same commit path. `store.flush()` atomically publishes
+the currently claimed buffers from all registered tables. `table.flush()` publishes
+only that table. If writing or publication fails, claimed store buffers are restored
+for retry. Immutable files written before a failed publication are harmless orphans
+and can be collected later.
 
+## Reads
+
+```python
+from finestore.reader import ReadView
+
+view = ReadView("gs://bucket/purchases")
+purchase = view.point("purchases", order_id="o-1")
+receipt = view.resolve(purchase["receipt_uri"])
+token = view.token
 ```
-{root}/
-    _archive.json                            # archive-wide: the on-disk format version
-    SEALED                                   # optional: the run is complete
-    {table}/_schema.json                     # per-table: primary key + logical schema version
-    {table}/w={writer}/g={gen}/{seq:016d}-{uid}.parquet
-```
 
-Shard membership is discovered by listing the table directory. A shard's schema
-and row-group statistics come from its Parquet footer. The small JSON objects
-record only what a footer cannot: `_archive.json` holds finestore's on-disk
-format version (the writer stamps it at open, and a reader refuses a newer
-format than it understands), and each `{table}/_schema.json` holds the dedup
-primary key and the caller's logical schema version. Together they are the whole
-"manifest". The writer and generation are encoded in the object key and
-recovered by listing; nothing else references a shard. A caller that shares the
-root with sibling data (an eval run's results directory also holds JSON and
-legacy parquet) passes a dedicated subdirectory as the root; finestore does not
-impose one.
+A view pins one manifest. Commits and compactions that happen afterward do not change
+its results. Create a new view to observe a newer token. `CompositeReader` remains the
+reader class used by existing call sites and has the same snapshot behavior.
 
-## Read semantics
+`scan` supports column projection and `==`, `!=`, and `in` filters. FineStore unifies
+compatible Parquet schemas across active shards and keeps the row from the latest
+user commit for each primary key. Compaction preserves each row's original commit
+sequence, so reorganizing files never makes an older value outrank a concurrent
+write.
 
-`scan` lists a table's shards, unifies their footers' schemas (a column a later
-writer added is promoted to null for older shards), reads only the projected
-columns plus whatever the primary key needs, and deduplicates by primary key. For
-each key it keeps the row with the highest `_seq`, breaking ties by the highest
-compaction generation. Because a writer resumes its `_seq` above every persisted
-row, a later write always outranks an earlier one — nothing can shadow it — and
-the generation only breaks the exact-`_seq` tie a compaction leaves when it
-re-emits a row unchanged. That single rule makes a duplicate delivery, a retried
-flush, and a crash mid-compaction all converge to one row without coordination.
+## Named objects and caches
 
-`point` returns the single row matching `key=value` for every key. Predicate
-filters support `==`, `!=`, and `in`, pushed into the Parquet scan, where the
-row-group footer statistics prune to the groups that can match — a `point`
-lookup on a compacted (primary-key-sorted) shard reads one row group, not the
-whole table.
+`DataStore.write_object(name, data, metadata)` writes bytes into the reserved `blobs`
+table and returns `finestore://blobs/<name>`. Named objects participate in the same
+transaction and commit token as ordinary table rows.
 
-Because schema unification is null-permissive, a reader that opened the archive
-without opening the writer — for example the dashboard — reads a run written by
-a newer or older schema without changes: absent columns read back as null and
-the row model's defaults fill them in.
+Two adapters build cache behavior on this primitive:
 
-## Writing
+- `finestore.cache.PersistentKvCache` stores serialized autotuning and compiled-kernel
+  results by key. The process memory tier serves repeated reads. Remote writes queue in
+  the background, and each burst shares a bounded multi-object transaction.
+- `finestore.fileset.FineStoreDirectory` materializes a committed named-object set
+  into a local directory and publishes newly created files in bounded transactions.
+  Iris uses it for XLA's per-fusion autotune directory, replacing the ZIP mirror.
 
-Appends are non-blocking and buffer in memory. The background thread flushes
-each table on a time ceiling (`DEFAULT_FLUSH_INTERVAL`, 5s) so shards stay
-fresh, and immediately once a buffer's estimated payload crosses a byte cap
-(`DEFAULT_MAX_BUFFER_BYTES`, 100 MiB) so memory stays bounded whether a table
-holds many small samples or a few large blobs. `table.flush()` persists one
-table; `store.flush()` persists all of them; `flush` and `close` block until
-every buffered row is a durable object — the "writes block until persisted"
-guarantee. A flush splits its rows into row groups of at most `ROW_GROUP_ROWS`
-(16384) so a later filtered read prunes by row group, writes to a temporary key,
-and atomically renames it into place, so a partial object is never visible.
-
-Concurrent writers of one run (for example RL rollout workers) each open a
-`DataStore` with a distinct `writer_id`. They write under their own key prefix
-and never coordinate; the reader composes and deduplicates them. Call `seal`
-once, after every writer has finished, to drop the `SEALED` marker.
+Both adapters are caches: failures may be treated as misses by their callers. The
+core `DataStore` and `ReadView` APIs propagate storage and commit errors.
 
 ## Compaction
 
-`compact(root, table)` streams a k-way merge over a table's shards in primary-key
-order and writes the surviving rows to one next-generation shard, one row group
-at a time, then deletes the shards it superseded. The merge is bounded in memory:
-a compacted shard (already in primary-key order) streams a row group at a time,
-while a level-0 shard — one flush, bounded by the writer's row cap — is sorted in
-memory, so an archive far larger than memory still compacts. Both the store flush
-and this merge write through the same `ShardWriter`. Compaction is optional and
-safe to run at any time — end of run, or in the background — because the dedup
-rule already yields correct reads across mixed generations. It reduces object
-count and improves read locality; it does not change query results.
+The store's maintenance thread flushes on its configured interval and compacts a
+table after it crosses `compaction_shards` active files. `store.maintain()` exposes
+the same operation for deterministic callers. `compact(root, table)` performs one
+explicit compaction.
 
-## Recovery
+Compaction pins a manifest, streams an ordered merge of its exact input shards, writes
+one next-generation shard, and replaces those paths through the same `HEAD` compare
+and swap. If another compactor removes an input first, the losing output remains
+unreferenced and the operation is a benign no-op. If another writer adds a shard,
+the replacement can rebase while preserving the new shard.
 
-There is no manifest and no rewrite, so recovery is a listing, not a repair.
+Compaction does not delete source objects. An older read view may still reference
+them. Physical garbage collection needs a separate retention rule, such as sealed
+archive retention or reader leases; it is outside the current API.
 
-- Crash mid-flush: the atomic rename means an interrupted flush leaves at most a
-  temporary object, never a torn shard. Re-running the writer re-appends the
-  unflushed rows under fresh `_seq` values; dedup collapses any overlap.
-- Crash mid-compaction: if the merged shard was written but its sources not yet
-  deleted, both generations are present. Dedup keeps the higher-generation row,
-  so reads are correct; a later `compact` finishes the cleanup.
-- Duplicate or retried delivery: the same primary key re-appears in a later
-  shard with a higher `_seq` and wins, so at-least-once producers are safe.
+## Layout
 
-## Primary key handling
+```text
+{root}/
+    _archive.json                         immutable format marker
+    HEAD                                  conditional commit pointer
+    manifests/{commit_id}.json            immutable complete snapshots
+    schemas/{content_hash}.json            immutable table contracts
+    data/{table}/w={writer}/g={level}/... immutable Parquet shards
+```
 
-Every table declares a primary key: the columns that identify a row. It is
-required — a table whose rows have no natural identity declares a nonce column
-rather than no key — because dedup by key is what stands in for a manifest, and a
-table without one silently doubles its rows on any at-least-once delivery.
+Only `HEAD` is mutable. The `HEAD` document names a manifest, commit id, and logical
+sequence. A manifest names every active shard, its writer and compaction generation,
+row and sequence bounds, each table's metadata object, and optional seal state.
 
-The reader keeps one row per key, so two different rows under one key would
-discard one with nothing recording that it existed.
-`store.table(..., on_conflict=...)` picks what happens instead:
+Writable archives require real conditional object writes:
 
-- `OnConflict.ERROR` (the default) raises `PrimaryKeyConflict`, naming the table
-  and the key. A repeat with an identical payload is an at-least-once redelivery
-  and collapses. Detection spans the whole writer session, so an earlier row
-  already flushed to a shard does not hide the conflict.
-- `OnConflict.SUPERSEDE` is the upsert contract, for a caller that means to
-  replace a row: blob rewrites and migration backfills. Compaction counts the
-  replaced rows into the `SEALED` marker, per table.
+- local disk: `flock` plus a content version;
+- GCS: object generations and `if_generation_match`;
+- S3: ETags with `If-None-Match` or `If-Match`.
 
-Widening a primary key is a schema change, and an accumulative store cannot
-absorb one: the added column reads as null on the old shards, so those rows never
-collapse against the new ones and survive beside them. A writer therefore refuses
-an archive whose `schema_version` predates its own. Bringing it forward means
-deleting, which no code in this library does — see
-`experiments.evaluation.migrations`.
+Other fsspec schemes are rejected for writes because last-writer-wins publication
+cannot provide transaction atomicity. They may be added after their backend exposes
+an equivalent compare-and-swap primitive.
 
-## Preserved sources
+## Recovery and lifecycle
 
-An exporter writes the evaluator-native files into the archive's `blobs` table
-under a `sources/` prefix (`EvaluationStore.add_source_artifact`), alongside the
-rows normalized from them. It preserves every artifact the harness left in the
-results tree, not only the files it reads — `run_artifacts` lists the tree rather
-than globbing it, so the harness's dot-directories (evalchemy keeps resume state
-under `.resume/`) are included, and skips the archive's own tables and markers so
-a re-export cannot fold the archive into itself. Shards are zstd-compressed, so a
-text artifact costs roughly a third of its raw size. The archive is then
-self-describing: the `samples` table can be re-derived from those blobs alone,
-repairing a run whose results tree was pruned or whose export died half written.
-A rebuild reproduces existing rows exactly, so they collapse against themselves
-and nothing is deleted. `marin.evaluation.lm_eval_samples` implements both halves
-for lm-eval output — `export_lm_eval_samples` and `rebuild_lm_eval_samples`.
+- A process that stops before advancing `HEAD` leaves the previous commit intact.
+- A process that stops after advancing `HEAD` completed the transaction.
+- A compare-and-swap loss reloads `HEAD` and rebases disjoint additions. A compaction
+  rebases only while all of its exact inputs remain active.
+- Opening a sealed archive for writing publishes a commit that clears its seal.
+  `store.seal()` flushes, compacts, and records seal metadata in a final manifest.
 
-evalchemy runs the harness in a `tempfile` working directory and copies the tree
-into the results path, so a retried evaluation leaves a second complete tree
-under a `tmp<random>/` segment. Both are real evaluations and their
-loglikelihoods differ, because inference is not deterministic, but only the
-canonical tree produced the metrics on the run's record. That exporter's
-`is_scratch_artifact` identifies the retry: it is preserved as a source blob like
-any other, and contributes no rows, so the samples a reader sees come from the
-same evaluation as the headline score. Indexing both would instead put two
-different rows on one primary key, which is a `PrimaryKeyConflict`, not a silent
-fold.
+Format v2 does not read format-v1 listing-based archives. Quiesce and seal a v1
+archive, then call `finestore.migrate.migrate_v1(root)` before moving its consumers.
+The migrator publishes existing Parquet shards through an initial manifest and keeps
+the legacy objects; it does not copy payload data. Producers and consumers then use
+one visibility protocol instead of carrying both models in every reader.
 
-Writing to an archive clears its `SEALED` marker. "Sealed" therefore means
-"these are the finished contents" rather than "some session once finished", so
-an export that dies partway leaves the archive visibly incomplete instead of
-carrying a marker that vouches for a table it no longer describes.
+## Package boundary
 
-## Migration
-
-`experiments.evaluation.migrations.migrate_archive` backfills a run written before the
-archive existed. Legacy runs stored one `samples_<task>_<ts>.parquet` per (sub)task and
-referenced Harbor trajectories by a `gs://` URI. The tool reads those files,
-writes the rows into the run's `samples` table, and for agentic samples pulls
-each referenced trajectory into the `blobs` table (rewriting the sample's
-`trajectory_uri` to a `finestore://` reference) and flattens its steps into a
-`steps` table. It is idempotent because samples dedupe on their primary key.
-`--archive-legacy` moves validated source Parquets to deterministic region-local
-30-day storage. `--from-legacy-archive` reads those preserved Parquets to rebuild
-the archive at the original results path without moving the backup again.
-
-`experiments.evaluation.migrations` holds the migrations that remove rows. They
-are the only code that deletes, and each snapshots the whole table directory to
-region-local 30-day storage and verifies every object's size before dropping
-anything, so a failure leaves either the original or a complete copy. An object
-already at the destination is left alone: the earliest snapshot is the pristine
-one, and a resumed migration must not write a degraded table over it.
-
-## Packaging
-
-finestore ships as `marin-finestore` (import `finestore`), a pure-Python root
-workspace member built with hatchling. It depends only on `marin-rigging` (for
-`rigging.filesystem`, the object-store abstraction), `pyarrow`, and `pydantic`
-(the typed table metadata). It pulls in no query engine and no `marin` code, so
-an import-light consumer such as the evaldash image can depend on it directly.
+`marin-finestore` contains storage, transactions, read views, compaction, and generic
+cache adapters. Evaluation record types and `EvaluationStore` live in the separate
+import-light `marin-evalstore` package (`evalstore.archive`). FineStore has no
+evaluation or Marin pipeline dependency.

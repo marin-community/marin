@@ -20,7 +20,7 @@ import json
 import logging
 import os
 
-from finestore.eval import EvalSample, SampleKind
+from evalstore.archive import EvalSample, SampleKind
 from pydantic import BaseModel, ConfigDict
 
 from . import samples

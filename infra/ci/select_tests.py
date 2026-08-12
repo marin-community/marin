@@ -56,6 +56,7 @@ class SourceRoot:
 
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES),
+    SourceRoot("lib/evalstore/src/evalstore", "lib/evalstore/src"),
     SourceRoot("experiments", "."),
     SourceRoot("infra/ci", "."),
     SourceRoot("infra/evaldash/src", "."),

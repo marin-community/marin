@@ -20,7 +20,6 @@ by other holders.
 
 import abc
 import fcntl
-import functools
 import json
 import logging
 import os
@@ -28,12 +27,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 
-import botocore.config
-import botocore.session
-from botocore.exceptions import ClientError
-from google.api_core.exceptions import NotFound
-from google.cloud import storage
-
+from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
@@ -195,45 +189,25 @@ class DistributedLease(abc.ABC):
 class GcsLease(DistributedLease):
     """GCS-backed lease using generation-based conditional writes."""
 
-    @staticmethod
-    def _parse_gcs_path(path: str) -> tuple[str, str]:
-        """Parse ``gs://bucket/path`` into ``(bucket, blob_path)``."""
-        path = path[5:]  # Remove gs://
-        bucket, _, blob_path = path.partition("/")
-        return (bucket, blob_path)
-
     def _read_with_generation(self) -> tuple[int, Lease | None]:
-        client = storage.Client()
-        bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
-        bucket = client.bucket(bucket_name)
-        blob = bucket.get_blob(blob_path)
-        if blob is None:
+        found = conditional_object(self.lock_path).read()
+        if found is None:
             return (0, None)
-        try:
-            data = json.loads(blob.download_as_string())
-        except NotFound:
-            # Blob was deleted between get_blob and download_as_string
-            logger.debug("[%s] Lock blob %s disappeared during read (race)", self.worker_id, self.lock_path)
-            return (0, None)
-        # get_blob loaded the resource from the server, so generation is populated.
-        assert blob.generation is not None
-        return (blob.generation, Lease(**data))
+        return (int(found.version), Lease(**json.loads(found.data)))
 
     def _write(self, lease: Lease, if_generation_match: int) -> None:
-        client = storage.Client()
-        bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
-        bucket = client.bucket(bucket_name)
-        blob = bucket.blob(blob_path)
-        blob.upload_from_string(json.dumps(asdict(lease)), if_generation_match=if_generation_match)
+        try:
+            conditional_object(self.lock_path).write(
+                json.dumps(asdict(lease)).encode(),
+                expected_version=None if if_generation_match == 0 else str(if_generation_match),
+            )
+        except ConditionalWriteError as exc:
+            raise FileExistsError(f"conditional write failed for {self.lock_path}") from exc
 
     def _delete(self) -> None:
-        client = storage.Client()
-        bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
-        bucket = client.bucket(bucket_name)
-        blob = bucket.blob(blob_path)
         try:
-            blob.delete()
-        except NotFound:
+            StoragePath(self.lock_path).rm()
+        except FileNotFoundError:
             logger.debug("Lock blob %s already deleted", self.lock_path)
 
 
@@ -246,87 +220,36 @@ class S3Lease(DistributedLease):
     """S3-backed lease using conditional writes (If-None-Match / If-Match).
 
     Works with any S3-compatible store that supports conditional PutObject
-    (AWS S3, Cloudflare R2, MinIO, etc.).  Uses botocore directly (available
-    transitively via s3fs) to inject the conditional headers that the
-    high-level SDKs do not expose.
+    (AWS S3, Cloudflare R2, MinIO, etc.). Uses botocore directly (available
+    transitively via s3fs) so the PutObject preconditions reach the backend.
     """
 
     def __init__(self, lock_path: str, worker_id: str | None = None):
         super().__init__(lock_path, worker_id)
         self._last_etag: str | None = None
 
-    @staticmethod
-    def _parse_s3_path(path: str) -> tuple[str, str]:
-        path = path[5:]  # Remove s3://
-        bucket, _, key = path.partition("/")
-        return (bucket, key)
-
-    @staticmethod
-    @functools.cache
-    def _make_client(cache_key: str = ""):
-        """Create a botocore S3 client, cached per *cache_key*.
-
-        Conditional writes inject temporary event hooks on the client's event bus
-        (register before put, unregister after). A single shared client is not
-        thread-safe: concurrent ``_write`` calls interleave hooks, corrupting
-        headers and causing ``SignatureDoesNotMatch``. Keying by lock path gives
-        each ``S3Lease`` instance its own client, avoiding the race.
-        """
-        session = botocore.session.get_session()
-        endpoint_url = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL")
-        kwargs: dict = {}
-        if endpoint_url:
-            kwargs["endpoint_url"] = endpoint_url
-            # Some S3-compatible endpoints (CoreWeave cwobject.com, cwlota.com)
-            # reject path-style requests.  Virtual-host style is the modern
-            # default for AWS S3 anyway, so always prefer it when a custom
-            # endpoint is in use.
-            kwargs["config"] = botocore.config.Config(s3={"addressing_style": "virtual"})
-        return session.create_client("s3", **kwargs)
-
     def _read_with_generation(self) -> tuple[int, Lease | None]:
-        client = self._make_client(self.lock_path)
-        bucket, key = self._parse_s3_path(self.lock_path)
-        try:
-            resp = client.get_object(Bucket=bucket, Key=key)
-            data = json.loads(resp["Body"].read())
-            self._last_etag = resp["ETag"]
-            return (1, Lease(**data))
-        except ClientError as e:
-            if e.response["Error"]["Code"] == "NoSuchKey":
-                self._last_etag = None
-                return (0, None)
-            raise
+        found = conditional_object(self.lock_path).read()
+        if found is None:
+            self._last_etag = None
+            return (0, None)
+        self._last_etag = found.version
+        return (1, Lease(**json.loads(found.data)))
 
     def _write(self, lease: Lease, if_generation_match: int) -> None:
-        client = self._make_client(self.lock_path)
-        bucket, key = self._parse_s3_path(self.lock_path)
-        body = json.dumps(asdict(lease)).encode()
-
-        if if_generation_match == 0:
-            condition_header = {"If-None-Match": "*"}
-        else:
-            assert self._last_etag is not None, "Cannot conditionally update without a prior read"
-            condition_header = {"If-Match": self._last_etag}
-
-        def inject_condition(request, **kwargs):
-            for key, value in condition_header.items():
-                request.headers[key] = value
-
-        client.meta.events.register("before-sign.s3.PutObject", inject_condition)
         try:
-            client.put_object(Bucket=bucket, Key=key, Body=body)
-        except ClientError as e:
-            if e.response["Error"]["Code"] in ("PreconditionFailed", "412"):
-                raise FileExistsError(f"Conditional write failed for {self.lock_path}") from e
-            raise
-        finally:
-            client.meta.events.unregister("before-sign.s3.PutObject", inject_condition)
+            conditional_object(self.lock_path).write(
+                json.dumps(asdict(lease)).encode(),
+                expected_version=None if if_generation_match == 0 else self._last_etag,
+            )
+        except ConditionalWriteError as exc:
+            raise FileExistsError(f"conditional write failed for {self.lock_path}") from exc
 
     def _delete(self) -> None:
-        client = self._make_client(self.lock_path)
-        bucket, key = self._parse_s3_path(self.lock_path)
-        client.delete_object(Bucket=bucket, Key=key)
+        try:
+            StoragePath(self.lock_path).rm()
+        except FileNotFoundError:
+            pass
 
 
 # ---------------------------------------------------------------------------

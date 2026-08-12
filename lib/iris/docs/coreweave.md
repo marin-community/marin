@@ -354,7 +354,11 @@ operator cleans them. Durable outputs belong in object storage.
 the node rather than a bucket picks its own subdirectory there. Nothing prunes
 it, so treat anything written there as recoverable. `iris.runtime.jax_init` uses
 `/cache/xla` for XLA's per-fusion autotune results on GPU tasks, because XLA
-opens that directory from C++ and cannot read an object-store URL. JAX's own
+opens that directory from C++ and cannot read an object-store URL. Iris warms one
+local leader per node from a FineStore file-set snapshot and has global rank 0
+publish newly created files in bounded transactions. The remote root is keyed by
+the launch tree hash under 30-day temporary storage; a storage failure starts cold
+and does not block JAX initialization. JAX's own
 compilation cache is the opposite case and stays on object storage under the
 Marin prefix: JAX writes it only from process 0, so a node-local copy would
 leave every other node permanently cold.

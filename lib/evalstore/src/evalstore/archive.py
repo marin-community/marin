@@ -381,10 +381,10 @@ class EvaluationStore:
         ``name`` is the file's path relative to the run's results root, so a rebuild can re-derive
         the tables from the archive alone, without the surrounding results tree still being intact.
         """
-        return self._store.write(
+        return self._store.write_object(
             prefix_join(SOURCES_PREFIX, name),
-            {"content_type": content_type, "sha256": hashlib.sha256(raw).hexdigest()},
             raw,
+            {"content_type": content_type, "sha256": hashlib.sha256(raw).hexdigest()},
         )
 
     def add_trajectory(self, raw: bytes, *, task: str, doc_id: str, trial_id: str) -> StoredTrajectory:
@@ -394,8 +394,8 @@ class EvaluationStore:
         still stored but yields no steps. Returns the blob's ``finestore://`` URI and the steps
         written, so a caller can reference the trajectory from its sample and count what was flattened.
         """
-        uri = self._store.write(
-            f"{trial_id}/trajectory.json", {"task": task, "doc_id": doc_id, "trial_id": trial_id}, raw
+        uri = self._store.write_object(
+            f"{trial_id}/trajectory.json", raw, {"task": task, "doc_id": doc_id, "trial_id": trial_id}
         )
         try:
             trajectory = json.loads(raw)

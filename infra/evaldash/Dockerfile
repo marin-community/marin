@@ -31,10 +31,12 @@ WORKDIR /app
 # config/ cluster YAMLs at ../../config, so the build keeps the checkout's relative layout.
 COPY lib/rigging /build/lib/rigging
 COPY lib/finestore /build/lib/finestore
+COPY lib/evalstore /build/lib/evalstore
 COPY config /build/config
 RUN pip install --no-cache-dir \
     /build/lib/rigging \
     /build/lib/finestore \
+    /build/lib/evalstore \
     uvicorn \
     sqlalchemy \
     pg8000 \
@@ -49,10 +51,9 @@ RUN pip install --no-cache-dir \
     && rm -rf /build
 
 # The record contract, the statistics engine, and its record adapter are the only bespoke Marin
-# modules in the image; the per-sample contract lives in finestore.eval, installed above with the
-# finestore wheel, and the private Postgres index lives with the server under infra/evaldash/src.
-# All three are import-light by construction (pydantic, finestore.eval, and the standard library),
-# which is what lets the image vendor them instead of installing marin-core.
+# modules in the image; the per-sample contract lives in evalstore.archive, installed above, and the
+# private Postgres index lives with the server under infra/evaldash/src. The image does not install
+# marin-core.
 # tests/evaluation/test_evaldash_image.py walks the server's imports and fails if one is missing here.
 COPY lib/marin/src/marin/__init__.py /app/marin/__init__.py
 COPY lib/marin/src/marin/evaluation/__init__.py /app/marin/evaluation/__init__.py

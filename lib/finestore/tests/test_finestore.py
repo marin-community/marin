@@ -9,18 +9,17 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finestore import compaction, shard_writer
+from finestore.commit import CommitConflict, CommitCoordinator
 from finestore.compaction import compact
 from finestore.layout import (
     FORMAT_VERSION,
     ArchiveMetadata,
     FineStoreLayout,
     OnConflict,
-    SealMarker,
-    TableMetadata,
 )
+from finestore.migrate import migrate_v1
 from finestore.reader import CompositeReader
 from finestore.store import DataStore, DataTable, PrimaryKeyConflict
-from fsspec.implementations.memory import MemoryFileSystem
 from rigging.filesystem import StoragePath
 
 
@@ -57,6 +56,21 @@ def test_point_lookup(tmp_path):
     assert row is not None
     assert row["score"] == 3.0
     assert CompositeReader(root).point("samples", task="arc", doc_id="99") is None
+
+
+def test_iter_rows_streams_latest_values_in_primary_key_order(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        table = store.table("samples", primary_key=("doc_id",), on_conflict=OnConflict.SUPERSEDE)
+        table.extend([{"doc_id": "b", "score": 1}, {"doc_id": "a", "score": 2}])
+        store.flush()
+        table.append({"doc_id": "a", "score": 3})
+        store.flush()
+
+    assert list(CompositeReader(root).iter_rows("samples", columns=["doc_id", "score"])) == [
+        {"doc_id": "a", "score": 3},
+        {"doc_id": "b", "score": 1},
+    ]
 
 
 def test_supersede_keeps_latest_seq(tmp_path):
@@ -124,7 +138,8 @@ def test_seal_records_superseded_rows(tmp_path):
         table.append({"task": "arc", "doc_id": "1", "score": 2.0})
         store.seal()
 
-    marker = SealMarker.model_validate_json(StoragePath(FineStoreLayout(root).sealed_path).read_text())
+    marker = CompositeReader(root).seal_marker()
+    assert marker is not None
     assert marker.superseded["samples"] == 1
 
 
@@ -143,11 +158,9 @@ def test_multi_writer_compose(tmp_path):
     assert {r["doc_id"] for r in rows} == {"a", "b"}
 
 
-def test_resume_seq_prevents_shadowing(tmp_path):
-    # The no-shadow guarantee. A key compacted into a higher generation must still be overwritten by a
-    # later append. A resuming writer starts its sequence above every persisted _seq, and dedup ranks
-    # by _seq before generation, so the new low-generation row outranks the old compacted one -- which
-    # a generation-first rule would have shadowed.
+def test_later_commit_prevents_compaction_shadowing(tmp_path):
+    # A key compacted into a higher generation must still be overwritten by a later low-generation
+    # append. The user commit sequence ranks before compaction generation.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 1.0})
@@ -190,11 +203,15 @@ def test_byte_cap_requests_an_early_flush(tmp_path):
         def raise_if_failed(self):
             pass
 
+        def flush_table(self, _table):
+            raise AssertionError("flush_table is not used by this test")
+
     scheduler = RecordingScheduler()
     table = DataTable(
         "blobs",
         writer_id="w1",
         layout=FineStoreLayout(str(tmp_path / "run")),
+        metadata_path=str(tmp_path / "schema.json"),
         max_buffer_bytes=1024,
         scheduler=scheduler,
         primary_key=("name",),
@@ -255,7 +272,7 @@ def test_blob_write_and_resolve(tmp_path):
     root = str(tmp_path / "run")
     payload = b'{"steps": [1, 2, 3]}'
     with DataStore.open(root, writer_id="w1") as store:
-        uri = store.write("traj/t1.json", {"task": "arc"}, payload)
+        uri = store.write_object("traj/t1.json", payload, {"task": "arc"})
         store.flush()
     assert uri == "finestore://blobs/traj/t1.json"
     assert CompositeReader(root).resolve(uri) == payload
@@ -267,13 +284,13 @@ def test_blob_rewrite_supersedes_by_name(tmp_path):
     # dedup keeps -- the latest payload wins, like any other primary-key collision.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        uri = store.write("t1.json", None, b"first")
-        store.write("t1.json", None, b"second")
+        uri = store.write_object("t1.json", b"first")
+        store.write_object("t1.json", b"second")
         store.flush()
     assert CompositeReader(root).resolve(uri) == b"second"
 
 
-def test_compaction_merges_and_deletes_source(tmp_path):
+def test_compaction_replaces_sources_logically_and_retains_objects(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
@@ -289,39 +306,35 @@ def test_compaction_merges_and_deletes_source(tmp_path):
     after = CompositeReader(root).list_shards("samples")
     assert len(after) == 1
     assert after[0].generation == 1
+    assert all(StoragePath(shard.path).exists() for shard in before)
     rows = _rows(CompositeReader(root), "samples")
     assert {r["doc_id"] for r in rows} == {"0", "1", "2"}
 
 
-def test_crash_mid_compaction_does_not_double_count(tmp_path):
-    # Simulate a crash after writing the compacted shard but before deleting the level-0 sources:
-    # both generations are present. Dedup must still return one row per key.
+def test_read_view_remains_valid_after_compaction(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": str(i)} for i in range(4)])
         store.flush()
 
-    compact(root, "samples", delete_source=False)
-    shards = CompositeReader(root).list_shards("samples")
-    assert {s.generation for s in shards} == {0, 1}
-
-    rows = _rows(CompositeReader(root), "samples")
-    assert len(rows) == 4
-    assert {r["doc_id"] for r in rows} == {"0", "1", "2", "3"}
+    pinned = CompositeReader(root)
+    compact(root, "samples")
+    assert {s.generation for s in pinned.list_shards("samples")} == {0}
+    assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {1}
+    assert {row["doc_id"] for row in _rows(pinned, "samples")} == {"0", "1", "2", "3"}
 
 
 def test_recompaction_merges_all_generations(tmp_path):
-    # A crash-style compaction leaves g0 and g1 both present; a second compaction merges them into
-    # g2 (preferring the higher generation per key, the merge result) and drops the lower ones. This
-    # exercises the streaming read of an already-compacted (multi-generation) shard.
+    # Recompaction must stream an already compacted shard and advance its generation without changing
+    # the visible rows.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": str(i), "score": float(i)} for i in range(4)])
         store.flush()
-    compact(root, "samples", delete_source=False)
-    assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {0, 1}
+    compact(root, "samples")
+    assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {1}
 
     assert compact(root, "samples").written == 4
     assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {2}
@@ -383,11 +396,12 @@ def test_typed_on_disk_metadata(tmp_path):
     archive = ArchiveMetadata.model_validate_json(StoragePath(layout.archive_path).read_text())
     assert archive.format_version == FORMAT_VERSION
 
-    table_meta = TableMetadata.model_validate_json(StoragePath(layout.schema_path("samples")).read_text())
+    table_meta = CompositeReader(root).table_metadata("samples")
     assert table_meta.primary_key == ("task", "doc_id")
     assert table_meta.schema_version == 3
 
-    seal = SealMarker.model_validate_json(StoragePath(layout.sealed_path).read_text())
+    seal = CompositeReader(root).seal_marker()
+    assert seal is not None
     assert seal.writer == "w1"
 
 
@@ -412,7 +426,8 @@ def test_seal_marker(tmp_path):
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         assert not reader.is_sealed()
         store.seal()
-    assert reader.is_sealed()
+    assert not reader.is_sealed()
+    assert CompositeReader(root).is_sealed()
 
 
 def test_seal_compacts_each_table_to_one_generation(tmp_path):
@@ -434,44 +449,21 @@ def test_seal_compacts_each_table_to_one_generation(tmp_path):
     ]
 
 
-def test_reads_resolve_the_filesystem_factory_at_call_time(monkeypatch):
-    # finestore must resolve rigging's filesystem factory at call time, not bind it at import: a caller
-    # that routes a remote scheme to a stand-in filesystem (as the harbor tests do) must be honored on
-    # the read path too, or a write-then-read over the same mock silently reaches real object storage.
-    # Route s3:// to an in-memory store and round-trip a write, seal (flush + compact), and scan --
-    # every step touches the factory. If the read path bound url_to_fs at import, the scan would miss
-    # the mock and try real S3.
-    class MemoryS3(MemoryFileSystem):
-        @classmethod
-        def _strip_protocol(cls, path):
-            if isinstance(path, str) and path.startswith("s3://"):
-                path = path[len("s3://") :]
-            return MemoryFileSystem._strip_protocol(path)
+def test_seal_compacts_tables_not_registered_by_the_sealing_writer(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="first", flush_interval=3600) as store:
+        table = store.table("history", primary_key=("id",))
+        table.append({"id": "1"})
+        store.flush()
+        table.append({"id": "2"})
+        store.flush()
 
-    MemoryS3.protocol = "s3"
-    MemoryS3.store = {}
-    MemoryS3.pseudo_dirs = [""]
-    fs = MemoryS3()
-
-    def fake_url_to_fs(url, **_kwargs):
-        path = StoragePath(url)
-        assert path.scheme == "s3"
-        return fs, "/".join(part for part in (path.netloc, path.key) if part)
-
-    def fake_open_url(url, mode="rb", **kwargs):
-        target_fs, key = fake_url_to_fs(url)
-        return target_fs.open(key, mode, **kwargs)
-
-    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", fake_url_to_fs)
-    monkeypatch.setattr("rigging.filesystem.factory.open_url", fake_open_url)
-
-    root = "s3://finestore-test/run"
-    with DataStore.open(root, writer_id="w1") as store:
-        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 1.0})
+    with DataStore.open(root, writer_id="sealer", flush_interval=3600) as store:
         store.seal()
-    rows = _rows(CompositeReader(root), "samples")
-    assert len(rows) == 1
-    assert rows[0]["score"] == 1.0
+
+    view = CompositeReader(root)
+    assert view.table_names() == ("history",)
+    assert len(view.list_shards("history")) == 1
 
 
 def test_reader_none_for_absent_table(tmp_path):
@@ -486,15 +478,14 @@ def test_single_table_flush_is_independent(tmp_path):
     # DataTable.flush() persists just its own buffer; a sibling table's rows stay buffered. A long
     # flush interval keeps the background thread from flushing the sibling during the test.
     root = str(tmp_path / "run")
-    reader = CompositeReader(root)
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
         samples = store.table("samples", primary_key=("task", "doc_id"))
         steps = store.table("steps", primary_key=("task", "step_id"))
         samples.append({"task": "arc", "doc_id": "1"})
         steps.append({"task": "arc", "step_id": 0})
         samples.flush()
-        assert len(reader.list_shards("samples")) == 1
-        assert reader.scan("steps") is None
+        assert len(CompositeReader(root).list_shards("samples")) == 1
+        assert CompositeReader(root).scan("steps") is None
 
 
 def test_table_returns_shared_handle(tmp_path):
@@ -526,11 +517,11 @@ def test_explicit_schema_pins_types_and_rejects_mismatch(tmp_path):
             ("_writer", pa.string()),
         ]
     )
-    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
-        store.table("samples", primary_key=("task", "doc_id"), schema=schema).append(
-            {"task": "arc", "doc_id": "1", "count": "not-an-int"}
-        )
-        with pytest.raises(pa.ArrowInvalid):
+    with pytest.raises(pa.ArrowInvalid):
+        with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+            store.table("samples", primary_key=("task", "doc_id"), schema=schema).append(
+                {"task": "arc", "doc_id": "1", "count": "not-an-int"}
+            )
             store.flush()
 
     with DataStore.open(root, writer_id="w2", flush_interval=3600) as store:
@@ -541,3 +532,150 @@ def test_explicit_schema_pins_types_and_rejects_mismatch(tmp_path):
     result = CompositeReader(root).scan("samples", columns=["task", "doc_id", "count"])
     assert result.schema.field("count").type == pa.int64()
     assert result.to_pylist() == [{"task": "arc", "doc_id": "2", "count": 5}]
+
+
+def test_transaction_publishes_tables_and_objects_with_one_token(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        store.table("purchases", primary_key=("order_id",))
+        before = store.read_view()
+        with store.transaction() as transaction:
+            transaction.table("purchases").add({"order_id": "o1", "amount": 12})
+            uri = transaction.write_object("receipts/o1", b"paid")
+            assert transaction.lookup("receipts/o1") == b"paid"
+            assert CompositeReader(root).scan("purchases") is None
+
+        assert transaction.token is not None
+        assert before.scan("purchases") is None
+        assert before.resolve(uri) is None
+        after = CompositeReader(root)
+        assert after.token == transaction.token
+        assert after.point("purchases", order_id="o1")["amount"] == 12
+        assert after.resolve(uri) == b"paid"
+
+
+def test_transaction_exception_publishes_nothing(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        store.table("purchases", primary_key=("order_id",))
+        with pytest.raises(RuntimeError, match="abort"):
+            with store.transaction() as transaction:
+                transaction.table("purchases").add({"order_id": "o1"})
+                transaction.write_object("receipts/o1", b"paid")
+                raise RuntimeError("abort")
+
+        view = CompositeReader(root)
+        assert view.scan("purchases") is None
+        assert view.read_blob("receipts/o1") is None
+
+
+def test_transaction_lookup_is_pinned_to_its_starting_commit(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="first", flush_interval=3600) as first:
+        transaction = first.transaction()
+        with DataStore.open(root, writer_id="second", flush_interval=3600) as second:
+            second.write_object("new", b"value")
+            second.flush()
+        assert transaction.lookup("new") is None
+        transaction.commit()
+
+
+def test_failed_multi_table_flush_restores_every_buffer(tmp_path, monkeypatch):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        store.table("purchases", primary_key=("order_id",)).append({"order_id": "o1"})
+        store.table("refunds", primary_key=("refund_id",)).append({"refund_id": "r1"})
+
+        real_write = shard_writer.write_table
+        writes = 0
+
+        def fail_second_write(path, table):
+            nonlocal writes
+            writes += 1
+            if writes == 2:
+                raise OSError("injected shard failure")
+            real_write(path, table)
+
+        monkeypatch.setattr("finestore.store.write_table", fail_second_write)
+        with pytest.raises(OSError, match="injected"):
+            store.flush()
+        assert CompositeReader(root).scan("purchases") is None
+        assert CompositeReader(root).scan("refunds") is None
+
+        monkeypatch.setattr("finestore.store.write_table", real_write)
+        token = store.flush()
+        assert token is not None
+        assert CompositeReader(root).point("purchases", order_id="o1") is not None
+        assert CompositeReader(root).point("refunds", refund_id="r1") is not None
+
+
+def test_maintenance_compacts_after_shard_threshold(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1", flush_interval=3600, compaction_shards=3) as store:
+        table = store.table("samples", primary_key=("doc_id",))
+        for index in range(3):
+            table.append({"doc_id": str(index)})
+            store.flush()
+        assert len(CompositeReader(root).list_shards("samples")) == 3
+
+        store.maintain()
+        shards = CompositeReader(root).list_shards("samples")
+        assert len(shards) == 1
+        assert shards[0].generation == 1
+
+
+def test_compaction_losing_an_input_race_is_a_benign_noop(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        table = store.table("samples", primary_key=("doc_id",))
+        table.append({"doc_id": "1"})
+        store.flush()
+        table.append({"doc_id": "2"})
+        store.flush()
+
+    real = CommitCoordinator(FineStoreLayout(root))
+
+    class LosingCoordinator:
+        def snapshot(self):
+            return real.snapshot()
+
+        def commit(self, _delta, *, base=None):
+            raise CommitConflict("inputs changed")
+
+    assert compact(root, "samples", coordinator=LosingCoordinator()).written == 0
+    assert len(CompositeReader(root).list_shards("samples")) == 2
+
+
+def test_migrate_v1_publishes_existing_shards_through_head(tmp_path):
+    root = tmp_path / "run"
+    shard = root / "samples" / "w=legacy" / "g=0" / "0000000000000000-old.parquet"
+    shard.parent.mkdir(parents=True)
+    (root / "_archive.json").write_text('{"format_version": 1}')
+    (root / "SEALED").write_text('{"writer": "legacy", "superseded": {}}')
+    (root / "samples" / "_schema.json").write_text(
+        '{"primary_key": ["doc_id"], "schema_version": 3, "on_conflict": "error"}'
+    )
+    pq.write_table(
+        pa.Table.from_pylist([{"doc_id": "1", "score": 0.5, "_seq": 7, "_writer": "legacy"}]),
+        shard,
+    )
+
+    token = migrate_v1(root.as_uri())
+    view = CompositeReader(str(root))
+    assert view.token == token
+    assert view.is_sealed()
+    assert view.schema_version("samples") == 3
+    assert view.point("samples", doc_id="1")["score"] == 0.5
+    assert view.list_shards("samples")[0].max_seq == 7
+    assert shard.exists()
+    assert (root / "samples" / "_schema.json").exists()
+    assert migrate_v1(root.as_uri()) == token
+
+
+def test_migrate_v1_requires_a_sealed_archive(tmp_path):
+    root = tmp_path / "run"
+    root.mkdir()
+    (root / "_archive.json").write_text('{"format_version": 1}')
+
+    with pytest.raises(ValueError, match="not sealed"):
+        migrate_v1(str(root))

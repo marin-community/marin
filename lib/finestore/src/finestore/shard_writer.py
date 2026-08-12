@@ -7,8 +7,8 @@
 compaction merge (a k-way-merged stream). Each :meth:`ShardWriter.write_table` call appends its rows
 as row groups capped at :data:`ROW_GROUP_ROWS`, so a large flush still splits into prunable groups
 and a caller streaming a merge holds only one bounded batch at a time rather than the whole table.
-The shard is written to a temp sibling key and renamed into place on close, so a reader listing the
-directory never observes a half-written object.
+The shard is written to a temp sibling key and renamed into place on close, so its manifest commit
+can never expose a half-written object.
 """
 
 from __future__ import annotations

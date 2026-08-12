@@ -16,7 +16,7 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from finestore.eval import base_metric, primary_metric
+from evalstore.archive import base_metric, primary_metric
 
 from marin.evaluation.eval_stats import (
     BINARY_METRICS,

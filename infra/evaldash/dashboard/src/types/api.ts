@@ -314,7 +314,7 @@ export interface LogsResponse {
   entries: LogEntry[]
 }
 
-// --- Per-sample browser (samples.py, mirroring finestore.eval.EvalSample) ---
+// --- Per-sample browser (samples.py, mirroring evalstore.archive.EvalSample) ---
 
 export interface SampleTasksResponse {
   available: boolean
@@ -336,7 +336,7 @@ export interface SampleChoice {
   is_greedy: boolean | null
 }
 
-// How one prediction was scored (finestore.eval.Grading). `method` names the grader
+// How one prediction was scored (evalstore.archive.Grading). `method` names the grader
 // (`lm-eval:<metric>`, `harbor:<verifier>`, `judge:<model>`); `detail` is the grader's raw output
 // as a JSON string, the escape hatch for anything the typed fields do not carry.
 export interface SampleGrading {

@@ -1,20 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compaction: merge a table's small shards into one sorted, deduplicated next-generation shard.
-
-Compaction is an optimization, not a correctness requirement — a reader deduplicates regardless. It
-streams a k-way merge over the table's shards in primary-key order and writes the surviving rows to the
-next generation, one row group at a time, then optionally deletes the shards it superseded. Because
-the merged rows keep their original ``_seq`` and the new shard has a higher generation, a reader
-prefers it; a crash between the write and the delete leaves both, and dedup still returns one row per
-key.
-
-The merge is bounded in memory. A compacted shard (generation >= 1) was written in primary-key order,
-so it streams a row group at a time; a level-0 shard is one flush (bounded by the writer's row cap),
-so it is sorted in memory. Neither path materializes the whole table, so an archive far larger than
-memory still compacts.
-"""
+"""Manifest-driven logical compaction for FineStore tables."""
 
 from __future__ import annotations
 
@@ -24,6 +11,7 @@ import logging
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Protocol
 
 import pyarrow as pa
 import pyarrow.dataset as pds
@@ -31,92 +19,83 @@ import pyarrow.parquet as pq
 from pyarrow.fs import FSSpecHandler, PyFileSystem
 from rigging.filesystem import factory
 
-from finestore.layout import SEQ_COLUMN, FineStoreLayout, Shard
-from finestore.reader import CompositeReader
+from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
+from finestore.layout import COMMIT_COLUMN, SEQ_COLUMN, CommitToken, FineStoreLayout, Shard
+from finestore.reader import ReadView
 from finestore.shard_writer import ROW_GROUP_ROWS, ShardWriter
 
 logger = logging.getLogger(__name__)
 
-# The writer identity stamped on compacted shards, distinct from any live append writer.
 _COMPACTOR = "compactor"
-
-# Surviving rows the merge accumulates before writing one output batch. Matched to the writer's
-# row-group cap so a compacted shard's groups are the same size as a flush's, keeping read pruning
-# uniform; it also bounds the merge's working set independently of the archive's total size.
 _COMPACT_BATCH_ROWS = ROW_GROUP_ROWS
+_MergeItem = tuple[tuple, int, int, int, dict]
 
-# One item in the merge heap: (primary-key tuple, generation, seq, row dict). The key sorts the merge;
-# seq then generation breaks ties so the latest write of a key wins (same rule the reader applies).
-_MergeItem = tuple[tuple, int, int, dict]
+
+class CompactionCoordinator(Protocol):
+    def snapshot(self) -> ArchiveSnapshot: ...
+
+    def commit(self, delta: CommitDelta, *, base: ArchiveSnapshot | None = None) -> CommitToken: ...
 
 
 def _key_tuple(row: dict, primary_key: tuple[str, ...]) -> tuple:
-    """A null-safe, order-stable primary-key tuple: ``None`` sorts before any value without comparing it."""
     return tuple((row.get(name) is None, row.get(name)) for name in primary_key)
 
 
 def _shard_rows(shard: Shard, unified: pa.Schema, primary_key: tuple[str, ...], pa_fs) -> Iterator[_MergeItem]:
-    """Yield a shard's rows in primary-key order, each tagged for the merge's tie-break.
-
-    A level-0 shard is unsorted but bounded by the writer's row cap, so it is sorted in memory; a
-    compacted shard was written in primary-key order, so its row groups stream in order. Reading through
-    the unified schema promotes columns a shard lacks to null.
-    """
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
-    if shard.generation == 0:
+    if not shard.primary_key_sorted:
         table = dataset.to_table()
         sort_columns = [(name, "ascending") for name in primary_key if name in unified.names]
         if sort_columns:
             table = table.sort_by(sort_columns)
         batches = table.to_batches()
     else:
-        # A compacted shard is already in primary-key order; scan it single-threaded so its row groups
-        # stream in that order (a threaded scan may reorder them, breaking the merge invariant).
         batches = dataset.scanner(use_threads=False).to_batches()
     for batch in batches:
         for row in batch.to_pylist():
-            yield _key_tuple(row, primary_key), shard.generation, row.get(SEQ_COLUMN) or 0, row
+            commit_sequence = row.get(COMMIT_COLUMN)
+            if commit_sequence is None:
+                commit_sequence = shard.commit_sequence
+            row[COMMIT_COLUMN] = commit_sequence
+            yield (
+                _key_tuple(row, primary_key),
+                commit_sequence,
+                row.get(SEQ_COLUMN) or 0,
+                shard.generation,
+                row,
+            )
 
 
 @dataclass(frozen=True)
 class CompactionResult:
-    """What one compaction did: rows written, and rows a later write of the same key replaced.
-
-    ``superseded`` counts inputs that lost their primary key to a higher ``(seq, generation)`` row. It
-    is zero for a table whose keys are unique, so a non-zero count is the signal that supersession
-    actually happened rather than an assumption that it did not.
-    """
+    """Rows written and duplicate inputs superseded by one compaction."""
 
     written: int
     superseded: int = 0
 
 
 def _merge_dedup(streams: list[Iterator[_MergeItem]], counter: list[int]) -> Iterator[dict]:
-    """Merge per-shard sorted streams into one primary-key-ordered stream, one surviving row per key.
-
-    Each item already carries its primary-key tuple, so the streams are grouped on that. Losing rows
-    are counted into ``counter[0]`` so the caller can report supersession instead of discarding it
-    without trace.
-    """
     merged = heapq.merge(*streams, key=lambda item: item[0])
     for _key, group in itertools.groupby(merged, key=lambda item: item[0]):
         items = list(group)
         counter[0] += len(items) - 1
-        winner = max(items, key=lambda item: (item[2], item[1]))
-        yield winner[3]
+        yield max(items, key=lambda item: (item[1], item[2], item[3]))[4]
 
 
-def compact(root: str, table: str, *, delete_source: bool = True) -> CompactionResult:
-    """Compact ``table`` under ``root`` into one sorted shard; report rows written and superseded.
+def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None = None) -> CompactionResult:
+    """Replace the currently active shards for ``table`` through one manifest commit.
 
-    Writes nothing when the table is empty or has no shards. When ``delete_source`` is set, shards
-    from generations below the new one are removed after the merged shard is published.
+    Source objects remain immutable and reachable by older read views. Garbage collection is
+    deliberately separate from compaction because the store does not yet track reader leases.
     """
-    reader = CompositeReader(root)
-    shards = reader.list_shards(table)
+    layout = FineStoreLayout(root)
+    commits = coordinator or CommitCoordinator(layout)
+    snapshot = commits.snapshot()
+    view = ReadView(root, snapshot)
+    shards = view.list_shards(table)
     if not shards:
         return CompactionResult(written=0)
-    primary_key = reader.primary_key(table)
+    primary_key = view.primary_key(table)
     next_generation = max(shard.generation for shard in shards) + 1
 
     fs, _ = factory.url_to_fs(root)
@@ -124,37 +103,66 @@ def compact(root: str, table: str, *, delete_source: bool = True) -> CompactionR
     unified = pa.unify_schemas(
         [pq.read_schema(shard.path, filesystem=pa_fs) for shard in shards], promote_options="permissive"
     )
+    if COMMIT_COLUMN not in unified.names:
+        unified = unified.append(pa.field(COMMIT_COLUMN, pa.int64()))
 
-    streams = [_shard_rows(shard, unified, primary_key, pa_fs) for shard in shards]
     superseded = [0]
-    survivors = _merge_dedup(streams, superseded)
+    survivors = _merge_dedup([_shard_rows(shard, unified, primary_key, pa_fs) for shard in shards], superseded)
     first = next(survivors, None)
     if first is None:
         return CompactionResult(written=0)
 
-    out_path = FineStoreLayout(root).shard_path(table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
+    output_path = layout.shard_path(table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
     written = 0
-    with ShardWriter(out_path, unified) as writer:
+    min_seq: int | None = None
+    max_seq: int | None = None
+    with ShardWriter(output_path, unified) as writer:
         batch = [first]
         for row in survivors:
             batch.append(row)
             if len(batch) >= _COMPACT_BATCH_ROWS:
                 writer.write_table(pa.Table.from_pylist(batch, schema=unified))
+                sequences = [row.get(SEQ_COLUMN) or 0 for row in batch]
+                min_seq = min(sequences) if min_seq is None else min(min_seq, *sequences)
+                max_seq = max(sequences) if max_seq is None else max(max_seq, *sequences)
                 written += len(batch)
                 batch = []
         if batch:
             writer.write_table(pa.Table.from_pylist(batch, schema=unified))
+            sequences = [row.get(SEQ_COLUMN) or 0 for row in batch]
+            min_seq = min(sequences) if min_seq is None else min(min_seq, *sequences)
+            max_seq = max(sequences) if max_seq is None else max(max_seq, *sequences)
             written += len(batch)
+
+    assert min_seq is not None and max_seq is not None
+    output = Shard(
+        path=output_path,
+        writer=_COMPACTOR,
+        generation=next_generation,
+        rows=written,
+        min_seq=min_seq,
+        max_seq=max_seq,
+        primary_key_sorted=True,
+    )
+    try:
+        commits.commit(
+            CommitDelta(
+                replacements={
+                    table: TableReplacement(
+                        input_paths=frozenset(shard.path for shard in shards), output_shards=(output,)
+                    )
+                }
+            ),
+            base=snapshot,
+        )
+    except CommitConflict:
+        logger.info("FineStore abandoned compaction for %s because its inputs changed", table)
+        return CompactionResult(written=0)
     logger.info(
-        "finestore compacted %s to generation %d (%d rows, %d superseded)",
+        "FineStore compacted %s to generation %d (%d rows, %d superseded)",
         table,
         next_generation,
         written,
         superseded[0],
     )
-
-    if delete_source:
-        for shard in shards:
-            if shard.generation < next_generation:
-                fs.rm(shard.path)
     return CompactionResult(written=written, superseded=superseded[0])

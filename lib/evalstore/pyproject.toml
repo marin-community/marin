@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-evalstore"
+version = "0.1.0"
+description = "Import-light evaluation record contracts and FineStore archive integration."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "marin-finestore",
+    "pyarrow>=23.0.0",
+    "pydantic>=2.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalstore"]

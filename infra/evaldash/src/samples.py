@@ -22,7 +22,7 @@ from typing import Generic, TypeVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.eval import (
+from evalstore.archive import (
     ARCHIVE_SAMPLES_TABLE,
     FILTER_COLUMN,
     SAMPLES_PREFIX,

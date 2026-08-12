@@ -15,8 +15,8 @@ import jax
 import jax.numpy as jnp
 import jaxlib
 from jaxtyping import Array, Float, Int
+from finestore.cache import PersistentKvCache
 from rigging.cache import (
-    PersistentKvCache,
     combined_content_hash,
     directory_content_hash,
     file_content_hash,
@@ -105,7 +105,7 @@ def _autotune_entry_name(key: str) -> str:
 
 
 class AutotuneBlockSizeCache:
-    """Tuned block sizes keyed by an opaque string, encoded to one object per key.
+    """Tuned block sizes keyed by an opaque string and stored as named values.
 
     The tiering and the per-process memo live in :class:`PersistentKvCache`; this
     wrapper only translates a block-size entry to and from its JSON object. Backed

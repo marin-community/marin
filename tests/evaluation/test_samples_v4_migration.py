@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The v4 samples migration: the only eval code that deletes, and what it preserves before it does."""
+"""The v4 samples migration preserves stale data before removing its logical table."""
 
 from __future__ import annotations
 
@@ -9,8 +9,10 @@ import json
 
 import pyarrow.parquet as pq
 import pytest
-from finestore.eval import ARCHIVE_SAMPLES_TABLE, EvalSample, EvaluationStore, Grading, SampleKind
+from evalstore.archive import ARCHIVE_SAMPLES_TABLE, EvalSample, EvaluationStore, Grading, SampleKind
+from finestore.admin import set_table_metadata
 from finestore.reader import CompositeReader
+from rigging.filesystem import StoragePath
 
 from experiments.evaluation.migrations.samples_v4 import (
     copy_table,
@@ -44,10 +46,9 @@ def _agentic(doc_id: str) -> EvalSample:
 
 
 def _stamp_schema_version(results, version: int) -> None:
-    schema_path = results / ARCHIVE_SAMPLES_TABLE / "_schema.json"
-    meta = json.loads(schema_path.read_text())
-    meta["schema_version"] = version
-    schema_path.write_text(json.dumps(meta))
+    reader = CompositeReader(str(results))
+    metadata = reader.table_metadata(ARCHIVE_SAMPLES_TABLE).model_copy(update={"schema_version": version})
+    set_table_metadata(str(results), ARCHIVE_SAMPLES_TABLE, metadata)
 
 
 def test_replacing_a_table_preserves_it_outside_the_run_first(tmp_path):
@@ -91,16 +92,15 @@ def test_an_existing_snapshot_is_never_overwritten(tmp_path):
     assert json.loads((destination / "_schema.json").read_text()) == {"sentinel": True}
 
 
-def test_dropping_a_table_leaves_its_schema_for_the_next_writer(tmp_path):
-    # The shards go; the declaration of what the table is stays, so the writer that rewrites the rows
-    # does not have to re-derive the primary key.
+def test_dropping_a_table_only_changes_logical_visibility(tmp_path):
     results = tmp_path / "run" / "results"
     _archive(results, [_generation("1")])
 
-    assert drop_table(str(results), ARCHIVE_SAMPLES_TABLE) == 1
+    shard_path = CompositeReader(str(results)).list_shards(ARCHIVE_SAMPLES_TABLE)[0].path
 
-    assert (results / ARCHIVE_SAMPLES_TABLE / "_schema.json").exists()
-    assert not list((results / ARCHIVE_SAMPLES_TABLE).rglob("*.parquet"))
+    assert drop_table(str(results), ARCHIVE_SAMPLES_TABLE) == 1
+    assert CompositeReader(str(results)).scan(ARCHIVE_SAMPLES_TABLE) is None
+    assert StoragePath(shard_path).exists()
 
 
 def test_copying_a_table_that_was_never_written_is_not_an_error(tmp_path):
@@ -112,8 +112,8 @@ def test_copying_a_table_that_was_never_written_is_not_an_error(tmp_path):
 
 
 def test_replace_refuses_a_table_holding_samples_it_cannot_regenerate(tmp_path):
-    # Agentic rows come from Harbor, which writes no lm-eval jsonl. Dropping them would leave the
-    # table missing a half nothing can put back, so the migration stops before it deletes anything.
+    # Agentic rows come from Harbor, which writes no lm-eval jsonl. The migration must keep the table
+    # visible when it cannot regenerate all of it.
     results = tmp_path / "run" / "results"
     _archive(results, [_agentic("1")])
     _stamp_schema_version(results, 3)

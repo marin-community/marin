@@ -9,7 +9,7 @@ import json
 
 import pytest
 from click.testing import CliRunner
-from finestore.eval import (
+from evalstore.archive import (
     Choice,
     EvalSample,
     EvaluationStore,
@@ -19,6 +19,7 @@ from finestore.eval import (
     sample_to_archive_row,
     write_sample_parquet,
 )
+from finestore.admin import set_table_metadata
 from finestore.reader import CompositeReader
 from fsspec.core import url_to_fs
 from marin.evaluation.lm_eval_samples import (
@@ -245,6 +246,10 @@ def test_preserving_artifacts_never_includes_the_archive_itself(tmp_path):
     results = tmp_path / "run" / "results"
     _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4")])
     export_lm_eval_samples(str(results))
+    legacy_shard = results / "samples" / "w=old" / "g=0" / "old.parquet"
+    legacy_shard.parent.mkdir(parents=True)
+    legacy_shard.write_bytes(b"unreachable format-v1 object")
+    (results / "SEALED").write_text("{}")
 
     before = len(run_artifacts(str(results)))
     export_lm_eval_samples(str(results))
@@ -270,7 +275,7 @@ def test_rebuild_reports_when_no_sources_were_preserved(tmp_path):
 
 def test_export_refuses_an_archive_written_under_an_older_contract(tmp_path):
     # A v3 archive folded both filters onto one key, and those rows cannot collapse against v4 rows.
-    # finestore does not delete, so the export stops rather than leaving the folded row beside them.
+    # An ordinary export stops so only the explicit, preserved migration can replace the table.
     results = tmp_path / "run" / "results"
     _write_jsonl(
         results,
@@ -288,10 +293,9 @@ def test_export_refuses_an_archive_written_under_an_older_contract(tmp_path):
 
 
 def _stamp_schema_version(results, version: int) -> None:
-    schema_path = StoragePath(str(results) + "/samples/_schema.json")
-    meta = json.loads(schema_path.read_text())
-    meta["schema_version"] = version
-    schema_path.write_text(json.dumps(meta))
+    reader = CompositeReader(str(results))
+    metadata = reader.table_metadata("samples").model_copy(update={"schema_version": version})
+    set_table_metadata(str(results), "samples", metadata)
 
 
 def _harbor_archive(results, version: int) -> None:
