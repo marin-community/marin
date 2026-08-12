@@ -262,7 +262,7 @@ equal the pre-reviewed ZIP manifest, and the extracted path/type/size/hash
 inventory to equal the expected extraction manifest. A mismatch invalidates the
 run even if all compiler tests pass.
 
-## ABI 5 gaps to close before submission
+## ABI 5 local preparation
 
 The historical runner is not fully reproducible. Its Bazel version is pinned,
 but the downloaded binary digest is recorded after download instead of checked
@@ -278,17 +278,71 @@ cover build-isolated requirements: JAX source requests unpinned `setuptools` and
 hashed build backends and disable build isolation, or apply an equivalently
 reviewed build constraint that proves those resolutions.
 
-`shuttle_jaxlib_acceptance.py` currently exercises only the f32 tanh-dot forward
-and JAX-owned VJP fixtures. Rebuilding it at ABI 5 proves the CPU `_jax`
-composition, observer, teardown, and cache identity paths. It does not execute
-the mapped-singleton rowwise-normalization operations that caused the ABI bump.
-Before using the run as Target 1 evidence, add a reviewed ordinary-JAX
-installed-wheel contract for the forward, JAX-owned backward, and composed BF16
-boundaries at `2048x4096` and `7x13`, under `SOURCE_ORDERED` and `FAST`. That
-contract must observe total source coverage, final Shuttle erasure, fresh ABI 5
-cache identities, and `y`, `dx`, and `dgamma` parity under separately reviewed
-numerical limits. Fixture generation or `shuttle-opt` round-tripping alone does
-not close this wheel-path gap.
+`scripts/shuttle/prepare_abi5_cpu_acceptance.py` creates a fresh config-free
+capsule from tracked `lib/shuttle` files. It excludes the sealed
+`jaxacceptance6` artifact, repository metadata, caches, virtual environments,
+Iris configs, and credentials. The output contains the capsule, a deterministic
+reviewed ZIP blob proposed for exact submission, a central-directory
+path/type/mode/size/hash manifest, an expected extraction path/type/size/hash
+manifest, and a preparation report.
+The prepared ZIP uses stored entries, a fixed ZIP timestamp, and explicit Unix
+file modes, so its bytes do not depend on checkout mtimes or timezone.
+The command requires a clean worktree when used outside tests:
+
+```bash
+PYTHONPATH=lib/iris/src:scripts/shuttle \
+  uv run python scripts/shuttle/prepare_abi5_cpu_acceptance.py \
+    --repository-root . \
+    --output /fresh/abi5-cpu-capsule
+```
+
+`scripts/shuttle/abi5_cpu_acceptance_manifest.json` pins every identity known
+locally: ABI 5, upstream revisions, patch digests, the Bazel 7.7.0 Linux binary
+digest, resource shape, destination, and zero failure, task-failure, and
+preemption retry ceilings. Task and init image digests, exact Linux Python,
+the Linux x86-64 hash lock, Iris client/config identities, bundle digest, and
+runner review commit remain explicit placeholders. The current CoreWeave
+controller always chooses its provider `default_image` for the bundle-fetch
+init container; an exact task-image override does not change it. The bundle
+route also requires a reviewed Iris API/controller change and authorized deploy
+that pins the init image per request. The alternative is a self-contained task
+OCI image with no bundle/workdir init path, which requires separate private
+image-push authorization. Neither option is implemented here.
+
+The current Iris CLI recreates a ZIP from the capsule directory and therefore
+does not submit the content-addressed prepared ZIP bytes. A future bundle route
+must submit the exact reviewed blob through a reviewed API change, or prove the
+controller's actual `IRIS_BUNDLE_ID` and ZIP inventory against the reviewed
+blob before any build. An inventory-equivalent CLI ZIP is not digest-equivalent
+evidence.
+
+The copied runner exits before external work even when `resolved-launch.json`
+closes the placeholder set. It rejects inherited tokens, `.marin.yaml`, nonzero
+retry limits, mutable image references, or an `IRIS_BUNDLE_ID` that differs
+from the reviewed bundle digest. The runner contains no upload, build, or
+launch implementation.
+
+The four named forbidden variables are not a closed credential boundary. A
+future execution runner must start build and test subprocesses with an explicit
+minimal environment-name allowlist, covering only reviewed `PATH`, home/temp
+locations, locale, CPU selection, and required Iris bundle fields. It must
+reject every unexpected environment name and credential file. The exact
+allowlist and its review commit remain a `resolved-launch.json` placeholder;
+AWS, GCP, GitHub, SSH-agent, and other inherited credentials are not implicitly
+safe. Local preparation therefore makes no safe-submission claim.
+
+`lib/shuttle/mlir/jax_patch/shuttle_jaxlib_target1_acceptance.py` closes the
+installed-wheel driver source gap. It covers forward, JAX-owned backward, and
+composed BF16 boundaries at `2048x4096` and `7x13` under `source_ordered` and
+`fast`. Disabled-JAX baseline, cache population, and cache reuse run in three
+processes. Each of the twelve enabled cells requires exact observer coverage,
+final erasure, one uniquely attributed fresh ABI 5 cache entry, a public
+second-process cache hit, and bitwise `y`, `dx`, and `dgamma` parity. These are
+source contracts only until the reviewed Linux wheel run completes.
+
+The preparation remains non-launch-ready. It does not authorize an Iris bundle
+upload, job launch, Linux build, CPU acceptance claim, hardware evidence, or a
+scorecard update.
 
 Background-research effort: medium. The local audit used canonical
 `c9e5f0734c968b70195d6836f2239ef61d9a2934`, the sealed `jaxacceptance6`

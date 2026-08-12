@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "preparation_base_commit": "0ac70a0a21bd7935980827bbf39d95e378335f99",
+  "pipeline_abi_version": 5,
+  "launch_ready": false,
+  "scorecard_status_changed": false,
+  "sealed_artifact_prohibition": "lib/shuttle/mlir/artifacts/native-preflight-20260810-jaxacceptance6",
+  "capsule_allowlist": {
+    "root": "lib/shuttle",
+    "tracked_path_count": 129,
+    "tracked_path_set_sha256": "9b115173bbb15c6862d200bee3e81f510ed6ba45c0df8683865cc0bbea6f1382"
+  },
+  "destination": "s3://marin-us-east-02a/iris/cw-us-east-02a/state/bundles",
+  "resource_request": {
+    "cpu": 24,
+    "disk_gb": 250,
+    "gpu": 0,
+    "memory_gib": 96,
+    "timeout_seconds": 14400
+  },
+  "retry_limits": {
+    "failure": 0,
+    "task_failure": 0,
+    "preemption": 0
+  },
+  "images": {
+    "task": "UNRESOLVED_TASK_IMAGE_OCI_DIGEST",
+    "init": "UNRESOLVED_INIT_IMAGE_OCI_DIGEST"
+  },
+  "toolchain": {
+    "bazel_version": "7.7.0",
+    "bazel_linux_x86_64_sha256": "953f1235a590546a4a9a83d757c075ecf7c7d8dbc30221fd086959a20d8c7a69",
+    "jax_version": "0.10.1",
+    "jaxlib_version": "0.10.1",
+    "jax_revision": "619764c15117fbefc4ba13ab941871cb514c23f6",
+    "xla_revision": "9b635916ecc6df6efee62d8e4b0c7ef87ef84d69",
+    "stablehlo_revision": "806a6844dfd92cca1ce5391c86dca0ef9e952550",
+    "llvm_revision": "9a4faee1068c09efbf837cfb7b0f5693b24635f4",
+    "nanobind_revision": "30f12ae6650ecec86042053d522d9af585f269b0",
+    "python": "UNRESOLVED_LINUX_PYTHON_3_12_PATCH_AND_BUILD_IDENTITY",
+    "linux_dependency_lock_sha256": "UNRESOLVED_LINUX_X86_64_HASH_LOCK"
+  },
+  "patch_sha256": {
+    "lib/shuttle/mlir/jax_patch/0001-link-shuttle-xla-registry-adapter.patch": "1e8b1400ee05bf8c8037277046113e1f1b1fae5ef56077899b7e853855e3424e",
+    "lib/shuttle/mlir/jax_patch/0002-add-acceptance-observer-bridge.patch": "c4d5bc4aaa4b72ee7e2ecb44d28719be99da8defcf01ebd107308df41cb71942",
+    "lib/shuttle/mlir/xla_patch/0001-add-stablehlo-module-transform-hook.patch": "b4e9f7cf2a49c42957cf24f16b43a1e0ead0a7e25d664629a841a5dbb0c7dbf9",
+    "lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch": "e4f3121f3123d7e2ee781cc5ee92f1ddeb0df662b6702d37615bcae821ecbc99"
+  },
+  "target1_contract": {
+    "boundaries": ["forward", "backward", "composed"],
+    "dtype": "bfloat16",
+    "oracle_status": "not_pinned",
+    "policies": ["source_ordered", "fast"],
+    "shapes": [[2048, 4096], [7, 13]],
+    "wrapper_count": 12,
+    "future_fast_rewrite_rule": "Revise and independently review numerical tolerances before any non-bitwise FAST rewrite or timing run."
+  },
+  "submitted_environment": {
+    "status": "unresolved_closed_allowlist_required",
+    "forbidden_inherited_variables": [
+      "HF_TOKEN",
+      "WANDB_API_KEY",
+      "GCS_RESOLVE_REFRESH_SECS",
+      "MARIN_PROVENANCE"
+    ],
+    "forbidden_files": [".marin.yaml", "coreweave.yaml"],
+    "iris_generated_provenance_requires_review": true
+  },
+  "unresolved_external_identities": [
+    "bundle_init_pinning_implementation_review",
+    "bundle_content_sha256",
+    "exact_bundle_blob_submission_review",
+    "init_image_oci_digest",
+    "iris_config_sha256",
+    "iris_revision",
+    "linux_dependency_lock_sha256",
+    "linux_python_identity",
+    "minimal_execution_environment_policy_review",
+    "runner_implementation_review",
+    "task_image_oci_digest"
+  ]
+}

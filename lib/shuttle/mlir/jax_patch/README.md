@@ -144,6 +144,35 @@ SSA names. The inventory includes every top-level operand, attribute, result
 type, source-result reference, output anchor, and each reducer block's scalar
 `stablehlo.add` result and `stablehlo.return` operation reference.
 
+`shuttle_jaxlib_target1_acceptance.py` is the installed-wheel ABI 5 CPU
+contract for those six boundaries. It runs each boundary under
+`source_ordered` and `fast`, for twelve distinct compiler/cache identities. A
+cache-disabled process saves disabled ordinary-JAX BF16 baselines. Separate
+populate and reuse processes require exact bitwise `y`, `dx`, and `dgamma`
+parity, total observer source coverage, final Shuttle erasure, twelve uniquely
+attributed cache entries, and twelve public second-process cache hits. The
+current pipelines round-trip these operations, so bitwise parity is required.
+A future non-bitwise `fast` rewrite needs a separately reviewed tolerance
+revision before any timing run.
+
+The driver is checked locally without claiming wheel execution:
+
+```bash
+PYTHONPATH=lib/shuttle/mlir/jax_patch:lib/shuttle/src \
+  uv run --project lib/shuttle --group test pytest -q \
+    lib/shuttle/mlir/jax_patch/test_target1_acceptance_contract.py \
+    lib/shuttle/mlir/jax_patch/test_shuttle_jaxlib_target1_acceptance.py
+```
+
+Run the installed-wheel contract only inside a reviewed Linux CPU runner:
+
+```bash
+JAX_PLATFORMS=cpu python \
+  lib/shuttle/mlir/jax_patch/shuttle_jaxlib_target1_acceptance.py \
+  --work-directory /fresh/target1-acceptance \
+  --report /fresh/target1-acceptance.json
+```
+
 The contract is audited from the checked-in pinned forward and JAX-owned VJP
 StableHLO fixtures at XLA's module-transform hook boundary. The fixture audit
 reapplies the pinned StableHLO complex-math expander and rejects a changed
