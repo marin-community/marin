@@ -1,0 +1,2083 @@
+{
+  "cases": [
+    {
+      "boundary": "backward",
+      "case_id": "row_fold_scale_44d152ecc3e9ff18",
+      "filename": "jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-backward.mlir",
+      "hashes": {
+        "hook_normalized_sha256": "B704DAF3EAFD450AFBC9763E226F17811F25ADEAFE6DEF9FF0886889666DF56E",
+        "hook_sha256": "936B3E68C19FDF4E7BC970D3CF6FFA5E84A6669B064310942F52D054C4E2CCE6",
+        "raw_normalized_sha256": "52DD7670DD3B7326BAB7DCB4764B390B6AD20F9F5680DC31E86358297EE00510",
+        "raw_sha256": "27AD1197826177DDD1FA58261BCD978CEBB754FE494FD6D71820D12B2452E5E6"
+      },
+      "hook_boundary": {
+        "function_type": "(tensor<2048x4096xbf16>, tensor<4096xbf16>, tensor<2048x4096xbf16>) -> (tensor<2048x4096xbf16>, tensor<4096xbf16>)",
+        "input_signature": [
+          {
+            "role": "x",
+            "type": "tensor<2048x4096xbf16>"
+          },
+          {
+            "role": "gamma",
+            "type": "tensor<4096xbf16>"
+          },
+          {
+            "role": "dy",
+            "type": "tensor<2048x4096xbf16>"
+          }
+        ],
+        "nested_operation_inventory": {
+          "stablehlo.add": 5,
+          "stablehlo.return": 5
+        },
+        "output_anchors": [
+          {
+            "anchor": [
+              "source_result",
+              0,
+              0,
+              42,
+              0
+            ],
+            "role": "dx"
+          },
+          {
+            "anchor": [
+              "source_result",
+              0,
+              0,
+              27,
+              0
+            ],
+            "role": "dgamma"
+          }
+        ],
+        "provenance_scheme": {
+          "function_ordinal": 0,
+          "result_ref_fields": [
+            "function",
+            "block",
+            "operation",
+            "result"
+          ],
+          "top_level_block_ordinal": 0
+        },
+        "reducers": [
+          {
+            "block_ordinal": 1,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    1,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    1,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    1,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    1,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  1,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              6,
+              0
+            ],
+            "top_level_operation": 6
+          },
+          {
+            "block_ordinal": 2,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    2,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    2,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    2,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    2,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  2,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              22,
+              0
+            ],
+            "top_level_operation": 22
+          },
+          {
+            "block_ordinal": 3,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    3,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    3,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    3,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    3,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  3,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              26,
+              0
+            ],
+            "top_level_operation": 26
+          },
+          {
+            "block_ordinal": 4,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    4,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    4,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    4,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    4,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  4,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              29,
+              0
+            ],
+            "top_level_operation": 29
+          },
+          {
+            "block_ordinal": 5,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    5,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    5,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    5,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    5,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  5,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              36,
+              0
+            ],
+            "top_level_operation": 36
+          }
+        ],
+        "top_level_operation_inventory": {
+          "func.return": 1,
+          "stablehlo.add": 3,
+          "stablehlo.broadcast_in_dim": 10,
+          "stablehlo.constant": 4,
+          "stablehlo.convert": 5,
+          "stablehlo.divide": 3,
+          "stablehlo.multiply": 10,
+          "stablehlo.reduce": 5,
+          "stablehlo.reshape": 2,
+          "stablehlo.rsqrt": 1
+        },
+        "top_level_operation_sequence": [
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.divide",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.add",
+          "stablehlo.rsqrt",
+          "stablehlo.divide",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.convert",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.reshape",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.reshape",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.divide",
+          "stablehlo.reduce",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.convert",
+          "func.return"
+        ]
+      },
+      "shape": {
+        "features": 4096,
+        "rows": 2048,
+        "shape_role": "primary_shape_candidate"
+      }
+    },
+    {
+      "boundary": "composed",
+      "case_id": "row_fold_scale_44d152ecc3e9ff18",
+      "filename": "jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-composed.mlir",
+      "hashes": {
+        "hook_normalized_sha256": "AB5FA3112403256B2D8EA1BCD51B1C978FC42A27359423CF40B9F80D4B929AEF",
+        "hook_sha256": "1D0AB8CF366410CED739C38D284E5EEC4B7E5DBA2257315A1B799AED305E2B38",
+        "raw_normalized_sha256": "CCFCB54450F3D71A301753C9ACE6954438E497AF8739F8CE9DC0836FE7E95A9C",
+        "raw_sha256": "1CAAA968C7F7682FA44726213B56B7DE3EE09C92A958488F04A8EF3252E7937F"
+      },
+      "hook_boundary": {
+        "function_type": "(tensor<2048x4096xbf16>, tensor<4096xbf16>, tensor<2048x4096xbf16>) -> (tensor<2048x4096xbf16>, tensor<2048x4096xbf16>, tensor<4096xbf16>)",
+        "input_signature": [
+          {
+            "role": "x",
+            "type": "tensor<2048x4096xbf16>"
+          },
+          {
+            "role": "gamma",
+            "type": "tensor<4096xbf16>"
+          },
+          {
+            "role": "dy",
+            "type": "tensor<2048x4096xbf16>"
+          }
+        ],
+        "nested_operation_inventory": {
+          "stablehlo.add": 5,
+          "stablehlo.return": 5
+        },
+        "output_anchors": [
+          {
+            "anchor": [
+              "source_result",
+              0,
+              0,
+              22,
+              0
+            ],
+            "role": "y"
+          },
+          {
+            "anchor": [
+              "source_result",
+              0,
+              0,
+              45,
+              0
+            ],
+            "role": "dx"
+          },
+          {
+            "anchor": [
+              "source_result",
+              0,
+              0,
+              30,
+              0
+            ],
+            "role": "dgamma"
+          }
+        ],
+        "provenance_scheme": {
+          "function_ordinal": 0,
+          "result_ref_fields": [
+            "function",
+            "block",
+            "operation",
+            "result"
+          ],
+          "top_level_block_ordinal": 0
+        },
+        "reducers": [
+          {
+            "block_ordinal": 1,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    1,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    1,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    1,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    1,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  1,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              6,
+              0
+            ],
+            "top_level_operation": 6
+          },
+          {
+            "block_ordinal": 2,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    2,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    2,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    2,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    2,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  2,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              25,
+              0
+            ],
+            "top_level_operation": 25
+          },
+          {
+            "block_ordinal": 3,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    3,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    3,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    3,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    3,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  3,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              29,
+              0
+            ],
+            "top_level_operation": 29
+          },
+          {
+            "block_ordinal": 4,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    4,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    4,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    4,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    4,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  4,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              32,
+              0
+            ],
+            "top_level_operation": 32
+          },
+          {
+            "block_ordinal": 5,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    5,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    5,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    5,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    5,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  5,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              39,
+              0
+            ],
+            "top_level_operation": 39
+          }
+        ],
+        "top_level_operation_inventory": {
+          "func.return": 1,
+          "stablehlo.add": 3,
+          "stablehlo.broadcast_in_dim": 11,
+          "stablehlo.constant": 4,
+          "stablehlo.convert": 6,
+          "stablehlo.divide": 3,
+          "stablehlo.multiply": 11,
+          "stablehlo.reduce": 5,
+          "stablehlo.reshape": 2,
+          "stablehlo.rsqrt": 1
+        },
+        "top_level_operation_sequence": [
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.divide",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.add",
+          "stablehlo.rsqrt",
+          "stablehlo.divide",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.convert",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.reshape",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.reshape",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.divide",
+          "stablehlo.reduce",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.convert",
+          "func.return"
+        ]
+      },
+      "shape": {
+        "features": 4096,
+        "rows": 2048,
+        "shape_role": "primary_shape_candidate"
+      }
+    },
+    {
+      "boundary": "forward",
+      "case_id": "row_fold_scale_44d152ecc3e9ff18",
+      "filename": "jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-forward.mlir",
+      "hashes": {
+        "hook_normalized_sha256": "C1CA875BECE48CEBA7CAA615F2EC096182B82881E99F3986F61DBA04DFEBB869",
+        "hook_sha256": "037F050F3DDBA7CEDEE2DA2AECA35613CA412913AFA7C3703BDC8C47C8317244",
+        "raw_normalized_sha256": "9C807D63CB709945B18C450DDE2F1A13D9AE9DF0FD9AA34EC5FBA8CA4B296DBA",
+        "raw_sha256": "3D62EDA2A5BA167842045F702178762E7CAA75C0CAD3C6D43EAE37D42D47B908"
+      },
+      "hook_boundary": {
+        "function_type": "(tensor<2048x4096xbf16>, tensor<4096xbf16>) -> tensor<2048x4096xbf16>",
+        "input_signature": [
+          {
+            "role": "x",
+            "type": "tensor<2048x4096xbf16>"
+          },
+          {
+            "role": "gamma",
+            "type": "tensor<4096xbf16>"
+          }
+        ],
+        "nested_operation_inventory": {
+          "stablehlo.add": 1,
+          "stablehlo.return": 1
+        },
+        "output_anchors": [
+          {
+            "anchor": [
+              "source_result",
+              0,
+              0,
+              18,
+              0
+            ],
+            "role": "y"
+          }
+        ],
+        "provenance_scheme": {
+          "function_ordinal": 0,
+          "result_ref_fields": [
+            "function",
+            "block",
+            "operation",
+            "result"
+          ],
+          "top_level_block_ordinal": 0
+        },
+        "reducers": [
+          {
+            "block_ordinal": 1,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    1,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    1,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    1,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    1,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  1,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              5,
+              0
+            ],
+            "top_level_operation": 5
+          }
+        ],
+        "top_level_operation_inventory": {
+          "func.return": 1,
+          "stablehlo.add": 1,
+          "stablehlo.broadcast_in_dim": 6,
+          "stablehlo.constant": 3,
+          "stablehlo.convert": 3,
+          "stablehlo.divide": 1,
+          "stablehlo.multiply": 3,
+          "stablehlo.reduce": 1,
+          "stablehlo.rsqrt": 1
+        },
+        "top_level_operation_sequence": [
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.divide",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.add",
+          "stablehlo.rsqrt",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.convert",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.convert",
+          "func.return"
+        ]
+      },
+      "shape": {
+        "features": 4096,
+        "rows": 2048,
+        "shape_role": "primary_shape_candidate"
+      }
+    },
+    {
+      "boundary": "backward",
+      "case_id": "row_fold_scale_81928ab3539c0f03",
+      "filename": "jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-backward.mlir",
+      "hashes": {
+        "hook_normalized_sha256": "25A2886E2325698263666FB2E66FF920CE811255C85BBD73937A6E5604C1DC28",
+        "hook_sha256": "8416A9EEB38CD7EDD09CC470E50325080D730FAF85FC78CAB1ADC66873934F7C",
+        "raw_normalized_sha256": "09B546E9EC2CEAA94602D5D3F1A520DD236405E96C63E223891A61BA1AED7C87",
+        "raw_sha256": "3F4A271E961B55D9B5923C57BE0EBF56C01CA7C7EAA32F9E9B7B7B8554190F67"
+      },
+      "hook_boundary": {
+        "function_type": "(tensor<7x13xbf16>, tensor<13xbf16>, tensor<7x13xbf16>) -> (tensor<7x13xbf16>, tensor<13xbf16>)",
+        "input_signature": [
+          {
+            "role": "x",
+            "type": "tensor<7x13xbf16>"
+          },
+          {
+            "role": "gamma",
+            "type": "tensor<13xbf16>"
+          },
+          {
+            "role": "dy",
+            "type": "tensor<7x13xbf16>"
+          }
+        ],
+        "nested_operation_inventory": {
+          "stablehlo.add": 5,
+          "stablehlo.return": 5
+        },
+        "output_anchors": [
+          {
+            "anchor": [
+              "source_result",
+              0,
+              0,
+              42,
+              0
+            ],
+            "role": "dx"
+          },
+          {
+            "anchor": [
+              "source_result",
+              0,
+              0,
+              27,
+              0
+            ],
+            "role": "dgamma"
+          }
+        ],
+        "provenance_scheme": {
+          "function_ordinal": 0,
+          "result_ref_fields": [
+            "function",
+            "block",
+            "operation",
+            "result"
+          ],
+          "top_level_block_ordinal": 0
+        },
+        "reducers": [
+          {
+            "block_ordinal": 1,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    1,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    1,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    1,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    1,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  1,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              6,
+              0
+            ],
+            "top_level_operation": 6
+          },
+          {
+            "block_ordinal": 2,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    2,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    2,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    2,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    2,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  2,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              22,
+              0
+            ],
+            "top_level_operation": 22
+          },
+          {
+            "block_ordinal": 3,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    3,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    3,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    3,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    3,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  3,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              26,
+              0
+            ],
+            "top_level_operation": 26
+          },
+          {
+            "block_ordinal": 4,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    4,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    4,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    4,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    4,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  4,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              29,
+              0
+            ],
+            "top_level_operation": 29
+          },
+          {
+            "block_ordinal": 5,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    5,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    5,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    5,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    5,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  5,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              36,
+              0
+            ],
+            "top_level_operation": 36
+          }
+        ],
+        "top_level_operation_inventory": {
+          "func.return": 1,
+          "stablehlo.add": 3,
+          "stablehlo.broadcast_in_dim": 10,
+          "stablehlo.constant": 4,
+          "stablehlo.convert": 5,
+          "stablehlo.divide": 3,
+          "stablehlo.multiply": 10,
+          "stablehlo.reduce": 5,
+          "stablehlo.reshape": 2,
+          "stablehlo.rsqrt": 1
+        },
+        "top_level_operation_sequence": [
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.divide",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.add",
+          "stablehlo.rsqrt",
+          "stablehlo.divide",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.convert",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.reshape",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.reshape",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.divide",
+          "stablehlo.reduce",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.convert",
+          "func.return"
+        ]
+      },
+      "shape": {
+        "features": 13,
+        "rows": 7,
+        "shape_role": "structural_shape_mutation"
+      }
+    },
+    {
+      "boundary": "composed",
+      "case_id": "row_fold_scale_81928ab3539c0f03",
+      "filename": "jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-composed.mlir",
+      "hashes": {
+        "hook_normalized_sha256": "DD07C24980E1D872A8979421A9A392B92F371669948A0A6A11AEF379C76E64B7",
+        "hook_sha256": "BD24451B7C31C9819D1E98A7731B885276E3582BD237DDB65AFB5D016982AF0B",
+        "raw_normalized_sha256": "7811CF8D35511EA1976536BAFB77A06B0BED6A148991CCCCB2558A52EB50949D",
+        "raw_sha256": "50E7D94A13A55D83164C3231DD22D954FE0F494E6CC03BED90AC902FFE4BB69C"
+      },
+      "hook_boundary": {
+        "function_type": "(tensor<7x13xbf16>, tensor<13xbf16>, tensor<7x13xbf16>) -> (tensor<7x13xbf16>, tensor<7x13xbf16>, tensor<13xbf16>)",
+        "input_signature": [
+          {
+            "role": "x",
+            "type": "tensor<7x13xbf16>"
+          },
+          {
+            "role": "gamma",
+            "type": "tensor<13xbf16>"
+          },
+          {
+            "role": "dy",
+            "type": "tensor<7x13xbf16>"
+          }
+        ],
+        "nested_operation_inventory": {
+          "stablehlo.add": 5,
+          "stablehlo.return": 5
+        },
+        "output_anchors": [
+          {
+            "anchor": [
+              "source_result",
+              0,
+              0,
+              22,
+              0
+            ],
+            "role": "y"
+          },
+          {
+            "anchor": [
+              "source_result",
+              0,
+              0,
+              45,
+              0
+            ],
+            "role": "dx"
+          },
+          {
+            "anchor": [
+              "source_result",
+              0,
+              0,
+              30,
+              0
+            ],
+            "role": "dgamma"
+          }
+        ],
+        "provenance_scheme": {
+          "function_ordinal": 0,
+          "result_ref_fields": [
+            "function",
+            "block",
+            "operation",
+            "result"
+          ],
+          "top_level_block_ordinal": 0
+        },
+        "reducers": [
+          {
+            "block_ordinal": 1,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    1,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    1,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    1,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    1,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  1,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              6,
+              0
+            ],
+            "top_level_operation": 6
+          },
+          {
+            "block_ordinal": 2,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    2,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    2,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    2,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    2,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  2,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              25,
+              0
+            ],
+            "top_level_operation": 25
+          },
+          {
+            "block_ordinal": 3,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    3,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    3,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    3,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    3,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  3,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              29,
+              0
+            ],
+            "top_level_operation": 29
+          },
+          {
+            "block_ordinal": 4,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    4,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    4,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    4,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    4,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  4,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              32,
+              0
+            ],
+            "top_level_operation": 32
+          },
+          {
+            "block_ordinal": 5,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    5,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    5,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    5,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    5,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  5,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              39,
+              0
+            ],
+            "top_level_operation": 39
+          }
+        ],
+        "top_level_operation_inventory": {
+          "func.return": 1,
+          "stablehlo.add": 3,
+          "stablehlo.broadcast_in_dim": 11,
+          "stablehlo.constant": 4,
+          "stablehlo.convert": 6,
+          "stablehlo.divide": 3,
+          "stablehlo.multiply": 11,
+          "stablehlo.reduce": 5,
+          "stablehlo.reshape": 2,
+          "stablehlo.rsqrt": 1
+        },
+        "top_level_operation_sequence": [
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.divide",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.add",
+          "stablehlo.rsqrt",
+          "stablehlo.divide",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.convert",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.convert",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.reshape",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.reshape",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.multiply",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.divide",
+          "stablehlo.reduce",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.multiply",
+          "stablehlo.add",
+          "stablehlo.convert",
+          "func.return"
+        ]
+      },
+      "shape": {
+        "features": 13,
+        "rows": 7,
+        "shape_role": "structural_shape_mutation"
+      }
+    },
+    {
+      "boundary": "forward",
+      "case_id": "row_fold_scale_81928ab3539c0f03",
+      "filename": "jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir",
+      "hashes": {
+        "hook_normalized_sha256": "6A87EAE59E011AD4C50C6892FB1BE77778D0D932E662AFD409B34A3EBD376C26",
+        "hook_sha256": "50386174720C4BB5B28E127E8CD5D6863F14CEC2C990072247DAF8B4EA1D56A2",
+        "raw_normalized_sha256": "0DE22FB0FDC264CFB01C4C2E75E66B935AF963FDB4BD40E3D5279F1B863F9CC5",
+        "raw_sha256": "5366D8FB253E770D4B84514C7951E6C7463EEBC8E71BA6353BFC485B6F5486C4"
+      },
+      "hook_boundary": {
+        "function_type": "(tensor<7x13xbf16>, tensor<13xbf16>) -> tensor<7x13xbf16>",
+        "input_signature": [
+          {
+            "role": "x",
+            "type": "tensor<7x13xbf16>"
+          },
+          {
+            "role": "gamma",
+            "type": "tensor<13xbf16>"
+          }
+        ],
+        "nested_operation_inventory": {
+          "stablehlo.add": 1,
+          "stablehlo.return": 1
+        },
+        "output_anchors": [
+          {
+            "anchor": [
+              "source_result",
+              0,
+              0,
+              18,
+              0
+            ],
+            "role": "y"
+          }
+        ],
+        "provenance_scheme": {
+          "function_ordinal": 0,
+          "result_ref_fields": [
+            "function",
+            "block",
+            "operation",
+            "result"
+          ],
+          "top_level_block_ordinal": 0
+        },
+        "reducers": [
+          {
+            "block_ordinal": 1,
+            "operations": [
+              {
+                "name": "stablehlo.add",
+                "operands": [
+                  [
+                    "block_argument",
+                    0,
+                    1,
+                    0
+                  ],
+                  [
+                    "block_argument",
+                    0,
+                    1,
+                    1
+                  ]
+                ],
+                "ordinal": 0,
+                "result_refs": [
+                  [
+                    0,
+                    1,
+                    0,
+                    0
+                  ]
+                ],
+                "result_types": [
+                  "tensor<f32>"
+                ]
+              },
+              {
+                "name": "stablehlo.return",
+                "operands": [
+                  [
+                    "source_result",
+                    0,
+                    1,
+                    0,
+                    0
+                  ]
+                ],
+                "operation_ref": [
+                  0,
+                  1,
+                  1
+                ],
+                "ordinal": 1,
+                "result_refs": [],
+                "result_types": []
+              }
+            ],
+            "source_ref": [
+              0,
+              0,
+              5,
+              0
+            ],
+            "top_level_operation": 5
+          }
+        ],
+        "top_level_operation_inventory": {
+          "func.return": 1,
+          "stablehlo.add": 1,
+          "stablehlo.broadcast_in_dim": 6,
+          "stablehlo.constant": 3,
+          "stablehlo.convert": 3,
+          "stablehlo.divide": 1,
+          "stablehlo.multiply": 3,
+          "stablehlo.reduce": 1,
+          "stablehlo.rsqrt": 1
+        },
+        "top_level_operation_sequence": [
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.constant",
+          "stablehlo.convert",
+          "stablehlo.multiply",
+          "stablehlo.reduce",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.divide",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.add",
+          "stablehlo.rsqrt",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.convert",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.broadcast_in_dim",
+          "stablehlo.multiply",
+          "stablehlo.convert",
+          "func.return"
+        ]
+      },
+      "shape": {
+        "features": 13,
+        "rows": 7,
+        "shape_role": "structural_shape_mutation"
+      }
+    }
+  ],
+  "provenance": {
+    "artifact_kind": "ordinary_jax_fixture_only",
+    "evaluation_oracle_status": "not_pinned",
+    "generator": "regenerate-jax-bf16-row-fold-scale-fixtures.py",
+    "generator_sha256": "17B39945C103E03749B8BFD53C5BE61899ADD22C318098633E579D2C5AC4F6A0",
+    "hardware_evidence": false,
+    "hook_pipeline": "builtin.module(func.func(stablehlo-complex-math-expander))",
+    "jax_revision": "619764c15117fbefc4ba13ab941871cb514c23f6",
+    "jax_version": "0.10.1",
+    "jaxlib_version": "0.10.1",
+    "source": "ordinary_jax_row_fold_scale_plus_jax_owned_vjp",
+    "stablehlo_current_version": "1.17.0",
+    "xla_revision": "9b635916ecc6df6efee62d8e4b0c7ef87ef84d69"
+  },
+  "schema_version": 1
+}

@@ -118,6 +118,32 @@ PYTHONPATH=lib/shuttle/mlir/jax_patch \
     --verifier lib/shuttle/mlir/jax_patch/verify_bf16_composed_fixture_oracle.py
 ```
 
+The six BF16 row Fold fixtures cover forward, JAX-owned backward, and composed
+boundaries at `2048x4096` and the structural `7x13` mutation. They are fixture
+inventory only. Their oracle manifest explicitly records that the evaluation
+oracle is unpinned and that no hardware evidence exists. Audit the corpus with
+JAX and jaxlib 0.10.1:
+
+```bash
+PYTHONPATH=lib/shuttle/mlir/jax_patch \
+  uv run python \
+    lib/shuttle/mlir/test/Inputs/regenerate-jax-bf16-row-fold-scale-fixtures.py
+PYTHONPATH=lib/shuttle/mlir/jax_patch \
+  uv run python \
+    lib/shuttle/mlir/jax_patch/verify_bf16_row_fold_scale_fixture_oracle.py
+PYTHONPATH=lib/shuttle/mlir/jax_patch \
+  uv run pytest -q \
+    lib/shuttle/mlir/jax_patch/test_bf16_row_fold_scale_fixture_oracle.py
+```
+
+To refresh an intentional toolchain or source change, run the generator with
+`--write`, then the verifier with `--write`, and rerun the test.
+
+The independent verifier hashes a canonical graph inventory instead of MLIR
+SSA names. The inventory includes every top-level operand, attribute, result
+type, source-result reference, output anchor, and each reducer block's scalar
+`stablehlo.add` result and `stablehlo.return` operation reference.
+
 The contract is audited from the checked-in pinned forward and JAX-owned VJP
 StableHLO fixtures at XLA's module-transform hook boundary. The fixture audit
 reapplies the pinned StableHLO complex-math expander and rejects a changed
