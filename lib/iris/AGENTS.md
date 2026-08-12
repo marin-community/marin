@@ -20,11 +20,11 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 
 - `src/iris/cli/` — CLI entry point (`main.py` has all commands including `login`, `submit`, `status`)
 - `src/iris/resources/` — immutable native resource records used by clients and controller behavior; canonical hierarchical names and compact IDs live in `names.py`
-- `src/iris/cluster/controller/` — controller application: `controller.py` (canonical resource behavior), `admin.py` (typed operational behavior), `composition.py` (process composition root), `runtime.py` (daemon and control loop), `persistence/` (SQLite, migrations, queries, and projections), `scheduling/`, and `autoscaler/`
+- `src/iris/cluster/controller/` — controller application: `controller.py` (canonical resource behavior), `resource_operations/` (registered protobuf-facing noun operations), `admin.py` (typed operational behavior), `composition.py` (process composition root), `runtime.py` (daemon and control loop), `persistence/` (SQLite, migrations, queries, and projections), `scheduling/`, and `autoscaler/`
 - `src/iris/backends/` — the native `TaskBackend` contract and status records plus implementations (`rpc/backend.py` = `RpcTaskBackend`, `k8s/tasks.py` = `K8sTaskProvider`)
 - `src/iris/cluster/platforms/` — machine-lifecycle providers (`gcp`, `k8s`, `local`, `manual`) behind `protocols.py` (`ControllerProvider`, `WorkerInfraProvider`) with shared handle/status types in `types.py`
 - `src/iris/cluster/worker/` — worker agent
-- `src/iris/rpc/` — protobuf definitions/generated code plus RPC clients, codecs, and server adapters; retained ControllerService translation is isolated under `legacy/`
+- `src/iris/rpc/` — protobuf definitions/generated code, generic ResourceService dispatch, RPC clients, and client codecs; retained ControllerService translation is isolated under `legacy/`
 - `dashboard/` — Vue 3 frontend (Vite + Tailwind)
 
 ## Development
@@ -79,12 +79,15 @@ dataclasses at the usage boundary when a caller needs a typed shape.
 
 `cluster/types.py` is limited to cluster topology and scheduling values. Put
 Job/Task names and runtime identifiers in `resources/names.py`, resource enums
-in their noun module, and all protobuf conversion in `rpc/`.
+in their noun module, shared client codecs in `rpc/`, and controller wire
+projections in `controller/resource_operations/`.
 
 ## Code Conventions
 
 - Use Connect/RPC for APIs and dashboards. Do not use `httpx` or raw HTTP.
 - After changing `.proto` files, regenerate from the repo root with `uv run python lib/iris/scripts/generate_protos.py`.
+- Public Python clients expose native immutable records. Registered operations under `controller/resource_operations/` may consume and return generated resource messages directly. Do not create a native request or response type solely to cross that boundary.
+- Generated messages remain forbidden in controller persistence, reconciliation, scheduling, federation protocols, `iris.resources`, and backend protocols. Convert protobuf fields into native values when those values enter durable state or a reusable controller/backend contract.
 - Prefer shallow, functional code that returns control quickly; avoid callback-heavy or inheritance-driven designs.
 - Dashboards must be a thin UI over the RPC API, not a second implementation path.
 - Use `rigging.timing` for all time-related operations (`Timestamp`, `Duration`, `Deadline`, `Timer`, `ExponentialBackoff`) instead of raw `datetime` or `time`.

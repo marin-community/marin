@@ -10,6 +10,7 @@ from rigging.server_auth import VerifiedIdentity, require_identity
 from iris.resources.errors import ResourcePermissionDenied
 
 FEDERATION_PEER_ROLE = "federation-peer"
+DASHBOARD_ROLE = "dashboard"
 
 
 class AuthzAction(StrEnum):

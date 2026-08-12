@@ -22,6 +22,29 @@ from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.operations import OperationalServices
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.cluster.controller.process import ControllerProcess
+from iris.cluster.controller.resource_operations.command import CreateExecSession, CreateProfileCapture
+from iris.cluster.controller.resource_operations.endpoint import (
+    BatchGetEndpoints,
+    CreateEndpointCapability,
+    GetEndpoint,
+    ListEndpoints,
+)
+from iris.cluster.controller.resource_operations.fleet import GetCapacity, GetNode, GetSlice, ListNodes, ListSlices
+from iris.cluster.controller.resource_operations.job import CreateJob, GetJob, ListJobs, UpdateJob
+from iris.cluster.controller.resource_operations.observability import (
+    GetOperation,
+    ListActivity,
+    ListLogs,
+    ListUsers,
+)
+from iris.cluster.controller.resource_operations.task import (
+    BatchGetTasks,
+    GetAttempt,
+    GetTask,
+    ListTasks,
+    UpdateAttempt,
+    UpdateTask,
+)
 from iris.cluster.controller.runtime import ControllerConfig, ControllerRuntime
 from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.managed_thread import ThreadContainer, get_thread_container
@@ -30,29 +53,6 @@ from iris.rpc.endpoint_service import EndpointServiceImpl
 from iris.rpc.federation_client import peer_connection_factory
 from iris.rpc.legacy.controller_service import LegacyControllerService
 from iris.rpc.log_reader import FinelogLogReader
-from iris.rpc.resource_endpoints.command import CreateExecSession, CreateProfileCapture
-from iris.rpc.resource_endpoints.endpoint import (
-    BatchGetEndpoints,
-    CreateEndpointCapability,
-    GetEndpoint,
-    ListEndpoints,
-)
-from iris.rpc.resource_endpoints.fleet import GetCapacity, GetNode, GetSlice, ListNodes, ListSlices
-from iris.rpc.resource_endpoints.job import CreateJob, GetJob, ListJobs, UpdateJob
-from iris.rpc.resource_endpoints.observability import (
-    GetOperation,
-    ListActivity,
-    ListLogs,
-    ListUsers,
-)
-from iris.rpc.resource_endpoints.task import (
-    BatchGetTasks,
-    GetAttempt,
-    GetTask,
-    ListTasks,
-    UpdateAttempt,
-    UpdateTask,
-)
 from iris.rpc.resource_registry import ResourceRouteRegistryBuilder, ResourceVerb
 from iris.rpc.resource_service import ResourceServiceImpl
 from iris.rpc.resource_types import ATTEMPT, EXEC_SESSION, NODE, PROFILE_CAPTURE, SLICE

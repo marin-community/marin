@@ -4,13 +4,35 @@
 """Generic Connect RPC boundary for registered Iris resources."""
 
 from collections.abc import Callable
-from typing import cast
+from typing import TypeVar, cast
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
+from google.protobuf.message import Message
 
+from iris.cluster.federation.protocol import PeerCallError
+from iris.resources.errors import (
+    ActionIdempotencyConflict,
+    ActionPolicyRejected,
+    AmbiguousResourceMigration,
+    BackendIdentityUnknown,
+    InvalidPageToken,
+    InvalidResourceKey,
+    InvalidResourceRequest,
+    ResourceConflict,
+    ResourceError,
+    ResourceExhausted,
+    ResourceNotFound,
+    ResourcePermissionDenied,
+    ResourcePreconditionFailed,
+    ResourceReplaced,
+    ResourceSourceUnavailable,
+    UnsupportedResourceSchema,
+    UnsupportedResourceVerb,
+)
 from iris.rpc import resource_pb2
+from iris.rpc.federation_client import peer_connect_error
 from iris.rpc.resource_registry import ResourceRouteRegistry, ResourceVerb
 
 PROTOCOL_VERSION = "resource.v1"
@@ -40,7 +62,7 @@ class ResourceServiceImpl:
             Callable[[resource_pb2.CreateResourceRequest, RequestContext], resource_pb2.Operation],
             route.endpoint,
         )
-        return handler(request, context)
+        return _invoke(handler, request, context)
 
     def get_resource(
         self,
@@ -54,7 +76,7 @@ class ResourceServiceImpl:
             Callable[[resource_pb2.GetResourceRequest, RequestContext], resource_pb2.GetResourceResponse],
             route.endpoint,
         )
-        return handler(request, context)
+        return _invoke(handler, request, context)
 
     def batch_get_resources(
         self,
@@ -71,7 +93,7 @@ class ResourceServiceImpl:
             Callable[[resource_pb2.BatchGetResourcesRequest, RequestContext], resource_pb2.BatchGetResourcesResponse],
             route.endpoint,
         )
-        return handler(request, context)
+        return _invoke(handler, request, context)
 
     def list_resources(
         self,
@@ -85,7 +107,7 @@ class ResourceServiceImpl:
             Callable[[resource_pb2.ListResourcesRequest, RequestContext], resource_pb2.ListResourcesResponse],
             route.endpoint,
         )
-        return handler(request, context)
+        return _invoke(handler, request, context)
 
     def update_resource(
         self,
@@ -100,7 +122,7 @@ class ResourceServiceImpl:
             Callable[[resource_pb2.UpdateResourceRequest, RequestContext], resource_pb2.Operation],
             route.endpoint,
         )
-        return handler(request, context)
+        return _invoke(handler, request, context)
 
     def delete_resource(
         self,
@@ -114,7 +136,7 @@ class ResourceServiceImpl:
             Callable[[resource_pb2.DeleteResourceRequest, RequestContext], resource_pb2.Operation],
             route.endpoint,
         )
-        return handler(request, context)
+        return _invoke(handler, request, context)
 
     def get_service_info(
         self,
@@ -137,3 +159,54 @@ def _require_ref(ref: resource_pb2.ResourceRef) -> None:
 def _require_mutation(mutation: resource_pb2.MutationMetadata) -> None:
     if not mutation.request_id.strip():
         raise ConnectError(Code.INVALID_ARGUMENT, "mutation request_id is required")
+
+
+_RequestT = TypeVar("_RequestT", bound=Message)
+_ResponseT = TypeVar("_ResponseT", bound=Message)
+
+
+def _invoke(
+    handler: Callable[[_RequestT, RequestContext], _ResponseT],
+    request: _RequestT,
+    context: RequestContext,
+) -> _ResponseT:
+    try:
+        return handler(request, context)
+    except ResourceError as error:
+        raise _resource_connect_error(error) from error
+    except PeerCallError as error:
+        raise peer_connect_error(error) from error
+    except ValueError as error:
+        raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
+
+
+def _resource_connect_error(error: ResourceError) -> ConnectError:
+    if isinstance(error, (InvalidResourceKey, InvalidResourceRequest, InvalidPageToken)):
+        code = Code.INVALID_ARGUMENT
+    elif isinstance(error, ResourceNotFound):
+        code = Code.NOT_FOUND
+    elif isinstance(error, ResourcePermissionDenied):
+        code = Code.PERMISSION_DENIED
+    elif isinstance(
+        error,
+        (
+            ResourceReplaced,
+            ResourcePreconditionFailed,
+            ActionPolicyRejected,
+            BackendIdentityUnknown,
+            UnsupportedResourceSchema,
+            AmbiguousResourceMigration,
+        ),
+    ):
+        code = Code.FAILED_PRECONDITION
+    elif isinstance(error, (ResourceConflict, ActionIdempotencyConflict)):
+        code = Code.ALREADY_EXISTS
+    elif isinstance(error, ResourceExhausted):
+        code = Code.RESOURCE_EXHAUSTED
+    elif isinstance(error, ResourceSourceUnavailable):
+        code = Code.UNAVAILABLE
+    elif isinstance(error, UnsupportedResourceVerb):
+        code = Code.UNIMPLEMENTED
+    else:
+        code = Code.INTERNAL
+    return ConnectError(code, str(error))

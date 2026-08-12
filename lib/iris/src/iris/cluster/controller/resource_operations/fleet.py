@@ -1,14 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fleet and capacity endpoint operations installed by controller composition."""
+"""Registered fleet and capacity operations owned by the controller."""
 
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from google.protobuf.message import Message
 
 from iris.cluster.controller.controller import Controller
+from iris.cluster.controller.resource_operations.support import (
+    _DEFAULT_RESOURCE_PAGE_SIZE,
+    _node_ref,
+    _parse_backend_ref_id,
+    _require_ref_type,
+    _resource,
+    _resource_ref,
+    _slice_ref,
+)
+from iris.cluster.controller.resource_operations.task import _attempt_summary_to_proto
 from iris.resources.capacity import (
     CapacityBackend,
     CapacityKubernetesStatus,
@@ -17,12 +25,7 @@ from iris.resources.capacity import (
     CapacityScalingGroup,
     ResourceAvailability,
 )
-from iris.resources.errors import (
-    ActionPolicyRejected,
-    InvalidPageToken,
-    InvalidResourceKey,
-    ResourceNotFound,
-)
+from iris.resources.errors import InvalidResourceRequest
 from iris.resources.node import NodeAttribute, NodeAttributeKind, NodeQuery, NodeSummary
 from iris.resources.slice import SliceMember, SliceQuery, SliceSummary
 from iris.rpc import resource_fleet_pb2, resource_identity_pb2, resource_pb2
@@ -44,18 +47,6 @@ from iris.rpc.resource_codec import (
 from iris.rpc.resource_codec import (
     slice_identity_to_proto as _slice_identity_to_proto,
 )
-from iris.rpc.resource_endpoint_support import (
-    _DEFAULT_RESOURCE_PAGE_SIZE,
-    _node_ref,
-    _parse_backend_ref_id,
-    _require_ref_type,
-    _resource,
-    _resource_ref,
-    _slice_ref,
-    _unpack,
-    type_url,
-)
-from iris.rpc.resource_endpoints.task import _attempt_summary_to_proto
 from iris.rpc.resource_registry import ResourceWireContract
 from iris.rpc.resource_types import CAPACITY, NODE, SLICE
 from iris.time_proto import timestamp_to_proto
@@ -340,14 +331,14 @@ def _node_detail_to_proto(detail) -> resource_fleet_pb2.NodeDetail:
 class GetNode:
     contract = ResourceWireContract(
         views=(resource_pb2.RESOURCE_VIEW_BASIC, resource_pb2.RESOURCE_VIEW_FULL),
-        body_type_urls=(type_url(resource_fleet_pb2.NodeSummary), type_url(resource_fleet_pb2.NodeDetail)),
+        body_types=(resource_fleet_pb2.NodeSummary, resource_fleet_pb2.NodeDetail),
         features=("current-ref-v1", "exact-ref-v1"),
     )
 
     def __init__(self, resources: Controller) -> None:
         self._resources = resources
 
-    def __call__(
+    def run(
         self, request: resource_pb2.GetResourceRequest, _context: RequestContext
     ) -> resource_pb2.GetResourceResponse:
         _require_ref_type(request.ref, NODE)
@@ -362,14 +353,7 @@ class GetNode:
         )
         if request.ref.HasField("uid"):
             locator.node_uid = request.ref.uid
-        try:
-            detail = self._resources.describe_node(node_locator_from_proto(locator))
-        except (InvalidResourceKey, ValueError) as exc:
-            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
-        except ResourceNotFound as exc:
-            raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
-        except ActionPolicyRejected as exc:
-            raise ConnectError(Code.FAILED_PRECONDITION, str(exc)) from exc
+        detail = self._resources.describe_node(node_locator_from_proto(locator))
         proto = _node_detail_to_proto(detail)
         body: Message = proto.summary if request.view == resource_pb2.RESOURCE_VIEW_BASIC else proto
         return resource_pb2.GetResourceResponse(
@@ -381,30 +365,29 @@ class GetNode:
 class ListNodes:
     contract = ResourceWireContract(
         views=(resource_pb2.RESOURCE_VIEW_BASIC, resource_pb2.RESOURCE_VIEW_FULL),
-        body_type_urls=(type_url(resource_fleet_pb2.NodeSummary),),
-        accepted_type_urls=(type_url(resource_fleet_pb2.NodeQuery),),
+        body_types=(resource_fleet_pb2.NodeSummary,),
+        input_type=resource_fleet_pb2.NodeQuery,
         features=("current-ref-v1", "exact-ref-v1"),
     )
 
     def __init__(self, resources: Controller) -> None:
         self._resources = resources
 
-    def __call__(
-        self, request: resource_pb2.ListResourcesRequest, _context: RequestContext
+    def run(
+        self,
+        request: resource_pb2.ListResourcesRequest,
+        query: resource_fleet_pb2.NodeQuery,
+        _context: RequestContext,
     ) -> resource_pb2.ListResourcesResponse:
-        query = _unpack(request.query, resource_fleet_pb2.NodeQuery)
-        try:
-            page = self._resources.list_nodes(
-                NodeQuery(
-                    backend_id=query.backend_id or None,
-                    contains=query.contains or None,
-                    health=frozenset(node_health_from_proto(value) for value in query.health),
-                    page_size=request.page_size or query.page.page_size or _DEFAULT_RESOURCE_PAGE_SIZE,
-                    page_token=request.page_token or query.page.page_token or None,
-                )
+        page = self._resources.list_nodes(
+            NodeQuery(
+                backend_id=query.backend_id or None,
+                contains=query.contains or None,
+                health=frozenset(node_health_from_proto(value) for value in query.health),
+                page_size=request.page_size or query.page.page_size or _DEFAULT_RESOURCE_PAGE_SIZE,
+                page_token=request.page_token or query.page.page_token or None,
             )
-        except (InvalidPageToken, ValueError) as exc:
-            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+        )
         summaries = [_node_summary_to_proto(item) for item in page.items]
         return resource_pb2.ListResourcesResponse(
             resources=[_resource(_node_ref(item.identity), item) for item in summaries],
@@ -424,14 +407,14 @@ def _slice_detail_to_proto(detail) -> resource_fleet_pb2.SliceDetail:
 class GetSlice:
     contract = ResourceWireContract(
         views=(resource_pb2.RESOURCE_VIEW_BASIC, resource_pb2.RESOURCE_VIEW_FULL),
-        body_type_urls=(type_url(resource_fleet_pb2.SliceSummary), type_url(resource_fleet_pb2.SliceDetail)),
+        body_types=(resource_fleet_pb2.SliceSummary, resource_fleet_pb2.SliceDetail),
         features=("current-ref-v1", "exact-ref-v1"),
     )
 
     def __init__(self, resources: Controller) -> None:
         self._resources = resources
 
-    def __call__(
+    def run(
         self, request: resource_pb2.GetResourceRequest, _context: RequestContext
     ) -> resource_pb2.GetResourceResponse:
         _require_ref_type(request.ref, SLICE)
@@ -446,14 +429,7 @@ class GetSlice:
         )
         if request.ref.HasField("uid"):
             locator.slice_uid = request.ref.uid
-        try:
-            detail = self._resources.describe_slice(slice_locator_from_proto(locator))
-        except (InvalidResourceKey, ValueError) as exc:
-            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
-        except ResourceNotFound as exc:
-            raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
-        except ActionPolicyRejected as exc:
-            raise ConnectError(Code.FAILED_PRECONDITION, str(exc)) from exc
+        detail = self._resources.describe_slice(slice_locator_from_proto(locator))
         proto = _slice_detail_to_proto(detail)
         body: Message = proto.summary if request.view == resource_pb2.RESOURCE_VIEW_BASIC else proto
         return resource_pb2.GetResourceResponse(
@@ -465,29 +441,28 @@ class GetSlice:
 class ListSlices:
     contract = ResourceWireContract(
         views=(resource_pb2.RESOURCE_VIEW_BASIC, resource_pb2.RESOURCE_VIEW_FULL),
-        body_type_urls=(type_url(resource_fleet_pb2.SliceSummary),),
-        accepted_type_urls=(type_url(resource_fleet_pb2.SliceQuery),),
+        body_types=(resource_fleet_pb2.SliceSummary,),
+        input_type=resource_fleet_pb2.SliceQuery,
         features=("current-ref-v1", "exact-ref-v1"),
     )
 
     def __init__(self, resources: Controller) -> None:
         self._resources = resources
 
-    def __call__(
-        self, request: resource_pb2.ListResourcesRequest, _context: RequestContext
+    def run(
+        self,
+        request: resource_pb2.ListResourcesRequest,
+        query: resource_fleet_pb2.SliceQuery,
+        _context: RequestContext,
     ) -> resource_pb2.ListResourcesResponse:
-        query = _unpack(request.query, resource_fleet_pb2.SliceQuery)
-        try:
-            page = self._resources.list_slices(
-                SliceQuery(
-                    backend_id=query.backend_id or None,
-                    scaling_group_id=query.scaling_group_id or None,
-                    page_size=request.page_size or query.page.page_size or _DEFAULT_RESOURCE_PAGE_SIZE,
-                    page_token=request.page_token or query.page.page_token or None,
-                )
+        page = self._resources.list_slices(
+            SliceQuery(
+                backend_id=query.backend_id or None,
+                scaling_group_id=query.scaling_group_id or None,
+                page_size=request.page_size or query.page.page_size or _DEFAULT_RESOURCE_PAGE_SIZE,
+                page_token=request.page_token or query.page.page_token or None,
             )
-        except (InvalidPageToken, ValueError) as exc:
-            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+        )
         summaries = [_slice_summary_to_proto(item) for item in page.items]
         return resource_pb2.ListResourcesResponse(
             resources=[_resource(_slice_ref(item.identity), item) for item in summaries],
@@ -532,19 +507,19 @@ def _capacity_to_proto(status) -> resource_fleet_pb2.CapacityStatus:
 class GetCapacity:
     contract = ResourceWireContract(
         views=(resource_pb2.RESOURCE_VIEW_FULL,),
-        body_type_urls=(type_url(resource_fleet_pb2.CapacityStatus),),
+        body_types=(resource_fleet_pb2.CapacityStatus,),
         features=("current-only-v1",),
     )
 
     def __init__(self, resources: Controller) -> None:
         self._resources = resources
 
-    def __call__(
+    def run(
         self, request: resource_pb2.GetResourceRequest, _context: RequestContext
     ) -> resource_pb2.GetResourceResponse:
         _require_ref_type(request.ref, CAPACITY)
         if request.ref.id != "capacity" or request.ref.HasField("uid"):
-            raise ConnectError(Code.INVALID_ARGUMENT, "Capacity is the current-only 'capacity' resource")
+            raise InvalidResourceRequest("Capacity is the current-only 'capacity' resource")
         body = _capacity_to_proto(self._resources.capacity_status())
         return resource_pb2.GetResourceResponse(
             resource=_resource(_resource_ref(request.ref.authority_cluster_id, CAPACITY, "capacity"), body),

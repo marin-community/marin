@@ -1,23 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Wire helpers shared by controller-owned ResourceService endpoints."""
+"""Wire helpers shared by controller-owned resource operations."""
 
 import uuid
-from typing import TypeVar
 
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
 from google.protobuf import any_pb2
 from google.protobuf.message import Message
 from rigging.server_auth import ANONYMOUS_ADMIN, get_verified_identity
 from rigging.timing import Timestamp
 
+from iris.cluster.authorization import DASHBOARD_ROLE, FEDERATION_PEER_ROLE, authorize_resource_owner
 from iris.cluster.controller.controller import Controller
+from iris.resources.errors import InvalidResourceKey, InvalidResourceRequest, ResourcePermissionDenied, ResourceReplaced
 from iris.resources.identity import ResourceKey
 from iris.resources.names import JobName
 from iris.rpc import resource_action_pb2, resource_endpoint_pb2, resource_identity_pb2, resource_pb2
-from iris.rpc.auth import DASHBOARD_ROLE, FEDERATION_PEER_ROLE, authorize_resource_owner
 from iris.rpc.resource_types import ATTEMPT, ENDPOINT, JOB, NODE, OPERATION, SLICE, TASK
 from iris.time_proto import timestamp_to_proto
 
@@ -43,7 +41,7 @@ def _resource_principal(resources: Controller, resource_id: str) -> str:
     root_job = JobName.from_wire(resource_id.rpartition(":")[0] or resource_id).root_job
     if resources.received_job_from_peer(root_job, identity.user_id):
         return root_job.user
-    raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {root_job}")
+    raise ResourcePermissionDenied(f"Peer {identity.user_id!r} did not federate job {root_job}")
 
 
 def _authorized_owner(requested_owner: str | None = None) -> str | None:
@@ -63,29 +61,10 @@ def _authorize_key_owner(key: ResourceKey) -> None:
     authorize_resource_owner(owner)
 
 
-_MessageT = TypeVar("_MessageT", bound=Message)
-
-
-def type_url(message_type: type[Message]) -> str:
-    return f"type.googleapis.com/{message_type.DESCRIPTOR.full_name}"
-
-
 def _pack(value: Message) -> any_pb2.Any:
     packed = any_pb2.Any()
     packed.Pack(value)
     return packed
-
-
-def _unpack(value: any_pb2.Any, message_type: type[_MessageT]) -> _MessageT:
-    if not value.Is(message_type.DESCRIPTOR):
-        raise ConnectError(
-            Code.INVALID_ARGUMENT,
-            f"expected {type_url(message_type)}, got {value.type_url or 'an empty body'}",
-        )
-    result = message_type()
-    if not value.Unpack(result):
-        raise ConnectError(Code.INVALID_ARGUMENT, f"invalid {type_url(message_type)} body")
-    return result
 
 
 def _resource_ref(
@@ -110,14 +89,14 @@ def _resource(ref: resource_pb2.ResourceRef, body: Message) -> resource_pb2.Reso
 
 def _require_ref_type(ref: resource_pb2.ResourceRef, expected: str) -> None:
     if ref.type != expected:
-        raise ConnectError(Code.INVALID_ARGUMENT, f"expected resource type {expected!r}, got {ref.type!r}")
+        raise InvalidResourceRequest(f"expected resource type {expected!r}, got {ref.type!r}")
     if not ref.authority_cluster_id or not ref.id:
-        raise ConnectError(Code.INVALID_ARGUMENT, "resource authority and id are required")
+        raise InvalidResourceRequest("resource authority and id are required")
 
 
 def _require_exact_uid(ref: resource_pb2.ResourceRef, actual_uid: str) -> None:
     if ref.HasField("uid") and ref.uid != actual_uid:
-        raise ConnectError(Code.FAILED_PRECONDITION, f"resource {ref.id!r} was replaced")
+        raise ResourceReplaced(f"resource {ref.id!r} was replaced")
 
 
 def _legacy_key(ref: resource_pb2.ResourceRef, kind: int) -> resource_identity_pb2.ResourceKey:
@@ -137,14 +116,14 @@ def _backend_ref_id(backend_id: str, resource_id: str) -> str:
 def _parse_backend_ref_id(value: str) -> tuple[str, str]:
     backend_id, separator, resource_id = value.partition(":")
     if not separator or not backend_id or not resource_id:
-        raise ConnectError(Code.INVALID_ARGUMENT, "backend resource id must be '<backend>:<id>'")
+        raise InvalidResourceKey("backend resource id must be '<backend>:<id>'")
     return backend_id, resource_id
 
 
 def _attempt_locator(ref: resource_pb2.ResourceRef) -> resource_identity_pb2.AttemptLocator:
     task_id, separator, attempt = ref.id.rpartition(":")
     if not separator or not task_id:
-        raise ConnectError(Code.INVALID_ARGUMENT, "Attempt id must be '<task>:<number|current>'")
+        raise InvalidResourceKey("Attempt id must be '<task>:<number|current>'")
     locator = resource_identity_pb2.AttemptLocator(
         task=_legacy_key(
             _resource_ref(ref.authority_cluster_id, TASK, task_id),
@@ -153,7 +132,7 @@ def _attempt_locator(ref: resource_pb2.ResourceRef) -> resource_identity_pb2.Att
     )
     if attempt != "current":
         if not attempt.isdecimal() or str(int(attempt)) != attempt:
-            raise ConnectError(Code.INVALID_ARGUMENT, "Attempt number must be canonical and non-negative")
+            raise InvalidResourceKey("Attempt number must be canonical and non-negative")
         locator.attempt_number = int(attempt)
     return locator
 
@@ -276,7 +255,7 @@ def _selected_ref_from_action(
         )
     if requested_ref.type == ATTEMPT:
         if not receipt.HasField("expected_attempt_number") or not receipt.expected_attempt_uid:
-            raise ConnectError(Code.INTERNAL, "Attempt action did not record its exact target")
+            raise RuntimeError("Attempt action did not record its exact target")
         task_id = receipt.target.resource_id
         if receipt.target.kind == resource_identity_pb2.RESOURCE_KIND_ATTEMPT:
             task_id, _, _ = task_id.rpartition(":")
@@ -286,7 +265,7 @@ def _selected_ref_from_action(
             f"{task_id}:{receipt.expected_attempt_number}",
             receipt.expected_attempt_uid,
         )
-    raise ConnectError(Code.INTERNAL, f"action cannot resolve selected resource type {requested_ref.type!r}")
+    raise RuntimeError(f"action cannot resolve selected resource type {requested_ref.type!r}")
 
 
 def _operation_from_action(

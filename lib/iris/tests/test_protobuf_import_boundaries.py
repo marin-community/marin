@@ -12,6 +12,7 @@ _SOURCE_ROOT = Path(__file__).parents[1] / "src" / "iris"
 _GENERATED_IMPORT_SUFFIXES = ("_pb2", "_connect")
 _TRANSPORT_FREE_PACKAGES = ("resources", "cluster/federation")
 _CONTROLLER_TRANSPORT_HOSTS = frozenset({"composition.py", "process.py"})
+_CONTROLLER_OPERATION_PREFIX = "resource_operations/"
 _BACKEND_TRANSPORT_HOSTS = frozenset({"k8s/logship.py"})
 
 
@@ -50,13 +51,29 @@ def _rpc_imports(paths: list[Path]) -> frozenset[tuple[str, str]]:
     return frozenset(imports)
 
 
+def _imported_modules(path: Path) -> tuple[str, ...]:
+    modules: list[str] = []
+    tree = ast.parse(path.read_bytes(), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            modules.append(node.module or "")
+    return tuple(modules)
+
+
 def test_native_resource_and_controller_kernel_packages_do_not_import_rpc_transport() -> None:
     paths = [path for package in _TRANSPORT_FREE_PACKAGES for path in (_SOURCE_ROOT / package).rglob("*.py")]
     paths.append(_SOURCE_ROOT / "cluster" / "types.py")
     paths.extend(
         path
         for path in (_SOURCE_ROOT / "cluster" / "controller").rglob("*.py")
-        if path.relative_to(_SOURCE_ROOT / "cluster" / "controller").as_posix() not in _CONTROLLER_TRANSPORT_HOSTS
+        if (
+            path.relative_to(_SOURCE_ROOT / "cluster" / "controller").as_posix() not in _CONTROLLER_TRANSPORT_HOSTS
+            and not path.relative_to(_SOURCE_ROOT / "cluster" / "controller")
+            .as_posix()
+            .startswith(_CONTROLLER_OPERATION_PREFIX)
+        )
     )
     paths.extend(
         path
@@ -72,19 +89,11 @@ def test_resources_and_backends_do_not_reach_through_controller_persistence() ->
     violations: list[tuple[str, str]] = []
     for package in ("resources", "backends"):
         for path in (_SOURCE_ROOT / package).rglob("*.py"):
-            tree = ast.parse(path.read_bytes(), filename=str(path))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    modules = tuple(alias.name for alias in node.names)
-                elif isinstance(node, ast.ImportFrom):
-                    modules = (node.module or "",)
-                else:
-                    continue
-                violations.extend(
-                    (path.relative_to(_SOURCE_ROOT).as_posix(), module)
-                    for module in modules
-                    if module.startswith("iris.cluster.controller.persistence")
-                )
+            violations.extend(
+                (path.relative_to(_SOURCE_ROOT).as_posix(), module)
+                for module in _imported_modules(path)
+                if module.startswith("iris.cluster.controller.persistence")
+            )
     assert not violations, f"Controller persistence imports in native packages: {sorted(violations)}"
 
 
@@ -107,47 +116,50 @@ def test_controller_sqlalchemy_is_confined_to_persistence() -> None:
     violations: list[str] = []
     for path in controller_root.rglob("*.py"):
         relative_path = path.relative_to(controller_root).as_posix()
-        tree = ast.parse(path.read_bytes(), filename=str(path))
-        for node in ast.walk(tree):
-            modules: tuple[str, ...] = ()
-            if isinstance(node, ast.Import):
-                modules = tuple(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                modules = (node.module,)
-            if any(module == "sqlalchemy" or module.startswith("sqlalchemy.") for module in modules):
-                if not relative_path.startswith("persistence/"):
-                    violations.append(relative_path)
+        if any(
+            module == "sqlalchemy" or module.startswith("sqlalchemy.") for module in _imported_modules(path)
+        ) and not relative_path.startswith("persistence/"):
+            violations.append(relative_path)
     assert not violations, f"SQLAlchemy imports outside controller/persistence: {sorted(set(violations))}"
 
 
 def test_rpc_adapters_do_not_import_controller_persistence() -> None:
     violations: list[tuple[str, str]] = []
     for path in (_SOURCE_ROOT / "rpc").rglob("*.py"):
-        tree = ast.parse(path.read_bytes(), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                modules = tuple(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                modules = (node.module or "",)
-            else:
-                continue
-            violations.extend(
-                (path.name, module) for module in modules if module.startswith("iris.cluster.controller.persistence")
-            )
+        violations.extend(
+            (path.name, module)
+            for module in _imported_modules(path)
+            if module.startswith("iris.cluster.controller.persistence")
+        )
     assert not violations, f"Controller persistence imports in RPC adapters: {sorted(violations)}"
+
+
+def test_controller_resource_operations_do_not_bypass_public_boundaries() -> None:
+    forbidden_prefixes = (
+        "connectrpc.code",
+        "connectrpc.errors",
+        "iris.backends",
+        "iris.cluster.controller.persistence",
+        "iris.cluster.controller.reconcile",
+        "iris.cluster.controller.scheduling",
+        "iris.rpc.federation_client",
+        "iris.rpc.legacy",
+        "iris.rpc.resource_client",
+        "iris.rpc.resource_service",
+    )
+    violations = {
+        (path.relative_to(_SOURCE_ROOT).as_posix(), module)
+        for path in (_SOURCE_ROOT / "cluster" / "controller" / "resource_operations").rglob("*.py")
+        for module in _imported_modules(path)
+        if module.startswith(forbidden_prefixes)
+    }
+
+    assert not violations, f"Registered operations bypass controller or transport boundaries: {sorted(violations)}"
 
 
 def test_control_runtime_does_not_construct_transport_adapters() -> None:
     runtime_path = _SOURCE_ROOT / "cluster" / "controller" / "runtime.py"
-    imports = {
-        module
-        for node in ast.walk(ast.parse(runtime_path.read_bytes(), filename=str(runtime_path)))
-        for module in (
-            tuple(alias.name for alias in node.names)
-            if isinstance(node, ast.Import)
-            else ((node.module or "",) if isinstance(node, ast.ImportFrom) else ())
-        )
-    }
+    imports = set(_imported_modules(runtime_path))
     forbidden = {
         "iris.cluster.controller.process",
         "iris.rpc.legacy.controller_service",

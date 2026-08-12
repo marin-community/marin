@@ -17,6 +17,7 @@ from connectrpc.errors import ConnectError
 from rigging.server_auth import VerifiedIdentity
 
 from iris.cluster.authorization import (
+    DASHBOARD_ROLE,
     FEDERATION_PEER_ROLE,
     AuthzAction,
 )
@@ -27,12 +28,6 @@ from iris.cluster.authorization import (
     authorize_resource_owner as authorize_native_resource_owner,
 )
 from iris.resources.errors import ResourcePermissionDenied
-
-# Read-only role granted to an IAP-authenticated caller whose email is not
-# provisioned in the user store (see the controller's IAP role resolver). It may
-# only call the read RPCs in DASHBOARD_READABLE_RPCS; see authorize_method. A
-# provisioned admin/user behind IAP resolves to their real role instead.
-DASHBOARD_ROLE = "dashboard"
 
 # Role carried by a verified federation token — a trusted peer handing a job off or
 # driving its sync/cancel/proxy. Method-scoped to FEDERATION_RPCS and the

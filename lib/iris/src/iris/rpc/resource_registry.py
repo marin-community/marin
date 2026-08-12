@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Protocol, TypeVar, cast
+from typing import cast
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -34,21 +34,17 @@ class ResourceWireContract:
     """Wire types and features advertised for one installed endpoint."""
 
     views: tuple[int, ...] = ()
-    body_type_urls: tuple[str, ...] = ()
-    accepted_type_urls: tuple[str, ...] = ()
+    body_types: tuple[type[Message], ...] = ()
+    input_type: type[Message] | None = None
     features: tuple[str, ...] = ()
 
+    @property
+    def body_type_urls(self) -> tuple[str, ...]:
+        return tuple(_type_url(message_type) for message_type in self.body_types)
 
-_RequestT = TypeVar("_RequestT", bound=Message, contravariant=True)
-_ResponseT = TypeVar("_ResponseT", bound=Message, covariant=True)
-
-
-class ResourceEndpoint(Protocol[_RequestT, _ResponseT]):
-    """One concrete noun/verb endpoint installed by controller composition."""
-
-    contract: ResourceWireContract
-
-    def __call__(self, request: _RequestT, context: RequestContext) -> _ResponseT: ...
+    @property
+    def accepted_type_urls(self) -> tuple[str, ...]:
+        return (_type_url(self.input_type),) if self.input_type is not None else ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,15 +88,26 @@ class ResourceRouteRegistryBuilder:
     def bind(
         self,
         path: str,
-        endpoint: ResourceEndpoint[_RequestT, _ResponseT],
+        operation: object,
     ) -> None:
-        """Bind `/noun/verb` to one controller endpoint operation."""
+        """Bind `/noun/verb` to one controller operation."""
         resource_type, verb = _parse_path(path)
         key = (resource_type, verb)
         if key in self._routes:
             raise ValueError(f"duplicate resource binding: {path}")
-        handler = cast(Callable[[Message, RequestContext], Message], endpoint)
-        self._routes[key] = ResourceEndpointBinding(handler, endpoint.contract)
+        contract = getattr(operation, "contract", None)
+        run = getattr(operation, "run", None)
+        if not isinstance(contract, ResourceWireContract) or not callable(run):
+            raise TypeError("resource operation must define a ResourceWireContract and callable run method")
+        for message_type in contract.body_types:
+            if not isinstance(message_type, type) or not issubclass(message_type, Message):
+                raise TypeError("resource response types must be protobuf Message classes")
+        if contract.input_type is not None and (
+            not isinstance(contract.input_type, type) or not issubclass(contract.input_type, Message)
+        ):
+            raise TypeError("resource input type must be a protobuf Message class")
+        handler = _bound_handler(verb, contract.input_type, run)
+        self._routes[key] = ResourceEndpointBinding(handler, contract)
         self._types.add(resource_type)
 
     def register_backend(
@@ -201,3 +208,38 @@ def _parse_path(path: str) -> tuple[str, ResourceVerb]:
     except ValueError as error:
         raise ValueError(f"unknown resource verb: {verb_name!r}") from error
     return f"iris/{noun}", verb
+
+
+def _bound_handler(
+    verb: ResourceVerb,
+    input_type: type[Message] | None,
+    run: Callable[..., Message],
+) -> Callable[[Message, RequestContext], Message]:
+    typed_verbs = {ResourceVerb.CREATE, ResourceVerb.LIST, ResourceVerb.UPDATE}
+    if input_type is None:
+        if verb in typed_verbs:
+            raise ValueError(f"{verb.value} requires a typed payload")
+        return cast(Callable[[Message, RequestContext], Message], run)
+    if verb not in typed_verbs:
+        raise ValueError(f"{verb.value} does not carry a typed payload")
+
+    def invoke(request: Message, context: RequestContext) -> Message:
+        packed = _packed_payload(verb, request)
+        body = input_type()
+        if not packed.Is(input_type.DESCRIPTOR) or not packed.Unpack(body):
+            raise ConnectError(Code.INVALID_ARGUMENT, f"invalid {_type_url(input_type)} payload")
+        return run(request, body, context)
+
+    return invoke
+
+
+def _packed_payload(verb: ResourceVerb, request: Message):
+    if verb is ResourceVerb.CREATE:
+        return cast(resource_pb2.CreateResourceRequest, request).body
+    if verb is ResourceVerb.LIST:
+        return cast(resource_pb2.ListResourcesRequest, request).query
+    return cast(resource_pb2.UpdateResourceRequest, request).update
+
+
+def _type_url(message_type: type[Message]) -> str:
+    return f"type.googleapis.com/{message_type.DESCRIPTOR.full_name}"
