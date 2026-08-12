@@ -613,3 +613,13 @@ author: Rafal Wojdyla
 - RNO progress: `hplt_v3_528b745e` started. Its 6,330-shard join stage got to 510 completed shards with 32 live workers and no dead workers.
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Next action: Continue the 15-minute check cadence and monitor HPLT through its join and embedding stages.
+
+### 2026-08-12 13:45 UTC - Long-source health check
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 35 completed source artifacts. RNO has eight completed source artifacts. The full run has 43 of 292 completed source artifacts.
+- East progress: `finepdfs_cf4aed04` got to 4,848 of 9,244 output shards with 32 live workers and no dead workers.
+- RNO progress: `hplt_v3_528b745e` completed its 6,330-shard join stage and got to 224 of 6,330 embedding shards with 32 live workers and no dead workers.
+- Error check: No new transport, retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the last 15 minutes.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Next action: Continue the 15-minute check cadence and refine the FinePDFs and HPLT completion estimates.
