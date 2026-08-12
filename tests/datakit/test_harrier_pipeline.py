@@ -43,7 +43,10 @@ def _embedding(value: float) -> list[float]:
 
 
 def test_tei_ports_follow_gpu_pci_bus(monkeypatch):
-    monkeypatch.setattr(tei.subprocess, "check_output", lambda *args, **kwargs: "00000000:3B:00.0\n")
+    def check_output(*_args, **_kwargs):
+        return "00000000:3B:00.0\n"
+
+    monkeypatch.setattr(tei.subprocess, "check_output", check_output)
 
     assert tei._tei_ports() == (25_059, 26_059)
 
@@ -62,7 +65,8 @@ def test_tei_client_retries_against_refreshed_endpoints(monkeypatch, transient_e
     monkeypatch.setattr(tei_client.time, "sleep", lambda _delay: None)
     monkeypatch.setattr(tei_client.random, "shuffle", lambda _items: None)
 
-    def urlopen(request, timeout):
+    def urlopen(request, *, timeout):
+        assert timeout == 300
         if request.full_url.startswith("http://dead"):
             raise transient_error
         texts = json.loads(request.data)["inputs"]
@@ -80,7 +84,8 @@ def test_tei_client_splits_large_requests_without_reordering(monkeypatch):
     monkeypatch.setattr(tei_client, "iris_ctx", lambda: SimpleNamespace(resolver=resolver))
     monkeypatch.setattr(tei_client.random, "shuffle", lambda _items: None)
 
-    def urlopen(request, timeout):
+    def urlopen(request, *, timeout):
+        assert timeout == 300
         texts = json.loads(request.data)["inputs"]
         if len(texts) > 2:
             raise urllib.error.HTTPError(request.full_url, 413, "payload too large", {}, None)

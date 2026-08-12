@@ -6,7 +6,6 @@
 import contextlib
 import json
 import logging
-import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -63,8 +62,7 @@ def _tei_ports() -> tuple[int, int]:
 
 def _prepare_model(config: TeiServiceConfig, root: Path) -> Path:
     archive_path = root / "checkpoint.tar"
-    with StoragePath(config.model_archive).open("rb") as source, archive_path.open("wb") as destination:
-        shutil.copyfileobj(source, destination)
+    StoragePath(config.model_archive).download_to(str(archive_path))
     with tarfile.open(archive_path) as archive:
         archive.extractall(root, filter="data")
 
