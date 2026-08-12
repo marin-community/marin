@@ -73,13 +73,14 @@ uv run pyrefly check
 uv run --no-project infra/ci/run_tests.py
 - The runner compares committed, staged, unstaged, and untracked changes with
   the merge base of `origin/main`, selects transitive import dependents, and
-  runs the selected paths in one pytest process with every workspace test group
-  plus the unified CI xdist settings. Haliax runs in a separate process when
-  another package is selected because it configures JAX before import; the
-  phases share one synced environment.
+  runs the selected paths from one top-level command with every workspace test
+  group plus the unified CI xdist settings. When Haliax is selected with other
+  packages, one worker runs Haliax with eight virtual CPU devices while the
+  remaining workers run the other affected tests concurrently.
 - Use `--dry-run` to inspect the plan and `--base-ref <ref>` when the branch
-  targets something other than main. Shared dependency or pytest configuration
-  changes fall back to the ordinary `uv run pytest` suite.
+  targets something other than main. Use `--workers <count>` to change the
+  eight-worker default. Shared dependency or pytest configuration changes fall
+  back to the ordinary `uv run pytest` suite.
 
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
@@ -124,6 +125,9 @@ uv run --no-project infra/ci/run_tests.py
 - PR monitoring is part of the `commit` skill. After opening or updating a PR,
   follow its `wait_for.py` loop through an exit condition. Do not substitute
   `gh pr checks --watch`, repeated `gh pr view` calls, or handoff at green CI.
+  Invoke `wait_for.py` once as a foreground blocking call and let it resume the
+  task when an event fires; do not poll a yielded process handle or narrate
+  unchanged state while it waits.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style

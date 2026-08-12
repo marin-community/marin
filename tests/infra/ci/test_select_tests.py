@@ -206,9 +206,9 @@ def test_classify_broad_triggers(tmp_path: Path) -> None:
 def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     write(tmp_path, "infra/ci/__init__.py")
     write(tmp_path, "infra/ci/select_tests.py", "def select():\n    pass\n")
-    write(tmp_path, "infra/ci/run_tests.py", "from infra.ci.select_tests import select\n")
+    write(tmp_path, "infra/ci/analyze_import_graph.py", "from infra.ci.select_tests import select\n")
+    write(tmp_path, "tests/infra/ci/test_analyze_import_graph.py", "from infra.ci.analyze_import_graph import select\n")
     write(tmp_path, "tests/infra/ci/test_select_tests.py", "from infra.ci.select_tests import select\n")
-    write(tmp_path, "tests/infra/ci/test_run_tests.py", "from infra.ci.run_tests import select\n")
 
     selection = select_local_tests(
         ["infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"],
@@ -217,7 +217,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
 
     assert selection.reason == "diff-driven"
     assert leg_paths(selection.matrix, "marin") == [
-        "tests/infra/ci/test_run_tests.py",
+        "tests/infra/ci/test_analyze_import_graph.py",
         "tests/infra/ci/test_select_tests.py",
     ]
 

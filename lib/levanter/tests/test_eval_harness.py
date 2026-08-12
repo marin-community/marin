@@ -5,7 +5,8 @@ from lib.levanter.tests.test_utils import skip_if_module_missing
 from transformers import AutoTokenizer
 
 from levanter.data.packing import PromptCompletion
-from levanter.eval_harness import LmEvalHarnessConfig, TaskConfig, _iterate_tokenized_requests
+from levanter.eval_harness import LmEvalHarnessConfig, _iterate_tokenized_requests
+from levanter.eval_harness_config import TaskConfig
 
 
 @skip_if_module_missing("lm_eval")

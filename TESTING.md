@@ -17,14 +17,16 @@ uv run --no-project infra/ci/run_tests.py
 The runner compares committed, staged, unstaged, and untracked files with the
 branch point from `origin/main`. It uses `infra/ci/select_tests.py` to find test
 files that transitively import changed modules, then runs the selected paths in
-one top-level pytest process with every workspace test group and the same uv
-extras and xdist flags as unified unit CI. It reuses the worktree environment,
-so repeated runs do not rebuild an isolated environment. A package shown as
-`full suite` has its test directory selected, not a single test. The runner
-prints the command it executes and abbreviates only long test-path lists.
-Haliax uses a separate pytest phase only when another package is also selected,
-because its eight-device CPU setup must happen before JAX initializes. Both
-phases reuse the same synced workspace environment.
+one top-level run with every workspace test group and the same uv extras and
+xdist flags as unified unit CI. It reuses the worktree environment, so repeated
+runs do not rebuild an isolated environment. A package shown as `full suite`
+has its test directory selected, not a single test. The runner prints the
+commands it executes and abbreviates only long test-path lists. When Haliax and
+other packages are selected together, one worker runs Haliax with eight virtual
+CPU devices while the remaining workers run the other affected tests
+concurrently. This keeps a single worker budget without imposing Haliax's JAX
+topology on every test process. The default budget is eight workers; override it
+with `--workers <count>`.
 CI selector and workflow changes run their import-dependent tests locally while
 the pushed branch exercises the complete CI matrix. Changes to shared dependency
 or pytest configuration cannot be narrowed, so the runner falls back to

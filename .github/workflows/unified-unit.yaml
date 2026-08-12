@@ -104,6 +104,9 @@ jobs:
         # which is not a failure. Those tests run in their own dedicated workflow. Treat
         # exit 5 as success; every other non-zero status still fails the lane.
         run: |
+          if [ "${{ matrix.package }}" = "marin-haliax" ]; then
+            export JAX_NUM_CPU_DEVICES=8
+          fi
           status=0
           uv run \
             --python ${{ matrix.python }} \

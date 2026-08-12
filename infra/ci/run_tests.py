@@ -3,10 +3,11 @@
 """Run the safe unit tests affected by a local branch and working tree.
 
 The default comparison includes committed, staged, unstaged, and untracked
-changes from the branch point with main. Selected paths share one workspace
-environment and normally one pytest process; Haliax gets a clean process when
-another package is selected because it configures JAX before import. Dedicated
-accelerator and browser suites remain delegated to CI.
+changes from the branch point with main. Selected paths share one synced
+workspace environment. When Haliax and other packages are selected together,
+the runner gives Haliax one eight-device worker and runs the remaining workers
+concurrently with the normal one-device topology. Dedicated accelerator and
+browser suites remain delegated to CI.
 
 Usage:
     uv run --no-project infra/ci/run_tests.py
@@ -15,6 +16,7 @@ Usage:
 """
 
 import argparse
+import os
 import shlex
 import subprocess
 import sys
@@ -32,6 +34,8 @@ LOCAL_SAFE_MARKERS = (
     "and not requires_cluster and not docker and not manual and not torch"
 )
 MAX_DISPLAYED_TEST_PATHS = 5
+HALIAX_CPU_DEVICE_COUNT = 8
+DEFAULT_WORKERS = 8
 
 
 class LocalTestError(RuntimeError):
@@ -58,7 +62,7 @@ class PackageSelection:
 
 @dataclass(frozen=True)
 class PytestInvocation:
-    """One local pytest phase for compatible affected workspace packages."""
+    """Affected workspace packages sharing one synced test environment."""
 
     python: str
     extras: tuple[str, ...]
@@ -69,6 +73,16 @@ class PytestInvocation:
     def test_paths(self) -> tuple[str, ...]:
         """Selected pytest paths across all packages, deduplicated in matrix order."""
         return tuple(dict.fromkeys(path for package in self.packages for path in package.test_paths))
+
+
+@dataclass(frozen=True)
+class PytestLane:
+    """One concurrent pytest process with a uniform JAX device topology."""
+
+    label: str
+    invocation: PytestInvocation
+    workers: int
+    jax_cpu_devices: int
 
 
 def _run_git(args: list[str], repo_root: Path) -> subprocess.CompletedProcess[str]:
@@ -159,29 +173,47 @@ def local_invocation(selection: SelectionResult) -> PytestInvocation | None:
     )
 
 
-def pytest_invocations(invocation: PytestInvocation) -> tuple[PytestInvocation, ...]:
-    """Separate Haliax when another suite would share its process-wide JAX setup."""
+def pytest_lanes(invocation: PytestInvocation, workers: int) -> tuple[PytestLane, ...]:
+    """Partition Haliax from ordinary tests while preserving one worker budget."""
     haliax = tuple(package for package in invocation.packages if package.label == "haliax")
-    others = tuple(package for package in invocation.packages if package.label != "haliax")
-    if not haliax or not others:
-        return (invocation,)
+    ordinary = tuple(package for package in invocation.packages if package.label != "haliax")
+    if not haliax:
+        return (PytestLane("workspace", invocation, workers, 1),)
+    if not ordinary:
+        return (PytestLane("haliax", invocation, workers, HALIAX_CPU_DEVICE_COUNT),)
     return (
-        replace(invocation, packages=haliax),
-        replace(invocation, packages=others),
+        PytestLane("haliax", replace(invocation, packages=haliax), 1, HALIAX_CPU_DEVICE_COUNT),
+        PytestLane("workspace", replace(invocation, packages=ordinary), workers - 1, 1),
+    )
+
+
+def uv_sync_command(invocation: PytestInvocation) -> tuple[str, ...]:
+    """Build the shared workspace test-environment sync command."""
+    return (
+        "uv",
+        "sync",
+        "--python",
+        invocation.python,
+        "--all-packages",
+        "--no-default-groups",
+        *(value for extra in invocation.extras for value in ("--extra", extra)),
+        "--group",
+        "test",
     )
 
 
 def pytest_command(
-    invocation: PytestInvocation,
+    lane: PytestLane,
     extra_args: tuple[str, ...] = (),
     *,
-    sync: bool = True,
+    no_sync: bool = False,
 ) -> tuple[str, ...]:
-    """Build one root pytest command with every selected package's test dependencies."""
+    """Build one root pytest command for a uniform-topology test lane."""
+    invocation = lane.invocation
     return (
         "uv",
         "run",
-        *(("--no-sync",) if not sync else ()),
+        *(("--no-sync",) if no_sync else ()),
         "--python",
         invocation.python,
         "--all-packages",
@@ -191,11 +223,23 @@ def pytest_command(
         "test",
         "pytest",
         *invocation.pytest_args,
+        "--maxprocesses",
+        str(lane.workers),
         "-m",
         LOCAL_SAFE_MARKERS,
         *invocation.test_paths,
         *extra_args,
     )
+
+
+def pytest_environment(lane: PytestLane) -> dict[str, str]:
+    """Build the process environment for one JAX device topology."""
+    environment = os.environ.copy()
+    if lane.jax_cpu_devices == 1:
+        environment.pop("JAX_NUM_CPU_DEVICES", None)
+    else:
+        environment["JAX_NUM_CPU_DEVICES"] = str(lane.jax_cpu_devices)
+    return environment
 
 
 def top_level_pytest_command(extra_args: tuple[str, ...] = ()) -> tuple[str, ...]:
@@ -204,24 +248,28 @@ def top_level_pytest_command(extra_args: tuple[str, ...] = ()) -> tuple[str, ...
 
 
 def pytest_command_preview(
-    invocation: PytestInvocation,
+    lane: PytestLane,
     extra_args: tuple[str, ...] = (),
     *,
-    sync: bool = True,
+    no_sync: bool = False,
 ) -> str:
     """Render the command without flooding the terminal for a large selection."""
-    command = pytest_command(invocation, extra_args, sync=sync)
+    invocation = lane.invocation
+    command = pytest_command(lane, extra_args, no_sync=no_sync)
+    environment_prefix = (
+        "env -u JAX_NUM_CPU_DEVICES " if lane.jax_cpu_devices == 1 else f"JAX_NUM_CPU_DEVICES={lane.jax_cpu_devices} "
+    )
     if len(invocation.test_paths) <= MAX_DISPLAYED_TEST_PATHS:
-        return shlex.join(command)
+        return f"{environment_prefix}{shlex.join(command)}"
 
     hidden = len(invocation.test_paths) - MAX_DISPLAYED_TEST_PATHS
     suffix_size = len(invocation.test_paths) + len(extra_args)
-    prefix = command[:-suffix_size]
+    command_prefix = command[:-suffix_size]
     visible_paths = invocation.test_paths[:MAX_DISPLAYED_TEST_PATHS]
-    preview = shlex.join((*prefix, *visible_paths))
+    preview = shlex.join((*command_prefix, *visible_paths))
     if extra_args:
-        return f"{preview} ... [{hidden} more test paths] {shlex.join(extra_args)}"
-    return f"{preview} ... [{hidden} more test paths]"
+        return f"{environment_prefix}{preview} ... [{hidden} more test paths] {shlex.join(extra_args)}"
+    return f"{environment_prefix}{preview} ... [{hidden} more test paths]"
 
 
 def native_sources_enabled(repo_root: Path) -> bool:
@@ -246,6 +294,7 @@ def _print_plan(
     invocation: PytestInvocation | None,
     extra_args: tuple[str, ...],
     repo_root: Path,
+    workers: int,
     *,
     show_commands: bool,
 ) -> None:
@@ -275,9 +324,12 @@ def _print_plan(
             detail = f"{len(package.test_paths)} selected test files"
         print(f"  {package.label}: {detail}")
     if show_commands and invocation is not None:
-        phases = pytest_invocations(invocation)
-        for index, phase in enumerate(phases):
-            print(f"  {pytest_command_preview(phase, extra_args, sync=index == 0)}")
+        lanes = pytest_lanes(invocation, workers)
+        if len(lanes) > 1:
+            print(f"  {shlex.join(uv_sync_command(invocation))}")
+        for lane in lanes:
+            label = f"{lane.label}: " if len(lanes) > 1 else ""
+            print(f"  {label}{pytest_command_preview(lane, extra_args, no_sync=len(lanes) > 1)}")
     if selection.suites:
         print(f"Dedicated CI suites not run locally: {', '.join(selection.suites)}")
 
@@ -287,6 +339,12 @@ def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base-ref", help="branch or commit to diff against (default: origin's main branch)")
     parser.add_argument("--dry-run", action="store_true", help="print selected commands without running them")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help=f"total xdist worker budget (default: {DEFAULT_WORKERS})",
+    )
     parser.add_argument("pytest_args", nargs=argparse.REMAINDER, help="extra pytest arguments after --")
     args = parser.parse_args(argv)
 
@@ -299,8 +357,11 @@ def run(argv: list[str] | None = None) -> int:
     except LocalTestError as error:
         parser.error(str(error))
 
+    if args.workers < 2:
+        parser.error("--workers must be at least 2")
+
     extra_args = tuple(args.pytest_args[1:] if args.pytest_args[:1] == ["--"] else args.pytest_args)
-    _print_plan(diff, selection, invocation, extra_args, repo_root, show_commands=True)
+    _print_plan(diff, selection, invocation, extra_args, repo_root, args.workers, show_commands=True)
     if invocation is None or args.dry_run:
         return 0
 
@@ -318,23 +379,42 @@ def run(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    failures: list[tuple[str, int]] = []
-    phases = pytest_invocations(invocation)
-    for index, phase in enumerate(phases):
-        labels = ", ".join(package.label for package in phase.packages)
-        print(
-            f"\n==> pytest {index + 1}/{len(phases)} ({labels}; {len(phase.test_paths)} selected paths)",
-            flush=True,
+    lanes = pytest_lanes(invocation, args.workers)
+    if len(lanes) == 1:
+        lane = lanes[0]
+        labels = ", ".join(package.label for package in lane.invocation.packages)
+        print(f"\n==> pytest ({labels}; {len(lane.invocation.test_paths)} selected paths)", flush=True)
+        result = subprocess.run(
+            pytest_command(lane, extra_args),
+            cwd=repo_root,
+            env=pytest_environment(lane),
+            check=False,
         )
-        result = subprocess.run(pytest_command(phase, extra_args, sync=index == 0), cwd=repo_root, check=False)
-        if result.returncode == 5:
-            print(f"{labels}: no tests collected after the safe marker filter")
-        elif result.returncode != 0:
-            failures.append((labels, result.returncode))
+        return 0 if result.returncode == 5 else result.returncode
 
+    print("\n==> syncing the shared test environment", flush=True)
+    sync = subprocess.run(uv_sync_command(invocation), cwd=repo_root, check=False)
+    if sync.returncode != 0:
+        return sync.returncode
+
+    print(f"\n==> pytest ({args.workers} workers across {len(lanes)} concurrent lanes)", flush=True)
+    processes = [
+        (
+            lane,
+            subprocess.Popen(
+                pytest_command(lane, extra_args, no_sync=True),
+                cwd=repo_root,
+                env=pytest_environment(lane),
+            ),
+        )
+        for lane in lanes
+    ]
+    failures = [(lane.label, status) for lane, process in processes if (status := process.wait()) not in (0, 5)]
     if failures:
-        summary = ", ".join(f"{labels} (exit {status})" for labels, status in failures)
-        print(f"Failed test phases: {summary}", file=sys.stderr)
+        print(
+            "Failed test lanes: " + ", ".join(f"{label} (exit {status})" for label, status in failures),
+            file=sys.stderr,
+        )
         return 1
     return 0
 
