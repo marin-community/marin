@@ -511,3 +511,13 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of root logs.
 - Next action: Continue the 15-minute check cadence and monitor both active sources.
+
+### 2026-08-12 11:03 UTC - East completes USGPO
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 34 completed source artifacts. RNO has six completed source artifacts. The full run has 40 of 292 completed source artifacts.
+- East result: `cp-usgpo_1e7881f3` succeeded with all 36 output shards and 1,291,904 documents.
+- East progress: `cp-wikiteam_7721bc04` started. It has 13 output shards, with all 13 workers alive and no dead workers.
+- RNO progress: `finetranslations_6ce00a47` got to 16,781 of 25,962 output shards with 32 live workers and no dead workers.
+- Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the active source logs.
+- Next action: Continue the 15-minute check cadence and monitor both active sources.
