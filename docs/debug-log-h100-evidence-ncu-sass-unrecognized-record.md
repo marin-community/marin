@@ -421,3 +421,31 @@ content after padding, tab and control bytes, sparse columns, row-count bounds,
 selected-width binding, and the production NCU subprocess boundary. No image
 build, GPU execution, v33 submission, retry, or relaunch was performed for
 this source repair.
+
+## V33 instruction-prefix diagnostic
+
+The single v33 task used source
+`5370e6cc72bbef392234444214bc471452b7af31`. It selected the 107-byte layout
+and accepted the kernel identity, identity-table close, fixed-column header,
+and five opaque metric-label rows. The first rejection was line 10 while the
+parser still required the selected separator. The bounded diagnostic marks the
+record as an instruction-pattern prefix match. That classifier uses the same
+start-anchored address-and-mnemonic regex as instruction admission, but it does
+not evaluate parser state, opcode acceptance, or kernel coverage. The retained
+line aggregate and classifier do not establish a new accepted record grammar.
+
+Instruction-shaped rejected records now include a bounded field summary. It
+reports the address hex-digit count and `0x`-prefix presence, matched-prefix and
+unmatched-suffix UTF-8 byte counts, mnemonic byte and segment counts, and
+whether the mnemonic base belongs to the closed opcode allowlist. It emits no
+address, mnemonic, operands, suffix, field hashes, raw or redacted line,
+adjacent record, path, or environment value. The existing whole-line SHA-256
+and 2,048-byte serialized-error bound remain.
+
+The parser still rejects line 10 in metric-label state. Instruction admission,
+opcode validation, parsed kernel records, and exact kernel coverage are
+unchanged. Behavior tests cover allowed and disallowed opcode bases, address
+forms, mnemonic modifiers, multibyte private suffixes, both fixed widths, the
+serialized bound, nonleakage, and the production NCU subprocess boundary. No
+image build, GPU execution, v34 submission, retry, or relaunch was performed
+for this diagnostic-only change.

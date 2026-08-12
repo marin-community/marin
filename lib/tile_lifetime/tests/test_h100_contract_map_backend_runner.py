@@ -281,6 +281,8 @@ def _ncu_sass_diagnostic(error: ValueError) -> dict[str, object]:
     }
     if "fixed_columns" in structure:
         expected_structure_fields.add("fixed_columns")
+    if "instruction_fields" in structure:
+        expected_structure_fields.add("instruction_fields")
     assert set(structure) == expected_structure_fields
     return diagnostic
 
@@ -559,6 +561,7 @@ def test_runner_ncu_parser_bounds_and_decodes_input_before_csv_parsing(tmp_path:
         "sparse-metric-labels",
         "invalid-metric-labels",
         "over-cap-metric-labels",
+        "instruction-field-diagnostic",
         "wide-address-close-private",
     ),
 )
@@ -662,6 +665,11 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
                 (boundary_row,) * 10,
                 separator_widths,
             )
+        elif variant == "instruction-field-diagnostic":
+            lines = source.splitlines()
+            lines[5] = "0000000000000000 MOV private-production-token"
+            lines[6] = "adjacent-private-token"
+            source = "\n".join(lines) + "\n"
         elif variant == "wide-address-close-private":
             lines = source.splitlines()
             lines[5] = _ncu_sass_fixed_column_row(
@@ -790,6 +798,29 @@ def test_runner_ncu_profile_parses_real_public_exports_at_process_boundary(
             diagnostic["line_sha256"]
             == hashlib.sha256(_ncu_sass_metric_labels_row(columns=("", "", "a", "b", "c", "d")).encode()).hexdigest()
         )
+        return
+    if variant == "instruction-field-diagnostic":
+        with pytest.raises(ValueError) as failure:
+            runner._run_ncu_profile(*arguments)
+        diagnostic = _ncu_sass_diagnostic(failure.value)
+        assert diagnostic["line_number"] == 6
+        structure = diagnostic["line_structure"]
+        assert isinstance(structure, dict)
+        public_patterns = structure["public_patterns"]
+        assert isinstance(public_patterns, dict)
+        assert public_patterns["instruction"] is True
+        assert structure["instruction_fields"] == {
+            "address_hex_digits": 16,
+            "address_uses_0x_prefix": False,
+            "matched_prefix_utf8_bytes": 20,
+            "mnemonic_base_allowlisted": True,
+            "mnemonic_segments": 1,
+            "mnemonic_utf8_bytes": 3,
+            "unmatched_suffix_utf8_bytes": 25,
+        }
+        message = str(failure.value)
+        for private in ("private-production-token", "adjacent-private-token", environment_token):
+            assert private not in message
         return
     if variant == "wide-address-close-private":
         with pytest.raises(ValueError) as failure:
@@ -1419,6 +1450,109 @@ def test_runner_ncu_sass_line_structure_reports_only_closed_public_patterns(reco
         "status": pattern == "status",
     }
     assert record not in str(failure.value)
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    (
+        (
+            "0000000000000000 MOV private-token",
+            {
+                "address_hex_digits": 16,
+                "address_uses_0x_prefix": False,
+                "matched_prefix_utf8_bytes": 20,
+                "mnemonic_base_allowlisted": True,
+                "mnemonic_segments": 1,
+                "mnemonic_utf8_bytes": 3,
+                "unmatched_suffix_utf8_bytes": 14,
+            },
+        ),
+        (
+            " /*0x00af*/: @!P3.X FFMA.SAT private-\N{GREEK CAPITAL LETTER OMEGA}",
+            {
+                "address_hex_digits": 4,
+                "address_uses_0x_prefix": True,
+                "matched_prefix_utf8_bytes": 28,
+                "mnemonic_base_allowlisted": True,
+                "mnemonic_segments": 2,
+                "mnemonic_utf8_bytes": 8,
+                "unmatched_suffix_utf8_bytes": 11,
+            },
+        ),
+        (
+            "0000 NOTREAL private-token",
+            {
+                "address_hex_digits": 4,
+                "address_uses_0x_prefix": False,
+                "matched_prefix_utf8_bytes": 12,
+                "mnemonic_base_allowlisted": False,
+                "mnemonic_segments": 1,
+                "mnemonic_utf8_bytes": 7,
+                "unmatched_suffix_utf8_bytes": 14,
+            },
+        ),
+    ),
+)
+def test_runner_ncu_sass_instruction_diagnostic_reports_bounded_match_fields(
+    record: str,
+    expected: dict[str, object],
+) -> None:
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000010 EXIT",)))
+    source = source.replace(_NCU_SASS_SEPARATOR + "\n0000000000000010 EXIT", record + "\n0000000000000010 EXIT")
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    structure = _ncu_sass_structure(failure.value)
+    public_patterns = structure["public_patterns"]
+    assert isinstance(public_patterns, dict)
+    assert public_patterns["instruction"] is True
+    assert structure["instruction_fields"] == expected
+    assert record not in str(failure.value)
+
+
+def test_runner_ncu_sass_instruction_diagnostic_does_not_change_instruction_admission() -> None:
+    private_suffix = "private-suffix-/workspace/secret"
+    source = _ncu_sass_export((_NCU_KERNEL_A, ("0000000000000000 MOV " + private_suffix,)))
+
+    parsed = runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    assert parsed[0].instructions == (runner.NcuSassInstruction(address=0, mnemonic="MOV"),)
+
+
+@pytest.mark.parametrize("separator_widths", (_NCU_SASS_COLUMN_WIDTHS, _NCU_SASS_WIDE_COLUMN_WIDTHS))
+def test_runner_ncu_sass_instruction_diagnostic_fits_selected_width_record_bound(
+    separator_widths: tuple[int, ...],
+) -> None:
+    private_source_field = "MOV private-token"
+    record = _ncu_sass_fixed_column_row(
+        ("00000000000000af", private_source_field, "0", "1", "2", "3"),
+        column_widths=separator_widths,
+    )
+    source = _ncu_sass_export(
+        (_NCU_KERNEL_A, ("0000000000000010 EXIT",)),
+        separator_widths=separator_widths,
+    )
+    source = source.replace(_ncu_sass_separator(separator_widths) + "\n0000000000000010 EXIT", record)
+
+    with pytest.raises(ValueError) as failure:
+        runner.parse_ncu_sass(source, (_NCU_KERNEL_A,))
+
+    diagnostic = _ncu_sass_diagnostic(failure.value)
+    assert diagnostic["line_utf8_bytes"] == sum(separator_widths) + 5
+    structure = diagnostic["line_structure"]
+    assert isinstance(structure, dict)
+    assert structure["instruction_fields"] == {
+        "address_hex_digits": 16,
+        "address_uses_0x_prefix": False,
+        "matched_prefix_utf8_bytes": 22,
+        "mnemonic_base_allowlisted": True,
+        "mnemonic_segments": 1,
+        "mnemonic_utf8_bytes": 3,
+        "unmatched_suffix_utf8_bytes": sum(separator_widths) - 17,
+    }
+    assert len(str(failure.value).encode("utf-8")) <= 2048
+    assert private_source_field not in str(failure.value)
 
 
 @pytest.mark.parametrize(

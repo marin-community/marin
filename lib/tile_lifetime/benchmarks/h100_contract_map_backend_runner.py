@@ -926,6 +926,7 @@ def _ncu_sass_line_structure(line: str, column_widths: tuple[int, ...]) -> dict[
 
     tokens = re.findall(r"\S+", line)
     public_words = frozenset(_NCU_SASS_PUBLIC_WORD_PATTERN.findall(line))
+    instruction = _NCU_SASS_INSTRUCTION_PATTERN.match(line)
     structure: dict[str, object] = {
         "ascii_classes": ascii_classes,
         "delimiters": {
@@ -938,7 +939,7 @@ def _ncu_sass_line_structure(line: str, column_widths: tuple[int, ...]) -> dict[
         "non_ascii_codepoints": sum(ord(character) >= 128 for character in line),
         "public_patterns": {
             "header": _ncu_sass_header_matches(line, column_widths),
-            "instruction": _NCU_SASS_INSTRUCTION_PATTERN.match(line) is not None,
+            "instruction": instruction is not None,
             "section": any(pattern.fullmatch(line) is not None for pattern in _NCU_SASS_SECTION_PATTERNS.values()),
             "separator": line in _NCU_SASS_SEPARATORS,
             "status": _NCU_SASS_STATUS_PATTERN.fullmatch(line) is not None,
@@ -953,6 +954,18 @@ def _ncu_sass_line_structure(line: str, column_widths: tuple[int, ...]) -> dict[
     fixed_columns = _ncu_sass_fixed_columns(line.encode("utf-8"), column_widths)
     if fixed_columns is not None:
         structure["fixed_columns"] = fixed_columns
+    if instruction is not None:
+        address = instruction.group("address")
+        mnemonic = instruction.group("mnemonic")
+        structure["instruction_fields"] = {
+            "address_hex_digits": len(address.removeprefix("0x")),
+            "address_uses_0x_prefix": address.startswith("0x"),
+            "matched_prefix_utf8_bytes": len(line[: instruction.end()].encode("utf-8")),
+            "mnemonic_base_allowlisted": mnemonic.split(".", maxsplit=1)[0] in _SASS_OPCODE_BASES,
+            "mnemonic_segments": len(mnemonic.split(".")),
+            "mnemonic_utf8_bytes": len(mnemonic.encode("utf-8")),
+            "unmatched_suffix_utf8_bytes": len(line[instruction.end() :].encode("utf-8")),
+        }
     return structure
 
 
