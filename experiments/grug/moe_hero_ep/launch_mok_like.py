@@ -50,6 +50,7 @@ RAM_PER_NODE = "900g"
 MATCHED_CAPACITY_FACTOR = 1.1
 PRODUCTION_MOK_LIKE_WORKSPACE_SLOTS = 1
 DEFAULT_GPU_DEVICE_MEMORY_FRACTION = 0.85
+PROMOTED_MOK_LIKE_PINNED_HOST_MEMORY_LIMIT_GB = 176
 STRICT_WORST_CASE_FOUR_RANK_SCHEDULE_CAPACITY_FACTOR = 4.0
 FSDP_EXPERT_CHUNKS = 4
 RAGGED_EP_XLA_FLAGS = (
@@ -107,6 +108,7 @@ class MokLikeExperimentConfig:
     gpu_default_pool_trim_interval_updates: int | None
     xla_autotune_cache_mode: XlaAutotuneCacheMode
     gpu_device_memory_fraction: float
+    pinned_host_memory_limit_gb: int | None
     max_retries_failure: int
     max_retries_preemption: int
     max_task_failures: int
@@ -123,6 +125,7 @@ _PROMOTED_DROPLESS_V12 = MokLikeExperimentConfig(
     gpu_default_pool_trim_interval_updates=None,
     xla_autotune_cache_mode=XlaAutotuneCacheMode.LOCAL_ONLY,
     gpu_device_memory_fraction=0.80,
+    pinned_host_memory_limit_gb=PROMOTED_MOK_LIKE_PINNED_HOST_MEMORY_LIMIT_GB,
     max_retries_failure=0,
     max_retries_preemption=0,
     max_task_failures=0,
@@ -145,6 +148,7 @@ _NON_MOK_LIKE_DEFAULTS = MokLikeExperimentConfig(
     gpu_default_pool_trim_interval_updates=None,
     xla_autotune_cache_mode=XlaAutotuneCacheMode.REMOTE_SYNC,
     gpu_device_memory_fraction=DEFAULT_GPU_DEVICE_MEMORY_FRACTION,
+    pinned_host_memory_limit_gb=None,
     max_retries_failure=0,
     max_retries_preemption=0,
     max_task_failures=0,
@@ -399,6 +403,11 @@ def build_backend_comparison_run(
                         else []
                     ),
                     *(
+                        [f"mok-like-pinned-host-memory-{preset.pinned_host_memory_limit_gb}gb"]
+                        if preset.pinned_host_memory_limit_gb is not None
+                        else []
+                    ),
+                    *(
                         ["strict-dropless-four-rank-capacity"]
                         if backend is MoeBackend.MOK_LIKE
                         and mok_like_schedule_capacity_factor == STRICT_WORST_CASE_FOUR_RANK_SCHEDULE_CAPACITY_FACTOR
@@ -460,7 +469,7 @@ def build_backend_comparison_run(
                 if backend is MoeBackend.MOK_LIKE
                 else None
             ),
-            mok_like_pinned_host_memory_limit_gb=192 if backend is MoeBackend.MOK_LIKE else None,
+            mok_like_pinned_host_memory_limit_gb=preset.pinned_host_memory_limit_gb,
             gpu_allocator=gpu_allocator,
             gpu_temp_buffer_pool=gpu_temp_buffer_pool,
             gpu_default_pool_preallocation=gpu_default_pool_preallocation,

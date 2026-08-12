@@ -495,6 +495,7 @@ def test_mok_like_launcher_keeps_capacity_limited_control_distinct_from_promoted
     )
 
     strict_config = strict.build_config(StepContext.for_fingerprint(strict.runtime_args.keys(), strict.deps))
+    baseline_config = baseline.build_config(StepContext.for_fingerprint(baseline.runtime_args.keys(), baseline.deps))
     strict_mok_like = strict_config.model.mok_like
     assert strict_mok_like is not None
     assert baseline.fingerprint() != strict.fingerprint()
@@ -502,6 +503,13 @@ def test_mok_like_launcher_keeps_capacity_limited_control_distinct_from_promoted
     assert "mok-like-schedule-capacity-4" in strict_config.trainer.trainer.tracker.tags
     assert "strict-dropless-four-rank-capacity" in strict_config.trainer.trainer.tracker.tags
     assert "mok-like-preset-promoted-dropless-v12" in strict_config.trainer.trainer.tracker.tags
+    assert (
+        baseline_config.mok_like_pinned_host_memory_limit_gb
+        == strict_config.mok_like_pinned_host_memory_limit_gb
+        == launch_mok_like.PROMOTED_MOK_LIKE_PINNED_HOST_MEMORY_LIMIT_GB
+    )
+    assert "mok-like-pinned-host-memory-176gb" in baseline_config.trainer.trainer.tracker.tags
+    assert "mok-like-pinned-host-memory-176gb" in strict_config.trainer.trainer.tracker.tags
 
 
 def test_mok_like_launcher_uses_one_production_workspace_slot_and_fingerprints_two_slot_stress() -> None:
@@ -837,7 +845,9 @@ def test_mok_like_launcher_cli_builds_the_promoted_scale_plan(monkeypatch: pytes
     assert config.model.mok_like.forward_x_storage is MokLikeForwardXStorage.XLA_PEER_EXPERIMENTAL
     assert config.model.mok_like.backward_peer_storage is MokLikeBackwardPeerStorage.RUNTIME_STAGED
     assert config.gpu_device_memory_fraction == 0.80
+    assert config.mok_like_pinned_host_memory_limit_gb == 176
     assert config.xla_autotune_cache_mode is train.XlaAutotuneCacheMode.LOCAL_ONLY
+    assert "mok-like-pinned-host-memory-176gb" in config.trainer.trainer.tracker.tags
     assert (config.max_retries_failure, config.max_retries_preemption, config.max_task_failures) == (0, 0, 0)
 
 
@@ -924,6 +934,7 @@ def test_mok_like_launcher_weak_scales_with_process_local_expert_groups(
     assert config.gpu_default_pool_preallocation is train.GpuDefaultPoolPreallocation.EAGER
     assert config.gpu_default_pool_trim_interval_updates is None
     assert config.gpu_device_memory_fraction == 0.80
+    assert config.mok_like_pinned_host_memory_limit_gb == 176
     assert config.xla_autotune_cache_mode is train.XlaAutotuneCacheMode.LOCAL_ONLY
     assert config.processes_per_task == 1
     assert trainer.profiler.enabled
@@ -946,6 +957,7 @@ def test_mok_like_launcher_weak_scales_with_process_local_expert_groups(
         "default-pool-trim-disabled",
         "xla-autotune-cache-local-only",
         "device-memory-0.8",
+        "mok-like-pinned-host-memory-176gb",
     }.issubset(trainer.tracker.tags)
 
     control = launch_mok_like.build_mok_like_run(
@@ -999,6 +1011,9 @@ def test_backend_comparison_keeps_the_same_weak_scaling_contract(
     assert config.trainer.trainer.train_batch_size == 128
     assert resources.replicas == 2
     assert resources.cpu == launch_mok_like.CPUS_PER_NODE
+    assert config.mok_like_pinned_host_memory_limit_gb == (
+        176 if backend is launch_mok_like.MoeBackend.MOK_LIKE else None
+    )
 
 
 def test_backend_comparison_rejects_unreviewed_node_counts() -> None:
