@@ -4194,3 +4194,59 @@ author: dlwh
   schedule/layout consumer of the logical materialization plan, and implement
   an immutable exact-bundle/init-image Iris contract locally. Request upload
   authorization only after those identities and reviews are closed.
+
+### 2026-08-12 - TLTC-MLIR-005 oracle, abstract schedule, and exact Iris transport
+
+- Canonical commits `8ca091027a`, `cc35129097`, and `7dcfad59c6` pin the
+  Target 1 numerical reference. Deterministic BF16 inputs feed an independent
+  binary64 forward and analytic-VJP implementation for both shapes and all
+  three boundaries. The contract binds output digests and max absolute, mean
+  absolute, relative L-infinity, and ordered finite-BF16 ULP metrics.
+- The local ordinary-JAX analytic gate is not scorecard evidence. Its historical
+  arm64 CPU observation is content-addressed but nonconforming; default tests
+  remain host-portable. A non-identity `FAST` numerical tolerance remains
+  unresolved and must revise the contract before execution.
+- Canonical commits `0d231c9c0e`, `4f2d93c3bf`, and `03b87920ed` add an
+  opt-in abstract `simt32` schedule contract over the logical materialization
+  plan. It re-derives task and buffer bindings, logical lexicographic iteration,
+  lifetimes, dependencies, and bounded candidate geometry. Both policies retain
+  `tree_association_free_leaf_order_fixed`; policy alone grants no extra Fold
+  freedom.
+- The schedule is non-executable. It defines no physical layout, address,
+  offset, alignment, reuse, synchronization, concrete reduction algorithm,
+  device placement, code generation, or runtime/XLA binding. Its passes remain
+  outside the production ABI 5 pipeline. The integrated native gate passes all
+  38 targets.
+- Independent review found and closed three fail-open boundaries before
+  integration: invalid numerical metrics bypassing ordered comparisons,
+  signed overflow in maximum-extent ceiling division, and incomplete schedule
+  deletion/reorder mutation coverage. The final Python and capsule suite passes
+  210 tests.
+- Canonical commits `01e95db28e`, `890cc938f2`, and `e068992632` add an Iris
+  exact-bundle submission boundary. A client can submit reviewed ZIP bytes with
+  their declared SHA-256 content ID, while the controller recomputes the ID and
+  rejects conflicting, incomplete, ambiguous, or unknown exact fields. A
+  per-job immutable init-image reference persists through schema, federation,
+  dispatch, child inheritance, and Kubernetes staging. No controller was
+  deployed and no bundle was uploaded.
+- Iris review restored the legacy bundle-ID/workspace precedence contract,
+  closed child init-image inheritance, and refreshed 14 deterministic replay
+  goldens. The integrated replay gate passes all 46 scenarios; the reviewed
+  public boundary suite passed 483 tests.
+- Canonical commit `0e80c99dbe` refreshes the closed ABI 5 source inventory to
+  140 paths with SHA-256
+  `0ba1bab0f3bab8a2294ac6a6c7598d0b722fe489ced108f8451b97767f4110df`.
+  Two preparations are byte-identical: 142 members, 1,048,994 bytes, and bundle
+  SHA-256 `dc332e55a9c0923968b0aab8db0dbec8efcedfbc169fa9f3f7559d9b1c691cee`.
+  The manifest remains `launch_ready=false`.
+- External acceptance remains blocked on a reviewed Linux dependency/runtime
+  identity, immutable task and init image digests, deployed Iris controller
+  identity/configuration, a closed execution environment, and explicit user
+  authorization to upload the named private source bundle to the named
+  CoreWeave destination. Target 1 also remains blocked on a pinned expert
+  oracle, representative-shape decision, executable device lowering, and the
+  H100 plus GB200/B200 numerical/performance matrix.
+- Next action: specify and implement the smallest lossless executable-device IR
+  boundary beneath the abstract schedule, including buffer binding, memory
+  spaces, offsets, synchronization, and runtime ownership. Keep it opt-in until
+  device-code and ordinary-JAX execution gates are independently reviewable.
