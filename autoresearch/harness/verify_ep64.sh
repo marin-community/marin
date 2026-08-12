@@ -42,30 +42,5 @@ echo "submitting ${RUN_ID} (${SIZE}/${FLAVOR}, ${NUM_STEPS} steps, port ${PORT})
      --num-steps "$NUM_STEPS" --steps-per-eval 100000 \
      --version "$(date +%Y.%m.%d)" --run >&2
 
-# --- Poll coordinator to terminal state.
-deadline=$((SECONDS + TIMEOUT_SECONDS))
-state=""
-while (( SECONDS < deadline )); do
-  state=$("${IRIS[@]}" job list --prefix "/mwittmann/${RUN_ID}-coord" 2>/dev/null \
-    | awk '$1 == "/mwittmann/'"${RUN_ID}"'-coord" {print tolower($2); exit}' || true)
-  case "$state" in
-    succeeded|completed) break ;;
-    failed|killed|error)
-      echo "job ${RUN_ID}-coord ended in state ${state}; recent logs:" >&2
-      "${IRIS[@]}" job logs --since-seconds 600 "${RUN_ID}-coord" >&2 || true
-      exit 1 ;;
-  esac
-  sleep 120
-done
-if [[ "$state" != succeeded && "$state" != completed ]]; then
-  echo "timeout after ${TIMEOUT_SECONDS}s in state '${state}'; killing job to free the rack" >&2
-  "${IRIS[@]}" job kill "${RUN_ID}-coord" >&2 || true
-  exit 1
-fi
-
-# --- Score from W&B; gate on drops + finite loss; single number on the last line.
-uv run python "$(dirname "$0")/score_ep64.py" \
-  --run-id "$RUN_ID" \
-  --start-step "$SCORE_START" --end-step $((NUM_STEPS - DROP_WINDOW - 1)) \
-  --drop-start $((NUM_STEPS - DROP_WINDOW)) --drop-end $((NUM_STEPS - 1)) \
-  --drop-budget "$DROP_BUDGET" --gpus 64
+# --- Poll to terminal state, then score (single number on the last line).
+exec "$(dirname "$0")/poll_score.sh" "$RUN_ID" "$NUM_STEPS"
