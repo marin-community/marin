@@ -131,12 +131,18 @@ def require_accepted(metrics: ErrorMetrics, policy: str, *, identity_roundtrip_b
     """Apply the policy-specific, predeclared local numerical gate."""
     if policy not in POLICIES:
         raise ValueError(f"undeclared policy: {policy!r}")
+    checked_metrics = ErrorMetrics(
+        max_absolute_error=_nonnegative_finite_number(metrics.max_absolute_error, "max_absolute_error"),
+        mean_absolute_error=_nonnegative_finite_number(metrics.mean_absolute_error, "mean_absolute_error"),
+        relative_linf_error=_nonnegative_finite_number(metrics.relative_linf_error, "relative_linf_error"),
+        max_bfloat16_ulp_error=_nonnegative_integer(metrics.max_bfloat16_ulp_error, "max_bfloat16_ulp_error"),
+    )
     if not identity_roundtrip_bitwise:
         if policy == "source_ordered":
             raise AssertionError("source_ordered must be bitwise-equal to ordinary JAX for the identity lowering")
         raise AssertionError("non-identity FAST numerical thresholds are unresolved")
     for name, limit in ANALYTIC_THRESHOLDS.items():
-        if getattr(metrics, name) > limit:
+        if getattr(checked_metrics, name) > limit:
             raise AssertionError(f"{policy} {name} exceeds the predeclared local analytic threshold")
 
 

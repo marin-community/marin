@@ -17,6 +17,7 @@ from target1_numerical_oracle import (
     BOUNDARIES,
     OUTPUT_ROLES,
     SHAPES,
+    ErrorMetrics,
     error_metrics,
     fixed_inputs,
     independent_reference,
@@ -123,6 +124,23 @@ def test_analytic_thresholds_reject_boundary_value_drift() -> None:
         object.__setattr__(mutated, field, limit + (1 if isinstance(limit, int) else np.finfo(np.float64).eps))
         with pytest.raises(AssertionError, match=field):
             require_accepted(mutated, "source_ordered", identity_roundtrip_bitwise=True)
+
+
+@pytest.mark.parametrize("field", ["max_absolute_error", "mean_absolute_error", "relative_linf_error"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), -1.0, True, "0"])
+def test_acceptance_rejects_invalid_float_metrics(field, value) -> None:
+    metrics = ErrorMetrics(0.0, 0.0, 0.0, 0)
+    object.__setattr__(metrics, field, value)
+    with pytest.raises(ValueError, match=field):
+        require_accepted(metrics, "source_ordered", identity_roundtrip_bitwise=True)
+
+
+@pytest.mark.parametrize("value", [-1, 0.5, True, "0"])
+def test_acceptance_rejects_invalid_ulp_metric(value) -> None:
+    metrics = ErrorMetrics(0.0, 0.0, 0.0, 0)
+    object.__setattr__(metrics, "max_bfloat16_ulp_error", value)
+    with pytest.raises(ValueError, match="max_bfloat16_ulp_error"):
+        require_accepted(metrics, "source_ordered", identity_roundtrip_bitwise=True)
 
 
 def test_fast_non_identity_rewrite_has_no_invented_acceptance_threshold() -> None:
