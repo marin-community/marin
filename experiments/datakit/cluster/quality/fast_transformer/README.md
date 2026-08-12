@@ -170,6 +170,18 @@ Run the report on a labeling run's first chunks before committing a fleet to the
 rest: a framing regression shows up there as an invalid rate concentrated in one
 position, with rationales that name the cut.
 
+**An invalid verdict on a cut window is not evidence the cut caused it.** On the
+bme2048 set the cut windows are the *clean* ones: begin windows that stop
+mid-document read 11.3% invalid against 23.1% for begin windows holding a whole
+(short) document, and only 2.6% of the former's invalid rationales blame the
+cut against 4.5% of the latter's. Long documents, whose begin window is always
+cut, are 2.3% invalid. The gradient tracks document length, which tracks
+quality. `window_dataset` offers two filters for the residual suspicion —
+`drop_cross_window_disagreements` (a begin verdict its own valid middle/end
+grades contradict) and the aggressive `drop_cut_window_invalids` (every invalid
+grade on a window that ends mid-document) — and the report's `cross_window`
+section sizes both before a training run spends on them.
+
 **Ask for the whole fleet.** `label_windows_vllm.py` submits `--num-gangs` gangs
 once at startup and never adds more, so the pool is exactly as large as the flag
 you launched with — there is no autoscaling to fall back on, and an
@@ -254,7 +266,7 @@ Labeling:
 - [`bme_windows.py`](bme_windows.py) — cut a document's grading windows under a `WindowGeometry`.
 - [`select_bme2048_docs.py`](select_bme2048_docs.py) — draw the bme2048 regrade pool (20k documents per type, holdout excluded) and cut its 2048-token windows.
 - [`label_windows_vllm.py`](label_windows_vllm.py) — grade windows through a brokered pool of self-hosted GLM-5.2 gangs.
-- [`window_label_report.py`](window_label_report.py) — a run's invalid rate by window position and by whether the window was cut.
+- [`window_label_report.py`](window_label_report.py) — a run's invalid rate by window position and by whether the window was cut, plus the cross-window disagreements a filter could be drawn from.
 - [`content_type.py`](content_type.py) — predict a document's content type, which the per-type calibration needs at scoring time.
 
 Evaluation:
@@ -265,6 +277,13 @@ Evaluation:
 - [`sample_disagreements.py`](sample_disagreements.py) — surface the documents two scorers most disagree about, for reading.
 - [`intruder_ab.py`](intruder_ab.py) — bucket-coherence intruder test, `--bucketing {global,domain-quantile}`.
 - [`gate_model.py`](gate_model.py) — decide whether a trained model beats the deployed one: within-type ranking, cross-type parity, and per-source signal, measured on the training holdout.
+
+Retraining campaigns:
+
+- [`train_exp.py`](train_exp.py) — embedding-table levers (vocab, tokenizer, donor warm start, bigram side table).
+- [`embed_exp.py`](embed_exp.py) — document-embedding fusion arms on the 88k labels.
+- [`scaled_exp.py`](scaled_exp.py) — the winning fusion arm retrained on the 512-token scale-up windows, plus the routed-expert variant.
+- [`bme2048_exp.py`](bme2048_exp.py) — the same recipe on the bme2048 window labels, varying only supervision (which window positions, whose grade, how much context, which filter). Every arm is scored on the holdout three ways — begin window, token bme, deployed character bme — so an arm's number separates the model from the scoring path.
 
 ## Artifacts
 

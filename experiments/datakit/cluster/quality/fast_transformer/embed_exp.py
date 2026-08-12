@@ -137,11 +137,15 @@ def holdout_id_set(labels_path: str) -> set[str]:
     return {ids[i] for i in perm[: max(1, int(len(ids) * EVAL_FRAC))]}
 
 
-def check_gigatoken_parity(tokenizer_name: str, texts: list[str], sources: np.ndarray) -> None:
+def check_gigatoken_parity(
+    tokenizer_name: str, texts: list[str], sources: np.ndarray, max_tokens: int = MAX_TOKENS
+) -> None:
     """Fail loudly unless gigatoken reproduces the HF tokenizer's ids exactly.
 
     The sample spans every source in the corpus, so tokenizer-hostile content
-    (CJK, LaTeX, tool logs) is represented rather than just prose.
+    (CJK, LaTeX, tool logs) is represented rather than just prose. ``max_tokens``
+    must be the caller's own context, or parity is only proven over a prefix of
+    what it will actually encode.
     """
     rng = np.random.default_rng(TRAIN_SEED)
     sample: list[int] = []
@@ -150,12 +154,12 @@ def check_gigatoken_parity(tokenizer_name: str, texts: list[str], sources: np.nd
         sample.extend(rng.choice(idx, size=min(PARITY_DOCS_PER_SOURCE, len(idx)), replace=False).tolist())
     docs = [texts[i] for i in sample]
     # Warm both tokenizer caches so the timing below measures encoding, not loading.
-    encode_texts(tokenizer_name, ["warmup"], MAX_TOKENS)
-    encode_texts_fast(tokenizer_name, ["warmup"], MAX_TOKENS)
+    encode_texts(tokenizer_name, ["warmup"], max_tokens)
+    encode_texts_fast(tokenizer_name, ["warmup"], max_tokens)
     t0 = time.time()
-    hf_ids = encode_texts(tokenizer_name, docs, MAX_TOKENS)
+    hf_ids = encode_texts(tokenizer_name, docs, max_tokens)
     t1 = time.time()
-    fast_ids = encode_texts_fast(tokenizer_name, docs, MAX_TOKENS)
+    fast_ids = encode_texts_fast(tokenizer_name, docs, max_tokens)
     t2 = time.time()
     mismatched = [i for i, (a, b) in enumerate(zip(hf_ids, fast_ids, strict=True)) if list(a) != list(b)]
     if mismatched:

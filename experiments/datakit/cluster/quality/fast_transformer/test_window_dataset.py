@@ -7,11 +7,14 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from experiments.datakit.cluster.quality.fast_transformer.bme2048_exp import window_target_from_begin
 from experiments.datakit.cluster.quality.fast_transformer.scaled_exp import grouped_val_split
 from experiments.datakit.cluster.quality.fast_transformer.window_dataset import (
     WINDOW_COLUMNS,
     assemble_training_windows,
+    drop_cross_window_disagreements,
     drop_cut_artifact_grades,
+    drop_cut_window_invalids,
     load_window_labels,
     subsample_mask,
 )
@@ -134,6 +137,61 @@ def test_cut_artifact_filter_drops_only_invalid_grades_that_blame_the_cut():
     }
     out = drop_cut_artifact_grades(rows)
     assert out["id"] == ["junk", "downgraded", "clean"]
+
+
+def test_cross_window_filter_drops_only_begin_grades_the_siblings_contradict():
+    """A begin window called invalid whose middle and end windows are valid and
+    good is a verdict on the cut. Without both siblings, or with a sibling that
+    agrees the document is poor, the verdict stands — and a middle window's own
+    invalid grade is never dropped, since nothing contradicts it."""
+    rows = {
+        "id": ["contra", "contra", "contra", "poor", "poor", "poor", "lonely", "midbad", "midbad", "midbad"],
+        "window": ["begin", "middle", "end", "begin", "middle", "end", "begin", "begin", "middle", "end"],
+        "valid": [False, True, True, False, True, True, False, True, False, True],
+        "quality": [1.0, 4.0, 4.0, 1.0, 2.0, 2.0, 1.0, 4.0, 1.0, 4.0],
+    }
+    out = drop_cross_window_disagreements(rows, min_sibling_quality=3.0)
+    assert list(zip(out["id"], out["window"], strict=True)) == [
+        ("contra", "middle"),
+        ("contra", "end"),
+        # siblings average 2.0, under the bar: the document really is poor
+        ("poor", "begin"),
+        ("poor", "middle"),
+        ("poor", "end"),
+        # no siblings to contradict it
+        ("lonely", "begin"),
+        ("midbad", "begin"),
+        ("midbad", "middle"),
+        ("midbad", "end"),
+    ]
+
+
+def test_cut_invalid_filter_drops_invalid_grades_only_on_windows_that_end_mid_document():
+    """The aggressive rule needs no siblings, so it reaches short documents cut
+    at one window — but an invalid verdict on a window holding the whole
+    document is about the document and must survive."""
+    rows = {
+        "id": ["cut", "whole", "cutvalid", "cutmiddle"],
+        "valid": [False, False, True, False],
+        "token_end": [2048, 900, 2048, 4096],
+        "doc_tokens": [9000, 900, 9000, 9000],
+    }
+    out = drop_cut_window_invalids(rows)
+    assert out["id"] == ["whole", "cutvalid"]
+
+
+def test_begin_label_targets_repoint_every_window_at_its_documents_begin_grade():
+    """Arm 3 keeps the middle/end windows as inputs but replaces their target,
+    so the only thing that changes against the bme arm is the supervision."""
+    windows = {
+        "id": ["a", "a", "a", "orphan"],
+        "window": ["begin", "middle", "end", "middle"],
+        "score_normalized": [0.25, 1.0, 0.75, 0.5],
+    }
+    targets, orphans = window_target_from_begin(windows)
+    assert targets[:3].tolist() == [0.25, 0.25, 0.25]
+    assert np.isnan(targets[3])
+    assert orphans == 1
 
 
 def test_grouped_val_split_never_straddles_a_doc():
