@@ -593,3 +593,13 @@ author: Rafal Wojdyla
 - Recovery evidence: No new transport error, task error two or three, dead worker, or other selected error matched either active source log during the last 15 minutes.
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Next action: Continue the 15-minute check cadence. Monitor the expected FineTranslations completion and the next RNO source start.
+
+### 2026-08-12 13:01 UTC - Long-source health check
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 35 completed source artifacts. RNO has six completed source artifacts. The full run has 41 of 292 completed source artifacts.
+- East progress: `finepdfs_cf4aed04` got to 3,459 of 9,244 output shards with 32 live workers and no dead workers.
+- RNO progress: `finetranslations_6ce00a47` got to 24,549 of 25,962 output shards with 32 live workers and no dead workers.
+- Error check: No new transport, retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the last 15 minutes.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Next action: Continue the 15-minute check cadence. Monitor the expected FineTranslations completion near 13:22 UTC and the next RNO source start.
