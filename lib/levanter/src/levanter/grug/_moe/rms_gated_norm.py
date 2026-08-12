@@ -14,12 +14,8 @@ from typing import Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
+from jax import shard_map
 from jax.sharding import PartitionSpec as P, get_abstract_mesh, reshard
-
-try:
-    from jax.shard_map import shard_map
-except ImportError:  # pragma: no cover - JAX < 0.8 compatibility
-    from jax.experimental.shard_map import shard_map
 
 from levanter.grug.sharding import _batch_axes
 
