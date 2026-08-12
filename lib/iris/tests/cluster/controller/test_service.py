@@ -51,22 +51,21 @@ from iris.rpc.legacy.controller_service import MAX_LIST_JOBS_OFFSET
 from iris.rpc.legacy.job_codec import constraint_from_proto, constraint_to_proto, device_to_proto
 from iris.rpc.legacy.job_service_codec import redact_request_env_vars
 from iris.rpc.worker_codec import worker_metadata_from_proto
-from rigging.server_auth import VerifiedIdentity, _verified_identity
-from rigging.timing import Duration, Timestamp
-from sqlalchemy import event, func
-from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-
-from .conftest import (
+from iris.testing.controller import (
     make_controller_service,
     make_job_request,
     make_test_entrypoint,
     make_worker_metadata,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_tasks_with_attempts as _query_tasks_with_attempts,
 )
+from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
+from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
+from rigging.server_auth import VerifiedIdentity, _verified_identity
+from rigging.timing import Duration, Timestamp
+from sqlalchemy import event, func
+from sqlalchemy import update as sa_update
 
 # =============================================================================
 # Test Helpers

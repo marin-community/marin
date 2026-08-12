@@ -4,10 +4,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "17 8 * * *"
   workflow_dispatch:
 
 concurrency:
-  group: unified-unit-${{ github.event.pull_request.number || github.ref }}
+  group: unified-unit-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -19,6 +21,8 @@ jobs:
     outputs:
       matrix: ${{ steps.analyze.outputs.matrix }}
       suites: ${{ steps.analyze.outputs.suites }}
+      levanter_torch_test_paths: ${{ steps.analyze.outputs.levanter_torch_test_paths }}
+      levanter_tpu_test_paths: ${{ steps.analyze.outputs.levanter_tpu_test_paths }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -32,22 +36,26 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          # A pull request selects tests from its diff. A push to main re-runs every unit
-          # test, which is what catches anything the import graph failed to select on the
-          # pull request that introduced it; it still gates the accelerator and browser
-          # suites on the diff, because those are chosen by directory and never by import.
-          # A manual run, and a push whose base is unknown, run everything.
+          # Pull requests and pushes select tests from their diff. Scheduled and manual
+          # runs exercise every test as a backstop for missing import-graph edges.
           ARGS=()
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ARGS+=(--run-all-tests)
           fi
           if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
             ARGS+=(--base-ref "$BASE_SHA")
+          elif [ "${{ github.event_name }}" != "schedule" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            ARGS+=(--run-all-tests)
           fi
           result=$(python3 infra/ci/select_tests.py "${ARGS[@]}")
           echo "$result"
           echo "matrix=$(jq -c .matrix <<<"$result")" >> "$GITHUB_OUTPUT"
           echo "suites=$(jq -c .suites <<<"$result")" >> "$GITHUB_OUTPUT"
+          # Pull requests use the workflow from the merge ref but run the selector from
+          # the checked-out head. Accelerator jobs fall back to their full suite when an
+          # older head predates these path outputs.
+          echo "levanter_torch_test_paths=$(jq -r '[.suite_test_paths["levanter-torch"][]? | sub("^lib/levanter/"; "")] | join(" ")' <<<"$result")" >> "$GITHUB_OUTPUT"
+          echo "levanter_tpu_test_paths=$(jq -r '.suite_test_paths["levanter-tpu"] // [] | join(" ")' <<<"$result")" >> "$GITHUB_OUTPUT"
 
   unit:
     needs: select
@@ -166,7 +174,13 @@ jobs:
 
       - name: Test torch-marked suite
         # Run directly on CPU to avoid GPU dependency issues.
-        run: CUDA_VISIBLE_DEVICES="" ../../.venv/bin/python -m pytest tests -m "torch" --durations=20
+        run: |
+          status=0
+          CUDA_VISIBLE_DEVICES="" ../../.venv/bin/python -m pytest \
+            ${{ needs.select.outputs.levanter_torch_test_paths || 'tests' }} \
+            -m "torch" --durations=20 || status=$?
+          [ "$status" -eq 5 ] && exit 0
+          exit "$status"
 
   levanter_tpu:
     name: levanter-tpu
@@ -190,6 +204,15 @@ jobs:
           echo "Using Docker image: $DOCKER_IMAGE"
           mkdir -p /tmp/uv-cache
           chmod 777 /tmp/uv-cache
+          TPU_TEST_PATHS="${{ needs.select.outputs.levanter_tpu_test_paths }}"
+          if [ -z "$TPU_TEST_PATHS" ]; then
+            TPU_TEST_PATHS="lib/levanter/tests"
+            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_audio.py"
+            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_new_cache.py"
+            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_hf_checkpoints.py"
+            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py"
+            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_gdn_layer.py"
+          fi
           # Run Levanter tests with the package TPU extra so CI validates the
           # explicit jax/jaxlib/libtpu pins shipped by marin-levanter.
           # TPU collection imports call jax.devices(), so keep pytest single-process here.
@@ -223,15 +246,13 @@ jobs:
                 echo '::endgroup::'; \
               fi && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
-              timeout --kill-after=5 --signal=TERM 1490 \
-              uv run --package marin-levanter --frozen --group test --extra tpu \
-              pytest -n 0 lib/levanter/tests \
-              --ignore=lib/levanter/tests/test_audio.py \
-              --ignore=lib/levanter/tests/test_new_cache.py \
-              --ignore=lib/levanter/tests/test_hf_checkpoints.py \
-              --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py \
-              --ignore=lib/levanter/tests/test_gdn_layer.py \
-              -v --tb=short --log-cli-level=WARNING --durations=20"
+              ( status=0; \
+                timeout --kill-after=5 --signal=TERM 1490 \
+                uv run --package marin-levanter --frozen --group test --extra tpu \
+                pytest -n 0 $TPU_TEST_PATHS \
+                -v --tb=short --log-cli-level=WARNING --durations=20 || status=\$?; \
+                [ "\$status" -eq 5 ] && exit 0; \
+                exit "\$status" )"
 
   iris_e2e_smoke:
     name: iris-e2e-smoke

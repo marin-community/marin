@@ -43,13 +43,13 @@ from iris.cluster.types import (
     WorkerUsability,
 )
 from iris.rpc import vm_pb2
-from rigging.timing import Duration, Timestamp
-from tests.cluster.platforms.conftest import (
+from iris.testing.backends import (
     FakeSliceHandle,
     FakeWorkerHandle,
     make_fake_slice_handle,
     make_mock_platform,
 )
+from rigging.timing import Duration, Timestamp
 
 DEFAULT_RESOURCES = ScaleGroupResources(
     cpu_millicores=64000,

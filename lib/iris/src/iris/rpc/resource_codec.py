@@ -592,7 +592,9 @@ def profile_configuration_to_proto(value: ProfileConfiguration | None) -> resour
             memory=resource_command_pb2.MemoryProfile(format=_MEMORY_FORMAT_TO_PROTO[value.format], leaks=value.leaks)
         )
     if isinstance(value, ThreadsProfileConfiguration):
-        return resource_command_pb2.ProfileType(threads=resource_command_pb2.ThreadsProfile(locals=value.include_locals))
+        return resource_command_pb2.ProfileType(
+            threads=resource_command_pb2.ThreadsProfile(locals=value.include_locals, native=value.include_native)
+        )
     return resource_command_pb2.ProfileType()
 
 
@@ -610,6 +612,9 @@ def profile_configuration_from_proto(value: resource_command_pb2.ProfileType) ->
                 leaks=value.memory.leaks,
             )
         case "threads":
-            return ThreadsProfileConfiguration(include_locals=value.threads.locals)
+            return ThreadsProfileConfiguration(
+                include_locals=value.threads.locals,
+                include_native=value.threads.native,
+            )
         case _:
             return None

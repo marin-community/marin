@@ -25,10 +25,9 @@ from iris.managed_thread import get_thread_container
 from iris.resources.names import JobName
 from iris.rpc import controller_pb2
 from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.testing.controller import make_controller_service, make_job_request
 from rigging.server_auth import VerifiedIdentity, identity_scope
 from sqlalchemy import select
-
-from .conftest import make_controller_service, make_job_request
 
 _IDENTITY = VerifiedIdentity(user_id="alice", role="user")
 

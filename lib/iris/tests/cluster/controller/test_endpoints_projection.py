@@ -15,10 +15,9 @@ from iris.cluster.controller.persistence.projections.endpoints import (
 from iris.cluster.controller.persistence.schema import tasks_table
 from iris.resources.names import JobName
 from iris.rpc import job_pb2
+from iris.testing.controller import make_job_request, submit_job
 from rigging.timing import Timestamp
 from sqlalchemy import update as sa_update
-
-from .conftest import make_job_request, submit_job
 
 
 def _make_row(endpoint_id: str, name: str, task_id: JobName, *, address: str = "h:1") -> EndpointRow:

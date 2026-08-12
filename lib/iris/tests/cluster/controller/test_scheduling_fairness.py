@@ -12,15 +12,14 @@ from iris.cluster.controller.scheduling.policy import (
 )
 from iris.resources.names import JobName
 from iris.rpc import controller_pb2, job_pb2
-from rigging.timing import Timestamp
-
-from ._test_support import set_task_state_for_test, submit_job_in_tx
-from .conftest import (
+from iris.testing.controller import (
     make_controller_state,
     make_job_request,
     query_tasks_for_job,
     submit_job,
 )
+from iris.testing.controller_state import set_task_state_for_test, submit_job_in_tx
+from rigging.timing import Timestamp
 
 
 def _submit_user_job(state, user: str, name: str, replicas: int = 1, band: int | None = None) -> list:

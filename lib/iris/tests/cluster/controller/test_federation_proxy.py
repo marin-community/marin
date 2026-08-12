@@ -53,6 +53,20 @@ from iris.resources.names import JobName
 from iris.rpc import controller_pb2
 from iris.rpc.dashboard import ControllerDashboard
 from iris.rpc.legacy.controller_service import LegacyControllerService
+from iris.testing.controller import promote_queued_federation, query_task
+from iris.testing.controller_state import ControllerTestState
+from iris.testing.federation import (
+    InProcessPeerConnection as _InProcessPeerConnection,
+)
+from iris.testing.federation import (
+    attach_federation as _attach_federation,
+)
+from iris.testing.federation import (
+    cluster_pinned_request as _cluster_pinned_request,
+)
+from iris.testing.federation import (
+    make_service as _make_service,
+)
 from rigging.server_auth import RequestAuthPolicy
 from rigging.timing import Duration, ExponentialBackoff
 from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem
@@ -61,15 +75,6 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.testclient import TestClient
-
-from ._test_support import ControllerTestState
-from .conftest import promote_queued_federation, query_task
-from .test_federation_handoff import (
-    _attach_federation,
-    _cluster_pinned_request,
-    _InProcessPeerConnection,
-    _make_service,
-)
 
 # The parent cluster's id: the requester stamped on the handoff, the federation
 # token's issuer, and the peer_id the peer's RECEIVED handle is keyed by.

@@ -11,8 +11,7 @@ from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_BATCH, IRIS_PRIORITY_CLASS_INTERACTIVE, K8sResource
 from iris.cluster.types import WellKnownAttribute
 from iris.rpc import job_pb2
-
-from .conftest import make_batch
+from iris.testing.k8s import make_batch
 
 _GPU = "nvidia.com/gpu"
 

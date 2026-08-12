@@ -22,7 +22,7 @@ from iris.cluster.controller.persistence import database as controller_db
 from iris.cluster.controller.persistence.database import ControllerDB
 from iris.resources.action import ActionResult, ActionState
 from iris.rpc import job_pb2
-from tests.journeys.world import journey_world
+from iris.testing.journeys.world import journey_world
 
 MIGRATIONS_DIR = Path(controller_db.__file__).with_name("migrations")
 

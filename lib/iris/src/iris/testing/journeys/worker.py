@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic worker-daemon actions for Iris product journeys."""
+"""Worker-daemon actions for Iris product journeys."""
 
 from dataclasses import dataclass, field
 from pathlib import Path

@@ -132,11 +132,11 @@ from iris.rpc.legacy.controller_service import USER_JOB_STATES
 from iris.rpc.worker_client import RpcWorkerClient, RpcWorkerStubFactory, _reconcile_request_to_proto
 from iris.rpc.worker_codec import worker_metadata_to_proto
 from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
+from iris.testing.controller_state import ControllerTestState
+from iris.testing.transitions import CursorTransitionReader
 from iris.version import client_revision_date
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import func, select, text, update
-from tests.cluster.controller._test_support import ControllerTestState
-from tests.cluster.controller.transition_driver import CursorTransitionReader
 
 # ---------------------------------------------------------------------------
 # Result accumulation

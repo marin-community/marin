@@ -626,7 +626,12 @@ exec {quoted_cmd}
             memray_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/memray", "memray"),
         )
         if isinstance(profile, ThreadsProfileConfiguration):
-            return capture_threads(dispatch, pid="1", include_locals=profile.include_locals)
+            return capture_threads(
+                dispatch,
+                pid="1",
+                include_locals=profile.include_locals,
+                include_native=profile.include_native,
+            )
         if isinstance(profile, CpuProfileConfiguration):
             return capture_cpu(dispatch, profile, duration_seconds, pid="1")
         if isinstance(profile, MemoryProfileConfiguration):

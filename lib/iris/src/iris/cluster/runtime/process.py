@@ -542,7 +542,12 @@ class ProcessContainerHandle:
         dispatch = LocalProfileDispatch(resume_pid=pid)
 
         if isinstance(profile, ThreadsProfileConfiguration):
-            return capture_threads(dispatch, pid=str(pid), include_locals=profile.include_locals)
+            return capture_threads(
+                dispatch,
+                pid=str(pid),
+                include_locals=profile.include_locals,
+                include_native=profile.include_native,
+            )
         if isinstance(profile, CpuProfileConfiguration):
             return self._profile_cpu(dispatch, pid, duration_seconds, profile)
         if isinstance(profile, MemoryProfileConfiguration):

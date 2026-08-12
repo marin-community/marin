@@ -68,24 +68,10 @@ from iris.resources.names import (
 )
 from iris.rpc import controller_pb2, job_pb2
 from iris.test_util import FakeStatsTable
-from rigging.timing import Duration, Timestamp
-from sqlalchemy import func, insert, select
-from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import (
-    ControllerTestState,
-    create_attempt_for_test,
-    submit_job_in_tx,
-)
-from tests.cluster.controller.transition_driver import (
-    WorkerTaskUpdates,
-    apply_task_observations,
-    commit_dispatch_updates,
-)
-
-from .conftest import (
+from iris.testing.controller import (
     building_counts as _building_counts,
 )
-from .conftest import (
+from iris.testing.controller import (
     check_task_can_be_scheduled,
     check_task_is_finished,
     dispatch_task,
@@ -99,24 +85,37 @@ from .conftest import (
     worker_daemon_backends_for_prune,
     worker_running_tasks,
 )
-from .conftest import (
+from iris.testing.controller import (
     make_test_entrypoint as _make_test_entrypoint,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_attempt as _query_attempt,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_job as _query_job,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_task as _query_task,
 )
-from .conftest import (
+from iris.testing.controller import (
     query_worker as _query_worker,
 )
-from .conftest import (
+from iris.testing.controller import (
     schedulable_tasks as _schedulable_tasks,
 )
+from iris.testing.controller_state import (
+    ControllerTestState,
+    create_attempt_for_test,
+    submit_job_in_tx,
+)
+from iris.testing.transitions import (
+    WorkerTaskUpdates,
+    apply_task_observations,
+    commit_dispatch_updates,
+)
+from rigging.timing import Duration, Timestamp
+from sqlalchemy import func, insert, select
+from sqlalchemy import update as sa_update
 
 _ZERO_USAGE = WorkerResourceUsage(0, 0, 0, 0)
 

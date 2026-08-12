@@ -4,7 +4,7 @@
 import pytest
 from iris.resources.node import NodeHealth
 from iris.rpc import job_pb2
-from tests.journeys.worker import WorkerJourney
+from iris.testing.journeys.worker import WorkerJourney
 
 
 @pytest.fixture

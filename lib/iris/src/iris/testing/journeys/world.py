@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed domain actions and public observations for Iris journeys."""
+"""Domain actions and public observations for Iris journeys."""
 
 import contextlib
 from dataclasses import dataclass
@@ -9,6 +9,9 @@ from pathlib import Path
 
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
+from rigging.server_auth import VerifiedIdentity, identity_scope
+from rigging.timing import Duration, Timestamp
+
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.controller.composition import compose_controller_process
@@ -53,9 +56,7 @@ from iris.resources.source import Page
 from iris.resources.state import JobState, TaskState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import controller_pb2, job_pb2
-from rigging.server_auth import VerifiedIdentity, identity_scope
-from rigging.timing import Duration, Timestamp
-from tests.journeys.backend import BackendEvent, ScriptedObservation, ScriptedTaskBackend, UnavailableTaskBackend
+from iris.testing.journeys.backend import BackendEvent, ScriptedObservation, ScriptedTaskBackend, UnavailableTaskBackend
 
 _JOB_STATE_BY_NAME = {
     "pending": JobState.PENDING,

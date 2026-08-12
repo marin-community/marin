@@ -110,6 +110,7 @@ class MemoryProfileConfiguration:
 @dataclass(frozen=True, slots=True)
 class ThreadsProfileConfiguration:
     include_locals: bool
+    include_native: bool = False
 
 
 type ProfileConfiguration = CpuProfileConfiguration | MemoryProfileConfiguration | ThreadsProfileConfiguration

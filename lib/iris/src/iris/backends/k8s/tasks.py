@@ -18,7 +18,7 @@ import time
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar, NamedTuple
@@ -135,6 +135,8 @@ from iris.resources.system import ProcessInfo
 from iris.resources.worker import ResourceUsage
 
 logger = logging.getLogger(__name__)
+
+_ARM64_ARCHITECTURES = frozenset({b"aarch64", b"arm64"})
 
 
 class PodManifestError(ValueError):
@@ -2603,10 +2605,22 @@ class K8sTaskProvider:
         duration = int(request.duration.to_seconds()) if request.duration is not None else 10
         profile = request.profile
         dispatch = _K8sProfileDispatch(self.kubectl, pod_name)
+        # py-spy 0.4.2's native unwinder can segfault on Linux ARM64 before it
+        # writes an output file. Keep native frames on other architectures and
+        # when explicitly requested, but default to Python frames on ARM64.
+        if isinstance(profile, CpuProfileConfiguration) and profile.native is None:
+            architecture = dispatch.exec(["uname", "-m"], timeout=10)
+            if architecture.returncode == 0 and architecture.stdout.strip().lower() in _ARM64_ARCHITECTURES:
+                profile = replace(profile, native=False)
 
         try:
             if isinstance(profile, ThreadsProfileConfiguration):
-                data = capture_threads(dispatch, pid="1", include_locals=profile.include_locals)
+                data = capture_threads(
+                    dispatch,
+                    pid="1",
+                    include_locals=profile.include_locals,
+                    include_native=profile.include_native,
+                )
             elif isinstance(profile, CpuProfileConfiguration):
                 data = capture_cpu(dispatch, profile, duration, pid="1")
             elif isinstance(profile, MemoryProfileConfiguration):

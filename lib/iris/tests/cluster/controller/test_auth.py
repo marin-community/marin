@@ -43,6 +43,8 @@ from iris.rpc.dashboard import (
     ControllerDashboard,
 )
 from iris.rpc.endpoint_service import EndpointServiceImpl
+from iris.testing.controller import make_controller_service
+from iris.testing.controller_state import ControllerTestState
 from rigging.server_auth import (
     PolicyAuthInterceptor,
     RequestAuthPolicy,
@@ -57,8 +59,6 @@ from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_ke
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
-from tests.cluster.controller._test_support import ControllerTestState
-from tests.cluster.controller.conftest import make_controller_service
 
 _TEST_TOKEN = "valid-test-token"
 _TEST_USER = "test-user"

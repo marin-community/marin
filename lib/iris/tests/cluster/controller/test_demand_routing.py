@@ -33,22 +33,22 @@ from iris.cluster.types import (
     CapacityType,
 )
 from iris.resources.execution import GpuDevice, ResourceSpec, TpuDevice
-from rigging.timing import Duration, Timestamp
-from tests.cluster.controller.conftest import (
+from iris.testing.backends import (
+    make_mock_platform,
+    make_mock_slice_handle,
+)
+from iris.testing.controller import (
     DEFAULT_RESOURCES,
     make_demand_entries,
     make_scale_group_config,
 )
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     make_big_demand_entries as _make_big_demand_entries,
 )
-from tests.cluster.controller.conftest import (
+from iris.testing.controller import (
     mark_discovered_ready as _mark_discovered_ready,
 )
-from tests.cluster.platforms.conftest import (
-    make_mock_platform,
-    make_mock_slice_handle,
-)
+from rigging.timing import Duration, Timestamp
 
 # ---------------------------------------------------------------------------
 # group_required_slices via route_demand

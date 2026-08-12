@@ -37,26 +37,25 @@ from iris.cluster.types import (
     WorkerStatus,
 )
 from iris.rpc import vm_pb2
-from rigging.timing import Duration, Timestamp
-from tests.cluster.platforms.conftest import (
+from iris.testing.backends import (
     FakeSliceHandle,
     FakeWorkerHandle,
     make_mock_platform,
     make_mock_slice_handle,
     make_mock_worker_handle,
 )
-
-from .conftest import (
+from iris.testing.controller import (
     make_autoscaler,
     make_demand_entries,
     make_scale_group_config,
 )
-from .conftest import (
+from iris.testing.controller import (
     make_big_demand_entries as _make_big_demand_entries,
 )
-from .conftest import (
+from iris.testing.controller import (
     mark_discovered_ready as _mark_discovered_ready,
 )
+from rigging.timing import Duration, Timestamp
 
 
 @dataclass

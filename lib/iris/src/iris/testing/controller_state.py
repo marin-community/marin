@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test-support helpers and a controller projection carrier for tests.
+"""Controller projection carrier and state helpers for tests.
 
 After Stage 7 (transitions-pure.md), production no longer has a
 ``ControllerTransitions`` class to hang test helpers off of. Tests still
@@ -14,6 +14,11 @@ projections through ``Controller`` constructor arguments.
 """
 
 from dataclasses import dataclass
+from typing import cast
+
+from rigging.timing import Timestamp
+from sqlalchemy import bindparam, select
+from sqlalchemy import update as sa_update
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.persistence import operations as ops
@@ -35,9 +40,6 @@ from iris.resources.names import (
 )
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.legacy.job_service_codec import job_spec_from_legacy_request
-from rigging.timing import Timestamp
-from sqlalchemy import bindparam, select
-from sqlalchemy import update as sa_update
 
 
 @dataclass
@@ -158,7 +160,7 @@ def resolve_band_for_test(cur: Tx, job_id: JobName, requested_band: int) -> job_
     inherited_band: int | None = None
     if requested_band == job_pb2.PRIORITY_BAND_INHERIT and job_id.parent is not None:
         inherited_band = reads.get_priority_bands(cur, [job_id.parent])[job_id.parent]
-    return ops.job.resolve_priority_band(requested_band, inherited_band)
+    return cast(job_pb2.PriorityBand, ops.job.resolve_priority_band(requested_band, inherited_band))
 
 
 def submit_job_in_tx(

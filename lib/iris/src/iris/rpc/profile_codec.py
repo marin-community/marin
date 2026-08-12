@@ -45,7 +45,10 @@ def profile_configuration_from_proto(profile: job_pb2.ProfileType) -> ProfileCon
                 leaks=profile.memory.leaks,
             )
         case "threads":
-            return ThreadsProfileConfiguration(include_locals=profile.threads.locals)
+            return ThreadsProfileConfiguration(
+                include_locals=profile.threads.locals,
+                include_native=profile.threads.native,
+            )
         case _:
             return None
 
@@ -62,5 +65,7 @@ def profile_configuration_to_proto(profile: ProfileConfiguration | None) -> job_
             memory=job_pb2.MemoryProfile(format=_MEMORY_FORMAT_TO_PROTO[profile.format], leaks=profile.leaks)
         )
     if isinstance(profile, ThreadsProfileConfiguration):
-        return job_pb2.ProfileType(threads=job_pb2.ThreadsProfile(locals=profile.include_locals))
+        return job_pb2.ProfileType(
+            threads=job_pb2.ThreadsProfile(locals=profile.include_locals, native=profile.include_native)
+        )
     return job_pb2.ProfileType()

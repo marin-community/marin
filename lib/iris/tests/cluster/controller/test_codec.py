@@ -67,9 +67,9 @@ from iris.rpc.resource_codec import (
     job_spec_to_proto,
     resource_spec_from_proto,
 )
+from iris.testing.controller_state import ControllerTestState
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select, update
-from tests.cluster.controller._test_support import ControllerTestState
 
 
 def _fully_populated_request(job_id: JobName) -> controller_pb2.Controller.LaunchJobRequest:

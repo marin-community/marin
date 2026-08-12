@@ -38,6 +38,7 @@ message MemoryProfile {
 
 message ThreadsProfile {
   bool locals = 1;
+  bool native = 2;
 }
 
 message ProfileType {

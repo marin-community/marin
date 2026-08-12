@@ -25,8 +25,8 @@ from iris.resources.worker import (
     WorkerReconcileResponse,
 )
 from iris.test_util import wait_for_condition
+from iris.testing.worker import create_attempt_launch, create_mock_container_handle
 from rigging.timing import Duration
-from tests.cluster.worker.conftest import create_attempt_launch, create_mock_container_handle
 
 pytestmark = pytest.mark.timeout(10)
 

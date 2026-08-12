@@ -29,11 +29,10 @@ from iris.cluster.types import (
 )
 from iris.resources.names import JobName
 from iris.rpc import job_pb2
+from iris.testing.controller import make_worker_metadata, query_tasks_for_job, register_worker, submit_direct_job
 from rigging.timing import Timestamp
 from sqlalchemy import insert as sa_insert
 from sqlalchemy import update as sa_update
-
-from .conftest import make_worker_metadata, query_tasks_for_job, register_worker, submit_direct_job
 
 PEER = "peer-west"
 

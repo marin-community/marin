@@ -83,7 +83,7 @@ plumbing — the mesh, the checkpointer, the Fray dispatch — while you supply 
 
 ```python
 from fray.cluster import ResourceConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.train import train_lm
 from marin.training.training import LevanterCheckpoint
@@ -163,10 +163,12 @@ Rerunning the same script skips steps whose outputs already exist.
 
 ### Rerunning a failed step
 
-`StepRunner` skips steps that succeeded. To force a failed step to rerun:
+`StepRunner` skips steps that succeeded and reruns steps that failed, so a failed step
+retries on the next invocation. To make a previous failure raise instead of retrying,
+pass `force_run_failed=False`:
 
-```bash
-MARIN_PREFIX=local_store uv run python my_experiment.py --force_run_failed true
+```python
+StepRunner().run([lower(build())], force_run_failed=False)
 ```
 
 ### Rerunning a succeeded step

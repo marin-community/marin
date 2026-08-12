@@ -28,11 +28,7 @@ from iris.resources.names import (
     WorkerId,
 )
 from iris.rpc import controller_pb2, job_pb2
-from rigging.timing import Timestamp
-from tests.cluster.controller._test_support import submit_job_in_tx
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
-
-from .conftest import (
+from iris.testing.controller import (
     ControllerTestHarness,
     dispatch_task,
     make_controller_state,
@@ -45,6 +41,9 @@ from .conftest import (
     register_worker,
     submit_job,
 )
+from iris.testing.controller_state import submit_job_in_tx
+from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
+from rigging.timing import Timestamp
 
 
 def _make_simple_context(workers: list[WorkerCapacity]) -> "FakeSchedulingContext":

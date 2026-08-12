@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test driver for landing task-state updates through the production path.
+"""Drivers for landing test task-state updates through the production path.
 
 The live controller lands worker-reported task states through the reconcile
 loop (``controller.reconcile.apply.apply_worker_reconcile``). To keep tests exercising

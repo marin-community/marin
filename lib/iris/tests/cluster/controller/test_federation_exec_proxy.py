@@ -45,11 +45,7 @@ from iris.rpc.legacy.controller_service import LegacyControllerService
 from iris.rpc.legacy.job_codec import constraint_to_proto
 from iris.rpc.profile_codec import profile_configuration_to_proto
 from iris.rpc.worker_codec import process_info_from_proto
-from rigging.provenance import Provenance
-from rigging.server_auth import VerifiedIdentity, identity_scope
-
-from ._test_support import ControllerTestState
-from .conftest import (
+from iris.testing.controller import (
     MockController,
     dispatch_task,
     make_controller_service,
@@ -59,6 +55,9 @@ from .conftest import (
     query_tasks_for_job,
     register_worker,
 )
+from iris.testing.controller_state import ControllerTestState
+from rigging.provenance import Provenance
+from rigging.server_auth import VerifiedIdentity, identity_scope
 
 # The parent authenticates to the peer as itself; the peer trusts it and runs the
 # delegated RPC under the asserted identity (profiling/exec never run anonymously).

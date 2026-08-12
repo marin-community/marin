@@ -5,7 +5,7 @@
 
 import pytest
 from iris.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
-from iris.resources.endpoint import EndpointAccess
+from iris.resources.endpoint import EndpointAccess, ThreadsProfileConfiguration
 from iris.resources.identity import (
     AttemptIdentity,
     AttemptLocator,
@@ -20,6 +20,12 @@ from iris.resources.identity import (
 )
 from iris.resources.source import Freshness, ResourceSourceStatus, SourceState
 from iris.rpc import resource_action_pb2, resource_endpoint_pb2, resource_identity_pb2, resource_job_pb2
+from iris.rpc.profile_codec import (
+    profile_configuration_from_proto as legacy_profile_configuration_from_proto,
+)
+from iris.rpc.profile_codec import (
+    profile_configuration_to_proto as legacy_profile_configuration_to_proto,
+)
 from iris.rpc.resource_codec import (
     action_receipt_from_proto,
     action_receipt_to_proto,
@@ -36,6 +42,8 @@ from iris.rpc.resource_codec import (
     node_identity_to_proto,
     node_locator_from_proto,
     node_locator_to_proto,
+    profile_configuration_from_proto,
+    profile_configuration_to_proto,
     redacted_job_spec_to_proto,
     resource_key_from_proto,
     resource_key_to_proto,
@@ -149,6 +157,13 @@ def test_status_and_action_codecs_preserve_presence_and_zero_valued_enums() -> N
     assert endpoint_access_from_proto(resource_endpoint_pb2.ENDPOINT_ACCESS_PRIVATE) is EndpointAccess.PRIVATE
     assert resource_source_status_from_proto(resource_source_status_to_proto(source)) == source
     assert action_receipt_from_proto(action_receipt_to_proto(receipt)) == receipt
+
+
+def test_profile_codecs_round_trip_thread_detail_options() -> None:
+    profile = ThreadsProfileConfiguration(include_locals=True, include_native=True)
+
+    assert profile_configuration_from_proto(profile_configuration_to_proto(profile)) == profile
+    assert legacy_profile_configuration_from_proto(legacy_profile_configuration_to_proto(profile)) == profile
 
 
 def test_shared_decoders_reject_unspecified_resource_and_action_enums() -> None:

@@ -96,8 +96,8 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   `iac` — a `src/<pkg>` layout mirroring `lib/*/src/<pkg>`.)
 - Grafana's CoreWeave Managed Auth usernames from
   `provisioning.coreweave.grafana_observer_rbac`. The stack binds those identities to `get`,
-  `list`, and `watch` on Nodes; the standard CoreWeave `read` group omits Nodes. Retain both
-  identities during a token rotation.
+  `list`, and `watch` on Nodes and NodePools; the standard CoreWeave `read` group omits these
+  cluster-inventory resources. Retain both identities during a token rotation.
 - Kueue's controller-manager memory request and limit default to `2Gi`.
   `manager_memory_limit` accepts larger per-cluster values and rejects values below `2Gi`.
 

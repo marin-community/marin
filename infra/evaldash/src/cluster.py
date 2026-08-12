@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from connectrpc.errors import ConnectError
-from discovery import resolve_internal_ip
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from google.protobuf.json_format import MessageToDict
@@ -32,6 +31,8 @@ from iris.resources.task import TaskDetail, TaskQuery
 from iris.rpc import job_pb2
 from iris.rpc.resource_client import ResourceRpcClient
 from rigging.timing import Timestamp
+
+from .discovery import resolve_internal_ip
 
 logger = logging.getLogger(__name__)
 

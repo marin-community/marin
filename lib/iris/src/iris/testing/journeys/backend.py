@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A deterministic external-boundary backend for Iris journeys."""
+"""Deterministic external-boundary backend for Iris journeys."""
 
 import threading
 from collections import defaultdict, deque
