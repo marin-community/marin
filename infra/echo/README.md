@@ -16,6 +16,10 @@ provides an IAP-gated HTTP interface and browser dashboard.
 - `work_log` is an append-only agent logbook with one row per distilled milestone.
 - `search_feedback` records the query, IAP-authenticated caller, and short overall
   explanation. `search_feedback_grades` stores its result IDs and 0–10 grades.
+- `search_executions` permanently records every API search, including its normalized
+  query, mode, selected domains and filters, result count, latency, indexed repository
+  commit, and service revision. `search_execution_results` snapshots the returned rank,
+  metadata, and snippets so later evaluations reproduce what the caller saw.
 
 ## CLI
 
@@ -26,9 +30,10 @@ uv run infra/echo/cli.py search "expert parallel MoE MFU on B200" --limit 10
 uv run infra/echo/cli.py search "ragged_all_to_all" --domain file --domain pr
 uv run infra/echo/cli.py get file:lib/iris/OPS.md
 uv run infra/echo/cli.py feedback --query "how do I deploy Iris?" \
-  --grade wiki:123=0 --grade file:lib/iris/OPS.md=10 <<'EOF'
+  --execution-id 1234 --grade wiki:123=0 --grade file:lib/iris/OPS.md=10 <<'EOF'
 The file result answered the question; the wiki result did not.
 EOF
+uv run infra/echo/cli.py history export > echo-search-history.jsonl
 uv run infra/echo/cli.py grep ragged_all_to_all --source discord
 uv run infra/echo/cli.py wiki search "grafana access" --tag ops
 uv run infra/echo/cli.py wiki add --file note.md          # OKF markdown document
@@ -102,12 +107,21 @@ latency and an additional prompt-injection path.
 measurement covers token acquisition, the network request, server retrieval and
 reranking, and response decoding: the time the caller waited for Echo.
 
-Submit useful or poor results with `feedback`. Repeat `--grade <result-id>=<0-10>` for
+Submit useful or poor results with `feedback`. A search prints its durable execution ID;
+pass it with `--execution-id` so each judgment is tied to the exact ranked result set.
+Repeat `--grade <result-id>=<0-10>` for
 the results you evaluated, where 0 means irrelevant and 10 means directly useful to the
 task. The exact query makes each judgment replayable against a future search version.
 A short overall explanation is required on stdin. Capture the result set's gestalt
 without restating each score. An explanation without grades can describe an empty or
-globally poor result set.
+globally poor result set. When an execution ID is supplied, the caller and query must
+match and every graded result must have appeared in that recorded execution.
+
+Search history is retained indefinitely for internal search-quality work. The service
+does not persist request headers, user agents, or network addresses in these tables.
+`history export` pages through the durable records as JSONL, including ranked result
+snapshots. Historical query manifests can be replayed through normal search so each
+record captures current results under the same contract as future traffic.
 
 The scheduled sync checks GitHub at most once per hour. An unchanged head only advances
 the check time. A new head uses GitHub's compare API to delete, fetch, and re-embed
@@ -156,8 +170,9 @@ A pg_trgm GIN index on chunks.text makes the substring match an index scan.
 Direct SQL access remains available for raw queries through Cloud SQL IAM group
 authentication. Members of `eng-all@openathena.ai` inherit `roles/cloudsql.instanceUser`,
 `roles/cloudsql.client`, `SELECT` on `chunks`, `repository_file_chunks`,
-`repository_index_state`, `wiki_entries`, `search_feedback`, and
-`search_feedback_grades`, and `SELECT, INSERT` on `work_log`; the `loom-vm` service
+`repository_index_state`, `wiki_entries`, `search_feedback`,
+`search_feedback_grades`, `search_executions`, and `search_execution_results`, and
+`SELECT, INSERT` on `work_log`; the `loom-vm` service
 account receives the same access. No database password is shared.
 Group membership and IAM changes can take about 15 minutes to propagate.
 
@@ -177,6 +192,7 @@ the activity corpus and wiki notes. The same service exposes OpenAPI documentati
 - `GET /api/wiki/search`
 - `GET /api/wiki/{id}`
 - `POST /api/feedback`
+- `GET /api/search-executions`
 - `POST /api/wiki`
 - `PUT /api/wiki/{id}`
 - `POST /api/wiki/{id}/references`
@@ -197,9 +213,14 @@ defaults, and displayed commit length used by the dashboard. The CLI's `get` com
 uses the existing wiki and activity detail endpoints plus
 `GET /api/repository-files/{path}` for complete indexed files.
 
+Every successful search response includes `X-Echo-Search-Execution-ID` and is stored
+with its returned result snapshot. `GET /api/search-executions` returns stable ID-ordered
+pages of at most 500 records for evaluation exports.
+
 `POST /api/feedback` accepts an exact query, up to 20 unique result grades from 0 through
 10, and a required overall explanation of at most 2,000 characters. Grades may be empty
-when the search returns no useful results. The API attributes feedback to the IAP-authenticated caller.
+when the search returns no useful results. The API attributes feedback to the
+IAP-authenticated caller and optionally links it to a matching search execution.
 
 The dashboard is a Vue single-page app served from the same origin, with client-side
 routes at `/` (search), `/wiki` (recently updated notes), `/wiki/<id>` (a note), and

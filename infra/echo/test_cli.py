@@ -8,6 +8,15 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 
 import cli
+import requests
+
+
+def json_response(value, headers=None):
+    response = requests.Response()
+    response.status_code = 200
+    response.headers.update(headers or {})
+    response._content = cli.json.dumps(value).encode()
+    return response
 
 
 def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys):
@@ -34,9 +43,9 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
 
     def fake_request(method, path, **options):
         calls.append((method, path, options))
-        return [remote_result]
+        return json_response([remote_result], {"X-Echo-Search-Execution-ID": "991"})
 
-    monkeypatch.setattr(cli, "request", fake_request)
+    monkeypatch.setattr(cli, "request_response", fake_request)
     clock = iter((10.0, 11.234))
     monkeypatch.setattr(cli.time, "perf_counter", lambda: next(clock))
     args = cli.build_parser().parse_args(["search", "FAILED_PRECONDITION", "--domain", "file", "--domain", "pr"])
@@ -53,7 +62,7 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
     assert "1 result in 1.23s" in output
     assert cli.SEARCH_DETAIL_INSTRUCTION in output
     assert "L42 raise FAILED_PRECONDITION" in output
-    assert "feedback --query FAILED_PRECONDITION --grade '<id>=<0-10>'" in output
+    assert "feedback --query FAILED_PRECONDITION --execution-id 991 --grade '<id>=<0-10>'" in output
 
 
 def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
@@ -61,9 +70,9 @@ def test_search_defaults_to_curated_domains_without_discord(monkeypatch):
 
     def fake_request(method, path, **options):
         calls.append((method, path, options))
-        return []
+        return json_response([])
 
-    monkeypatch.setattr(cli, "request", fake_request)
+    monkeypatch.setattr(cli, "request_response", fake_request)
     args = cli.build_parser().parse_args(["search", "scheduler"])
     args.func(args)
 
@@ -154,3 +163,52 @@ def test_feedback_submits_replayable_grades_and_stdin_note(monkeypatch, capsys):
         )
     ]
     assert capsys.readouterr().out == "recorded feedback #17\n"
+
+
+def test_feedback_links_execution_when_provided(monkeypatch):
+    calls = []
+
+    def fake_request(method, path, **options):
+        calls.append((method, path, options))
+        return {"id": 17}
+
+    monkeypatch.setattr(cli, "request", fake_request)
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO("The file answered it.\n"))
+    args = cli.build_parser().parse_args(
+        [
+            "feedback",
+            "--query",
+            "how do I deploy Iris?",
+            "--execution-id",
+            "991",
+            "--grade",
+            "file:lib/iris/OPS.md=10",
+        ]
+    )
+
+    args.func(args)
+
+    assert calls[0][2]["body"]["execution_id"] == 991
+
+
+def test_history_export_pages_in_stable_id_order(monkeypatch, capsys):
+    calls = []
+    pages = [
+        [{"id": 4, "query": "deploy iris"}, {"id": 7, "query": "inspect logs"}],
+        [{"id": 9, "query": "reserve tpu"}],
+    ]
+
+    def fake_request(method, path, **options):
+        calls.append((method, path, options))
+        return pages.pop(0)
+
+    monkeypatch.setattr(cli, "request", fake_request)
+    args = cli.build_parser().parse_args(["history", "export", "--after-id", "3", "--page-size", "2"])
+
+    args.func(args)
+
+    assert calls == [
+        ("GET", "/search-executions", {"params": {"after_id": 3, "mode": None, "limit": 2}, "timeout": 180}),
+        ("GET", "/search-executions", {"params": {"after_id": 7, "mode": None, "limit": 2}, "timeout": 180}),
+    ]
+    assert [cli.json.loads(line)["id"] for line in capsys.readouterr().out.splitlines()] == [4, 7, 9]
