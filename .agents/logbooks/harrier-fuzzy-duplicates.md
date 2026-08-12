@@ -572,3 +572,14 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of root logs.
 - Next action: Continue the 15-minute check cadence and monitor both long-running sources.
+
+### 2026-08-12 12:29 UTC - RNO transport event recovers
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 35 completed source artifacts. RNO has six completed source artifacts. The full run has 41 of 292 completed source artifacts.
+- East progress: `finepdfs_cf4aed04` got to 2,428 of 9,244 output shards with 32 live workers and no dead workers.
+- RNO progress: `finetranslations_6ce00a47` got to 22,383 of 25,962 output shards with 32 live workers and no dead workers.
+- Transport diagnostic: From 12:17:37 through 12:18:12, 25 shard attempts on 24 RNO workers exhausted TEI request retries with `RemoteDisconnected`. Zephyr requeued each shard at task error one of three. No shard reached task error two or three.
+- Recovery evidence: All 32 Zephyr workers remain running, no new TEI job failed, and RNO resumed normal shard progress. The 25 failed shards remain queued for later retry. No manual recovery was necessary.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Next action: Continue the 15-minute check cadence. Escalate if transport errors repeat, a shard reaches task error two, or worker health changes.
