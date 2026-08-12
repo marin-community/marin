@@ -40,9 +40,7 @@ def file_lines(name: str, raw: bytes) -> list[str]:
     """Render *raw* as display lines, using *name*'s extension to pick a JSON reader.
 
     A tabular ``.json`` or ``.jsonl`` file renders as a table. The renderer ignores one
-    supported compression suffix. Other files render as text or a byte count. Parquet
-    cannot be rendered from a head read at all, so callers route it to
-    :func:`rigging.fsutil.parquet.parquet_lines` before they read any bytes.
+    supported compression suffix. Other files render as text or a byte count.
     """
     name = uncompressed_name(name)
     if name.endswith((".json", ".jsonl")):
@@ -79,11 +77,7 @@ def _json_lines(name: str, text: str) -> list[str]:
 
 
 def record_lines(records: list[dict]) -> list[str]:
-    """Render records as a table with a column per key, truncating oversized cells.
-
-    Shared by the JSON readers and the parquet reader, which arrive at the same shape
-    from different formats.
-    """
+    """Render records as a table with a column per key, truncating oversized cells."""
     headers = list({key: None for row in records for key in row})
     rows = [[_cell(row.get(header)) for header in headers] for row in records]
     return table_lines(headers, rows)

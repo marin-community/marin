@@ -94,7 +94,13 @@ def cat(url: str, raw: bool) -> None:
 
 @cli.command()
 @click.argument("url")
-@click.option("-n", "--lines", default=20, show_default=True, help="Number of lines to print.")
+@click.option(
+    "-n",
+    "--lines",
+    default=PREVIEW_ROWS,
+    show_default=True,
+    help="Number of lines to print, or rows for a parquet file.",
+)
 def head(url: str, lines: int) -> None:
     """Print the first lines of a file, or the first rows of a parquet file."""
     rendered = _formatted_lines(url, lines)

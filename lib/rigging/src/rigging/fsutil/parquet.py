@@ -68,11 +68,9 @@ def _summary_lines(metadata, file_size: int) -> list[str]:
 def _row_lines(parquet_file, metadata, rows: int) -> list[str]:
     """The first *rows* rows of row group 0, or why they were not read.
 
-    Parquet's smallest readable unit is a whole column chunk, so one row costs the row
-    group that holds it. A first row group above the limit is reported rather than
-    decoded, and the read is pinned to that group so it never crosses into one the limit
-    has not cleared. A short first group therefore yields fewer rows than asked, which
-    the row count below the table states.
+    A short first group yields fewer rows than asked, and the count below the table says
+    so. Row group 0 is the whole budget because parquet's smallest readable unit is a
+    column chunk.
     """
     if rows <= 0:
         return []
