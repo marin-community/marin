@@ -30,7 +30,7 @@ const LOADING_HTML =
   '<body style="margin:0;font:14px system-ui,sans-serif;color:#888;display:flex;' +
   'height:100vh;align-items:center;justify-content:center">Capturing profile…</body>'
 
-function isSpeedscopeProfile(bytes: Uint8Array): boolean {
+function hasSpeedscopeTopLevelFields(bytes: Uint8Array): boolean {
   try {
     const value = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>
     return Array.isArray(value.profiles) && typeof value.shared === 'object' && value.shared !== null
@@ -91,7 +91,7 @@ export function openSpeedscopeWindow(): PendingSpeedscope {
   return {
     show(bytes: Uint8Array, title: string) {
       const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/json' }))
-      if (!isSpeedscopeProfile(bytes)) {
+      if (!hasSpeedscopeTopLevelFields(bytes)) {
         offerRawDownload(win, url, title)
         return
       }
