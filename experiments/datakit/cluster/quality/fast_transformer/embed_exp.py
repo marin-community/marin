@@ -214,14 +214,18 @@ def report_arm(
         by_domain = grouped_spearman(preds, quality, domains, MIN_TYPE_LABELS)
         for domain_name in sorted(by_domain):
             logger.info("EMBED_EXP %s mlp_domain %-14s %+.3f", name, domain_name, by_domain[domain_name])
-    logger.info(
-        "EMBED_EXP %s source_rho mean=%+.3f median=%+.3f min=%+.3f (%d sources)",
-        name,
-        float(np.mean(list(by_source.values()))),
-        float(np.median(list(by_source.values()))),
-        float(np.min(list(by_source.values()))),
-        len(by_source),
-    )
+    if by_source:
+        logger.info(
+            "EMBED_EXP %s source_rho mean=%+.3f median=%+.3f min=%+.3f (%d sources)",
+            name,
+            float(np.mean(list(by_source.values()))),
+            float(np.median(list(by_source.values()))),
+            float(np.min(list(by_source.values()))),
+            len(by_source),
+        )
+    else:
+        # A subsampled smoke holdout can leave every source under the floor.
+        logger.info("EMBED_EXP %s source_rho: no source met the %d-label floor", name, MIN_SOURCE_LABELS)
     logger.info("EMBED_EXP %s source_signal=%+.3f", name, source_signal(preds, quality, sources))
     logger.info(
         "EMBED_EXP %s per-source pred std mean=%.4f min=%.4f flat(<%.2f)=%d/%d",

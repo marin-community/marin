@@ -42,9 +42,9 @@ def test_params_filter_freezes_the_donor_table_while_the_projection_trains():
     best, _, _ = train_regressor(model, ids, scores, ids[:16], scores[:16], hp, params_filter=params_filter)
 
     np.testing.assert_array_equal(np.asarray(best.donor_embed), np.asarray(donor))
-    assert not np.allclose(np.asarray(best.donor_proj), np.asarray(model.donor_proj)), (
-        "the projection is trainable and three epochs of updates must move it"
-    )
+    assert not np.allclose(
+        np.asarray(best.donor_proj), np.asarray(model.donor_proj)
+    ), "the projection is trainable and three epochs of updates must move it"
     assert best.embed is None
     preds = best(jnp.asarray(ids[:4]))
     assert preds.shape == (4,) and bool(np.isfinite(np.asarray(preds)).all())

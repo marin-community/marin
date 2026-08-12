@@ -81,6 +81,16 @@ class FastTransformerConfig:
     # via ``train_regressor``'s ``params_filter`` (the forward also
     # stop-gradients them, but weight decay is only stopped by the filter).
     frozen_donor_dim: int = 0
+    # Per-sequence-routed FFN mixture: each layer keeps its always-on shared FFN
+    # and adds ``moe_experts`` routed FFN experts of ratio ``moe_expert_ratio``,
+    # softly mixed over the ``moe_top_k`` experts a per-layer router selects from
+    # the raw document embedding — one routing decision per document, not per
+    # token. The routed sum sits behind a per-layer zero-init gate, so at init
+    # the forward is exactly the dense model and the mixture fades in by
+    # gradient (the same precedent as the doc-embedding super token). 0 disables.
+    moe_experts: int = 0
+    moe_expert_ratio: int = 1
+    moe_top_k: int = 2
 
     def __post_init__(self) -> None:
         if self.max_tokens % self.pool_window != 0:
@@ -93,6 +103,11 @@ class FastTransformerConfig:
             raise ValueError(f"hidden_dim={self.hidden_dim} not divisible by num_heads={self.num_heads}")
         if self.doc_embed_super_token and not self.doc_embed_dim:
             raise ValueError("doc_embed_super_token requires doc_embed_dim > 0")
+        if self.moe_experts:
+            if not self.doc_embed_dim:
+                raise ValueError("moe_experts requires doc_embed_dim > 0 (the router reads the document embedding)")
+            if not 0 < self.moe_top_k <= self.moe_experts:
+                raise ValueError(f"moe_top_k={self.moe_top_k} must be in 1..moe_experts={self.moe_experts}")
 
     @property
     def num_super_tokens(self) -> int:
@@ -119,6 +134,11 @@ class FastTransformerConfig:
         attn_scores = 2 * (2 * s * s * d)  # QK^T and AV
         mlp = 2 * (2 * d * d_ff) * s
         per_layer = attn_proj + attn_scores + mlp
+        if self.moe_experts:
+            # Active cost only: the shared FFN plus the top-k routed experts run
+            # per document (training computes all experts and zero-weights the
+            # rest, which is mathematically identical).
+            per_layer += 2 * (2 * d * (d * self.moe_expert_ratio)) * s * self.moe_top_k
         head = 2 * d  # final linear to scalar
         total = proj + self.num_layers * per_layer + head
         if self.frozen_donor_dim:
@@ -140,6 +160,18 @@ def _matmul(x: Array, w: Array) -> Array:
     return out.astype(jnp.float32)
 
 
+def _expert_matmul(x: Array, w: Array) -> Array:
+    """Per-expert ``x @ w[e]`` in bf16 with f32 accumulation/output.
+
+    ``x`` is ``[b, s, d]`` (broadcast to every expert) or ``[b, E, s, d]``
+    (already per-expert); ``w`` is ``[E, d, f]``; the result is ``[b, E, s, f]``.
+    """
+    if x.ndim == 3:
+        x = x[:, None]  # [b, 1, s, d] broadcasts over the expert axis
+    out = jnp.matmul(x.astype(COMPUTE_DTYPE), w.astype(COMPUTE_DTYPE), preferred_element_type=jnp.float32)
+    return out.astype(jnp.float32)
+
+
 def _layer_norm(x: Array, gamma: Array, beta: Array) -> Array:
     mu = x.mean(axis=-1, keepdims=True)
     var = x.var(axis=-1, keepdims=True)
@@ -154,7 +186,16 @@ def _dropout(x: Array, p: float, key: PRNGKeyArray | None, inference: bool) -> A
 
 
 class TransformerLayer(eqx.Module):
-    """Batched masked pre-norm transformer block over super-tokens."""
+    """Batched masked pre-norm transformer block over super-tokens.
+
+    With ``moe_experts`` the FFN grows a per-sequence-routed mixture: the shared
+    FFN always runs, and ``moe_experts`` routed FFN experts are softly mixed
+    over the top-k the router selects from the document embedding. The routed
+    sum is gated by the zero-init ``moe_gate`` so the layer starts as its dense
+    self. All experts are computed and the off-top-k ones weighted to zero,
+    which is mathematically identical to gathering the top-k (deployment
+    gathers; ``flops_per_token`` counts the active cost).
+    """
 
     ln1_g: Array
     ln1_b: Array
@@ -164,10 +205,27 @@ class TransformerLayer(eqx.Module):
     wo: Array  # [D, D]
     w1: Array  # [D, D_ff]
     w2: Array  # [D_ff, D]
+    router_w: Array | None  # [doc_embed_dim, E], or None when the mixture is off
+    expert_w1: Array | None  # [E, D, D * expert_ratio]
+    expert_w2: Array | None  # [E, D * expert_ratio, D]
+    moe_gate: Array | None  # scalar, zero-init so training starts as the dense layer
     num_heads: int = eqx.field(static=True)
     dropout: float = eqx.field(static=True)
+    moe_top_k: int = eqx.field(static=True)
 
-    def __init__(self, dim: int, num_heads: int, mlp_ratio: int, dropout: float, *, key: PRNGKeyArray):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int,
+        mlp_ratio: int,
+        dropout: float,
+        *,
+        key: PRNGKeyArray,
+        moe_experts: int = 0,
+        moe_expert_ratio: int = 1,
+        moe_top_k: int = 2,
+        doc_embed_dim: int = 0,
+    ):
         kqkv, ko, k1, k2 = jax.random.split(key, 4)
         self.ln1_g = jnp.ones(dim)
         self.ln1_b = jnp.zeros(dim)
@@ -179,14 +237,50 @@ class TransformerLayer(eqx.Module):
         self.w2 = _glorot(k2, (dim * mlp_ratio, dim))
         self.num_heads = num_heads
         self.dropout = dropout
+        self.moe_top_k = moe_top_k
+        if moe_experts:
+            # Folded rather than added to the split above so the dense weight
+            # stream is unchanged: the MoE arm starts from the exact trunk the
+            # dense arm starts from (same seed, same weights).
+            kr, ke1, ke2 = jax.random.split(jax.random.fold_in(key, 4), 3)
+            d_ff = dim * moe_expert_ratio
+            # Small random router init breaks the top-k tie a zero init would leave.
+            self.router_w = jax.random.normal(kr, (doc_embed_dim, moe_experts)) * 0.02
+            self.expert_w1 = _glorot(ke1, (moe_experts, dim, d_ff))
+            self.expert_w2 = _glorot(ke2, (moe_experts, d_ff, dim))
+            self.moe_gate = jnp.zeros(())
+        else:
+            self.router_w = None
+            self.expert_w1 = None
+            self.expert_w2 = None
+            self.moe_gate = None
+
+    def expert_mixture(self, doc_embed: Array) -> Array:
+        """Soft top-k routing weights [b, E] from the document embedding."""
+        logits = doc_embed @ self.router_w  # [b, E]
+        kth = jax.lax.top_k(logits, self.moe_top_k)[0][..., -1:]
+        return jax.nn.softmax(jnp.where(logits >= kth, logits, NEG_INF), axis=-1)
 
     def __call__(
-        self, x: Array, valid: Array, *, key: PRNGKeyArray | None, inference: bool, dropout: float | None = None
+        self,
+        x: Array,
+        valid: Array,
+        *,
+        key: PRNGKeyArray | None,
+        inference: bool,
+        dropout: float | None = None,
+        doc_embed: Array | None = None,
     ) -> Array:
         b, s, d = x.shape
         h, hd = self.num_heads, d // self.num_heads
         p = self.dropout if dropout is None else dropout
-        ka, km = (None, None) if key is None else jax.random.split(key)
+        moe = self.router_w is not None
+        if moe != (doc_embed is not None):
+            raise ValueError("layers with routed experts need doc_embed, dense layers must not get one")
+        if key is None:
+            ka = km = kx = None
+        else:
+            ka, km, kx = jax.random.split(key, 3) if moe else (*jax.random.split(key), None)
 
         normed = _layer_norm(x, self.ln1_g, self.ln1_b)
         qkv = _matmul(normed, self.wqkv).reshape(b, s, 3, h, hd)
@@ -200,6 +294,11 @@ class TransformerLayer(eqx.Module):
         normed = _layer_norm(x, self.ln2_g, self.ln2_b)
         mlp = _matmul(jax.nn.gelu(_matmul(normed, self.w1)), self.w2)
         x = x + _dropout(mlp, p, km, inference)
+        if moe:
+            mix = self.expert_mixture(doc_embed)  # [b, E]
+            hidden = jax.nn.gelu(_expert_matmul(normed, self.expert_w1))  # [b, E, s, d_ff]
+            routed = jnp.einsum("be,besd->bsd", mix, _expert_matmul(hidden, self.expert_w2))
+            x = x + self.moe_gate * _dropout(routed, p, kx, inference)
         return x
 
 
@@ -252,7 +351,17 @@ class FastTransformer(eqx.Module):
         self.pos_embed = jax.random.normal(kpos, (config.num_super_tokens, config.hidden_dim)) * 0.02
         layer_keys = jax.random.split(klayers, max(1, config.num_layers))
         self.layers = [
-            TransformerLayer(config.hidden_dim, config.num_heads, config.mlp_ratio, config.dropout, key=lk)
+            TransformerLayer(
+                config.hidden_dim,
+                config.num_heads,
+                config.mlp_ratio,
+                config.dropout,
+                key=lk,
+                moe_experts=config.moe_experts,
+                moe_expert_ratio=config.moe_expert_ratio,
+                moe_top_k=config.moe_top_k,
+                doc_embed_dim=config.doc_embed_dim,
+            )
             for lk in layer_keys[: config.num_layers]
         ]
         self.final_query = jax.random.normal(kfq, (config.hidden_dim,)) * 0.02
@@ -365,7 +474,7 @@ class FastTransformer(eqx.Module):
         n = cfg.num_layers
         layer_keys = [None] * n if key is None else list(jax.random.split(key, n)) if n else []
         for layer, lk in zip(self.layers, layer_keys, strict=True):
-            h = layer(h, valid, key=lk, inference=inference)
+            h = layer(h, valid, key=lk, inference=inference, doc_embed=doc_embed if cfg.moe_experts else None)
 
         if doc_vec is not None and cfg.doc_embed_super_token:
             # The doc token is a conditioning input the real tokens attend to, not
@@ -393,3 +502,14 @@ class FastTransformer(eqx.Module):
 
 def count_params(model: FastTransformer) -> int:
     return sum(x.size for x in jax.tree_util.tree_leaves(eqx.filter(model, eqx.is_inexact_array)))
+
+
+def expert_utilization(model: FastTransformer, doc_embed: Array) -> Array:
+    """Mean routing weight per (layer, expert) over a batch of documents, [L, E].
+
+    The routing-health readout: a healthy mixture spreads mass across experts,
+    a collapsed one concentrates every layer's mass on a single expert.
+    """
+    if not model.config.moe_experts:
+        raise ValueError("model has no routed experts")
+    return jnp.stack([layer.expert_mixture(doc_embed).mean(axis=0) for layer in model.layers])
