@@ -30,6 +30,16 @@ def test_resolve_profile_dir_uses_logged_trainer_log_dir():
     assert resolve_profile_dir(run) == "gs://bucket/logs/trainer-456/profiler"
 
 
+def test_resolve_profile_dir_uses_nested_levanter_trainer_config():
+    run = SimpleNamespace(
+        config={"trainer": {"trainer": {"id": "trainer-456", "log_dir": "s3://bucket/logs"}}},
+        path=["entity", "project", "run-123"],
+    )
+
+    assert resolve_profile_run_id(run) == "trainer-456"
+    assert resolve_profile_dir(run) == "s3://bucket/logs/trainer-456/profiler"
+
+
 @pytest.mark.parametrize("root_factory", [lambda _: None, lambda tmp_path: tmp_path / "logs"])
 def test_mirror_profile_dir_returns_existing_local_directory(tmp_path, root_factory):
     source = tmp_path / "logs" / "run-123" / "profiler"

@@ -65,9 +65,7 @@ def normalize_run_target(target: str, entity: Optional[str], project: Optional[s
 
 
 def resolve_profile_run_id(run: WandbRunLike) -> str:
-    trainer_config = run.config.get(TRAINER_CONFIG_KEY)
-    if not isinstance(trainer_config, dict):
-        raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
+    trainer_config = _resolve_trainer_config(run)
 
     run_id = trainer_config.get("id")
     if isinstance(run_id, str) and run_id:
@@ -77,15 +75,25 @@ def resolve_profile_run_id(run: WandbRunLike) -> str:
 
 
 def resolve_profile_dir(run: WandbRunLike) -> str:
-    trainer_config = run.config.get(TRAINER_CONFIG_KEY)
-    if not isinstance(trainer_config, dict):
-        raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
+    trainer_config = _resolve_trainer_config(run)
 
     log_dir = trainer_config.get("log_dir")
     if not isinstance(log_dir, str) or not log_dir:
         raise RuntimeError(f"Run {run.path} does not expose trainer.log_dir.")
 
     return str(StoragePath(log_dir) / resolve_profile_run_id(run) / PROFILER_DIR_NAME)
+
+
+def _resolve_trainer_config(run: WandbRunLike) -> Mapping[str, Any]:
+    trainer_config = run.config.get(TRAINER_CONFIG_KEY)
+    if not isinstance(trainer_config, Mapping):
+        raise RuntimeError(f"Run {run.path} does not expose a trainer config.")
+
+    nested_trainer_config = trainer_config.get(TRAINER_CONFIG_KEY)
+    if isinstance(nested_trainer_config, Mapping):
+        return nested_trainer_config
+
+    return trainer_config
 
 
 def mirror_profile_dir(profile_dir: str, root: Path | None, *, run_id: str) -> Path:
