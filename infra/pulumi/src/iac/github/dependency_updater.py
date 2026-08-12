@@ -25,6 +25,7 @@ class DependencyUpdaterConfig:
     organization: str
     repository: str
     app_id: int
+    client_id: str
     app_slug: str
     actions_key_id: str
     encrypted_private_key: str
@@ -77,6 +78,7 @@ def dependency_updater_config(
     expected_keys = {
         "actionsKeyId",
         "appId",
+        "clientId",
         "appSlug",
         "encryptedPrivateKey",
         "repository",
@@ -90,6 +92,9 @@ def dependency_updater_config(
     app_slug = settings["appSlug"]
     if not isinstance(app_slug, str) or APP_SLUG.fullmatch(app_slug) is None:
         raise ValueError("dependencyUpdater.appSlug must be a lowercase GitHub App slug")
+    client_id = settings["clientId"]
+    if not isinstance(client_id, str) or not client_id:
+        raise ValueError("dependencyUpdater.clientId must be a non-empty string")
     actions_key_id = settings["actionsKeyId"]
     if not isinstance(actions_key_id, str) or not actions_key_id:
         raise ValueError("dependencyUpdater.actionsKeyId must be a non-empty string")
@@ -100,6 +105,7 @@ def dependency_updater_config(
         organization=organization,
         repository=repository,
         app_id=_positive_int(settings, "appId"),
+        client_id=client_id,
         app_slug=app_slug,
         actions_key_id=actions_key_id,
         encrypted_private_key=encrypted_private_key,
@@ -162,11 +168,11 @@ def register_dependency_updater(
 ) -> tuple[pulumi.CustomResource, ...]:
     """Register the app credentials and layered main-branch rules."""
     plan = dependency_updater_plan(config)
-    app_id = github.ActionsVariable(
-        "external-runtime-updater-app-id",
+    client_id = github.ActionsVariable(
+        "external-runtime-updater-client-id",
         repository=plan.repository,
-        variable_name="DEPENDENCY_UPDATER_APP_ID",
-        value=str(config.app_id),
+        variable_name="DEPENDENCY_UPDATER_CLIENT_ID",
+        value=config.client_id,
     )
     app_slug = github.ActionsVariable(
         "external-runtime-updater-app-slug",
@@ -253,7 +259,7 @@ def register_dependency_updater(
             )
         ),
     )
-    return app_id, app_slug, private_key, classic_branch_protection, review_ruleset, required_ci_ruleset
+    return client_id, app_slug, private_key, classic_branch_protection, review_ruleset, required_ci_ruleset
 
 
 def register_dependency_updater_environment(

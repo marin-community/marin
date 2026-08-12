@@ -446,7 +446,7 @@ def test_dependency_update_workflows_share_scoped_app_pr_lifecycle(workflow_path
     token_step = next(step for step in steps if step.get("id") == "app-token")
     assert token_step["uses"] == "actions/create-github-app-token@v3"
     assert token_step["with"] == {
-        "app-id": "${{ vars.DEPENDENCY_UPDATER_APP_ID }}",
+        "client-id": "${{ vars.DEPENDENCY_UPDATER_CLIENT_ID }}",
         "private-key": "${{ secrets.DEPENDENCY_UPDATER_PRIVATE_KEY }}",
         "repositories": "${{ github.event.repository.name }}",
     }
