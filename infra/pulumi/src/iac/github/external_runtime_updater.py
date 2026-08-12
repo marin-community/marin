@@ -10,7 +10,7 @@ import pulumi
 import pulumi_github as github
 
 from iac.github.resources import repository_name
-from scripts.ci.external_runtime_policy import GITHUB_ACTIONS_APP_ID, REQUIRED_CHECKS
+from scripts.ci.dependency_update_policy import GITHUB_ACTIONS_APP_ID, REQUIRED_CHECKS
 
 APP_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 UPDATER_ENVIRONMENT = "external-runtime-updater"
@@ -34,7 +34,6 @@ class ExternalRuntimeUpdaterConfig:
     repository: str
     app_id: int
     app_slug: str
-    installation_id: int
     actions_key_id: str
     encrypted_private_key: str
     review_ruleset_id: int
@@ -47,14 +46,20 @@ class RequiredCheckPlan:
 
 
 @dataclass(frozen=True)
+class RulesetBypassActorPlan:
+    actor_type: str
+    bypass_mode: str
+    actor_id: int | None = None
+
+
+@dataclass(frozen=True)
 class ExternalRuntimeUpdaterPlan:
     repository: str
     environment: str
     deployment_branch: str
-    installation_import: str
     review_ruleset_import: str
-    review_bypass_actor_id: int
-    required_ci_bypass_actor_ids: tuple[int, ...]
+    review_bypass_actors: tuple[RulesetBypassActorPlan, ...]
+    required_ci_bypass_actors: tuple[RulesetBypassActorPlan, ...]
     required_checks: tuple[RequiredCheckPlan, ...]
 
 
@@ -88,7 +93,6 @@ def external_runtime_updater_config(
         "appId",
         "appSlug",
         "encryptedPrivateKey",
-        "installationId",
         "repository",
         "reviewRulesetId",
     }
@@ -112,7 +116,6 @@ def external_runtime_updater_config(
         repository=repository,
         app_id=_positive_int(settings, "appId"),
         app_slug=app_slug,
-        installation_id=_positive_int(settings, "installationId"),
         actions_key_id=actions_key_id,
         encrypted_private_key=encrypted_private_key,
         review_ruleset_id=_positive_int(settings, "reviewRulesetId"),
@@ -120,16 +123,26 @@ def external_runtime_updater_config(
 
 
 def external_runtime_updater_plan(config: ExternalRuntimeUpdaterConfig) -> ExternalRuntimeUpdaterPlan:
-    """Compute the app's repository imports and non-overlapping merge rules."""
+    """Compute the app's credentials and non-overlapping merge rules."""
     repository = repository_name(config.organization, config.repository)
+    organization_admin = RulesetBypassActorPlan(
+        actor_type="OrganizationAdmin",
+        bypass_mode="always",
+    )
     return ExternalRuntimeUpdaterPlan(
         repository=repository,
         environment=UPDATER_ENVIRONMENT,
         deployment_branch=UPDATER_BRANCH,
-        installation_import=f"{config.installation_id}:{repository}",
         review_ruleset_import=f"{repository}:{config.review_ruleset_id}",
-        review_bypass_actor_id=config.app_id,
-        required_ci_bypass_actor_ids=(),
+        review_bypass_actors=(
+            organization_admin,
+            RulesetBypassActorPlan(
+                actor_id=config.app_id,
+                actor_type="Integration",
+                bypass_mode="pull_request",
+            ),
+        ),
+        required_ci_bypass_actors=(organization_admin,),
         required_checks=tuple(
             RequiredCheckPlan(context=context, integration_id=GITHUB_ACTIONS_APP_ID) for context in REQUIRED_CHECKS
         ),
@@ -145,18 +158,20 @@ def _default_branch_conditions() -> github.RepositoryRulesetConditionsArgs:
     )
 
 
+def _bypass_actor_args(actor: RulesetBypassActorPlan) -> github.RepositoryRulesetBypassActorArgs:
+    return github.RepositoryRulesetBypassActorArgs(
+        actor_id=actor.actor_id,
+        actor_type=actor.actor_type,
+        bypass_mode=actor.bypass_mode,
+    )
+
+
 def register_external_runtime_updater(
     config: ExternalRuntimeUpdaterConfig,
     deployment_policy: pulumi.CustomResource,
 ) -> tuple[pulumi.CustomResource, ...]:
-    """Register the app installation, credentials, and layered main-branch rules."""
+    """Register the app credentials and layered main-branch rules."""
     plan = external_runtime_updater_plan(config)
-    installation = github.AppInstallationRepository(
-        "external-runtime-updater-installation",
-        installation_id=str(config.installation_id),
-        repository=plan.repository,
-        opts=pulumi.ResourceOptions(import_=plan.installation_import),
-    )
     app_id = github.ActionsVariable(
         "external-runtime-updater-app-id",
         repository=plan.repository,
@@ -185,13 +200,7 @@ def register_external_runtime_updater(
         target="branch",
         enforcement="active",
         conditions=_default_branch_conditions(),
-        bypass_actors=[
-            github.RepositoryRulesetBypassActorArgs(
-                actor_id=plan.review_bypass_actor_id,
-                actor_type="Integration",
-                bypass_mode="pull_request",
-            )
-        ],
+        bypass_actors=[_bypass_actor_args(actor) for actor in plan.review_bypass_actors],
         rules=github.RepositoryRulesetRulesArgs(
             deletion=True,
             non_fast_forward=True,
@@ -205,7 +214,6 @@ def register_external_runtime_updater(
             ),
         ),
         opts=pulumi.ResourceOptions(
-            depends_on=[installation],
             import_=plan.review_ruleset_import,
         ),
     )
@@ -216,6 +224,7 @@ def register_external_runtime_updater(
         target="branch",
         enforcement="active",
         conditions=_default_branch_conditions(),
+        bypass_actors=[_bypass_actor_args(actor) for actor in plan.required_ci_bypass_actors],
         rules=github.RepositoryRulesetRulesArgs(
             required_status_checks=github.RepositoryRulesetRulesRequiredStatusChecksArgs(
                 do_not_enforce_on_create=False,
@@ -230,7 +239,7 @@ def register_external_runtime_updater(
             )
         ),
     )
-    return installation, app_id, app_slug, private_key, review_ruleset, required_ci_ruleset
+    return app_id, app_slug, private_key, review_ruleset, required_ci_ruleset
 
 
 def register_external_runtime_updater_environment(

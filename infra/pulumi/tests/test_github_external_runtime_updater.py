@@ -5,11 +5,12 @@ import pytest
 from iac.github.external_runtime_updater import (
     ExternalRuntimeUpdaterBootstrap,
     ExternalRuntimeUpdaterConfig,
+    RulesetBypassActorPlan,
     external_runtime_updater_config,
     external_runtime_updater_plan,
 )
 
-from scripts.ci.external_runtime_policy import GITHUB_ACTIONS_APP_ID, REQUIRED_CHECKS
+from scripts.ci.dependency_update_policy import GITHUB_ACTIONS_APP_ID, REQUIRED_CHECKS
 
 
 def _config(**overrides) -> ExternalRuntimeUpdaterConfig:
@@ -18,7 +19,6 @@ def _config(**overrides) -> ExternalRuntimeUpdaterConfig:
         "repository": "marin-community/marin",
         "app_id": 1234,
         "app_slug": "marin-external-runtime-updater",
-        "installation_id": 5678,
         "actions_key_id": "test-actions-key-id",
         "encrypted_private_key": "test-encrypted-private-key",
         "review_ruleset_id": 785435,
@@ -27,12 +27,13 @@ def _config(**overrides) -> ExternalRuntimeUpdaterConfig:
     return ExternalRuntimeUpdaterConfig(**values)
 
 
-def test_plan_gives_only_the_updater_app_a_review_bypass() -> None:
+def test_plan_preserves_admin_override_and_limits_the_updater_to_review_bypass() -> None:
     plan = external_runtime_updater_plan(_config())
 
-    assert plan.review_bypass_actor_id == 1234
-    assert plan.required_ci_bypass_actor_ids == ()
-    assert plan.installation_import == "5678:marin"
+    admin = RulesetBypassActorPlan(actor_type="OrganizationAdmin", bypass_mode="always")
+    updater = RulesetBypassActorPlan(actor_type="Integration", bypass_mode="pull_request", actor_id=1234)
+    assert plan.review_bypass_actors == (admin, updater)
+    assert plan.required_ci_bypass_actors == (admin,)
     assert plan.review_ruleset_import == "marin:785435"
 
 
@@ -80,7 +81,6 @@ def test_active_stack_config_requires_the_environment_sealed_private_key() -> No
                 "repository": "marin-community/marin",
                 "appId": 1234,
                 "appSlug": "marin-external-runtime-updater",
-                "installationId": 5678,
                 "reviewRulesetId": 785435,
             },
         )

@@ -20,7 +20,7 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -357,6 +357,22 @@ def latest_family_version(package: PackageFamily) -> str | None:
     """Return the greatest supported release across a coupled package family."""
     versions = [version for distribution in package.artifacts if (version := latest_pypi_version(distribution))]
     return max(versions, key=_version_key) if versions else None
+
+
+def latest_native_release_versions(
+    latest_version: Callable[[str], str | None] = latest_pypi_version,
+) -> Mapping[str, str]:
+    """Return the newest published wheel version consumed by each native family."""
+    versions = {}
+    for name, package in sorted(PACKAGES.items()):
+        build = package.build
+        if not isinstance(build, NativeBuild):
+            continue
+        version = latest_version(build.requirement_distribution)
+        if version is None:
+            raise ValueError(f"No published release found for {build.requirement_distribution}")
+        versions[name] = version
+    return MappingProxyType(versions)
 
 
 def resolve_version(
@@ -909,6 +925,15 @@ def _bump_releases_command(args: argparse.Namespace) -> None:
     )
 
 
+def _latest_native_releases_command(args: argparse.Namespace) -> None:
+    versions = json.dumps(
+        {name: {"version": version} for name, version in latest_native_release_versions().items()},
+        separators=(",", ":"),
+    )
+    print(versions)
+    _emit_github_output(args.github_output, versions=versions)
+
+
 def _plan_command(args: argparse.Namespace) -> None:
     changed_paths = args.changed_files.read_text().splitlines() if args.changed_files else ()
     plan = release_plan(
@@ -959,6 +984,10 @@ def main() -> None:
     bump_releases.add_argument("--repo-root", type=Path, default=Path.cwd())
     bump_releases.add_argument("--github-output", type=Path)
     bump_releases.set_defaults(func=_bump_releases_command)
+
+    latest_native_releases = subparsers.add_parser("latest-native-releases")
+    latest_native_releases.add_argument("--github-output", type=Path)
+    latest_native_releases.set_defaults(func=_latest_native_releases_command)
 
     plan = subparsers.add_parser("plan")
     plan.add_argument("--event-name", required=True)

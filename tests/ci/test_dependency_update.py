@@ -5,8 +5,7 @@ import subprocess
 
 import pytest
 
-from scripts.ci.external_runtime_policy import EXPECTED_FILES
-from scripts.ci.external_runtime_update import (
+from scripts.ci.dependency_update import (
     CheckRow,
     MergeDecision,
     PullRequestSnapshot,
@@ -16,30 +15,34 @@ from scripts.ci.external_runtime_update import (
     validate_changed_files,
     validated_pull_request,
 )
+from scripts.ci.dependency_update_policy import EXTERNAL_RUNTIME_POLICY, NATIVE_PACKAGE_POLICY, PullRequestPolicy
+from scripts.ci.package_release import PACKAGES, requirement_paths_for_packages
 
 EXPECTED_SHA = "a" * 40
 
 
-def _pull_request(**overrides) -> PullRequestSnapshot:
+def _pull_request(policy: PullRequestPolicy = EXTERNAL_RUNTIME_POLICY, **overrides) -> PullRequestSnapshot:
     values = {
         "author": "app/marin-external-runtime-updater",
         "base_branch": "main",
-        "files": tuple(sorted(EXPECTED_FILES)),
-        "head_branch": "automation/external-dependencies",
+        "files": tuple(sorted(policy.allowed_files)),
+        "head_branch": policy.head_branch,
         "head_sha": EXPECTED_SHA,
         "state": "OPEN",
-        "title": "[dependencies] Advance external runtimes",
+        "title": policy.title,
         "url": "https://github.com/marin-community/marin/pull/123",
     }
     values.update(overrides)
     return PullRequestSnapshot(**values)
 
 
-def test_returns_the_dedicated_apps_exact_generated_pull_request() -> None:
-    pull_request = _pull_request()
+@pytest.mark.parametrize("policy", [EXTERNAL_RUNTIME_POLICY, NATIVE_PACKAGE_POLICY])
+def test_returns_the_dedicated_apps_exact_generated_pull_request(policy: PullRequestPolicy) -> None:
+    pull_request = _pull_request(policy)
 
     validated = validated_pull_request(
         pull_request,
+        policy=policy,
         expected_app_slug="marin-external-runtime-updater",
         expected_head_sha=EXPECTED_SHA,
     )
@@ -55,7 +58,7 @@ def test_returns_the_dedicated_apps_exact_generated_pull_request() -> None:
         {"head_branch": "feature/unrelated"},
         {"head_sha": "b" * 40},
         {"title": "Update dependencies"},
-        {"files": (*tuple(sorted(EXPECTED_FILES)), "src/backdoor.py")},
+        {"files": (*tuple(sorted(EXTERNAL_RUNTIME_POLICY.allowed_files)), "src/backdoor.py")},
         {"files": ()},
     ],
     ids=["author", "base", "head", "sha", "title", "files", "empty"],
@@ -64,6 +67,7 @@ def test_rejects_a_pull_request_outside_the_generated_boundary(override: dict) -
     with pytest.raises(ValueError):
         validated_pull_request(
             _pull_request(**override),
+            policy=EXTERNAL_RUNTIME_POLICY,
             expected_app_slug="marin-external-runtime-updater",
             expected_head_sha=EXPECTED_SHA,
         )
@@ -103,6 +107,19 @@ def test_required_check_gate_distinguishes_missing_pending_and_failed_checks() -
     assert evaluate_merge("OPEN", failed) is MergeDecision.FAIL
 
 
+def test_required_check_gate_ignores_duplicate_unrelated_checks() -> None:
+    gate = evaluate_required_checks(
+        [
+            CheckRow(name="changes", bucket="pass"),
+            CheckRow(name="changes", bucket="pass"),
+            CheckRow(name="marin-lint", bucket="pass"),
+        ],
+        required=("marin-lint",),
+    )
+
+    assert gate.passed
+
+
 def test_merge_gate_only_releases_an_open_pull_request_after_all_required_checks_pass() -> None:
     checks = evaluate_required_checks(
         [
@@ -119,7 +136,7 @@ def test_merge_gate_only_releases_an_open_pull_request_after_all_required_checks
 
 def test_no_registered_github_checks_is_a_missing_gate_not_a_cli_failure(monkeypatch) -> None:
     monkeypatch.setattr(
-        "scripts.ci.external_runtime_update.subprocess.run",
+        "scripts.ci.dependency_update.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="no checks"),
     )
 
@@ -129,8 +146,15 @@ def test_no_registered_github_checks_is_a_missing_gate_not_a_cli_failure(monkeyp
 def test_changed_files_are_sorted_and_restricted_to_the_policy() -> None:
     changed = validate_changed_files(
         ["uv.lock", "config/external/harbor/uv.lock", "uv.lock"],
+        policy=EXTERNAL_RUNTIME_POLICY,
     )
 
     assert changed == ("config/external/harbor/uv.lock", "uv.lock")
     with pytest.raises(ValueError):
-        validate_changed_files(["uv.lock", "src/backdoor.py"])
+        validate_changed_files(["uv.lock", "src/backdoor.py"], policy=EXTERNAL_RUNTIME_POLICY)
+
+
+def test_native_package_policy_matches_every_compatibility_floor() -> None:
+    compatibility_floors = {path.as_posix() for path in requirement_paths_for_packages(PACKAGES)}
+
+    assert NATIVE_PACKAGE_POLICY.allowed_files == {"uv.lock", *compatibility_floors}

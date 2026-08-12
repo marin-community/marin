@@ -60,8 +60,9 @@ once before enabling the stack resource:
 2. Open the [preconfigured organization app registration](https://github.com/organizations/marin-community/settings/apps/new?name=marin-external-runtime-updater&description=Advances%20Marin%27s%20immutable%20external%20runtime%20pins&url=https%3A%2F%2Fgithub.com%2Fmarin-community%2Fmarin&public=false&webhook_active=false&contents=write&pull_requests=write),
    verify that only Contents and Pull requests have read/write access, and create the private app.
 3. Generate a private key on the app's General page. Install the app on `marin-community`, selecting
-   only the `marin` repository. Record the app ID, the slug from its settings URL, and the numeric
-   installation ID from the installation URL.
+   only the `marin` repository. Record the app ID and the slug from its settings URL. The installation
+   remains owner-managed because GitHub's repository-selection endpoint requires a user-scoped token;
+   unattended Pulumi runs do not receive that authority.
 4. Seal the private key to the protected environment's Actions public key. `--no-store` prints
    ciphertext without creating the secret. Record the matching public-key ID:
 
@@ -83,14 +84,13 @@ once before enabling the stack resource:
      repository: marin-community/marin
      appId: 123456
      appSlug: marin-external-runtime-updater
-     installationId: 789012
      reviewRulesetId: 785435
      actionsKeyId: example-key-id
      encryptedPrivateKey: example-base64-ciphertext
    ```
 
-6. Run `pulumi preview`, confirm that the existing app installation and `protect main` ruleset are
-   imports rather than replacements, then run `pulumi up`. Run the live credential audit afterward:
+6. Run `pulumi preview`, confirm that the existing `protect main` ruleset is imported rather than
+   replaced, then run `pulumi up`. Run the live credential audit afterward:
 
    ```bash
    pulumi preview

@@ -76,6 +76,15 @@ discovered within six hours under normal Actions scheduling; a green update
 lands in that run, while a blocked update raises a visible failure within the
 workflow's 90-minute deadline.
 
+`ops-native-package-dependencies.yaml` applies the same policy to Marin's
+published native wheels. A successful non-PR `Marin - Release Packages` run
+triggers the updater from the default branch, where the protected environment
+can release the app key. The updater reads the newest published DupeKit,
+Finelog, and Iris native versions from PyPI, advances their compatibility floors
+and `uv.lock`, and merges only after the same identity, file, SHA, and CI gates
+pass. Manual dispatch retries a failed or missed update without republishing the
+wheels.
+
 ## Canonical recipe: open or update a bot PR with `git + gh`
 
 This recipe replaces `peter-evans/create-pull-request@v7`. It creates the PR if missing, updates it (force-with-lease) if present, reconciles labels, and writes `pr_url` and `pr_created` to `$GITHUB_OUTPUT`.
