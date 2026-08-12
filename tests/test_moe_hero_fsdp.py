@@ -11,23 +11,24 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from jax.sharding import AxisType, Mesh, reshard
+from jax.sharding import PartitionSpec as P
+from levanter.grug._moe import rms_gated_norm as rgn
 from levanter.grug._moe.rms_gated_norm import (
     exact_gated_norm_up_reverse,
     exact_rms_backward_consumer,
     exact_rms_backward_producer_reference,
     exact_silu_backward_reference,
+    rms_gated_norm,
 )
 
 from experiments.grug.moe_hero_fsdp import launch, train
-from experiments.grug.moe_hero_fsdp import model as model_module
 from experiments.grug.moe_hero_fsdp.model import (
+    _BATCH_AXES,
     _GATED_NORM_RANK,
     GatedNorm,
     GrugModelConfig,
     GrugMoeHfConfig,
     RMSNorm,
-    _rms_gated_norm_exact_forward,
-    rms_gated_norm,
 )
 
 _NORM_EPS = 1e-5
@@ -119,7 +120,7 @@ def test_fused_reverse_keeps_stock_forward_bit_identical(cpu_mesh, dtype):
     inputs = _norm_inputs(dtype)
 
     expected = _xla_rms_gated_norm(inputs.x, inputs.norm_weight, inputs.w_down, inputs.w_up)
-    actual, _ = _rms_gated_norm_exact_forward(inputs.x, inputs.norm_weight, inputs.w_down, inputs.w_up, _NORM_EPS)
+    actual, _ = rgn._exact_forward(inputs.x, inputs.norm_weight, inputs.w_down, inputs.w_up, _NORM_EPS)
 
     np.testing.assert_array_equal(actual, expected)
 
@@ -179,7 +180,7 @@ def test_rms_reverse_algebra_matches_stock_autodiff(cpu_mesh, dtype, max_thresho
 def test_gated_norm_up_reverse_matches_autodiff(cpu_mesh):
     del cpu_mesh
     inputs = _norm_inputs(jnp.bfloat16)
-    _, residuals = _rms_gated_norm_exact_forward(inputs.x, inputs.norm_weight, inputs.w_down, inputs.w_up, _NORM_EPS)
+    _, residuals = rgn._exact_forward(inputs.x, inputs.norm_weight, inputs.w_down, inputs.w_up, _NORM_EPS)
 
     def output_gate(normalized, gate_hidden, w_up):
         gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
@@ -211,23 +212,25 @@ def test_fused_reverse_matches_stock_autodiff_end_to_end(cpu_mesh, monkeypatch, 
     """
     del cpu_mesh
     monkeypatch.setattr(
-        model_module,
-        "_rms_gated_norm_backward_kernels",
+        rgn,
+        "_backward_kernels",
         lambda: (exact_silu_backward_reference, exact_rms_backward_producer_reference),
     )
     inputs = _norm_inputs(dtype)
     # The fused path reshards its input to the batch spec, so feed both paths an already-sharded
     # activation and cotangent; otherwise their outputs carry different shardings.
-    batch_spec = model_module._batch_spec()
+    batch_spec = P(_BATCH_AXES)
     x = reshard(inputs.x, batch_spec)
     cotangent = reshard(inputs.cotangent, batch_spec)
 
     def fused(x, norm_weight, w_down, w_up):
         return rms_gated_norm(
             x,
-            RMSNorm(weight=norm_weight, eps=_NORM_EPS),
-            GatedNorm(w_down=w_down, w_up=w_up),
-            "quack_coda_backward",
+            norm_weight=norm_weight,
+            w_down=w_down,
+            w_up=w_up,
+            eps=_NORM_EPS,
+            implementation="quack_coda_backward",
         )
 
     primals = (x, inputs.norm_weight, inputs.w_down, inputs.w_up)
@@ -270,4 +273,11 @@ def test_rms_gated_norm_rejects_unknown_implementation():
     gated = GatedNorm(w_down=inputs.w_down, w_up=inputs.w_up)
 
     with pytest.raises(ValueError):
-        rms_gated_norm(inputs.x, rms, gated, "unknown")  # type: ignore[arg-type]
+        rms_gated_norm(
+            inputs.x,
+            norm_weight=rms.weight,
+            w_down=gated.w_down,
+            w_up=gated.w_up,
+            eps=_NORM_EPS,
+            implementation="unknown",  # type: ignore[arg-type]
+        )

@@ -6,6 +6,7 @@
 import dataclasses
 import os
 from datetime import timedelta
+from typing import get_args
 
 import click
 import jmp
@@ -27,6 +28,7 @@ from rigging.filesystem import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.grug.moe_hero_ep.model import RmsGatedNormImplementation
 from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, WatchMode, run_grug
 from experiments.llama import llama3_tokenizer
 
@@ -102,6 +104,7 @@ def build_hero_run(
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
+    rms_gated_norm_implementation: RmsGatedNormImplementation | None = None,
     flavor: str = "ep",
     eval_every: int = 0,
     save_checkpoints: bool = False,
@@ -162,6 +165,7 @@ def build_hero_run(
             ("intermediate_dim", intermediate_dim),
             ("capacity_factor", capacity_factor),
             ("latent_dim", latent_dim),
+            ("rms_gated_norm_implementation", rms_gated_norm_implementation),
         )
         if value is not None
     }
@@ -347,6 +351,12 @@ def build_hero_run(
     help="LatentMoE: run routed experts at this width. Divides all-to-all traffic by hidden/latent.",
 )
 @click.option(
+    "--rms-gated-norm-implementation",
+    type=click.Choice(get_args(RmsGatedNormImplementation)),
+    default=None,
+    help="RMSNorm-GatedNorm boundary implementation. Unset keeps the hero value.",
+)
+@click.option(
     "--flavor",
     type=click.Choice(sorted(FLAVORS)),
     default="ep",
@@ -420,6 +430,7 @@ def main(
     intermediate_dim: int | None,
     capacity_factor: float | None,
     latent_dim: int | None,
+    rms_gated_norm_implementation: RmsGatedNormImplementation | None,
     flavor: str,
     save_checkpoints: bool,
     checkpoint_minutes: float,
@@ -441,6 +452,7 @@ def main(
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
+        rms_gated_norm_implementation=rms_gated_norm_implementation,
         flavor=flavor,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),

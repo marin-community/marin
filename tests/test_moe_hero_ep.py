@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import math
 import os
 import subprocess
@@ -20,6 +21,7 @@ import pytest
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.grug._moe import rms_gated_norm as rgn
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, launch, model, train
@@ -679,3 +681,101 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
     assert step_one_stats is not None
     np.testing.assert_allclose(step_zero_stats["grad/norm/total"], 4.0)
     np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)
+
+
+_RMS_GATED_NORM_EPS = 1e-5
+
+
+def _rms_gated_norm_mesh():
+    return Mesh(
+        np.asarray([jax.devices("cpu")[0]]).reshape(1, 1, 1, 1),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+
+
+def _rms_gated_norm_inputs(dtype):
+    keys = jax.random.split(jax.random.key(19), 5)
+    return SimpleNamespace(
+        x=jax.random.normal(keys[0], (2, 3, 16), dtype=dtype),
+        norm_weight=(1 + 0.1 * jax.random.normal(keys[1], (16,), dtype=jnp.float32)).astype(dtype),
+        w_down=(0.1 * jax.random.normal(keys[2], (16, model._GATED_NORM_RANK), dtype=jnp.float32)).astype(dtype),
+        w_up=(0.1 * jax.random.normal(keys[3], (model._GATED_NORM_RANK, 16), dtype=jnp.float32)).astype(dtype),
+        cotangent=jax.random.normal(keys[4], (2, 3, 16), dtype=dtype),
+    )
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+def test_rms_gated_norm_matches_the_stock_modules(dtype):
+    """The shared boundary must reproduce this variant's own GatedNorm(RMSNorm(x)) exactly."""
+    with set_mesh(_rms_gated_norm_mesh()):
+        inputs = _rms_gated_norm_inputs(dtype)
+        rms = model.RMSNorm(weight=inputs.norm_weight, eps=_RMS_GATED_NORM_EPS)
+        gated = model.GatedNorm(w_down=inputs.w_down, w_up=inputs.w_up)
+
+        expected = gated(rms(inputs.x))
+        actual = model._apply_rms_gated_norm(inputs.x, rms, gated, "xla")
+
+        np.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "tolerance"),
+    [(jnp.float32, 2e-6), (jnp.bfloat16, 3e-2)],
+)
+def test_fused_reverse_matches_stock_autodiff(monkeypatch, dtype, tolerance):
+    """Pin the EP wiring of the fused custom VJP against differentiating the stock path.
+
+    The SM100 kernels are swapped for their pure-JAX references so the composition and the
+    batch-axis reductions are exercised on CPU.
+    """
+    monkeypatch.setattr(
+        rgn,
+        "_backward_kernels",
+        lambda: (rgn.exact_silu_backward_reference, rgn.exact_rms_backward_producer_reference),
+    )
+    with set_mesh(_rms_gated_norm_mesh()):
+        inputs = _rms_gated_norm_inputs(dtype)
+        rms = model.RMSNorm(weight=inputs.norm_weight, eps=_RMS_GATED_NORM_EPS)
+        gated = model.GatedNorm(w_down=inputs.w_down, w_up=inputs.w_up)
+        spec = P(model._BATCH_AXES)
+        x = jax.sharding.reshard(inputs.x, spec)
+        cotangent = jax.sharding.reshard(inputs.cotangent, spec)
+
+        def stock(x, norm_weight, w_down, w_up):
+            return model.GatedNorm(w_down=w_down, w_up=w_up)(
+                model.RMSNorm(weight=norm_weight, eps=_RMS_GATED_NORM_EPS)(x)
+            )
+
+        def fused(x, norm_weight, w_down, w_up):
+            return model._apply_rms_gated_norm(
+                x,
+                model.RMSNorm(weight=norm_weight, eps=_RMS_GATED_NORM_EPS),
+                model.GatedNorm(w_down=w_down, w_up=w_up),
+                "quack_coda_backward",
+            )
+
+        primals = (x, rms.weight, gated.w_down, gated.w_up)
+        expected_out, expected_pullback = jax.vjp(stock, *primals)
+        actual_out, actual_pullback = jax.vjp(fused, *primals)
+        np.testing.assert_array_equal(actual_out, expected_out)
+
+        for name, actual, expected in zip(
+            ("input", "norm_weight", "w_down", "w_up"),
+            actual_pullback(cotangent),
+            expected_pullback(cotangent),
+            strict=True,
+        ):
+            error = float(jnp.max(jnp.abs(actual.astype(jnp.float32) - expected.astype(jnp.float32))))
+            assert error <= tolerance, f"{dtype} {name} gradient: max abs error {error:.6g} > {tolerance:.6g}"
+
+
+def test_runtime_rms_implementation_is_not_serialized_in_hf_config():
+    cfg = _latent_config()
+    cfg = dataclasses.replace(cfg, rms_gated_norm_implementation="quack_coda_backward")
+
+    serialized = cfg.to_hf_config(cfg.vocab_size).to_dict()
+    restored = model.GrugModelConfig.from_hf_config(model.GrugMoeHfConfig.from_dict(serialized))
+
+    assert "rms_gated_norm_implementation" not in serialized
+    assert restored.rms_gated_norm_implementation == "xla"
