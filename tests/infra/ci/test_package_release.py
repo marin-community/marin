@@ -452,3 +452,6 @@ def test_dependency_update_workflows_share_scoped_app_pr_lifecycle(workflow_path
     }
     pr_step = next(step for step in steps if step.get("name") == "Open or update pull request")
     assert pr_step["env"]["GH_TOKEN"] == "${{ steps.app-token.outputs.token }}"
+    updater_commands = [step["run"] for step in steps if "scripts.ci.dependency_update" in step.get("run", "")]
+    assert updater_commands
+    assert all("python -m scripts.ci.dependency_update" in command for command in updater_commands)

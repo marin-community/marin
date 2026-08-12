@@ -45,7 +45,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          python scripts/ci/dependency_update.py prepare \
+          python -m scripts.ci.dependency_update prepare \
             --kind external-runtime \
             --repository "$GITHUB_REPOSITORY" \
             --github-output "$GITHUB_OUTPUT"
@@ -61,7 +61,7 @@ jobs:
           uv run config/update-external.py --summary-file "$PR_BODY"
           cat "$PR_BODY" >> "$GITHUB_STEP_SUMMARY"
 
-          changed=$(python scripts/ci/dependency_update.py changed-files --kind external-runtime)
+          changed=$(python -m scripts.ci.dependency_update changed-files --kind external-runtime)
 
           if [[ -z "$changed" ]]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -77,7 +77,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_BODY: ${{ runner.temp }}/external-dependencies.md
         run: |
-          python scripts/ci/dependency_update.py publish \
+          python -m scripts.ci.dependency_update publish \
             --kind external-runtime \
             --repository "$GITHUB_REPOSITORY" \
             --body-file "$PR_BODY" \
@@ -91,7 +91,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          python scripts/ci/dependency_update.py merge \
+          python -m scripts.ci.dependency_update merge \
             --kind external-runtime \
             --pr "${{ steps.pull-request.outputs.pr_url }}" \
             --repository "$GITHUB_REPOSITORY" \

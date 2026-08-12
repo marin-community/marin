@@ -45,7 +45,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          python scripts/ci/dependency_update.py prepare \
+          python -m scripts.ci.dependency_update prepare \
             --kind native-package \
             --repository "$GITHUB_REPOSITORY" \
             --github-output "$GITHUB_OUTPUT"
@@ -72,7 +72,7 @@ jobs:
           BODY_FILE: .github/native-package-version-pr.md
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          python scripts/ci/dependency_update.py publish \
+          python -m scripts.ci.dependency_update publish \
             --kind native-package \
             --repository "$GITHUB_REPOSITORY" \
             --body-file "$BODY_FILE" \
@@ -86,7 +86,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          python scripts/ci/dependency_update.py merge \
+          python -m scripts.ci.dependency_update merge \
             --kind native-package \
             --pr "${{ steps.pull-request.outputs.pr_url }}" \
             --repository "$GITHUB_REPOSITORY" \
