@@ -771,3 +771,15 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Issue update: None. These are routine source completions, not a major run-state change.
 - Next action: Check FinePDFs Russian startup and continue the regular health-check cadence.
+
+### 2026-08-12 17:38 UTC - FinePDFs Russian completed
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 43 completed source artifacts. RNO has eight completed source artifacts. The full run has 51 of 292 completed source artifacts.
+- East result: `finepdfs-rus_cyrl_88010315` completed all 1,182 output shards with 2,424,394 duplicate documents. The source step succeeded.
+- East progress: `finepdfs-swe_latn_3f198a8d` started its 148-shard join stage with 32 live workers and no dead workers.
+- RNO progress: `hplt_v3_528b745e` got to 5,441 of 6,330 embedding shards with 32 live workers and no dead workers at 17:36 UTC. Its recent rate gives a rough 18:16 UTC completion estimate.
+- Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Issue update: None. This is a routine source completion, not a major run-state change.
+- Next action: Continue the regular health-check cadence and watch RNO HPLT through completion.
