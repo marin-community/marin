@@ -744,8 +744,8 @@ class CloudK8sService:
                     )
                     try:
                         resp.run_forever(timeout=effective_timeout)
-                        stdout = resp.read_stdout() or ""
-                        stderr = resp.read_stderr() or ""
+                        stdout = resp.read_stdout(timeout=0) or ""
+                        stderr = resp.read_stderr(timeout=0) or ""
                         if resp.is_open():
                             timeout_error = f"Command timed out after {effective_timeout:g} seconds"
                             return ExecResult(

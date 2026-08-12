@@ -13,41 +13,63 @@ from iris.cluster.platforms.k8s.types import K8sResource
 
 
 class _FakeExecStream:
-    def __init__(self, *, returncode: int, stdout: str = "", stderr: str = ""):
+    def __init__(self, *, returncode: int, stdout: str = "", stderr: str = "", stream_open: bool = False):
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+        self.open = stream_open
         self.closed = False
 
     def run_forever(self, timeout: float | None = None) -> None:
         pass
 
     def is_open(self) -> bool:
-        return False
+        return self.open
 
-    def read_stdout(self) -> str:
+    def read_stdout(self, timeout: float | None = None) -> str:
+        if self.open and timeout != 0:
+            raise AssertionError("blocking stdout read on an open exec stream")
         return self.stdout
 
-    def read_stderr(self) -> str:
+    def read_stderr(self, timeout: float | None = None) -> str:
+        if self.open and timeout != 0:
+            raise AssertionError("blocking stderr read on an open exec stream")
         return self.stderr
 
     def close(self) -> None:
+        self.open = False
         self.closed = True
 
 
-def test_exec_reports_command_exit_status(monkeypatch):
-    """A command error inside a reachable pod must not look successful."""
-    stream = _FakeExecStream(returncode=1, stderr="cat: profile.json: No such file")
+def _service_with_exec_stream(monkeypatch, stream: _FakeExecStream) -> CloudK8sService:
     monkeypatch.setattr(k8s_service.kubernetes.stream, "stream", lambda *_args, **_kwargs: stream)
     core_api = SimpleNamespace(connect_get_namespaced_pod_exec=object())
     monkeypatch.setattr(k8s_service.kubernetes.client, "CoreV1Api", lambda _client: core_api)
     svc = CloudK8sService(namespace="iris")
     monkeypatch.setattr(svc, "create_api_client", lambda: nullcontext(object()))
+    return svc
+
+
+def test_exec_reports_command_exit_status(monkeypatch):
+    """A command error inside a reachable pod must not look successful."""
+    stream = _FakeExecStream(returncode=1, stderr="cat: profile.json: No such file")
+    svc = _service_with_exec_stream(monkeypatch, stream)
 
     result = svc.exec("task-pod", ["cat", "profile.json"], container="task")
 
     assert result.returncode == 1
     assert result.stderr == "cat: profile.json: No such file"
+    assert stream.closed
+
+
+def test_exec_timeout_reads_open_stream_without_blocking(monkeypatch):
+    stream = _FakeExecStream(returncode=0, stream_open=True)
+    svc = _service_with_exec_stream(monkeypatch, stream)
+
+    result = svc.exec("task-pod", ["sleep", "infinity"], container="task", timeout=1)
+
+    assert result.returncode == 124
+    assert result.stderr == "Command timed out after 1 seconds"
     assert stream.closed
 
 
