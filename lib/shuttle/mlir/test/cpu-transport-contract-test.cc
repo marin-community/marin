@@ -217,6 +217,80 @@ TEST(CpuTransportContractTest, DistinctProgramHasDistinctCanonicalTransport) {
   EXPECT_NE(golden, goldenBytes("cpu-forward-7x13-transport.hex"));
 }
 
+TEST(CpuTransportContractTest,
+     VjpBundlesHaveFrozenCanonicalTransportAndExternalOrder) {
+  struct ExpectedBundle {
+    llvm::StringLiteral boundary;
+    int64_t entries;
+    int64_t slots;
+    std::string digest;
+    size_t bytes;
+    llvm::SmallVector<int64_t> resultSlots;
+  };
+  const std::array<ExpectedBundle, 2> expected{{
+      {"backward", 48, 51,
+       "f7354ae3435e05d287306b55ff7931c86103bf041a4f1440b5970303e8c55af5",
+       16103, {32, 50}},
+      {"composed", 51, 54,
+       "4088b329ab172b3cf98ebcfd12a066e2f5f3a25f9b70d9a6949e094c2f7a8b19",
+       17090, {25, 35, 53}},
+  }};
+
+  for (const ExpectedBundle &item : expected) {
+    auto built = buildBundle(readText(
+        ("jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-" +
+         item.boundary + ".mlir")
+            .str()));
+    ASSERT_TRUE(built) << item.boundary.str();
+    auto device =
+        *built->module->getOps<mlir::shuttle::DeviceModuleOp>().begin();
+    auto abi =
+        *built->module->getOps<mlir::shuttle::InvocationAbiOp>().begin();
+    EXPECT_EQ(std::distance(device.getBody()
+                                .front()
+                                .getOps<mlir::shuttle::DeviceEntryOp>()
+                                .begin(),
+                            device.getBody()
+                                .front()
+                                .getOps<mlir::shuttle::DeviceEntryOp>()
+                                .end()),
+              item.entries);
+    EXPECT_EQ(std::distance(abi.getBody()
+                                .front()
+                                .getOps<mlir::shuttle::InvocationSlotOp>()
+                                .begin(),
+                            abi.getBody()
+                                .front()
+                                .getOps<mlir::shuttle::InvocationSlotOp>()
+                                .end()),
+              item.slots);
+
+    auto serialized =
+        mlir::shuttle::serializeCpuExecutableBundle(*built->module);
+    ASSERT_TRUE(mlir::succeeded(serialized));
+    EXPECT_EQ(serialized->size(), item.bytes);
+    EXPECT_EQ(mlir::shuttle::cpuExecutableBundleDigest(*serialized),
+              item.digest);
+    auto loaded = mlir::shuttle::CpuExecutable::Load(*serialized);
+    ASSERT_TRUE(loaded.ok()) << loaded.status();
+    auto bindings = (*loaded)->externalBindings();
+    ASSERT_EQ(bindings.size(), 3 + item.resultSlots.size());
+    for (int64_t index = 0; index < 3; ++index) {
+      EXPECT_EQ(bindings[index].kind,
+                mlir::shuttle::ExecutableBindingKind::Operand);
+      EXPECT_EQ(bindings[index].index, index);
+      EXPECT_EQ(bindings[index].slotOrdinal, index);
+    }
+    for (auto [index, slot] : llvm::enumerate(item.resultSlots)) {
+      const auto &binding = bindings[3 + index];
+      EXPECT_EQ(binding.kind,
+                mlir::shuttle::ExecutableBindingKind::Result);
+      EXPECT_EQ(binding.index, index);
+      EXPECT_EQ(binding.slotOrdinal, slot);
+    }
+  }
+}
+
 TEST(CpuTransportContractTest, PublicLoaderRejectsStructuralBindingMutations) {
   std::string program =
       readText("jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir");
