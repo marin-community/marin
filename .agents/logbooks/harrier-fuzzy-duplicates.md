@@ -837,3 +837,13 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Issue update: None. There is no major run-state change.
 - Next action: Continue the regular health-check cadence and watch Nemotron Code Content through completion.
+
+### 2026-08-12 19:17 UTC - Three RNO sources completed
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 45 completed source artifacts. RNO has 14 completed source artifacts. The full run has 59 of 292 completed source artifacts.
+- RNO results: `nemotron_code_v2-content_459eda75` completed 517 shards with 44,697,176 duplicate documents. `nsf_awards_0f5c5fa9` completed three shards with 62,181 duplicate documents. `numinamath-tir_1451911b` completed one shard with 470 duplicate documents. All three source steps succeeded.
+- RNO progress: `stack-v3_6ac1a286` started its 12,818-shard join and passed shard 59.
+- East progress: `nemotron_cc_v2-diverse_qa_016d1909` got to 1,360 of 4,416 embedding shards with 32 live workers and no dead workers.
+- Issue update: None. These are routine source completions, not a major run-state change.
+- Next action: Monitor both long sources and check Stack v3 through its join transition.
