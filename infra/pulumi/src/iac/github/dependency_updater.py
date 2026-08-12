@@ -15,6 +15,7 @@ from scripts.ci.dependency_update_policy import GITHUB_ACTIONS_APP_ID, REQUIRED_
 APP_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 UPDATER_ENVIRONMENT = "external-runtime-updater"
 UPDATER_BRANCH = "main"
+CLASSIC_REQUIRED_CHECKS = ("marin-lint", "marin-docs", "marin-integration", "unit-tests")
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,9 @@ class RulesetBypassActorPlan:
 class DependencyUpdaterPlan:
     repository: str
     environment: str
+    classic_branch_protection_import: str
+    classic_review_bypass_apps: tuple[str, ...]
+    classic_required_checks: tuple[RequiredCheckPlan, ...]
     review_ruleset_import: str
     review_bypass_actors: tuple[RulesetBypassActorPlan, ...]
     required_ci_bypass_actors: tuple[RulesetBypassActorPlan, ...]
@@ -113,6 +117,12 @@ def dependency_updater_plan(config: DependencyUpdaterConfig) -> DependencyUpdate
     return DependencyUpdaterPlan(
         repository=repository,
         environment=UPDATER_ENVIRONMENT,
+        classic_branch_protection_import=f"{repository}:{UPDATER_BRANCH}",
+        classic_review_bypass_apps=(config.app_slug,),
+        classic_required_checks=tuple(
+            RequiredCheckPlan(context=context, integration_id=GITHUB_ACTIONS_APP_ID)
+            for context in CLASSIC_REQUIRED_CHECKS
+        ),
         review_ruleset_import=f"{repository}:{config.review_ruleset_id}",
         review_bypass_actors=(
             organization_admin,
@@ -173,6 +183,30 @@ def register_dependency_updater(
         value_encrypted=config.encrypted_private_key,
         opts=pulumi.ResourceOptions(depends_on=[deployment_policy]),
     )
+    classic_branch_protection = github.BranchProtectionV3(
+        "main-classic-protection",
+        repository=plan.repository,
+        branch=UPDATER_BRANCH,
+        enforce_admins=False,
+        require_conversation_resolution=False,
+        require_signed_commits=False,
+        required_status_checks=github.BranchProtectionV3RequiredStatusChecksArgs(
+            checks=[f"{check.context}:{check.integration_id}" for check in plan.classic_required_checks],
+            strict=False,
+        ),
+        required_pull_request_reviews=github.BranchProtectionV3RequiredPullRequestReviewsArgs(
+            bypass_pull_request_allowances=github.BranchProtectionV3RequiredPullRequestReviewsBypassPullRequestAllowancesArgs(
+                apps=list(plan.classic_review_bypass_apps),
+                teams=[],
+                users=[],
+            ),
+            dismiss_stale_reviews=False,
+            require_code_owner_reviews=False,
+            require_last_push_approval=False,
+            required_approving_review_count=1,
+        ),
+        opts=pulumi.ResourceOptions(import_=plan.classic_branch_protection_import),
+    )
     review_ruleset = github.RepositoryRuleset(
         "protect-main",
         repository=plan.repository,
@@ -219,7 +253,7 @@ def register_dependency_updater(
             )
         ),
     )
-    return app_id, app_slug, private_key, review_ruleset, required_ci_ruleset
+    return app_id, app_slug, private_key, classic_branch_protection, review_ruleset, required_ci_ruleset
 
 
 def register_dependency_updater_environment(
