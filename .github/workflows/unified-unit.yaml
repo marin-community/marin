@@ -104,9 +104,12 @@ jobs:
         # which is not a failure. Those tests run in their own dedicated workflow. Treat
         # exit 5 as success; every other non-zero status still fails the lane.
         run: |
+          if [ "${{ matrix.package }}" = "marin-haliax" ]; then
+            export JAX_NUM_CPU_DEVICES=8
+          fi
           status=0
           uv run \
-            --python 3.12 \
+            --python ${{ matrix.python }} \
             --package ${{ matrix.package }} \
             ${{ matrix.extras }} \
             --group test \
@@ -148,12 +151,9 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          if [ "${{ matrix.package }}" = "marin-haliax" ]; then
-            export JAX_NUM_CPU_DEVICES=8
-          fi
           status=0
           uv run \
-            --python ${{ matrix.python }} \
+            --python 3.12 \
             --package ${{ matrix.package }} \
             ${{ matrix.extras }} \
             --group test \
