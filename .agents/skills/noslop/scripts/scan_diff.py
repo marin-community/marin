@@ -49,7 +49,7 @@ PROSE_PATTERNS = (
 TEST_PATTERNS = (
     ("weak-assertion", re.compile(r"\bassert\s+.+\s+is\s+not\s+None\b")),
     ("type-assertion", re.compile(r"\bassert\s+isinstance\(")),
-    ("mock-dispatch", re.compile(r"\bassert_(?:called|called_once|called_once_with|any_call)\b")),
+    ("mock-dispatch", re.compile(r"\bassert_(?:called(?:_once)?(?:_with)?|any_call)\b")),
     ("private-state", re.compile(r"\bassert\s+[^#\n]*\._[A-Za-z]")),
     ("log-text", re.compile(r"\b(?:caplog\.text|record\.message)\b")),
 )
