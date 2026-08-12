@@ -108,9 +108,9 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
     ),
 )
 
-VLLM_FORK_REQUIREMENT = "vllm @ git+https://github.com/marin-community/vllm.git@244808e7863d53ac319a22beb548afd854d48d57"
+VLLM_FORK_REQUIREMENT = "vllm @ git+https://github.com/marin-community/vllm.git@3d26773be1d7aa7361a542943e3ef14f023d6f3a"
 TPU_INFERENCE_FORK_REQUIREMENT = (
-    "tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@e8809d492d5d6c7008369919a00384eb1c4de969"
+    "tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@c63712cb74eb8183999b9bec1a75a810edb4abab"
 )
 
 EXTERNAL_DEPENDENCIES = (
