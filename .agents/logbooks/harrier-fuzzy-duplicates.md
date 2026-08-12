@@ -450,3 +450,14 @@ author: Rafal Wojdyla
 - Shutdown diagnostic: Five late `swe-zero-12m` replacement workers tried to register endpoints after Iris had made their worker-group tasks terminal. Iris rejected the registrations. The source and coordinator succeeded, and East has no failed descendants. No recovery was necessary.
 - Error check: No error matched the active East or RNO source logs after the source transitions.
 - Next action: Continue the 15-minute check cadence and monitor both active sources.
+
+### 2026-08-12 09:56 UTC - East completes StarCoder Rust
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 21 completed source artifacts. RNO has six completed source artifacts. The full run has 27 of 292 completed source artifacts.
+- East result: `starcoder2-ir_rust_f431fcdb` succeeded with all four output shards and 27,118 documents.
+- East progress: `biocollection-free_text_stream_29c0f030` started. It has 59 output shards, with 32 in flight, 32 live workers, and no dead workers.
+- RNO progress: `finetranslations_6ce00a47` got to 12,015 of 25,962 output shards with 32 live workers and no dead workers.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of root logs.
+- Next action: Continue the 15-minute check cadence and monitor the first large `biocollection-free_text_stream` shards.
