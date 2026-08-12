@@ -22,7 +22,7 @@ from levanter.testing.helpers import (
 )
 from transformers import AutoModelForCausalLM, LlamaForCausalLM
 
-from levanter.layers.attention import AttentionMask
+from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import Attention, LlamaConfig, LlamaDecoderLayer, LlamaLMHeadModel
 from levanter.testing.model_configs import llama_test_config
@@ -88,7 +88,8 @@ def test_llama_attention(use_flash, num_kv_heads):
         LlamaRotaryEmbedding as HFLlamaRotaryEmbedding,
     )
 
-    config = llama_test_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
+    attention_backend = AttentionBackend.DEFAULT if use_flash else AttentionBackend.VANILLA
+    config = llama_test_config(attention_backend=attention_backend, num_kv_heads=num_kv_heads)
 
     attention_config = config.attention_config()
     attention = Attention.init(config=attention_config, key=random.PRNGKey(0))  # type: ignore
@@ -236,7 +237,8 @@ def test_llama_lm_head_model(num_kv_heads):
 @pytest.mark.parametrize("use_flash", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2])
 def test_llama_lm_head_model_bwd(use_flash, num_kv_heads):
-    llama_config = llama_test_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
+    attention_backend = AttentionBackend.DEFAULT if use_flash else AttentionBackend.VANILLA
+    llama_config = llama_test_config(attention_backend=attention_backend, num_kv_heads=num_kv_heads)
     Batch = hax.Axis("batch", 1)
     Vocab = hax.Axis("vocab", 256)
     Pos = llama_config.max_Pos

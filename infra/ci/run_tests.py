@@ -36,6 +36,7 @@ LOCAL_SAFE_MARKERS = (
 MAX_DISPLAYED_TEST_PATHS = 5
 HALIAX_CPU_DEVICE_COUNT = 8
 DEFAULT_WORKERS = 8
+JAX_CPU_DEVICE_ENV = "JAX_NUM_CPU_DEVICES"
 
 
 class LocalTestError(RuntimeError):
@@ -236,14 +237,13 @@ def pytest_environment(lane: PytestLane) -> dict[str, str]:
     """Build the process environment for one JAX device topology."""
     environment = os.environ.copy()
     if lane.jax_cpu_devices == 1:
-        environment.pop("JAX_NUM_CPU_DEVICES", None)
+        environment.pop(JAX_CPU_DEVICE_ENV, None)
     else:
-        environment["JAX_NUM_CPU_DEVICES"] = str(lane.jax_cpu_devices)
+        environment[JAX_CPU_DEVICE_ENV] = str(lane.jax_cpu_devices)
     return environment
 
 
 def top_level_pytest_command(extra_args: tuple[str, ...] = ()) -> tuple[str, ...]:
-    """Build the repository's ordinary safe pytest command."""
     return ("uv", "run", "pytest", *extra_args)
 
 
@@ -257,7 +257,7 @@ def pytest_command_preview(
     invocation = lane.invocation
     command = pytest_command(lane, extra_args, no_sync=no_sync)
     environment_prefix = (
-        "env -u JAX_NUM_CPU_DEVICES " if lane.jax_cpu_devices == 1 else f"JAX_NUM_CPU_DEVICES={lane.jax_cpu_devices} "
+        f"env -u {JAX_CPU_DEVICE_ENV} " if lane.jax_cpu_devices == 1 else f"{JAX_CPU_DEVICE_ENV}={lane.jax_cpu_devices} "
     )
     if len(invocation.test_paths) <= MAX_DISPLAYED_TEST_PATHS:
         return f"{environment_prefix}{shlex.join(command)}"
