@@ -143,7 +143,17 @@ patch set), or the pinned refresh branch for descriptor pins. Then, onto `new_ba
    condition. For non-obvious patches, leave a short code-adjacent rationale.
 5. Run `git range-diff old_base..old_tip new_base..<new_tip>` as the replay audit
    and explain every dropped or rewritten delta in the notes and PR.
-6. Keep history reviewable — no conflict artifacts, unrelated refactors, or
+6. Audit the overlay's call-sites against the new base's API before the build. A
+   clean cherry-pick applies textually but does not prove the upstream symbols the
+   overlay imports or calls still exist: on a fast-moving fork a class becomes a
+   factory function, a helper is deleted, a signature gains a required argument.
+   Statically cross-check every upstream symbol the overlay touches — constructor
+   kwargs, function signatures, attributes, removed helpers — against `new_base`,
+   including the overlay's tests. A vLLM refresh caught two breaks this way: a
+   `FusedMoE` class replaced by a `FusedMoEFactory` function, and a removed
+   `is_interleaved` config helper. A textual replay left both in place, and only a
+   multi-hour GPU build would otherwise have surfaced them.
+7. Keep history reviewable — no conflict artifacts, unrelated refactors, or
    preserved commits whose behavior is now `drop`. Collapse fork-infra churn
    (CI, workflow, or prose commits that adopt then revise then disable) to its final
    state rather than replaying each hop.
