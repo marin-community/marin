@@ -250,3 +250,12 @@ author: Rafal Wojdyla
 - Recovery: Restored the 1,208,135,680-byte model archive from a live East worker to its original East-region S3 path. This protects later TEI restarts from the missing-object failure.
 - Source health: Both source jobs continue to run. No Parquet merge has started.
 - Next action: Continue source monitoring and decide whether to replace the 14 terminal RNO services or keep the saturated 82-worker pool.
+
+### 2026-08-12 01:27 UTC - RNO TEI service replay
+
+- Source health: East reached 3,013 of 5,872 output shards. RNO reached 3,967 of 8,018 output shards. Each source has 32 of 32 Zephyr workers alive and zero dead workers.
+- Recovery method: Read each terminal TEI job request from the `cw-rno2a` controller and replayed the same request with the same job ID.
+- Scope: Replayed TEI indices 067, 070-073, 075, 078-082, 088, 090, and 091. The live 82-worker pool stayed in service.
+- Scheduler state: All 96 TEI jobs are in the running job state. Kubernetes has 82 running TEI pods and 14 pending pods with `SchedulingGated`.
+- Archive state: The restored model archive remains at the original S3 path for these worker starts.
+- Next action: Wait for RNO interactive capacity. Validate one new endpoint and then validate the full 96-worker pool.
