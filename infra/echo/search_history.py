@@ -8,6 +8,7 @@ from typing import Literal
 
 import schema
 import sqlalchemy
+from search_config import normalize_query
 
 SearchMode = Literal["federated", "activity", "grep"]
 
@@ -39,10 +40,6 @@ class SearchExecutionRecord:
     results: tuple[SearchResultRecord, ...] = ()
 
 
-def normalize_query(query: str) -> str:
-    return " ".join(query.casefold().split())
-
-
 def execution_values(record: SearchExecutionRecord) -> dict[str, object]:
     return {
         "author": record.author,
@@ -60,7 +57,11 @@ def execution_values(record: SearchExecutionRecord) -> dict[str, object]:
 
 
 def insert_execution(conn: sqlalchemy.Connection, record: SearchExecutionRecord) -> int:
-    """Insert one execution and its ranked result snapshot."""
+    """Insert one execution and its ranked result snapshot.
+
+    Returns:
+        The new search execution ID.
+    """
     row = conn.execute(
         schema.search_executions.insert().values(**execution_values(record)).returning(schema.search_executions.c.id)
     ).first()

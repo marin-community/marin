@@ -141,7 +141,7 @@ def test_quality_manifest_groups_observed_queries_and_defaults_no_answer_domains
     cases = build_search_quality_manifest.build_manifest(query_log, benchmark, ["feedback only"])
 
     assert len(cases) == 3
-    assert cases[0]["query"] == "deploy iris"
-    assert cases[0]["occurrences"] == 2
-    assert cases[1]["source"] == "feedback-only"
-    assert cases[2]["domains"] == list(build_search_quality_manifest.search_config.DEFAULT_SEARCH_DOMAINS)
+    assert cases[0].query == "deploy iris"
+    assert cases[0].occurrences == 2
+    assert cases[1].source == "feedback-only"
+    assert cases[2].domains == build_search_quality_manifest.search_config.DEFAULT_SEARCH_DOMAINS

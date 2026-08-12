@@ -18,6 +18,7 @@ from pathlib import Path
 
 import cli as echo_cli
 import search_config
+from build_search_quality_manifest import ManifestCase as ReplayCase
 
 MAX_WORKERS = 4
 RATE_LIMIT_RETRY_DELAYS = (15, 30, 60, 120)
@@ -25,43 +26,10 @@ REPLAY_REQUEST_TIMEOUT = 180
 
 
 @dataclass(frozen=True)
-class ReplayCase:
-    id: str
-    query: str
-    domains: tuple[search_config.SearchDomain, ...]
-    source: str
-    occurrences: int
-
-
-@dataclass(frozen=True)
 class ReplayResult:
     id: str
     execution_id: int
     returned_count: int
-
-
-def checked_case(value: object) -> ReplayCase:
-    if not isinstance(value, dict):
-        raise ValueError("replay case must be an object")
-    identifier = value.get("id")
-    query = value.get("query")
-    source = value.get("source")
-    domains = value.get("domains")
-    occurrences = value.get("occurrences", 1)
-    if not isinstance(identifier, str) or not identifier:
-        raise ValueError("id must be a nonblank string")
-    if not isinstance(query, str) or not query.strip():
-        raise ValueError(f"{identifier}: query must be a nonblank string")
-    if not isinstance(source, str) or not source:
-        raise ValueError(f"{identifier}: source must be a nonblank string")
-    if not isinstance(domains, list) or not domains:
-        raise ValueError(f"{identifier}: domains must be a nonempty list")
-    if not isinstance(occurrences, int) or occurrences < 1:
-        raise ValueError(f"{identifier}: occurrences must be a positive integer")
-    for domain in domains:
-        if domain not in search_config.SEARCH_DOMAINS:
-            raise ValueError(f"{identifier}: unknown domain {domain!r}")
-    return ReplayCase(identifier, query.strip(), tuple(domains), source, occurrences)
 
 
 def load_cases(path: Path) -> list[ReplayCase]:
@@ -72,10 +40,10 @@ def load_cases(path: Path) -> list[ReplayCase]:
         if not line.strip():
             continue
         try:
-            case = checked_case(json.loads(line))
+            case = ReplayCase.from_json(json.loads(line))
         except (json.JSONDecodeError, ValueError) as error:
             raise ValueError(f"{path}:{line_number}: {error}") from error
-        normalized_query = " ".join(case.query.casefold().split())
+        normalized_query = search_config.normalize_query(case.query)
         if case.id in seen_ids:
             raise ValueError(f"{path}:{line_number}: duplicate id {case.id!r}")
         if normalized_query in seen_queries:
@@ -95,8 +63,12 @@ def completed_ids(path: Path) -> set[str]:
 
 
 def reconcile_history(cases: Sequence[ReplayCase], history: Path, output: Path) -> int:
-    """Recover completed cases whose response was lost after server persistence."""
-    cases_by_query = {" ".join(case.query.casefold().split()): case for case in cases}
+    """Recover completed cases whose response was lost after server persistence.
+
+    Returns:
+        The number of recovered cases appended to ``output``.
+    """
+    cases_by_query = {search_config.normalize_query(case.query): case for case in cases}
     completed = completed_ids(output)
     recovered: dict[str, ReplayResult] = {}
     for line in history.read_text().splitlines():
@@ -133,7 +105,7 @@ def replay_one(case: ReplayCase, limit: int) -> ReplayResult:
                 raise
             time.sleep(RATE_LIMIT_RETRY_DELAYS[attempt])
     assert response is not None
-    execution_id = response.headers.get("X-Echo-Search-Execution-ID")
+    execution_id = response.headers.get(search_config.SEARCH_EXECUTION_HEADER)
     if execution_id is None:
         raise RuntimeError(f"{case.id}: Echo response omitted the execution ID")
     results = echo_cli.response_objects(response.json())

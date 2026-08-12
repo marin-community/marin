@@ -231,7 +231,7 @@ def cmd_search(args: argparse.Namespace) -> None:
     noun = "result" if len(results) == 1 else "results"
     print(f"{len(results)} {noun} in {elapsed:.2f}s")
     print_search_results(results)
-    execution_id = response.headers.get("X-Echo-Search-Execution-ID")
+    execution_id = response.headers.get(search_config.SEARCH_EXECUTION_HEADER)
     execution_flag = f"--execution-id {execution_id} " if execution_id else ""
     print(
         "Feedback: uv run infra/echo/cli.py feedback "

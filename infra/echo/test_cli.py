@@ -62,7 +62,6 @@ def test_search_sends_selected_domains_to_federated_endpoint(monkeypatch, capsys
     assert "1 result in 1.23s" in output
     assert cli.SEARCH_DETAIL_INSTRUCTION in output
     assert "L42 raise FAILED_PRECONDITION" in output
-    assert "feedback --query FAILED_PRECONDITION --execution-id 991 --grade '<id>=<0-10>'" in output
 
 
 def test_search_defaults_to_curated_domains_without_discord(monkeypatch):

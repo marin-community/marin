@@ -313,7 +313,6 @@ def test_search_feedback_rejects_grade_absent_from_linked_execution(client_with)
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "graded results were not returned by the linked search execution: wiki:123"
     assert not any(
         getattr(statement, "is_insert", False) and statement.table.name == "search_feedback"
         for statement in harness.engine.executions

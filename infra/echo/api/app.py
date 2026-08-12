@@ -70,7 +70,7 @@ QUERY_LINE_STOP_WORDS = frozenset(
     }
 )
 FILE_REFERENCE_LIMIT = 3
-SEARCH_EXECUTION_HEADER = "X-Echo-Search-Execution-ID"
+SEARCH_EXECUTION_HEADER = search_config.SEARCH_EXECUTION_HEADER
 SEARCH_HISTORY_PAGE_LIMIT = 500
 POSTGRES_UNDEFINED_COLUMN = "42703"
 POSTGRES_UNDEFINED_TABLE = "42P01"
@@ -83,6 +83,7 @@ class EchoConfig:
     public_url: str
     github_repository: str
     github_branch: str
+    service_revision: str | None = None
 
 
 DEFAULT_CONFIG = EchoConfig(
@@ -97,6 +98,7 @@ def environment_config() -> EchoConfig:
         public_url=os.environ.get("ECHO_PUBLIC_URL", DEFAULT_CONFIG.public_url).rstrip("/"),
         github_repository=os.environ.get("GITHUB_REPOSITORY", DEFAULT_CONFIG.github_repository),
         github_branch=os.environ.get("GITHUB_BRANCH", DEFAULT_CONFIG.github_branch),
+        service_revision=os.environ.get("K_REVISION"),
     )
 
 
@@ -564,6 +566,14 @@ def database_error_code(error: sqlalchemy.exc.DBAPIError) -> str | None:
 
 
 def record_live_search(engine: sqlalchemy.Engine, record: search_history.SearchExecutionRecord) -> int | None:
+    """Persist a live search and return its execution ID when history storage is available.
+
+    Echo deploys additive migrations after Cloud Run resources because the migration grants
+    runtime database users created by those resources. A new revision may therefore receive
+    requests before its history table or newest columns exist. Only PostgreSQL's undefined
+    table and undefined column errors are tolerated during that rollout window; all other
+    persistence failures propagate.
+    """
     try:
         with engine.begin() as conn:
             return search_history.insert_execution(conn, record)
@@ -572,6 +582,16 @@ def record_live_search(engine: sqlalchemy.Engine, record: search_history.SearchE
             raise
         logger.warning("Search history schema is not available; apply pending Echo migrations", exc_info=True)
         return None
+
+
+def attach_search_execution(
+    response: Response,
+    engine: sqlalchemy.Engine,
+    record: search_history.SearchExecutionRecord,
+) -> None:
+    execution_id = record_live_search(engine, record)
+    if execution_id is not None:
+        response.headers[SEARCH_EXECUTION_HEADER] = str(execution_id)
 
 
 def wiki_search_result(row: sqlalchemy.Row, config: EchoConfig) -> SearchResult:
@@ -902,6 +922,7 @@ def repository_index_status(engine: Engine, config: Config) -> RepositoryIndexSt
 def search(
     engine: Engine,
     model: Model,
+    config: Config,
     response: Response,
     q: str = Query(description="Natural-language query."),
     source: str | None = Query(None, enum=list(SOURCES)),
@@ -925,7 +946,8 @@ def search(
     with engine.connect() as conn:
         conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
         results = [hit(row) for row in conn.execute(statement, params)]
-    execution_id = record_live_search(
+    attach_search_execution(
+        response,
         engine,
         search_history.SearchExecutionRecord(
             author=iap_caller(x_goog_authenticated_user_email),
@@ -940,12 +962,10 @@ def search(
             requested_limit=limit,
             returned_count=len(results),
             duration_ms=(time.perf_counter() - started_at) * 1_000,
-            service_revision=os.environ.get("K_REVISION"),
+            service_revision=config.service_revision,
             results=tuple(recorded_hit(result) for result in results),
         ),
     )
-    if execution_id is not None:
-        response.headers[SEARCH_EXECUTION_HEADER] = str(execution_id)
     return results
 
 
@@ -994,7 +1014,8 @@ def federated_search_endpoint(
     domains = list(dict.fromkeys(domain or search_config.DEFAULT_SEARCH_DOMAINS))
     started_at = time.perf_counter()
     results = federated_search(engine, model, reranker, config, query, domains, limit)
-    execution_id = record_live_search(
+    attach_search_execution(
+        response,
         engine,
         search_history.SearchExecutionRecord(
             author=iap_caller(x_goog_authenticated_user_email),
@@ -1006,18 +1027,17 @@ def federated_search_endpoint(
             returned_count=len(results),
             duration_ms=(time.perf_counter() - started_at) * 1_000,
             repository_commit=result_repository_commit(results),
-            service_revision=os.environ.get("K_REVISION"),
+            service_revision=config.service_revision,
             results=tuple(recorded_search_result(result) for result in results),
         ),
     )
-    if execution_id is not None:
-        response.headers[SEARCH_EXECUTION_HEADER] = str(execution_id)
     return results
 
 
 @api.get("/grep", response_model=list[Hit])
 def grep(
     engine: Engine,
+    config: Config,
     response: Response,
     pattern: str = Query(description="Exact substring (SQL wildcards are escaped)."),
     source: str | None = Query(None, enum=list(SOURCES)),
@@ -1044,7 +1064,8 @@ def grep(
     query = query.order_by(schema.chunks.c.date.desc()).limit(limit)
     with engine.connect() as conn:
         results = [hit(r) for r in conn.execute(query)]
-    execution_id = record_live_search(
+    attach_search_execution(
+        response,
         engine,
         search_history.SearchExecutionRecord(
             author=iap_caller(x_goog_authenticated_user_email),
@@ -1055,12 +1076,10 @@ def grep(
             requested_limit=limit,
             returned_count=len(results),
             duration_ms=(time.perf_counter() - started_at) * 1_000,
-            service_revision=os.environ.get("K_REVISION"),
+            service_revision=config.service_revision,
             results=tuple(recorded_hit(result) for result in results),
         ),
     )
-    if execution_id is not None:
-        response.headers[SEARCH_EXECUTION_HEADER] = str(execution_id)
     return results
 
 
