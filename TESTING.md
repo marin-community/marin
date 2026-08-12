@@ -8,50 +8,19 @@ reviewing tests, read root `AGENTS.md`, this file, the nearest module
 
 ## Running Tests Locally
 
-Run the safe tests affected by the current branch and working tree with:
+Run a narrow test while editing, then run all safe tests affected by the branch
+and working tree:
 
 ```bash
+uv run pytest <test path>
 uv run --no-project infra/ci/run_tests.py
 ```
 
-The runner compares committed, staged, unstaged, and untracked files with the
-branch point from `origin/main`. It uses `infra/ci/select_tests.py` to find test
-files that transitively import changed modules, then runs the selected paths in
-one top-level run with every workspace test group and the same uv extras and
-xdist flags as unified unit CI. It reuses the worktree environment, so repeated
-runs do not rebuild an isolated environment. A package shown as `full suite`
-has its test directory selected, not a single test. The runner prints the
-commands it executes and abbreviates only long test-path lists. When Haliax and
-other packages are selected together, one worker runs Haliax with eight virtual
-CPU devices while the remaining workers run the other affected tests
-concurrently. This keeps a single worker budget without imposing Haliax's JAX
-topology on every test process. The default budget is the host CPU count;
-override it with `--workers <count>`.
-CI selector and workflow changes run their import-dependent tests locally while
-the pushed branch exercises the complete CI matrix. Changes to shared dependency
-or pytest configuration cannot be narrowed, so the runner falls back to
-`uv run pytest`. Use `--dry-run` to inspect the command or `--base-ref <ref>`
-when the branch targets another ref. Extra pytest arguments follow `--`, for example
-`uv run --no-project infra/ci/run_tests.py -- -x`.
-
 The repository defaults exclude `slow`, `integration`, `data_integration`,
-`cluster`, `requires_cluster`, `docker`, and `manual` tests. The same exclusions
-apply to a direct path:
-
-```bash
-uv run --package marin-iris --group test pytest lib/iris/tests/cluster/controller/test_service.py
-```
-
-Use a direct path for the narrow edit-test loop; use the affected-test runner
-before handing off a change.
-
-Do not pass a partial marker expression such as `-m "not slow"` for routine
-local testing. Pytest replaces the configured expression instead of combining
-with it, which can select live-cluster or integration tests. Dedicated CI jobs
-run the excluded suites. The scheduled unified unit workflow runs slow CPU tests
-nightly; accelerator, integration, cluster, and Docker tests use their owning
-workflows. Opt into one locally only when the user or the relevant module guide
-explicitly requests it.
+`cluster`, `requires_cluster`, `docker`, and `manual` tests. Do not pass a
+partial marker expression such as `-m "not slow"`; pytest replaces the default
+expression and may select live-cluster tests. Run excluded markers only when
+requested or directed by the relevant module guide.
 
 Tests run from the repository root have a 60-second per-test timeout, including
 fixture setup and teardown. On POSIX, pytest-timeout first interrupts the test

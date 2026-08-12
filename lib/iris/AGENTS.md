@@ -29,9 +29,6 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 ## Development
 
 ```bash
-# Tests affected by the current branch and working tree
-uv run --no-project infra/ci/run_tests.py
-
 # Full safe Iris unit suite
 uv run --package marin-iris --group test pytest --tb=short lib/iris/tests/
 ```

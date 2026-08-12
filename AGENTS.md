@@ -71,16 +71,6 @@ uv run pyrefly check
 
 # Safe tests affected by the current branch and working tree
 uv run --no-project infra/ci/run_tests.py
-- The runner compares committed, staged, unstaged, and untracked changes with
-  the merge base of `origin/main`, selects transitive import dependents, and
-  runs the selected paths from one top-level command with every workspace test
-  group plus the unified CI xdist settings. When Haliax is selected with other
-  packages, one worker runs Haliax with eight virtual CPU devices while the
-  remaining workers run the other affected tests concurrently.
-- Use `--dry-run` to inspect the plan and `--base-ref <ref>` when the branch
-  targets something other than main. Use `--workers <count>` to change the
-  host CPU count default. Shared dependency or pytest configuration changes
-  fall back to the ordinary `uv run pytest` suite.
 
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
@@ -90,9 +80,7 @@ uv run --no-project infra/ci/run_tests.py
   follow-up materially changes the design or scope.
 ```
 
-- Python >=3.12. Use `uv run` for entry points; the stdlib-only local test
-  runner uses `uv run --no-project infra/ci/run_tests.py` so it can select test
-  paths before uv installs the workspace test dependencies.
+- Python >=3.12. Use `uv run` for entry points.
 - Do not replace pytest's default marker expression with a partial expression
   such as `-m "not slow"`; `-m` overrides the whole default and can select live
   cluster tests. Run excluded markers only when the user or a dedicated task

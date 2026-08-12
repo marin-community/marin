@@ -11,9 +11,6 @@ JAX-based language model training library using Haliax named tensors and Equinox
 ## Development
 
 ```bash
-# Tests affected by the current branch and working tree (run from repo root)
-uv run --no-project infra/ci/run_tests.py
-
 # Full safe Levanter suite
 uv run --package marin-levanter --group test pytest lib/levanter/tests
 ```

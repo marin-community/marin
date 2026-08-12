@@ -43,21 +43,14 @@ You can also run them manually with `./infra/pre-commit.py --all-files --fix` or
 
 ### Testing
 
-Use a direct test path during the edit-test loop. Before opening a pull request,
-run every safe unit test affected by the branch and working tree:
+Run a narrow test while editing, then run all safe tests affected by the branch
+and working tree:
 
 ```bash
 uv run pytest <relevant test paths>
 uv run --no-project infra/ci/run_tests.py
 ```
 
-The runner selects transitive import dependents and runs the selected paths with
-the workspace test dependencies and pytest settings. Haliax uses one concurrent
-worker with its required eight-device JAX topology; the remaining workers run
-the other selected paths.
-Use `uv run pytest <relevant test paths>` during the edit-test loop. Changes to
-shared dependency or pytest configuration fall back to `uv run pytest` because
-they cannot be narrowed safely.
 `pyproject.toml` already excludes the slow, integration, data-integration,
 live-cluster, Docker, and manual markers by default. Do not pass `-m 'not slow'`:
 `-m` replaces the whole default expression, so it re-selects the cluster and

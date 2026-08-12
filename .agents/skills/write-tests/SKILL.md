@@ -37,11 +37,9 @@ fixtures, mocks, markers, or commands:
 
 ## Default Commands
 
-- Run a narrow test path during the edit-test loop, then run `uv run
-  --no-project infra/ci/run_tests.py` to cover every safe unit test affected by
-  the branch and working tree. Do not override the repository's default marker expression; it
-  excludes tests that require slow, integration, live-cluster, Docker, or
-  manual execution.
+- Run a narrow test path while editing, then run
+  `uv run --no-project infra/ci/run_tests.py`. Do not override the repository's
+  default marker expression.
 - For package-specific commands, use the relevant `lib/*/AGENTS.md` or testing
   doc.
 

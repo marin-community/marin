@@ -46,7 +46,6 @@ repository. Follow these notes when implementing new features or fixing bugs.
 
 ## Testing
 
-* Run `uv run --no-project infra/ci/run_tests.py` from the repository root for tests affected by the current branch and working tree.
 * Run the full safe Haliax suite with `JAX_NUM_CPU_DEVICES=8 uv run --package marin-haliax --group test pytest lib/haliax/tests`.
 * In general, never relax tolerances in floating point tests unless specifically discussed with the
   team. Use `assert_allclose` with appropriate tolerances for numerical comparisons. We typically use
