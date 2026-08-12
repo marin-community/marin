@@ -783,3 +783,14 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Issue update: None. This is a routine source completion, not a major run-state change.
 - Next action: Continue the regular health-check cadence and watch RNO HPLT through completion.
+
+### 2026-08-12 17:45 UTC - FinePDFs Swedish and Ukrainian completed
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 45 completed source artifacts. RNO has eight completed source artifacts. The full run has 53 of 292 completed source artifacts.
+- East results: `finepdfs-swe_latn_3f198a8d` completed 148 shards with 526,543 duplicate documents. `finepdfs-ukr_cyrl_85c35eab` completed 214 shards with 394,995 duplicate documents. Both source steps succeeded.
+- East progress: `nemotron_cc_v2-diverse_qa_016d1909` started with a running coordinator and worker group.
+- RNO progress: `hplt_v3_528b745e` got to 5,659 of 6,330 embedding shards with 32 live workers and no dead workers. Its recent rate gives a rough 18:15 UTC completion estimate.
+- Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
+- Issue update: None. These are routine source completions, not a major run-state change.
+- Next action: Continue the regular health-check cadence and watch RNO HPLT through completion.
