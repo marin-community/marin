@@ -177,13 +177,17 @@ def _replace(document: dict, path: tuple[str | int, ...], value: object) -> dict
         (("backends", "backward"), "transformer_engine", "backend identity"),
         (("counterbalance", "position"), 1, "counterbalance identity"),
         (("workspace_queries", "forward", "dtype"), "float32", "workspace_queries.forward.dtype"),
-        (("workspace_queries", "backward", "shape"), [False], "workspace_queries.backward.shape"),
         (("timing", "warmup_invocations"), 9, "warmup_invocations"),
         (("timing", "raw_cuda_event_milliseconds"), [1.0] * 49, "raw sample count"),
         (("timing", "raw_cuda_event_milliseconds", 0), -1.0, "finite nonnegative"),
         (("timing", "median_cuda_event_milliseconds"), 25.0, "median drifted"),
         (("comparison", "outputs", 0, "role"), "dx", "output roles"),
         (("comparison", "outputs", 0, "metrics", "max_absolute_error"), False, "finite nonnegative"),
+        (
+            ("comparison", "outputs", 0, "metrics", "mean_absolute_error"),
+            1.0,
+            "mean_absolute_error exceeds max_absolute_error",
+        ),
         (("comparison", "outputs", 0, "metrics", "max_bfloat16_ulp_error"), 1.0, "ulp_error"),
         (("comparison", "oracle_relative_thresholds"), {}, "thresholds are forbidden"),
         (("provenance", "transformer_engine", "source_commit"), "0" * 40, "source identity"),
@@ -213,3 +217,45 @@ def test_result_schema_accepts_blocked_unsealed_observation(tmp_path: Path) -> N
 
     assert validated["status"] == "unsealed_hardware_observation"
     assert validated["comparison"]["oracle_relative_thresholds"] is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("shape", [], "shape drifted"),
+        ("shape", [[1024]], "shape drifted"),
+        ("shape", [0], "shape drifted"),
+        ("shape", [-1], "shape drifted"),
+        ("shape", [False], "shape drifted"),
+        ("shape", [1024.0], "shape drifted"),
+        ("shape", ["1024"], "shape drifted"),
+        ("byte_count", 0, "byte_count drifted"),
+        ("byte_count", -1, "byte_count drifted"),
+        ("byte_count", False, "byte_count drifted"),
+        ("byte_count", 1024.0, "byte_count drifted"),
+        ("byte_count", "1024", "byte_count drifted"),
+        ("byte_count", 1023, "does not match byte workspace shape"),
+    ],
+)
+def test_result_schema_rejects_invalid_byte_workspace_metadata(
+    tmp_path: Path, field: str, value: object, message: str
+) -> None:
+    run = _run()
+    mutated = _replace(_valid_result(run), ("workspace_queries", "forward", field), value)
+    result = tmp_path / "result.json"
+    result.write_text(json.dumps(mutated))
+
+    with pytest.raises(ValueError, match=message):
+        validate_result(result, run)
+
+
+def test_result_schema_accepts_equal_mean_and_max_absolute_error(tmp_path: Path) -> None:
+    run = _run()
+    result_document = _valid_result(run)
+    for output in result_document["comparison"]["outputs"]:
+        output["metrics"]["max_absolute_error"] = 0.5
+        output["metrics"]["mean_absolute_error"] = 0.5
+    result = tmp_path / "result.json"
+    result.write_text(json.dumps(result_document))
+
+    validate_result(result, run)

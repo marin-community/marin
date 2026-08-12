@@ -212,12 +212,14 @@ def prepare_run_plan(output: Path, runner_binary: Path) -> dict[str, Any]:
 def _validate_workspace(value: object, name: str) -> None:
     workspace = _closed(value, {"shape", "dtype", "byte_count"}, name)
     shape = workspace["shape"]
-    if not isinstance(shape, list) or any(type(dimension) is not int or dimension < 0 for dimension in shape):
+    if not isinstance(shape, list) or len(shape) != 1 or type(shape[0]) is not int or shape[0] <= 0:
         raise ValueError(f"{name}.shape drifted")
     if workspace["dtype"] != "byte":
         raise ValueError(f"{name}.dtype drifted")
-    if type(workspace["byte_count"]) is not int or workspace["byte_count"] < 0:
+    if type(workspace["byte_count"]) is not int or workspace["byte_count"] <= 0:
         raise ValueError(f"{name}.byte_count drifted")
+    if workspace["byte_count"] != shape[0]:
+        raise ValueError(f"{name}.byte_count does not match byte workspace shape")
 
 
 def validate_result(path: Path, expected_run: dict[str, Any]) -> dict[str, Any]:
@@ -329,8 +331,12 @@ def validate_result(path: Path, expected_run: dict[str, Any]) -> dict[str, Any]:
             },
             "comparison metrics",
         )
-        for name in ("max_absolute_error", "mean_absolute_error", "relative_linf_error"):
-            _nonnegative_finite(metrics[name], f"comparison metrics.{name}")
+        checked_metrics = {
+            name: _nonnegative_finite(metrics[name], f"comparison metrics.{name}")
+            for name in ("max_absolute_error", "mean_absolute_error", "relative_linf_error")
+        }
+        if checked_metrics["mean_absolute_error"] > checked_metrics["max_absolute_error"]:
+            raise ValueError("comparison metrics.mean_absolute_error exceeds max_absolute_error")
         if type(metrics["max_bfloat16_ulp_error"]) is not int or metrics["max_bfloat16_ulp_error"] < 0:
             raise ValueError("comparison metrics.max_bfloat16_ulp_error drifted")
     provenance = _closed(
