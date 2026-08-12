@@ -815,3 +815,14 @@ author: Rafal Wojdyla
 - East progress: `nemotron_cc_v2-diverse_qa_016d1909` got to 416 of 4,416 embedding shards with 32 live workers and no dead workers.
 - Issue update: None. This is a routine source completion, not a major run-state change.
 - Next action: Check Institutional Books startup and continue the regular health-check cadence.
+
+### 2026-08-12 18:36 UTC - Institutional Books and Molmo2 Cap completed
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 45 completed source artifacts. RNO has 11 completed source artifacts. The full run has 56 of 292 completed source artifacts.
+- RNO results: `institutional_books_63f8aca7` completed 1,832 shards with 603,657 duplicate documents. `molmo2-cap_a25dc16d` completed two shards with 11,287 duplicate documents. Both source steps succeeded.
+- RNO progress: `nemotron_code_v2-content_459eda75` started its 517-shard join and passed shard 138.
+- East progress: `nemotron_cc_v2-diverse_qa_016d1909` got to 714 of 4,416 embedding shards with 32 live workers and no dead workers.
+- Error check: No selected error matched the new RNO source log.
+- Issue update: None. These are routine source completions, not a major run-state change.
+- Next action: Check Nemotron Code Content startup and continue the regular health-check cadence.
