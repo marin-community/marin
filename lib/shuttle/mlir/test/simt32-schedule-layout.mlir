@@ -25,9 +25,11 @@
 
 // LARGE-COUNT-21: "shuttle.schedule_buffer"
 // LARGE-COUNT-19: "shuttle.schedule_task"
+// LARGE-GEOMETRY: "shuttle.schedule_task"() <{{.*}}domain_shape = array<i64: 2048, 4096>{{.*}}grid_shape = array<i64: 32768>{{.*}}kind = #shuttle.schedule_task_kind<elementwise>{{.*}}serial_tiles = 1{{.*}}tile_shape = array<i64: 256>{{.*}}workgroup_threads = 256
 // LARGE-GEOMETRY: "shuttle.schedule_task"() <{{.*}}domain_shape = array<i64: 2048, 4096>{{.*}}grid_shape = array<i64: 2048>{{.*}}kind = #shuttle.schedule_task_kind<row_fold>{{.*}}serial_tiles = 16{{.*}}tile_shape = array<i64: 1, 256>
 // SMALL-COUNT-21: "shuttle.schedule_buffer"
 // SMALL-COUNT-19: "shuttle.schedule_task"
+// SMALL-GEOMETRY: "shuttle.schedule_task"() <{{.*}}domain_shape = array<i64: 7, 13>{{.*}}grid_shape = array<i64: 1>{{.*}}kind = #shuttle.schedule_task_kind<elementwise>{{.*}}serial_tiles = 1{{.*}}tile_shape = array<i64: 91>{{.*}}workgroup_threads = 96
 // SMALL-GEOMETRY: "shuttle.schedule_task"() <{{.*}}domain_shape = array<i64: 7, 13>{{.*}}grid_shape = array<i64: 7>{{.*}}kind = #shuttle.schedule_task_kind<row_fold>{{.*}}serial_tiles = 1{{.*}}tile_shape = array<i64: 1, 13>{{.*}}workgroup_threads = 32
 
 // FAST: "shuttle.schedule_plan"

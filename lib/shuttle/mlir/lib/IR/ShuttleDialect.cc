@@ -980,7 +980,7 @@ FailureOr<int64_t> staticElementCount(ArrayRef<int64_t> shape) {
 
 int64_t roundUpToSubgroup(int64_t value) {
   constexpr int64_t kSubgroup = 32;
-  return ((value + kSubgroup - 1) / kSubgroup) * kSubgroup;
+  return ceilDivPositive(value, kSubgroup) * kSubgroup;
 }
 
 struct Simt32Geometry {
@@ -1009,7 +1009,7 @@ FailureOr<Simt32Geometry> simt32Geometry(ScheduleTaskKind kind,
       return failure();
     }
     int64_t tile = std::min(*elements, kMaxThreads);
-    return Simt32Geometry{{(*elements + tile - 1) / tile},
+    return Simt32Geometry{{ceilDivPositive(*elements, tile)},
                           {tile},
                           1,
                           roundUpToSubgroup(tile),
@@ -1024,7 +1024,7 @@ FailureOr<Simt32Geometry> simt32Geometry(ScheduleTaskKind kind,
   int64_t threads = roundUpToSubgroup(tile);
   return Simt32Geometry{{domain[0]},
                         {1, tile},
-                        (domain[1] + tile - 1) / tile,
+                        ceilDivPositive(domain[1], tile),
                         threads,
                         kSubgroup,
                         threads * static_cast<int64_t>(sizeof(float)),

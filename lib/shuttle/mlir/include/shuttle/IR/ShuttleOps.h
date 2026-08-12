@@ -4,6 +4,8 @@
 #ifndef SHUTTLE_IR_SHUTTLEOPS_H_
 #define SHUTTLE_IR_SHUTTLEOPS_H_
 
+#include <cassert>
+#include <cstdint>
 #include <string>
 
 #include "mlir/Bytecode/BytecodeOpInterface.h"
@@ -19,6 +21,11 @@
 #include "shuttle/IR/ShuttleOps.h.inc"
 
 namespace mlir::shuttle {
+
+inline int64_t ceilDivPositive(int64_t numerator, int64_t denominator) {
+  assert(numerator > 0 && denominator > 0);
+  return numerator / denominator + (numerator % denominator != 0);
+}
 
 std::string materializationPlanFingerprint(MaterializationPlanOp plan);
 

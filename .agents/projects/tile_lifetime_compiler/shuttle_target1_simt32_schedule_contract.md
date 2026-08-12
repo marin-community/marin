@@ -81,6 +81,11 @@ plan policy and fingerprint but retains the Fold-derived reduction constraint.
 That FAST gate tests schedule binding only, not full FAST conversion,
 reassociation freedom, or numerical execution.
 
+Positive ceiling division uses quotient plus a nonzero-remainder bit. The
+boundary gate covers partial subgroup rounding at `7x13`, exact 256-element
+tiles, 4096-element multi-tile Fold scheduling, and an `INT64_MAX` feature
+extent without signed addition overflow.
+
 Mutation gates reject logical iteration, reduction axis/order, tile, resource
 profile, dependency, task deletion/reorder, source-task, buffer type,
 unknown-attribute, and multiple-plan corruption. Axis-zero and BF16-accumulator
