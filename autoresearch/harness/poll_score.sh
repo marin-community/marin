@@ -14,8 +14,12 @@ TIMEOUT_SECONDS="${AR_TIMEOUT:-21600}"
 IRIS=(uv run iris --config lib/iris/config/marin.yaml)
 JOB="/mwittmann/${RUN_ID}-coord"
 
+STALL_LIMIT="${AR_STALL_LIMIT:-1200}"  # kill if no new W&B step for this many seconds
+
 deadline=$((SECONDS + TIMEOUT_SECONDS))
 state=""
+last_step=-1
+last_progress=$SECONDS
 while (( SECONDS < deadline )); do
   state=$("${IRIS[@]}" job list --prefix "$JOB" 2>/dev/null \
     | awk -v j="$JOB" '$1 == j {print tolower($2); exit}' || true)
@@ -26,6 +30,26 @@ while (( SECONDS < deadline )); do
       "${IRIS[@]}" job logs --since-seconds 600 "$JOB" >&2 || true
       exit 1 ;;
   esac
+  # Stall watchdog: a wedged gang stays 'running' with every rank alive (the
+  # iteration-0 baseline burned 10.5 rack-hours that way). Progress = the run's
+  # last logged _step advancing; startup/compile is covered by TIMEOUT, not this.
+  step=$(uv run python -c "
+import wandb
+try:
+    run = wandb.Api().run('marin-community/marin_moe/${RUN_ID}')
+    print(int(run.summary.get('_step', -1)))
+except Exception:
+    print(-1)
+" 2>/dev/null || echo -1)
+  if (( step > last_step )); then
+    last_step=$step
+    last_progress=$SECONDS
+  elif (( last_step >= 0 && SECONDS - last_progress > STALL_LIMIT )); then
+    echo "STALL: no step past ${last_step} for >${STALL_LIMIT}s; capturing summary and killing ${JOB}" >&2
+    "${IRIS[@]}" job summary "${JOB}/grug-train-${RUN_ID}" >&2 || true
+    "${IRIS[@]}" job kill "$JOB" >&2 || true
+    exit 1
+  fi
   sleep 120
 done
 if [[ "$state" != succeeded && "$state" != completed ]]; then
