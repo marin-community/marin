@@ -308,3 +308,12 @@ author: Rafal Wojdyla
 - Result: Both Zephyr stages wait for GPU embedding responses. RNO has the larger TEI queue because 82 live GPUs are saturated while 14 replacement pods wait for interactive capacity.
 - Captures: `scratch/harrier-profile-20260812-0232-east-zephyr-threads.txt`, `scratch/harrier-profile-20260812-0232-rno-zephyr-threads.txt`, `scratch/harrier-profile-20260812-0236-east-zephyr.speedscope.json`, and `scratch/harrier-profile-20260812-0236-rno-zephyr.speedscope.json`.
 - Next action: Keep the live configuration. Continue to wait for the 14 RNO replacement workers and monitor source progress.
+
+### 2026-08-12 02:54 UTC - Routine health check
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- East progress: Six source jobs succeeded. `eai-taxonomy-code-w-dclm_39527a3d` reached 4,466 of 5,872 output shards with 32 live workers and no dead workers.
+- RNO progress: Two source jobs succeeded. `common_corpus-english_0e1cf2c4` reached 5,424 of 8,018 output shards with 32 live workers and no dead workers.
+- Service capacity: East has 96 running TEI pods. RNO has 82 running TEI pods and 14 replacement pods waiting for interactive capacity.
+- Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of coordinator logs.
+- Next action: Continue the 15-minute check cadence and validate RNO replacements when capacity becomes available.
