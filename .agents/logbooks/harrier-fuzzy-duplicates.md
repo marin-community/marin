@@ -826,3 +826,14 @@ author: Rafal Wojdyla
 - Error check: No selected error matched the new RNO source log.
 - Issue update: None. These are routine source completions, not a major run-state change.
 - Next action: Check Nemotron Code Content startup and continue the regular health-check cadence.
+
+### 2026-08-12 18:50 UTC - Routine health check
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 45 completed source artifacts. RNO has 11 completed source artifacts. The full run has 56 of 292 completed source artifacts.
+- East progress: `nemotron_cc_v2-diverse_qa_016d1909` got to 940 of 4,416 embedding shards with 32 live workers and no dead workers.
+- RNO progress: `nemotron_code_v2-content_459eda75` completed its 517-shard join and got to 163 of 517 embedding shards with 32 live workers and no dead workers. Uneven shard times give a rough 19:03 UTC completion estimate.
+- Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Issue update: None. There is no major run-state change.
+- Next action: Continue the regular health-check cadence and watch Nemotron Code Content through completion.
