@@ -496,7 +496,9 @@ def build_small_run(
 @click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
-    default=1.33,
+    # autoresearch baseline: 2.5 keeps trained-router drops within the 2% budget (hero arm is 1.33,
+    # which runs ~5-6% drops at d768-d1536 and violates the budget).
+    default=2.5,
     show_default=True,
     help="Fixed all-to-all capacity factor (EP hero arm is 1.33). Higher drops fewer and pads more.",
 )
