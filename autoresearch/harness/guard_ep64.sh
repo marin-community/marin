@@ -23,7 +23,10 @@ echo "guard[2/2]: GPU tests on one GB200 node (bundles the working tree)" >&2
   --gpu "GB200x4" --cpu 64 --memory 256GB --disk 128GB \
   --job-name "ar8062-guard-${SHA}" \
   -e IRIS_USER mwittmann \
-  -- bash -c "uv sync --all-packages --extra gpu >&2 && uv run pytest -q -p no:randomly \
+  -e XLA_PYTHON_CLIENT_PREALLOCATE false \
+  -- bash -c "uv sync --all-packages --extra gpu >&2 && uv run pytest -q -p no:randomly -n 4 \
         lib/levanter/tests/grug/test_grugformer_moe.py \
         lib/levanter/tests/grug/test_fa4_cute_attention.py \
         tests/test_moe_hero_ep.py"
+# -n 4: the repo default xdist worker count (~2x CPUs) OOMs the GPUs when every
+# worker initializes JAX; preallocate off so the 4 workers share the 4 devices.
