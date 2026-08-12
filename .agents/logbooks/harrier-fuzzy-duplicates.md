@@ -714,3 +714,10 @@ author: Rafal Wojdyla
 - Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched the active RNO source log during the last 15 minutes.
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Next action: Check FinePDFs CES Latin startup and continue the 15-minute check cadence.
+
+### 2026-08-12 16:10 UTC - FinePDFs CES Latin completed
+
+- Completed artifacts: East has 37 completed source artifacts. RNO has eight completed source artifacts. The full run has 45 of 292 completed source artifacts.
+- East result: `finepdfs-ces_latn_b5488bfa` completed all 194 output shards with 596,382 duplicate documents. The source step succeeded.
+- East progress: `finepdfs-deu_latn_142650e9` started with a running coordinator and worker group.
+- Next action: Return to the 15-minute health-check cadence.
