@@ -653,3 +653,9 @@ W&B: https://wandb.ai/marin-community/marin_moe/runs/mok-like-ab-mok-like-100-20
   ```
 
 - Acceptance: all 16 tasks and coordinator terminal-successful; 25 finite losses with exact zero drops; 4,800 forward and 4,800 backward handlers per process; forward staging zero; exact staged-backward bytes/calls; slot one unused with maximum active slots one; zero generation, reuse, trim, or protocol anomalies. Score steps 10-24 and require at least 80% weak-scale efficiency before launching two racks.
+
+### 2026-08-12 10:20 PT - Scale006 rejected an invalid artifact version
+
+- Result: the coordinator exited 2 before it created a child job, allocated a GPU, or initialized W&B. The launcher rejected `--version c8558b7cfa` because artifact versions must use `YYYY.MM.DD[.N]`, `dev`, or a `-dev` label. This did not exercise the 900 GiB resource contract.
+- Decision: retain the clean implementation SHA `c8558b7cfa62133d427dba5f509d7c1542d451ed` as source lineage and use calendar artifact version `2026.08.12`. A new run id prevents the rejected coordinator identity from mixing with the corrected launch.
+- Next command: repeat the exact Scale006 contract as `mok-scale-007-v12-dropless-1rack-ram900-25-20260812-1020` with `--version 2026.08.12`. No other argument changes.
