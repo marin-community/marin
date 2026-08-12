@@ -188,19 +188,37 @@ def extract_shard(task: dict) -> dict:
     return {"shard": relpath, "rows": rows.height, "windows": len(windows)}
 
 
-def select(fs: fsspec.AbstractFileSystem, out: str, deficits: dict[str, int], oversample: float, seed: int) -> None:
-    """Draw the per-type candidate sample from the scored shards."""
+def select(
+    fs: fsspec.AbstractFileSystem,
+    out: str,
+    candidates_dir: str,
+    deficits: dict[str, int],
+    oversample: float,
+    seed: int,
+    exclude_selected: list[str],
+) -> None:
+    """Draw the per-type candidate sample from the scored shards.
+
+    ``candidates_dir`` may belong to an earlier round's output prefix so a
+    follow-up draw reuses its scores, and ``exclude_selected`` drops the ids
+    earlier rounds already took — a later round's pool is what is left.
+    """
     selected_path = f"{out}/selected.parquet"
     if fs.exists(selected_path):
         logger.info("select: reusing %s", selected_path)
         return
-    shards = sorted("s3://" + p for p in fs.glob(f"{out.removeprefix('s3://')}/candidates/**/*.parquet"))
+    shards = sorted("s3://" + p for p in fs.glob(f"{candidates_dir.removeprefix('s3://')}/**/*.parquet"))
     frames = []
     for path in shards:
         with fs.open(path, "rb") as fh:
             frames.append(pl.read_parquet(fh))
     candidates = pl.concat(frames)
     logger.info("select: %d unlabeled candidates over %d shards", candidates.height, len(shards))
+    for prior in exclude_selected:
+        with fs.open(prior, "rb") as fh:
+            taken = pl.read_parquet(fh).get_column("id")
+        candidates = candidates.filter(~pl.col("id").is_in(taken))
+        logger.info("select: %d candidates after excluding %d from %s", candidates.height, taken.len(), prior)
 
     picks = []
     for ctype, deficit in sorted(deficits.items()):
@@ -223,6 +241,17 @@ def main() -> None:
     parser.add_argument("--mlp", default=DEFAULT_MLP)
     parser.add_argument("--labeled-ids", default=DEFAULT_LABELED_IDS)
     parser.add_argument("--limit-shards", type=int, default=None, help="score only the first N shards (smoke runs)")
+    parser.add_argument(
+        "--candidates-dir",
+        default=None,
+        help="reuse an earlier round's scored candidates instead of scoring (skips the score stage)",
+    )
+    parser.add_argument(
+        "--exclude-selected",
+        nargs="*",
+        default=[],
+        help="earlier rounds' selected.parquet paths whose ids are excluded from the pools",
+    )
     args = parser.parse_args()
     configure_logging(logging.INFO)
     configure_coreweave_s3()
@@ -246,15 +275,17 @@ def main() -> None:
         sample_texts = pq.ParquetFile(fh).read_row_group(0, columns=["text"]).column("text").to_pylist()
     check_gigatoken_parity(sample_texts[:256])
 
-    score_tasks = [{"relpath": r, "out": out, "mlp": args.mlp, "labeled_ids": args.labeled_ids} for r in relpaths]
-    outcome = ZephyrContext(
-        name="mine-scaleup-score",
-        resources=SCORE_RESOURCES,
-        max_workers=MAX_WORKERS,
-    ).execute(Dataset.from_list(score_tasks).map(score_shard), verbose=True)
-    logger.info("score: done, %d shards", len(outcome.results))
+    if args.candidates_dir is None:
+        score_tasks = [{"relpath": r, "out": out, "mlp": args.mlp, "labeled_ids": args.labeled_ids} for r in relpaths]
+        outcome = ZephyrContext(
+            name="mine-scaleup-score",
+            resources=SCORE_RESOURCES,
+            max_workers=MAX_WORKERS,
+        ).execute(Dataset.from_list(score_tasks).map(score_shard), verbose=True)
+        logger.info("score: done, %d shards", len(outcome.results))
+    candidates_dir = args.candidates_dir or f"{out}/candidates"
 
-    select(fs, out, deficits, args.oversample, args.seed)
+    select(fs, out, candidates_dir, deficits, args.oversample, args.seed, args.exclude_selected)
 
     with fs.open(f"{out}/selected.parquet", "rb") as fh:
         chosen_shards = sorted(set(pl.read_parquet(fh).get_column("relpath").to_list()))
