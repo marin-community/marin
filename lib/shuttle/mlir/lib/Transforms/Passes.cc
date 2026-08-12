@@ -160,6 +160,14 @@ SourceRefAttr singleSourceRef(Operation *operation) {
   return dyn_cast<SourceRefAttr>(refs[0]);
 }
 
+DenseI64ArrayAttr operationRefForSource(SourceRefAttr source) {
+  return DenseI64ArrayAttr::get(
+      source.getContext(),
+      {static_cast<int64_t>(source.getFunctionOrdinal()),
+       static_cast<int64_t>(source.getBlockOrdinal()),
+       static_cast<int64_t>(source.getOperationOrdinal())});
+}
+
 DictionaryAttr sourceAttributes(Operation *operation) {
   SmallVector<NamedAttribute> attributes;
   for (NamedAttribute attribute : operation->getAttrs()) {
@@ -1633,6 +1641,12 @@ LogicalResult verifyManifestCoverage(ModuleOp module, DictionaryAttr manifest) {
   llvm::SmallDenseSet<Attribute> operationRefs;
   WalkResult operationRefWalk = module.walk([&](Operation *operation) {
     Attribute operationRef = operation->getAttr(kOperationRefAttribute);
+    ArrayAttr refs = sourceRefs(operation);
+    if (refs && operation->getParentOfType<FoldOp>() && !operationRef) {
+      operation->emitOpError(
+          "has nested Fold sources without an operation reference");
+      return WalkResult::interrupt();
+    }
     if (!operationRef) {
       return WalkResult::advance();
     }
@@ -1641,6 +1655,14 @@ LogicalResult verifyManifestCoverage(ModuleOp module, DictionaryAttr manifest) {
         !operationRefs.insert(operationRef).second) {
       operation->emitOpError(
           "has a missing-format or duplicate operation reference");
+      return WalkResult::interrupt();
+    }
+    if (refs && llvm::any_of(refs, [&](Attribute ref) {
+          auto source = dyn_cast<SourceRefAttr>(ref);
+          return !source || operationRefForSource(source) != denseOperationRef;
+        })) {
+      operation->emitOpError(
+          "has an operation reference that differs from its source results");
       return WalkResult::interrupt();
     }
     return WalkResult::advance();
@@ -1709,6 +1731,11 @@ LogicalResult verifyManifestCoverage(ModuleOp module, DictionaryAttr manifest) {
           fold->getAttrOfType<DenseI64ArrayAttr>(kOperationRefAttribute);
       if (!owner) {
         fold.emitOpError("requires Reduce owner operation provenance");
+        return WalkResult::interrupt();
+      }
+      if (owner != operationRefForSource(fold.getSource())) {
+        fold.emitOpError(
+            "has Reduce owner provenance that differs from its source");
         return WalkResult::interrupt();
       }
       for (BlockArgument argument : fold.getCombiner().front().getArguments()) {
@@ -2164,6 +2191,12 @@ FailureOr<Operation *> lowerFold(OpBuilder &builder, FoldOp fold,
   if (!fold.getOrderFree()) {
     fold.emitOpError(
         "order_free=false has no lossless StableHLO Reduce lowering");
+    return failure();
+  }
+  if (llvm::any_of(fold->getDiscardableAttrs(), [](NamedAttribute attribute) {
+        return attribute.getName().strref() != kOperationRefAttribute;
+      })) {
+    fold.emitOpError("has an unsupported discardable Fold attribute");
     return failure();
   }
   if (operands.size() != 2 || fold.getInputs().size() != 1 ||

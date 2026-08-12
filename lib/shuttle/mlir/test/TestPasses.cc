@@ -118,6 +118,34 @@ public:
   }
 };
 
+class NestedExcludedAttributePass
+    : public MutationPass<NestedExcludedAttributePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(NestedExcludedAttributePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-mutate-nested-excluded-attribute";
+  }
+  StringRef getDescription() const final {
+    return "Mutate one excluded operation nested in a source region";
+  }
+  void runOnOperation() override {
+    auto excluded = excludedSources(getOperation());
+    WalkResult result = getOperation().walk([&](Operation *operation) {
+      if (!isExcluded(operation, excluded) ||
+          isa<func::FuncOp>(operation->getParentOp())) {
+        return WalkResult::advance();
+      }
+      operation->setAttr("stablehlo.mutated_nested_test",
+                         UnitAttr::get(operation->getContext()));
+      return WalkResult::interrupt();
+    });
+    if (!result.wasInterrupted()) {
+      getOperation().emitError("test fixture has no nested excluded operation");
+      this->signalPassFailure();
+    }
+  }
+};
+
 class ExcludedOperandPass : public MutationPass<ExcludedOperandPass> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ExcludedOperandPass)
@@ -264,6 +292,20 @@ public:
   }
 };
 
+class FoldOwnerMismatchPass : public FoldMutationPass<FoldOwnerMismatchPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldOwnerMismatchPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-mismatch-fold-owner-ref";
+  }
+  void runOnOperation() override {
+    if (FoldOp operation = fold()) {
+      operation->setAttr(kOperationRef, DenseI64ArrayAttr::get(
+                                            operation.getContext(), {9, 9, 9}));
+    }
+  }
+};
+
 class FoldAddSourcePass : public FoldMutationPass<FoldAddSourcePass> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldAddSourcePass)
@@ -275,6 +317,46 @@ public:
     if (operation) {
       operation.getCombiner().walk(
           [&](arith::AddFOp add) { add->removeAttr(kSourceRefs); });
+    }
+  }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<arith::ArithDialect>();
+  }
+};
+
+class FoldAddOwnerMismatchPass
+    : public FoldMutationPass<FoldAddOwnerMismatchPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldAddOwnerMismatchPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-mismatch-fold-add-owner-ref";
+  }
+  void runOnOperation() override {
+    FoldOp operation = fold();
+    if (operation) {
+      operation.getCombiner().walk([&](arith::AddFOp add) {
+        add->setAttr(kOperationRef,
+                     DenseI64ArrayAttr::get(add.getContext(), {8, 8, 8}));
+      });
+    }
+  }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<arith::ArithDialect>();
+  }
+};
+
+class FoldAddOwnerMissingPass
+    : public FoldMutationPass<FoldAddOwnerMissingPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldAddOwnerMissingPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-remove-fold-add-owner-ref";
+  }
+  void runOnOperation() override {
+    FoldOp operation = fold();
+    if (operation) {
+      operation.getCombiner().walk(
+          [&](arith::AddFOp add) { add->removeAttr(kOperationRef); });
     }
   }
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -388,6 +470,21 @@ public:
   }
 };
 
+class FoldAttributePass : public FoldMutationPass<FoldAttributePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldAttributePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-add-fold-attribute";
+  }
+  void runOnOperation() override {
+    if (FoldOp operation = fold()) {
+      operation->setAttr(
+          "shuttle.test_semantic",
+          IntegerAttr::get(IntegerType::get(operation.getContext(), 64), 7));
+    }
+  }
+};
+
 class ManifestVersionPass : public MutationPass<ManifestVersionPass> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ManifestVersionPass)
@@ -451,18 +548,23 @@ public:
 void registerMutationPasses() {
   PassRegistration<ExcludedKindPass>();
   PassRegistration<ExcludedAttributePass>();
+  PassRegistration<NestedExcludedAttributePass>();
   PassRegistration<ExcludedOperandPass>();
   PassRegistration<UnsupportedAbsorptionPass>();
   PassRegistration<ReturnRewirePass>();
   PassRegistration<ManifestDigestPass>();
   PassRegistration<FoldOwnerPass>();
+  PassRegistration<FoldOwnerMismatchPass>();
   PassRegistration<FoldAddSourcePass>();
+  PassRegistration<FoldAddOwnerMismatchPass>();
+  PassRegistration<FoldAddOwnerMissingPass>();
   PassRegistration<FoldAddDuplicateSourcePass>();
   PassRegistration<FoldYieldOwnerPass>();
   PassRegistration<FoldOwnerDuplicatePass>();
   PassRegistration<FoldYieldRewirePass>();
   PassRegistration<FoldAddFastMathPass>();
   PassRegistration<FoldYieldAttributePass>();
+  PassRegistration<FoldAttributePass>();
   PassRegistration<ManifestVersionPass>();
   PassRegistration<ManifestVersionMissingPass>();
   PassRegistration<ReportNormalizedFingerprintPass>();

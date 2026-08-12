@@ -59,6 +59,21 @@ module {
   }
 }
 
+// -----
+
+module {
+  func.func @promoted_result(%input: tensor<4x4xf32>, %init: tensor<f32>)
+      -> tensor<4xf64> {
+    %result = "stablehlo.reduce"(%input, %init) ({
+    ^bb0(%element: tensor<f64>, %accumulator: tensor<f64>):
+      %sum = stablehlo.add %element, %accumulator : tensor<f64>
+      stablehlo.return %sum : tensor<f64>
+    }) {dimensions = array<i64: 0>} : (tensor<4x4xf32>, tensor<f32>) -> tensor<4xf64>
+    return %result : tensor<4xf64>
+  }
+}
+
+// CHECK-DAG: shuttle.coverage_manifest = {{.*}}reason = "unsupported_operation"{{.*}}reason = "enclosing_region_excluded"
 // CHECK-DAG: shuttle.coverage_manifest = {{.*}}reason = "unsupported_operation"{{.*}}reason = "enclosing_region_excluded"
 // CHECK-DAG: shuttle.coverage_manifest = {{.*}}reason = "unsupported_operation"{{.*}}reason = "enclosing_region_excluded"
 // CHECK-DAG: shuttle.coverage_manifest = {{.*}}reason = "unsupported_operation"{{.*}}reason = "enclosing_region_excluded"
@@ -67,3 +82,4 @@ module {
 // CHECK-DAG: func.func @extra_combiner_op
 // CHECK-DAG: func.func @bf16_accumulator
 // CHECK-DAG: func.func @multi_result
+// CHECK-DAG: func.func @promoted_result
