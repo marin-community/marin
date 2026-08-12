@@ -33,18 +33,24 @@ while (( SECONDS < deadline )); do
   # Stall watchdog: a wedged gang stays 'running' with every rank alive (the
   # iteration-0 baseline burned 10.5 rack-hours that way). Progress = the run's
   # last logged _step advancing; startup/compile is covered by TIMEOUT, not this.
+  # Progress only counts while the W&B run is live: a gang retry inherits the
+  # previous attempt's finished run, whose stale summary otherwise reads as
+  # "progress then stall" and gets a queued job killed (this happened).
   step=$(uv run python -c "
 import wandb
 try:
     run = wandb.Api().run('marin-community/marin_moe/${RUN_ID}')
-    print(int(run.summary.get('_step', -1)))
+    if run.state == 'running':
+        print(int(run.summary.get('_step', -1)))
+    else:
+        print(-1)
 except Exception:
     print(-1)
 " 2>/dev/null || echo -1)
   if (( step > last_step )); then
     last_step=$step
     last_progress=$SECONDS
-  elif (( last_step >= 0 && SECONDS - last_progress > STALL_LIMIT )); then
+  elif (( last_step >= 0 && step >= 0 && SECONDS - last_progress > STALL_LIMIT )); then
     echo "STALL: no step past ${last_step} for >${STALL_LIMIT}s; capturing summary and killing ${JOB}" >&2
     "${IRIS[@]}" job summary "${JOB}/grug-train-${RUN_ID}" >&2 || true
     "${IRIS[@]}" job kill "$JOB" >&2 || true
