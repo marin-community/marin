@@ -176,6 +176,26 @@ StepRunner().run([lower(build())], force_run_failed=False)
 Remove the artifact directory, then rerun the script. Alternatively, bump the `version`
 in `train_lm` to produce a new artifact at a new path without touching the old one.
 
+### Checked-in smoke launcher
+
+The repository also includes a small launcher for checking the standard training path.
+It prints its plan by default; pass `--run` to execute it. Use `--version dev` while
+iterating, or a calendar version to pin outputs:
+
+```bash
+# Print the CPU/TinyStories plan.
+uv run python -m experiments.tutorials.train_tiny_model \
+  --device cpu --dataset tinystories --version dev
+
+# Run on an Iris H100 worker.
+uv run python -m experiments.tutorials.train_tiny_model \
+  --device h100x8 --dataset wikitext --version dev --run
+```
+
+If the launcher appears to do nothing, check whether `--run` was omitted. It also accepts
+`h100x1`, `gb200x1`, `gb200x4`, `v5litepod-16`, and `v6e-4`. TinyStories and WikiText
+tokenize a 1,000-document sample; `fineweb-edu` uses the checked-in pretokenized cache.
+
 ## Next steps
 
 - Train a full [1B parameter model](train-an-lm.md) using the DCLM mixture.

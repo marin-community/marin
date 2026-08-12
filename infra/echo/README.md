@@ -107,6 +107,8 @@ latency and an additional prompt-injection path.
 measurement covers token acquisition, the network request, server retrieval and
 reranking, and response decoding: the time the caller waited for Echo.
 
+### Record and inspect search feedback
+
 Submit useful or poor results with `feedback`. A search prints its durable execution ID;
 pass it with `--execution-id` so each judgment is tied to the exact ranked result set.
 Repeat `--grade <result-id>=<0-10>` for
@@ -122,6 +124,13 @@ does not persist request headers, user agents, or network addresses in these tab
 `history export` pages through the durable records as JSONL, including ranked result
 snapshots. Historical query manifests can be replayed through normal search so each
 record captures current results under the same contract as future traffic.
+
+Use the durable export for retrieval analysis. Cloud Logging request lines are operational
+telemetry and do not preserve the execution-to-result relationship:
+
+```bash
+uv run infra/echo/cli.py history export > echo-search-history.jsonl
+```
 
 The scheduled sync checks GitHub at most once per hour. An unchanged head only advances
 the check time. A new head uses GitHub's compare API to delete, fetch, and re-embed

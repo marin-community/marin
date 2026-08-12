@@ -264,6 +264,35 @@ iris task exec /user/job/0 -- bash -c "nohup bash -c 'your-command > /tmp/out.lo
 iris task exec /user/job/0 -- cat /tmp/out.log   # check later
 ```
 
+### Task with no logs or W&B progress
+
+Determine whether the task is pending, building, running, or terminal before treating
+missing logs or W&B metrics as a training stall:
+
+```bash
+iris task describe /user/job/0
+iris task events /user/job/0
+iris job logs /user/job
+```
+
+A task without a running container cannot produce task-local logs or W&B updates. For a
+running task, compare the current attempt and exit reason with driver/container logs and
+the resource request. A live process can still be compiling or blocked by host/device
+memory before its first optimizer update.
+
+Keep inspection read-only. Record the state, attempt, exit reason, and resource request
+before restarting or signalling anything.
+
+### Log filtering
+
+The Iris dashboard's full-log filter accepts a regular expression. For example,
+`rank0.*train/loss` matches log contents; an invalid expression such as an unbalanced
+`[` is rejected. Fix the expression instead of treating an empty result as evidence that
+the task produced no matching logs.
+
+The dashboard's find box searches only the lines loaded in the browser. Use the
+full-log filter when the target may be outside that segment; use find for visible lines.
+
 ### Kicking a wedged task (emergency override)
 
 When a scheduling bug or stuck node strands a task on a machine, force its
