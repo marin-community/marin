@@ -794,3 +794,14 @@ author: Rafal Wojdyla
 - Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
 - Issue update: None. These are routine source completions, not a major run-state change.
 - Next action: Continue the regular health-check cadence and watch RNO HPLT through completion.
+
+### 2026-08-12 18:03 UTC - Routine health check
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 45 completed source artifacts. RNO has eight completed source artifacts. The full run has 53 of 292 completed source artifacts.
+- East progress: `nemotron_cc_v2-diverse_qa_016d1909` completed its 4,416-shard join and got to 192 of 4,416 embedding shards with 32 live workers and no dead workers.
+- RNO progress: `hplt_v3_528b745e` got to 6,024 of 6,330 embedding shards with 32 live workers and no dead workers. Its recent rate gives a rough 18:15-18:20 UTC completion estimate.
+- Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Issue update: None. There is no major run-state change.
+- Next action: Watch RNO HPLT through completion and continue the regular East health checks.
