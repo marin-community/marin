@@ -1064,6 +1064,20 @@ def test_build_eval_bloom_excludes_named_task_dirs(tmp_path: Path):
     assert rows["hits-excluded"]["contaminated"] is False
 
 
+def test_build_eval_bloom_excludes_direct_file_under_named_task_dir(tmp_path: Path):
+    eval_path = tmp_path / "evals" / "code2text_python" / "eval.parquet"
+    _write_input_parquet(eval_path, [{"id": "excluded-1", "text": "alpha beta gamma"}])
+
+    result = build_eval_bloom(
+        eval_data_sources=str(eval_path),
+        output_path=str(tmp_path / "bloom"),
+        exclude_eval_dirs=frozenset({"code2text_python"}),
+    )
+
+    assert result.n_eval_records == 0
+    assert pq.read_table(result.eval_hash_index_path).num_rows == 0
+
+
 def test_merge_eval_blooms_equals_single_build(tmp_path: Path):
     """merge_eval_blooms over N per-eval builds detects everything a single combined build does.
 

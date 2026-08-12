@@ -314,7 +314,12 @@ def _discover_eval_files(eval_paths: list[str], exclude_dir_names: frozenset[str
         protocol = source.split("://")[0] if "://" in source else ""
         if fs.isfile(resolved):
             filename = os.path.basename(resolved)
-            if not filename.startswith(".") and filename.endswith(SUPPORTED_EXTENSIONS):
+            parent_name = os.path.basename(os.path.dirname(resolved).rstrip("/"))
+            if (
+                parent_name not in exclude_dir_names
+                and not filename.startswith(".")
+                and filename.endswith(SUPPORTED_EXTENSIONS)
+            ):
                 yield source
             continue
         for root, _dirs, files in fs.walk(resolved):
@@ -1015,7 +1020,8 @@ def build_eval_bloom_step(
             expected version and names enter the step hash.
         best_effort_eval_manifest_path, best_effort_eval_root,
             best_effort_eval_corpus_version: Optional best-effort suite. Only
-            the exact artifacts in its manifest enter the Bloom.
+            the exact artifacts in its immutable, versioned manifest enter the
+            Bloom.
         output_path_prefix, override_output_path: StepSpec routing.
     """
     raw_paths: list[str] = []

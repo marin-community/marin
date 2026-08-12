@@ -679,6 +679,24 @@ def _lmh_task_names() -> list[str]:
 
 
 def _prepare_lmh() -> dict[str, Any]:
+    """Build and seal the LMH manifest for one eval-corpus version."""
+    manifest_path = f"{_output_root()}/{LMH_MANIFEST_RELATIVE}"
+    manifest_storage = StoragePath(manifest_path)
+    if manifest_storage.exists():
+        with manifest_storage.open("r") as source:
+            existing_manifest = json.load(source)
+        if not isinstance(existing_manifest, dict):
+            raise ValueError(f"lmh manifest must be an object: {manifest_path}")
+        if existing_manifest.get("corpus_version") != EVAL_CORPUS_VERSION:
+            raise ValueError(
+                f"lmh manifest version is {existing_manifest.get('corpus_version')!r}, "
+                f"expected {EVAL_CORPUS_VERSION!r}"
+            )
+        if existing_manifest.get("status") not in {"complete", "complete_with_failures"}:
+            raise ValueError(f"lmh manifest is not complete: {manifest_path}")
+        logger.info("lmh: version %s is already sealed at %s", EVAL_CORPUS_VERSION, manifest_path)
+        return existing_manifest
+
     trust_remote_code_for_hf()
     names = _lmh_task_names()
     logger.info("lmh: %d unique task names from task_configs.py", len(names))
@@ -698,7 +716,7 @@ def _prepare_lmh() -> dict[str, Any]:
             "artifacts": [],
             "failed": [{"task": "*", "reason": f"lm_eval import: {exc}"}],
         }
-        _write_json(f"{_output_root()}/{LMH_MANIFEST_RELATIVE}", manifest)
+        _write_json(manifest_path, manifest)
         return manifest
 
     succeeded: list[str] = []
@@ -791,7 +809,7 @@ def _prepare_lmh() -> dict[str, Any]:
         "artifacts": artifacts,
         "failed": [{"task": name, "reason": reason} for name, reason in failed],
     }
-    _write_json(f"{_output_root()}/{LMH_MANIFEST_RELATIVE}", manifest)
+    _write_json(manifest_path, manifest)
     return manifest
 
 

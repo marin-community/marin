@@ -9,6 +9,7 @@ not falsely flagged. Non-passage docs are unchanged.
 """
 
 import io
+import json
 import zipfile
 from dataclasses import replace
 
@@ -228,3 +229,30 @@ def test_aa_record_count_mismatch_stops_preparation():
 
     with pytest.raises(ValueError, match="Example Eval: expected 2 records, extracted 1"):
         _aa_records([{"question": "Only question", "answer": "Only answer"}], cfg)
+
+
+def test_lmh_manifest_is_immutable_within_a_corpus_version(tmp_path, monkeypatch):
+    manifest = {
+        "schema_version": 1,
+        "corpus_version": prepare_eval_corpus.EVAL_CORPUS_VERSION,
+        "required": False,
+        "status": "complete_with_failures",
+        "included_leaf_tasks": ["existing-task"],
+        "artifacts": [{"task": "existing-task", "artifact": "existing-task/eval.parquet", "records": 1}],
+        "failed": [],
+    }
+    manifest_path = tmp_path / prepare_eval_corpus.LMH_MANIFEST_RELATIVE
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(json.dumps(manifest))
+    original_bytes = manifest_path.read_bytes()
+    monkeypatch.setattr(prepare_eval_corpus, "_output_root", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        prepare_eval_corpus,
+        "_lmh_task_names",
+        lambda: pytest.fail("a sealed corpus version must not enumerate tasks again"),
+    )
+
+    result = prepare_eval_corpus._prepare_lmh()
+
+    assert result == manifest
+    assert manifest_path.read_bytes() == original_bytes
