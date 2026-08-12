@@ -80,10 +80,12 @@ WORKER_MAX_TASK_RETRIES = 5_000
 # rejects a pipeline past its limit rather than queueing it, so the driver's
 # fan-out reads this same number off the context.
 MAX_CONCURRENT_PIPELINES = 30
-# The coordinator tracks 32 pipelines at once instead of zephyr's default handful,
-# so it gets more than the default 0.1 CPU / 1 GB. It stays non-preemptible: losing
-# it loses every in-flight pipeline, while losing a worker costs one shard.
-COORDINATOR_RESOURCES = ResourceConfig(cpu=2, ram="3g", preemptible=False)
+
+# Five CPUs for the coordinator: it holds one thread per concurrency slot and every
+# pipeline's task queue, and fields a ``pull_task`` from each of ~200 workers twice a
+# second. Never preemptible -- losing a worker costs one shard, losing the
+# coordinator costs every pipeline in flight.
+COORDINATOR_RESOURCES = ResourceConfig(cpu=5, ram="16g", preemptible=False)
 
 
 def coordinator_max_concurrency(max_workers: int) -> int:

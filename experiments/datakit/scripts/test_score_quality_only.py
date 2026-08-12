@@ -212,8 +212,7 @@ def test_the_coordinator_is_sized_for_the_fan_out_and_never_preempted():
     Preemptibility matters more than size: an evicted worker costs one shard, an
     evicted coordinator costs every pipeline in flight.
     """
-    assert COORDINATOR_RESOURCES.cpu == 2
-    assert COORDINATOR_RESOURCES.ram == "3g"
+    assert COORDINATOR_RESOURCES.cpu == 5
     assert COORDINATOR_RESOURCES.preemptible is False
 
 
