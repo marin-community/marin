@@ -356,3 +356,15 @@ author: Rafal Wojdyla
 - Archive check: The restored model archive still exists at the original v3 S3 path.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of coordinator logs.
 - Next action: Verify the RNO source transition, continue the 15-minute check cadence, and validate replacement services when RNO capacity becomes available.
+
+### 2026-08-12 05:43 UTC - RNO source transition
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 11 completed source artifacts. RNO has three completed source artifacts. The full run has 14 of 292 completed source artifacts.
+- RNO result: `common_corpus-english_0e1cf2c4` succeeded after 8 hours and 55 minutes. It processed 8,017 output shards and skipped one existing output shard.
+- Retry result: 174 RNO shards retried once. No shard needed a second retry.
+- RNO progress: `davinci-dev-ctx-native_f5bd4268` started. It has 298 output shards, with 32 in flight, 32 live workers, and no dead workers.
+- East progress: `nemotron_code_v1-content_085c2c96` got to 856 of 2,341 output shards with 32 live workers and no dead workers.
+- Service capacity: East has 96 running TEI pods. RNO has 82 running TEI pods. Fourteen replacement jobs still wait for interactive capacity.
+- Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the active coordinator logs.
+- Next action: Continue the 15-minute check cadence and validate replacement services when RNO capacity becomes available.
