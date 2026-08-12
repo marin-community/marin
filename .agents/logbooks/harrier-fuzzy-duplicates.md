@@ -969,3 +969,15 @@ author: Rafal Wojdyla
 - East progress: `nemotron_cc_v2-high_quality_synthetic_ea28c25e` is embedding 8,778 shards with 32 live workers and no dead workers.
 - Issue update: Post one major update for the sustained RNO capacity loss.
 - Next action: Watch the 16 building RNO services and recover only if a service job becomes terminal.
+
+### 2026-08-12 23:52 UTC - RNO TEI capacity returned to 88
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 46 completed source artifacts. RNO has 33 completed source artifacts. The full run has 79 of 292 completed source artifacts, and 81 sources have written output.
+- Aggregate progress: A direct object count at 23:49 UTC found 95,986 of 166,775 output shards, or 57.55%. There are 70,789 shards left. East has written 37,090 shards, and RNO has written 58,896 shards.
+- RNO service recovery: Eight TEI services recovered automatically. RNO now has 88 running services and eight services in the build state. This state stayed stable for more than ten minutes. No TEI service job failed.
+- RNO results: `cp/pubmed_1a33b0a8` completed 162 shards, `cp/stackexchange_89d5f2ba` completed 130 shards, and `cp/uk_hansard_1e827dc0` completed 11 shards. All three source steps succeeded.
+- RNO progress: `cp/uspto_97add1bd` reached 128 of 551 shards with 32 live workers and no dead workers. The service transition caused eight `RemoteDisconnected` errors. Zephyr requeued all eight shards at retry one of three. The burst ended at 23:38:41 UTC, and no shard reached retry two.
+- East progress: `nemotron_cc_v2-high_quality_synthetic_ea28c25e` reached 3,353 of 8,778 shards with 32 live workers and no dead workers.
+- Issue update: Post one major update for the stable RNO capacity recovery.
+- Next action: Continue to watch both active sources and the eight building RNO services.
