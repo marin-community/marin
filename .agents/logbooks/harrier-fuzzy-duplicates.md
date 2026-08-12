@@ -957,3 +957,15 @@ author: Rafal Wojdyla
 - Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
 - Issue update: None. These are routine source completions, not a major run-state change.
 - Next action: Watch `cp/pes2o` through completion and confirm that the new east source starts embedding.
+
+### 2026-08-12 23:04 UTC - RNO TEI capacity fell to 80
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 46 completed source artifacts. RNO has 30 completed source artifacts. The full run has 76 of 292 completed source artifacts.
+- Aggregate progress: A direct object count found 93,645 of 166,775 output shards, or 56.15%. There are 73,130 shards left. East has written 35,084 shards, and RNO has written 58,561 shards.
+- RNO service event: Eight previously queued TEI services obtained H100 workers. Sixteen other TEI services were then preempted and moved to the build state. Healthy RNO capacity fell from 88 to 80 and stayed there for more than ten minutes. No TEI service job failed.
+- RNO results: `cp/pes2o_c403b7bb` completed 211 shards with 3,836,569 duplicate documents, `cp/pre_1929_books_aa6450f5` completed 61 shards with 107,100 duplicate documents, and `cp/project_gutenberg_4b66f21a` completed 28 shards with 54,293 duplicate documents. All three source steps succeeded.
+- RNO progress: `cp/pubmed_1a33b0a8` is running with 32 live workers and no dead workers. No retry-two, rate-limit, memory, dead-worker, or missing-file error matched its logs.
+- East progress: `nemotron_cc_v2-high_quality_synthetic_ea28c25e` is embedding 8,778 shards with 32 live workers and no dead workers.
+- Issue update: Post one major update for the sustained RNO capacity loss.
+- Next action: Watch the 16 building RNO services and recover only if a service job becomes terminal.
