@@ -45,8 +45,15 @@ buffer ordinal:
 
 The first implementation should forbid reuse, donation, nonzero offsets, and
 overlapping alias groups. That is a safe candidate policy, not a fact derivable
-from StableHLO. The runtime owner must choose it explicitly and validate actual
-base pointers and spans at invocation.
+from StableHLO. A typed XLA FFI handler can observe each argument's dtype, data
+pointer, rank, and dimensions. It can recompute a shape-derived required byte
+count and check pointer alignment, but that count is not an observable
+allocation extent and cannot prove the allocation is large enough. Contiguous,
+zero-offset storage and its layout, alias, and donation guarantees must
+therefore be established when constructing the custom call and participating in
+XLA buffer assignment. If that proof is unavailable, the boundary requires an
+explicit XLA ABI extension or backend metadata that carries the missing facts;
+the handler must not infer them from the FFI buffer view.
 
 Rank-zero tensors remain real one-element buffers. Scalar Map tasks are not
 compile-time constants unless a separate verified constant-folding pass removes
@@ -121,28 +128,38 @@ device ABI, code generator, target profile, and code-object digest. Either model
 changes observable compilation and requires a pipeline ABI/cache review. An
 opt-in analysis that does not replace StableHLO leaves ABI 5 unchanged.
 
-Under the custom-call model, XLA owns external operand and result allocations
-and supplies their base pointers, available byte extents, and execution stream
-to the handler. Shuttle's compiler output supplies required byte spans and
-minimum alignment. The handler validates those requirements before enqueue.
-Temporary buffers are compiler-planned but runtime-allocated; the handler's
-scratch allocator supplies their base pointers and extents for the invocation.
-The handler reports synchronous validation and enqueue failures to XLA. Device
-execution failures remain owned by XLA's stream and executable completion path.
-Input donation and output aliasing follow XLA's buffer assignment, including
+Under the custom-call model, XLA owns external operand and result allocations.
+Typed FFI supplies their dtype, data pointer, rank, dimensions, and execution
+stream, but not the backing allocation's available byte extent. Shuttle's
+compiler output supplies the shape-derived required byte count and minimum
+alignment. The handler can validate dtype, rank, dimensions, and pointer
+alignment before enqueue; construction-time buffer assignment or explicit
+backend metadata must establish the storage span, offset, layout, alias, and
+donation contract.
+
+Temporary buffers are compiler-planned but runtime-allocated. The ordinary FFI
+scratch allocator may release an allocation when the handler returns; that is
+insufficient for asynchronous launches unless its implementation is proven
+stream-ordered or deferred through device completion. The runtime must instead
+retain temporary allocations, loaded code, executable state, and asynchronous
+error state through an explicit FFI `Future` or equivalent completion token,
+and resolve that token with any asynchronous failure. A synchronizing handler
+may release them before return only after synchronization succeeds. The handler
+reports synchronous validation and enqueue failures directly to XLA. Input
+donation and output aliasing follow XLA's buffer assignment, including
 tuple-leaf destinations; Shuttle may only request relationships that the
-assignment confirms. The XLA executable owns the stream until all enqueued
-launches and dependent callbacks complete. A handler cannot release temporary
-storage, code objects, or error state before that completion point.
-The backend-integration model must name equivalent owners explicitly.
+assignment confirms. The XLA runtime owns the supplied stream, and no owner may
+release temporary storage, code objects, or error state, until the completion
+token resolves. The backend-integration model must name equivalent owners
+explicitly.
 
 ## Prior artifacts
 
-`ffi_command_buffer_boundary.md` describes two fixed generated CUDA handlers
-and one H100 measurement. Its handler names, fixed-shape code, CUDA launch
-policy, and command-buffer eligibility audit are experiment evidence. They are
-not a generic Target 1 runtime contract and must not become dispatch keys for
-this boundary.
+`ffi_command_buffer_boundary.md` describes two fixed generated CUDA handlers,
+evidence from a prior sealed H100 profile, and an unexecuted one-H100 measurement
+plan. Its handler names, fixed-shape code, CUDA launch policy, and command-buffer
+eligibility audit are experiment evidence. They are not a generic Target 1
+runtime contract and must not become dispatch keys for this boundary.
 
 The EventTensor documents define derived dependency factorization and
 release/acquire visibility. They can inform a later synchronization lowering,
@@ -157,7 +174,8 @@ Those ownership decisions remain required even for a standalone local runtime.
 ## Proposed typed split
 
 Do not add one operation that mixes static code, dynamic pointers, and runtime
-state. The first executable implementation should use two closed schemas.
+state. The first executable implementation should use two closed child schemas
+and one closed static binding root.
 
 `shuttle.device_module` is static compiler output. It binds exactly one verified
 schedule and contains:
@@ -170,16 +188,27 @@ schedule and contains:
 - a deterministic fingerprint covering every semantic field.
 
 `shuttle.invocation_abi` is a static descriptor consumed by the runtime. It
-contains buffer slots, types, byte spans, strides, offsets, alignments, address
-spaces, ownership, alias and donation constraints, tuple-leaf destinations, and
-allocation/reuse groups. Actual base pointers and stream/event handles are
-dynamic invocation values and must not be serialized into MLIR.
+contains buffer slots, types, required byte spans, strides, offsets, alignments,
+address spaces, ownership, alias and donation constraints, tuple-leaf
+destinations, and allocation/reuse groups. Actual base pointers, observable
+allocation extents supplied by a future ABI extension, and stream/event handles
+are dynamic invocation values and must not be serialized into MLIR.
 
 Both schemas must reject unknown attributes and recompute fingerprints. A
-source-binding verifier must rederive exact task and buffer ordinals from the
-algebra, materialization plan, and schedule plan. Code-object verification must
-bind generated entrypoints to the complete typed Map/Fold bodies; workload,
-module, function, and source-operation names are excluded.
+static `shuttle.executable_bundle` root binds the canonical device-module digest
+and invocation-ABI digest and has a fingerprint covering that ordered pair and
+the common source-plan identity. Before code lookup or enqueue, the runtime
+recomputes both child digests and the root fingerprint and verifies all three.
+Matching source-plan fingerprints alone are insufficient: a device module and
+invocation ABI cannot be exchanged independently, even with counterparts built
+from the same plan.
+
+A source-binding verifier must rederive exact task and buffer ordinals from the
+algebra, materialization plan, and schedule plan. It must compare each launch's
+ordered buffer ordinals and access modes with the invocation ABI, not only their
+types or counts. Code-object verification must bind generated entrypoints to the
+complete typed Map/Fold bodies; workload, module, function, and source-operation
+names are excluded.
 
 The initial candidate may use one launch per schedule task, global buffers,
 natural element alignment, zero offsets, unique alias groups, no reuse, and
@@ -220,6 +249,10 @@ Mutation gates must reject:
 - scalar Maps with tensor domains and tensor Maps with scalar domains;
 - unknown attributes, multiple device modules, multiple invocation ABIs, or
   mismatched source-plan fingerprints;
+- a device module or invocation ABI swapped with a same-source-plan counterpart,
+  including a one-sided recomputation of either child or bundle digest;
+- a launch buffer ordinal or access mode that disagrees with the bound
+  invocation-ABI slot, even when the tensor types match;
 - dispatch based on workload, module, function, fixture, or source-operation
   names.
 
