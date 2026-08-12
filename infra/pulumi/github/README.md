@@ -83,7 +83,8 @@ select only `marin`. To recreate or rotate the app credential:
      encryptedPrivateKey: example-base64-ciphertext
    ```
 
-4. Run `pulumi preview`, verify the ruleset bypass actors, then run `pulumi up` and the live audit:
+4. Run `pulumi preview`. Verify the ruleset bypass actors and the imported classic `main`
+   protection's app bypass, then run `pulumi up` and the live audit:
 
    ```bash
    pulumi preview

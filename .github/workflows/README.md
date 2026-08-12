@@ -69,7 +69,8 @@ scheduled workflow red.
 
 The app key is an environment secret released only to `main`; a pull-request
 workflow cannot receive it. The GitHub Pulumi stack gives the app a
-pull-request-only review bypass but no required-CI bypass. Organization admins
+pull-request-only review bypass in both the current ruleset and the repository's
+imported classic protection, but no required-CI bypass. Organization admins
 retain their emergency bypass on both rulesets. Required checks are bound to
 the GitHub Actions integration, so the app cannot merge a failing update or
 supply the required contexts itself. An upstream commit is discovered within

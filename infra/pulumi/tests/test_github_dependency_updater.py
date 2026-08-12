@@ -3,6 +3,7 @@
 
 import pytest
 from iac.github.dependency_updater import (
+    CLASSIC_REQUIRED_CHECKS,
     DependencyUpdaterConfig,
     RulesetBypassActorPlan,
     dependency_updater_config,
@@ -34,6 +35,8 @@ def test_plan_preserves_admin_override_and_limits_the_updater_to_review_bypass()
     assert plan.review_bypass_actors == (admin, updater)
     assert plan.required_ci_bypass_actors == (admin,)
     assert plan.review_ruleset_import == "marin:785435"
+    assert plan.classic_branch_protection_import == "marin:main"
+    assert plan.classic_review_bypass_apps == ("marin-external-runtime-updater",)
 
 
 def test_plan_binds_required_checks_to_github_actions() -> None:
@@ -41,6 +44,8 @@ def test_plan_binds_required_checks_to_github_actions() -> None:
 
     assert tuple(check.context for check in plan.required_checks) == REQUIRED_CHECKS
     assert {check.integration_id for check in plan.required_checks} == {GITHUB_ACTIONS_APP_ID}
+    assert tuple(check.context for check in plan.classic_required_checks) == CLASSIC_REQUIRED_CHECKS
+    assert {check.integration_id for check in plan.classic_required_checks} == {GITHUB_ACTIONS_APP_ID}
 
 
 def test_plan_targets_marins_dependency_update_environment() -> None:
