@@ -30,7 +30,7 @@ from haliax.jax_utils import broadcast_one_to_all
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
+from zephyr.context import ZephyrContext
 from zephyr import counters as zephyr_counters
 from rigging.filesystem.atomic import atomic_rename
 from zephyr.writers import ThreadedBatchWriter, batchify, ensure_parent_dir

@@ -124,7 +124,7 @@ from marin.processing.tokenize.attributes import (
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
-from zephyr.execution import ZephyrContext
+from zephyr.context import ZephyrContext
 from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.cluster.domain.v0.assign import (

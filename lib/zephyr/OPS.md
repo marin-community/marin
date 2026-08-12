@@ -9,7 +9,9 @@ See `lib/iris/OPS.md` → "Cluster Lifecycle" for `iris cluster dashboard` and `
 Pull-based coordinator/worker model. Coordinator queues tasks per stage; workers poll `pull_task()`, execute shards, report results. Stages are sequential barriers — all shards in a stage must complete before the next starts (`_wait_for_stage`).
 
 Key files:
-- `src/zephyr/execution.py` — coordinator loop, worker poll loop, shard execution
+- `src/zephyr/context.py` — worker-pool lifecycle and pipeline submission
+- `src/zephyr/coordinator.py` — coordinator loop and stage scheduling
+- `src/zephyr/worker.py` — worker polling and shard execution
 - `src/zephyr/plan.py` — pipeline plan, scatter/reduce, k-way merge
 
 Child job naming: `<hash>-p<pipeline>-a<attempt>-{coord,workers}`. Focus on the latest attempt.
