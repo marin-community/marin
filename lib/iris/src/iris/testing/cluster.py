@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
 from iris.cluster.bundle import BundleStore
-from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
+from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.controller import ops
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.db import ControllerDB
@@ -67,45 +67,6 @@ def make_gpu_resource_spec() -> job_pb2.ResourceSpecProto:
     spec = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=4 * 1024**3)
     spec.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="h100", count=1))
     return spec
-
-
-# ---------------------------------------------------------------------------
-# Worker attribute helpers
-# ---------------------------------------------------------------------------
-
-
-def make_worker_attrs(
-    region: str = "us-central1",
-    device_type: str = "cpu",
-    device_variant: str = "",
-    preemptible: str | None = None,
-    zone: str | None = None,
-    tpu_name: str | None = None,
-    tpu_worker_id: int | None = None,
-    **extras: str,
-) -> dict[str, job_pb2.AttributeValue]:
-    """Build a worker attributes dict for scheduling tests.
-
-    Returns a dict suitable for setting on WorkerMetadata.attributes.
-    """
-    attrs: dict[str, job_pb2.AttributeValue] = {
-        WellKnownAttribute.DEVICE_TYPE: job_pb2.AttributeValue(string_value=device_type),
-    }
-    if region:
-        attrs[WellKnownAttribute.REGION] = job_pb2.AttributeValue(string_value=region)
-    if device_variant:
-        attrs[WellKnownAttribute.DEVICE_VARIANT] = job_pb2.AttributeValue(string_value=device_variant)
-    if preemptible is not None:
-        attrs[WellKnownAttribute.PREEMPTIBLE] = job_pb2.AttributeValue(string_value=preemptible)
-    if zone is not None:
-        attrs[WellKnownAttribute.ZONE] = job_pb2.AttributeValue(string_value=zone)
-    if tpu_name is not None:
-        attrs[WellKnownAttribute.TPU_NAME] = job_pb2.AttributeValue(string_value=tpu_name)
-    if tpu_worker_id is not None:
-        attrs[WellKnownAttribute.TPU_WORKER_ID] = job_pb2.AttributeValue(int_value=tpu_worker_id)
-    for key, val in extras.items():
-        attrs[key] = job_pb2.AttributeValue(string_value=val)
-    return attrs
 
 
 # ---------------------------------------------------------------------------

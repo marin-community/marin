@@ -83,10 +83,6 @@ class ListShard:
         for ref in self.refs:
             yield from ref
 
-    def get_iterators(self) -> Iterator[Iterator]:
-        for ref in self.refs:
-            yield iter(ref)
-
 
 # ---------------------------------------------------------------------------
 # Constants
