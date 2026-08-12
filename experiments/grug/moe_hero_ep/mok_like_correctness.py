@@ -6,8 +6,10 @@
 import json
 import math
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from enum import StrEnum
+from functools import partial
 from threading import Barrier
 
 import click
@@ -41,6 +43,9 @@ SHARED_GRADIENT_ATOL = 1.0
 ROUTER_GRADIENT_RELATIVE_L2_TOLERANCE = 0.01
 MOK_LIKE_SOURCE_ROOT = "/tmp/marin-mok-like/source"
 MOK_LIKE_BUILD_ROOT = "/tmp/marin-mok-like/build"
+
+type FailureResult = jax.Array | tuple[jax.Array, tuple[jax.Array, ...]]
+type CompiledFailure = Callable[..., FailureResult]
 
 
 class RouteScenario(StrEnum):
@@ -437,7 +442,11 @@ def main(
                 else MokLikeTestFailurePoint.BEFORE_COMPLETION
             )
 
-            def failure_output(failure_routes: jax.Array, *arguments: jax.Array) -> jax.Array:
+            def failure_output(
+                failure_routes: jax.Array,
+                *arguments: jax.Array,
+                collective_id: int,
+            ) -> jax.Array:
                 return mok_like_mlp(
                     arguments[0],
                     failure_routes,
@@ -445,28 +454,39 @@ def main(
                     mesh=mesh,
                     runtime=runtime,
                     config=config,
-                    collective_id=0,
+                    collective_id=collective_id,
                 )[0]
 
             def failure_loss(
                 failure_routes: jax.Array,
                 failure_output_gradient: jax.Array,
                 *arguments: jax.Array,
+                collective_id: int,
             ) -> jax.Array:
-                output = failure_output(failure_routes, *arguments)
+                output = failure_output(failure_routes, *arguments, collective_id=collective_id)
                 return jnp.sum(output.astype(jnp.float32) * failure_output_gradient.astype(jnp.float32))
 
+            failure_collective_ids = (0, 1) if failure_concurrent_control else (0,)
             if phase is MokLikeTestFailurePhase.FORWARD:
                 differentiable_offset = 1
                 failure_arguments = (selected_experts, *differentiable)
-                compiled_failure = jax.jit(failure_output).lower(*failure_arguments).compile()
+                compiled_failures = tuple(
+                    jax.jit(partial(failure_output, collective_id=collective_id)).lower(*failure_arguments).compile()
+                    for collective_id in failure_collective_ids
+                )
             else:
                 differentiable_offset = 2
                 failure_arguments = (selected_experts, output_gradient, *differentiable)
-                compiled_failure = (
-                    jax.jit(jax.value_and_grad(failure_loss, argnums=tuple(range(2, 10))))
+                compiled_failures = tuple(
+                    jax.jit(
+                        jax.value_and_grad(
+                            partial(failure_loss, collective_id=collective_id),
+                            argnums=tuple(range(2, 10)),
+                        )
+                    )
                     .lower(*failure_arguments)
                     .compile()
+                    for collective_id in failure_collective_ids
                 )
             runtime.reset_call_counts()
             runtime.reset_debug_counters()
@@ -490,9 +510,13 @@ def main(
                     failure_arguments,
                     scaled_x_arguments,
                 )
+                concurrent_executions = tuple(zip(compiled_failures, concurrent_arguments, strict=True))
                 start = Barrier(2)
 
-                def run_failure_control(arguments: tuple[jax.Array, ...]) -> tuple[object | None, Exception | None]:
+                def run_failure_control(
+                    execution: tuple[CompiledFailure, tuple[jax.Array, ...]],
+                ) -> tuple[FailureResult | None, Exception | None]:
+                    compiled_failure, arguments = execution
                     start.wait()
                     try:
                         result = compiled_failure(*arguments)
@@ -502,7 +526,7 @@ def main(
                         return None, failure
 
                 with ThreadPoolExecutor(max_workers=2) as executor:
-                    results = tuple(executor.map(run_failure_control, concurrent_arguments))
+                    results = tuple(executor.map(run_failure_control, concurrent_executions))
                 errors = tuple(error for _, error in results if error is not None)
                 successes = tuple((index, result) for index, (result, error) in enumerate(results) if error is None)
                 if len(errors) != 1 or len(successes) != 1:
@@ -510,12 +534,13 @@ def main(
                 captured_failure = errors[0]
                 elapsed = time.monotonic() - failure_started
                 success_index, successful_result = successes[0]
+                assert successful_result is not None
                 successful_arguments = concurrent_arguments[success_index]
                 successful_differentiable = successful_arguments[differentiable_offset:]
                 if phase is MokLikeTestFailurePhase.FORWARD:
                     expected_success = jax.jit(reference_output)(*successful_differentiable)
                     jax.block_until_ready(expected_success)
-                    success_metrics: object = _error_metrics(
+                    success_metrics = _error_metrics(
                         successful_result,
                         expected_success,
                         absolute_tolerance=BF16_ATOL,
@@ -557,7 +582,7 @@ def main(
                     raise AssertionError(f"concurrent control result did not match the reference: {success_metrics}")
             else:
                 try:
-                    failed_result = compiled_failure(*failure_arguments)
+                    failed_result = compiled_failures[0](*failure_arguments)
                     jax.block_until_ready(failed_result)
                 except Exception as failure:
                     captured_failure = failure
