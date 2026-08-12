@@ -86,6 +86,12 @@ EXPECTED_TARGET_DIMENSIONS = {
         {"gb200x4"},
     ),
 }
+EXPECTED_SHAPE_SPECIFICATIONS = {
+    "rmsnorm_bf16_2048x4096": (
+        "x:bf16[2048,4096], gamma:bf16[4096], dy:bf16[2048,4096], y:bf16[2048,4096], "
+        "dx:bf16[2048,4096], dgamma:bf16[4096], epsilon:f32=1e-5, layout:row_major_contiguous"
+    ),
+}
 REQUIRED_POLICIES = frozenset(Numerics)
 PENDING_SHAPE_SUFFIX = "_pending"
 IDENTIFIER_PATTERN = re.compile(r"[a-z0-9][a-z0-9_]*\Z")
@@ -309,6 +315,10 @@ def validate_evaluation_manifest(document: object, *, source_root: Path) -> Eval
     thresholds = _acceptance_thresholds(root["acceptance_thresholds"])
     shapes = tuple(_shape(value, index) for index, value in enumerate(_list(root["shapes"], "shapes")))
     shape_by_id = _unique_by_id(shapes, "shape")
+    for shape_id, specification in EXPECTED_SHAPE_SPECIFICATIONS.items():
+        shape = shape_by_id.get(shape_id)
+        if shape is None or shape.specification != specification:
+            raise EvaluationManifestError(f"shape {shape_id!r} differs from Shuttle evaluation schema version 1")
 
     evidence = tuple(
         _evidence(value, f"evidence[{index}]", source_root=source_root)

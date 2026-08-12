@@ -410,6 +410,34 @@ def test_target_one_matrix_rejects_a_self_consistent_shape_change() -> None:
         validate_evaluation_manifest(document, source_root=SOURCE_ROOT)
 
 
+@pytest.mark.parametrize(
+    ("original", "replacement"),
+    [
+        (
+            "x:bf16[2048,4096], gamma:bf16[4096], dy:bf16[2048,4096], y:bf16[2048,4096], "
+            "dx:bf16[2048,4096], dgamma:bf16[4096]",
+            "x:bf16[7,13], gamma:bf16[13], dy:bf16[7,13], y:bf16[7,13], dx:bf16[7,13], dgamma:bf16[13]",
+        ),
+        ("bf16", "f32"),
+        ("epsilon:f32=1e-5", "epsilon:f32=1e-6"),
+        ("layout:row_major_contiguous", "layout:column_major_contiguous"),
+        ("dgamma:bf16[4096]", "dbeta:bf16[4096]"),
+    ],
+)
+def test_target_one_shape_rejects_same_id_specification_mutations(original: str, replacement: str) -> None:
+    document = _document()
+    shapes = document["shapes"]
+    assert isinstance(shapes, list)
+    shape = next(item for item in shapes if isinstance(item, dict) and item["id"] == "rmsnorm_bf16_2048x4096")
+    specification = shape["specification"]
+    assert isinstance(specification, str)
+    assert original in specification
+    shape["specification"] = specification.replace(original, replacement)
+
+    with pytest.raises(EvaluationManifestError):
+        validate_evaluation_manifest(document, source_root=SOURCE_ROOT)
+
+
 def test_declared_shape_rejects_a_representative_shape_blocker() -> None:
     document = _document()
     cells = document["cells"]
