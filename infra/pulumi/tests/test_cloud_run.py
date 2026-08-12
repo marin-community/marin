@@ -3,7 +3,7 @@
 
 import pulumi
 import pulumi_gcp as gcp
-from iac.gcp.cloud_run import dockerfile_image
+from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, dockerfile_image
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 
@@ -54,3 +54,31 @@ def test_dockerfile_image_uses_dedicated_registry_cache() -> pulumi.Output[None]
         assert registry["imageManifest"] is True
 
     return image.ref.apply(check)
+
+
+@pulumi.runtime.test
+def test_cloud_run_service_resumes_latest_revision_after_operational_rollback() -> pulumi.Output[None]:
+    mocks = RecordingMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-iac", stack="test", preview=False)
+    provider = gcp.Provider("gcp", project="example")
+    service = CloudRunService(
+        "service",
+        CloudRunServiceArgs(
+            project="example",
+            region="us-central1",
+            service_name="service",
+            build_context="/tmp/service",
+        ),
+        gcp_provider=provider,
+    )
+
+    def check(_: str) -> None:
+        resource = next(resource for resource in mocks.resources if resource.typ == "gcp:cloudrunv2/service:Service")
+        assert resource.inputs["traffics"] == [
+            {
+                "percent": 100.0,
+                "type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST",
+            }
+        ]
+
+    return service.uri.apply(check)

@@ -347,6 +347,15 @@ class CloudRunService(pulumi.ComponentResource):
                 min_instance_count=args.min_instances,
                 max_instance_count=args.max_instances,
             ),
+            # An operational rollback temporarily points traffic at a named revision.
+            # The next intentional Pulumi update resumes forward deployment to the
+            # revision created from this template.
+            traffics=[
+                gcp.cloudrunv2.ServiceTrafficArgs(
+                    type="TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST",
+                    percent=100,
+                )
+            ],
             template=gcp.cloudrunv2.ServiceTemplateArgs(
                 service_account=service_account.email,
                 timeout=f"{args.request_timeout}s",

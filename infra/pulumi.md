@@ -48,6 +48,31 @@ deployment. `infra/loom` is one example: it builds an image, writes the image
 digest and runtime configuration to a durable VM, and runs its own readiness
 activation step.
 
+Cloud Run applications can roll back without a separate release database. The
+`cloud-run-rollback` command reads the revision receiving all actual traffic,
+selects the next older revision that reached Cloud Run readiness, and moves all
+traffic to it with the service's `etag` as a concurrency guard. Pass `--to` to
+select another retained ready revision. The command waits for reconciliation
+and checks the application's IAP-protected health endpoint; a failed activation
+or health check restores and verifies the captured source revision.
+
+```bash
+gcloud auth application-default login
+iris login
+uv run --package marin-iac cloud-run-rollback \
+  --project <project> \
+  --region <region> \
+  --service <service> \
+  --health-path /healthz
+```
+
+Rollback changes live Cloud Run traffic and intentionally creates Pulumi drift.
+`CloudRunService` declares 100% traffic to the latest revision, so the next
+intentional `pulumi up` resumes forward deployment. The command does not rewind
+databases or secret values. Confirm the target binary accepts the current data
+schema, and use numbered Secret Manager versions when a release must stay bound
+to one secret value.
+
 ### 3. SaaS resource declarations
 
 SaaS projects record resources outside GCP. For example,

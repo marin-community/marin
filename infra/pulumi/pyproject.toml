@@ -45,6 +45,9 @@ deploy = [
     "google-cloud-kms>=2.24.0",
 ]
 
+[project.scripts]
+cloud-run-rollback = "iac.gcp.cloud_run_rollback:main"
+
 # marin-iris / marin-rigging resolve via the root workspace [tool.uv.sources]
 # (marin-iac is a workspace member), so no local sources table is needed.
 
