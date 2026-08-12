@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Search Echo activity and wiki notes, and read or append the shared work log.
+"""Search Echo context, collect result feedback, and read or append the shared work log.
 
 See ``infra/echo/README.md`` for endpoints and access requirements.
 """
@@ -21,6 +21,7 @@ import hybrid_search
 import reranking
 import schema
 import search_config
+import search_feedback
 import sqlalchemy
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastembed import TextEmbedding
@@ -111,7 +112,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="echo",
-    description="Search Marin activity and wiki notes, and read/append the shared agent work log.",
+    description="Search Marin context, record result feedback, and read or append the shared agent work log.",
     lifespan=lifespan,
 )
 app.state.config = DEFAULT_CONFIG
@@ -203,6 +204,52 @@ class SearchConfiguration(BaseModel):
     domains: list[SearchDomainOption]
     default_domains: list[search_config.SearchDomain]
     display_sha_characters: int
+
+
+class SearchFeedbackGrade(BaseModel):
+    result_id: str = Field(min_length=1, max_length=search_feedback.MAX_RESULT_ID_CHARACTERS)
+    grade: int = Field(ge=search_feedback.MIN_GRADE, le=search_feedback.MAX_GRADE)
+
+    @field_validator("result_id")
+    @classmethod
+    def validate_result_id(cls, result_id: str) -> str:
+        return search_feedback.checked_result_id(result_id)
+
+
+class SearchFeedbackCreate(BaseModel):
+    query: str = Field(min_length=1, max_length=search_feedback.MAX_QUERY_CHARACTERS)
+    grades: list[SearchFeedbackGrade] = Field(default_factory=list, max_length=search_feedback.MAX_GRADES)
+    note: str = Field(min_length=1, max_length=search_feedback.MAX_NOTE_CHARACTERS)
+
+    @field_validator("query")
+    @classmethod
+    def normalize_query(cls, query: str) -> str:
+        query = query.strip()
+        if not query:
+            raise ValueError("query must not be blank")
+        return query
+
+    @field_validator("grades")
+    @classmethod
+    def reject_duplicate_results(cls, grades: list[SearchFeedbackGrade]) -> list[SearchFeedbackGrade]:
+        result_ids = [grade.result_id for grade in grades]
+        if len(result_ids) != len(set(result_ids)):
+            raise ValueError("each result may be graded once per feedback submission")
+        return grades
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, note: str) -> str:
+        note = note.strip()
+        if not note:
+            raise ValueError("note must not be blank")
+        return note
+
+
+class SearchFeedbackEntry(SearchFeedbackCreate):
+    id: int
+    created_at: datetime
+    author: str
 
 
 class RepositoryIndexStatus(BaseModel):
@@ -924,6 +971,44 @@ def add_work_log(
     with engine.begin() as conn:
         row = conn.execute(statement).first()
     return LogEntry(**{c: getattr(row, c) for c in LogEntry.model_fields})
+
+
+@api.post("/feedback", response_model=SearchFeedbackEntry, status_code=201)
+def add_search_feedback(
+    feedback: SearchFeedbackCreate,
+    engine: Engine,
+    x_goog_authenticated_user_email: str | None = Header(None),
+) -> SearchFeedbackEntry:
+    """Store one query's optional note and per-result relevance grades."""
+    statement = (
+        schema.search_feedback.insert()
+        .values(
+            author=iap_caller(x_goog_authenticated_user_email),
+            query=feedback.query,
+            note=feedback.note,
+        )
+        .returning(schema.search_feedback)
+    )
+    with engine.begin() as conn:
+        row = conn.execute(statement).first()
+        assert row is not None
+        if feedback.grades:
+            conn.execute(
+                schema.search_feedback_grades.insert().values(
+                    [
+                        {"feedback_id": row.id, "result_id": grade.result_id, "grade": grade.grade}
+                        for grade in feedback.grades
+                    ]
+                )
+            )
+    return SearchFeedbackEntry(
+        id=row.id,
+        created_at=row.created_at,
+        author=row.author,
+        query=feedback.query,
+        grades=feedback.grades,
+        note=feedback.note,
+    )
 
 
 @api.get("/wiki/search", response_model=list[WikiSummary])

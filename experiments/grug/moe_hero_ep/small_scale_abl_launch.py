@@ -190,7 +190,7 @@ def _small_model(
 
     Every routing/MoE/attention-kernel field is kept from the d6144 hero shape; only the width,
     depth, head split, and intermediate width shrink. ``fixed_all_to_all`` is the EP MoE backend, so
-    ``num_experts`` (128) still divides the EP64 expert axis.
+    ``num_experts`` (192, the hero bank) still divides the EP64 expert axis.
     """
     return GrugModelConfig(
         vocab_size=128_256,
@@ -259,11 +259,11 @@ def build_small_run(
     capacity_factor: float = 1.33,
     seq_len: int = SEQ_LEN,
     tokens_per_step: int = TOKENS_PER_STEP,
-    num_experts: int = 128,
+    num_experts: int = 192,
     num_experts_per_token: int = 4,
     intermediate_dim: int | None = None,
     latent_dim: int | None = None,
-    qb_use_histogram: bool = True,
+    qb_use_histogram: bool = False,
     qb_hist_bins: int = 1000,
     tokens_per_active_param: int = 750,
     num_train_steps_override: int | None = None,
@@ -499,7 +499,7 @@ def build_small_run(
     show_default=True,
     help="Fixed all-to-all capacity factor (EP hero arm is 1.33). Higher drops fewer and pads more.",
 )
-@click.option("--num-experts", type=click.IntRange(min=1), default=128, help="Routed expert count.")
+@click.option("--num-experts", type=click.IntRange(min=1), default=192, help="Routed expert count (hero bank).")
 @click.option("--num-experts-per-token", type=click.IntRange(min=1), default=4, help="Routed experts per token.")
 @click.option(
     "--intermediate-dim",
@@ -515,9 +515,9 @@ def build_small_run(
 )
 @click.option(
     "--qb-histogram/--no-qb-histogram",
-    default=True,
+    default=False,
     show_default=True,
-    help="Estimate the QB quantile with the histogram estimator (EP hero arm) instead of top-k mean.",
+    help="Estimate the QB quantile with the histogram estimator instead of the top-k mean (the hero default).",
 )
 @click.option(
     "--qb-hist-bins",

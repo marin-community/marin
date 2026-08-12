@@ -120,7 +120,7 @@ def test_open_stages_outside_request_then_redirects_to_proxy_path(tmp_path):
     stager = _BlockingStager(tmp_path / "cached profile")
     manager = ProfileStageManager(stager, max_workers=1)
     app = XprofGateway(_xprof_app, manager, "/proxy/xprof")
-    query = "uri=gs%3A%2F%2Fmarin-us-east5%2Ftmp%2Fttl%3D7d%2Fxprof%2Frun-1"
+    query = "uri=gs%3A%2F%2Fmarin-us-east5%2Ftmp%2Fttl%3D7d%2Fxprof%2Frun-1&tool=trace_viewer"
     try:
         pending = _request(app, "/open", query)
         assert pending["status"] == "202 Accepted"
@@ -139,11 +139,13 @@ def test_open_stages_outside_request_then_redirects_to_proxy_path(tmp_path):
         complete = json.loads(_request(app, "/progress", query)["body"])
         assert complete == {
             "state": "ready",
-            "location": f"./?{urlencode({'run_path': str(stager.local_path)})}",
+            "location": f"./?{urlencode({'run_path': str(stager.local_path), 'tool': 'trace_viewer'})}",
         }
         ready = _request(app, "/open", query)
         assert ready["status"] == "303 See Other"
-        assert ready["headers"]["Location"] == f"./?{urlencode({'run_path': str(stager.local_path)})}"
+        assert ready["headers"]["Location"] == (
+            f"./?{urlencode({'run_path': str(stager.local_path), 'tool': 'trace_viewer'})}"
+        )
     finally:
         app.shutdown()
 

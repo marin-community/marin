@@ -50,7 +50,7 @@ lib/marin/src/marin/scaling_laws/
 
 First, make sure the idea looks promising at one reference scale. Good signs include:
 
-- A Grug variant experiment (see `docs/recipes/change_grug.md`).
+- A Grug variant experiment (see `.agents/skills/change-grug/SKILL.md`).
 - A quick A/B at about 130M parameters against the current best setup.
 - Published results or supporting theory.
 

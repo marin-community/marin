@@ -13,6 +13,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlparse
@@ -21,7 +22,7 @@ import click
 import yaml
 from rigging.secrets import resolve_secret_spec
 
-from finelog.deploy.bootstrap import HEALTH_OK, health_probe_command, render_template
+from finelog.deploy.bootstrap import HEALTH_OK, REGISTRATION_FAILED, health_probe_command, render_template
 from finelog.deploy.config import FinelogConfig, auth_policy_json
 from finelog.deploy.image import resolve_image_digest
 
@@ -328,33 +329,44 @@ def _ensure_priority_class(cfg: FinelogConfig) -> None:
     _kubectl_apply(cfg, json.dumps(manifest))
 
 
-def _verify_ingest_ready(cfg: FinelogConfig) -> None:
+def _verify_ingest_ready(cfg: FinelogConfig, max_attempts: int = 60) -> None:
     """Fail the deploy when the rolled-out pod is listening but not ingesting.
 
     ``kubectl rollout status`` only proves the readiness probe passed, and that
     probe is ``/health``, which answers 200 whenever the server is listening. A
     binary whose schema the catalog rejects serves and rejects every write to
     the namespace, so read the body from inside the new pod.
+
+    Registration runs after the server starts listening, so a busy catalog
+    reports ``registration pending`` for a while on a healthy deploy. Poll until
+    a namespace either registers or reports the failure that will not resolve.
     """
     assert cfg.deployment.k8s is not None
-    result = _kubectl(
-        cfg,
-        "exec",
-        f"deployment/{cfg.name}",
-        "-n",
-        cfg.deployment.k8s.namespace,
-        "--",
-        "sh",
-        "-c",
-        health_probe_command(cfg.port),
-        check=False,
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        raise click.ClickException(f"could not read /health from deployment/{cfg.name}: {result.stderr.strip()}")
-    body = result.stdout.strip()
-    if body != HEALTH_OK:
-        raise click.ClickException(f"finelog is serving but not ingesting: {body}")
+    probe = health_probe_command(cfg.port)
+    body = "unreachable"
+    for _ in range(max_attempts):
+        result = _kubectl(
+            cfg,
+            "exec",
+            f"deployment/{cfg.name}",
+            "-n",
+            cfg.deployment.k8s.namespace,
+            "--",
+            "sh",
+            "-c",
+            probe,
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise click.ClickException(f"could not read /health from deployment/{cfg.name}: {result.stderr.strip()}")
+        body = result.stdout.strip()
+        if body == HEALTH_OK:
+            return
+        if REGISTRATION_FAILED in body:
+            break
+        time.sleep(2)
+    raise click.ClickException(f"finelog is serving but not ingesting: {body}")
 
 
 def k8s_up(cfg: FinelogConfig) -> None:

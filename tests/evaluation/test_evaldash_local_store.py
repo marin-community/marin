@@ -3,28 +3,17 @@
 
 """The evaldash local (Postgres-free) store and its API, exercised over generated fixtures.
 
-The server runs with ``infra/evaldash/src`` on ``sys.path`` (the image layout), so its modules use
-bare sibling imports; the tests put that directory on the path the same way to import ``server`` and
-``fixtures``. These cover the ``MemoryRecordStore`` reads, the null-metric sample-reader fix, and the
-HTTP surface a local dashboard serves with no database or cluster.
+These cover the ``MemoryRecordStore`` reads, the null-metric sample-reader fix, and the HTTP surface
+a local dashboard serves with no database or cluster.
 """
 
 import asyncio
-import sys
-from pathlib import Path
 
 import pytest
+from marin.evaluation.records import list_records, write_record
+from starlette.testclient import TestClient
 
-_EVALDASH_SRC = Path(__file__).resolve().parents[2] / "infra" / "evaldash" / "src"
-if str(_EVALDASH_SRC) not in sys.path:
-    sys.path.insert(0, str(_EVALDASH_SRC))
-
-import fixtures  # noqa: E402
-import metrics  # noqa: E402
-import samples  # noqa: E402
-import server  # noqa: E402
-from marin.evaluation.records import list_records, write_record  # noqa: E402
-from starlette.testclient import TestClient  # noqa: E402
+from infra.evaldash.src import fixtures, metrics, samples, server
 
 
 @pytest.fixture

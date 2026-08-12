@@ -25,8 +25,7 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import JobName
 from iris.test_util import FakeStatsTable
-
-from .conftest import (
+from iris.testing.k8s import (
     KUEUE_UNADMITTED_MSG,
     gated_pod,
     imagepull_pod,

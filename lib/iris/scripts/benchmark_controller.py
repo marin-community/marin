@@ -121,11 +121,11 @@ from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 from iris.rpc.worker_connect import WorkerService, WorkerServiceASGIApplication
+from iris.testing.controller_state import ControllerTestState
+from iris.testing.transitions import CursorTransitionReader
 from iris.version import client_revision_date
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import func, select, text, update
-from tests.cluster.controller._test_support import ControllerTestState
-from tests.cluster.controller.transition_driver import CursorTransitionReader
 
 
 def _worker_addresses_for_tasks(db, tasks):

@@ -58,6 +58,30 @@ def test_full_bank_top_k_is_rejected_before_launch():
         )
 
 
+def test_checkpoint_path_overrides_the_step_output_path():
+    """A run that only exercises the checkpoint write sends it to disposable storage."""
+    temp_path = "s3://marin-us-east-02a/tmp/ttl=1d/hero-ckpt-smoke"
+    step = launch.build_hero_run(
+        run_id="ckpt-elsewhere",
+        dp_racks=1,
+        num_steps=1,
+        save_checkpoints=True,
+        checkpoint_path=temp_path,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.trainer.checkpointer.base_path == temp_path
+
+
+def test_checkpoint_path_defaults_under_the_step_output_path():
+    step = launch.build_hero_run(run_id="ckpt-default", dp_racks=1, num_steps=1, version="dev")
+    ctx = StepContext.for_fingerprint(step.runtime_args, step.deps)
+    config = step.build_config(ctx)
+
+    assert config.trainer.trainer.checkpointer.base_path == f"{ctx.output_path}/checkpoints"
+
+
 def test_checkpoint_interval_must_be_positive():
     with pytest.raises(ValueError, match="checkpoint_interval must be positive"):
         launch.build_hero_run(
@@ -362,15 +386,15 @@ def test_ep_ablation_defaults_match_the_documented_arm_and_scale_per_rack():
     one = abl.build_small_run(run_id="d768", size="d768", flavor="ep", version="dev")
     cfg = one.build_config(StepContext.for_fingerprint(one.runtime_args, one.deps))
     m = cfg.model
-    # The EP rung reproduces the documented latent/histogram/1.33 arm from issue #8062.
+    # The EP rung is a downsized hero: latent = hidden/2, capacity 1.33, top-k QB (the hero default).
     assert m.latent_dim == m.hidden_dim // 2
     assert m.capacity_factor == 1.33
-    assert m.qb_estimator == model.QbEstimator.HIST
+    assert m.qb_estimator == model.QbEstimator.TOPK
     assert m.num_layers % 2 == 0  # even depth applied in the launcher, not GrugModelConfig
-    # Histogram QB is selectable off through the builder.
-    topk = abl.build_small_run(run_id="d768-topk", size="d768", flavor="ep", qb_use_histogram=False, version="dev")
-    assert topk.build_config(StepContext.for_fingerprint(topk.runtime_args, topk.deps)).model.qb_estimator == (
-        model.QbEstimator.TOPK
+    # The histogram QB estimator is selectable on through the builder.
+    hist = abl.build_small_run(run_id="d768-hist", size="d768", flavor="ep", qb_use_histogram=True, version="dev")
+    assert hist.build_config(StepContext.for_fingerprint(hist.runtime_args, hist.deps)).model.qb_estimator == (
+        model.QbEstimator.HIST
     )
     # The global batch scales with the rack count, holding the per-rack token load constant.
     four = abl.build_small_run(run_id="d2048", size="d2048", flavor="ep", dp_racks=4, version="dev")

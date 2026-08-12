@@ -46,8 +46,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-import review
-import samples
 import sqlalchemy
 import uvicorn
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE, Completeness, MissingPolicy, SelectionRequest
@@ -57,7 +55,16 @@ from marin.evaluation.records import (
     RecordParseFailure,
     scan_records,
 )
-from metrics import (
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from sqlalchemy.engine import Engine
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
+
+from . import review, samples
+from .metrics import (
     RUN_FACETS,
     build_comparison,
     build_meta,
@@ -66,7 +73,7 @@ from metrics import (
     panel_request,
     record_headline,
 )
-from results_db import (
+from .results_db import (
     connect_engine,
     ensure_schema,
     eval_runs,
@@ -76,13 +83,6 @@ from results_db import (
     set_model_archived,
     upsert_record,
 )
-from rigging.filesystem.s3_compat import configure_coreweave_s3
-from sqlalchemy.engine import Engine
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
-from starlette.routing import Mount, Route
-from starlette.staticfiles import StaticFiles
 
 logger = logging.getLogger(__name__)
 
@@ -590,8 +590,7 @@ _NOT_BUILT_HTML = (
 
 
 def _dashboard_dist() -> Path:
-    """Locate the built SPA: env override, the image layout (beside this file), or the repo
-    layout (``../dashboard/dist``)."""
+    """Locate the built SPA: env override, package-local dist, or repository dashboard dist."""
     override = os.environ.get("EVALDASH_DASHBOARD_DIST")
     if override:
         return Path(override)
@@ -1022,7 +1021,7 @@ def main() -> None:
     else:
         # Production only: the live gateway pulls in the iris/finelog connect clients, which local
         # mode neither has nor needs. Import it lazily so local dev runs without those deps.
-        from cluster import ClusterGateway  # noqa: PLC0415
+        from .cluster import ClusterGateway  # noqa: PLC0415
 
         configure_coreweave_s3()
         gateway = ClusterGateway()

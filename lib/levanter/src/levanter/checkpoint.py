@@ -37,6 +37,7 @@ from rigging.filesystem import StoragePath
 
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
+    TensorStoreWriteConfig,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
 )
@@ -445,6 +446,7 @@ class Checkpointer:
         delete_old_temp_checkpoints: bool = True,
         keep_last_temporary_checkpoints: int = 1,
         debug: CheckpointDebugConfig | None = None,
+        write_config: TensorStoreWriteConfig | None = None,
     ):
         """
         Class for managing checkpoints. Saves checkpoints according to two policies: time and step.
@@ -468,6 +470,7 @@ class Checkpointer:
             keep_last_temporary_checkpoints: number of complete temporary checkpoints to retain after a temporary
                 checkpoint commits successfully. Set to 0 to delete temporary checkpoints after they commit. Permanent
                 checkpoints still clean up temporary checkpoints because they supersede them for recovery.
+            write_config: how a save divides work across the processes holding the state
         """
         if keep_last_temporary_checkpoints < 0:
             raise ValueError("keep_last_temporary_checkpoints must be non-negative")
@@ -482,6 +485,7 @@ class Checkpointer:
         self._last_save_step = 0
         self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
+        self.write_config = write_config or TensorStoreWriteConfig()
         self._temporary_checkpoints = []
 
         # ensure that the step_policies are sorted. We could sort, but instead we'll just insist that they are sorted
@@ -719,6 +723,7 @@ class Checkpointer:
             commit_callback=commit_callback,
             is_temporary=is_temporary,
             debug=self.debug,
+            write_config=self.write_config,
         )
         self._last_save_step = step
         self._last_save_time = self._dt_now_injection()
@@ -740,6 +745,7 @@ def save_checkpoint(
     commit_callback: Optional[Callable[[], None]] = None,
     is_temporary: bool = True,
     debug: CheckpointDebugConfig | None = None,
+    write_config: TensorStoreWriteConfig | None = None,
 ):
     """
     Save a checkpoint to a given path using TensorStore with OCDBT.
@@ -756,6 +762,7 @@ def save_checkpoint(
         manager: the GlobalAsyncCheckpointManager to use for saving the checkpoint
         commit_callback: a callback to call after the checkpoint has been saved
         is_temporary: whether the checkpoint is temporary
+        write_config: how the save divides work across the processes holding the state
     """
     step = int(step)
     checkpoint_path = str(checkpoint_path)
@@ -813,6 +820,7 @@ def save_checkpoint(
             manager,
             commit_callback=my_callback,
             debug_checkpointer=checkpoint_debug.enabled,
+            write_config=write_config,
         )
         if progress_logger is not None:
             progress_logger.set_phase("async_commit_in_flight")
@@ -1157,6 +1165,8 @@ class CheckpointerConfig:
     """Number of complete temporary checkpoints to retain after a successful temporary checkpoint commit."""
     debug: CheckpointDebugConfig = field(default_factory=CheckpointDebugConfig)
     """Checkpoint-path diagnostics. Disabled by default."""
+    write: TensorStoreWriteConfig = field(default_factory=TensorStoreWriteConfig)
+    """How a save divides work across the processes holding the state."""
 
     def expanded_path(self, run_id) -> str:
         if self.append_run_id_to_base_path:
@@ -1180,6 +1190,7 @@ class CheckpointerConfig:
             delete_old_temp_checkpoints=self.delete_old_temp_checkpoints,
             keep_last_temporary_checkpoints=self.keep_last_temporary_checkpoints,
             debug=self.debug,
+            write_config=self.write,
         )
 
     def __post_init__(self):
@@ -1190,6 +1201,8 @@ class CheckpointerConfig:
             self.temporary_base_path = os.path.expanduser(self.temporary_base_path)
         if isinstance(self.debug, dict):
             self.debug = CheckpointDebugConfig(**self.debug)
+        if isinstance(self.write, dict):
+            self.write = TensorStoreWriteConfig(**self.write)
         if self.keep_last_temporary_checkpoints < 0:
             raise ValueError("keep_last_temporary_checkpoints must be non-negative")
 

@@ -202,6 +202,13 @@ def scored_results(local_out: str) -> bool:
     return False
 
 
+def upload_task_output(out_fs, local_out: str, dest: str) -> None:
+    """Replace ``dest`` with the task tree ``local_out`` holds."""
+    if out_fs.exists(dest):
+        out_fs.rm(dest, recursive=True)
+    out_fs.put(local_out, dest, recursive=True)
+
+
 def main() -> None:
     config = json.loads(os.environ[CONFIG_ENV_KEY])
     tasks = config["tasks"]
@@ -234,7 +241,7 @@ def main() -> None:
                 produced = os.listdir(local_out)
                 scored = scored_results(local_out)
                 if produced:
-                    out_fs.put(local_out, dest, recursive=True)
+                    upload_task_output(out_fs, local_out, dest)
                     print(f"uploaded {len(produced)} path(s) to {dest}", flush=True)
             if result.returncode != 0:
                 failures.append(f"{task['name']}: evalchemy exited {result.returncode}")

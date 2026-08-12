@@ -78,7 +78,7 @@ class PushLogsResponse(_message.Message):
     def __init__(self) -> None: ...
 
 class FetchLogsRequest(_message.Message):
-    __slots__ = ("source", "since_ms", "cursor", "substring", "max_lines", "tail", "min_level", "match_scope", "cluster", "until_cursor")
+    __slots__ = ("source", "since_ms", "cursor", "substring", "max_lines", "tail", "min_level", "match_scope", "cluster", "until_cursor", "regex")
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     SINCE_MS_FIELD_NUMBER: _ClassVar[int]
     CURSOR_FIELD_NUMBER: _ClassVar[int]
@@ -89,6 +89,7 @@ class FetchLogsRequest(_message.Message):
     MATCH_SCOPE_FIELD_NUMBER: _ClassVar[int]
     CLUSTER_FIELD_NUMBER: _ClassVar[int]
     UNTIL_CURSOR_FIELD_NUMBER: _ClassVar[int]
+    REGEX_FIELD_NUMBER: _ClassVar[int]
     source: str
     since_ms: int
     cursor: int
@@ -99,7 +100,8 @@ class FetchLogsRequest(_message.Message):
     match_scope: MatchScope
     cluster: str
     until_cursor: int
-    def __init__(self, source: _Optional[str] = ..., since_ms: _Optional[int] = ..., cursor: _Optional[int] = ..., substring: _Optional[str] = ..., max_lines: _Optional[int] = ..., tail: _Optional[bool] = ..., min_level: _Optional[str] = ..., match_scope: _Optional[_Union[MatchScope, str]] = ..., cluster: _Optional[str] = ..., until_cursor: _Optional[int] = ...) -> None: ...
+    regex: str
+    def __init__(self, source: _Optional[str] = ..., since_ms: _Optional[int] = ..., cursor: _Optional[int] = ..., substring: _Optional[str] = ..., max_lines: _Optional[int] = ..., tail: _Optional[bool] = ..., min_level: _Optional[str] = ..., match_scope: _Optional[_Union[MatchScope, str]] = ..., cluster: _Optional[str] = ..., until_cursor: _Optional[int] = ..., regex: _Optional[str] = ...) -> None: ...
 
 class FetchLogsResponse(_message.Message):
     __slots__ = ("entries", "cursor")

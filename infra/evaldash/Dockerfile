@@ -66,14 +66,13 @@ COPY lib/iris/src/iris/rpc/ /app/iris/rpc/
 COPY lib/finelog/src/finelog/__init__.py /app/finelog/__init__.py
 COPY lib/finelog/src/finelog/rpc/ /app/finelog/rpc/
 
-# The server plus its flat top-level modules: metric selection, VM discovery, the iris/finelog
-# cluster gateway, and the per-sample parquet reader.
-COPY infra/evaldash/src/ /app/
-COPY --from=dashboard /build/dist /app/dist
+# Preserve the repository package path so the image and tests import the server identically.
+COPY infra/evaldash/src/ /app/infra/evaldash/src/
+COPY --from=dashboard /build/dist /app/infra/evaldash/dashboard/dist
 
 # Cloud Run injects PORT and routes to it; the server reads it (default 8080).
 ENV PORT=8080
 EXPOSE 8080
 
 # Connect to Postgres, start the object-store ingestor, and serve the app on $PORT.
-CMD ["python", "server.py"]
+CMD ["python", "-m", "infra.evaldash.src.server"]

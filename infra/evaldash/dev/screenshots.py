@@ -7,10 +7,10 @@ A single foreground process: uvicorn runs in a background thread bound to loopba
 a headless Chromium against it, and the process exits when done (no detached server to reap). Use it
 to eyeball the SPA end-to-end without a standing server.
 
-    PYTHONPATH=infra/evaldash/src:lib/marin/src:lib/rigging/src \
+    PYTHONPATH=lib/marin/src:lib/rigging/src \
     uv run --with starlette --with uvicorn --with sqlalchemy --with pyarrow --with pydantic \
       --with fsspec --with playwright \
-      python infra/evaldash/dev/screenshots.py <out_dir> [records_dir]
+      python -m infra.evaldash.dev.screenshots <out_dir> [records_dir]
 
 ``records_dir`` defaults to a freshly generated fixture set. The built SPA must exist
 (``npm --prefix infra/evaldash/dashboard run build``); its dist is read from EVALDASH_DASHBOARD_DIST
@@ -28,11 +28,11 @@ from pathlib import Path
 
 os.environ.setdefault("EVALDASH_STORE", "local")
 
-import fixtures
-import server
 import uvicorn
 from marin.evaluation.records import list_records
 from playwright.sync_api import sync_playwright
+
+from infra.evaldash.src import fixtures, server
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("EVALDASH_SCREENSHOT_PORT", "8137"))
