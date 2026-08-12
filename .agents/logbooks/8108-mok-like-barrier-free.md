@@ -667,3 +667,24 @@ W&B: https://wandb.ai/marin-community/marin_moe/runs/mok-like-ab-mok-like-100-20
 - Runtime audit: every process reported exactly 4,800 forward and 4,800 backward handlers. Forward staging was zero. Backward staged copies were exactly 19,200 calls and 7,741,007,462,400 bytes per process. Slot one was unused, maximum active slots was one, and protocol, generation, reuse, trim, and slot anomalies were zero across all 16 processes.
 - Memory: process-zero compile RSS peaked at 890,453.125 MiB (869.583 GiB) and system memory reached 100%. The 900 GiB pod contract passed, but the margin is limited. Peak allocated HBM was 180,552,531,968 bytes on GPU zero and 180,529,463,296 bytes on GPUs one through three.
 - Decision: promote the unchanged source and 900 GiB resource contract to the 32-node, two-rack 25-update gate. Require all 32 processes to compile and pass the exact runtime audit, 25 finite zero-drop rows, and at least 80% weak-scale efficiency before the 100-update two-rack seal.
+
+### 2026-08-12 10:40 PT - Two-rack strict-dropless gate prepared
+
+- DRI: dlwh. Source: implementation commit `c8558b7cfa62133d427dba5f509d7c1542d451ed` on clean pushed branch `codex/upstream-mok-like`; later branch commits contain only experiment records. Current Iris spend is zero under the 128,000 interactive budget. The scheduler computes the gang's effective band before admission, so the single 32-task request remains one scheduling unit even though its running resource value exceeds the ordinary interactive budget.
+- Contract: 32 tasks across two hard 16-node rack slices, one JAX process and four GB200s per task, 96 CPUs, 900 GiB RAM, and 1 TiB disk per node. Local EP4/DP32 gives global batch 2,048 with the same 16 sequences/GPU. The strict-dropless v12 preset, 48 layers, 25 updates, local-only cache, profile steps 5-9, and zero retry/failure tolerance are unchanged. The run writes metrics/profile artifacts but no final model checkpoint; `initialize_from` is unset.
+- Output identity: artifact `grug/moe-backend-comparison/mok_like/mok-scale-008-v12-dropless-2rack-ram900-25-20260812-1040/2026.08.12`; W&B id/name `mok-scale-008-v12-dropless-2rack-ram900-25-20260812-1040`, project `marin-community/marin_moe`, group `moe-backend-comparison-2rack`, resume `allow`.
+- Exact submission, with the secret value scrubbed:
+
+  ```bash
+  .venv/bin/python -c 'import iris.cluster.platforms.k8s.service as service; from iris.cluster.platforms.types import find_free_port; service.find_free_port = lambda start=10000: find_free_port(); from iris.cli.main import main; main()' \
+    --config lib/iris/config/cw-us-east-08a.yaml job run --no-wait --enable-extra-resources \
+    --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 \
+    --job-name mok-scale-008-v12-dropless-2rack-ram900-25-20260812-1040-coord \
+    -e WANDB_API_KEY '<redacted>' -e WANDB_PROJECT marin_moe -- \
+    .venv/bin/python -m experiments.grug.moe_hero_ep.launch_mok_like \
+      --run-id mok-scale-008-v12-dropless-2rack-ram900-25-20260812-1040 \
+      --backend mok_like --num-steps 25 --num-nodes 32 \
+      --mok-like-preset promoted_dropless_v12 --version 2026.08.12 --run
+  ```
+
+- Acceptance: all 32 tasks and coordinator terminal-successful; 25 finite exact-zero-drop rows; 4,800 forward/backward handlers per process; forward staging zero and staged-backward copies exact; slot one unused, maximum active slots one, and zero protocol/generation/reuse/trim anomalies. Score steps 10-24 against the 661,262.097504-token/s ideal; require at least 80% weak-scale efficiency before the 100-update seal.
