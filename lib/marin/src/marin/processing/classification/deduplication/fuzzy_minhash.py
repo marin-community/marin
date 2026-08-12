@@ -286,7 +286,7 @@ def compute_minhash_attrs_step(
             max_workers=max_workers,
         ),
         hash_attrs={
-            "artifact_version": MINHASH_ATTR_DATA_VERSION,
+            "v": MINHASH_ATTR_DATA_VERSION,
             "num_perms": num_perms,
             "num_bands": num_bands,
             "ngram_size": ngram_size,

@@ -49,7 +49,7 @@ from finelog.benchmarks.query_measurement import (
     WorkerMode,
     cold_samples,
     concurrency_measurement,
-    force_compact,
+    maintain,
     peak_rss_sampler,
     percentile,
     query_table,
@@ -270,7 +270,7 @@ def _write_candidate_segment(
     client.register_table(stats_pb2.RegisterTableRequest(namespace=namespace, schema=schema))
     write_batch(client, namespace, first)
     write_batch(client, namespace, second)
-    force_compact(address, namespace)
+    maintain(address, namespace, force_compact_l0=True)
     return Path(namespace)
 
 
@@ -344,7 +344,7 @@ def populate_current_store(
             )
             write_seconds += time.perf_counter() - write_started
             compact_started = time.perf_counter()
-            force_compact(server.address, staging_namespace)
+            maintain(server.address, staging_namespace, force_compact_l0=True)
             compact_seconds += time.perf_counter() - compact_started
     finally:
         server.stop()
@@ -480,7 +480,7 @@ def _create_mirror(
         server.stop()
 
 
-def _table_digest(table: pa.Table) -> str:
+def table_digest(table: pa.Table) -> str:
     def normalize(value: object) -> object:
         if isinstance(value, float):
             return round(value, 9)
@@ -505,7 +505,7 @@ def _table_digest(table: pa.Table) -> str:
 def _query_digest(log_dir: Path, workload: Workload) -> str:
     server = require_embedded_server()(log_dir=str(log_dir))
     try:
-        return _table_digest(query_table(stats_client(server.address), workload.sql))
+        return table_digest(query_table(stats_client(server.address), workload.sql))
     finally:
         server.stop()
 
@@ -817,7 +817,7 @@ def run_catalog_benchmark(
             RUN_CATALOG_NAMESPACE,
             _run_catalog_batch(midpoint, run_ids, spec),
         )
-        force_compact(server.address, RUN_CATALOG_NAMESPACE)
+        maintain(server.address, RUN_CATALOG_NAMESPACE, force_compact_l0=True)
     finally:
         server.stop()
     sql = f"""

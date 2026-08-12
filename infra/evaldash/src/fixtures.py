@@ -13,7 +13,7 @@ The dataset is intentionally varied: several models across version cohorts, all 
 dashboard's views all have something to render. It is deterministic (fixed timestamps and values) so
 regenerating it produces byte-stable records.
 
-Run: ``python infra/evaldash/src/fixtures.py <dest>`` (with ``lib/marin/src`` on ``PYTHONPATH``).
+Run: ``python -m infra.evaldash.src.fixtures <dest>`` (with ``lib/marin/src`` on ``PYTHONPATH``).
 """
 
 from __future__ import annotations
@@ -22,6 +22,16 @@ import json
 import sys
 from datetime import datetime, timedelta
 
+from finestore.eval import (
+    SAMPLES_PREFIX,
+    SAMPLES_SUFFIX,
+    Choice,
+    EvalSample,
+    Grading,
+    Message,
+    SampleKind,
+    write_sample_parquet,
+)
 from fsspec.core import url_to_fs
 from marin.evaluation.records import (
     RECORD_FILE,
@@ -35,17 +45,8 @@ from marin.evaluation.records import (
     RunStatus,
     RunTiming,
     ServingParams,
+    TaskCoverage,
     write_record,
-)
-from marin.evaluation.samples import (
-    SAMPLES_PREFIX,
-    SAMPLES_SUFFIX,
-    Choice,
-    EvalSample,
-    Grading,
-    Message,
-    SampleKind,
-    write_sample_parquet,
 )
 
 # The dashboard's EvalProfileChart highlights this reference model; keep it in the fixtures so that
@@ -98,6 +99,7 @@ def _record(
     results_path: str,
     metrics: dict[str, dict[str, float]],
     description: str | None,
+    coverage: dict[str, TaskCoverage] | None = None,
     error: str | None = None,
     log_tails: dict[str, tuple[str, ...]] | None = None,
     runtime_minutes: float = 8.0,
@@ -115,12 +117,13 @@ def _record(
         version=version,
         description=description,
         model=ModelRef(name=model, location=f"gs://marin-models/{model}", backend="vllm"),
-        evaluation=evaluation,
+        eval=evaluation,
         hardware=_hardware(),
         status=status,
         error=error,
         results_path=results_path,
         metrics=metrics,
+        coverage=coverage or {},
         jobs={"serve": f"jobs/{group_id}/serve", "eval": f"jobs/{run_id}/eval"},
         log_tails=log_tails or {},
         provenance=_provenance(),
@@ -309,13 +312,20 @@ _HEADLINE = {
     "mmlu": ("acc,none", "acc_stderr,none"),
     "arc-challenge": ("acc_norm,none", "acc_norm_stderr,none"),
     "gsm8k-0shot": ("exact_match,flexible-extract", "exact_match_stderr,flexible-extract"),
+    "humaneval": ("exact_match,none", "exact_match_stderr,none"),
     "math500": ("accuracy", None),
 }
 
 
+# Graded documents behind every fixture lm-eval score, as lm-eval records it beside the metrics. A
+# round thousand so each three-decimal fixture score is an exact document count, and the statistics
+# engine takes its binomial path rather than falling back to recorded dispersion.
+_FIXTURE_ITEMS = 1000
+
+
 def _lm_metrics(task: str, value: float, stderr: float | None) -> dict[str, dict[str, float]]:
     metric, stderr_key = _HEADLINE[task]
-    inner = {metric: value}
+    inner = {metric: value, "sample_len": float(_FIXTURE_ITEMS)}
     if stderr_key is not None and stderr is not None:
         inner[stderr_key] = stderr
     return {task: inner}
@@ -408,6 +418,35 @@ def build_fixtures(dest: str) -> list[str]:
             _generation_sample("gsm8k-0shot", "2", extracted="120", target="120"),
         ],
     )
+    r = f"{grp}-humaneval"
+    emit(
+        _record(
+            run_id=r,
+            group_id=grp,
+            model=REFERENCE_MODEL,
+            version="2026.07.20",
+            created_at="2026-07-20T02:15:00+00:00",
+            evaluation=_lm_eval_ref("humaneval", 0),
+            status=RunStatus.SUCCEEDED,
+            results_path=results_of(r),
+            metrics=_lm_metrics("humaneval", 0.318, 0.015),
+            coverage={
+                "humaneval": TaskCoverage(
+                    n_attempted=_FIXTURE_ITEMS, n_scored=_FIXTURE_ITEMS, n_correct=318, n_unanswered=12
+                )
+            },
+            description=desc,
+        )
+    )
+    _write_samples(
+        fs,
+        results_of(r),
+        "humaneval",
+        [
+            _generation_sample("humaneval", "0", extracted="return a + b", target="return a + b"),
+            _generation_sample("humaneval", "1", extracted="", target="return len(s)"),
+        ],
+    )
     r = f"{grp}-aime"
     emit(
         _record(
@@ -419,7 +458,10 @@ def build_fixtures(dest: str) -> list[str]:
             evaluation=_harbor_ref("aime"),
             status=RunStatus.SUCCEEDED,
             results_path=results_of(r),
-            metrics={"aime": {"accuracy": 0.333, "mean_reward": 0.333, "solved": 3.0, "total": 9.0}},
+            # An agentic run that lost one of its ten trials to a timeout: the aggregate is over the
+            # nine trials a verifier graded, and the coverage carries what happened to the tenth.
+            metrics={"aime": {"accuracy": 3 / 9, "mean_reward": 3 / 9, "solved": 3.0, "total": 9.0}},
+            coverage={"aime": TaskCoverage(n_attempted=10, n_scored=9, errors={"AgentTimeoutError": 1})},
             description=desc,
             runtime_minutes=42.0,  # agentic sandbox rollouts run far longer than the lm-eval tasks
             serving=ServingParams(
@@ -488,6 +530,37 @@ def build_fixtures(dest: str) -> list[str]:
             _generation_sample("gsm8k-0shot", str(i), extracted=str(i), target=str(i if i % 2 else i + 1))
             for i in range(4)
         ],
+    )
+    r = f"{grp}-humaneval"
+    emit(
+        _record(
+            run_id=r,
+            group_id=grp,
+            model="tootsie-8b",
+            version="2026.07.20",
+            created_at="2026-07-20T04:15:00+00:00",
+            evaluation=_lm_eval_ref("humaneval", 0),
+            status=RunStatus.SUCCEEDED,
+            results_path=results_of(r),
+            # A complete run that scored zero because nothing it produced could be extracted -- the
+            # score is real and the panel marks it, since a broken grader looks exactly like this.
+            metrics=_lm_metrics("humaneval", 0.0, 0.0),
+            coverage={
+                "humaneval": TaskCoverage(
+                    n_attempted=_FIXTURE_ITEMS,
+                    n_scored=_FIXTURE_ITEMS,
+                    n_correct=0,
+                    n_unanswered=_FIXTURE_ITEMS,
+                )
+            },
+            description=desc,
+        )
+    )
+    _write_samples(
+        fs,
+        results_of(r),
+        "humaneval",
+        [_generation_sample("humaneval", str(i), extracted="", target=str(i)) for i in range(3)],
     )
     r = f"{grp}-math500"
     emit(

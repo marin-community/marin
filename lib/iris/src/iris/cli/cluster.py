@@ -13,6 +13,7 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,9 +40,13 @@ from iris.cli.build import (
 )
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
 from iris.cluster.composer import provider_bundle
-from iris.cluster.config import KUBERNETES_WORKER_RUNTIME, clear_remote_state, make_local_config
+from iris.cluster.config import (
+    KUBERNETES_WORKER_RUNTIME,
+    clear_remote_state,
+    make_local_config,
+    slice_template_zone,
+)
 from iris.cluster.controller.autoscaler.scaling_group import (
-    _zone_from_template,
     build_worker_config_for_group,
     prepare_slice_config,
 )
@@ -57,6 +62,7 @@ from iris.cluster.controller.rollout import (
 from iris.cluster.dashboard_common import VUE_DIST_DIR
 from iris.cluster.inject_env import with_injected_task_env
 from iris.cluster.local_cluster import LocalCluster
+from iris.cluster.platforms.factory import ProviderBundle
 from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import Labels
@@ -591,6 +597,53 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: s
     click.echo(key.public_pem.rstrip("\n"))
 
 
+# A platform's "controller is up" signal stops short of "clients can reach it".
+# On Kubernetes it is a Deployment counter, which goes green the moment the new
+# pod passes its readiness probe while the Service can still route to the pod
+# that is going away; on GCP the health check runs on the controller VM itself.
+# A client that connects in that window reaches nothing and the controller logs
+# no request at all. Probing over a tunnel spends the settling time inside
+# `cluster start` instead of failing the command after it.
+CONTROLLER_REACHABLE_TIMEOUT = 120.0
+CONTROLLER_HEALTH_REQUEST_TIMEOUT = 5.0
+
+# Controller tunnels are local forwards, so an HTTP_PROXY in the operator's
+# environment must never be consulted for them.
+_HEALTH_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _wait_controller_reachable(bundle: ProviderBundle, address: str) -> None:
+    """Poll the controller's ``/health`` over a client tunnel until it answers.
+
+    Raises:
+        click.ClickException: the controller never answered within
+            ``CONTROLLER_REACHABLE_TIMEOUT``.
+    """
+    failure = "no response"
+
+    with bundle.controller.tunnel(address) as url:
+
+        def answered() -> bool:
+            nonlocal failure
+            try:
+                with _HEALTH_OPENER.open(f"{url}/health", timeout=CONTROLLER_HEALTH_REQUEST_TIMEOUT) as response:
+                    if response.status == 200:
+                        return True
+                    failure = f"HTTP {response.status}"
+            except OSError as e:
+                failure = str(e)
+            return False
+
+        backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
+        if backoff.wait_until(answered, timeout=Duration.from_seconds(CONTROLLER_REACHABLE_TIMEOUT)):
+            return
+
+    raise click.ClickException(
+        f"Controller at {address} did not answer /health over a tunnel within "
+        f"{CONTROLLER_REACHABLE_TIMEOUT:.0f}s: {failure}"
+    )
+
+
 @cluster.command("start")
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
 @click.option(
@@ -611,12 +664,15 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: s
 )
 @click.pass_context
 def cluster_start(ctx, local: bool, fresh: bool, task_image_platforms: str | None, cargo_profile: str):
-    """Start controller and wait for health.
+    """Start controller and wait until it answers over a client tunnel.
 
     Each platform handles its own controller lifecycle:
     - GCP: builds images, creates GCE VM, SSHes in, bootstraps
     - CoreWeave: kubectl apply ConfigMap + NodePool + Deployment + Service
     - Local: starts in-process controller
+
+    Remote platforms then get a ``/health`` probe over a tunnel, so the command
+    only reports success once the next ``iris`` invocation can reach it.
 
     Use --local to create a local cluster for testing that mimics the original config.
     """
@@ -661,6 +717,8 @@ def cluster_start(ctx, local: bool, fresh: bool, task_image_platforms: str | Non
         else:
             bundle = provider_bundle(config)
             address = bundle.controller.start_controller(config, fresh=fresh)
+            click.echo("Waiting for the controller to answer over a client tunnel...")
+            _wait_controller_reachable(bundle, address)
             click.echo(f"Controller started at {address}")
             click.echo("\nController is running with integrated autoscaler.")
             click.echo("Use 'iris --config=... cluster status' to check cluster state.")
@@ -1765,7 +1823,7 @@ def worker_restart(
                     return wid, None, f"unknown scale group {row.scale_group!r}"
                 # TPU workers leave md_gce_zone empty; fall back to the scale
                 # group's slice-template zone.
-                zone = row.zone or _zone_from_template(sg_config.slice_template)
+                zone = row.zone or slice_template_zone(sg_config.slice_template)
                 if not zone:
                     return wid, None, "missing zone metadata"
                 wc = build_worker_config_for_group(base_worker_config, sg_config)

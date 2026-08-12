@@ -3,11 +3,12 @@
 
 """Tests for iris.env_resources."""
 
+import io
 import os
 
 import pytest
 from google.protobuf import json_format
-from iris.env_resources import TaskResources, _read_iris_resource_proto, _read_proc_meminfo_total
+from iris.env_resources import TaskResources, _read_iris_resource_proto
 from iris.rpc import job_pb2
 
 
@@ -37,6 +38,22 @@ def _make_resource_env(
     return json_format.MessageToJson(proto, preserving_proto_field_name=True)
 
 
+@pytest.fixture
+def host_resources(monkeypatch):
+    real_open = open
+
+    def fake_open(path, *args, **kwargs):
+        path_string = str(path)
+        if path_string.startswith("/sys/fs/cgroup/"):
+            raise FileNotFoundError(path_string)
+        if path_string == "/proc/meminfo":
+            return io.StringIO("MemTotal:       16777216 kB\n")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    monkeypatch.setattr(os, "cpu_count", lambda: 12)
+
+
 def test_from_environment_with_full_env(monkeypatch):
     monkeypatch.setenv("IRIS_TASK_RESOURCES", _make_resource_env(cpu_millicores=4000, memory_bytes=8 * 1024**3))
     res = TaskResources.from_environment()
@@ -64,37 +81,28 @@ def test_from_environment_with_tpu(monkeypatch):
     assert res.gpu_count == 0
 
 
-def test_from_environment_falls_back_without_env(monkeypatch):
+def test_from_environment_falls_back_without_env(monkeypatch, host_resources):
     """Without IRIS_TASK_RESOURCES, should fall back to OS-level detection."""
     monkeypatch.delenv("IRIS_TASK_RESOURCES", raising=False)
     res = TaskResources.from_environment()
-    # Should get some positive values from the host
-    assert res.cpu_cores > 0
+    assert res.cpu_cores == 12
+    assert res.memory_bytes == 16 * 1024**3
     assert res.gpu_count == 0
     assert res.tpu_count == 0
 
 
-def test_from_environment_partial_env_falls_back(monkeypatch):
+def test_from_environment_partial_env_falls_back(monkeypatch, host_resources):
     """When only GPU is specified, CPU/memory should fall back to OS-level."""
     monkeypatch.setenv("IRIS_TASK_RESOURCES", _make_resource_env(gpu_count=2))
     res = TaskResources.from_environment()
-    # cpu_millicores and memory_bytes are 0 in the proto, so should fall back
-    assert res.cpu_cores > 0
+    assert res.cpu_cores == 12
+    assert res.memory_bytes == 16 * 1024**3
     assert res.gpu_count == 2
 
 
-def test_malformed_env_falls_back(monkeypatch):
+def test_malformed_env_falls_back(monkeypatch, host_resources):
     monkeypatch.setenv("IRIS_TASK_RESOURCES", "not-valid-json{{{")
     res = TaskResources.from_environment()
-    # Should fall back to OS-level, not crash
-    assert res.cpu_cores > 0
+    assert res.cpu_cores == 12
+    assert res.memory_bytes == 16 * 1024**3
     assert res.gpu_count == 0
-
-
-def test_read_proc_meminfo_total():
-    """Smoke test: on Linux CI this should return a positive value."""
-    total = _read_proc_meminfo_total()
-    if os.path.exists("/proc/meminfo"):
-        assert total is not None
-        assert total > 0
-    # On non-Linux, it's fine to return None

@@ -6,6 +6,7 @@
 import textwrap
 
 import pytest
+from draccus.utils import ParsingError
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import (
@@ -17,7 +18,7 @@ from marin.evaluation.model_config import (
     scan_model_configs,
     serve_config_vllm_args,
 )
-from marin.evaluation.serving_config import inference_config_for_model
+from marin.evaluation.serving_config import _serve_host_memory, inference_config_for_model
 
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
@@ -63,6 +64,13 @@ def test_load_model_config_round_trips_the_catalog_shape(tmp_path):
     assert config.serve.vllm_extra_args == ("--enable-prefix-caching",)
     assert dict(config.generation.extra_gen_kwargs) == {"skip_special_tokens": "false"}
     assert "enable_thinking" in config.agent.agent_kwargs["extra_body"]
+
+
+def test_load_model_config_rejects_name_with_job_path_separator(tmp_path):
+    body = "name: Qwen/Qwen3-8B\nlocation: Qwen/Qwen3-8B\n"
+
+    with pytest.raises(ParsingError):
+        load_model_config(_write(tmp_path, "model.yaml", body))
 
 
 def test_load_rejects_unknown_field_at_load_time(tmp_path):
@@ -129,14 +137,16 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
     model = ModelConfig(
         name="qwen3-32b",
         location="Qwen/Qwen3-32B",
-        resource_hint=ResourceHint(gpu={"H100": 2}),
+        # The memory hint keeps the lowering offline: it skips the checkpoint measurement the same
+        # way auto_overrides=False skips the config.json fetch. This test covers flag rendering.
+        resource_hint=ResourceHint(gpu={"H100": 2}, memory="128g"),
         serve=ServeConfig(
             tensor_parallel_size=2,
             max_model_len=32768,
             tool_call_parser="hermes",
             reasoning_parser="qwen3",
             vllm_extra_args=("--enable-prefix-caching",),
-            auto_overrides=False,  # skip the config.json fetch; this test covers flag rendering
+            auto_overrides=False,
         ),
     )
     choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=2)
@@ -148,6 +158,58 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
     ).engine.extra_args
     assert "--swap-space" not in engine_args
     assert "--trust-remote-code" not in engine_args
+
+
+def _gib(memory: str) -> int:
+    return int(memory.removesuffix("g"))
+
+
+def test_serve_host_memory_covers_a_checkpoint_larger_than_the_flat_default():
+    # Regression for the H100 serve killed with SIGKILL while loading: every model got a flat 64g
+    # host-memory request, so a checkpoint bigger than that was OOM-killed mid-load. The request has
+    # to leave room for the checkpoint the loader pulls through host memory.
+    shards = {f"model-0000{shard}-of-00002.safetensors": 34 * 1024**3 for shard in (1, 2)}
+
+    assert _gib(_serve_host_memory(shards, ranks=4)) > 68
+
+
+def test_serve_host_memory_grows_with_the_rank_count():
+    # Every rank on the host carries its own CUDA context and torch runtime, so the same checkpoint
+    # spread over more devices needs more host memory than it does on one.
+    files = {"model.safetensors": 40 * 1024**3}
+
+    assert _gib(_serve_host_memory(files, ranks=8)) > _gib(_serve_host_memory(files, ranks=1))
+
+
+def test_serve_host_memory_ignores_a_duplicate_subdirectory_copy():
+    # The Llama repos ship a second copy of the weights under original/ that vLLM never reads.
+    # Counting it would roughly double every request sized from such a checkpoint.
+    plain = {"model.safetensors": 15 * 1024**3, "tokenizer.json": 11 * 1024**2}
+    duplicated = plain | {"original/consolidated.00.safetensors": 15 * 1024**3}
+
+    assert _serve_host_memory(duplicated, ranks=1) == _serve_host_memory(plain, ranks=1)
+
+
+def test_serve_host_memory_rejects_a_checkpoint_with_no_weight_file():
+    # An unreadable layout would otherwise sum to zero and hand a large model the floor -- the
+    # failure this sizing exists to prevent. Fail instead, and say which knob resolves it.
+    with pytest.raises(ValueError, match=r"resource_hint\.memory"):
+        _serve_host_memory({"model.gguf": 40 * 1024**3, "config.json": 1024}, ranks=1)
+
+
+def test_explicit_memory_hint_wins_without_measuring_the_checkpoint():
+    # The override is the escape hatch for a model needing more than its weights imply, and it has
+    # to work for a location the launcher cannot list (an object-store export needing credentials).
+    model = ModelConfig(
+        name="hinted",
+        location="s3://marin-us-east-02a/marin/exports/absent/",
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        serve=ServeConfig(auto_overrides=False),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
+
+    lowered = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+    assert lowered.iris.worker_resources.ram == "512g"
 
 
 def test_scan_model_configs_keys_by_name_and_skips_underscored(tmp_path):

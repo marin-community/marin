@@ -325,7 +325,7 @@ impl Catalog {
         }
 
         if let Some(existing) = inner.live.get(name).cloned() {
-            // `merge` raises SchemaConflict on a non-additive change.
+            // `merge` raises SchemaConflict on a column-type change.
             let effective = merge(&existing.schema)?;
             if effective != existing.schema {
                 inner.upsert_locked(name, &effective)?;

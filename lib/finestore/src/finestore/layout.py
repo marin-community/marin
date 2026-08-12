@@ -9,7 +9,7 @@ partitioned by the writer that produced them and the compaction generation they 
     {root}/
         _archive.json                           # archive-wide metadata: the on-disk format version
         SEALED                                  # optional marker: the run is complete
-        {table}/_schema.json                    # per-table metadata: merge key + logical schema version
+        {table}/_schema.json                    # per-table metadata: primary key + logical schema version
         {table}/w={writer}/g={gen}/{seq:016d}-{uid}.parquet
 
 Shard membership is discovered by listing the table directory; a shard's schema and row-group
@@ -23,15 +23,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 from rigging.filesystem import prefix_join
 
 # The seal marker object; its presence means every writer has finished and the run is immutable.
 SEALED_MARKER = "SEALED"
 
-# Per-table metadata object, next to a table's shards: the dedup merge key and the caller's logical
+# Per-table metadata object, next to a table's shards: the dedup primary key and the caller's logical
 # schema version -- what a Parquet footer cannot record.
 SCHEMA_FILE = "_schema.json"
 
@@ -53,7 +54,7 @@ GEN_COLUMN = "_gen"
 # The URI scheme sample rows use to reference payloads held inside the same archive.
 URI_SCHEME = "finestore"
 
-# The reserved table backing ``DataStore.write``: an opaque payload store whose merge key is the blob
+# The reserved table backing ``DataStore.write``: an opaque payload store whose primary key is the blob
 # name, so writes batch through the background flusher like any table and a compacted shard is sorted
 # by name -- a ``name ==`` lookup then prunes to a single row group via the Parquet footer statistics
 # rather than scanning. It is also the ``finestore://blobs/<name>`` URI's netloc. Both the writer and
@@ -76,21 +77,43 @@ class ArchiveMetadata(BaseModel):
     format_version: int = FORMAT_VERSION
 
 
+class OnConflict(StrEnum):
+    """What a writer does when two rows in one session share a primary key.
+
+    ``ERROR`` raises, because the reader keeps one row per key and would otherwise discard the other
+    without reporting it. A repeat whose payload is identical is an at-least-once redelivery and
+    collapses. ``SUPERSEDE`` is the upsert contract: the newer row deliberately replaces the older,
+    and compaction counts how many it replaced.
+    """
+
+    ERROR = "error"
+    SUPERSEDE = "supersede"
+
+
 class TableMetadata(BaseModel):
     """The typed contents of a table's ``_schema.json``.
 
-    Records what a Parquet footer cannot: ``merge_key`` names the columns a reader collapses
-    duplicates on, and ``schema_version`` is the caller's logical schema version for the table's rows.
+    Records what a Parquet footer cannot: ``primary_key`` names the columns identifying a row,
+    ``schema_version`` is the caller's logical schema version for the table's rows, and
+    ``on_conflict`` is the policy the writer applied to repeated keys. ``merge_key`` is accepted as
+    the field name written by finestore writers that predate the rename.
     """
 
-    merge_key: tuple[str, ...] | None = None
+    primary_key: tuple[str, ...] = Field(validation_alias=AliasChoices("primary_key", "merge_key"))
     schema_version: int = 1
+    on_conflict: OnConflict = OnConflict.ERROR
 
 
 class SealMarker(BaseModel):
-    """The typed contents of the ``SEALED`` marker: which writer sealed the completed archive."""
+    """The typed contents of the ``SEALED`` marker: which writer sealed the completed archive.
+
+    ``superseded`` records, per table, how many rows compaction dropped because a later write of the
+    same primary key replaced them. A non-zero count on an ``ERROR`` table means rows were replaced
+    across sessions (a re-run or a resumed migration), which is legal but never silent.
+    """
 
     writer: str
+    superseded: dict[str, int] = {}
 
 
 @dataclass(frozen=True)

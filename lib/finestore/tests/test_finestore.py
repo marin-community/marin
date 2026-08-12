@@ -10,9 +10,16 @@ import pyarrow.parquet as pq
 import pytest
 from finestore import compaction, shard_writer
 from finestore.compaction import compact
-from finestore.layout import FORMAT_VERSION, ArchiveMetadata, FineStoreLayout, SealMarker, TableMetadata
+from finestore.layout import (
+    FORMAT_VERSION,
+    ArchiveMetadata,
+    FineStoreLayout,
+    OnConflict,
+    SealMarker,
+    TableMetadata,
+)
 from finestore.reader import CompositeReader
-from finestore.store import DataStore, DataTable
+from finestore.store import DataStore, DataTable, PrimaryKeyConflict
 from fsspec.implementations.memory import MemoryFileSystem
 from rigging.filesystem import StoragePath
 
@@ -25,7 +32,7 @@ def _rows(reader: CompositeReader, table: str, **kwargs) -> list[dict]:
 def test_round_trip_and_projection(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        samples = store.table("samples", merge_key=("task", "doc_id"))
+        samples = store.table("samples", primary_key=("task", "doc_id"))
         samples.append({"task": "arc", "doc_id": "1", "correct": True, "logprobs": [0.1, 0.2]})
         samples.append({"task": "arc", "doc_id": "2", "correct": False, "logprobs": [0.3]})
         store.flush()
@@ -42,7 +49,7 @@ def test_round_trip_and_projection(tmp_path):
 def test_point_lookup(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", merge_key=("task", "doc_id"))
+        table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": str(i), "score": float(i)} for i in range(5)])
         store.flush()
 
@@ -52,13 +59,13 @@ def test_point_lookup(tmp_path):
     assert CompositeReader(root).point("samples", task="arc", doc_id="99") is None
 
 
-def test_duplicate_delivery_latest_seq_wins(tmp_path):
+def test_supersede_keeps_latest_seq(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", merge_key=("task", "doc_id"))
+        table = store.table("samples", primary_key=("task", "doc_id"), on_conflict=OnConflict.SUPERSEDE)
         table.append({"task": "arc", "doc_id": "1", "score": 1.0})
         store.flush()
-        # A retried trial re-delivers the same merge key with a fresh score in a later shard.
+        # A retried trial re-delivers the same primary key with a fresh score in a later shard.
         table.append({"task": "arc", "doc_id": "1", "score": 2.0})
         store.flush()
 
@@ -67,14 +74,68 @@ def test_duplicate_delivery_latest_seq_wins(tmp_path):
     assert rows[0]["score"] == 2.0
 
 
+def test_conflicting_primary_key_raises(tmp_path):
+    """A key repeat that would silently discard a differing row is rejected, not folded."""
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", primary_key=("task", "doc_id"))
+        table.append({"task": "gsm8k", "doc_id": "0", "score": 0.0})
+        with pytest.raises(PrimaryKeyConflict, match="gsm8k"):
+            table.append({"task": "gsm8k", "doc_id": "0", "score": 1.0})
+        # The rejected row never entered the buffer, so the accepted one is intact.
+        store.flush()
+
+    rows = _rows(CompositeReader(root), "samples")
+    assert [row["score"] for row in rows] == [0.0]
+
+
+def test_identical_redelivery_is_not_a_conflict(tmp_path):
+    """At-least-once delivery of the same row loses nothing, so it collapses without raising."""
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", primary_key=("task", "doc_id"))
+        table.append({"task": "arc", "doc_id": "1", "score": 1.0})
+        store.flush()
+        table.append({"task": "arc", "doc_id": "1", "score": 1.0})
+        store.flush()
+
+    rows = _rows(CompositeReader(root), "samples")
+    assert len(rows) == 1
+
+
+def test_conflict_detected_across_flushes(tmp_path):
+    """The earlier row already being durable does not hide the conflict."""
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", primary_key=("task", "doc_id"))
+        table.append({"task": "gsm8k", "doc_id": "0", "score": 0.0})
+        store.flush()
+        with pytest.raises(PrimaryKeyConflict):
+            table.append({"task": "gsm8k", "doc_id": "0", "score": 1.0})
+
+
+def test_seal_records_superseded_rows(tmp_path):
+    """Supersession is legal but never silent: the seal marker carries the count."""
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", primary_key=("task", "doc_id"), on_conflict=OnConflict.SUPERSEDE)
+        table.append({"task": "arc", "doc_id": "1", "score": 1.0})
+        store.flush()
+        table.append({"task": "arc", "doc_id": "1", "score": 2.0})
+        store.seal()
+
+    marker = SealMarker.model_validate_json(StoragePath(FineStoreLayout(root).sealed_path).read_text())
+    assert marker.superseded["samples"] == 1
+
+
 def test_multi_writer_compose(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="worker-a") as a:
-        ta = a.table("samples", merge_key=("task", "doc_id"))
+        ta = a.table("samples", primary_key=("task", "doc_id"))
         ta.append({"task": "arc", "doc_id": "a", "score": 1.0})
         a.flush()
     with DataStore.open(root, writer_id="worker-b") as b:
-        tb = b.table("samples", merge_key=("task", "doc_id"))
+        tb = b.table("samples", primary_key=("task", "doc_id"))
         tb.append({"task": "arc", "doc_id": "b", "score": 2.0})
         b.flush()
 
@@ -89,23 +150,23 @@ def test_resume_seq_prevents_shadowing(tmp_path):
     # a generation-first rule would have shadowed.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 1.0})
+        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 1.0})
     compact(root, "samples")
     assert CompositeReader(root).list_shards("samples")[0].generation == 1
 
     with DataStore.open(root, writer_id="w2") as store:
-        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 2.0})
+        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 2.0})
     rows = _rows(CompositeReader(root), "samples")
     assert len(rows) == 1
     assert rows[0]["score"] == 2.0
 
 
-def test_keys_lists_deduped_merge_keys(tmp_path):
-    # keys() is the resume primitive: the deduplicated set of merge-key tuples already committed, so a
+def test_keys_lists_deduped_primary_keys(tmp_path):
+    # keys() is the resume primitive: the deduplicated set of primary-key tuples already committed, so a
     # writer can skip finished work. A re-delivered key appears once; an absent table is the empty set.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", merge_key=("task", "doc_id"))
+        table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": "1"}, {"task": "arc", "doc_id": "2"}])
         store.flush()
         table.append({"task": "arc", "doc_id": "1"})
@@ -136,7 +197,7 @@ def test_byte_cap_requests_an_early_flush(tmp_path):
         layout=FineStoreLayout(str(tmp_path / "run")),
         max_buffer_bytes=1024,
         scheduler=scheduler,
-        merge_key=("name",),
+        primary_key=("name",),
         schema=None,
         schema_version=1,
     )
@@ -152,7 +213,7 @@ def test_large_flush_splits_into_prunable_row_groups(tmp_path, monkeypatch):
     monkeypatch.setattr(shard_writer, "ROW_GROUP_ROWS", 2)
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
-        table = store.table("samples", merge_key=("task", "doc_id"))
+        table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": f"{i:03d}"} for i in range(7)])
         store.flush()
     shard = CompositeReader(root).list_shards("samples")[0].path
@@ -165,11 +226,11 @@ def test_schema_evolution_null_promotes_missing_column(tmp_path):
     root = str(tmp_path / "run")
     # An "old" writer without the difficulty column.
     with DataStore.open(root, writer_id="old") as store:
-        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
+        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         store.flush()
     # A "new" writer that added a column.
     with DataStore.open(root, writer_id="new") as store:
-        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "2", "difficulty": 3})
+        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "2", "difficulty": 3})
         store.flush()
 
     result = CompositeReader(root).scan("samples")
@@ -183,7 +244,7 @@ def test_empty_dict_column_is_writable(tmp_path):
     # at write time and reads back as absent rather than failing the flush.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", merge_key=("task", "doc_id"))
+        table = store.table("samples", primary_key=("task", "doc_id"))
         table.append({"task": "arc", "doc_id": "1", "metrics": {}})
         store.flush()
     rows = _rows(CompositeReader(root), "samples")
@@ -203,7 +264,7 @@ def test_blob_write_and_resolve(tmp_path):
 
 def test_blob_rewrite_supersedes_by_name(tmp_path):
     # Blobs are a table keyed by name, so re-writing a name buffers a higher-_seq row that the reader's
-    # dedup keeps -- the latest payload wins, like any other merge-key collision.
+    # dedup keeps -- the latest payload wins, like any other primary-key collision.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
         uri = store.write("t1.json", None, b"first")
@@ -215,7 +276,7 @@ def test_blob_rewrite_supersedes_by_name(tmp_path):
 def test_compaction_merges_and_deletes_source(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", merge_key=("task", "doc_id"))
+        table = store.table("samples", primary_key=("task", "doc_id"))
         for i in range(3):
             table.append({"task": "arc", "doc_id": str(i)})
             store.flush()  # three separate level-0 shards
@@ -223,8 +284,7 @@ def test_compaction_merges_and_deletes_source(tmp_path):
     before = CompositeReader(root).list_shards("samples")
     assert len(before) == 3
 
-    written = compact(root, "samples")
-    assert written == 3
+    assert compact(root, "samples").written == 3
 
     after = CompositeReader(root).list_shards("samples")
     assert len(after) == 1
@@ -238,7 +298,7 @@ def test_crash_mid_compaction_does_not_double_count(tmp_path):
     # both generations are present. Dedup must still return one row per key.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", merge_key=("task", "doc_id"))
+        table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": str(i)} for i in range(4)])
         store.flush()
 
@@ -257,14 +317,13 @@ def test_recompaction_merges_all_generations(tmp_path):
     # exercises the streaming read of an already-compacted (multi-generation) shard.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", merge_key=("task", "doc_id"))
+        table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": str(i), "score": float(i)} for i in range(4)])
         store.flush()
     compact(root, "samples", delete_source=False)
     assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {0, 1}
 
-    written = compact(root, "samples")
-    assert written == 4
+    assert compact(root, "samples").written == 4
     assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {2}
     rows = {r["doc_id"]: r["score"] for r in _rows(CompositeReader(root), "samples")}
     assert rows == {"0": 0.0, "1": 1.0, "2": 2.0, "3": 3.0}
@@ -275,10 +334,10 @@ def test_compaction_unifies_evolved_schema(tmp_path):
     # the compacted shard carries both columns, null where a source lacked one.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="old") as store:
-        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "a": 1})
+        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "a": 1})
         store.flush()
     with DataStore.open(root, writer_id="new") as store:
-        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "2", "b": 2})
+        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "2", "b": 2})
         store.flush()
 
     compact(root, "samples")
@@ -288,24 +347,23 @@ def test_compaction_unifies_evolved_schema(tmp_path):
 
 def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
     # A tiny output row group forces a compacted shard to span several groups; re-compacting it with a
-    # fresh level-0 shard must stream those groups in merge-key order and merge correctly, proving the
+    # fresh level-0 shard must stream those groups in primary-key order and merge correctly, proving the
     # merge never materializes the whole table.
     monkeypatch.setattr(compaction, "_COMPACT_BATCH_ROWS", 2)
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", merge_key=("task", "doc_id"))
+        table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": f"{i:03d}", "score": float(i)} for i in range(7)])
         store.flush()
     compact(root, "samples")  # g1 spanning ceil(7/2) row groups
 
     with DataStore.open(root, writer_id="w2") as store:
-        store.table("samples", merge_key=("task", "doc_id")).extend(
+        store.table("samples", primary_key=("task", "doc_id")).extend(
             [{"task": "arc", "doc_id": f"{i:03d}", "score": float(i)} for i in range(7, 10)]
         )
         store.flush()
 
-    written = compact(root, "samples")
-    assert written == 10
+    assert compact(root, "samples").written == 10
     assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {2}
     rows = {r["doc_id"]: r["score"] for r in _rows(CompositeReader(root), "samples")}
     assert rows == {f"{i:03d}": float(i) for i in range(10)}
@@ -318,7 +376,7 @@ def test_typed_on_disk_metadata(tmp_path):
     root = str(tmp_path / "run")
     layout = FineStoreLayout(root)
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", merge_key=("task", "doc_id"), schema_version=3)
+        table = store.table("samples", primary_key=("task", "doc_id"), schema_version=3)
         table.append({"task": "arc", "doc_id": "1"})
         store.seal()
 
@@ -326,7 +384,7 @@ def test_typed_on_disk_metadata(tmp_path):
     assert archive.format_version == FORMAT_VERSION
 
     table_meta = TableMetadata.model_validate_json(StoragePath(layout.schema_path("samples")).read_text())
-    assert table_meta.merge_key == ("task", "doc_id")
+    assert table_meta.primary_key == ("task", "doc_id")
     assert table_meta.schema_version == 3
 
     seal = SealMarker.model_validate_json(StoragePath(layout.sealed_path).read_text())
@@ -338,7 +396,7 @@ def test_reader_refuses_a_future_format(tmp_path):
     # records the format version and scan refuses one it does not understand.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
+        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         store.flush()
     StoragePath(FineStoreLayout(root).archive_path).write_text(
         ArchiveMetadata(format_version=FORMAT_VERSION + 1).model_dump_json()
@@ -351,7 +409,7 @@ def test_seal_marker(tmp_path):
     root = str(tmp_path / "run")
     reader = CompositeReader(root)
     with DataStore.open(root, writer_id="w1") as store:
-        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
+        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         assert not reader.is_sealed()
         store.seal()
     assert reader.is_sealed()
@@ -363,7 +421,7 @@ def test_seal_compacts_each_table_to_one_generation(tmp_path):
     # generation-1 shard holding the latest row -- readable without applying finestore's dedup rule.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", merge_key=("task", "doc_id"))
+        table = store.table("samples", primary_key=("task", "doc_id"), on_conflict=OnConflict.SUPERSEDE)
         table.append({"task": "arc", "doc_id": "1", "score": 1.0})
         store.flush()
         table.append({"task": "arc", "doc_id": "1", "score": 2.0})
@@ -409,7 +467,7 @@ def test_reads_resolve_the_filesystem_factory_at_call_time(monkeypatch):
 
     root = "s3://finestore-test/run"
     with DataStore.open(root, writer_id="w1") as store:
-        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 1.0})
+        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 1.0})
         store.seal()
     rows = _rows(CompositeReader(root), "samples")
     assert len(rows) == 1
@@ -419,7 +477,7 @@ def test_reads_resolve_the_filesystem_factory_at_call_time(monkeypatch):
 def test_reader_none_for_absent_table(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
+        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         store.flush()
     assert CompositeReader(root).scan("does-not-exist") is None
 
@@ -430,8 +488,8 @@ def test_single_table_flush_is_independent(tmp_path):
     root = str(tmp_path / "run")
     reader = CompositeReader(root)
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
-        samples = store.table("samples", merge_key=("task", "doc_id"))
-        steps = store.table("steps", merge_key=("task", "step_id"))
+        samples = store.table("samples", primary_key=("task", "doc_id"))
+        steps = store.table("steps", primary_key=("task", "step_id"))
         samples.append({"task": "arc", "doc_id": "1"})
         steps.append({"task": "arc", "step_id": 0})
         samples.flush()
@@ -444,8 +502,8 @@ def test_table_returns_shared_handle(tmp_path):
     # sequence counter rather than splitting rows across two.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        first = store.table("samples", merge_key=("task", "doc_id"))
-        second = store.table("samples")
+        first = store.table("samples", primary_key=("task", "doc_id"))
+        second = store.table("samples", primary_key=("task", "doc_id"))
         assert first is second
         first.append({"task": "arc", "doc_id": "1"})
         second.append({"task": "arc", "doc_id": "2"})
@@ -469,14 +527,14 @@ def test_explicit_schema_pins_types_and_rejects_mismatch(tmp_path):
         ]
     )
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
-        store.table("samples", merge_key=("task", "doc_id"), schema=schema).append(
+        store.table("samples", primary_key=("task", "doc_id"), schema=schema).append(
             {"task": "arc", "doc_id": "1", "count": "not-an-int"}
         )
         with pytest.raises(pa.ArrowInvalid):
             store.flush()
 
     with DataStore.open(root, writer_id="w2", flush_interval=3600) as store:
-        store.table("samples", merge_key=("task", "doc_id"), schema=schema).append(
+        store.table("samples", primary_key=("task", "doc_id"), schema=schema).append(
             {"task": "arc", "doc_id": "2", "count": 5}
         )
         store.flush()

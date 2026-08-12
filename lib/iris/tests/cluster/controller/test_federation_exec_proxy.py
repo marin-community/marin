@@ -32,10 +32,7 @@ from iris.cluster.types import JobName
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
-from rigging.server_auth import VerifiedIdentity, identity_scope
-
-from ._test_support import ControllerTestState
-from .conftest import (
+from iris.testing.controller import (
     MockController,
     dispatch_task,
     make_controller_state,
@@ -44,6 +41,8 @@ from .conftest import (
     query_tasks_for_job,
     register_worker,
 )
+from iris.testing.controller_state import ControllerTestState
+from rigging.server_auth import VerifiedIdentity, identity_scope
 
 # The parent authenticates to the peer as itself; the peer trusts it and runs the
 # delegated RPC under the asserted identity (profiling/exec never run anonymously).

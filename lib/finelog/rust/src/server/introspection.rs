@@ -23,14 +23,26 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::query::metadata_cache_stats;
-use crate::query::sidecar::SidecarManager;
 use crate::server::diagnostics::read_proc_self_status_kb;
+use crate::server::ingest_health::{IngestHealth, NamespaceRegistration};
+use crate::store::index_bundle::SectionKind;
 use crate::store::segment::{
-    segment_physical, LAYOUT_VERSION, MAX_ROW_GROUP_ROWS, TARGET_ROW_GROUP_BYTES,
+    segment_id_and_row_group_rows, segment_physical, LAYOUT_VERSION, MAX_ROW_GROUP_ROWS,
+    TARGET_ROW_GROUP_BYTES,
 };
-use crate::store::trigram::{sidecar_path, SIDECAR_SPAN_ROWS};
+use crate::store::segment_index::parse_trigram_coverage;
+use crate::store::segment_index::{
+    parse_group_extrema_config, parse_projection_reference, projection_path,
+};
+use crate::store::trigram::SIDECAR_SPAN_ROWS;
 use crate::store::types::{basename, SegmentRow};
 use crate::store::Store;
+
+#[derive(Clone)]
+struct IntrospectionState {
+    store: Arc<Store>,
+    health: Arc<IngestHealth>,
+}
 
 /// When this process started, stamped at router-build time so uptime counts
 /// from the server coming up rather than from the first request.
@@ -109,6 +121,20 @@ struct MetadataCacheInfo {
     hits: i64,
 }
 
+/// Invalid derived index artifacts observed by this process. Both conditions
+/// fall back to source Parquet scans, but a non-zero value merits rebuilding
+/// the affected local bundle.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IndexCacheInfo {
+    corrupt_bundles: i64,
+    corrupt_sections: i64,
+    exact_aggregate_full: i64,
+    exact_aggregate_partial: i64,
+    exact_aggregate_declined: i64,
+    exact_aggregate_fallbacks: i64,
+}
+
 /// The on-disk format policy this binary writes. A segment whose
 /// `layoutVersion` differs was written by an older policy and is queued for an
 /// in-place re-encode by maintenance.
@@ -118,7 +144,7 @@ struct FormatInfo {
     layout_version: u32,
     target_row_group_bytes: i64,
     max_row_group_rows: i64,
-    sidecar_span_rows: i64,
+    trigram_span_rows: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -127,12 +153,16 @@ struct ServerInfoResponse {
     build: BuildInfo,
     process: ProcessInfo,
     store: StoreInfo,
+    /// Registration state of the namespaces this process ingests into itself.
+    /// A namespace stuck here rejects every write to it, across restarts.
+    ingest: Vec<NamespaceRegistration>,
     metadata_cache: MetadataCacheInfo,
+    index_cache: IndexCacheInfo,
     format: FormatInfo,
 }
 
 /// `GET /api/segments?namespace=NS` query. `physical=true` additionally reads
-/// each local segment's parquet footer and trigram sidecar, which costs a tail
+/// each local segment's Parquet footer and index directory, which costs a tail
 /// read per segment — cheap for one page load, not for a refresh loop.
 #[derive(Debug, Deserialize)]
 struct SegmentsQuery {
@@ -166,6 +196,7 @@ struct SegmentInfo {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PhysicalInfo {
+    segment_identity: String,
     /// `None` for a segment written before the layout stamp existed.
     layout_version: Option<u32>,
     /// Whether that stamp matches what this binary writes today.
@@ -176,19 +207,39 @@ struct PhysicalInfo {
     footer_bytes: i64,
     uncompressed_bytes: i64,
     created_by: Option<String>,
-    /// Trigram sidecar, when one exists and this binary can still read it. A
-    /// sidecar written at an older format version reads as absent, which is
-    /// also how the query path treats it.
+    /// Typed index bundle, when one exists and is bound to this segment.
     #[serde(skip_serializing_if = "Option::is_none")]
-    sidecar: Option<SidecarInfo>,
+    index_bundle: Option<IndexBundleInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SidecarInfo {
+struct IndexBundleInfo {
+    /// Bytes in the checksummed `.fidx` bundle itself.
+    bytes: i64,
+    /// Bytes in covering-projection Parquets referenced by the bundle.
+    external_bytes: i64,
+    checksum: &'static str,
+    sections: Vec<IndexSectionInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IndexSectionInfo {
+    id: String,
+    kind: &'static str,
+    exactness: &'static str,
+    method_version: u8,
+    checksum: &'static str,
+    payload_bytes: i64,
+    external_bytes: i64,
+    /// Source or projected columns described by the section's typed coverage.
     columns: Vec<String>,
-    spans: i64,
-    span_rows: i64,
+    /// False when a covering projection reference no longer resolves to the
+    /// bound Parquet artifact. In-bundle sections are available with the
+    /// readable directory; payload corruption is reported by `indexCache` once
+    /// a query verifies its checksum.
+    available: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -211,10 +262,13 @@ fn unix_seconds(t: SystemTime) -> i64 {
         .unwrap_or(0)
 }
 
-async fn get_server(State(store): State<Arc<Store>>) -> impl IntoResponse {
+async fn get_server(State(state): State<IntrospectionState>) -> impl IntoResponse {
+    let store = &state.store;
     let started = process_started();
     let memory = store.memory_summary();
     let cache = metadata_cache_stats();
+    let corruption = store.index_cache().corruption_counts();
+    let aggregate = store.index_cache().aggregate_stats();
     Json(ServerInfoResponse {
         build: build_info(),
         process: ProcessInfo {
@@ -235,46 +289,134 @@ async fn get_server(State(store): State<Arc<Store>>) -> impl IntoResponse {
             ram_buffer_bytes: memory.ram_bytes,
             ram_chunks: memory.chunks,
         },
+        ingest: state.health.snapshot(),
         metadata_cache: MetadataCacheInfo {
             limit_bytes: cache.limit_bytes as i64,
             size_bytes: cache.size_bytes as i64,
             entries: cache.entries as i64,
             hits: cache.hits as i64,
         },
+        index_cache: IndexCacheInfo {
+            corrupt_bundles: corruption.bundles as i64,
+            corrupt_sections: corruption.sections as i64,
+            exact_aggregate_full: aggregate.full as i64,
+            exact_aggregate_partial: aggregate.partial as i64,
+            exact_aggregate_declined: aggregate.declined as i64,
+            exact_aggregate_fallbacks: aggregate.fallbacks as i64,
+        },
         format: FormatInfo {
             layout_version: LAYOUT_VERSION,
             target_row_group_bytes: TARGET_ROW_GROUP_BYTES as i64,
             max_row_group_rows: MAX_ROW_GROUP_ROWS as i64,
-            sidecar_span_rows: SIDECAR_SPAN_ROWS as i64,
+            trigram_span_rows: SIDECAR_SPAN_ROWS as i64,
         },
     })
 }
 
-/// Read `path`'s footer and sidecar. `None` when the file is not readable here,
+/// Read `path`'s footer and index bundle. `None` when the file is not readable here,
 /// which is the normal state of a `REMOTE` segment after eviction.
-fn physical_info(path: &str) -> Option<PhysicalInfo> {
-    let physical = segment_physical(Path::new(path)).ok()?;
-    let sidecar = SidecarManager::global()
-        .get_header(&sidecar_path(Path::new(path)))
-        .map(|header| SidecarInfo {
-            columns: header.column_names().map(str::to_string).collect(),
-            spans: header.span_count as i64,
-            span_rows: header.span_rows as i64,
+fn physical_info(
+    path: &str,
+    index_cache: &crate::query::index_cache::IndexCache,
+) -> Option<PhysicalInfo> {
+    let path = Path::new(path);
+    let physical = segment_physical(path).ok()?;
+    let (source_id, rows) = segment_id_and_row_group_rows(path)?;
+    let index_bundle = index_cache
+        .get_header(path, source_id, rows.iter().sum::<usize>() as u64)
+        .map(|header| {
+            let sections = header
+                .sections
+                .iter()
+                .map(|section| {
+                    let reference = (section.kind == SectionKind::CoveringProjection)
+                        .then(|| parse_projection_reference(&section.coverage))
+                        .flatten();
+                    let columns = match section.kind {
+                        SectionKind::TrigramBloom => parse_trigram_coverage(&section.coverage)
+                            .map(|coverage| vec![coverage.column])
+                            .unwrap_or_default(),
+                        SectionKind::ExactPostings | SectionKind::ValueCounts => {
+                            std::str::from_utf8(&section.coverage)
+                                .ok()
+                                .map(|columns| {
+                                    columns
+                                        .split('\0')
+                                        .filter(|column| !column.is_empty())
+                                        .map(str::to_string)
+                                        .collect()
+                                })
+                                .unwrap_or_default()
+                        }
+                        SectionKind::CoveringProjection => reference
+                            .as_ref()
+                            .map(|reference| reference.descriptor.columns.clone())
+                            .unwrap_or_default(),
+                        SectionKind::GroupExtrema => parse_group_extrema_config(&section.coverage)
+                            .map(|config| {
+                                vec![
+                                    config.filter_column,
+                                    format!("{}->{}", config.json_column, config.json_key),
+                                    config.extrema_column,
+                                ]
+                            })
+                            .unwrap_or_default(),
+                    };
+                    let available = if section.kind == SectionKind::CoveringProjection {
+                        reference.as_ref().is_some_and(|reference| {
+                            let projection = projection_path(path, reference);
+                            std::fs::metadata(&projection)
+                                .ok()
+                                .is_some_and(|metadata| metadata.len() == reference.file_bytes)
+                        })
+                    } else {
+                        true
+                    };
+                    let external_bytes = reference
+                        .filter(|_| available)
+                        .map(|reference| reference.file_bytes as i64)
+                        .unwrap_or(0);
+                    IndexSectionInfo {
+                        id: section.id.clone(),
+                        kind: section.kind.as_str(),
+                        exactness: section.exactness.as_str(),
+                        method_version: section.method_version,
+                        checksum: section.checksum_algorithm.as_str(),
+                        payload_bytes: section.len as i64,
+                        external_bytes,
+                        columns,
+                        available,
+                    }
+                })
+                .collect::<Vec<_>>();
+            IndexBundleInfo {
+                bytes: header.bundle_len as i64,
+                external_bytes: sections.iter().map(|section| section.external_bytes).sum(),
+                checksum: header.checksum_algorithm.as_str(),
+                sections,
+            }
         });
     Some(PhysicalInfo {
+        segment_identity: source_id.to_string(),
         layout_version: physical.layout_version,
         layout_current: physical.layout_version == Some(LAYOUT_VERSION),
         row_groups: physical.row_groups as i64,
         footer_bytes: physical.footer_bytes,
         uncompressed_bytes: physical.uncompressed_bytes,
         created_by: physical.created_by,
-        sidecar,
+        index_bundle,
     })
 }
 
-fn to_segment_info(row: SegmentRow, physical: bool) -> SegmentInfo {
+fn to_segment_info(
+    row: SegmentRow,
+    physical: bool,
+    index_cache: &crate::query::index_cache::IndexCache,
+) -> SegmentInfo {
     SegmentInfo {
-        physical: physical.then(|| physical_info(&row.path)).flatten(),
+        physical: physical
+            .then(|| physical_info(&row.path, index_cache))
+            .flatten(),
         path: basename(&row.path),
         level: row.level,
         min_seq: row.min_seq,
@@ -289,16 +431,18 @@ fn to_segment_info(row: SegmentRow, physical: bool) -> SegmentInfo {
 }
 
 async fn get_segments(
-    State(store): State<Arc<Store>>,
+    State(state): State<IntrospectionState>,
     Query(q): Query<SegmentsQuery>,
 ) -> impl IntoResponse {
+    let store = Arc::clone(&state.store);
     let namespace = q.namespace.clone();
+    let index_cache = Arc::clone(store.index_cache());
     // Footer reads are blocking file I/O, and a large namespace has hundreds of
     // them, so the whole listing runs off the async runtime.
     let listed = tokio::task::spawn_blocking(move || {
         store.list_segments(&q.namespace).map(|rows| {
             rows.into_iter()
-                .map(|row| to_segment_info(row, q.physical))
+                .map(|row| to_segment_info(row, q.physical, &index_cache))
                 .collect::<Vec<_>>()
         })
     })
@@ -319,10 +463,10 @@ async fn get_segments(
 }
 
 /// The `/api/*` introspection routes, for merging into the app router.
-pub fn introspection_router(store: Arc<Store>) -> Router {
+pub fn introspection_router(store: Arc<Store>, health: Arc<IngestHealth>) -> Router {
     process_started();
     Router::new()
         .route("/api/server", get(get_server))
         .route("/api/segments", get(get_segments))
-        .with_state(store)
+        .with_state(IntrospectionState { store, health })
 }

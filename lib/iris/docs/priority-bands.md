@@ -60,6 +60,18 @@ that band turns into actual preemption depends on the backend:
 A preempted job surfaces as described in [`task-states.md`](task-states.md) and is
 requeued for retry.
 
+On Kubernetes, single-task CPU coordinators have a PodDisruptionBudget whose
+availability policy follows the job's band. PRODUCTION coordinators use
+`minAvailable: 1`, so a voluntary node drain waits for operator action.
+INTERACTIVE and BATCH coordinators use `maxUnavailable: 1`, so a drain may evict
+the singleton pod. Iris records that eviction as `PREEMPTED` and retries it
+within `max_retries_preemption`.
+
+An evicted coordinator loses in-memory and node-local state. INTERACTIVE and
+BATCH coordinators must keep durable progress outside the pod and make repeated
+external writes safe. Use PRODUCTION only when the coordinator must block
+voluntary maintenance; a PDB cannot protect it from a hard node failure.
+
 ## How band selection interacts with budgets
 
 Per-user budget tracking lives in

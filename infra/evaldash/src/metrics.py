@@ -1,24 +1,46 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Standard-error lookup paired with the canonical primary-metric selection.
+"""Panel views over eval records, built on the shared statistics engine.
 
-Primary-metric selection (``PRIMARY_METRIC_PRIORITY``, ``FILTER_PRIORITY``, ``primary_metric``) is
-defined once, in ``marin.evaluation.samples`` (the per-sample export contract), and re-exported here
-so the matrix/leaderboard views and the sample browser rank metrics identically. ``stderr_for`` is the
-one piece specific to run-level metric dicts: finding the stderr paired with a metric key.
+Every score the dashboard shows is a :class:`~marin.evaluation.eval_stats.Measurement`: a value, the
+items behind it, and an interval that widens when a run graded less than it attempted. This module
+turns records into measurements, answers a :class:`~marin.evaluation.eval_stats.SelectionRequest`
+with them, and shapes the result for the API -- the statistics and the selection rules live in the
+engine, which the eval runners share, so the dashboard and the producers cannot drift.
+
+Presentation lives here: the suite grouping of columns, the smoke-suite exclusion, and the payload
+shapes. A cell the request rejected is kept as a *missing* entry with the reason, so an empty cell is
+explained rather than blank.
 """
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
+from collections.abc import Mapping
 
+from marin.evaluation.eval_measurements import measurement_from_record, measurements_from_records
+from marin.evaluation.eval_stats import (
+    DEFAULT_EXCLUDE_FLAGS,
+    DEFAULT_MIN_COVERAGE,
+    Aggregate,
+    AggregationProtocol,
+    CohortMode,
+    Completeness,
+    Interval,
+    Measurement,
+    MissingPolicy,
+    Rejection,
+    SelectionRequest,
+    difference_interval,
+    matches_filters,
+    measurement_interval,
+    panel_aggregate,
+    select,
+)
 from marin.evaluation.records import EvalRunRecord, RunStatus
-from marin.evaluation.samples import primary_metric as primary_metric
 
-# Capped-instance launcher validation runs; kept out of the headline grid and cohort payloads (they
-# stay visible in the runs list and history).
+# Capped-instance launcher validation runs; kept out of the headline panel (they stay visible in the
+# runs list and history).
 SMOKE_SUFFIX = "-smoke"
 
 # Presentation grouping of eval columns into suites for the dashboard's column tree. This mirrors the
@@ -46,6 +68,16 @@ EVAL_SUITES: dict[str, tuple[str, ...]] = {
     "Code": ("humaneval", "humanevalplus", "mbppplus"),
 }
 
+# Run properties a panel can be filtered on. Each maps a facet name to the record attribute path the
+# facet reads, so the API, the meta facets, and the selection filter all name the same set.
+RUN_FACETS: dict[str, str] = {
+    "accelerator": "hardware.accelerator",
+    "platform": "hardware.platform",
+    "backend": "model.backend",
+    "mechanism": "evaluation.mechanism",
+    "user": "user",
+}
+
 
 def eval_suites(evals: set[str]) -> list[dict]:
     """Group the eval names present into ordered presentation suites for the column tree.
@@ -65,225 +97,243 @@ def eval_suites(evals: set[str]) -> list[dict]:
     return result
 
 
-def stderr_for(metrics: dict[str, float], metric_key: str) -> float | None:
-    """The standard error paired with ``metric_key``: its ``<base>_stderr,<filter>`` value, or None.
-
-    lm-eval names the stderr for ``acc,none`` as ``acc_stderr,none``; a filterless ``acc`` pairs with
-    ``acc_stderr``.
-    """
-    base, _, flt = metric_key.partition(",")
-    key = f"{base}_stderr,{flt}" if flt else f"{base}_stderr"
-    value = metrics.get(key)
-    return float(value) if value is not None else None
+def _attribute(record: EvalRunRecord, path: str) -> str:
+    value: object = record
+    for part in path.split("."):
+        value = getattr(value, part, None)
+    return str(value) if value is not None else ""
 
 
-def _task_of(metric_key: str) -> str:
-    """The task a metrics key belongs to: the prefix before ``/`` for a group subtask, else the key."""
-    return metric_key.split("/", 1)[0]
+def run_metadata(records: list[EvalRunRecord]) -> dict[str, dict[str, str]]:
+    """Each run's filterable properties, keyed by run id, for the engine's metadata filter."""
+    return {record.run_id: {facet: _attribute(record, path) for facet, path in RUN_FACETS.items()} for record in records}
 
 
-def _combined_stderr(stderrs: list[float | None]) -> float | None:
-    """Standard error of an unweighted mean of independent means: ``sqrt(sum se^2)/n``.
+def _panel_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
+    """Records eligible for the headline panel: everything but the capped smoke suites."""
+    return [record for record in records if not record.evaluation.name.endswith(SMOKE_SUFFIX)]
 
-    None when any component stderr is missing, since the aggregate is then unknown.
-    """
-    values: list[float] = []
-    for stderr in stderrs:
-        if stderr is None:
-            return None
-        values.append(stderr)
-    if not values:
+
+def _gap_reason(record: EvalRunRecord) -> str:
+    """Why a record contributes no cell, when the request did not reject it outright."""
+    if record.status == RunStatus.SUCCEEDED:
+        return "no metrics recorded"
+    return f"status {record.status.value}"
+
+
+def cell_payload(measurement: Measurement) -> dict:
+    """One panel cell: the value, its interval and what that interval covers, and its provenance."""
+    interval = measurement_interval(measurement)
+    coverage = measurement.coverage
+    return {
+        "value": measurement.value,
+        "low": interval.low,
+        "high": interval.high,
+        "interval_kind": interval.kind.value,
+        "metric": measurement.metric,
+        "metric_kind": measurement.kind.value,
+        "n_scored": coverage.n_scored,
+        "n_attempted": coverage.n_attempted,
+        "coverage": coverage.rate,
+        "errors": dict(coverage.errors),
+        "item_cap": measurement.item_cap,
+        "flags": sorted(flag.value for flag in measurement.flags),
+        "run_id": measurement.run_id,
+        "created_at": measurement.created_at,
+        "version": measurement.version,
+        "git_sha": measurement.git_sha,
+        "eval_runtime": measurement.eval_runtime,
+    }
+
+
+def _aggregate_payload(aggregate: Aggregate | None) -> dict | None:
+    """A panel aggregate rendered with the protocol that defines it, or None when there is none."""
+    if aggregate is None:
         return None
-    return math.sqrt(sum(value * value for value in values)) / len(values)
+    return {
+        "value": aggregate.value,
+        "low": aggregate.low,
+        "high": aggregate.high,
+        "interval_kind": aggregate.kind.value,
+        "covered": aggregate.covered,
+        "total": len(aggregate.protocol.panel),
+        "panel": list(aggregate.protocol.panel),
+        "missing_policy": aggregate.protocol.missing.value,
+        "metrics": list(aggregate.metrics),
+        "runtimes": list(aggregate.runtimes),
+    }
 
 
-@dataclass(frozen=True)
-class TaskScore:
-    """One task's headline score for a record: the value, its metric label, and paired stderr."""
+def _missing_cells(
+    records: list[EvalRunRecord],
+    chosen: Mapping[str, Mapping[str, Measurement]],
+    rejections: tuple[Rejection, ...],
+) -> dict[str, dict[str, dict]]:
+    """Why each ``(model, benchmark)`` without an admitted cell has none, keyed model then benchmark.
 
-    value: float
-    metric: str
-    stderr: float | None
-
-
-@dataclass(frozen=True)
-class _MetricScore:
-    subtask: str
-    value: float
-    metric: str
-    stderr: float | None
-
-
-def primary_metrics_by_task(record: EvalRunRecord) -> dict[str, TaskScore]:
-    """One record's headline metric per task as ``{task: TaskScore}``.
-
-    A group task writes namespaced ``prefix/subtask`` keys; those roll up to ``prefix`` by the
-    unweighted mean of each subtask's primary metric, with the aggregate stderr combined across
-    subtasks. A plain task keeps its single primary value. ``metric`` is the shared metric name, or
-    ``mean`` when a rollup spans differing metrics.
+    A gap is either a run the request rejected (a failed status, coverage below the gate, the wrong
+    cohort) or a run that reached no metric at all, which never becomes a measurement. Both keep the
+    newest offending run, so an empty cell links the run behind it instead of rendering blank.
     """
-    by_task: dict[str, list[_MetricScore]] = {}
-    for task_key, metrics in (record.metrics or {}).items():
-        picked = primary_metric(metrics)
-        if picked is None:
-            continue
-        name, value = picked
-        subtask = task_key.rsplit("/", 1)[-1]
-        by_task.setdefault(_task_of(task_key), []).append(
-            _MetricScore(subtask=subtask, value=value, metric=name, stderr=stderr_for(metrics, name))
-        )
-    result: dict[str, TaskScore] = {}
-    for task, entries in by_task.items():
-        # lm-eval writes a group's doc-weighted aggregate as a subtask whose name prefixes every
-        # other subtask (``mmlu_5shot/mmlu`` beside ``mmlu_5shot/mmlu_anatomy``); score from that
-        # row alone rather than re-averaging it with the per-subject rows it already summarizes.
-        aggregates = [entry for entry in entries if all(other.subtask.startswith(entry.subtask) for other in entries)]
-        if len(aggregates) == 1 and len(entries) > 1:
-            entries = aggregates
-        mean = sum(entry.value for entry in entries) / len(entries)
-        labels = {entry.metric for entry in entries}
-        stderr = _combined_stderr([entry.stderr for entry in entries])
-        result[task] = TaskScore(mean, next(iter(labels)) if len(labels) == 1 else "mean", stderr)
-    return result
-
-
-def record_score(record: EvalRunRecord) -> TaskScore | None:
-    """One record's headline score: its per-task primaries rolled up by unweighted mean.
-
-    Records here carry a single top-level task, so this is normally that task's primary metric;
-    a multi-task eval averages its tasks with the stderrs combined. None when nothing scored.
-    """
-    per_task = primary_metrics_by_task(record) if record.metrics else {}
-    if not per_task:
-        return None
-    entries = list(per_task.values())
-    mean = sum(score.value for score in entries) / len(entries)
-    labels = {score.metric for score in entries}
-    metric = labels.pop() if len(labels) == 1 else "mean"
-    return TaskScore(value=mean, metric=metric, stderr=_combined_stderr([score.stderr for score in entries]))
-
-
-def _current_version(records: list[EvalRunRecord]) -> str | None:
-    """The version label of a model's most recent run: the cohort the headline matrix shows for it.
-
-    Runs are grouped into version cohorts so the matrix never mixes evals across model states -- a
-    model's newest run picks the current version, and only that version's runs fill its row. An
-    unlabelled launch (``version is None``) is its own cohort, so pre-version runs behave as before.
-    """
-    newest = max(records, key=lambda record: record.created_at or "")
-    return newest.version
-
-
-def _cohort_cells(records: list[EvalRunRecord]) -> dict[str, dict]:
-    """One version cohort's ``{eval_name: cell}``: latest succeeded run per eval, else latest failure.
-
-    A cell shows the latest succeeded run's rolled-up primary metric (with stderr); when no run for
-    that eval in the cohort succeeded, it carries the latest run's failure status with a null value,
-    still linking that run so the failure stays visible and clickable rather than silently dropped.
-    """
-    succeeded: dict[str, dict] = {}
-    latest_any: dict[str, dict] = {}
+    reasons = {rejection.run_id: rejection.reason for rejection in rejections}
+    missing: dict[str, dict[str, dict]] = {}
     for record in records:
-        eval_name = record.evaluation.name
-        created_at = record.created_at or ""
-        latest = latest_any.get(eval_name)
-        if latest is None or created_at > latest["created_at"]:
-            latest_any[eval_name] = {"run_id": record.run_id, "created_at": created_at, "status": record.status.value}
-        score = record_score(record)
-        if score is not None:
-            current = succeeded.get(eval_name)
-            if current is None or created_at > current["created_at"]:
-                succeeded[eval_name] = {
-                    "value": score.value,
-                    "stderr": score.stderr,
-                    "metric": score.metric,
-                    "run_id": record.run_id,
-                    "created_at": created_at,
-                }
-    cells: dict[str, dict] = {}
-    for eval_name, latest in latest_any.items():
-        win = succeeded.get(eval_name)
-        if win is not None:
-            cells[eval_name] = {"status": "succeeded", **win}
-        else:
-            cells[eval_name] = {
-                "status": latest["status"],
-                "value": None,
-                "stderr": None,
-                "metric": None,
-                "run_id": latest["run_id"],
-                "created_at": latest["created_at"],
+        model, benchmark = record.model.name, record.evaluation.name
+        if benchmark in chosen.get(model, {}):
+            continue
+        reason = reasons.get(record.run_id) or _gap_reason(record)
+        current = missing.setdefault(model, {}).get(benchmark)
+        if current is None or (record.created_at or "") > current["created_at"]:
+            missing[model][benchmark] = {
+                "reason": reason,
+                "run_id": record.run_id,
+                "status": record.status.value,
+                "created_at": record.created_at,
             }
-    return cells
+    return missing
 
 
-def build_matrix(records: list[EvalRunRecord], archived_models: frozenset[str] = frozenset()) -> dict:
-    """Pivot runs into a ``model x eval`` matrix plus a per-model leaderboard.
+def build_panel(
+    records: list[EvalRunRecord],
+    request: SelectionRequest,
+    archived_models: frozenset[str] = frozenset(),
+    aggregate_policy: MissingPolicy | None = None,
+) -> dict:
+    """Answer one selection request over the record snapshot.
 
-    Each model row reflects its latest version cohort: only the runs labelled with the version of the
-    model's most recent launch fill its cells, so the headline never unions evals produced against
-    different model states. Columns are the registry eval names present across those cohorts. Each row
-    and leaderboard entry carries its cohort ``version`` and an ``archived`` flag. The leaderboard
-    scores each model by the unweighted mean of its succeeded cells over the full eval set, sorted
-    best-first with unscored models last.
+    ``rows`` carries one entry per model that survived the request, each with its selected cells, the
+    rejections behind any empty cell, and -- only when a caller asks for one by naming an aggregation
+    policy -- a panel aggregate carrying its own protocol. No aggregate is produced by default: a mean
+    across benchmarks has no interpretation without a declared panel and missing-data policy.
     """
-    by_model: dict[str, list[EvalRunRecord]] = {}
-    for record in records:
-        if record.evaluation.name.endswith(SMOKE_SUFFIX):
-            continue
-        by_model.setdefault(record.model.name, []).append(record)
+    eligible = _panel_records(records)
+    metadata = run_metadata(eligible)
+    selection = select(measurements_from_records(eligible), request, metadata)
+    on_panel = [
+        record
+        for record in eligible
+        if request.panel is None or record.evaluation.name in request.panel
+        if matches_filters(record.model.name, metadata[record.run_id], request)
+    ]
+    missing = _missing_cells(on_panel, selection.cells, selection.rejections)
 
-    tasks: set[str] = set()
+    panel = request.panel if request.panel is not None else selection.benchmarks
+    protocol = AggregationProtocol(panel=tuple(panel), missing=aggregate_policy) if aggregate_policy else None
+
     rows = []
-    scored_by_model: dict[str, list[dict]] = {}
-    for model in sorted(by_model):
-        version = _current_version(by_model[model])
-        cohort = [record for record in by_model[model] if record.version == version]
-        cells = _cohort_cells(cohort)
-        tasks.update(cells)
-        rows.append({"model": model, "version": version, "archived": model in archived_models, "cells": cells})
-        scored_by_model[model] = [cell for cell in cells.values() if cell["value"] is not None]
-
-    task_list = sorted(tasks)
-    leaderboard = []
-    for row in rows:
-        scored = scored_by_model[row["model"]]
-        score = sum(cell["value"] for cell in scored) / len(scored) if scored else None
-        stderr = _combined_stderr([cell["stderr"] for cell in scored]) if scored else None
-        leaderboard.append(
+    for model in sorted(set(selection.cells) | set(missing)):
+        cells = selection.cells.get(model, {})
+        if request.completeness is Completeness.COMPLETE_PANEL and model not in selection.cells:
+            continue
+        rows.append(
             {
-                "model": row["model"],
-                "version": row["version"],
-                "archived": row["archived"],
-                "score": score,
-                "stderr": stderr,
-                "covered": len(scored),
-                "total": len(task_list),
+                "model": model,
+                "archived": model in archived_models,
+                "cells": {name: cell_payload(measurement) for name, measurement in cells.items()},
+                "missing": missing.get(model, {}),
+                "aggregate": _aggregate_payload(panel_aggregate(cells, protocol)) if protocol else None,
+                "covered": sum(1 for name in panel if name in cells),
             }
         )
-    leaderboard.sort(key=lambda entry: (entry["score"] is not None, entry["score"] or 0.0), reverse=True)
-    return {"tasks": task_list, "rows": rows, "leaderboard": leaderboard}
+    return {
+        "benchmarks": list(selection.benchmarks),
+        "panel": list(panel),
+        "rows": rows,
+        "request": {
+            "min_coverage": request.min_coverage,
+            "cohort": request.cohort.value,
+            "cohort_version": request.cohort_version,
+            "completeness": request.completeness.value,
+            "filters": dict(request.filters),
+            "model_query": request.model_query,
+            "statuses": sorted(status.value for status in request.statuses),
+        },
+    }
+
+
+def _difference_payload(leader: Measurement, other: Measurement) -> dict:
+    """One head-to-head gap: the interval for ``theta_leader - theta_other`` and whether it clears 0."""
+    interval: Interval = difference_interval(leader, other)
+    return {"low": interval.low, "high": interval.high, "separated": interval.low > 0.0}
+
+
+def build_comparison(records: list[EvalRunRecord], request: SelectionRequest, models: tuple[str, ...]) -> dict:
+    """Head-to-head over the benchmarks a set of models share.
+
+    Per benchmark, the model with the highest interval lower bound leads, and every other model gets
+    an interval for its gap to that leader. That interval, not an eyeball comparison of two error
+    bars, is what settles whether an ordering holds: it folds in both runs' sampling error and both
+    runs' ungraded items, and the ungraded ones enter asymmetrically because the *opposing* run's
+    missing items are what can move your bound.
+
+    The single ranking number is the equal-weight aggregate over the shared benchmarks only, under
+    ``require_complete``: a model missing one of them is not scored rather than scored on a smaller
+    panel that would not be the same quantity.
+    """
+    eligible = _panel_records(records)
+    metadata = run_metadata(eligible)
+    selection = select(measurements_from_records(eligible), request, metadata)
+    chosen = {model: dict(selection.cells.get(model, {})) for model in models}
+
+    union = [name for name in selection.benchmarks if any(name in cells for cells in chosen.values())]
+    shared = [name for name in union if all(name in cells for cells in chosen.values())]
+    protocol = AggregationProtocol(panel=tuple(shared), missing=MissingPolicy.REQUIRE_COMPLETE)
+
+    rows = []
+    for benchmark in union:
+        present = {model: cells[benchmark] for model, cells in chosen.items() if benchmark in cells}
+        leader = max(present, key=lambda model: measurement_interval(present[model]).low)
+        rows.append(
+            {
+                "benchmark": benchmark,
+                "shared": benchmark in shared,
+                "leader": leader,
+                "cells": {model: cell_payload(measurement) for model, measurement in present.items()},
+                "differences": {
+                    model: _difference_payload(present[leader], measurement)
+                    for model, measurement in present.items()
+                    if model != leader
+                },
+            }
+        )
+    return {
+        "models": list(models),
+        "benchmarks": union,
+        "shared": shared,
+        "rows": rows,
+        "aggregates": {model: _aggregate_payload(panel_aggregate(cells, protocol)) for model, cells in chosen.items()},
+    }
 
 
 def build_meta(records: list[EvalRunRecord], archived_models: frozenset[str] = frozenset()) -> dict:
-    """Distinct filter values (models, evals, users, statuses) across all records, plus archived set."""
+    """Distinct filter values across all records, plus the archived set and the run facets."""
     eval_names = {r.evaluation.name for r in records}
+    metadata = run_metadata(records)
+    facets = {
+        facet: sorted({values[facet] for values in metadata.values() if values.get(facet)}) for facet in RUN_FACETS
+    }
     return {
         "models": sorted({r.model.name for r in records}),
         "evals": sorted(eval_names),
         "suites": eval_suites(eval_names),
         "users": sorted({r.user for r in records if r.user}),
         "statuses": sorted({r.status.value for r in records}),
+        "versions": sorted({r.version for r in records if r.version}),
+        "facets": facets,
         "archived_models": sorted(archived_models),
     }
 
 
-def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:
-    """One entry per distinct version cohort, newest first, with its eval counts and serve group.
+def record_headline(record: EvalRunRecord) -> dict | None:
+    """One run's headline score with its interval, or None when the run produced no primary metric."""
+    measurement = measurement_from_record(record)
+    if measurement is None:
+        return None
+    return cell_payload(measurement)
 
-    ``created_at`` is the cohort's most recent run (which also orders the list) and ``group_id`` is that
-    run's serve group. Mirrors the version grouping :func:`build_matrix` collapses each model row to.
-    """
+
+def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:
+    """One entry per distinct version cohort, newest first, with its eval counts and serve group."""
     by_version: dict[str | None, list[EvalRunRecord]] = {}
     for record in records:
         by_version.setdefault(record.version, []).append(record)
@@ -304,37 +354,23 @@ def _model_cohorts(records: list[EvalRunRecord]) -> list[dict]:
 
 
 def _model_history(records: list[EvalRunRecord]) -> dict[str, list[dict]]:
-    """Per-eval score-over-time: every scored run for the model on each eval, oldest first.
-
-    Each point carries the same fields as an ``/api/history`` series entry. A run contributes only
-    when it produced a primary metric.
-    """
+    """Per-eval score-over-time: every scored run for the model on each eval, oldest first."""
     history: dict[str, list[dict]] = {}
     for record in records:
-        score = record_score(record)
-        if score is None:
+        headline = record_headline(record)
+        if headline is None:
             continue
-        history.setdefault(record.evaluation.name, []).append(
-            {
-                "run_id": record.run_id,
-                "created_at": record.created_at,
-                "value": score.value,
-                "stderr": score.stderr,
-                "metric": score.metric,
-                "status": record.status.value,
-                "git_sha": record.provenance.git_sha,
-            }
-        )
+        history.setdefault(record.evaluation.name, []).append({**headline, "status": record.status.value})
     for points in history.values():
         points.sort(key=lambda point: point["created_at"] or "")
     return history
 
 
 def _model_runs(records: list[EvalRunRecord]) -> list[dict]:
-    """Every run for the model, newest first, each with its rolled-up primary score when it scored."""
+    """Every run for the model, newest first, each with its headline score when it scored."""
     runs = []
     for record in records:
-        score = record_score(record)
+        headline = record_headline(record)
         runs.append(
             {
                 "run_id": record.run_id,
@@ -342,9 +378,8 @@ def _model_runs(records: list[EvalRunRecord]) -> list[dict]:
                 "status": record.status.value,
                 "created_at": record.created_at,
                 "version": record.version,
-                "value": score.value if score else None,
-                "stderr": score.stderr if score else None,
-                "metric": score.metric if score else None,
+                "headline": headline,
+                "gap_reason": None if headline else _gap_reason(record),
             }
         )
     runs.sort(key=lambda run: run["created_at"] or "", reverse=True)
@@ -356,23 +391,49 @@ def build_model_detail(records: list[EvalRunRecord], model: str) -> dict | None:
 
     ``current_version`` is the version of the model's most recent non-smoke run -- the cohort the view
     opens on -- and ``cohorts`` lists one entry per distinct version, both excluding ``-smoke`` suites
-    as the headline grid does. ``history`` is the per-eval score-over-time across every scored run, and
-    ``runs`` spans every run for the model (smoke included), newest first; the view derives each
-    cohort's cells from ``runs``. The identity fields come from the newest record. Returns None when the
-    model has no records so the caller can answer 404.
+    as the headline panel does. ``history`` is the per-eval score-over-time across every scored run,
+    and ``runs`` spans every run for the model (smoke included), newest first.
     """
     model_records = [record for record in records if record.model.name == model]
     if not model_records:
         return None
     newest = max(model_records, key=lambda record: record.created_at or "")
-    graded = [record for record in model_records if not record.evaluation.name.endswith(SMOKE_SUFFIX)]
+    eligible = _panel_records(model_records)
     return {
         "model": model,
         "location": newest.model.location,
         "backend": newest.model.backend,
         "user": newest.user,
-        "current_version": _current_version(graded) if graded else None,
-        "cohorts": _model_cohorts(graded),
-        "history": _model_history(graded),
+        "current_version": max(eligible, key=lambda r: r.created_at or "").version if eligible else None,
+        "cohorts": _model_cohorts(eligible),
+        "history": _model_history(eligible),
         "runs": _model_runs(model_records),
     }
+
+
+def panel_request(
+    *,
+    benchmarks: tuple[str, ...] | None = None,
+    cohort_version: str | None = None,
+    completeness: Completeness = Completeness.ANY,
+    min_coverage: float = DEFAULT_MIN_COVERAGE,
+    filters: dict[str, str] | None = None,
+    model_query: str | None = None,
+    include_flagged: bool = False,
+) -> SelectionRequest:
+    """Build a selection request from already-parsed query values.
+
+    ``include_flagged`` readmits results the engine flags as suspect, which are excluded by default
+    so one cannot stand as a model's newest result. They are always reported as the reason for the
+    empty cell, so this widens what is shown rather than revealing something that was hidden.
+    """
+    return SelectionRequest(
+        min_coverage=min_coverage,
+        exclude_flags=frozenset() if include_flagged else DEFAULT_EXCLUDE_FLAGS,
+        cohort=CohortMode.SINGLE_COHORT if cohort_version else CohortMode.LATEST_VALID,
+        cohort_version=cohort_version,
+        panel=benchmarks,
+        completeness=completeness,
+        filters=filters or {},
+        model_query=model_query,
+    )

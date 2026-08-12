@@ -15,9 +15,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{
-    Column as ProtoColumn, ColumnIndex as ProtoColumnIndex, ColumnType, Schema as ProtoSchema,
-    SchemaView,
+    Column as ProtoColumn, ColumnIndex as ProtoColumnIndex, ColumnType,
+    CoveringProjection as ProtoCoveringProjection, GroupedExtrema as ProtoGroupedExtrema,
+    Schema as ProtoSchema, SchemaView,
 };
+use crate::store::group_extrema::GroupExtremaConfig;
 
 /// Default implicit ordering-key column name when `Schema.key_column` is empty.
 pub const IMPLICIT_KEY_COLUMN: &str = "timestamp_ms";
@@ -40,13 +42,17 @@ pub const MAX_WRITE_ROWS_BYTES: usize = 16 * 1024 * 1024;
 /// Max rows per RecordBatch. Exactly `1_000_000` (NOT `1 << 20`).
 pub const MAX_WRITE_ROWS_ROWS: usize = 1_000_000;
 
-/// Secondary indexes a column carries. Each index type is its own field so
-/// adding one is additive; `ColumnIndex::default()` (all-false) is unindexed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// User-facing column index policy. It compiles into the closed planner-facing
+/// [`crate::store::segment_index::IndexSpec`] family.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ColumnIndex {
-    /// Per-row-group trigram substring index in each segment's `.tgm` sidecar.
+    /// Span-granular trigram substring section in each segment's `.fidx` bundle.
     /// Only meaningful for STRING columns.
     pub trigram: bool,
+    /// Exact values covered by postings and any explicitly declared projection.
+    pub exact_values: Vec<String>,
+    /// Exact per-value counts stored in the segment's `.fidx` bundle.
+    pub value_counts: bool,
 }
 
 /// One column in a registered schema.
@@ -56,6 +62,38 @@ pub struct Column {
     pub r#type: ColumnType,
     pub nullable: bool,
     pub index: ColumnIndex,
+}
+
+/// A named filtered Parquet projection that covers a stable query family.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoveringProjection {
+    pub name: String,
+    pub predicate_column: String,
+    pub predicate_values: Vec<String>,
+    pub columns: Vec<String>,
+}
+
+impl CoveringProjection {
+    pub fn new(
+        name: impl Into<String>,
+        predicate_column: impl Into<String>,
+        predicate_values: impl IntoIterator<Item = impl Into<String>>,
+        columns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        let mut predicate_values: Vec<String> =
+            predicate_values.into_iter().map(Into::into).collect();
+        predicate_values.sort();
+        predicate_values.dedup();
+        let mut columns: Vec<String> = columns.into_iter().map(Into::into).collect();
+        let mut seen = std::collections::BTreeSet::new();
+        columns.retain(|column| seen.insert(column.clone()));
+        Self {
+            name: name.into(),
+            predicate_column: predicate_column.into(),
+            predicate_values,
+            columns,
+        }
+    }
 }
 
 impl Column {
@@ -73,6 +111,23 @@ impl Column {
         self.index.trigram = true;
         self
     }
+
+    /// Builder: maintain exact source-row postings for selected string values.
+    pub fn with_exact_values(
+        mut self,
+        values: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.index.exact_values = values.into_iter().map(Into::into).collect();
+        self.index.exact_values.sort();
+        self.index.exact_values.dedup();
+        self
+    }
+
+    /// Builder: persist exact counts for every value in this string column.
+    pub fn with_value_counts(mut self) -> Self {
+        self.index.value_counts = true;
+        self
+    }
 }
 
 /// Registered column layout for a namespace.
@@ -84,6 +139,8 @@ impl Column {
 pub struct Schema {
     pub columns: Vec<Column>,
     pub key_column: String,
+    pub projections: Vec<CoveringProjection>,
+    pub grouped_extrema: Vec<GroupExtremaConfig>,
 }
 
 impl Schema {
@@ -91,7 +148,19 @@ impl Schema {
         Self {
             columns,
             key_column: key_column.into(),
+            projections: Vec::new(),
+            grouped_extrema: Vec::new(),
         }
+    }
+
+    pub fn with_covering_projection(mut self, projection: CoveringProjection) -> Self {
+        self.projections.push(projection);
+        self
+    }
+
+    pub fn with_grouped_extrema(mut self, config: GroupExtremaConfig) -> Self {
+        self.grouped_extrema.push(config);
+        self
     }
 
     pub fn column(&self, name: &str) -> Option<&Column> {
@@ -217,9 +286,57 @@ pub fn schema_from_proto_view(view: &SchemaView) -> Result<Schema, StatsError> {
             .as_option()
             .and_then(|ix| ix.trigram)
             .unwrap_or(false);
+        column.index.exact_values = c
+            .index
+            .as_option()
+            .map(|ix| {
+                ix.exact_values
+                    .iter()
+                    .map(|value| value.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        column.index.exact_values.sort();
+        column.index.exact_values.dedup();
+        column.index.value_counts = c
+            .index
+            .as_option()
+            .and_then(|ix| ix.value_counts)
+            .unwrap_or(false);
         cols.push(column);
     }
-    Ok(Schema::new(cols, view.key_column.unwrap_or("")))
+    let projections = view
+        .projections
+        .iter()
+        .map(|projection| {
+            CoveringProjection::new(
+                projection.name.unwrap_or(""),
+                projection.predicate_column.unwrap_or(""),
+                projection
+                    .predicate_values
+                    .iter()
+                    .map(|value| value.to_string()),
+                projection.columns.iter().map(|value| value.to_string()),
+            )
+        })
+        .collect();
+    let grouped_extrema = view
+        .grouped_extrema
+        .iter()
+        .map(|config| {
+            GroupExtremaConfig::new(
+                config.filter_column.unwrap_or(""),
+                config.group_json_column.unwrap_or(""),
+                config.group_json_key.unwrap_or(""),
+                config.extrema_column.unwrap_or(""),
+            )
+        })
+        .collect();
+    let mut schema = Schema::new(cols, view.key_column.unwrap_or(""));
+    schema.projections = projections;
+    schema.grouped_extrema = grouped_extrema;
+    validate_index_policies(&schema)?;
+    Ok(schema)
 }
 
 /// Encode a schema for the wire, stripping the implicit `seq` column.
@@ -230,9 +347,12 @@ pub fn schema_to_proto_owned(schema: &Schema) -> ProtoSchema {
         .filter(|c| c.name != IMPLICIT_SEQ_COLUMN)
         .map(|c| {
             ProtoColumn {
-                index: MessageField::some(
-                    ProtoColumnIndex::default().with_trigram(c.index.trigram),
-                ),
+                index: MessageField::some(ProtoColumnIndex {
+                    exact_values: c.index.exact_values.clone(),
+                    ..ProtoColumnIndex::default()
+                        .with_trigram(c.index.trigram)
+                        .with_value_counts(c.index.value_counts)
+                }),
                 ..Default::default()
             }
             .with_name(&c.name)
@@ -242,6 +362,28 @@ pub fn schema_to_proto_owned(schema: &Schema) -> ProtoSchema {
         .collect();
     ProtoSchema {
         columns,
+        projections: schema
+            .projections
+            .iter()
+            .map(|projection| ProtoCoveringProjection {
+                name: Some(projection.name.clone()),
+                predicate_column: Some(projection.predicate_column.clone()),
+                predicate_values: projection.predicate_values.clone(),
+                columns: projection.columns.clone(),
+                ..Default::default()
+            })
+            .collect(),
+        grouped_extrema: schema
+            .grouped_extrema
+            .iter()
+            .map(|config| ProtoGroupedExtrema {
+                filter_column: Some(config.filter_column.clone()),
+                group_json_column: Some(config.json_column.clone()),
+                group_json_key: Some(config.json_key.clone()),
+                extrema_column: Some(config.extrema_column.clone()),
+                ..Default::default()
+            })
+            .collect(),
         ..Default::default()
     }
     .with_key_column(&schema.key_column)
@@ -255,6 +397,10 @@ pub fn schema_to_proto_owned(schema: &Schema) -> ProtoSchema {
 struct JsonColumnIndex {
     #[serde(default)]
     trigram: bool,
+    #[serde(default)]
+    exact_values: Vec<String>,
+    #[serde(default)]
+    value_counts: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -273,6 +419,10 @@ struct JsonColumn {
 struct JsonSchema {
     key_column: String,
     columns: Vec<JsonColumn>,
+    #[serde(default)]
+    projections: Vec<CoveringProjection>,
+    #[serde(default)]
+    grouped_extrema: Vec<GroupExtremaConfig>,
 }
 
 fn column_type_name(t: ColumnType) -> &'static str {
@@ -330,9 +480,13 @@ pub fn schema_to_json(schema: &Schema) -> String {
                 nullable: c.nullable,
                 index: JsonColumnIndex {
                     trigram: c.index.trigram,
+                    exact_values: c.index.exact_values.clone(),
+                    value_counts: c.index.value_counts,
                 },
             })
             .collect(),
+        projections: schema.projections.clone(),
+        grouped_extrema: schema.grouped_extrema.clone(),
     };
     serde_json::to_string(&payload).expect("schema JSON serialization never fails")
 }
@@ -345,9 +499,17 @@ pub fn schema_from_json(text: &str) -> Result<Schema, StatsError> {
     for c in payload.columns {
         let mut column = Column::new(c.name, column_type_from_json(&c.r#type)?, c.nullable);
         column.index.trigram = c.index.trigram;
+        column.index.exact_values = c.index.exact_values;
+        column.index.exact_values.sort();
+        column.index.exact_values.dedup();
+        column.index.value_counts = c.index.value_counts;
         cols.push(column);
     }
-    Ok(Schema::new(cols, payload.key_column))
+    let mut schema = Schema::new(cols, payload.key_column);
+    schema.projections = payload.projections;
+    schema.grouped_extrema = payload.grouped_extrema;
+    validate_index_policies(&schema)?;
+    Ok(schema)
 }
 
 // ---------------------------------------------------------------------------
@@ -367,7 +529,12 @@ pub fn with_implicit_seq(schema: Schema) -> Schema {
         false,
     ));
     columns.extend(schema.columns);
-    Schema::new(columns, schema.key_column)
+    Schema {
+        columns,
+        key_column: schema.key_column,
+        projections: schema.projections,
+        grouped_extrema: schema.grouped_extrema,
+    }
 }
 
 /// Return `schema` with the implicit nullable STRING `cluster` column appended.
@@ -383,13 +550,26 @@ pub fn with_implicit_cluster(schema: Schema) -> Schema {
     let Schema {
         mut columns,
         key_column,
+        projections,
+        grouped_extrema,
     } = schema;
     columns.push(Column::new(
         IMPLICIT_CLUSTER_COLUMN,
         ColumnType::COLUMN_TYPE_STRING,
         true,
     ));
-    Schema::new(columns, key_column)
+    Schema {
+        columns,
+        key_column,
+        projections,
+        grouped_extrema,
+    }
+}
+
+/// Add the implicit columns registration gives every namespace: the `cluster`
+/// origin column appended, then the `seq` counter prepended.
+pub fn stored_form(schema: Schema) -> Schema {
+    with_implicit_seq(with_implicit_cluster(schema))
 }
 
 /// Resolve the ordering key column name, raising if invalid.
@@ -425,16 +605,150 @@ pub fn resolve_key_column(schema: &Schema) -> Result<String, StatsError> {
     Ok(resolved)
 }
 
+/// Validate index column types and named covering-projection definitions.
+pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
+    for column in &schema.columns {
+        let has_exact_index = column.index.value_counts || !column.index.exact_values.is_empty();
+        if has_exact_index && column.r#type != ColumnType::COLUMN_TYPE_STRING {
+            return Err(StatsError::SchemaValidation(format!(
+                "column {:?}: exact_values and value_counts require a STRING column",
+                column.name
+            )));
+        }
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for projection in &schema.projections {
+        if projection.name.is_empty()
+            || !projection
+                .name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(StatsError::SchemaValidation(format!(
+                "projection name {:?} must contain only ASCII letters, digits, '-' or '_'",
+                projection.name
+            )));
+        }
+        if !names.insert(&projection.name) {
+            return Err(StatsError::SchemaValidation(format!(
+                "duplicate projection name {:?}",
+                projection.name
+            )));
+        }
+        let Some(predicate) = schema.column(&projection.predicate_column) else {
+            return Err(StatsError::SchemaValidation(format!(
+                "projection {:?}: unknown predicate column {:?}",
+                projection.name, projection.predicate_column
+            )));
+        };
+        if predicate.r#type != ColumnType::COLUMN_TYPE_STRING {
+            return Err(StatsError::SchemaValidation(format!(
+                "projection {:?}: predicate column {:?} must be STRING",
+                projection.name, projection.predicate_column
+            )));
+        }
+        if projection.predicate_values.is_empty() || projection.columns.is_empty() {
+            return Err(StatsError::SchemaValidation(format!(
+                "projection {:?}: predicate_values and columns must be non-empty",
+                projection.name
+            )));
+        }
+        if !projection.columns.contains(&projection.predicate_column) {
+            return Err(StatsError::SchemaValidation(format!(
+                "projection {:?}: columns must include predicate column {:?}",
+                projection.name, projection.predicate_column
+            )));
+        }
+        for column in &projection.columns {
+            if schema.column(column).is_none()
+                && column != IMPLICIT_SEQ_COLUMN
+                && column != IMPLICIT_CLUSTER_COLUMN
+            {
+                return Err(StatsError::SchemaValidation(format!(
+                    "projection {:?}: unknown included column {:?}",
+                    projection.name, column
+                )));
+            }
+        }
+    }
+    let mut grouped_extrema = std::collections::BTreeSet::new();
+    for config in &schema.grouped_extrema {
+        if !grouped_extrema.insert(config) {
+            return Err(StatsError::SchemaValidation(format!(
+                "duplicate grouped-extrema declaration {config:?}"
+            )));
+        }
+        let Some(filter) = schema.column(&config.filter_column) else {
+            return Err(StatsError::SchemaValidation(format!(
+                "grouped extrema: unknown filter column {:?}",
+                config.filter_column
+            )));
+        };
+        if filter.r#type != ColumnType::COLUMN_TYPE_STRING {
+            return Err(StatsError::SchemaValidation(format!(
+                "grouped extrema: filter column {:?} must be STRING",
+                config.filter_column
+            )));
+        }
+        let Some(document) = schema.column(&config.json_column) else {
+            return Err(StatsError::SchemaValidation(format!(
+                "grouped extrema: unknown JSON column {:?}",
+                config.json_column
+            )));
+        };
+        if document.r#type != ColumnType::COLUMN_TYPE_STRING {
+            return Err(StatsError::SchemaValidation(format!(
+                "grouped extrema: JSON column {:?} must be STRING",
+                config.json_column
+            )));
+        }
+        if config.json_key.is_empty() {
+            return Err(StatsError::SchemaValidation(
+                "grouped extrema: JSON key must be non-empty".to_string(),
+            ));
+        }
+        let Some(extrema) = schema.column(&config.extrema_column) else {
+            return Err(StatsError::SchemaValidation(format!(
+                "grouped extrema: unknown extrema column {:?}",
+                config.extrema_column
+            )));
+        };
+        if extrema.r#type != ColumnType::COLUMN_TYPE_INT64 {
+            return Err(StatsError::SchemaValidation(format!(
+                "grouped extrema: extrema column {:?} must be INT64",
+                config.extrema_column
+            )));
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
-// Schema merge (additive-only).
+// Schema merge: additive for the column layout, replaceable for derived state.
 // ---------------------------------------------------------------------------
+
+/// Whether `registered` accelerates every query `requested` would: same
+/// predicate column, superset predicate values, superset columns.
+fn covers_projection(registered: &CoveringProjection, requested: &CoveringProjection) -> bool {
+    registered.predicate_column == requested.predicate_column
+        && requested
+            .predicate_values
+            .iter()
+            .all(|value| registered.predicate_values.contains(value))
+        && requested
+            .columns
+            .iter()
+            .all(|column| registered.columns.contains(column))
+}
 
 /// Return the effective schema for a re-register against `registered`.
 ///
 /// - identical / requested ⊆ registered -> `registered` unchanged.
 /// - requested adds nullable columns -> the union (registered then new).
-/// - a conflicting column *type* -> `SchemaConflict`.
-/// - a new non-nullable column -> `SchemaConflict`.
+/// - a conflicting column *type* -> `SchemaConflict`. The registered layout
+///   cannot hold the requested rows, so every write would be rejected anyway.
+/// - a new non-nullable column is adopted as nullable, with a warn. Every
+///   already-stored row is missing it.
 /// - a nullability difference on an existing column is *not* a conflict: warn
 ///   and keep the registered nullability (adopt-from-disk widens compacted
 ///   columns to nullable, and re-registration with the original schema must be
@@ -442,11 +756,20 @@ pub fn resolve_key_column(schema: &Schema) -> Result<String, StatsError> {
 /// - a differing `key_column` is a *hint*: warn and keep the registered value.
 /// - a secondary index is *monotonically enabled*: a request that asks for one
 ///   on an existing column turns it on, and one that omits it leaves the
-///   registered value alone. Enabling is additive — the sidecar is a derived
+///   registered value alone. Enabling is additive — the bundle is a derived
 ///   artifact the backfill sweep builds, and until it exists the query merely
 ///   scans unpruned — so a newer client can add an index to a live namespace
 ///   without a reset. An older client that does not know about the field can
 ///   never clear one, mirroring the storage-policy rule.
+/// - a named covering projection is added when its name is new, and superseded
+///   when a registered name comes back with a different definition. The
+///   registered definition only decides what future segments build: each
+///   segment's `.fidx` `CoveringProjection` section describes its own coverage,
+///   so segments written under the old definition stay queryable until the
+///   index backfill reclaims them. A definition the registered one already
+///   covers is ignored, so an older binary registering a narrower definition
+///   against a newer catalog does not churn a fleet's derived state
+///   mid-rollout.
 pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, StatsError> {
     if registered.key_column != requested.key_column {
         tracing::warn!(
@@ -458,16 +781,57 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
 
     let mut extras: Vec<Column> = Vec::new();
     let mut enable_trigram: Vec<&str> = Vec::new();
+    let mut enable_value_counts: Vec<&str> = Vec::new();
+    let mut exact_values: Vec<(&str, Vec<String>)> = Vec::new();
+    let grouped_extrema = requested
+        .grouped_extrema
+        .iter()
+        .filter(|config| !registered.grouped_extrema.contains(config))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut projections = registered.projections.clone();
+    let mut projections_changed = false;
+    for requested_projection in &requested.projections {
+        match projections
+            .iter_mut()
+            .find(|projection| projection.name == requested_projection.name)
+        {
+            None => {
+                projections.push(requested_projection.clone());
+                projections_changed = true;
+            }
+            Some(existing) if existing == requested_projection => {}
+            Some(existing) if covers_projection(existing, requested_projection) => {
+                tracing::debug!(
+                    projection = %requested_projection.name,
+                    "register: keeping the registered projection, which covers the requested one",
+                );
+            }
+            Some(existing) => {
+                tracing::warn!(
+                    projection = %requested_projection.name,
+                    superseded_values = ?existing.predicate_values,
+                    superseded_columns = ?existing.columns,
+                    "register: superseding a registered covering projection",
+                );
+                *existing = requested_projection.clone();
+                projections_changed = true;
+            }
+        }
+    }
     for rc in &requested.columns {
         match registered.column(&rc.name) {
             None => {
                 if !rc.nullable {
-                    return Err(StatsError::SchemaConflict(format!(
-                        "non-additive change: new column {:?} must be nullable for evolve-merge",
-                        rc.name
-                    )));
+                    tracing::warn!(
+                        column = %rc.name,
+                        "register: adopting a new non-nullable column as nullable",
+                    );
                 }
-                extras.push(rc.clone());
+                extras.push(Column {
+                    nullable: true,
+                    ..rc.clone()
+                });
             }
             Some(existing) => {
                 if existing.r#type != rc.r#type {
@@ -499,11 +863,30 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                 if rc.index.trigram && !existing.index.trigram {
                     enable_trigram.push(rc.name.as_str());
                 }
+                if rc.index.value_counts && !existing.index.value_counts {
+                    enable_value_counts.push(rc.name.as_str());
+                }
+                let additions: Vec<String> = rc
+                    .index
+                    .exact_values
+                    .iter()
+                    .filter(|value| !existing.index.exact_values.contains(value))
+                    .cloned()
+                    .collect();
+                if !additions.is_empty() {
+                    exact_values.push((rc.name.as_str(), additions));
+                }
             }
         }
     }
 
-    if extras.is_empty() && enable_trigram.is_empty() {
+    if extras.is_empty()
+        && enable_trigram.is_empty()
+        && enable_value_counts.is_empty()
+        && exact_values.is_empty()
+        && !projections_changed
+        && grouped_extrema.is_empty()
+    {
         return Ok(registered.clone());
     }
     let mut merged = registered.columns.clone();
@@ -515,9 +898,34 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
             );
             column.index.trigram = true;
         }
+        if enable_value_counts.contains(&column.name.as_str()) {
+            tracing::info!(
+                column = %column.name,
+                "register: enabling exact value counts on an existing column",
+            );
+            column.index.value_counts = true;
+        }
+        if let Some((_, additions)) = exact_values
+            .iter()
+            .find(|(name, _)| *name == column.name.as_str())
+        {
+            tracing::info!(
+                column = %column.name,
+                values = ?additions,
+                "register: enabling exact-value projections on an existing column",
+            );
+            column.index.exact_values.extend(additions.iter().cloned());
+            column.index.exact_values.sort();
+            column.index.exact_values.dedup();
+        }
     }
     merged.extend(extras);
-    Ok(Schema::new(merged, registered.key_column.clone()))
+    let mut merged_schema = Schema::new(merged, registered.key_column.clone());
+    merged_schema.projections = projections;
+    merged_schema.grouped_extrema = registered.grouped_extrema.clone();
+    merged_schema.grouped_extrema.extend(grouped_extrema);
+    validate_index_policies(&merged_schema)?;
+    Ok(merged_schema)
 }
 
 // ---------------------------------------------------------------------------
@@ -1008,6 +1416,119 @@ mod tests {
     }
 
     #[test]
+    fn exact_index_policies_require_string_columns() {
+        for column in [
+            col("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false).with_value_counts(),
+            col("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false).with_exact_values(["phase"]),
+        ] {
+            let schema = Schema::new(vec![column], "timestamp_ms");
+            assert!(matches!(
+                validate_index_policies(&schema),
+                Err(StatsError::SchemaValidation(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn covering_projection_round_trips_and_merges_by_name() {
+        let projection = CoveringProjection::new(
+            "training-status",
+            "worker_id",
+            ["phase", "step"],
+            ["seq", "worker_id", "mem_bytes"],
+        );
+        let requested = worker_schema().with_covering_projection(projection.clone());
+        validate_index_policies(&requested).unwrap();
+        assert_eq!(
+            schema_from_json(&schema_to_json(&requested)).unwrap(),
+            requested
+        );
+
+        let registered = with_implicit_seq(worker_schema());
+        let merged = merge_schemas(&registered, &with_implicit_seq(requested)).unwrap();
+        assert_eq!(merged.projections, vec![projection]);
+
+        let redefined = CoveringProjection::new(
+            "training-status",
+            "worker_id",
+            ["other"],
+            ["seq", "worker_id"],
+        );
+        let superseded = merge_schemas(
+            &merged,
+            &with_implicit_seq(worker_schema().with_covering_projection(redefined.clone())),
+        )
+        .unwrap();
+        assert_eq!(superseded.projections, vec![redefined]);
+    }
+
+    #[test]
+    fn covering_projection_redefinition_keeps_the_wider_definition() {
+        // A rolled-back binary registering a narrower definition must leave the
+        // registered one alone; flipping back and forth would re-index every
+        // segment in the namespace on each registration.
+        let wide = CoveringProjection::new(
+            "training-status",
+            "worker_id",
+            ["phase", "step"],
+            ["seq", "worker_id", "mem_bytes"],
+        );
+        let registered = with_implicit_seq(worker_schema().with_covering_projection(wide.clone()));
+        let narrow = with_implicit_seq(worker_schema().with_covering_projection(
+            CoveringProjection::new("training-status", "worker_id", ["phase"], ["worker_id"]),
+        ));
+        assert_eq!(merge_schemas(&registered, &narrow).unwrap(), registered);
+
+        // An added predicate value is not covered, so it supersedes.
+        let wider = CoveringProjection::new(
+            "training-status",
+            "worker_id",
+            ["phase", "progress", "step"],
+            ["seq", "worker_id", "mem_bytes"],
+        );
+        let merged = merge_schemas(
+            &registered,
+            &with_implicit_seq(worker_schema().with_covering_projection(wider.clone())),
+        )
+        .unwrap();
+        assert_eq!(merged.projections, vec![wider]);
+    }
+
+    #[test]
+    fn grouped_extrema_round_trips_and_merges_monotonically() {
+        let config = GroupExtremaConfig::new("worker_id", "worker_id", "job", "timestamp_ms");
+        let requested = worker_schema().with_grouped_extrema(config.clone());
+        validate_index_policies(&requested).unwrap();
+        assert_eq!(
+            schema_from_json(&schema_to_json(&requested)).unwrap(),
+            requested
+        );
+
+        let registered = with_implicit_seq(worker_schema());
+        let merged = merge_schemas(&registered, &with_implicit_seq(requested)).unwrap();
+        assert_eq!(merged.grouped_extrema, vec![config]);
+        assert_eq!(
+            merge_schemas(&merged, &with_implicit_seq(worker_schema())).unwrap(),
+            merged,
+            "an older registration cannot remove a declared rollup"
+        );
+    }
+
+    #[test]
+    fn grouped_extrema_validates_declared_column_roles() {
+        let invalid = worker_schema().with_grouped_extrema(GroupExtremaConfig::new(
+            "mem_bytes",
+            "worker_id",
+            "job",
+            "timestamp_ms",
+        ));
+        assert!(matches!(
+            validate_index_policies(&invalid),
+            Err(StatsError::SchemaValidation(_))
+        ));
+    }
+
+    #[test]
     fn merge_additive_nullable_extends_in_order() {
         let reg = with_implicit_seq(worker_schema());
         let mut req_cols = reg.columns.clone();
@@ -1067,15 +1588,12 @@ mod tests {
     }
 
     #[test]
-    fn merge_new_non_nullable_rejects() {
+    fn merge_new_non_nullable_column_is_adopted_as_nullable() {
         let reg = with_implicit_seq(worker_schema());
         let mut req_cols = reg.columns.clone();
         req_cols.push(col("cpu_pct", ColumnType::COLUMN_TYPE_FLOAT64, false));
-        let req = Schema::new(req_cols, "");
-        assert!(matches!(
-            merge_schemas(&reg, &req),
-            Err(StatsError::SchemaConflict(_))
-        ));
+        let merged = merge_schemas(&reg, &Schema::new(req_cols, "")).unwrap();
+        assert!(merged.column("cpu_pct").unwrap().nullable);
     }
 
     #[test]
@@ -1114,6 +1632,34 @@ mod tests {
         // A client that predates the field sends the column with no index set.
         let merged = merge_schemas(&reg, &with_implicit_seq(worker_schema())).unwrap();
         assert!(merged.column("worker_id").unwrap().index.trigram);
+    }
+
+    #[test]
+    fn merge_monotonically_adds_exact_index_policies() {
+        let reg = with_implicit_seq(worker_schema());
+        let requested = Schema::new(
+            reg.columns
+                .iter()
+                .map(|column| {
+                    if column.name == "worker_id" {
+                        column
+                            .clone()
+                            .with_exact_values(["phase", "step"])
+                            .with_value_counts()
+                    } else {
+                        column.clone()
+                    }
+                })
+                .collect(),
+            "",
+        );
+        let indexed = merge_schemas(&reg, &requested).unwrap();
+        let worker = &indexed.column("worker_id").unwrap().index;
+        assert_eq!(worker.exact_values, vec!["phase", "step"]);
+        assert!(worker.value_counts);
+
+        let older_client = with_implicit_seq(worker_schema());
+        assert_eq!(merge_schemas(&indexed, &older_client).unwrap(), indexed);
     }
 
     #[test]

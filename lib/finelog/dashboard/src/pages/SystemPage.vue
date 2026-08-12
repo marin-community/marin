@@ -83,6 +83,21 @@ const store = computed<Field[]>(() => {
   ]
 })
 
+/** One row per namespace this server registers for itself; anything but
+ * `registered` is rejecting every write to it. */
+const ingest = computed<Field[]>(() => {
+  const namespaces = info.value?.ingest
+  if (!namespaces?.length) return []
+  return namespaces.map((n) => ({
+    label: n.namespace,
+    value: n.state === 'failed' ? (n.error ?? 'registration failed') : n.state,
+    note:
+      n.state === 'failed'
+        ? `failing since ${formatUnix(n.sinceUnix ?? 0)}, ${formatNumber(n.attempts ?? 0)} attempts`
+        : undefined,
+  }))
+})
+
 const cache = computed<Field[]>(() => {
   const c = info.value?.metadataCache
   if (!c) return []
@@ -91,6 +106,22 @@ const cache = computed<Field[]>(() => {
     { label: 'Parquet metadata', value: `${formatBytes(c.sizeBytes)} of ${formatBytes(c.limitBytes)}`, note: `${pct}% full` },
     { label: 'Cached footers', value: formatNumber(c.entries) },
     { label: 'Hits', value: formatNumber(c.hits) },
+  ]
+})
+
+const indexCache = computed<Field[]>(() => {
+  const c = info.value?.indexCache
+  if (!c) return []
+  const corrupt = c.corruptBundles + c.corruptSections
+  const fallbacks = c.exactAggregateFallbacks
+  return [
+    { label: 'Corrupt bundles', value: formatNumber(c.corruptBundles) },
+    { label: 'Corrupt sections', value: formatNumber(c.corruptSections) },
+    { label: 'Indexed aggregates', value: formatNumber(c.exactAggregateFull) },
+    { label: 'Partial aggregates', value: formatNumber(c.exactAggregatePartial) },
+    { label: 'Declined aggregates', value: formatNumber(c.exactAggregateDeclined) },
+    { label: 'Aggregate fallbacks', value: formatNumber(c.exactAggregateFallbacks) },
+    { label: 'Fallback status', value: corrupt || fallbacks ? 'source fallback observed' : 'healthy' },
   ]
 })
 
@@ -135,7 +166,9 @@ onMounted(load)
           { title: 'Build', fields: build },
           { title: 'Process', fields: process },
           { title: 'Store', fields: store },
+          { title: 'Ingest', fields: ingest },
           { title: 'Query cache', fields: cache },
+          { title: 'Index cache', fields: indexCache },
           { title: 'Storage format', fields: format },
         ]"
         :key="card.title"

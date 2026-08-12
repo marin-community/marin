@@ -43,20 +43,25 @@ You can also run them manually with `./infra/pre-commit.py --all-files --fix` or
 
 ### Testing
 
-For most changes, start with targeted fast tests:
+Run a narrow test while editing, then run all safe tests affected by the branch
+and working tree:
 
 ```bash
-uv run pytest -m 'not slow' <relevant test paths>
+uv run pytest <relevant test paths>
+uv run --no-project infra/ci/run_tests.py
 ```
 
-Use `make test` when you need the full default test suite.
+`pyproject.toml` already excludes the slow, integration, data-integration,
+live-cluster, Docker, and manual markers by default. Do not pass `-m 'not slow'`:
+`-m` replaces the whole default expression, so it re-selects the cluster and
+Docker tests it looks like it is narrowing.
 
 ### Opening a pull request
 
 Before opening a pull request:
 
 1. Run `./infra/pre-commit.py --all-files --fix`.
-2. Run `uv run pytest -m 'not slow'` for the files or packages you changed.
+2. Run `uv run --no-project infra/ci/run_tests.py`.
 3. If your change adds, removes, renames, or rewires docs pages or docs-owned links, run `uv run python infra/check_docs_source_links.py`.
 4. If your change is docs-heavy, run `uv run mkdocs build --strict`.
 5. If your change adds or rewrites substantial prose, do a final prose-only review using `./.agents/skills/writing-style/SKILL.md`. Remove generic significance framing, stock AI-writing templates, and polished filler that does not add information.

@@ -6,10 +6,22 @@ serve time. `experiments.evaluation.models.models()` scans this directory once a
 with the Python factory entries defined in `models.py`. Files and directories whose names start with
 `_` or `.` are skipped.
 
+The launcher also accepts one file with this schema directly, without adding it to the catalog:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model-config /path/to/model.yaml \
+  --evals smoke \
+  --dry-run
+```
+
+Exactly one of `--model <registry-key>` or `--model-config <path>` is required. `record.json` stores
+the normalized schema under `model.config`.
+
 ## Schema
 
 ```yaml
-name: qwen3-32b                 # registry key (must be unique across catalog + factories)
+name: qwen3-32b                 # slash-free launch identity; catalog entries must be unique
 location: Qwen/Qwen3-32B        # HF repo id, or gs://|s3:// HF-format export dir
 revision: null                  # pin an immutable checkpoint (base models); optional
 tokenizer: null                 # required only when location is an object-store path
@@ -19,7 +31,7 @@ resource_hint:                  # ResourceHint -> experiment fleet placement
   hbm_gb: 84                    # serving HBM budget the hardware selector sizes a slice from
   gpu: {}                       # alternatively, accepted exact GPU shapes, e.g. {H100: 8}
   cpu: null                     # optional inference-worker host CPU override
-  memory: null                  # optional inference-worker host memory override
+  memory: null                  # override; the default is sized from the checkpoint's weight files
   disk: null                    # optional inference-worker host disk override
 
 serve:                          # ServeConfig -> model-server behavior

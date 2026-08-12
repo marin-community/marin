@@ -1,11 +1,12 @@
 # Evaluation launcher
 
-A one-command path from "model + eval suite" to recorded results. Pick a model and an eval selection
-from the registries here; the launcher sizes a serving slice and submits one CPU orchestrator job for
-the whole launch. The orchestrator serves the model once, runs every selected eval against that
-endpoint in order, and writes one durable `record.json` per eval as it finishes -- so a suite fills
-in progressively, each eval independently inspectable (own record, own eval-child job and logs, own
-parquet), all sharing a `group_id`. Evaldash scans those records into its Postgres query index.
+A one-command path from "model + eval suite" to recorded results. Pick a registered model or supply a
+catalog-schema model file, then select registered or file-backed evaluations. The launcher sizes a
+serving slice and submits one CPU orchestrator job for the whole launch. The orchestrator serves the
+model once, runs every selected eval against that endpoint in order, and writes one durable
+`record.json` per eval as it finishes -- so a suite fills in progressively, each eval independently
+inspectable (own record, own eval-child job and logs, own parquet), all sharing a `group_id`. Evaldash
+scans those records into its Postgres query index.
 
 `marin.evaluation.runner` opens one `remote_inference` session and passes its Iris endpoint URL to
 each executor. An evaluation failure is recorded and later evaluations continue. If inference fails,
@@ -30,6 +31,10 @@ uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smok
 # See the resolved plan without submitting anything.
 uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke --dry-run
 
+# Evaluate an export without adding it to the model catalog.
+uv run python -m experiments.evaluation.cli launch \
+  --model-config /path/to/fresh-rl-checkpoint.yaml --evals smoke --dry-run
+
 # One suite, a specific slice, capped instances, no waiting.
 uv run python -m experiments.evaluation.cli launch --model llama3.1-8b-instruct \
   --evals gsm8k --accelerator v6e-8 --limit 128 --no-wait
@@ -42,7 +47,8 @@ uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8
   --federated_cluster cw-rno2a --priority interactive
 ```
 
-Key options: `--evals` takes a suite name (`smoke`, `core`) or comma-separated eval keys
+Key options: exactly one of `--model` or `--model-config` selects a registry entry or a catalog-schema
+YAML/JSON file. `--evals` takes a suite name (`smoke`, `core`) or comma-separated eval keys
 (`gsm8k,mmlu-smoke`); repeatable `--evalchemy-config` and `--harbor-config` options add evaluator-native
 files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the sizing
 heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
@@ -57,29 +63,36 @@ math500): one model boot, eleven evals against the shared endpoint, eleven recor
 shows the full model x task grid of runs.
 
 `backfill-samples` rewrites every run's per-sample parquets from its kept `samples_*.jsonl` sources --
-useful after a change to the contract in `marin.evaluation.samples` (the parquet files are
+useful after a change to the contract in `finestore.eval` (the parquet files are
 regenerated in place; the source jsonl is untouched):
 
 ```bash
-uv run python -m experiments.evaluation.cli backfill-samples --prefix gs://marin-eval-metadata/evals
+uv run python -m experiments.evaluation.migrations.cli backfill-samples --prefix gs://marin-eval-metadata/evals
 ```
+
+A task scored under several extraction filters (gsm8k under `strict-match` and `flexible-extract`)
+stores one sample per (document, filter); the two disagree by design. The dashboard's sample browser
+shows one filter at a time, defaulting to the one that produced the run's headline metric, with a
+selector for the others.
 
 ## Records and the dashboard index
 
 Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). That record
-is the source of truth: model, hardware, status (`succeeded` / `failed` / `infra_failed`), the
-per-task metrics, provenance, normalized evaluator configuration, the `group_id` shared by every eval
-from the same serve, and the iris job paths of every job behind the run (`jobs`: orchestrator, the
-shared inference child, this eval's child). The orchestrator writes it on success and on failure, so
-a failed run is still accounted for -- and a failure carries the failed child's last 100 log lines
-(`log_tails`), so most failures are diagnosable straight from the record (or the dashboard) without
-cluster access.
+is the source of truth: normalized model configuration, hardware, status (`succeeded` / `failed` /
+`artifact_failed` / `infra_failed`), the per-task metrics, provenance, normalized evaluator configuration,
+the `group_id`
+shared by every eval from the same serve, and the iris job paths of every job behind the run (`jobs`:
+orchestrator, the shared inference child, this eval's child). The orchestrator writes it on success
+and on failure, so a failed run is still accounted for -- and a failure carries the failed child's
+last 100 log lines (`log_tails`), so most failures are diagnosable straight from the record (or the
+dashboard) without cluster access.
 
 Alongside the results tree, each task's individually-scored questions are exported as parquet:
 lm-eval runs with `--log_samples`, and the orchestrator converts every `samples_*.jsonl` into a
-parquet sibling (`marin.evaluation.samples`, the per-sample contract -- `EvalSample`, normalized from
-lm-eval's native row shape, with the parquet schema *being* the Pydantic model) -- load them with
-pandas/duckdb, or read them back with `EvalSample.model_validate`, to zoom into any run.
+parquet sibling (`marin.evaluation.lm_eval_samples` normalizes lm-eval's native row shape into
+`EvalSample`, the per-sample contract in `finestore.eval`, with the parquet schema *being* the
+Pydantic model) -- load them with pandas/duckdb, or read them back with `EvalSample.model_validate`,
+to zoom into any run.
 
 Evaldash treats these records as the source of truth. Its background ingestor scans every configured
 object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implemented in
@@ -87,11 +100,12 @@ object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implem
 
 ## Evals in pipelines
 
-`pipeline.py` exposes the same run as an `ArtifactStep`: `eval_step("qwen3-1.7b", "smoke",
-version="2026.07.19")` is a lazy, versioned handle. The step submits the same CPU orchestrator used by
-the CLI and writes eval outputs to the launcher's shared `evals` root; its artifact path contains the
-pipeline cache record. The slice override is a runtime arg, so changing it does not change the artifact
-identity.
+`pipeline.py` exposes the same run as an `ArtifactStep`:
+`eval_step(CatalogEvaluationModel("qwen3-1.7b"), "smoke", version="2026.07.19")` is a lazy,
+versioned handle. The step submits the same CPU orchestrator used by the CLI and writes eval outputs
+to the launcher's shared `evals` root; its artifact path contains the pipeline cache record. The slice
+override is a runtime arg, so changing it does not change the artifact identity. Produced-model
+adapters such as `SkyRLEvaluationModel` use the same `eval_step` entry point.
 
 ## Evalchemy config files
 
@@ -221,8 +235,9 @@ cached `models()` registry in `models.py`:
 
 Set `resource_hint.hbm_gb` to a portable serving footprint, or set
 `resource_hint.gpu` to an accepted exact GPU shape such as `{"H100": 8}`. The experiment fleet maps
-that requirement to a cluster. Set `resource_hint.memory` when serving needs more than the default
-host memory. Set `tokenizer` when `location` is an object-store export because the eval client loads
+that requirement to a cluster. Host memory is sized from the checkpoint's weight files and the
+slice's rank count, so set `resource_hint.memory` only when a model needs more than its weights
+imply. Set `tokenizer` when `location` is an object-store export because the eval client loads
 its tokenizer through Hugging Face. vLLM streams object-store weights through the RunAI loader.
 Every explicit `serve` value wins over what `auto_serve_overrides` derives from the model's
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)

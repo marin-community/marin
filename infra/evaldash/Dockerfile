@@ -48,12 +48,17 @@ RUN pip install --no-cache-dir \
     anthropic \
     && rm -rf /build
 
-# The canonical record and sample contracts are the only Marin modules in the image. The private
-# Postgres index lives with the server under infra/evaldash/src.
+# The record contract, the statistics engine, and its record adapter are the only bespoke Marin
+# modules in the image; the per-sample contract lives in finestore.eval, installed above with the
+# finestore wheel, and the private Postgres index lives with the server under infra/evaldash/src.
+# All three are import-light by construction (pydantic, finestore.eval, and the standard library),
+# which is what lets the image vendor them instead of installing marin-core.
+# tests/evaluation/test_evaldash_image.py walks the server's imports and fails if one is missing here.
 COPY lib/marin/src/marin/__init__.py /app/marin/__init__.py
 COPY lib/marin/src/marin/evaluation/__init__.py /app/marin/evaluation/__init__.py
 COPY lib/marin/src/marin/evaluation/records.py /app/marin/evaluation/records.py
-COPY lib/marin/src/marin/evaluation/samples.py /app/marin/evaluation/samples.py
+COPY lib/marin/src/marin/evaluation/eval_stats.py /app/marin/evaluation/eval_stats.py
+COPY lib/marin/src/marin/evaluation/eval_measurements.py /app/marin/evaluation/eval_measurements.py
 # Copy the generated Connect clients and protobufs as package directories; evaldash does not need
 # the full Iris or finelog runtime packages.
 COPY lib/iris/src/iris/__init__.py /app/iris/__init__.py
@@ -61,14 +66,13 @@ COPY lib/iris/src/iris/rpc/ /app/iris/rpc/
 COPY lib/finelog/src/finelog/__init__.py /app/finelog/__init__.py
 COPY lib/finelog/src/finelog/rpc/ /app/finelog/rpc/
 
-# The server plus its flat top-level modules: metric selection, VM discovery, the iris/finelog
-# cluster gateway, and the per-sample parquet reader.
-COPY infra/evaldash/src/ /app/
-COPY --from=dashboard /build/dist /app/dist
+# Preserve the repository package path so the image and tests import the server identically.
+COPY infra/evaldash/src/ /app/infra/evaldash/src/
+COPY --from=dashboard /build/dist /app/infra/evaldash/dashboard/dist
 
 # Cloud Run injects PORT and routes to it; the server reads it (default 8080).
 ENV PORT=8080
 EXPOSE 8080
 
 # Connect to Postgres, start the object-store ingestor, and serve the app on $PORT.
-CMD ["python", "server.py"]
+CMD ["python", "-m", "infra.evaldash.src.server"]

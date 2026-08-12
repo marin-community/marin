@@ -8,9 +8,10 @@ advertised device variant in ``K8sTaskProvider.resource_capacity``."""
 from iris.cluster.backends.k8s.tasks import ClusterState, K8sTaskProvider, PodConfig
 from iris.cluster.controller.backend import DeviceCapacity
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
-from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_BATCH, IRIS_PRIORITY_CLASS_INTERACTIVE
+from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_BATCH, IRIS_PRIORITY_CLASS_INTERACTIVE, K8sResource
 from iris.cluster.types import WellKnownAttribute
 from iris.rpc import job_pb2
+from iris.testing.k8s import make_batch
 
 _GPU = "nvidia.com/gpu"
 
@@ -114,27 +115,35 @@ def test_gpu_capacity_zero_without_gpu_nodes():
     assert state.gpu_capacity(_PRIORITY_CLASSES) == DeviceCapacity(free=0, total=0)
 
 
-def _provider(advertised: dict[str, set[str]]) -> K8sTaskProvider:
+def _resource_capacity(advertised: dict[str, set[str]]) -> dict[str, DeviceCapacity] | None:
+    k8s = InMemoryK8sService(namespace="test-ns")
+    k8s.seed_resource(K8sResource.NODES, "n1", _node("n1", 8))
+    pod = _pod("a", 2)
+    pod["metadata"]["labels"] = {"iris.managed": "true", "iris.runtime": "iris-kubernetes"}
+    k8s.seed_resource(K8sResource.PODS, "a", pod)
     provider = K8sTaskProvider(
-        kubectl=InMemoryK8sService(namespace="test-ns"),
+        kubectl=k8s,
         pods=PodConfig(namespace="test-ns", default_image="img"),
         advertised=advertised,
+        cluster_scan_interval=0.0,
     )
-    provider._cluster_state.update(pods=[_pod("a", 2)], nodes=[_node("n1", 8)], workloads=[], node_pools=[])
-    return provider
+    try:
+        provider.sync(make_batch())
+        return provider.resource_capacity()
+    finally:
+        provider.close()
 
 
 def test_resource_capacity_attributes_gpus_to_the_sole_variant():
-    provider = _provider({WellKnownAttribute.DEVICE_VARIANT: {"H100"}})
-    assert provider.resource_capacity() == {  # lowercased, 8 - 2
+    assert _resource_capacity({WellKnownAttribute.DEVICE_VARIANT: {"H100"}}) == {  # lowercased, 8 - 2
         "h100": DeviceCapacity(free=6, total=8, held_by_band={job_pb2.PRIORITY_BAND_INTERACTIVE: 2})
     }
 
 
 def test_resource_capacity_is_unset_when_the_variant_is_ambiguous():
     # Two variants: free GPUs cannot be attributed to one, so fall back to shape-only.
-    assert _provider({WellKnownAttribute.DEVICE_VARIANT: {"h100", "a100"}}).resource_capacity() is None
+    assert _resource_capacity({WellKnownAttribute.DEVICE_VARIANT: {"h100", "a100"}}) is None
 
 
 def test_resource_capacity_is_unset_without_an_advertised_variant():
-    assert _provider({}).resource_capacity() is None
+    assert _resource_capacity({}) is None

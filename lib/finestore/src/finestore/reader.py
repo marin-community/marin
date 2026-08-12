@@ -5,7 +5,7 @@
 
 A read lists the table directory, unifies the shards' self-describing schemas (so a column a run
 added later is null for older shards), reads only the projected columns, and collapses duplicates by
-the table's merge key — keeping, for each key, the row with the highest ``_seq`` and then the highest
+the table's primary key — keeping, for each key, the row with the highest ``_seq`` and then the highest
 compaction generation. Because a writer resumes its ``_seq`` above every persisted row, a later write
 always outranks an earlier one, so nothing can shadow it; the generation only breaks the exact-``_seq``
 tie a compaction creates when it re-emits a row unchanged. That single rule makes a crash
@@ -31,7 +31,6 @@ from finestore.layout import (
     FORMAT_VERSION,
     GEN_COLUMN,
     SEQ_COLUMN,
-    WRITER_COLUMN,
     ArchiveMetadata,
     FineStoreLayout,
     Shard,
@@ -41,10 +40,6 @@ from finestore.layout import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Deduplication falls back to this always-unique key when a table declares no merge key: it still
-# collapses a re-published shard (same writer + seq) but not a duplicate domain delivery.
-_DEFAULT_MERGE_KEY = (WRITER_COLUMN, SEQ_COLUMN)
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 
@@ -83,17 +78,29 @@ class CompositeReader:
         shards = [parse_shard_path(key) for key in keys]
         return [shard for shard in shards if shard is not None]
 
-    def merge_key(self, table: str) -> tuple[str, ...]:
-        """The table's dedup merge key, read from ``_schema.json`` (or the default fallback)."""
-        key = self._meta(table).merge_key
-        return tuple(key) if key else _DEFAULT_MERGE_KEY
+    def primary_key(self, table: str) -> tuple[str, ...]:
+        """The columns identifying a row of ``table``, read from its ``_schema.json``."""
+        return tuple(self._meta(table).primary_key)
+
+    def schema_version(self, table: str) -> int | None:
+        """The caller's logical schema version for ``table``, or ``None`` if it holds no shards.
+
+        A writer compares this against its own contract version to tell a fresh archive from one
+        whose rows predate the current row shape. ``None`` means only that the table has no shards:
+        a table that has them but no ``_schema.json`` raises, because reading a corrupt archive as
+        "fresh" would skip the rebuild a contract change needs.
+        """
+        fs, _ = factory.url_to_fs(self.root)
+        if not self._list_shards(fs, table):
+            return None
+        return self._meta(table).schema_version
 
     def _meta(self, table: str) -> TableMetadata:
         if table in self._meta_cache:
             return self._meta_cache[table]
         # The store writes _schema.json when it registers a table, before any of that table's shards.
         # So a table with shards always has one; a missing file is a corrupt or foreign archive and
-        # propagates rather than silently defaulting the merge key (which would mis-deduplicate).
+        # propagates rather than silently defaulting the primary key (which would mis-deduplicate).
         meta = TableMetadata.model_validate_json(StoragePath(self._layout.schema_path(table)).read_text())
         self._meta_cache[table] = meta
         return meta
@@ -130,7 +137,7 @@ class CompositeReader:
         ``where`` is a list of ``(column, op, value)`` conditions (``==``, ``!=``, ``in``) ANDed
         together and pushed into the Parquet scan. Returns ``None`` when the table has no shards. When
         ``columns`` is given, only those column chunks are read (fat columns a query does not select
-        are never fetched), plus whatever the merge key needs; the result is projected back to
+        are never fetched), plus whatever the primary key needs; the result is projected back to
         ``columns``.
         """
         fs, _ = factory.url_to_fs(self.root)
@@ -138,7 +145,7 @@ class CompositeReader:
         if not shards:
             return None
         self._check_format()
-        key = self.merge_key(table)
+        key = self.primary_key(table)
         pa_fs = PyFileSystem(FSSpecHandler(fs))
 
         schemas = [pq.read_schema(shard.path, filesystem=pa_fs) for shard in shards]
@@ -204,20 +211,20 @@ class CompositeReader:
         return highest
 
     def keys(self, table: str) -> set[tuple]:
-        """The deduplicated set of merge-key tuples durably present in ``table``.
+        """The deduplicated set of primary-key tuples durably present in ``table``.
 
         The resume primitive a writer reads to skip work it already committed (e.g. Harbor asking
-        which trials are done). Reads only the merge-key columns; returns an empty set for a table
+        which trials are done). Reads only the primary-key columns; returns an empty set for a table
         with no shards.
         """
         fs, _ = factory.url_to_fs(self.root)
         if not self._list_shards(fs, table):
             return set()
-        merge_key = self.merge_key(table)
-        result = self.scan(table, columns=list(merge_key))
+        primary_key = self.primary_key(table)
+        result = self.scan(table, columns=list(primary_key))
         if result is None:
             return set()
-        columns = [result.column(name).to_pylist() for name in merge_key]
+        columns = [result.column(name).to_pylist() for name in primary_key]
         return set(zip(*columns, strict=True))
 
     # -- blobs / references ------------------------------------------------------------------------
@@ -250,8 +257,8 @@ class CompositeReader:
         return self._list_shards(fs, table)
 
 
-def _deduplicate(table: pa.Table, merge_key: tuple[str, ...]) -> pa.Table:
-    """Keep one row per merge key: the highest ``(_seq, _gen)`` wins.
+def _deduplicate(table: pa.Table, primary_key: tuple[str, ...]) -> pa.Table:
+    """Keep one row per primary key: the highest ``(_seq, _gen)`` wins.
 
     ``_seq`` decides — a writer resumes it above every persisted row, so a later write outranks an
     earlier one and cannot be shadowed. Generation only breaks the exact-``_seq`` tie compaction
@@ -260,7 +267,7 @@ def _deduplicate(table: pa.Table, merge_key: tuple[str, ...]) -> pa.Table:
     num_rows = table.num_rows
     if num_rows == 0:
         return table
-    key_columns = [table.column(name).to_pylist() for name in merge_key]
+    key_columns = [table.column(name).to_pylist() for name in primary_key]
     generations = table.column(GEN_COLUMN).to_pylist()
     sequences = table.column(SEQ_COLUMN).to_pylist() if SEQ_COLUMN in table.column_names else [0] * num_rows
     order = sorted(range(num_rows), key=lambda i: (sequences[i], generations[i]))

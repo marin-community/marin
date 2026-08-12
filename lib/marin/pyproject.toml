@@ -32,6 +32,7 @@ dependencies = [
     "transformers>=5.5.3,<6.0",
     "markdownify>=0.14.1",
     "mcp>=1.28.1",
+    "msgspec>=0.18.0",
     "numpy",
     "openai",
     "pandas>=2.0",
@@ -84,13 +85,10 @@ docs = [
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
-math = ["pylatexenc", "sympy>=1.12.1,<1.14"]
-
 dev = [
     { include-group = "test" },
     { include-group = "lint" },
     { include-group = "docs" },
-    { include-group = "math" },
 ]
 
 [tool.uv]
@@ -103,12 +101,6 @@ conflicts = [
         { extra = "gpu" },
         { extra = "cpu" },
     ],
-    [
-        # The vllm extra builds vLLM for TPUs from source, so it must use CPU
-        # torch rather than the cu128-pinned torch from the gpu extra.
-        { extra = "vllm" },
-        { extra = "gpu" },
-    ],
 ]
 
 
@@ -119,7 +111,8 @@ gpu = [
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
-  "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
+  # 2.29.3 carries the upstream aarch64 proxy freeOps CAS leak fix, which a Grace host needs.
+  "nvidia-nccl-cu13>=2.29.3; sys_platform == 'linux'",
   # FA4 CuTe/THD attention backends.
   "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
   "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
@@ -133,9 +126,9 @@ gpu = [
   "torchvision==0.26.0",
 ]
 tpu = [
-  "jax==0.10.1",
-  "jaxlib==0.10.1",
-  "libtpu==0.0.41",
+  "jax==0.11.0",
+  "jaxlib==0.11.0",
+  "libtpu==0.0.44.*",
   "torch==2.11.0",
   # Linux x86_64
   "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -146,7 +139,7 @@ tpu = [
 ]
 
 cpu = [
-  "jax==0.10.1",
+  "jax==0.11.0",
   "torch==2.11.0",
   # Linux x86_64
   "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -156,33 +149,11 @@ cpu = [
   "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
-rl = [
-    # Provides the Prime Intellect CLI invoked via subprocess in
-    # prime_intellect_env.py (`prime env install ...`); not a Python import.
-    "prime",
-    "sympy>=1.12.1,<1.14",
-    "verifiers==0.1.5",
-]
-
 # Evalchemy runs from a commit-pinned uvx environment against a served OpenAI URL, so lm-eval does
 # not share Marin's project environment. See marin.evaluation.evalchemy.runtime.
 
 vizier = [
     "google-vizier[jax]",
-]
-
-vllm = [
-    "jax==0.10.1",
-    "jaxlib==0.10.1",
-    "libtpu==0.0.41",
-    "vllm",
-    "tpu-inference==0.23.0",
-    # Pin torch + torchvision explicitly so the per-extra source map below
-    # routes them to the pytorch-cpu index during fresh Iris resolves.
-    "torch==2.11.0",
-    "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torchvision==0.26.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
-    "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
 dedup = [
@@ -200,18 +171,15 @@ datakit = [
     "duckdb>=1.0.0",
 ]
 
-math = ["pylatexenc", "sympy"]
-
 [[tool.uv.index]]
 name = "marin-resiliparse"
 url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 
 [tool.uv.sources]
 torchvision = [
-    # Default to the CPU index for TPU/CPU/vLLM builds
+    # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
-    { index = "pytorch-cpu", extra = "vllm" },
     # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
     { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
 ]
@@ -221,7 +189,6 @@ torch = [
     { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
-    { index = "pytorch-cpu", extra = "vllm" },
 ]
 
 [[tool.uv.index]]

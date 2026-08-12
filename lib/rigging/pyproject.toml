@@ -27,6 +27,7 @@ dependencies = [
     "requests>=2.0.0",
     "s3fs>=2024.0.0",
     "starlette>=0.40",
+    "zstandard>=0.22",
 ]
 
 [project.scripts]

@@ -20,9 +20,10 @@ import json
 import logging
 import os
 
-import samples
-from marin.evaluation.samples import EvalSample, SampleKind
+from finestore.eval import EvalSample, SampleKind
 from pydantic import BaseModel, ConfigDict
+
+from . import samples
 
 logger = logging.getLogger(__name__)
 

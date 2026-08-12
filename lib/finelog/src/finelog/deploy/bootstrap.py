@@ -17,6 +17,18 @@ import re
 CONTAINER_NAME = "finelog"
 CACHE_DIR = "/var/cache/finelog"
 
+# `/health` answers 200 whenever the process is listening; the body says whether
+# its namespaces accept rows (`rust/src/server/ingest_health.rs`). A namespace
+# whose registration is `pending` is still starting up; `failed` is terminal for
+# the running binary, so a deploy gate stops waiting on it.
+HEALTH_OK = "ok"
+REGISTRATION_FAILED = "registration failed"
+
+
+def health_probe_command(port: int) -> str:
+    """The shell command a deploy gate runs to read `/health` from the server's own host."""
+    return f"curl -sf -m 5 http://localhost:{port}/health"
+
 
 def render_template(template: str, **variables: str | int) -> str:
     """Render a `{{ variable }}` template (single space inside the braces).
@@ -114,7 +126,9 @@ for i in $(seq 1 60); do
         sudo docker logs {{ container_name }} --tail 200 || true
         exit 1
     fi
-    if curl -sf http://localhost:{{ port }}/health > /dev/null 2>&1; then
+    # Gate on the body: /health answers 200 while the server is only listening.
+    health=$({{ health_probe }} 2>/dev/null || true)
+    if [ "$health" = "{{ health_ok }}" ]; then
         echo "[finelog-init] finelog is healthy"
         echo "[finelog-init] Bootstrap complete"
         exit 0
@@ -122,7 +136,7 @@ for i in $(seq 1 60); do
     sleep 2
 done
 
-echo "[finelog-init] ERROR: finelog failed to become healthy after 120s"
+echo "[finelog-init] ERROR: finelog failed to become healthy after 120s (last /health: ${health:-unreachable})"
 sudo docker ps -a -f name={{ container_name }}
 sudo docker logs {{ container_name }} --tail 200 || true
 exit 1
@@ -135,7 +149,7 @@ def render_bootstrap(
     remote_log_dir: str,
     auth_policy: str,
     query_metadata_cache_mb: int | None,
-    query_sidecar_cache_mb: int | None,
+    query_index_cache_mb: int | None,
 ) -> str:
     """Render the finelog bootstrap script.
 
@@ -145,7 +159,7 @@ def render_bootstrap(
     tunnel. It is passed single-quoted, so it must not contain a single quote
     (the JSON never does — CIDR prefixes, cluster names, PEM public keys).
     ``query_metadata_cache_mb`` leaves DataFusion's default in place when unset,
-    and ``query_sidecar_cache_mb`` the server's own sidecar cache default.
+    and ``query_index_cache_mb`` the server's decoded index-cache default.
     """
     if not image:
         raise ValueError("image is required")
@@ -157,8 +171,8 @@ def render_bootstrap(
     query_env = (
         f"-e FINELOG_QUERY_METADATA_CACHE_MB={query_metadata_cache_mb} " if query_metadata_cache_mb is not None else ""
     )
-    if query_sidecar_cache_mb is not None:
-        query_env += f"-e FINELOG_SIDECAR_CACHE_MB={query_sidecar_cache_mb} "
+    if query_index_cache_mb is not None:
+        query_env += f"-e FINELOG_INDEX_CACHE_MB={query_index_cache_mb} "
     return render_template(
         BOOTSTRAP_SCRIPT,
         docker_image=image,
@@ -168,4 +182,6 @@ def render_bootstrap(
         query_env=query_env,
         cache_dir=CACHE_DIR,
         container_name=CONTAINER_NAME,
+        health_probe=health_probe_command(port),
+        health_ok=HEALTH_OK,
     )

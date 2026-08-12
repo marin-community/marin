@@ -17,7 +17,7 @@ object, and there is no manifest to keep consistent.
 
 Rows carry a caller-defined schema plus two stamped columns: `_writer` (the
 producing writer) and `_seq` (a per-writer monotonic id). A table declares a
-`merge_key`; the reader keeps one row per key (the latest write wins).
+`primary_key`; the reader keeps one row per key (the latest write wins).
 
 `DataStore.write(name, metadata, data)` stores an opaque payload in the `blobs`
 table and returns a `finestore://blobs/<name>` reference. A sample row holds
@@ -32,7 +32,7 @@ from finestore.store import DataStore
 from finestore.reader import CompositeReader
 
 with DataStore.open("gs://bucket/run/results", writer_id="evalchemy") as store:
-    samples = store.table("samples", merge_key=("task", "doc_id"))
+    samples = store.table("samples", primary_key=("task", "doc_id"))
     samples.append({"task": "arc", "doc_id": "1", "correct": True})
     store.seal()  # mark the run complete
 
@@ -51,7 +51,7 @@ generation they belong to:
 {root}/
     _archive.json                            # archive-wide: the on-disk format version
     SEALED                                   # optional: the run is complete
-    {table}/_schema.json                     # per-table: merge key + logical schema version
+    {table}/_schema.json                     # per-table: primary key + logical schema version
     {table}/w={writer}/g={gen}/{seq:016d}-{uid}.parquet
 ```
 
@@ -60,7 +60,7 @@ and row-group statistics come from its Parquet footer. The small JSON objects
 record only what a footer cannot: `_archive.json` holds finestore's on-disk
 format version (the writer stamps it at open, and a reader refuses a newer
 format than it understands), and each `{table}/_schema.json` holds the dedup
-merge key and the caller's logical schema version. Together they are the whole
+primary key and the caller's logical schema version. Together they are the whole
 "manifest". The writer and generation are encoded in the object key and
 recovered by listing; nothing else references a shard. A caller that shares the
 root with sibling data (an eval run's results directory also holds JSON and
@@ -71,7 +71,7 @@ impose one.
 
 `scan` lists a table's shards, unifies their footers' schemas (a column a later
 writer added is promoted to null for older shards), reads only the projected
-columns plus whatever the merge key needs, and deduplicates by merge key. For
+columns plus whatever the primary key needs, and deduplicates by primary key. For
 each key it keeps the row with the highest `_seq`, breaking ties by the highest
 compaction generation. Because a writer resumes its `_seq` above every persisted
 row, a later write always outranks an earlier one — nothing can shadow it — and
@@ -82,7 +82,7 @@ flush, and a crash mid-compaction all converge to one row without coordination.
 `point` returns the single row matching `key=value` for every key. Predicate
 filters support `==`, `!=`, and `in`, pushed into the Parquet scan, where the
 row-group footer statistics prune to the groups that can match — a `point`
-lookup on a compacted (merge-key-sorted) shard reads one row group, not the
+lookup on a compacted (primary-key-sorted) shard reads one row group, not the
 whole table.
 
 Because schema unification is null-permissive, a reader that opened the archive
@@ -110,10 +110,10 @@ once, after every writer has finished, to drop the `SEALED` marker.
 
 ## Compaction
 
-`compact(root, table)` streams a k-way merge over a table's shards in merge-key
+`compact(root, table)` streams a k-way merge over a table's shards in primary-key
 order and writes the surviving rows to one next-generation shard, one row group
 at a time, then deletes the shards it superseded. The merge is bounded in memory:
-a compacted shard (already in merge-key order) streams a row group at a time,
+a compacted shard (already in primary-key order) streams a row group at a time,
 while a level-0 shard — one flush, bounded by the writer's row cap — is sorted in
 memory, so an archive far larger than memory still compacts. Both the store flush
 and this merge write through the same `ShardWriter`. Compaction is optional and
@@ -134,21 +134,83 @@ There is no manifest and no rewrite, so recovery is a listing, not a repair.
 - Duplicate or retried delivery: the same primary key re-appears in a later
   shard with a higher `_seq` and wins, so at-least-once producers are safe.
 
+## Primary key handling
+
+Every table declares a primary key: the columns that identify a row. It is
+required — a table whose rows have no natural identity declares a nonce column
+rather than no key — because dedup by key is what stands in for a manifest, and a
+table without one silently doubles its rows on any at-least-once delivery.
+
+The reader keeps one row per key, so two different rows under one key would
+discard one with nothing recording that it existed.
+`store.table(..., on_conflict=...)` picks what happens instead:
+
+- `OnConflict.ERROR` (the default) raises `PrimaryKeyConflict`, naming the table
+  and the key. A repeat with an identical payload is an at-least-once redelivery
+  and collapses. Detection spans the whole writer session, so an earlier row
+  already flushed to a shard does not hide the conflict.
+- `OnConflict.SUPERSEDE` is the upsert contract, for a caller that means to
+  replace a row: blob rewrites and migration backfills. Compaction counts the
+  replaced rows into the `SEALED` marker, per table.
+
+Widening a primary key is a schema change, and an accumulative store cannot
+absorb one: the added column reads as null on the old shards, so those rows never
+collapse against the new ones and survive beside them. A writer therefore refuses
+an archive whose `schema_version` predates its own. Bringing it forward means
+deleting, which no code in this library does — see
+`experiments.evaluation.migrations`.
+
+## Preserved sources
+
+An exporter writes the evaluator-native files into the archive's `blobs` table
+under a `sources/` prefix (`EvaluationStore.add_source_artifact`), alongside the
+rows normalized from them. It preserves every artifact the harness left in the
+results tree, not only the files it reads — `run_artifacts` lists the tree rather
+than globbing it, so the harness's dot-directories (evalchemy keeps resume state
+under `.resume/`) are included, and skips the archive's own tables and markers so
+a re-export cannot fold the archive into itself. Shards are zstd-compressed, so a
+text artifact costs roughly a third of its raw size. The archive is then
+self-describing: the `samples` table can be re-derived from those blobs alone,
+repairing a run whose results tree was pruned or whose export died half written.
+A rebuild reproduces existing rows exactly, so they collapse against themselves
+and nothing is deleted. `marin.evaluation.lm_eval_samples` implements both halves
+for lm-eval output — `export_lm_eval_samples` and `rebuild_lm_eval_samples`.
+
+evalchemy runs the harness in a `tempfile` working directory and copies the tree
+into the results path, so a retried evaluation leaves a second complete tree
+under a `tmp<random>/` segment. Both are real evaluations and their
+loglikelihoods differ, because inference is not deterministic, but only the
+canonical tree produced the metrics on the run's record. That exporter's
+`is_scratch_artifact` identifies the retry: it is preserved as a source blob like
+any other, and contributes no rows, so the samples a reader sees come from the
+same evaluation as the headline score. Indexing both would instead put two
+different rows on one primary key, which is a `PrimaryKeyConflict`, not a silent
+fold.
+
+Writing to an archive clears its `SEALED` marker. "Sealed" therefore means
+"these are the finished contents" rather than "some session once finished", so
+an export that dies partway leaves the archive visibly incomplete instead of
+carrying a marker that vouches for a table it no longer describes.
+
 ## Migration
 
-`experiments.evaluation.migrate_archive` backfills a run written before the
+`experiments.evaluation.migrations.migrate_archive` backfills a run written before the
 archive existed. Legacy runs stored one `samples_<task>_<ts>.parquet` per (sub)task and
 referenced Harbor trajectories by a `gs://` URI. The tool reads those files,
 writes the rows into the run's `samples` table, and for agentic samples pulls
 each referenced trajectory into the `blobs` table (rewriting the sample's
 `trajectory_uri` to a `finestore://` reference) and flattens its steps into a
-`steps` table. It is idempotent — samples dedupe on their primary key — and
-never deletes the source files, so a migration can be validated before the
-legacy layout is retired.
+`steps` table. It is idempotent because samples dedupe on their primary key.
+`--archive-legacy` moves validated source Parquets to deterministic region-local
+30-day storage. `--from-legacy-archive` reads those preserved Parquets to rebuild
+the archive at the original results path without moving the backup again.
 
-```shell
-uv run python -m experiments.evaluation.migrate_archive gs://bucket/run/results
-```
+`experiments.evaluation.migrations` holds the migrations that remove rows. They
+are the only code that deletes, and each snapshots the whole table directory to
+region-local 30-day storage and verifies every object's size before dropping
+anything, so a failure leaves either the original or a complete copy. An object
+already at the destination is left alone: the earliest snapshot is the pristine
+one, and a resumed migration must not write a degraded table over it.
 
 ## Packaging
 

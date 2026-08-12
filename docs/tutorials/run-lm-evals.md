@@ -1,8 +1,9 @@
 # Running Evaluations with Marin
 
-The shared evaluation launcher runs Evalchemy and Harbor evaluations against a registered model.
-It starts one OpenAI-compatible model server, runs every selected evaluation against that endpoint,
-writes one durable record per evaluation, and tears the server down.
+The shared evaluation launcher runs Evalchemy and Harbor evaluations against a registered model or a
+file-backed model configuration. It starts one OpenAI-compatible model server, runs every selected
+evaluation against that endpoint, writes one durable record per evaluation, and tears the server
+down.
 
 Use the launcher for routine post-hoc evaluations. Use the composable APIs later in this page when
 an evaluation must be part of a Marin pipeline or consume an `ArtifactStep[LevanterCheckpoint]`.
@@ -12,12 +13,13 @@ See [Evaluation Overview](../explanations/evaluation.md) for the evaluator and s
 
 - Run commands from the Marin repository with `uv`.
 - Use a model key registered in `experiments/evaluation/models.py` or
-  `experiments/evaluation/serve/models/`.
+  `experiments/evaluation/serve/models/`, or supply a file with the
+  [model catalog schema](https://github.com/marin-community/marin/blob/main/experiments/evaluation/serve/models/README.md#schema).
 - Have access to the selected Iris cluster and its TPU or GPU serving resources.
 - For Harbor evaluations, use an environment with access to the Daytona credential described in
   [Harbor credentials](#harbor-credentials).
 
-## Launch registered evaluations
+## Launch registered models and evaluations
 
 The command accepts one model key and either a named suite or comma-separated evaluation keys:
 
@@ -39,6 +41,22 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 ## Launch file-backed evaluations
+
+Use `--model-config` for a one-off model export that does not belong in the central catalog. The file
+uses the same YAML or JSON schema as `experiments/evaluation/serve/models/`; its `name` becomes the
+served model name and run identity. This dry run evaluates a fresh RL export without modifying the
+checkout:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model-config /path/to/fresh-rl-checkpoint.yaml \
+  --evals smoke \
+  --dry-run
+```
+
+Exactly one of `--model <registry-key>` or `--model-config <path>` is required. `record.json` stores
+the normalized model schema under `model.config`, including registry-backed launches, so the durable
+record is self-contained.
 
 Use `--evalchemy-config` for an Evalchemy or lm-eval definition that does not belong in the central
 registry. This dry run resolves the checked-in IFEval definition without opening Iris:
@@ -486,7 +504,8 @@ Other GPU-served models (DeepSeek-V2-Lite, Qwen3-30B-A3B, …) need no extra fla
 
 - `config`: the `EvalchemyRunConfig`, including tasks, generation settings, concurrency, and limits.
 - `serve`: the model-server behavior (`vllm` or `levanter` and its server options).
-- `resource_hint`: optional CPU, memory, and disk overrides for the inference worker.
+- `resource_hint`: optional CPU, memory, and disk overrides for the inference worker. Host memory
+  defaults to a size derived from the checkpoint's weight files.
 - `accelerator`: the exact TPU or GPU slice used for inference.
 - `tokenizer`: HF tokenizer id the eval client loads; defaults to the served checkpoint. Set it to a
   base-model HF id when serving a `gs://` path the Evalchemy client cannot load a tokenizer from.
