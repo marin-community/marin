@@ -436,11 +436,38 @@ def main(
                 if failure_gate.endswith("input_ready")
                 else MokLikeTestFailurePoint.BEFORE_COMPLETION
             )
-            compiled_failure = (
-                jax.jit(fused_output).lower(*differentiable).compile()
-                if phase is MokLikeTestFailurePhase.FORWARD
-                else jax.jit(jax.value_and_grad(fused_loss, argnums=tuple(range(8)))).lower(*differentiable).compile()
-            )
+
+            def failure_output(failure_routes: jax.Array, *arguments: jax.Array) -> jax.Array:
+                return mok_like_mlp(
+                    arguments[0],
+                    failure_routes,
+                    *arguments[1:],
+                    mesh=mesh,
+                    runtime=runtime,
+                    config=config,
+                    collective_id=0,
+                )[0]
+
+            def failure_loss(
+                failure_routes: jax.Array,
+                failure_output_gradient: jax.Array,
+                *arguments: jax.Array,
+            ) -> jax.Array:
+                output = failure_output(failure_routes, *arguments)
+                return jnp.sum(output.astype(jnp.float32) * failure_output_gradient.astype(jnp.float32))
+
+            if phase is MokLikeTestFailurePhase.FORWARD:
+                differentiable_offset = 1
+                failure_arguments = (selected_experts, *differentiable)
+                compiled_failure = jax.jit(failure_output).lower(*failure_arguments).compile()
+            else:
+                differentiable_offset = 2
+                failure_arguments = (selected_experts, output_gradient, *differentiable)
+                compiled_failure = (
+                    jax.jit(jax.value_and_grad(failure_loss, argnums=tuple(range(2, 10))))
+                    .lower(*failure_arguments)
+                    .compile()
+                )
             runtime.reset_call_counts()
             runtime.reset_debug_counters()
             # Only process zero injects. Every other process must still take the
@@ -454,9 +481,14 @@ def main(
                 )
             failure_started = time.monotonic()
             if failure_concurrent_control:
+                scaled_x_arguments = (
+                    *failure_arguments[:differentiable_offset],
+                    failure_arguments[differentiable_offset] * jnp.asarray(0.5, dtype=jnp.bfloat16),
+                    *failure_arguments[differentiable_offset + 1 :],
+                )
                 concurrent_arguments = (
-                    differentiable,
-                    (differentiable[0] * jnp.asarray(0.5, dtype=jnp.bfloat16), *differentiable[1:]),
+                    failure_arguments,
+                    scaled_x_arguments,
                 )
                 start = Barrier(2)
 
@@ -479,8 +511,9 @@ def main(
                 elapsed = time.monotonic() - failure_started
                 success_index, successful_result = successes[0]
                 successful_arguments = concurrent_arguments[success_index]
+                successful_differentiable = successful_arguments[differentiable_offset:]
                 if phase is MokLikeTestFailurePhase.FORWARD:
-                    expected_success = jax.jit(reference_output)(*successful_arguments)
+                    expected_success = jax.jit(reference_output)(*successful_differentiable)
                     jax.block_until_ready(expected_success)
                     success_metrics: object = _error_metrics(
                         successful_result,
@@ -490,7 +523,7 @@ def main(
                     success_matches = bool(success_metrics["allclose"])
                 else:
                     expected_success = jax.jit(jax.value_and_grad(reference_loss, argnums=tuple(range(8))))(
-                        *successful_arguments
+                        *successful_differentiable
                     )
                     jax.block_until_ready(expected_success)
                     gradient_metrics = tuple(
@@ -524,7 +557,7 @@ def main(
                     raise AssertionError(f"concurrent control result did not match the reference: {success_metrics}")
             else:
                 try:
-                    failed_result = compiled_failure(*differentiable)
+                    failed_result = compiled_failure(*failure_arguments)
                     jax.block_until_ready(failed_result)
                 except Exception as failure:
                     captured_failure = failure

@@ -28,7 +28,7 @@ from levanter.kernels.mixture_of_kittens.source import (
 )
 
 
-_BUILD_SCHEMA = "mok_forward_backward_ffi_v14"
+_BUILD_SCHEMA = "mok_forward_backward_ffi_v15"
 _CUDA_DISTRIBUTIONS = (
     "nvidia-cuda-runtime",
     "nvidia-cuda-nvcc",

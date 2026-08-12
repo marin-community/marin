@@ -277,11 +277,14 @@ def backward_bf16_local(
     return gradients, results[-1][0]
 
 
-def raise_mok_like_failure() -> None:
-    """Raise a typed-FFI error on the already-uniform mesh failure branch."""
-    jax.ffi.ffi_call(
+def fence_mok_like_failure(marker: jax.Array) -> jax.Array:
+    """Raise a typed-FFI error whose data result belongs to the awaited execution."""
+    marker = jnp.asarray(marker, dtype=jnp.int32)
+    if marker.shape != ():
+        raise ValueError(f"failure marker must be scalar, got shape {marker.shape}")
+    return jax.ffi.ffi_call(
         FAILURE_FENCE_TARGET,
-        (),
-        has_side_effect=True,
+        jax.ShapeDtypeStruct((), jnp.int32),
+        has_side_effect=False,
         vmap_method="broadcast_all",
-    )()
+    )(marker)

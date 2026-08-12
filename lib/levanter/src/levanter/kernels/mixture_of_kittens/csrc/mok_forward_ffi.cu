@@ -2260,11 +2260,21 @@ auto BackwardBinding() {
       .Ret<ffi::Buffer<ffi::S32, 1>>();
 }
 
-ffi::Error FailureFence() {
+ffi::Error FailureFence(
+    ffi::Buffer<ffi::S32, 0> marker,
+    ffi::Result<ffi::Buffer<ffi::S32, 0>> returned_marker) {
+  (void)marker;
+  (void)returned_marker;
+  // XLA discards results when a typed FFI handler returns an error. The result
+  // exists only to keep this call data-dependent and out of the runtime token.
   return ffi::Error::Internal("Mixture-of-Kittens failed on at least one mesh rank");
 }
 
-auto FailureFenceBinding() { return ffi::Ffi::Bind(); }
+auto FailureFenceBinding() {
+  return ffi::Ffi::Bind()
+      .Arg<ffi::Buffer<ffi::S32, 0>>()
+      .Ret<ffi::Buffer<ffi::S32, 0>>();
+}
 
 }  // namespace
 

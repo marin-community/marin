@@ -17,8 +17,8 @@ from levanter.kernels.mixture_of_kittens.config import MokLikeConfig
 from levanter.kernels.mixture_of_kittens.ffi import (
     MokLikeForwardContext,
     backward_bf16_local,
+    fence_mok_like_failure,
     forward_bf16_local,
-    raise_mok_like_failure,
 )
 from levanter.kernels.mixture_of_kittens.runtime import MokLikeRuntimeHandle, validate_mok_like_mesh_topology
 from levanter.kernels.mixture_of_kittens.schedule import build_schedule, schedule_capacity
@@ -31,6 +31,12 @@ MOK_CONTEXT_CHECKPOINT_NAME = "mixture_of_kittens_context"
 
 def _failure_agreement_axes(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> tuple[str, ...]:
     return tuple(axis_name for axis_name in mesh.axis_names if axis_name != _EXPERT_AXIS)
+
+
+def _failure_outputs(marker: jax.Array, values: tuple[jax.Array, ...]) -> tuple[jax.Array, ...]:
+    """Make one failure-fence result data-dependent on every branch output."""
+    fenced_marker = fence_mok_like_failure(marker)
+    return tuple(jnp.broadcast_to(fenced_marker.astype(value.dtype), value.shape) for value in values)
 
 
 def validate_mok_like_inputs(
@@ -169,8 +175,11 @@ def _fused_forward_with_context(
             return output, jax.lax.psum(schedule.dropped_assignments, _EXPERT_AXIS), context
 
         def failure(_: None) -> tuple[jax.Array, jax.Array, MokLikeForwardContext]:
-            raise_mok_like_failure()
-            return output, jnp.zeros_like(schedule.dropped_assignments), context
+            failed_output, failed_dropped_assignments = _failure_outputs(
+                global_failure,
+                (output, schedule.dropped_assignments),
+            )
+            return failed_output, failed_dropped_assignments, context
 
         return jax.lax.cond(global_failure == 0, success, failure, operand=None)
 
@@ -386,10 +395,9 @@ def _fused_backward(
         def failure(_: None) -> tuple[jax.Array, ...]:
             # The process-spanning pmax makes this branch uniform across
             # processes. It contains no collective before the typed FFI error.
-            raise_mok_like_failure()
-            return tuple(
-                jnp.zeros_like(value)
-                for value in (
+            return _failure_outputs(
+                global_failure,
+                (
                     local_x,
                     local_combine_weights,
                     local_w_gate,
@@ -398,7 +406,7 @@ def _fused_backward(
                     local_shared_gate,
                     local_shared_up,
                     local_shared_down,
-                )
+                ),
             )
 
         return jax.lax.cond(

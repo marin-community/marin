@@ -23,12 +23,12 @@ from levanter.kernels.mixture_of_kittens import (
     validate_mok_like_inputs,
 )
 from levanter.kernels.mixture_of_kittens import availability, build as mok_build, runtime
-from levanter.kernels.mixture_of_kittens.api import _failure_agreement_axes
+from levanter.kernels.mixture_of_kittens.api import _failure_agreement_axes, _failure_outputs
 from levanter.kernels.mixture_of_kittens.collective_memory_probe import (
     collective_memory_ring_u32,
     memory_space_frontend_attributes,
 )
-from levanter.kernels.mixture_of_kittens.ffi import MokLikeForwardContext, backward_bf16_local
+from levanter.kernels.mixture_of_kittens.ffi import MokLikeForwardContext, backward_bf16_local, fence_mok_like_failure
 from levanter.kernels.mixture_of_kittens.runtime import MokLikeRuntimeHandle
 from levanter.kernels.mixture_of_kittens.schedule import build_schedule, schedule_capacity
 
@@ -640,6 +640,46 @@ def test_failure_agreement_excludes_only_the_process_local_expert_axis() -> None
     assert agreement_axes == ("replica_dcn", "data", "model")
     pmax_equation = next(equation for equation in jaxpr.jaxpr.eqns if equation.primitive.name == "pmax")
     assert pmax_equation.params["axes"] == agreement_axes
+
+
+def test_failure_fence_is_data_returning_without_a_side_effect_token() -> None:
+    marker = jnp.asarray(1, dtype=jnp.int32)
+    jaxpr = jax.make_jaxpr(fence_mok_like_failure)(marker)
+
+    fence_equation = next(equation for equation in jaxpr.jaxpr.eqns if equation.primitive.name == "ffi_call")
+    assert fence_equation.params["has_side_effect"] is False
+    assert tuple(variable.aval.shape for variable in fence_equation.invars) == ((),)
+    assert tuple(variable.aval.shape for variable in fence_equation.outvars) == ((),)
+    assert jaxpr.jaxpr.outvars == fence_equation.outvars
+
+
+def test_failure_marker_remains_in_lowered_branch_output_dataflow() -> None:
+    marker = jnp.asarray(1, dtype=jnp.int32)
+    output = jnp.zeros((2, 3), dtype=jnp.bfloat16)
+    auxiliary = jnp.zeros((), dtype=jnp.int32)
+    jaxpr = jax.make_jaxpr(_failure_outputs)(marker, (output, auxiliary))
+    fence_equation = next(equation for equation in jaxpr.jaxpr.eqns if equation.primitive.name == "ffi_call")
+    fence_output = fence_equation.outvars[0]
+
+    marker_consumers = tuple(
+        equation for equation in jaxpr.jaxpr.eqns if equation is not fence_equation and fence_output in equation.invars
+    )
+    assert marker_consumers
+    assert fence_output in jaxpr.jaxpr.outvars
+
+    def branch(status: jax.Array, value: jax.Array, extra: jax.Array) -> tuple[jax.Array, jax.Array]:
+        return jax.lax.cond(
+            status == 0,
+            lambda _: (value, extra),
+            lambda _: _failure_outputs(status, (value, extra)),
+            operand=None,
+        )
+
+    lowered = jax.jit(branch).lower(marker, output, auxiliary).as_text()
+    failure_branch = lowered.split('"stablehlo.case"', maxsplit=1)[1].split("}, {", maxsplit=1)[0]
+    assert "@levanter_mok_failure_fence" in lowered
+    assert "stablehlo.return" in failure_branch
+    assert "has_side_effect = true" not in lowered
 
 
 def test_runtime_debug_counters_preserve_rank_and_phase_structure(tmp_path: Path) -> None:
