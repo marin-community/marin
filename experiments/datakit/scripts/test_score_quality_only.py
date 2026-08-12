@@ -14,6 +14,7 @@ import inspect
 import numpy as np
 from fray.cluster import ResourceConfig
 from marin.execution.step_spec import StepSpec
+from zephyr.execution import ZephyrContext
 
 from experiments.datakit.cluster.quality.fast_transformer.content_type import structural_features
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict_rows
@@ -23,6 +24,7 @@ from experiments.datakit.scripts.score_quality_only import (
     DEFAULT_MAX_WORKERS,
     NODE_CPU,
     NODE_RAM_GB,
+    WORKER_MAX_TASK_RETRIES,
     quality_step,
     tasks_per_worker,
     worker_resources,
@@ -161,3 +163,14 @@ def test_scoring_chunks_fill_a_whole_forward_pass():
     # A narrower sequence packs proportionally more rows into the same token budget.
     assert predict_rows(1024) == 256
     assert inspect.signature(PooledScorer.score).parameters["batch_size"].default is None
+
+
+def test_the_pool_survives_preemption_at_batch_priority():
+    """Zephyr's default failure budget is spent by eviction, not just by faults.
+
+    Iris counts a preemption against a cumulative, gang-wide budget, and this job
+    asks to be preempted by running at batch priority. The default of 10 killed a
+    4-worker smoke in nine minutes, so the entry point must raise it.
+    """
+    assert WORKER_MAX_TASK_RETRIES > ZephyrContext().worker_max_task_retries
+    assert inspect.signature(ZephyrContext).parameters["worker_max_task_retries"]

@@ -32,6 +32,7 @@ from zephyr.coordinator import (
     MAX_CONCURRENT_PIPELINES,
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
+    WORKER_MAX_TASK_RETRIES,
     ZephyrCoordinator,
     ZephyrExecutionResult,
     _cleanup_execution,
@@ -254,6 +255,11 @@ class ZephyrContext:
         max_concurrent_pipelines: Maximum pipelines one pool runs at the same
             time. A pipeline past the limit is rejected, not queued. Raise it
             for a driver that fans many pipelines onto one shared pool.
+        worker_max_task_retries: Cumulative worker-task failures the pool tolerates
+            before Iris kills the whole worker gang. Iris counts a preemption as a
+            failure, so a job at batch priority on a contended cluster spends this
+            budget on evictions it recovers from by design. Raise it for a long or
+            low-priority run: the default is sized for a short one.
     """
 
     client: Client | None = None
@@ -271,6 +277,7 @@ class ZephyrContext:
     max_shard_failures: int = MAX_SHARD_FAILURES
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
     max_concurrent_pipelines: int = MAX_CONCURRENT_PIPELINES
+    worker_max_task_retries: int = WORKER_MAX_TASK_RETRIES
 
     _shared_data: ContextVar[dict[str, Any] | None] = field(init=False, repr=False)
     _state: _ContextState = field(init=False, default=_ContextState.NEW, repr=False)
@@ -525,7 +532,7 @@ class ZephyrContext:
                 self.stage_runner_factory,
                 ZephyrTaskResources.from_resource_config(self.resources),
                 self.resources,
-                ActorConfig(max_concurrency=100, max_task_retries=10),
+                ActorConfig(max_concurrency=100, max_task_retries=self.worker_max_task_retries),
             ).result()
             ready_wait = float(os.environ.get("ZEPHYR_WORKERS_READY_WAIT") or 12 * 60 * 60)
             coordinator.worker_handles.remote(1, ready_wait).result(timeout=ready_wait)

@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 
 MAX_SHARD_FAILURES = 3
 MAX_SHARD_INFRA_FAILURES = 20
+# Cumulative worker-task failures Iris tolerates before it kills the worker gang.
+# Iris counts a preemption as a failure, so this is spent by eviction as well as by
+# real faults; a preemptible or long-running pool should raise it.
+WORKER_MAX_TASK_RETRIES = 10
 MAX_STATUS_TEXT_LENGTH = 1000
 MAX_CONCURRENT_PIPELINES = 16
 MAX_CONCURRENT_RESULT_READS = 16

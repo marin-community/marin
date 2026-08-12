@@ -64,6 +64,13 @@ DEFAULT_MAX_WORKERS = 216
 # ``zephyr-score-<uuid>-coordinator-<pool_id>``. Kept short and free of the stage
 # name so a pool is identifiable in the cluster without reading like a step.
 POOL_NAME = "score"
+# Iris counts a preemption against the worker gang's cumulative failure budget, and
+# this job runs at batch priority precisely so it yields to interactive and
+# production work -- so it is evicted by design, repeatedly, over a run measured in
+# hours. Zephyr's default of 10 is a budget for a short job: a 4-worker smoke spent
+# it in nine minutes and the gang was killed with "Job exceeded max_task_failures".
+# Scoring resumes per file, so an evicted shard costs its own work and nothing else.
+WORKER_MAX_TASK_RETRIES = 5_000
 
 
 def worker_resources(fraction: float = WORKER_FRACTION) -> ResourceConfig:
@@ -143,6 +150,7 @@ def score_all(
         resources=resources,
         max_workers=max_workers,
         stage_runner_factory=InlineRunner,
+        worker_max_task_retries=WORKER_MAX_TASK_RETRIES,
     ) as ctx:
         for i, (name, normalize_step) in enumerate(sorted(sources.items()), start=1):
             out = quality_step(name, normalize_step, quality_model_version, output_prefix).output_path
