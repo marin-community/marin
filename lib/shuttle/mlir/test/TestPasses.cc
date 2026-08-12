@@ -3,6 +3,8 @@
 
 #include "TestPasses.h"
 
+#include <type_traits>
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/AffineMap.h"
@@ -932,6 +934,15 @@ void refreshMaterializationFingerprint(MaterializationPlanOp plan) {
   plan.setFingerprint(materializationPlanFingerprint(plan));
 }
 
+SchedulePlanOp schedulePlan(ModuleOp module) {
+  auto plans = module.getOps<SchedulePlanOp>();
+  return plans.empty() ? SchedulePlanOp{} : *plans.begin();
+}
+
+void refreshScheduleFingerprint(SchedulePlanOp plan) {
+  plan.setFingerprint(schedulePlanFingerprint(plan));
+}
+
 void refreshMaterializationEdges(MaterializationPlanOp plan) {
   SmallVector<MaterializationBufferOp> buffers;
   SmallVector<MaterializationTaskOp> tasks;
@@ -1248,6 +1259,332 @@ public:
   }
 };
 
+class ReportScheduleFingerprintPass
+    : public MutationPass<ReportScheduleFingerprintPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ReportScheduleFingerprintPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-report-simt32-schedule-fingerprint";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (!plan) {
+      getOperation().emitError("test fixture has no schedule plan");
+      return signalPassFailure();
+    }
+    llvm::outs() << plan.getFingerprint() << '\n';
+  }
+};
+
+class ScheduleIndexingPass : public MutationPass<ScheduleIndexingPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleIndexingPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-mutate-schedule-indexing";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (plan) {
+      for (ScheduleBufferOp buffer :
+           plan.getBody().front().getOps<ScheduleBufferOp>()) {
+        auto type = cast<RankedTensorType>(buffer.getTensorType());
+        if (type.getRank() == 2) {
+          buffer->setAttr("iteration_order",
+                          DenseI64ArrayAttr::get(buffer.getContext(), {1, 0}));
+          refreshScheduleFingerprint(plan);
+          return;
+        }
+      }
+    }
+    getOperation().emitError("test fixture has no rank-two schedule buffer");
+    signalPassFailure();
+  }
+};
+
+class ScheduleAxisPass : public MutationPass<ScheduleAxisPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleAxisPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-mutate-schedule-axis";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (plan) {
+      for (ScheduleTaskOp task :
+           plan.getBody().front().getOps<ScheduleTaskOp>()) {
+        if (task.getKind() == ScheduleTaskKind::RowFold) {
+          task->setAttr(
+              "reduction_axis",
+              IntegerAttr::get(task.getReductionAxisAttr().getType(), 0));
+          refreshScheduleFingerprint(plan);
+          return;
+        }
+      }
+    }
+    getOperation().emitError("test fixture has no row Fold schedule");
+    signalPassFailure();
+  }
+};
+
+class ScheduleTilePass : public MutationPass<ScheduleTilePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleTilePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-mutate-schedule-tile";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (plan) {
+      for (ScheduleTaskOp task :
+           plan.getBody().front().getOps<ScheduleTaskOp>()) {
+        if (task.getKind() == ScheduleTaskKind::RowFold) {
+          task->setAttr("tile_shape",
+                        DenseI64ArrayAttr::get(task.getContext(), {1, 12}));
+          refreshScheduleFingerprint(plan);
+          return;
+        }
+      }
+    }
+    getOperation().emitError("test fixture has no row Fold schedule");
+    signalPassFailure();
+  }
+};
+
+class ScheduleResourcePass : public MutationPass<ScheduleResourcePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleResourcePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-mutate-schedule-resource";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (plan) {
+      for (ScheduleTaskOp task :
+           plan.getBody().front().getOps<ScheduleTaskOp>()) {
+        if (task.getKind() == ScheduleTaskKind::RowFold) {
+          task.setScratchBytes(task.getScratchBytes() + 4);
+          refreshScheduleFingerprint(plan);
+          return;
+        }
+      }
+    }
+    getOperation().emitError("test fixture has no row Fold schedule");
+    signalPassFailure();
+  }
+};
+
+class ScheduleDependencyPass : public MutationPass<ScheduleDependencyPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleDependencyPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-mutate-schedule-dependency";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (plan) {
+      for (ScheduleTaskOp task :
+           plan.getBody().front().getOps<ScheduleTaskOp>()) {
+        if (!task.getDependencies().empty()) {
+          SmallVector<int64_t> dependencies(task.getDependencies().begin(),
+                                            task.getDependencies().end());
+          dependencies.pop_back();
+          task->setAttr("dependencies", DenseI64ArrayAttr::get(
+                                            task.getContext(), dependencies));
+          refreshScheduleFingerprint(plan);
+          return;
+        }
+      }
+    }
+    getOperation().emitError("test fixture has no dependent schedule task");
+    signalPassFailure();
+  }
+};
+
+class ScheduleReplaySourceTaskPass
+    : public MutationPass<ScheduleReplaySourceTaskPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleReplaySourceTaskPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-replay-schedule-source-task";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    SmallVector<ScheduleTaskOp> tasks;
+    if (plan) {
+      llvm::append_range(tasks,
+                         plan.getBody().front().getOps<ScheduleTaskOp>());
+    }
+    if (tasks.size() < 2) {
+      getOperation().emitError(
+          "test fixture has fewer than two schedule tasks");
+      return signalPassFailure();
+    }
+    tasks[1].setSourceTask(tasks[0].getSourceTask());
+    refreshScheduleFingerprint(plan);
+  }
+};
+
+class ScheduleTypePass : public MutationPass<ScheduleTypePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleTypePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-mutate-schedule-type";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (plan) {
+      for (ScheduleBufferOp buffer :
+           plan.getBody().front().getOps<ScheduleBufferOp>()) {
+        auto type = cast<RankedTensorType>(buffer.getTensorType());
+        if (type.getElementType().isBF16()) {
+          buffer->setAttr(
+              "tensor_type",
+              TypeAttr::get(RankedTensorType::get(
+                  type.getShape(), Float32Type::get(buffer.getContext()))));
+          refreshScheduleFingerprint(plan);
+          return;
+        }
+      }
+    }
+    getOperation().emitError("test fixture has no bf16 schedule buffer");
+    signalPassFailure();
+  }
+};
+
+template <typename PlanOp>
+class ClonePlanPass : public MutationPass<ClonePlanPass<PlanOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ClonePlanPass<PlanOp>)
+  StringRef getArgument() const final {
+    return std::is_same_v<PlanOp, MaterializationPlanOp>
+               ? "shuttle-test-clone-materialization-plan"
+               : "shuttle-test-clone-schedule-plan";
+  }
+  void runOnOperation() override {
+    ModuleOp module = this->getOperation();
+    auto plans = module.getOps<PlanOp>();
+    if (plans.empty()) {
+      module.emitError("test fixture has no plan to clone");
+      return this->signalPassFailure();
+    }
+    PlanOp plan = *plans.begin();
+    Operation *clone = plan->clone();
+    module.getBody()->getOperations().push_back(clone);
+  }
+};
+
+class ScheduleUnknownAttributePass
+    : public MutationPass<ScheduleUnknownAttributePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleUnknownAttributePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-add-schedule-attribute";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (!plan) {
+      getOperation().emitError("test fixture has no schedule plan");
+      return signalPassFailure();
+    }
+    plan->setAttr("shuttle.test_semantic", UnitAttr::get(plan.getContext()));
+  }
+};
+
+class ScheduleTaskUnknownAttributePass
+    : public MutationPass<ScheduleTaskUnknownAttributePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleTaskUnknownAttributePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-add-schedule-task-attribute";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (!plan) {
+      getOperation().emitError("test fixture has no schedule plan");
+      return signalPassFailure();
+    }
+    auto tasks = plan.getBody().front().getOps<ScheduleTaskOp>();
+    if (tasks.empty()) {
+      getOperation().emitError("test fixture has no schedule task");
+      return signalPassFailure();
+    }
+    (*tasks.begin())
+        ->setAttr("shuttle.test_semantic", UnitAttr::get(plan.getContext()));
+  }
+};
+
+class ScheduleTargetProfilePass
+    : public MutationPass<ScheduleTargetProfilePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleTargetProfilePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-mutate-schedule-target";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (plan) {
+      for (ScheduleTaskOp task :
+           plan.getBody().front().getOps<ScheduleTaskOp>()) {
+        if (task.getKind() == ScheduleTaskKind::RowFold) {
+          task.setSubgroupSize(64);
+          refreshScheduleFingerprint(plan);
+          return;
+        }
+      }
+    }
+    getOperation().emitError("test fixture has no row Fold schedule");
+    signalPassFailure();
+  }
+};
+
+class ScheduleReductionOrderPass
+    : public MutationPass<ScheduleReductionOrderPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleReductionOrderPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-mutate-schedule-order";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (plan) {
+      for (ScheduleTaskOp task :
+           plan.getBody().front().getOps<ScheduleTaskOp>()) {
+        if (task.getKind() == ScheduleTaskKind::RowFold) {
+          task->setAttr(
+              "reduction_order",
+              ScheduleReductionOrderAttr::get(
+                  task.getContext(), ScheduleReductionOrder::LeafOrderFree));
+          refreshScheduleFingerprint(plan);
+          return;
+        }
+      }
+    }
+    getOperation().emitError("test fixture has no row Fold schedule");
+    signalPassFailure();
+  }
+};
+
+class ScheduleLifetimePass : public MutationPass<ScheduleLifetimePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleLifetimePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-mutate-schedule-lifetime";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (plan) {
+      for (ScheduleBufferOp buffer :
+           plan.getBody().front().getOps<ScheduleBufferOp>()) {
+        buffer.setLifetimeEnd(buffer.getLifetimeEnd() + 1);
+        refreshScheduleFingerprint(plan);
+        return;
+      }
+    }
+    getOperation().emitError("test fixture has no mutable schedule lifetime");
+    signalPassFailure();
+  }
+};
+
 class RenameSymbolsPass : public MutationPass<RenameSymbolsPass> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RenameSymbolsPass)
@@ -1332,6 +1669,21 @@ void registerMutationPasses() {
   PassRegistration<MaterializationDomainPass<true>>();
   PassRegistration<MaterializationDomainPass<false>>();
   PassRegistration<MaterializationUnknownAttributePass>();
+  PassRegistration<ReportScheduleFingerprintPass>();
+  PassRegistration<ScheduleIndexingPass>();
+  PassRegistration<ScheduleAxisPass>();
+  PassRegistration<ScheduleTilePass>();
+  PassRegistration<ScheduleResourcePass>();
+  PassRegistration<ScheduleDependencyPass>();
+  PassRegistration<ScheduleReplaySourceTaskPass>();
+  PassRegistration<ScheduleTypePass>();
+  PassRegistration<ClonePlanPass<MaterializationPlanOp>>();
+  PassRegistration<ClonePlanPass<SchedulePlanOp>>();
+  PassRegistration<ScheduleUnknownAttributePass>();
+  PassRegistration<ScheduleTaskUnknownAttributePass>();
+  PassRegistration<ScheduleTargetProfilePass>();
+  PassRegistration<ScheduleReductionOrderPass>();
+  PassRegistration<ScheduleLifetimePass>();
   PassRegistration<RenameSymbolsPass>();
   PassRegistration<SetFastRegionPolicyPass>();
 }

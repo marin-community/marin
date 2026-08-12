@@ -77,4 +77,17 @@ def ShuttleVerifyMaterializationPlanPass
   let constructor = "createVerifyMaterializationPlanPass()";
 }
 
+def ShuttlePlanSimt32RowFoldSchedulePass
+    : Pass<"shuttle-plan-simt32-row-fold-schedule", "::mlir::ModuleOp"> {
+  let summary = "Derive one bounded SIMT32 row Fold schedule candidate";
+  let dependentDialects = ["::mlir::shuttle::ShuttleDialect"];
+  let constructor = "createPlanSimt32RowFoldSchedulePass()";
+}
+
+def ShuttleVerifySimt32RowFoldSchedulePass
+    : Pass<"shuttle-verify-simt32-row-fold-schedule", "::mlir::ModuleOp"> {
+  let summary = "Verify a SIMT32 schedule remains bound to materialization";
+  let constructor = "createVerifySimt32RowFoldSchedulePass()";
+}
+
 #endif // SHUTTLE_TRANSFORMS_PASSES_TD_

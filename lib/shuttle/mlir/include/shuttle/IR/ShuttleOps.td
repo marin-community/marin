@@ -126,4 +126,50 @@ def Shuttle_MaterializationPlanYieldOp
   let builders = [OpBuilder<(ins), [{ /* no operands */ }]>];
 }
 
+def Shuttle_SchedulePlanOp
+    : Shuttle_Op<
+          "schedule_plan", [IsolatedFromAbove,
+                            SingleBlockImplicitTerminator<
+                                "::mlir::shuttle::SchedulePlanYieldOp">]> {
+  let summary = "Non-executable target schedule and logical indexing contract";
+  let arguments = (ins I64Attr:$schema_version, Shuttle_ScheduleTargetAttr:$target,
+      Shuttle_PolicyAttr:$policy, StrAttr:$source_plan_fingerprint,
+      StrAttr:$fingerprint);
+  let regions = (region SizedRegion<1>:$body);
+  let hasRegionVerifier = 1;
+}
+
+def Shuttle_ScheduleBufferOp
+    : Shuttle_Op<"schedule_buffer",
+                 [ParentOneOf<["::mlir::shuttle::SchedulePlanOp"]>]> {
+  let summary = "Logical iteration contract for one planned buffer";
+  let arguments = (ins I64Attr:$ordinal, I64Attr:$source_buffer,
+      TypeAttr:$tensor_type, Shuttle_ScheduleBufferIndexingAttr:$indexing,
+      DenseI64ArrayAttr:$iteration_order, I64Attr:$lifetime_start,
+      I64Attr:$lifetime_end);
+}
+
+def Shuttle_ScheduleTaskOp
+    : Shuttle_Op<"schedule_task",
+                 [ParentOneOf<["::mlir::shuttle::SchedulePlanOp"]>]> {
+  let summary = "One bounded logical SIMT32 schedule candidate";
+  let arguments = (ins I64Attr:$ordinal, I64Attr:$source_task,
+      Shuttle_ScheduleTaskKindAttr:$kind, DenseI64ArrayAttr:$domain_shape,
+      DenseI64ArrayAttr:$grid_shape, DenseI64ArrayAttr:$tile_shape,
+      I64Attr:$serial_tiles, I64Attr:$workgroup_threads,
+      I64Attr:$subgroup_size, I64Attr:$scratch_bytes,
+      DenseI64ArrayAttr:$input_buffers, DenseI64ArrayAttr:$output_buffers,
+      DenseI64ArrayAttr:$dependencies, OptionalAttr<I64Attr>:$reduction_axis,
+      OptionalAttr<Shuttle_ScheduleReductionOrderAttr>:$reduction_order,
+      StrAttr:$semantic_fingerprint);
+}
+
+def Shuttle_SchedulePlanYieldOp
+    : Shuttle_Op<"schedule_plan_yield",
+                 [ParentOneOf<["::mlir::shuttle::SchedulePlanOp"]>,
+                  Terminator]> {
+  let summary = "Terminate a non-executable schedule plan";
+  let builders = [OpBuilder<(ins), [{ /* no operands */ }]>];
+}
+
 #endif // SHUTTLE_IR_SHUTTLEOPS_TD_

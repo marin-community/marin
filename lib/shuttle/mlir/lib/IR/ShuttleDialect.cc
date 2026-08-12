@@ -4,6 +4,7 @@
 #include "shuttle/IR/ShuttleDialect.h"
 
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -934,6 +935,247 @@ LogicalResult MaterializationPlanOp::verifyRegions() {
   if (getFingerprint() != materializationPlanFingerprint(*this)) {
     return emitOpError(
         "fingerprint does not match the closed materialization plan");
+  }
+  return success();
+}
+
+std::string schedulePlanFingerprint(SchedulePlanOp plan) {
+  std::string normalized;
+  llvm::raw_string_ostream stream(normalized);
+  stream << "schema=" << plan.getSchemaVersion() << ';';
+  Attribute(plan.getTargetAttr()).print(stream);
+  stream << ';';
+  Attribute(plan.getPolicyAttr()).print(stream);
+  stream << ";source=" << plan.getSourcePlanFingerprint() << '\n';
+  for (Operation &operation : plan.getBody().front()) {
+    if (isa<SchedulePlanYieldOp>(operation)) {
+      continue;
+    }
+    stream << operation.getName() << '{';
+    for (NamedAttribute attribute : operation.getAttrs()) {
+      stream << attribute.getName() << '=';
+      attribute.getValue().print(stream);
+      stream << ',';
+    }
+    stream << "}\n";
+  }
+  stream.flush();
+  llvm::SHA256 digest;
+  digest.update(normalized);
+  return llvm::toHex(digest.final(), true);
+}
+
+namespace {
+
+FailureOr<int64_t> staticElementCount(ArrayRef<int64_t> shape) {
+  int64_t count = 1;
+  for (int64_t extent : shape) {
+    if (extent <= 0 || count > std::numeric_limits<int64_t>::max() / extent) {
+      return failure();
+    }
+    count *= extent;
+  }
+  return count;
+}
+
+int64_t roundUpToSubgroup(int64_t value) {
+  constexpr int64_t kSubgroup = 32;
+  return ((value + kSubgroup - 1) / kSubgroup) * kSubgroup;
+}
+
+struct Simt32Geometry {
+  SmallVector<int64_t> grid;
+  SmallVector<int64_t> tile;
+  int64_t serialTiles;
+  int64_t workgroupThreads;
+  int64_t subgroupSize;
+  int64_t scratchBytes;
+  std::optional<int64_t> reductionAxis;
+};
+
+FailureOr<Simt32Geometry> simt32Geometry(ScheduleTaskKind kind,
+                                         ArrayRef<int64_t> domain) {
+  constexpr int64_t kSubgroup = 32;
+  constexpr int64_t kMaxThreads = 256;
+  if (kind == ScheduleTaskKind::Scalar) {
+    if (!domain.empty()) {
+      return failure();
+    }
+    return Simt32Geometry{{1}, {}, 1, 1, kSubgroup, 0, std::nullopt};
+  }
+  if (kind == ScheduleTaskKind::Elementwise) {
+    FailureOr<int64_t> elements = staticElementCount(domain);
+    if (failed(elements)) {
+      return failure();
+    }
+    int64_t tile = std::min(*elements, kMaxThreads);
+    return Simt32Geometry{{(*elements + tile - 1) / tile},
+                          {tile},
+                          1,
+                          roundUpToSubgroup(tile),
+                          kSubgroup,
+                          0,
+                          std::nullopt};
+  }
+  if (domain.size() != 2 || domain[0] <= 0 || domain[1] <= 0) {
+    return failure();
+  }
+  int64_t tile = std::min(domain[1], kMaxThreads);
+  int64_t threads = roundUpToSubgroup(tile);
+  return Simt32Geometry{{domain[0]},
+                        {1, tile},
+                        (domain[1] + tile - 1) / tile,
+                        threads,
+                        kSubgroup,
+                        threads * static_cast<int64_t>(sizeof(float)),
+                        1};
+}
+
+} // namespace
+
+LogicalResult SchedulePlanOp::verifyRegions() {
+  if (!getOperation()->getDiscardableAttrs().empty()) {
+    return emitOpError("does not permit discardable attributes");
+  }
+  if (getSchemaVersion() != 1 || getTarget() != ScheduleTarget::Simt32) {
+    return emitOpError("requires schedule schema 1 and target simt32");
+  }
+  if (!isLowerHexDigest(getSourcePlanFingerprint()) ||
+      !isLowerHexDigest(getFingerprint())) {
+    return emitOpError("fingerprints must be lowercase SHA-256 digests");
+  }
+  Region &body = getBody();
+  if (body.empty() || !llvm::hasSingleElement(body) ||
+      !isa<SchedulePlanYieldOp>(body.front().getTerminator())) {
+    return emitOpError(
+        "requires one block terminated by shuttle.schedule_plan_yield");
+  }
+
+  SmallVector<ScheduleBufferOp> buffers;
+  SmallVector<ScheduleTaskOp> tasks;
+  bool sawTask = false;
+  for (Operation &operation : body.front().without_terminator()) {
+    if (auto buffer = dyn_cast<ScheduleBufferOp>(operation)) {
+      if (sawTask) {
+        return buffer.emitOpError("schedule buffers must precede tasks");
+      }
+      if (!buffer->getDiscardableAttrs().empty()) {
+        return buffer.emitOpError("does not permit discardable attributes");
+      }
+      buffers.push_back(buffer);
+      continue;
+    }
+    if (auto task = dyn_cast<ScheduleTaskOp>(operation)) {
+      sawTask = true;
+      if (!task->getDiscardableAttrs().empty()) {
+        return task.emitOpError("does not permit discardable attributes");
+      }
+      tasks.push_back(task);
+      continue;
+    }
+    return emitOpError("body may contain only schedule buffers and tasks");
+  }
+  if (buffers.empty() || tasks.empty()) {
+    return emitOpError("requires at least one schedule buffer and task");
+  }
+  if (!body.front().getTerminator()->getDiscardableAttrs().empty()) {
+    return body.front().getTerminator()->emitOpError(
+        "does not permit discardable attributes");
+  }
+
+  for (auto [ordinal, buffer] : llvm::enumerate(buffers)) {
+    if (buffer.getOrdinal() != static_cast<int64_t>(ordinal) ||
+        buffer.getSourceBuffer() != static_cast<int64_t>(ordinal)) {
+      return buffer.emitOpError(
+          "schedule buffer and source ordinals must be contiguous");
+    }
+    auto type = dyn_cast<RankedTensorType>(buffer.getTensorType());
+    if (!type || !type.hasStaticShape() ||
+        failed(staticElementCount(type.getShape())) ||
+        (!type.getElementType().isBF16() && !type.getElementType().isF32())) {
+      return buffer.emitOpError(
+          "requires a positive static bf16 or f32 tensor type");
+    }
+    ScheduleBufferIndexing expectedIndexing =
+        type.getRank() == 0 ? ScheduleBufferIndexing::Scalar
+                            : ScheduleBufferIndexing::Lexicographic;
+    SmallVector<int64_t> expectedOrder;
+    for (int64_t axis = 0; axis < type.getRank(); ++axis) {
+      expectedOrder.push_back(axis);
+    }
+    if (buffer.getIndexing() != expectedIndexing ||
+        buffer.getIterationOrder() != ArrayRef<int64_t>(expectedOrder)) {
+      return buffer.emitOpError(
+          "buffer indexing must equal logical tensor rank");
+    }
+    if (buffer.getLifetimeStart() < 0 ||
+        buffer.getLifetimeEnd() < buffer.getLifetimeStart() ||
+        buffer.getLifetimeEnd() > static_cast<int64_t>(tasks.size())) {
+      return buffer.emitOpError("has an invalid schedule lifetime interval");
+    }
+  }
+
+  unsigned rowFoldCount = 0;
+  for (auto [ordinal, task] : llvm::enumerate(tasks)) {
+    if (task.getOrdinal() != static_cast<int64_t>(ordinal) ||
+        task.getSourceTask() != static_cast<int64_t>(ordinal)) {
+      return task.emitOpError(
+          "schedule source tasks must be unique structural ordinals");
+    }
+    if (!isLowerHexDigest(task.getSemanticFingerprint())) {
+      return task.emitOpError(
+          "semantic fingerprint must be a lowercase SHA-256 digest");
+    }
+    for (ArrayRef<int64_t> references :
+         {task.getInputBuffers(), task.getOutputBuffers()}) {
+      for (int64_t buffer : references) {
+        if (buffer < 0 || buffer >= buffers.size()) {
+          return task.emitOpError("schedule buffer reference is out of range");
+        }
+      }
+    }
+    llvm::SmallDenseSet<int64_t> dependencies;
+    for (int64_t dependency : task.getDependencies()) {
+      if (dependency < 0 || dependency >= static_cast<int64_t>(ordinal) ||
+          !dependencies.insert(dependency).second) {
+        return task.emitOpError(
+            "dependencies must be unique earlier schedule tasks");
+      }
+    }
+    if (task.getKind() == ScheduleTaskKind::RowFold &&
+        task.getReductionAxis() != 1) {
+      return task.emitOpError("row Fold schedule requires reduction axis one");
+    }
+    std::optional<ScheduleReductionOrder> expectedOrder;
+    if (task.getKind() == ScheduleTaskKind::RowFold) {
+      expectedOrder = ScheduleReductionOrder::TreeAssociationFreeLeafOrderFixed;
+    }
+    if (task.getReductionOrder() != expectedOrder) {
+      return task.emitOpError(
+          "Fold reduction order must equal bound Fold semantics");
+    }
+    FailureOr<Simt32Geometry> expected =
+        simt32Geometry(task.getKind(), task.getDomainShape());
+    if (failed(expected) ||
+        task.getGridShape() != ArrayRef<int64_t>(expected->grid) ||
+        task.getTileShape() != ArrayRef<int64_t>(expected->tile) ||
+        task.getSerialTiles() != expected->serialTiles ||
+        task.getWorkgroupThreads() != expected->workgroupThreads ||
+        task.getSubgroupSize() != expected->subgroupSize ||
+        task.getScratchBytes() != expected->scratchBytes ||
+        task.getReductionAxis() != expected->reductionAxis) {
+      return task.emitOpError(
+          "schedule geometry must equal the SIMT32 derivation");
+    }
+    if (task.getKind() == ScheduleTaskKind::RowFold) {
+      ++rowFoldCount;
+    }
+  }
+  if (rowFoldCount != 1) {
+    return emitOpError("requires exactly one row Fold schedule task");
+  }
+  if (getFingerprint() != schedulePlanFingerprint(*this)) {
+    return emitOpError("fingerprint does not match the closed schedule plan");
   }
   return success();
 }

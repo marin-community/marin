@@ -22,6 +22,8 @@ namespace mlir::shuttle {
 
 std::string materializationPlanFingerprint(MaterializationPlanOp plan);
 
+std::string schedulePlanFingerprint(SchedulePlanOp plan);
+
 } // namespace mlir::shuttle
 
 #endif // SHUTTLE_IR_SHUTTLEOPS_H_

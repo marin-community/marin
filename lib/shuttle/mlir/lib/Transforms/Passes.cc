@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -57,6 +58,8 @@ namespace mlir::shuttle {
 #define GEN_PASS_DEF_SHUTTLEVERIFYNOSHUTTLEOPSPASS
 #define GEN_PASS_DEF_SHUTTLEPLANROWFOLDMATERIALIZATIONPASS
 #define GEN_PASS_DEF_SHUTTLEVERIFYMATERIALIZATIONPLANPASS
+#define GEN_PASS_DEF_SHUTTLEPLANSIMT32ROWFOLDSCHEDULEPASS
+#define GEN_PASS_DEF_SHUTTLEVERIFYSIMT32ROWFOLDSCHEDULEPASS
 #include "shuttle/Transforms/Passes.h.inc"
 
 namespace {
@@ -3176,6 +3179,143 @@ public:
   }
 };
 
+LogicalResult
+verifyMaterializationPlanAgainstSource(ModuleOp module,
+                                       MaterializationPlanOp plan) {
+  if (failed(plan.verifyRegions())) {
+    return failure();
+  }
+  llvm::SmallDenseMap<Attribute, Operation *> sourceOperations;
+  llvm::SmallDenseSet<Attribute> duplicateSources;
+  module.walk([&](Operation *operation) {
+    if (auto map = dyn_cast<MapOp>(operation)) {
+      if (!sourceOperations.try_emplace(map.getSource(), operation).second) {
+        duplicateSources.insert(map.getSource());
+      }
+    } else if (auto fold = dyn_cast<FoldOp>(operation)) {
+      if (!sourceOperations.try_emplace(fold.getSource(), operation).second) {
+        duplicateSources.insert(fold.getSource());
+      }
+    }
+  });
+  SmallVector<MaterializationBufferOp> buffers;
+  SmallVector<MaterializationTaskOp> tasks;
+  for (Operation &operation : plan.getBody().front()) {
+    if (auto buffer = dyn_cast<MaterializationBufferOp>(operation)) {
+      buffers.push_back(buffer);
+    } else if (auto task = dyn_cast<MaterializationTaskOp>(operation)) {
+      tasks.push_back(task);
+    }
+  }
+  llvm::SmallDenseSet<Operation *> bound;
+  for (MaterializationTaskOp task : tasks) {
+    auto found = sourceOperations.find(task.getSource());
+    if (found == sourceOperations.end() ||
+        duplicateSources.contains(task.getSource()) ||
+        !bound.insert(found->second).second) {
+      task.emitOpError("source must uniquely bind one surviving algebra task");
+      return failure();
+    }
+    Operation *source = found->second;
+    const bool kindMatches = (task.getKind() == MaterializationTaskKind::Map &&
+                              isa<MapOp>(source)) ||
+                             (task.getKind() == MaterializationTaskKind::Fold &&
+                              isa<FoldOp>(source));
+    if (!kindMatches ||
+        task.getSemanticFingerprint() != semanticTaskFingerprint(source) ||
+        task.getInputBuffers().size() != source->getNumOperands() ||
+        task.getOutputBuffers().size() != source->getNumResults()) {
+      task.emitOpError("does not match its bound algebra semantics");
+      return failure();
+    }
+    for (auto [bufferOrdinal, value] :
+         llvm::zip_equal(task.getInputBuffers(), source->getOperands())) {
+      if (buffers[bufferOrdinal].getTensorType() != value.getType()) {
+        task.emitOpError("input buffer type does not match bound algebra");
+        return failure();
+      }
+    }
+    for (auto [bufferOrdinal, value] :
+         llvm::zip_equal(task.getOutputBuffers(), source->getResults())) {
+      if (buffers[bufferOrdinal].getTensorType() != value.getType()) {
+        task.emitOpError("output buffer type does not match bound algebra");
+        return failure();
+      }
+    }
+    SmallVector<int64_t> expectedDomain;
+    if (auto map = dyn_cast<MapOp>(source)) {
+      FailureOr<SmallVector<int64_t>> domain = mapDomainShape(map);
+      if (failed(domain)) {
+        task.emitOpError("bound Map has no closed static domain");
+        return failure();
+      }
+      expectedDomain = std::move(*domain);
+    } else {
+      auto fold = cast<FoldOp>(source);
+      expectedDomain.assign(
+          cast<RankedTensorType>(fold.getInputs()[0].getType())
+              .getShape()
+              .begin(),
+          cast<RankedTensorType>(fold.getInputs()[0].getType())
+              .getShape()
+              .end());
+    }
+    if (task.getDomainShape() != ArrayRef<int64_t>(expectedDomain)) {
+      task.emitOpError("domain does not match bound algebra indexing");
+      return failure();
+    }
+  }
+  RegionOp owner;
+  if (!bound.empty()) {
+    owner = (*bound.begin())->getParentOfType<RegionOp>();
+  }
+  if (!owner || owner.getPolicy() != plan.getPolicy() ||
+      bound.size() != owner.getBody().front().getOperations().size() - 1) {
+    plan.emitOpError("must cover exactly one connected algebra region");
+    return failure();
+  }
+  for (Operation *operation : bound) {
+    if (operation->getParentOfType<RegionOp>() != owner) {
+      plan.emitOpError("tasks must bind one algebra region");
+      return failure();
+    }
+  }
+  FailureOr<DerivedPlan> expected = deriveRowFoldPlan(owner);
+  if (failed(expected) || expected->tasks.size() != tasks.size() ||
+      expected->buffers.size() != buffers.size()) {
+    plan.emitOpError("does not equal the plan derived from bound algebra");
+    return failure();
+  }
+  for (auto [ordinal, expectedTask] : llvm::enumerate(expected->tasks)) {
+    MaterializationTaskOp actual = tasks[ordinal];
+    if (expectedTask.operation != sourceOperations.lookup(actual.getSource()) ||
+        actual.getInputBuffers() != ArrayRef<int64_t>(expectedTask.inputs) ||
+        actual.getOutputBuffers() != ArrayRef<int64_t>(expectedTask.outputs) ||
+        actual.getDependencies() !=
+            ArrayRef<int64_t>(expectedTask.dependencies)) {
+      actual.emitOpError(
+          "task order and edges must equal bound algebra SSA dependencies");
+      return failure();
+    }
+  }
+  for (auto [ordinal, expectedBuffer] : llvm::enumerate(expected->buffers)) {
+    MaterializationBufferOp actual = buffers[ordinal];
+    auto actualProducer = actual->getAttrOfType<IntegerAttr>("producer");
+    std::optional<int64_t> producer =
+        actualProducer ? std::optional<int64_t>(actualProducer.getInt())
+                       : std::nullopt;
+    if (actual.getTensorType() != expectedBuffer.value.getType() ||
+        producer != expectedBuffer.producer ||
+        actual.getConsumers() != ArrayRef<int64_t>(expectedBuffer.consumers) ||
+        actual.getLiveOut() != expectedBuffer.liveOut) {
+      actual.emitOpError(
+          "buffer ownership and uses must equal bound algebra SSA edges");
+      return failure();
+    }
+  }
+  return success();
+}
+
 class VerifyMaterializationPlanPass
     : public impl::ShuttleVerifyMaterializationPlanPassBase<
           VerifyMaterializationPlanPass> {
@@ -3184,141 +3324,286 @@ public:
     ModuleOp module = getOperation();
     SmallVector<MaterializationPlanOp> plans(
         module.getOps<MaterializationPlanOp>());
-    if (plans.size() != 1 || failed(plans[0].verifyRegions())) {
-      module.emitError("requires one internally valid materialization plan");
+    if (plans.size() != 1 ||
+        failed(verifyMaterializationPlanAgainstSource(module, plans[0]))) {
+      module.emitError("requires one source-bound materialization plan");
+      signalPassFailure();
+    }
+  }
+};
+
+struct ScheduledGeometry {
+  SmallVector<int64_t> grid;
+  SmallVector<int64_t> tile;
+  int64_t serialTiles;
+  int64_t workgroupThreads;
+  int64_t subgroupSize;
+  int64_t scratchBytes;
+  std::optional<int64_t> reductionAxis;
+};
+
+FailureOr<int64_t> scheduleElementCount(ArrayRef<int64_t> shape) {
+  int64_t count = 1;
+  for (int64_t extent : shape) {
+    if (extent <= 0 || count > std::numeric_limits<int64_t>::max() / extent) {
+      return failure();
+    }
+    count *= extent;
+  }
+  return count;
+}
+
+int64_t scheduleThreads(int64_t tile) {
+  constexpr int64_t kSubgroup = 32;
+  return ((tile + kSubgroup - 1) / kSubgroup) * kSubgroup;
+}
+
+FailureOr<ScheduledGeometry> deriveSimt32Geometry(ScheduleTaskKind kind,
+                                                  ArrayRef<int64_t> domain) {
+  constexpr int64_t kSubgroup = 32;
+  constexpr int64_t kMaxThreads = 256;
+  if (kind == ScheduleTaskKind::Scalar) {
+    if (!domain.empty()) {
+      return failure();
+    }
+    return ScheduledGeometry{{1}, {}, 1, 1, kSubgroup, 0, std::nullopt};
+  }
+  if (kind == ScheduleTaskKind::Elementwise) {
+    FailureOr<int64_t> elements = scheduleElementCount(domain);
+    if (failed(elements)) {
+      return failure();
+    }
+    int64_t tile = std::min(*elements, kMaxThreads);
+    return ScheduledGeometry{{(*elements + tile - 1) / tile},
+                             {tile},
+                             1,
+                             scheduleThreads(tile),
+                             kSubgroup,
+                             0,
+                             std::nullopt};
+  }
+  if (domain.size() != 2 || domain[0] <= 0 || domain[1] <= 0) {
+    return failure();
+  }
+  int64_t tile = std::min(domain[1], kMaxThreads);
+  int64_t threads = scheduleThreads(tile);
+  return ScheduledGeometry{{domain[0]},
+                           {1, tile},
+                           (domain[1] + tile - 1) / tile,
+                           threads,
+                           kSubgroup,
+                           threads * static_cast<int64_t>(sizeof(float)),
+                           1};
+}
+
+void createScheduleRecord(OpBuilder &builder, Location location,
+                          StringRef operationName,
+                          ArrayRef<NamedAttribute> attributes) {
+  OperationState state(location, operationName);
+  state.addAttributes(attributes);
+  builder.create(state);
+}
+
+class PlanSimt32RowFoldSchedulePass
+    : public impl::ShuttlePlanSimt32RowFoldSchedulePassBase<
+          PlanSimt32RowFoldSchedulePass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    SmallVector<MaterializationPlanOp> materializationPlans(
+        module.getOps<MaterializationPlanOp>());
+    if (materializationPlans.size() != 1 ||
+        failed(verifyMaterializationPlanAgainstSource(
+            module, materializationPlans.front()))) {
+      module.emitError(
+          "requires exactly one source-bound materialization plan");
       return signalPassFailure();
     }
-    MaterializationPlanOp plan = plans[0];
-    llvm::SmallDenseMap<Attribute, Operation *> sourceOperations;
-    llvm::SmallDenseSet<Attribute> duplicateSources;
-    module.walk([&](Operation *operation) {
-      if (auto map = dyn_cast<MapOp>(operation)) {
-        if (!sourceOperations.try_emplace(map.getSource(), operation).second) {
-          duplicateSources.insert(map.getSource());
-        }
-      } else if (auto fold = dyn_cast<FoldOp>(operation)) {
-        if (!sourceOperations.try_emplace(fold.getSource(), operation).second) {
-          duplicateSources.insert(fold.getSource());
-        }
-      }
-    });
-    SmallVector<MaterializationBufferOp> buffers;
-    SmallVector<MaterializationTaskOp> tasks;
-    for (Operation &operation : plan.getBody().front()) {
-      if (auto buffer = dyn_cast<MaterializationBufferOp>(operation)) {
-        buffers.push_back(buffer);
-      } else if (auto task = dyn_cast<MaterializationTaskOp>(operation)) {
-        tasks.push_back(task);
-      }
-    }
-    llvm::SmallDenseSet<Operation *> bound;
-    for (MaterializationTaskOp task : tasks) {
-      auto found = sourceOperations.find(task.getSource());
-      if (found == sourceOperations.end() ||
-          duplicateSources.contains(task.getSource()) ||
-          !bound.insert(found->second).second) {
-        task.emitOpError(
-            "source must uniquely bind one surviving algebra task");
-        return signalPassFailure();
-      }
-      Operation *source = found->second;
-      const bool kindMatches =
-          (task.getKind() == MaterializationTaskKind::Map &&
-           isa<MapOp>(source)) ||
-          (task.getKind() == MaterializationTaskKind::Fold &&
-           isa<FoldOp>(source));
-      if (!kindMatches ||
-          task.getSemanticFingerprint() != semanticTaskFingerprint(source) ||
-          task.getInputBuffers().size() != source->getNumOperands() ||
-          task.getOutputBuffers().size() != source->getNumResults()) {
-        task.emitOpError("does not match its bound algebra semantics");
-        return signalPassFailure();
-      }
-      for (auto [bufferOrdinal, value] :
-           llvm::zip_equal(task.getInputBuffers(), source->getOperands())) {
-        if (buffers[bufferOrdinal].getTensorType() != value.getType()) {
-          task.emitOpError("input buffer type does not match bound algebra");
-          return signalPassFailure();
-        }
-      }
-      for (auto [bufferOrdinal, value] :
-           llvm::zip_equal(task.getOutputBuffers(), source->getResults())) {
-        if (buffers[bufferOrdinal].getTensorType() != value.getType()) {
-          task.emitOpError("output buffer type does not match bound algebra");
-          return signalPassFailure();
-        }
-      }
-      SmallVector<int64_t> expectedDomain;
-      if (auto map = dyn_cast<MapOp>(source)) {
-        FailureOr<SmallVector<int64_t>> domain = mapDomainShape(map);
-        if (failed(domain)) {
-          task.emitOpError("bound Map has no closed static domain");
-          return signalPassFailure();
-        }
-        expectedDomain = std::move(*domain);
-      } else {
-        auto fold = cast<FoldOp>(source);
-        expectedDomain.assign(
-            cast<RankedTensorType>(fold.getInputs()[0].getType())
-                .getShape()
-                .begin(),
-            cast<RankedTensorType>(fold.getInputs()[0].getType())
-                .getShape()
-                .end());
-      }
-      if (task.getDomainShape() != ArrayRef<int64_t>(expectedDomain)) {
-        task.emitOpError("domain does not match bound algebra indexing");
-        return signalPassFailure();
-      }
-    }
-    RegionOp owner;
-    if (!bound.empty()) {
-      owner = (*bound.begin())->getParentOfType<RegionOp>();
-    }
-    if (!owner || owner.getPolicy() != plan.getPolicy() ||
-        bound.size() != owner.getBody().front().getOperations().size() - 1) {
-      plan.emitOpError("must cover exactly one connected algebra region");
+    if (!module.getOps<SchedulePlanOp>().empty()) {
+      module.emitError("already contains a schedule plan");
       return signalPassFailure();
     }
-    for (Operation *operation : bound) {
-      if (operation->getParentOfType<RegionOp>() != owner) {
-        plan.emitOpError("tasks must bind one algebra region");
+    MaterializationPlanOp source = materializationPlans.front();
+    SmallVector<MaterializationBufferOp> sourceBuffers(
+        source.getBody().front().getOps<MaterializationBufferOp>());
+    SmallVector<MaterializationTaskOp> sourceTasks(
+        source.getBody().front().getOps<MaterializationTaskOp>());
+
+    OpBuilder builder(module.getContext());
+    builder.setInsertionPointToEnd(module.getBody());
+    OperationState planState(module.getLoc(),
+                             SchedulePlanOp::getOperationName());
+    planState.addAttribute("schema_version", builder.getI64IntegerAttr(1));
+    planState.addAttribute(
+        "target",
+        ScheduleTargetAttr::get(module.getContext(), ScheduleTarget::Simt32));
+    planState.addAttribute("policy", source.getPolicyAttr());
+    planState.addAttribute("source_plan_fingerprint",
+                           builder.getStringAttr(source.getFingerprint()));
+    planState.addAttribute("fingerprint",
+                           builder.getStringAttr(std::string(64, '0')));
+    planState.addRegion();
+    auto schedule = cast<SchedulePlanOp>(builder.create(planState));
+    Block *body = new Block();
+    schedule.getBody().push_back(body);
+    builder.setInsertionPointToEnd(body);
+
+    for (auto [ordinal, buffer] : llvm::enumerate(sourceBuffers)) {
+      auto type = cast<RankedTensorType>(buffer.getTensorType());
+      SmallVector<int64_t> order;
+      for (int64_t axis = 0; axis < type.getRank(); ++axis) {
+        order.push_back(axis);
+      }
+      createScheduleRecord(
+          builder, buffer.getLoc(), ScheduleBufferOp::getOperationName(),
+          {builder.getNamedAttr("ordinal", builder.getI64IntegerAttr(ordinal)),
+           builder.getNamedAttr("source_buffer",
+                                builder.getI64IntegerAttr(ordinal)),
+           builder.getNamedAttr("tensor_type", TypeAttr::get(type)),
+           builder.getNamedAttr(
+               "indexing", ScheduleBufferIndexingAttr::get(
+                               module.getContext(),
+                               type.getRank() == 0
+                                   ? ScheduleBufferIndexing::Scalar
+                                   : ScheduleBufferIndexing::Lexicographic)),
+           builder.getNamedAttr(
+               "iteration_order",
+               DenseI64ArrayAttr::get(module.getContext(), order)),
+           builder.getNamedAttr(
+               "lifetime_start",
+               builder.getI64IntegerAttr(buffer.getLifetimeStart())),
+           builder.getNamedAttr("lifetime_end", builder.getI64IntegerAttr(
+                                                    buffer.getLifetimeEnd()))});
+    }
+    for (auto [ordinal, task] : llvm::enumerate(sourceTasks)) {
+      ScheduleTaskKind kind =
+          task.getKind() == MaterializationTaskKind::Fold
+              ? ScheduleTaskKind::RowFold
+              : (task.getDomainShape().empty() ? ScheduleTaskKind::Scalar
+                                               : ScheduleTaskKind::Elementwise);
+      FailureOr<ScheduledGeometry> geometry =
+          deriveSimt32Geometry(kind, task.getDomainShape());
+      if (failed(geometry)) {
+        task.emitOpError("cannot derive a bounded SIMT32 schedule candidate");
         return signalPassFailure();
       }
+      SmallVector<NamedAttribute> attrs{
+          builder.getNamedAttr("ordinal", builder.getI64IntegerAttr(ordinal)),
+          builder.getNamedAttr("source_task",
+                               builder.getI64IntegerAttr(ordinal)),
+          builder.getNamedAttr(
+              "kind", ScheduleTaskKindAttr::get(module.getContext(), kind)),
+          builder.getNamedAttr("domain_shape", task.getDomainShapeAttr()),
+          builder.getNamedAttr(
+              "grid_shape",
+              DenseI64ArrayAttr::get(module.getContext(), geometry->grid)),
+          builder.getNamedAttr(
+              "tile_shape",
+              DenseI64ArrayAttr::get(module.getContext(), geometry->tile)),
+          builder.getNamedAttr(
+              "serial_tiles", builder.getI64IntegerAttr(geometry->serialTiles)),
+          builder.getNamedAttr(
+              "workgroup_threads",
+              builder.getI64IntegerAttr(geometry->workgroupThreads)),
+          builder.getNamedAttr("subgroup_size", builder.getI64IntegerAttr(
+                                                    geometry->subgroupSize)),
+          builder.getNamedAttr("scratch_bytes", builder.getI64IntegerAttr(
+                                                    geometry->scratchBytes)),
+          builder.getNamedAttr("input_buffers", task.getInputBuffersAttr()),
+          builder.getNamedAttr("output_buffers", task.getOutputBuffersAttr()),
+          builder.getNamedAttr("dependencies", task.getDependenciesAttr()),
+          builder.getNamedAttr("semantic_fingerprint",
+                               task.getSemanticFingerprintAttr())};
+      if (geometry->reductionAxis) {
+        attrs.push_back(builder.getNamedAttr(
+            "reduction_axis",
+            builder.getI64IntegerAttr(*geometry->reductionAxis)));
+        attrs.push_back(builder.getNamedAttr(
+            "reduction_order",
+            ScheduleReductionOrderAttr::get(
+                module.getContext(),
+                ScheduleReductionOrder::TreeAssociationFreeLeafOrderFixed)));
+      }
+      createScheduleRecord(builder, task.getLoc(),
+                           ScheduleTaskOp::getOperationName(), attrs);
     }
-    FailureOr<DerivedPlan> expected = deriveRowFoldPlan(owner);
-    if (failed(expected) || expected->tasks.size() != tasks.size() ||
-        expected->buffers.size() != buffers.size()) {
-      plan.emitOpError("does not equal the plan derived from bound algebra");
+    builder.create<SchedulePlanYieldOp>(module.getLoc());
+    schedule.setFingerprint(schedulePlanFingerprint(schedule));
+    if (failed(schedule.verifyRegions())) {
+      signalPassFailure();
+    }
+  }
+};
+
+class VerifySimt32RowFoldSchedulePass
+    : public impl::ShuttleVerifySimt32RowFoldSchedulePassBase<
+          VerifySimt32RowFoldSchedulePass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    SmallVector<MaterializationPlanOp> materializationPlans(
+        module.getOps<MaterializationPlanOp>());
+    SmallVector<SchedulePlanOp> schedules(module.getOps<SchedulePlanOp>());
+    if (materializationPlans.size() != 1 || schedules.size() != 1 ||
+        failed(verifyMaterializationPlanAgainstSource(
+            module, materializationPlans.front())) ||
+        failed(schedules.front().verifyRegions())) {
+      module.emitError(
+          "requires exactly one valid materialization and schedule plan");
       return signalPassFailure();
     }
-    for (auto [ordinal, expectedTask] : llvm::enumerate(expected->tasks)) {
-      MaterializationTaskOp actual = tasks[ordinal];
-      if (expectedTask.operation !=
-              sourceOperations.lookup(actual.getSource()) ||
-          actual.getInputBuffers() != ArrayRef<int64_t>(expectedTask.inputs) ||
-          actual.getOutputBuffers() !=
-              ArrayRef<int64_t>(expectedTask.outputs) ||
-          actual.getDependencies() !=
-              ArrayRef<int64_t>(expectedTask.dependencies)) {
+    MaterializationPlanOp source = materializationPlans.front();
+    SchedulePlanOp schedule = schedules.front();
+    if (schedule.getTarget() != ScheduleTarget::Simt32 ||
+        schedule.getPolicy() != source.getPolicy() ||
+        schedule.getSourcePlanFingerprint() != source.getFingerprint()) {
+      schedule.emitOpError(
+          "target, policy, and source fingerprint must bind materialization");
+      return signalPassFailure();
+    }
+    SmallVector<MaterializationBufferOp> sourceBuffers(
+        source.getBody().front().getOps<MaterializationBufferOp>());
+    SmallVector<MaterializationTaskOp> sourceTasks(
+        source.getBody().front().getOps<MaterializationTaskOp>());
+    SmallVector<ScheduleBufferOp> buffers(
+        schedule.getBody().front().getOps<ScheduleBufferOp>());
+    SmallVector<ScheduleTaskOp> tasks(
+        schedule.getBody().front().getOps<ScheduleTaskOp>());
+    if (buffers.size() != sourceBuffers.size() ||
+        tasks.size() != sourceTasks.size()) {
+      schedule.emitOpError(
+          "must cover every materialization buffer and task exactly once");
+      return signalPassFailure();
+    }
+    for (auto [ordinal, actual, expected] :
+         llvm::enumerate(buffers, sourceBuffers)) {
+      if (actual.getSourceBuffer() != static_cast<int64_t>(ordinal) ||
+          actual.getTensorType() != expected.getTensorType() ||
+          actual.getLifetimeStart() != expected.getLifetimeStart() ||
+          actual.getLifetimeEnd() != expected.getLifetimeEnd()) {
         actual.emitOpError(
-            "task order and edges must equal bound algebra SSA dependencies");
+            "schedule buffer type and lifetime must equal materialization");
         return signalPassFailure();
       }
     }
-    for (auto [ordinal, expectedBuffer] : llvm::enumerate(expected->buffers)) {
-      MaterializationBufferOp actual = buffers[ordinal];
-      auto actualProducer = actual->getAttrOfType<IntegerAttr>("producer");
-      std::optional<int64_t> producer =
-          actualProducer ? std::optional<int64_t>(actualProducer.getInt())
-                         : std::nullopt;
-      if (actual.getTensorType() != expectedBuffer.value.getType() ||
-          producer != expectedBuffer.producer ||
-          actual.getConsumers() !=
-              ArrayRef<int64_t>(expectedBuffer.consumers) ||
-          actual.getLiveOut() != expectedBuffer.liveOut) {
+    for (auto [ordinal, actual, expected] :
+         llvm::enumerate(tasks, sourceTasks)) {
+      ScheduleTaskKind expectedKind =
+          expected.getKind() == MaterializationTaskKind::Fold
+              ? ScheduleTaskKind::RowFold
+              : (expected.getDomainShape().empty()
+                     ? ScheduleTaskKind::Scalar
+                     : ScheduleTaskKind::Elementwise);
+      if (actual.getSourceTask() != static_cast<int64_t>(ordinal) ||
+          actual.getKind() != expectedKind ||
+          actual.getDomainShape() != expected.getDomainShape() ||
+          actual.getInputBuffers() != expected.getInputBuffers() ||
+          actual.getOutputBuffers() != expected.getOutputBuffers() ||
+          actual.getDependencies() != expected.getDependencies() ||
+          actual.getSemanticFingerprint() !=
+              expected.getSemanticFingerprint()) {
         actual.emitOpError(
-            "buffer ownership and uses must equal bound algebra SSA edges");
+            "schedule dependencies must equal the materialization task");
         return signalPassFailure();
       }
     }
@@ -3519,6 +3804,14 @@ std::unique_ptr<Pass> createPlanRowFoldMaterializationPass() {
 
 std::unique_ptr<Pass> createVerifyMaterializationPlanPass() {
   return std::make_unique<VerifyMaterializationPlanPass>();
+}
+
+std::unique_ptr<Pass> createPlanSimt32RowFoldSchedulePass() {
+  return std::make_unique<PlanSimt32RowFoldSchedulePass>();
+}
+
+std::unique_ptr<Pass> createVerifySimt32RowFoldSchedulePass() {
+  return std::make_unique<VerifySimt32RowFoldSchedulePass>();
 }
 
 void buildShuttleStablehloPipeline(

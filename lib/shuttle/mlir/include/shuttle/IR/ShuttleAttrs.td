@@ -83,6 +83,62 @@ def Shuttle_MaterializationStorageAttr
   let assemblyFormat = "`<` $value `>`";
 }
 
+def Shuttle_ScheduleTarget
+    : I32EnumAttr<"ScheduleTarget", "Abstract schedule capability profile",
+                  [I32EnumAttrCase<"Simt32", 0, "simt32">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_ScheduleTargetAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_ScheduleTarget, "schedule_target"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
+def Shuttle_ScheduleBufferIndexing
+    : I32EnumAttr<"ScheduleBufferIndexing", "Logical tensor iteration contract",
+                  [I32EnumAttrCase<"Scalar", 0, "scalar">,
+                   I32EnumAttrCase<"Lexicographic", 1, "lexicographic">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_ScheduleBufferIndexingAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_ScheduleBufferIndexing,
+               "schedule_buffer_indexing"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
+def Shuttle_ScheduleReductionOrder
+    : I32EnumAttr<"ScheduleReductionOrder", "Required Fold realization order",
+                  [I32EnumAttrCase<"TreeAssociationFreeLeafOrderFixed", 0,
+                      "tree_association_free_leaf_order_fixed">,
+                   I32EnumAttrCase<"LeafOrderFree", 1, "leaf_order_free">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_ScheduleReductionOrderAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_ScheduleReductionOrder,
+               "schedule_reduction_order"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
+def Shuttle_ScheduleTaskKind
+    : I32EnumAttr<"ScheduleTaskKind", "Logical SIMT32 task schedule kind",
+                  [I32EnumAttrCase<"Scalar", 0, "scalar">,
+                   I32EnumAttrCase<"Elementwise", 1, "elementwise">,
+                   I32EnumAttrCase<"RowFold", 2, "row_fold">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_ScheduleTaskKindAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_ScheduleTaskKind,
+               "schedule_task_kind"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
 def Shuttle_SourceRefAttr : Shuttle_Attr<"SourceRef"> {
   let mnemonic = "source_ref";
   let summary = "Rename-invariant structural reference to a source result";
