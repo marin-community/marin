@@ -157,6 +157,10 @@ outside the current Shuttle MLIR path. It is reference-only for this work.
 
 ## Smallest test-first sequence
 
+The Reduce/Fold provenance, ordering, initializer, lowering, and test contract
+for steps 2 and 3 is specified in
+[`shuttle_target1_fold_conversion_design.md`](shuttle_target1_fold_conversion_design.md).
+
 1. Add audited ordinary-JAX forward, backward, and composed StableHLO fixtures
    for `R=2048,H=4096`, plus one small shape mutation. Regeneration must pin
    JAX/JAXlib/XLA identities and fail on normalized-fingerprint drift. Pin the
