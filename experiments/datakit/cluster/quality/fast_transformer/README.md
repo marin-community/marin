@@ -270,3 +270,11 @@ Evaluation:
 
 - Labels: `s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet` (5,578 oracle labels; `label_batch` marks `consensus_v3` / `junkgate_web_wiki` / `junkgate_code_math`).
 - Model: `s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2/` (`.eqx` + `_remap.json` + `_meta.json` + `calib_bme.json`).
+- Window labels, 2048-token geometry: `s3://marin-us-east-02a/marin/user/muchanem/quality_v2/glm52_labels_bme2048/`
+  (`labels/windows.parquet` — 180,048 grades over 137,167 documents, `label_batch` `glm52_rubric_v2_bme2048`;
+  `windows/` the graded windows; `selection.json` which documents were drawn and why; `labels/window_label_report.json`).
+  Invalid rates read 11.3% on begin windows cut mid-document, 23.1% on begin windows holding a whole (short)
+  document, and 2.0% on middle and end.
+- Window labels, 512-token geometry: `s3://marin-us-east-02a/marin/user/muchanem/quality_v2/glm52_labels_scaleup/labels/windows.parquet`
+  (the earlier scale-up; its newly mined begin windows were graded without the excerpt marker and are 36.5% invalid —
+  `window_dataset.drop_cut_artifact_grades` filters the rationales that blame the cut).
