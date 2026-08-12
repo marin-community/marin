@@ -869,3 +869,14 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Issue update: None. There is no major run-state change.
 - Next action: Continue the regular health-check cadence and watch both long sources through completion.
+
+### 2026-08-12 20:40 UTC - Three RNO TEI services recovered
+
+- Root health: Both roots are running with zero failures and zero preemptions. Both active sources have 32 live workers and no dead workers.
+- Completed artifacts: East has 45 completed source artifacts. RNO has 14 completed source artifacts. The full run has 59 of 292 completed source artifacts.
+- RNO service event: TEI jobs 028, 030, and 032 reached their retry limit after three cluster preemptions. RNO capacity fell from 82 to 79 live TEI services.
+- Recovery: The saved controller request did not include the callable work files. A replay without those files failed before TEI started. A live TEI service supplied the original runner and callable template. Each replacement then received its deterministic port pair. All three replacements passed their local health checks, and RNO returned to 82 live TEI services.
+- RNO progress: `stack-v3_6ac1a286` got to 9,446 of 12,818 embedding shards. A set of endpoint disconnects was requeued at retry one of three. No shard reached retry two, the source kept 32 live workers, and its stable rate gives a rough 21:05-21:10 UTC completion estimate.
+- East progress: `nemotron_cc_v2-diverse_qa_016d1909` got to 2,648 of 4,416 embedding shards with 32 live workers and no dead workers. Its stable rate gives a rough 22:25-22:35 UTC completion estimate.
+- Issue update: Post one major update for the RNO capacity loss and recovery.
+- Next action: Confirm that the disconnect burst has ended, then continue the regular health-check cadence.
