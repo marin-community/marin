@@ -56,7 +56,7 @@ endpoint requires a user-scoped token unsuitable for unattended Pulumi runs. The
 select only `marin`. To recreate or rotate the app credential:
 
 1. Verify that the app has only Contents and Pull requests read/write permission and remains
-   installed only on `marin`. Record the app ID and slug from its settings page.
+   installed only on `marin`. Record the app ID, client ID, and slug from its settings page.
 2. Generate a private key and seal it to the protected environment's Actions public key. `--no-store`
    prints ciphertext without creating the secret. Record the matching public-key ID:
 
@@ -77,6 +77,7 @@ select only `marin`. To recreate or rotate the app credential:
    marin-github:dependencyUpdater:
      repository: marin-community/marin
      appId: 123456
+     clientId: Iv23example-client-id
      appSlug: marin-external-runtime-updater
      reviewRulesetId: 785435
      actionsKeyId: example-key-id

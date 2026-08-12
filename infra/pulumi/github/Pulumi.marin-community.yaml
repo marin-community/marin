@@ -7,6 +7,7 @@ config:
   marin-github:dependencyUpdater:
     repository: marin-community/marin
     appId: 4563866
+    clientId: Iv23liNdDvC85E67xNa6
     appSlug: marin-external-runtime-updater
     reviewRulesetId: 785435
     actionsKeyId: "3380204578043523366"

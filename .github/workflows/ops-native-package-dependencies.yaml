@@ -28,7 +28,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.DEPENDENCY_UPDATER_APP_ID }}
+          client-id: ${{ vars.DEPENDENCY_UPDATER_CLIENT_ID }}
           private-key: ${{ secrets.DEPENDENCY_UPDATER_PRIVATE_KEY }}
           repositories: ${{ github.event.repository.name }}
 

@@ -18,6 +18,7 @@ def _config(**overrides) -> DependencyUpdaterConfig:
         "organization": "marin-community",
         "repository": "marin-community/marin",
         "app_id": 1234,
+        "client_id": "Iv23test-client-id",
         "app_slug": "marin-external-runtime-updater",
         "actions_key_id": "test-actions-key-id",
         "encrypted_private_key": "test-encrypted-private-key",
