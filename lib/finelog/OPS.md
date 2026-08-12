@@ -244,15 +244,32 @@ push. `forwarding.cluster` is the origin name the sender stamps on every forward
 row; keep it equal to the hub key entry's `cluster` label so reads line up.
 
 Roll the **hub first** (a sender whose key the hub does not yet trust gets 401),
-then the sender. `deploy up` resolves `signing_key` from Secret Manager on the
-operator's machine and projects it into the pod's `<name>-env` Secret, so whoever
-runs it needs `roles/secretmanager.secretAccessor` on that secret.
+then the sender. `deploy sync-secret` resolves `signing_key` from Secret Manager
+on the operator's machine and updates the pod's `<name>-env` Secret, so whoever
+runs it needs `roles/secretmanager.secretAccessor` on that secret. The Pulumi
+stack references that existing Kubernetes Secret without reading its values.
 
 ```bash
 uv run finelog deploy restart marin              # hub: gcp backend, in-place
+export KUBECONFIG=~/.kube/coreweave-iris
 export R2_KEY_ID=... R2_KEY_SECRET=...
-uv run finelog deploy up "$CLUSTER" --no-build   # sender: k8s, applies Secret + env
+uv run finelog deploy sync-secret "$CLUSTER"
+
+cd infra/finelog
+pulumi stack select "$CLUSTER"
+pulumi preview
+pulumi up
 ```
+
+`pulumi up` builds and pushes the Finelog image, then rolls the sender
+Deployment to the returned digest. Its rollout identity and image build stamp
+come from the checked-out, content-addressed Git tree SHA. If only the Secret
+changed, replace the pod using `kube_context`, `namespace`, and `name` from
+`lib/finelog/config/$CLUSTER.yaml`, wait for the Deployment, then run `uv run
+--frozen --package marin-finelog finelog deploy verify "$CLUSTER"`. See
+[`infra/finelog/README.md`](../../infra/finelog/README.md) for first-time stack
+adoption. Do not run the first update without the import flag: the live PVC must
+be adopted, not recreated.
 
 Forwarding starts at the sender's current watermark: rows already in its store
 stay there and stay queryable, but they do not backfill into the hub.
@@ -327,8 +344,9 @@ local retention; filtered foreign-origin rows may make it an upper bound on lost
 
 To rotate a key, add the new Secret Manager version, add its public key alongside
 the old one under the same `keys[].cluster` (the hub accepts either), roll the
-hub, re-pin the sender's `signing_key` to the new version, roll the sender, then
-drop the old public key and roll the hub again.
+hub, re-pin the sender's `signing_key` to the new version, run `deploy
+sync-secret`, update the sender's Pulumi stack, then drop the old public key and
+roll the hub again.
 
 ## Checking that a server is ingesting
 
@@ -350,9 +368,11 @@ curl -sf http://<host>:<port>/api/server | jq .ingest
 
 `/api/server`'s `ingest` block names each namespace, its state, the error, when
 it first failed, and how many attempts have been made since. The dashboard's
-System page shows the same under **Ingest**. `deploy up`, `deploy restart`, and
-`safe_deploy` gate on the body, so a deploy that wedges ingest fails and rolls
-back.
+System page shows the same under **Ingest**. The GCE `deploy up`, `deploy
+restart`, and `safe_deploy` paths gate on the body; `safe_deploy` rolls back a
+failed rollout. Each Kubernetes `infra/finelog` Pulumi update runs `finelog
+deploy verify` after the Deployment becomes Ready and fails the update when
+ingest is wedged; it does not roll back automatically.
 
 ## Serving a copy of a store
 
