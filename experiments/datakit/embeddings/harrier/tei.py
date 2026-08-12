@@ -20,7 +20,7 @@ from fray.client import JobHandle
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, JobStatus, ResourceConfig, create_environment
 from iris.client import iris_ctx
-from iris.cluster.client.job_info import get_job_info
+from iris.client.job_info import get_job_info
 from iris.cluster.setup_scripts import default_setup_script
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging

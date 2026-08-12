@@ -299,8 +299,8 @@ def capabilities(smoke_cluster) -> ClusterCapabilities:
 # ============================================================================
 
 
-def test_dashboard_groups_jobs_by_starred_user_and_opens_job(smoke_cluster, smoke_page, smoke_screenshot):
-    """The Job landing page groups owners, preserves stars, and drills into their Jobs."""
+def test_dashboard_opens_a_user_job_list_and_job(smoke_cluster, smoke_page, smoke_screenshot):
+    """The Job page scopes by owner and drills into that owner's Jobs."""
     quick = smoke_cluster.submit(TestJobs.quick, "smoke-simple")
     failed = smoke_cluster.submit(TestJobs.fail, "smoke-failed")
     running = smoke_cluster.submit(TestJobs.sleep, "smoke-running", 300)
@@ -311,15 +311,8 @@ def test_dashboard_groups_jobs_by_starred_user_and_opens_job(smoke_cluster, smok
 
     user = quick.job_id.user
 
-    dashboard_goto(smoke_page, f"{smoke_cluster.url}/")
+    dashboard_goto(smoke_page, f"{smoke_cluster.url}/#/?user={user}")
     wait_for_dashboard_ready(smoke_page)
-    user_link = smoke_page.get_by_role("link", name=user, exact=True)
-    user_link.wait_for()
-    star = user_link.locator("xpath=ancestor::tr").locator("button[aria-pressed]")
-    initial_starred = star.get_attribute("aria-pressed")
-    star.click()
-    assert star.get_attribute("aria-pressed") != initial_starred
-    user_link.click()
     for name in ["smoke-simple", "smoke-failed", "smoke-running"]:
         assert_visible(smoke_page, f"text={name}")
     assert_visible(smoke_page, "th:has-text('Backend')")

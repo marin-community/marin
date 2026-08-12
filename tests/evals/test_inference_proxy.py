@@ -138,6 +138,11 @@ class _InferenceResourceClient:
     def describe_endpoint(self, key: ResourceKey) -> EndpointDetail:
         return self.endpoints[key]
 
+    def resolve_endpoints(self, name: str) -> tuple[EndpointDetail, ...]:
+        if self.endpoint_count == 0:
+            return ()
+        return tuple(self._endpoint(name, index) for index in range(self.endpoint_count))
+
     def mint_endpoint_token(self, key: ResourceKey, *, ttl: Duration) -> EndpointToken:
         detail = self.endpoints[key]
         if self.minted is not None:

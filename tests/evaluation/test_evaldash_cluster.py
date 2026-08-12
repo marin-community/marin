@@ -1,23 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import importlib.util
 import sys
 from dataclasses import replace
-from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import cast
 
-_EVALDASH_SRC = Path(__file__).resolve().parents[2] / "infra" / "evaldash" / "src"
-if str(_EVALDASH_SRC) not in sys.path:
-    sys.path.insert(0, str(_EVALDASH_SRC))
-
-discovery = ModuleType("discovery")
-discovery.resolve_internal_ip = lambda *_args, **_kwargs: "127.0.0.1"
-sys.modules["discovery"] = discovery
-
-from iris.resources.attempt import AttemptSummary  # noqa: E402
-from iris.resources.identity import (  # noqa: E402
+from iris.resources.attempt import AttemptSummary
+from iris.resources.identity import (
     AttemptIdentity,
     JobIdentity,
     NodeIdentity,
@@ -25,17 +15,17 @@ from iris.resources.identity import (  # noqa: E402
     ResourceKind,
     TaskIdentity,
 )
-from iris.resources.job import JobDetail, JobSpec, JobSummary  # noqa: E402
-from iris.resources.source import Page  # noqa: E402
-from iris.resources.task import TaskDetail, TaskSummary  # noqa: E402
-from iris.rpc import job_pb2  # noqa: E402
-from rigging.timing import Timestamp  # noqa: E402
+from iris.resources.job import JobDetail, JobSpec, JobSummary
+from iris.resources.source import Page
+from iris.resources.task import TaskDetail, TaskSummary
+from iris.rpc import job_pb2
+from rigging.timing import Timestamp
 
-_CLUSTER_SPEC = importlib.util.spec_from_file_location("evaldash_cluster", _EVALDASH_SRC / "cluster.py")
-assert _CLUSTER_SPEC is not None and _CLUSTER_SPEC.loader is not None
-cluster = importlib.util.module_from_spec(_CLUSTER_SPEC)
-sys.modules[_CLUSTER_SPEC.name] = cluster
-_CLUSTER_SPEC.loader.exec_module(cluster)
+discovery = ModuleType("infra.evaldash.src.discovery")
+discovery.resolve_internal_ip = lambda *_args, **_kwargs: "127.0.0.1"
+sys.modules[discovery.__name__] = discovery
+
+from infra.evaldash.src import cluster  # noqa: E402
 
 
 def test_job_status_reads_all_tasks_through_resource_api(monkeypatch) -> None:
