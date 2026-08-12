@@ -4,6 +4,7 @@
 #include "shuttle/Transforms/Passes.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <utility>
 
@@ -62,7 +63,7 @@ ShuttlePipelineOptions commandLinePipelineOptions(NumericalPolicy numerics) {
   options.numerics = numerics;
   if (numerics == NumericalPolicy::Fast) {
     options.canonicalOptions =
-        R"json({"numerics":"fast","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+        R"json({"numerics":"fast","pipeline_abi_version":3,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
   }
   return options;
 }
@@ -97,6 +98,38 @@ StringRef policyName(NumericalPolicy numerics) {
 struct CandidateComponent {
   SmallVector<Operation *> operations;
 };
+
+LogicalResult
+walkSourcePreorder(Region &region,
+                   llvm::function_ref<LogicalResult(Operation *)> visitor) {
+  for (Block &block : region) {
+    for (Operation &operation : block) {
+      if (failed(visitor(&operation))) {
+        return failure();
+      }
+      for (Region &nested : operation.getRegions()) {
+        if (failed(walkSourcePreorder(nested, visitor))) {
+          return failure();
+        }
+      }
+    }
+  }
+  return success();
+}
+
+LogicalResult
+walkSourcePreorder(Operation *operation,
+                   llvm::function_ref<LogicalResult(Operation *)> visitor) {
+  if (failed(visitor(operation))) {
+    return failure();
+  }
+  for (Region &nested : operation->getRegions()) {
+    if (failed(walkSourcePreorder(nested, visitor))) {
+      return failure();
+    }
+  }
+  return success();
+}
 
 bool containsShuttleAttribute(Attribute attribute) {
   bool found = false;
@@ -163,14 +196,49 @@ DictionaryAttr normalizedOperationFingerprint(Operation *operation) {
 Attribute valueAnchor(Value value) {
   MLIRContext *context = value.getContext();
   if (auto argument = dyn_cast<BlockArgument>(value)) {
-    auto function = dyn_cast<func::FuncOp>(argument.getOwner()->getParentOp());
+    Operation *parent = argument.getOwner()->getParentOp();
+    auto function = dyn_cast<func::FuncOp>(parent);
     auto functionOrdinal =
         function
             ? function->getAttrOfType<IntegerAttr>(kFunctionOrdinalAttribute)
             : IntegerAttr{};
     if (!functionOrdinal ||
         &function.getBody().front() != argument.getOwner()) {
-      return {};
+      auto ownerRef =
+          parent
+              ? parent->getAttrOfType<DenseI64ArrayAttr>(kOperationRefAttribute)
+              : DenseI64ArrayAttr{};
+      if (!ownerRef) {
+        return {};
+      }
+      unsigned regionOrdinal = 0;
+      unsigned blockOrdinal = 0;
+      bool found = false;
+      for (auto [regionIndex, region] : llvm::enumerate(parent->getRegions())) {
+        for (auto [blockIndex, block] : llvm::enumerate(region)) {
+          if (&block == argument.getOwner()) {
+            regionOrdinal = regionIndex;
+            blockOrdinal = blockIndex;
+            found = true;
+          }
+        }
+      }
+      if (!found) {
+        return {};
+      }
+      NamedAttribute nestedFields[] = {
+          NamedAttribute(StringAttr::get(context, "owner"), ownerRef),
+          NamedAttribute(
+              StringAttr::get(context, "region"),
+              IntegerAttr::get(IntegerType::get(context, 64), regionOrdinal)),
+          NamedAttribute(
+              StringAttr::get(context, "block"),
+              IntegerAttr::get(IntegerType::get(context, 64), blockOrdinal)),
+          NamedAttribute(StringAttr::get(context, "argument"),
+                         IntegerAttr::get(IntegerType::get(context, 64),
+                                          argument.getArgNumber())),
+      };
+      return DictionaryAttr::get(context, nestedFields);
     }
     NamedAttribute fields[] = {
         NamedAttribute(StringAttr::get(context, "argument"),
@@ -241,7 +309,70 @@ bool hasDefaultDotPrecision(Operation *operation) {
          });
 }
 
+bool isSupportedStablehloReduce(Operation *operation) {
+  if (operation->getName().getStringRef() !=
+          stablehlo::ReduceOp::getOperationName() ||
+      operation->getNumOperands() != 2 || operation->getNumResults() != 1 ||
+      operation->getNumRegions() != 1 ||
+      !llvm::hasSingleElement(operation->getRegion(0))) {
+    return false;
+  }
+  auto input = dyn_cast<RankedTensorType>(operation->getOperand(0).getType());
+  auto init = dyn_cast<RankedTensorType>(operation->getOperand(1).getType());
+  auto result = dyn_cast<RankedTensorType>(operation->getResult(0).getType());
+  auto dimensions = operation->getAttrOfType<DenseI64ArrayAttr>("dimensions");
+  DictionaryAttr reduceAttributes = sourceAttributes(operation);
+  if (!input || input.getRank() == 0 || !input.getElementType().isF32() ||
+      !init || init.getRank() != 0 || !init.getElementType().isF32() ||
+      !result || !result.getElementType().isF32() || !dimensions ||
+      dimensions.empty() || reduceAttributes.size() != 1 ||
+      !reduceAttributes.get("dimensions")) {
+    return false;
+  }
+  llvm::SmallDenseSet<int64_t> seen;
+  for (int64_t dimension : dimensions.asArrayRef()) {
+    if (dimension < 0 || dimension >= input.getRank() ||
+        !seen.insert(dimension).second) {
+      return false;
+    }
+  }
+  SmallVector<int64_t> expected;
+  for (int64_t dimension = 0; dimension < input.getRank(); ++dimension) {
+    if (!seen.contains(dimension)) {
+      expected.push_back(input.getDimSize(dimension));
+    }
+  }
+  Block &body = operation->getRegion(0).front();
+  if (result.getShape() != ArrayRef<int64_t>(expected) ||
+      body.getNumArguments() != 2 ||
+      !llvm::all_of(body.getArguments(),
+                    [](BlockArgument argument) {
+                      auto type =
+                          dyn_cast<RankedTensorType>(argument.getType());
+                      return type && type.getRank() == 0 &&
+                             type.getElementType().isF32();
+                    }) ||
+      body.getOperations().size() != 2) {
+    return false;
+  }
+  Operation &add = body.front();
+  Operation &terminator = body.back();
+  return add.getName().getStringRef() == stablehlo::AddOp::getOperationName() &&
+         sourceAttributes(&add).empty() && add.getNumOperands() == 2 &&
+         add.getNumResults() == 1 && add.getOperand(0) == body.getArgument(0) &&
+         add.getOperand(1) == body.getArgument(1) &&
+         add.getResult(0).getType() == body.getArgument(0).getType() &&
+         terminator.getName().getStringRef() ==
+             stablehlo::ReturnOp::getOperationName() &&
+         sourceAttributes(&terminator).empty() &&
+         terminator.getNumOperands() == 1 &&
+         terminator.getOperand(0) == add.getResult(0);
+}
+
 bool isSupportedStablehlo(Operation *operation) {
+  if (isSupportedStablehloReduce(operation)) {
+    return true;
+  }
   if (operation->getNumRegions() != 0 || !isMemoryEffectFree(operation) ||
       !hasOnlyRankedSupportedFloats(operation->getOperands()) ||
       !hasOnlyRankedSupportedFloats(operation->getResults())) {
@@ -277,7 +408,8 @@ bool isSupportedStablehlo(Operation *operation) {
   if (name == stablehlo::TanhOp::getOperationName() ||
       name == stablehlo::ExpOp::getOperationName() ||
       name == stablehlo::NegOp::getOperationName()) {
-    return operation->getNumOperands() == 1 && operation->getNumResults() == 1 &&
+    return operation->getNumOperands() == 1 &&
+           operation->getNumResults() == 1 &&
            !operation->hasAttr("result_accuracy") &&
            elementType(operation->getOperand(0)).isF32() &&
            operation->getOperand(0).getType() ==
@@ -307,16 +439,16 @@ bool isSupportedStablehlo(Operation *operation) {
   if (name == stablehlo::ConstantOp::getOperationName()) {
     auto value = operation->getAttrOfType<DenseElementsAttr>("value");
     auto result = cast<RankedTensorType>(operation->getResult(0).getType());
-    return operation->getNumOperands() == 0 && operation->getNumResults() == 1 &&
-           result.getRank() == 0 && result.getElementType().isF32() && value &&
-           value.isSplat();
+    return operation->getNumOperands() == 0 &&
+           operation->getNumResults() == 1 && result.getRank() == 0 &&
+           result.getElementType().isF32() && value && value.isSplat();
   }
   if (name == stablehlo::BroadcastInDimOp::getOperationName()) {
     auto dimensions =
         operation->getAttrOfType<DenseI64ArrayAttr>("broadcast_dimensions");
-    auto operand =
-        cast<RankedTensorType>(operation->getOperand(0).getType());
-    return operation->getNumOperands() == 1 && operation->getNumResults() == 1 &&
+    auto operand = cast<RankedTensorType>(operation->getOperand(0).getType());
+    return operation->getNumOperands() == 1 &&
+           operation->getNumResults() == 1 &&
            elementType(operation->getOperand(0)).isF32() &&
            operand.getRank() == 0 &&
            operation->getOperand(0).getType() !=
@@ -408,10 +540,11 @@ DictionaryAttr zeroResultRecord(Operation *operation) {
     operands.push_back(anchor);
   }
   NamedAttribute fields[] = {
-      NamedAttribute(StringAttr::get(context, "classification"),
-                     StringAttr::get(context, isa<func::ReturnOp>(operation)
-                                                  ? "terminator"
-                                                  : "zero_result_operation")),
+      NamedAttribute(
+          StringAttr::get(context, "classification"),
+          StringAttr::get(context, operation->hasTrait<OpTrait::IsTerminator>()
+                                       ? "terminator"
+                                       : "zero_result_operation")),
       NamedAttribute(StringAttr::get(context, "fingerprint"),
                      normalizedOperationFingerprint(operation)),
       NamedAttribute(StringAttr::get(context, "operation_ref"),
@@ -432,17 +565,27 @@ buildCoverageManifest(ModuleOp module, ArrayRef<CandidateComponent> components,
   for (const CandidateComponent &component : components) {
     SmallVector<Attribute> refs;
     for (Operation *operation : component.operations) {
-      ArrayAttr operationRefs = operationSourceRefs(operation);
-      if (!operationRefs) {
-        operation->emitOpError("is missing structural source references");
+      LogicalResult nested =
+          walkSourcePreorder(operation, [&](Operation *sourceOperation) {
+            ArrayAttr operationRefs = operationSourceRefs(sourceOperation);
+            if (sourceOperation->getNumResults() != 0 && !operationRefs) {
+              sourceOperation->emitOpError(
+                  "is missing structural source references");
+              return failure();
+            }
+            if (operationRefs) {
+              for (Attribute ref : operationRefs) {
+                if (!selected.insert(ref).second) {
+                  module.emitError("a source result belongs to two regions");
+                  return failure();
+                }
+                refs.push_back(ref);
+              }
+            }
+            return success();
+          });
+      if (failed(nested)) {
         return failure();
-      }
-      for (Attribute ref : operationRefs) {
-        if (!selected.insert(ref).second) {
-          module.emitError("a source result belongs to two regions");
-          return failure();
-        }
-        refs.push_back(ref);
       }
     }
     selectedRegions.push_back(ArrayAttr::get(context, refs));
@@ -455,50 +598,60 @@ buildCoverageManifest(ModuleOp module, ArrayRef<CandidateComponent> components,
   for (func::FuncOp function : module.getOps<func::FuncOp>()) {
     auto functionOrdinal =
         function->getAttrOfType<IntegerAttr>(kFunctionOrdinalAttribute);
-    for (Block &block : function.getBody()) {
-      for (Operation &operation : block) {
-        if (operation.getNumResults() == 0) {
-          DictionaryAttr record = zeroResultRecord(&operation);
-          if (!record) {
-            operation.emitOpError(
-                "has an operand without a structural source anchor");
+    LogicalResult sourceWalk =
+        walkSourcePreorder(function.getBody(), [&](Operation *operation) {
+          if (operation->getNumResults() == 0) {
+            DictionaryAttr record = zeroResultRecord(operation);
+            if (!record) {
+              operation->emitOpError(
+                  "has an operand without a structural source anchor");
+              return failure();
+            }
+            zeroResultOperations.push_back(record);
+            return success();
+          }
+          ArrayAttr operationRefs = operationSourceRefs(operation);
+          if (!operationRefs) {
+            operation->emitOpError("is missing structural source references");
             return failure();
           }
-          zeroResultOperations.push_back(record);
-          continue;
-        }
-        ArrayAttr operationRefs = operationSourceRefs(&operation);
-        if (!operationRefs) {
-          operation.emitOpError("is missing structural source references");
-          return failure();
-        }
-        SmallVector<Attribute> operandAnchors;
-        for (Value operand : operation.getOperands()) {
-          Attribute anchor = valueAnchor(operand);
-          if (!anchor) {
-            operation.emitOpError(
-                "has an operand without a structural source anchor");
-            return failure();
+          SmallVector<Attribute> operandAnchors;
+          for (Value operand : operation->getOperands()) {
+            Attribute anchor = valueAnchor(operand);
+            if (!anchor) {
+              operation->emitOpError(
+                  "has an operand without a structural source anchor");
+              return failure();
+            }
+            operandAnchors.push_back(anchor);
           }
-          operandAnchors.push_back(anchor);
-        }
-        for (Attribute ref : operationRefs) {
-          complete.push_back(ref);
-          if (selected.contains(ref)) {
-            continue;
+          for (Attribute ref : operationRefs) {
+            complete.push_back(ref);
+            if (selected.contains(ref)) {
+              continue;
+            }
+            NamedAttribute fields[] = {
+                NamedAttribute(StringAttr::get(context, "fingerprint"),
+                               normalizedOperationFingerprint(operation)),
+                NamedAttribute(StringAttr::get(context, "operands"),
+                               ArrayAttr::get(context, operandAnchors)),
+                NamedAttribute(StringAttr::get(context, "source"), ref),
+                NamedAttribute(
+                    StringAttr::get(context, "reason"),
+                    StringAttr::get(
+                        context,
+                        operation->getParentOp() &&
+                                !isa<func::FuncOp>(operation->getParentOp()) &&
+                                operation->getParentOp()->getNumRegions() != 0
+                            ? "enclosing_region_excluded"
+                            : "unsupported_operation")),
+            };
+            excluded.push_back(DictionaryAttr::get(context, fields));
           }
-          NamedAttribute fields[] = {
-              NamedAttribute(StringAttr::get(context, "fingerprint"),
-                             normalizedOperationFingerprint(&operation)),
-              NamedAttribute(StringAttr::get(context, "operands"),
-                             ArrayAttr::get(context, operandAnchors)),
-              NamedAttribute(StringAttr::get(context, "source"), ref),
-              NamedAttribute(StringAttr::get(context, "reason"),
-                             StringAttr::get(context, "unsupported_operation")),
-          };
-          excluded.push_back(DictionaryAttr::get(context, fields));
-        }
-      }
+          return success();
+        });
+    if (failed(sourceWalk)) {
+      return failure();
     }
     auto returnOp = dyn_cast<func::ReturnOp>(function.getBody().front().back());
     if (!returnOp) {
@@ -526,7 +679,7 @@ buildCoverageManifest(ModuleOp module, ArrayRef<CandidateComponent> components,
   std::string tuningDigest = sha256(canonicalTuning);
   NamedAttribute fields[] = {
       NamedAttribute(StringAttr::get(context, "version"),
-                     IntegerAttr::get(IntegerType::get(context, 64), 1)),
+                     IntegerAttr::get(IntegerType::get(context, 64), 2)),
       NamedAttribute(StringAttr::get(context, "policy"),
                      StringAttr::get(context, policyName(numerics))),
       NamedAttribute(StringAttr::get(context, "policy_digest"),
@@ -560,6 +713,12 @@ void annotateRegion(Region &region, uint64_t functionOrdinal,
       Dialect *dialect = operation.getDialect();
       if (dialect == nullptr ||
           dialect->getNamespace() != ShuttleDialect::getDialectNamespace()) {
+        operation.setAttr(
+            kOperationRefAttribute,
+            DenseI64ArrayAttr::get(operation.getContext(),
+                                   {static_cast<int64_t>(functionOrdinal),
+                                    static_cast<int64_t>(blockOrdinal),
+                                    static_cast<int64_t>(operationOrdinal)}));
         SmallVector<Attribute> sourceRefs;
         sourceRefs.reserve(operation.getNumResults());
         for (uint64_t resultOrdinal = 0;
@@ -571,13 +730,6 @@ void annotateRegion(Region &region, uint64_t functionOrdinal,
         if (!sourceRefs.empty()) {
           operation.setAttr(kSourceRefsAttribute,
                             ArrayAttr::get(operation.getContext(), sourceRefs));
-        } else {
-          operation.setAttr(
-              kOperationRefAttribute,
-              DenseI64ArrayAttr::get(operation.getContext(),
-                                     {static_cast<int64_t>(functionOrdinal),
-                                      static_cast<int64_t>(blockOrdinal),
-                                      static_cast<int64_t>(operationOrdinal)}));
         }
       }
       for (Region &nested : operation.getRegions()) {
@@ -632,14 +784,6 @@ struct FormStructuralRegionsPass
         signalPassFailure();
         return;
       }
-      for (Operation &operation : function.getBody().front()) {
-        if (operation.getNumRegions() != 0) {
-          operation.emitOpError(
-              "the first offline slice requires region-free source operations");
-          signalPassFailure();
-          return;
-        }
-      }
     }
 
     SmallVector<CandidateComponent> components = candidateComponents(module);
@@ -689,13 +833,24 @@ private:
 
     SmallVector<Attribute> declaredSources;
     for (Operation *operation : component.operations) {
-      ArrayAttr refs = operationSourceRefs(operation);
-      if (!refs) {
-        return operation->emitOpError(
-            "is missing structural source references");
+      LogicalResult nested =
+          walkSourcePreorder(operation, [&](Operation *sourceOperation) {
+            ArrayAttr refs = operationSourceRefs(sourceOperation);
+            if (sourceOperation->getNumResults() != 0 && !refs) {
+              sourceOperation->emitOpError(
+                  "is missing structural source references");
+              return failure();
+            }
+            if (refs) {
+              llvm::append_range(declaredSources, refs);
+              sourceOperation->setAttr(kSelectedAttribute,
+                                       UnitAttr::get(context));
+            }
+            return success();
+          });
+      if (failed(nested)) {
+        return failure();
       }
-      llvm::append_range(declaredSources, refs);
-      operation->setAttr(kSelectedAttribute, UnitAttr::get(context));
     }
     SmallVector<Attribute> outputSources;
     for (Value output : outputs) {
@@ -932,9 +1087,8 @@ Operation *createScalarOperation(OpBuilder &builder, Operation *operation,
             ? ScalarConvertSemantics::RoundNearestEven
             : ScalarConvertSemantics::Exact;
     state.addTypes(result);
-    state.addAttribute(
-        "semantics",
-        ScalarConvertSemanticsAttr::get(operation->getContext(), semantics));
+    state.addAttribute("semantics", ScalarConvertSemanticsAttr::get(
+                                        operation->getContext(), semantics));
     return builder.create(state);
   } else if (stablehloName == stablehlo::ConstantOp::getOperationName()) {
     auto value = operation->getAttrOfType<DenseElementsAttr>("value");
@@ -1048,6 +1202,68 @@ LogicalResult convertContractOperation(Operation *operation) {
   return success();
 }
 
+LogicalResult convertReduceOperation(Operation *operation) {
+  if (!isSupportedStablehloReduce(operation)) {
+    return operation->emitOpError(
+        "is outside the first Fold conversion contract");
+  }
+  SourceRefAttr source = singleSourceRef(operation);
+  auto ownerRef =
+      operation->getAttrOfType<DenseI64ArrayAttr>(kOperationRefAttribute);
+  if (!source || !ownerRef) {
+    return operation->emitOpError(
+        "requires one result source and one owner operation reference");
+  }
+  Block &sourceBody = operation->getRegion(0).front();
+  Operation &sourceAdd = sourceBody.front();
+  Operation &sourceReturn = sourceBody.back();
+  ArrayAttr addRefs = sourceRefs(&sourceAdd);
+  auto addOwner =
+      sourceAdd.getAttrOfType<DenseI64ArrayAttr>(kOperationRefAttribute);
+  auto returnOwner =
+      sourceReturn.getAttrOfType<DenseI64ArrayAttr>(kOperationRefAttribute);
+  if (!addRefs || addRefs.size() != 1 || !addOwner || !returnOwner) {
+    return operation->emitOpError("has incomplete nested reducer provenance");
+  }
+
+  OpBuilder builder(operation);
+  OperationState state(operation->getLoc(), FoldOp::getOperationName());
+  state.addOperands(operation->getOperands());
+  state.addTypes(operation->getResultTypes());
+  state.addAttribute("operandSegmentSizes",
+                     DenseI32ArrayAttr::get(operation->getContext(), {1, 1}));
+  state.addAttribute("reduction_dimensions", operation->getAttr("dimensions"));
+  state.addAttribute("accumulator_types",
+                     ArrayAttr::get(operation->getContext(),
+                                    {TypeAttr::get(builder.getF32Type())}));
+  state.addAttribute("order_free", builder.getBoolAttr(true));
+  state.addAttribute("source", source);
+  state.addAttribute(kOperationRefAttribute, ownerRef);
+  state.addRegion();
+  auto fold = cast<FoldOp>(builder.create(state));
+
+  Block *body = new Block();
+  fold.getCombiner().push_back(body);
+  body->addArgument(builder.getF32Type(), sourceBody.getArgument(0).getLoc());
+  body->addArgument(builder.getF32Type(), sourceBody.getArgument(1).getLoc());
+  builder.setInsertionPointToEnd(body);
+  OperationState addState(sourceAdd.getLoc(),
+                          arith::AddFOp::getOperationName());
+  addState.addOperands(body->getArguments());
+  addState.addTypes(builder.getF32Type());
+  addState.addAttribute(kSourceRefsAttribute, addRefs);
+  addState.addAttribute(kOperationRefAttribute, addOwner);
+  Operation *add = builder.create(addState);
+  OperationState yieldState(sourceReturn.getLoc(), YieldOp::getOperationName());
+  yieldState.addOperands(add->getResult(0));
+  yieldState.addAttribute(kOperationRefAttribute, returnOwner);
+  builder.create(yieldState);
+
+  operation->getResult(0).replaceAllUsesWith(fold.getResult(0));
+  operation->erase();
+  return success();
+}
+
 struct ConvertStablehloToAlgebraPass
     : impl::ShuttleConvertStablehloToAlgebraPassBase<
           ConvertStablehloToAlgebraPass> {
@@ -1070,7 +1286,9 @@ struct ConvertStablehloToAlgebraPass
       for (Operation *operation : sourceOperations) {
         StringRef name = operation->getName().getStringRef();
         LogicalResult result =
-            name == stablehlo::DotGeneralOp::getOperationName()
+            name == stablehlo::ReduceOp::getOperationName()
+                ? convertReduceOperation(operation)
+            : name == stablehlo::DotGeneralOp::getOperationName()
                 ? convertContractOperation(operation)
                 : convertMapOperation(operation);
         if (failed(result)) {
@@ -1104,6 +1322,19 @@ LogicalResult verifyRegionLocalCoverage(ModuleOp module) {
         source = contract.getSource();
       } else if (auto fold = dyn_cast<FoldOp>(operation)) {
         source = fold.getSource();
+      } else if (operation->getParentOfType<FoldOp>()) {
+        ArrayAttr refs = sourceRefs(operation);
+        if (!refs) {
+          return WalkResult::advance();
+        }
+        for (Attribute nestedSource : refs) {
+          if (!declaredSources.contains(nestedSource) ||
+              !representedSources.insert(nestedSource).second) {
+            operation->emitOpError("has invalid nested Fold source coverage");
+            return WalkResult::interrupt();
+          }
+        }
+        return WalkResult::advance();
       } else {
         return WalkResult::advance();
       }
@@ -1112,7 +1343,10 @@ LogicalResult verifyRegionLocalCoverage(ModuleOp module) {
             "source reference is absent from the enclosing shuttle.region");
         return WalkResult::interrupt();
       }
-      representedSources.insert(source);
+      if (!representedSources.insert(source).second) {
+        operation->emitOpError("duplicates region-local source coverage");
+        return WalkResult::interrupt();
+      }
       return WalkResult::advance();
     });
     if (nestedResult.wasInterrupted()) {
@@ -1179,7 +1413,9 @@ excludedManifestSources(DictionaryAttr manifest) {
     auto source =
         record ? record.getAs<SourceRefAttr>("source") : SourceRefAttr{};
     auto reason = record ? record.getAs<StringAttr>("reason") : StringAttr{};
-    if (!source || !reason || reason.getValue() != "unsupported_operation" ||
+    if (!source || !reason ||
+        (reason.getValue() != "unsupported_operation" &&
+         reason.getValue() != "enclosing_region_excluded") ||
         !excluded.insert(source).second) {
       return failure();
     }
@@ -1206,36 +1442,43 @@ FailureOr<ArrayAttr> currentExcludedRecords(ModuleOp module,
 
   SmallVector<Attribute> records;
   for (func::FuncOp function : module.getOps<func::FuncOp>()) {
-    for (Operation &operation : function.getBody().front()) {
-      ArrayAttr refs = sourceRefs(&operation);
-      if (!refs) {
-        continue;
-      }
-      SmallVector<Attribute> operandAnchors;
-      for (Value operand : operation.getOperands()) {
-        Attribute anchor = valueAnchor(operand);
-        if (!anchor) {
-          return failure();
-        }
-        operandAnchors.push_back(anchor);
-      }
-      for (Attribute source : refs) {
-        auto reason = reasons.find(source);
-        if (reason == reasons.end()) {
-          continue;
-        }
-        NamedAttribute fields[] = {
-            NamedAttribute(StringAttr::get(module.getContext(), "fingerprint"),
-                           normalizedOperationFingerprint(&operation)),
-            NamedAttribute(StringAttr::get(module.getContext(), "operands"),
-                           ArrayAttr::get(module.getContext(), operandAnchors)),
-            NamedAttribute(StringAttr::get(module.getContext(), "source"),
-                           source),
-            NamedAttribute(StringAttr::get(module.getContext(), "reason"),
-                           reason->second),
-        };
-        records.push_back(DictionaryAttr::get(module.getContext(), fields));
-      }
+    LogicalResult walk =
+        walkSourcePreorder(function.getBody(), [&](Operation *operation) {
+          ArrayAttr refs = sourceRefs(operation);
+          if (!refs) {
+            return success();
+          }
+          SmallVector<Attribute> operandAnchors;
+          for (Value operand : operation->getOperands()) {
+            Attribute anchor = valueAnchor(operand);
+            if (!anchor) {
+              return failure();
+            }
+            operandAnchors.push_back(anchor);
+          }
+          for (Attribute source : refs) {
+            auto reason = reasons.find(source);
+            if (reason == reasons.end()) {
+              continue;
+            }
+            NamedAttribute fields[] = {
+                NamedAttribute(
+                    StringAttr::get(module.getContext(), "fingerprint"),
+                    normalizedOperationFingerprint(operation)),
+                NamedAttribute(
+                    StringAttr::get(module.getContext(), "operands"),
+                    ArrayAttr::get(module.getContext(), operandAnchors)),
+                NamedAttribute(StringAttr::get(module.getContext(), "source"),
+                               source),
+                NamedAttribute(StringAttr::get(module.getContext(), "reason"),
+                               reason->second),
+            };
+            records.push_back(DictionaryAttr::get(module.getContext(), fields));
+          }
+          return success();
+        });
+    if (failed(walk)) {
+      return failure();
     }
   }
   return ArrayAttr::get(module.getContext(), records);
@@ -1244,17 +1487,21 @@ FailureOr<ArrayAttr> currentExcludedRecords(ModuleOp module,
 FailureOr<ArrayAttr> currentZeroResultRecords(ModuleOp module) {
   SmallVector<Attribute> records;
   for (func::FuncOp function : module.getOps<func::FuncOp>()) {
-    for (Block &block : function.getBody()) {
-      for (Operation &operation : block) {
-        if (operation.getNumResults() != 0) {
-          continue;
-        }
-        DictionaryAttr record = zeroResultRecord(&operation);
-        if (!record) {
-          return failure();
-        }
-        records.push_back(record);
-      }
+    LogicalResult walk =
+        walkSourcePreorder(function.getBody(), [&](Operation *operation) {
+          if (operation->getNumResults() != 0 ||
+              !operation->hasAttr(kOperationRefAttribute)) {
+            return success();
+          }
+          DictionaryAttr record = zeroResultRecord(operation);
+          if (!record) {
+            return failure();
+          }
+          records.push_back(record);
+          return success();
+        });
+    if (failed(walk)) {
+      return failure();
     }
   }
   return ArrayAttr::get(module.getContext(), records);
@@ -1293,7 +1540,46 @@ FailureOr<ArrayAttr> currentFunctionResultRecords(ModuleOp module) {
   return ArrayAttr::get(module.getContext(), records);
 }
 
+bool zeroResultRecordsMatch(ArrayAttr current, ArrayAttr expected) {
+  if (!current || !expected || current.size() != expected.size()) {
+    return false;
+  }
+  for (auto [currentAttribute, expectedAttribute] :
+       llvm::zip_equal(current, expected)) {
+    auto currentRecord = dyn_cast<DictionaryAttr>(currentAttribute);
+    auto expectedRecord = dyn_cast<DictionaryAttr>(expectedAttribute);
+    if (!currentRecord || !expectedRecord ||
+        currentRecord.get("classification") !=
+            expectedRecord.get("classification") ||
+        currentRecord.get("operation_ref") !=
+            expectedRecord.get("operation_ref") ||
+        currentRecord.get("operands") != expectedRecord.get("operands")) {
+      return false;
+    }
+    if (currentRecord.get("fingerprint") == expectedRecord.get("fingerprint")) {
+      continue;
+    }
+    auto currentFingerprint =
+        currentRecord.getAs<DictionaryAttr>("fingerprint");
+    auto expectedFingerprint =
+        expectedRecord.getAs<DictionaryAttr>("fingerprint");
+    auto currentName = currentFingerprint
+                           ? currentFingerprint.getAs<StringAttr>("name")
+                           : StringAttr{};
+    auto expectedName = expectedFingerprint
+                            ? expectedFingerprint.getAs<StringAttr>("name")
+                            : StringAttr{};
+    if (!currentName || !expectedName ||
+        currentName.getValue() != YieldOp::getOperationName() ||
+        expectedName.getValue() != stablehlo::ReturnOp::getOperationName()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 LogicalResult verifyManifestCoverage(ModuleOp module, DictionaryAttr manifest) {
+  auto version = manifest.getAs<IntegerAttr>("version");
   auto completeArray = manifest.getAs<ArrayAttr>(kManifestComplete);
   auto selectedGroups = manifest.getAs<ArrayAttr>(kManifestSelectedRegions);
   auto policy = manifest.getAs<StringAttr>("policy");
@@ -1305,9 +1591,9 @@ LogicalResult verifyManifestCoverage(ModuleOp module, DictionaryAttr manifest) {
       selectedManifestSources(manifest);
   FailureOr<llvm::SmallDenseSet<Attribute>> excluded =
       excludedManifestSources(manifest);
-  if (!completeArray || !selectedGroups || !policy || !policyDigest ||
-      !canonicalOptions || !canonicalTuning || !tuningDigest ||
-      failed(selected) || failed(excluded)) {
+  if (!version || version.getInt() != 2 || !completeArray || !selectedGroups ||
+      !policy || !policyDigest || !canonicalOptions || !canonicalTuning ||
+      !tuningDigest || failed(selected) || failed(excluded)) {
     return module.emitError("has a malformed Shuttle coverage manifest");
   }
   std::string policyPrefix = "{\"numerics\":\"";
@@ -1337,6 +1623,25 @@ LogicalResult verifyManifestCoverage(ModuleOp module, DictionaryAttr manifest) {
   if (!sameAttributeSet(partition, complete)) {
     return module.emitError(
         "coverage manifest is not a total source-result partition");
+  }
+
+  llvm::SmallDenseSet<Attribute> operationRefs;
+  WalkResult operationRefWalk = module.walk([&](Operation *operation) {
+    Attribute operationRef = operation->getAttr(kOperationRefAttribute);
+    if (!operationRef) {
+      return WalkResult::advance();
+    }
+    auto denseOperationRef = dyn_cast<DenseI64ArrayAttr>(operationRef);
+    if (!denseOperationRef || denseOperationRef.size() != 3 ||
+        !operationRefs.insert(operationRef).second) {
+      operation->emitOpError(
+          "has a missing-format or duplicate operation reference");
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  if (operationRefWalk.wasInterrupted()) {
+    return failure();
   }
 
   const bool algebraStage = !module.getOps<func::FuncOp>().empty() && [&]() {
@@ -1395,6 +1700,20 @@ LogicalResult verifyManifestCoverage(ModuleOp module, DictionaryAttr manifest) {
       return recordSelected(operation, contract.getSource());
     }
     if (auto fold = dyn_cast<FoldOp>(operation)) {
+      auto owner =
+          fold->getAttrOfType<DenseI64ArrayAttr>(kOperationRefAttribute);
+      if (!owner) {
+        fold.emitOpError("requires Reduce owner operation provenance");
+        return WalkResult::interrupt();
+      }
+      for (BlockArgument argument : fold.getCombiner().front().getArguments()) {
+        auto anchor = dyn_cast_or_null<DictionaryAttr>(valueAnchor(argument));
+        if (!anchor || anchor.get("owner") != owner) {
+          fold.emitOpError(
+              "has a combiner argument without its Reduce owner anchor");
+          return WalkResult::interrupt();
+        }
+      }
       return recordSelected(operation, fold.getSource());
     }
     ArrayAttr refs = sourceRefs(operation);
@@ -1404,9 +1723,16 @@ LogicalResult verifyManifestCoverage(ModuleOp module, DictionaryAttr manifest) {
     for (Attribute source : refs) {
       if (selected->contains(source)) {
         if (algebraStage) {
-          operation->emitOpError(
-              "selected source operation survived algebra conversion");
-          return WalkResult::interrupt();
+          if (!operation->getParentOfType<FoldOp>()) {
+            operation->emitOpError(
+                "selected source operation survived algebra conversion");
+            return WalkResult::interrupt();
+          }
+          if (!representedSelected.insert(source).second) {
+            operation->emitOpError("duplicates selected source coverage");
+            return WalkResult::interrupt();
+          }
+          continue;
         }
         if (!representedSelected.insert(source).second) {
           operation->emitOpError("duplicates selected source coverage");
@@ -1445,8 +1771,9 @@ LogicalResult verifyManifestCoverage(ModuleOp module, DictionaryAttr manifest) {
   FailureOr<ArrayAttr> functionResultRecords =
       currentFunctionResultRecords(module);
   if (failed(zeroResultRecords) || failed(functionResultRecords) ||
-      *zeroResultRecords !=
-          manifest.getAs<ArrayAttr>(kManifestZeroResultOperations) ||
+      !zeroResultRecordsMatch(
+          *zeroResultRecords,
+          manifest.getAs<ArrayAttr>(kManifestZeroResultOperations)) ||
       *functionResultRecords !=
           manifest.getAs<ArrayAttr>(kManifestFunctionResults)) {
     return module.emitError(
@@ -1579,9 +1906,8 @@ FailureOr<OperationState> lowerMapState(MapOp map, ValueRange operands) {
         dimensions.push_back(position);
       }
       stablehloName = stablehlo::BroadcastInDimOp::getOperationName();
-      attributes.append(
-          "broadcast_dimensions",
-          DenseI64ArrayAttr::get(map.getContext(), dimensions));
+      attributes.append("broadcast_dimensions",
+                        DenseI64ArrayAttr::get(map.getContext(), dimensions));
     } else {
       if (inputMap.getNumResults() != resultMap.getNumResults()) {
         map.emitOpError("has incompatible transpose indexing maps");
@@ -1679,8 +2005,7 @@ FailureOr<OperationState> lowerMapState(MapOp map, ValueRange operands) {
           (inputType.isBF16() && resultType.isF32() &&
            convert.getSemantics() == ScalarConvertSemantics::Exact) ||
           (inputType.isF32() && resultType.isBF16() &&
-           convert.getSemantics() ==
-               ScalarConvertSemantics::RoundNearestEven);
+           convert.getSemantics() == ScalarConvertSemantics::RoundNearestEven);
       if (!validSemantics) {
         convert.emitOpError("has semantics with no StableHLO conversion");
         return failure();
@@ -1689,8 +2014,7 @@ FailureOr<OperationState> lowerMapState(MapOp map, ValueRange operands) {
     } else if (auto constant = dyn_cast<arith::ConstantOp>(scalar);
                constant && operands.empty()) {
       auto value = dyn_cast<FloatAttr>(constant.getValue());
-      auto resultType =
-          dyn_cast<RankedTensorType>(map.getResult(0).getType());
+      auto resultType = dyn_cast<RankedTensorType>(map.getResult(0).getType());
       if (!value || !resultType || resultType.getRank() != 0 ||
           value.getType() != resultType.getElementType()) {
         constant.emitOpError("has no rank-zero StableHLO constant lowering");
@@ -1830,6 +2154,83 @@ FailureOr<OperationState> lowerContractState(ContractOp contract,
   return state;
 }
 
+FailureOr<Operation *> lowerFold(OpBuilder &builder, FoldOp fold,
+                                 ValueRange operands) {
+  if (!fold.getOrderFree()) {
+    fold.emitOpError(
+        "order_free=false has no lossless StableHLO Reduce lowering");
+    return failure();
+  }
+  if (operands.size() != 2 || fold.getInputs().size() != 1 ||
+      fold.getInitializers().size() != 1 || fold.getNumResults() != 1 ||
+      fold.getCombiner().empty()) {
+    fold.emitOpError("is outside the first Fold lowering contract");
+    return failure();
+  }
+  Block &body = fold.getCombiner().front();
+  if (body.getNumArguments() != 2 || body.getOperations().size() != 2) {
+    fold.emitOpError("requires exactly one scalar add and one yield");
+    return failure();
+  }
+  auto add = dyn_cast<arith::AddFOp>(body.front());
+  auto yield = dyn_cast<YieldOp>(body.back());
+  auto fastMath = add ? add->getAttrOfType<arith::FastMathFlagsAttr>("fastmath")
+                      : arith::FastMathFlagsAttr{};
+  if (!add || !yield || add.getLhs() != body.getArgument(0) ||
+      add.getRhs() != body.getArgument(1) || yield.getValues().size() != 1 ||
+      yield.getValues()[0] != add.getResult() ||
+      !body.getArgument(0).getType().isF32() ||
+      !body.getArgument(1).getType().isF32() ||
+      (fastMath && fastMath.getValue() != arith::FastMathFlags::none) ||
+      llvm::any_of(add->getAttrs(), [](NamedAttribute attribute) {
+        StringRef name = attribute.getName().strref();
+        return name != "fastmath" && name != kSourceRefsAttribute &&
+               name != kOperationRefAttribute;
+      })) {
+    fold.emitOpError("requires the closed ordered scalar f32 add combiner");
+    return failure();
+  }
+  ArrayAttr addRefs = sourceRefs(add);
+  auto foldOwner =
+      fold->getAttrOfType<DenseI64ArrayAttr>(kOperationRefAttribute);
+  auto addOwner = add->getAttrOfType<DenseI64ArrayAttr>(kOperationRefAttribute);
+  auto yieldOwner =
+      yield->getAttrOfType<DenseI64ArrayAttr>(kOperationRefAttribute);
+  if (!addRefs || addRefs.size() != 1 || !foldOwner || !addOwner ||
+      !yieldOwner) {
+    fold.emitOpError("has incomplete Fold source provenance");
+    return failure();
+  }
+
+  OperationState state(fold.getLoc(), stablehlo::ReduceOp::getOperationName());
+  state.addOperands(operands);
+  state.addTypes(fold.getResultTypes());
+  state.addAttribute("dimensions", fold.getReductionDimensionsAttr());
+  state.addAttribute(kSourceRefsAttribute,
+                     ArrayAttr::get(fold.getContext(), {fold.getSource()}));
+  state.addAttribute(kOperationRefAttribute, foldOwner);
+  state.addRegion();
+  Operation *reduce = builder.create(state);
+  Block *reducer = new Block();
+  reduce->getRegion(0).push_back(reducer);
+  auto scalarTensor = RankedTensorType::get({}, builder.getF32Type());
+  reducer->addArgument(scalarTensor, body.getArgument(0).getLoc());
+  reducer->addArgument(scalarTensor, body.getArgument(1).getLoc());
+  OpBuilder reducerBuilder = OpBuilder::atBlockEnd(reducer);
+  OperationState addState(add.getLoc(), stablehlo::AddOp::getOperationName());
+  addState.addOperands(reducer->getArguments());
+  addState.addTypes(scalarTensor);
+  addState.addAttribute(kSourceRefsAttribute, addRefs);
+  addState.addAttribute(kOperationRefAttribute, addOwner);
+  Operation *loweredAdd = reducerBuilder.create(addState);
+  OperationState returnState(yield.getLoc(),
+                             stablehlo::ReturnOp::getOperationName());
+  returnState.addOperands(loweredAdd->getResult(0));
+  returnState.addAttribute(kOperationRefAttribute, yieldOwner);
+  reducerBuilder.create(returnState);
+  return reduce;
+}
+
 LogicalResult lowerRegion(RegionOp region) {
   OpBuilder builder(region);
   IRMapping mapping;
@@ -1855,6 +2256,17 @@ LogicalResult lowerRegion(RegionOp region) {
     }
     Attribute source;
     FailureOr<OperationState> state = failure();
+    if (auto fold = dyn_cast<FoldOp>(operation)) {
+      FailureOr<Operation *> lowered = lowerFold(builder, fold, operands);
+      if (failed(lowered)) {
+        return failure();
+      }
+      for (auto [result, loweredResult] :
+           llvm::zip_equal(operation.getResults(), (*lowered)->getResults())) {
+        mapping.map(result, loweredResult);
+      }
+      continue;
+    }
     if (auto map = dyn_cast<MapOp>(operation)) {
       source = map.getSource();
       state = lowerMapState(map, operands);
@@ -1988,41 +2400,61 @@ std::string normalizedModuleFingerprintImpl(ModuleOp module) {
     for (BlockArgument argument : function.getArguments()) {
       values.try_emplace(argument, nextValue++);
     }
+    std::function<void(Operation &)> printOperation =
+        [&](Operation &operation) {
+          stream << operation.getName() << '(';
+          for (Value operand : operation.getOperands()) {
+            auto position = values.find(operand);
+            if (position == values.end()) {
+              stream << "missing";
+            } else {
+              stream << position->second;
+            }
+            stream << ',';
+          }
+          stream << ")->(";
+          for (Type type : operation.getResultTypes()) {
+            type.print(stream);
+            stream << ',';
+          }
+          stream << "){";
+          for (NamedAttribute attribute : operation.getAttrs()) {
+            StringRef name = attribute.getName().strref();
+            if (name == SymbolTable::getSymbolAttrName() ||
+                name == kSourceRefsAttribute || name == kSelectedAttribute ||
+                name == kFunctionOrdinalAttribute ||
+                name == kOperationRefAttribute ||
+                name == kCoverageManifestAttribute ||
+                name == kRegionResultSourcesAttribute) {
+              continue;
+            }
+            stream << name << '=';
+            attribute.getValue().print(stream);
+            stream << ',';
+          }
+          stream << "}\n";
+          for (Value result : operation.getResults()) {
+            values.try_emplace(result, nextValue++);
+          }
+          for (auto [regionOrdinal, region] :
+               llvm::enumerate(operation.getRegions())) {
+            stream << "region:" << regionOrdinal << '\n';
+            for (auto [blockOrdinal, block] : llvm::enumerate(region)) {
+              stream << "block:" << blockOrdinal << '(';
+              for (BlockArgument argument : block.getArguments()) {
+                argument.getType().print(stream);
+                stream << ':' << nextValue << ',';
+                values.try_emplace(argument, nextValue++);
+              }
+              stream << ")\n";
+              for (Operation &nested : block) {
+                printOperation(nested);
+              }
+            }
+          }
+        };
     for (Operation &operation : function.getBody().front()) {
-      stream << operation.getName() << '(';
-      for (Value operand : operation.getOperands()) {
-        auto position = values.find(operand);
-        if (position == values.end()) {
-          stream << "missing";
-        } else {
-          stream << position->second;
-        }
-        stream << ',';
-      }
-      stream << ")->(";
-      for (Type type : operation.getResultTypes()) {
-        type.print(stream);
-        stream << ',';
-      }
-      stream << "){";
-      for (NamedAttribute attribute : operation.getAttrs()) {
-        StringRef name = attribute.getName().strref();
-        if (name == SymbolTable::getSymbolAttrName() ||
-            name == kSourceRefsAttribute || name == kSelectedAttribute ||
-            name == kFunctionOrdinalAttribute ||
-            name == kOperationRefAttribute ||
-            name == kCoverageManifestAttribute ||
-            name == kRegionResultSourcesAttribute) {
-          continue;
-        }
-        stream << name << '=';
-        attribute.getValue().print(stream);
-        stream << ',';
-      }
-      stream << "}\n";
-      for (Value result : operation.getResults()) {
-        values.try_emplace(result, nextValue++);
-      }
+      printOperation(operation);
     }
   }
   stream.flush();

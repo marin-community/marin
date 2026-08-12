@@ -30,7 +30,7 @@ module {
         indexing_maps = [#identity, #identity],
         source = #shuttle.source_ref<0, 0, 1, 0>
       } : (tensor<2x4xf32>) -> tensor<2x4xf32>
-      %zero = arith.constant 0.0 : f32
+      %zero = arith.constant dense<0.0> : tensor<f32>
       %folded = "shuttle.fold"(%mapped, %zero) ({
       ^bb0(%left: f32, %right: f32):
         %sum = arith.addf %left, %right : f32
@@ -41,7 +41,7 @@ module {
         order_free = false,
         reduction_dimensions = array<i64: 1>,
         source = #shuttle.source_ref<0, 0, 2, 0>
-      } : (tensor<2x4xf32>, f32) -> tensor<2xf32>
+      } : (tensor<2x4xf32>, tensor<f32>) -> tensor<2xf32>
       "shuttle.yield"(%folded) : (tensor<2xf32>) -> ()
     }) {
       policy = #shuttle.policy<source_ordered>,

@@ -57,7 +57,7 @@ module {
   func.func @fold_shaped(%arg: tensor<2x4xf32>) -> tensor<2xf32> {
     %result = "shuttle.region"(%arg) ({
     ^bb0(%region_arg: tensor<2x4xf32>):
-      %zero = arith.constant 0.0 : f32
+      %zero = arith.constant dense<0.0> : tensor<f32>
       // expected-error @+1 {{scalar body operations must not use shaped values}}
       %folded = "shuttle.fold"(%region_arg, %zero) ({
       ^bb0(%left: f32, %right: f32):
@@ -70,7 +70,7 @@ module {
         order_free = false,
         reduction_dimensions = array<i64: 1>,
         source = #shuttle.source_ref<0, 0, 0, 0>
-      } : (tensor<2x4xf32>, f32) -> tensor<2xf32>
+      } : (tensor<2x4xf32>, tensor<f32>) -> tensor<2xf32>
       "shuttle.yield"(%folded) : (tensor<2xf32>) -> ()
     }) {
       policy = #shuttle.policy<source_ordered>,

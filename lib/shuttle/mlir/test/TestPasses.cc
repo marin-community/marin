@@ -3,6 +3,7 @@
 
 #include "TestPasses.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -23,6 +24,7 @@ namespace {
 
 constexpr llvm::StringLiteral kManifest = "shuttle.coverage_manifest";
 constexpr llvm::StringLiteral kSourceRefs = "shuttle.source_refs";
+constexpr llvm::StringLiteral kOperationRef = "shuttle.operation_ref";
 
 llvm::SmallDenseSet<Attribute> excludedSources(ModuleOp module) {
   llvm::SmallDenseSet<Attribute> sources;
@@ -231,6 +233,188 @@ public:
   }
 };
 
+template <typename Derived>
+class FoldMutationPass : public MutationPass<Derived> {
+protected:
+  FoldOp fold() {
+    FoldOp result;
+    this->getOperation().walk([&](FoldOp candidate) {
+      if (!result) {
+        result = candidate;
+      }
+    });
+    if (!result) {
+      this->getOperation().emitError("test fixture has no shuttle.fold");
+      this->signalPassFailure();
+    }
+    return result;
+  }
+};
+
+class FoldOwnerPass : public FoldMutationPass<FoldOwnerPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldOwnerPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-remove-fold-owner-ref";
+  }
+  void runOnOperation() override {
+    if (FoldOp operation = fold()) {
+      operation->removeAttr(kOperationRef);
+    }
+  }
+};
+
+class FoldAddSourcePass : public FoldMutationPass<FoldAddSourcePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldAddSourcePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-remove-fold-add-source";
+  }
+  void runOnOperation() override {
+    FoldOp operation = fold();
+    if (operation) {
+      operation.getCombiner().walk(
+          [&](arith::AddFOp add) { add->removeAttr(kSourceRefs); });
+    }
+  }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<arith::ArithDialect>();
+  }
+};
+
+class FoldAddDuplicateSourcePass
+    : public FoldMutationPass<FoldAddDuplicateSourcePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldAddDuplicateSourcePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-duplicate-fold-add-source";
+  }
+  void runOnOperation() override {
+    FoldOp operation = fold();
+    if (operation) {
+      operation.getCombiner().walk([&](arith::AddFOp add) {
+        add->setAttr(kSourceRefs,
+                     ArrayAttr::get(add.getContext(), {operation.getSource()}));
+      });
+    }
+  }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<arith::ArithDialect>();
+  }
+};
+
+class FoldYieldOwnerPass : public FoldMutationPass<FoldYieldOwnerPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldYieldOwnerPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-remove-fold-yield-ref";
+  }
+  void runOnOperation() override {
+    if (FoldOp operation = fold()) {
+      operation.getCombiner().front().getTerminator()->removeAttr(
+          kOperationRef);
+    }
+  }
+};
+
+class FoldOwnerDuplicatePass : public FoldMutationPass<FoldOwnerDuplicatePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldOwnerDuplicatePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-duplicate-fold-owner-ref";
+  }
+  void runOnOperation() override {
+    FoldOp operation = fold();
+    if (!operation) {
+      return;
+    }
+    Attribute owner = operation->getAttr(kOperationRef);
+    operation.getCombiner().walk(
+        [&](arith::AddFOp add) { add->setAttr(kOperationRef, owner); });
+  }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<arith::ArithDialect>();
+  }
+};
+
+class FoldYieldRewirePass : public FoldMutationPass<FoldYieldRewirePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldYieldRewirePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-rewire-fold-yield";
+  }
+  void runOnOperation() override {
+    if (FoldOp operation = fold()) {
+      auto yield = cast<YieldOp>(operation.getCombiner().front().back());
+      yield.getValuesMutable().assign(
+          operation.getCombiner().front().getArgument(0));
+    }
+  }
+};
+
+class FoldAddFastMathPass : public FoldMutationPass<FoldAddFastMathPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldAddFastMathPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-add-fold-fastmath";
+  }
+  void runOnOperation() override {
+    FoldOp operation = fold();
+    if (operation) {
+      operation.getCombiner().walk([&](arith::AddFOp add) {
+        add.setFastmathAttr(arith::FastMathFlagsAttr::get(
+            add.getContext(), arith::FastMathFlags::fast));
+      });
+    }
+  }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<arith::ArithDialect>();
+  }
+};
+
+class ManifestVersionPass : public MutationPass<ManifestVersionPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ManifestVersionPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-downgrade-manifest-version";
+  }
+  void runOnOperation() override {
+    auto manifest = getOperation()->getAttrOfType<DictionaryAttr>(kManifest);
+    if (!manifest) {
+      getOperation().emitError("test fixture has no coverage manifest");
+      signalPassFailure();
+      return;
+    }
+    NamedAttrList fields(manifest);
+    fields.set(
+        "version",
+        IntegerAttr::get(IntegerType::get(getOperation().getContext(), 64), 1));
+    getOperation()->setAttr(
+        kManifest, DictionaryAttr::get(getOperation().getContext(), fields));
+  }
+};
+
+class ManifestVersionMissingPass
+    : public MutationPass<ManifestVersionMissingPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ManifestVersionMissingPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-remove-manifest-version";
+  }
+  void runOnOperation() override {
+    auto manifest = getOperation()->getAttrOfType<DictionaryAttr>(kManifest);
+    if (!manifest) {
+      getOperation().emitError("test fixture has no coverage manifest");
+      signalPassFailure();
+      return;
+    }
+    NamedAttrList fields(manifest);
+    fields.erase("version");
+    getOperation()->setAttr(
+        kManifest, DictionaryAttr::get(getOperation().getContext(), fields));
+  }
+};
+
 class ReportNormalizedFingerprintPass
     : public MutationPass<ReportNormalizedFingerprintPass> {
 public:
@@ -255,6 +439,15 @@ void registerMutationPasses() {
   PassRegistration<UnsupportedAbsorptionPass>();
   PassRegistration<ReturnRewirePass>();
   PassRegistration<ManifestDigestPass>();
+  PassRegistration<FoldOwnerPass>();
+  PassRegistration<FoldAddSourcePass>();
+  PassRegistration<FoldAddDuplicateSourcePass>();
+  PassRegistration<FoldYieldOwnerPass>();
+  PassRegistration<FoldOwnerDuplicatePass>();
+  PassRegistration<FoldYieldRewirePass>();
+  PassRegistration<FoldAddFastMathPass>();
+  PassRegistration<ManifestVersionPass>();
+  PassRegistration<ManifestVersionMissingPass>();
   PassRegistration<ReportNormalizedFingerprintPass>();
 }
 

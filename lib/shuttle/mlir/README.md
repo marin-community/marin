@@ -1,11 +1,12 @@
 # Native Shuttle MLIR slice
 
 This directory implements the bounded native compiler-unit slice for generic
-f32/BF16 Contract and scalar Map graphs. `shuttle-opt` partitions typed StableHLO,
-converts selected regions to Shuttle algebra, checks total source coverage,
-lowers from the authoritative algebra, and removes all Shuttle semantics before
-StableHLO-to-HLO conversion. The native compiler-option parser and pinned
-XLA/JAX registration overlays live here. The sealed ABI 1
+f32/BF16 Contract and scalar Map graphs plus one-input f32 add Reduce graphs.
+`shuttle-opt` partitions typed StableHLO, converts selected regions to Shuttle
+algebra, checks total source coverage, lowers from the authoritative algebra,
+and removes all Shuttle semantics before StableHLO-to-HLO conversion. The
+native compiler-option parser and pinned XLA/JAX registration overlays live
+here. The sealed ABI 1
 [`jaxacceptance6`](artifacts/native-preflight-20260810-jaxacceptance6/README.md)
 artifact records the pinned CPU ordinary-JAX build, observer contract, and
 persistent-cache populate/reuse protocol. GPU PJRT linkage, GPU execution, and
@@ -68,7 +69,7 @@ Current implemented behavior is deliberately narrow:
 - `shuttle-form-structural-regions` derives maximal contiguous supported-pure
   intervals and deterministic SSA weakly connected components.
 - `shuttle-convert-stablehlo-to-algebra` produces generic `shuttle.contract`
-  and `shuttle.map` operations. BF16/F32 conversions become typed
+  `shuttle.map`, and `shuttle.fold` operations. BF16/F32 conversions become typed
   `shuttle.scalar_convert` operations carrying exact or round-to-nearest-even
   provenance. No workload name or fixture selector is used.
 - `shuttle-verify-source-coverage` checks exact selected and excluded result
@@ -86,7 +87,8 @@ Current implemented behavior is deliberately narrow:
   lowered-coverage, final-erasure, and terminal-failure records keyed by a
   process-unique invocation ID. Records include policy and tuning digests,
   pre-strip manifests and unsupported-island fingerprints, and the post-strip
-  StableHLO fingerprint and erasure result.
+  StableHLO fingerprint and erasure result. Coverage manifest version 2
+  recursively accounts for nested source results and terminators.
 - `subscribeShuttlePipelineObserver` returns a move-only scoped subscription.
   Its destructor removes the observer from future invocations and waits for
   invocations that captured it. An observer callback must not destroy or
@@ -101,14 +103,14 @@ Current implemented behavior is deliberately narrow:
   schema and invokes the shared production builder. Numerical policy, schema
   version, pipeline ABI version, and the complete tuning object are part of
   `canonicalOptions`; observer policy identity hashes that full cache key.
-  The BF16 scalar-conversion and Contract boundary is pipeline ABI version 2.
+  Recursive Reduce/Fold conversion is pipeline ABI version 3.
 - `ShuttleXlaRegistryAdapter` is an `alwayslink` translation unit that
   automatically registers the keyed `shuttle` callback in XLA's generic
   registry. The separate pinned JAX patch links it at final CPU `_jax`
   composition. The `jaxacceptance6` artifact proves that CPU composition path;
   dynamically loaded GPU PJRT plugins still require their own linkage and
   registration proof. That artifact covers the earlier ABI 1 f32 slice; ABI 2
-  requires a rebuilt CPU jaxlib acceptance run.
+  requires a rebuilt CPU jaxlib acceptance run; ABI 3 does as well.
 
 The export verifier keys operation rejection on the operation-name namespace,
 so it also covers opaque `shuttle.*` operations in a context where the Shuttle
@@ -138,8 +140,18 @@ transformation participates in the compiler pipeline.
 `shuttle.map` and `shuttle.fold` admit only scalar, region-free operations with
 proven no memory effects in their bodies. Fold inputs are positive-rank tensors
 whose element types equal the scalar numeric accumulator types. Initializers,
-combiner arguments and yields, and result elements use the same accumulator
-types; an output cast must be a separate `shuttle.map`.
+which remain rank-zero tensors at the Fold boundary, have element types equal
+to the accumulator types. Combiner arguments and yields are scalars, and result
+elements use the same accumulator types; an output cast must be a separate
+`shuttle.map`.
+
+`order_free = true` carries StableHLO Reduce's exact freedom: binary-tree
+association and initializer multiplicity and placement are implementation
+defined, while data leaves remain in ascending lexicographic order. It does
+not allow leaf permutation and does not infer associativity or commutativity.
+`order_free = false` requires one initializer followed by lexicographically
+ordered accumulator updates, which StableHLO Reduce cannot represent; source
+lowering rejects it.
 
 Map input indexing maps may project dimensions to express broadcast. Result
 maps are full domain permutations: projection would imply duplicate writes,

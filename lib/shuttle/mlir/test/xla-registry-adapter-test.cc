@@ -23,7 +23,7 @@
 namespace {
 
 constexpr char kOptions[] =
-    R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+    R"json({"numerics":"source_ordered","pipeline_abi_version":3,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
 constexpr char kProgram[] = R"mlir(
 module {
   func.func @main(%arg0: tensor<7xf32>) -> tensor<7xf32> {
@@ -35,13 +35,9 @@ module {
 constexpr char kFailingProgram[] = R"mlir(
 module {
   func.func @main(%arg0: tensor<7xf32>) -> tensor<7xf32> {
-    %condition = arith.constant true
-    %0 = scf.if %condition -> tensor<7xf32> {
-      scf.yield %arg0 : tensor<7xf32>
-    } else {
-      scf.yield %arg0 : tensor<7xf32>
-    }
-    return %0 : tensor<7xf32>
+    return %arg0 : tensor<7xf32>
+  ^bb1(%value: tensor<7xf32>):
+    return %value : tensor<7xf32>
   }
 }
 )mlir";

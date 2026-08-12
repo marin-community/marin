@@ -14,8 +14,8 @@
 #include "mlir/Support/LogicalResult.h"
 #include "shuttle/IR/ShuttleAttrs.h"
 #include "shuttle/IR/ShuttleOps.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
@@ -364,12 +364,10 @@ LogicalResult verifyDotGeneralElementTypes(ContractOp contract) {
         "dot_general supports only bf16 or f32 operand elements");
   }
   if (!accumulator.isF32()) {
-    return contract.emitOpError(
-        "dot_general requires an f32 accumulator");
+    return contract.emitOpError("dot_general requires an f32 accumulator");
   }
   if (!resultElement.isF32()) {
-    return contract.emitOpError(
-        "dot_general requires f32 result elements");
+    return contract.emitOpError("dot_general requires f32 result elements");
   }
   return success();
 }
@@ -494,8 +492,7 @@ LogicalResult ScalarConvertOp::verify() {
     return emitOpError("supports only bf16 and f32 scalar types");
   }
   if (inputType == resultType) {
-    if (!inputType.isF32() ||
-        getSemantics() != ScalarConvertSemantics::Exact) {
+    if (!inputType.isF32() || getSemantics() != ScalarConvertSemantics::Exact) {
       return emitOpError(
           "same-type conversion supports only f32 exact semantics");
     }
@@ -508,8 +505,7 @@ LogicalResult ScalarConvertOp::verify() {
     return success();
   }
   if (getSemantics() != ScalarConvertSemantics::RoundNearestEven) {
-    return emitOpError(
-        "f32 to bf16 requires round_nearest_even semantics");
+    return emitOpError("f32 to bf16 requires round_nearest_even semantics");
   }
   return success();
 }
@@ -587,19 +583,22 @@ LogicalResult FoldOp::verifyRegions() {
     Type accumulatorType =
         cast<TypeAttr>(getAccumulatorTypes()[index]).getValue();
     Type inputElementType = scalarType(getInputs()[index].getType());
+    auto initializerType =
+        dyn_cast<RankedTensorType>(getInitializers()[index].getType());
     if (!isScalarNumericType(accumulatorType)) {
       return emitOpError("accumulator types must be scalar numeric types");
     }
-    if (inputElementType != accumulatorType ||
-        getInitializers()[index].getType() != accumulatorType ||
+    if (inputElementType != accumulatorType || !initializerType ||
+        initializerType.getRank() != 0 ||
+        initializerType.getElementType() != accumulatorType ||
         combiner.getArgument(index).getType() != inputElementType ||
         combiner.getArgument(index + resultCount).getType() !=
             accumulatorType ||
         yield.getValues()[index].getType() != accumulatorType ||
         scalarType(getResults()[index].getType()) != accumulatorType) {
-      return emitOpError(
-          "input elements, initializers, combiner arguments and yields, and "
-          "result elements must use accumulator types");
+      return emitOpError("input elements, rank-zero initializers, combiner "
+                         "arguments and yields, and "
+                         "result elements must use accumulator types");
     }
   }
   return verifyPureScalarComputation(*this, getCombiner());
