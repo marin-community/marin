@@ -436,3 +436,17 @@ author: Rafal Wojdyla
 - RNO progress: `finetranslations_6ce00a47` got to 4,245 of 25,962 output shards with 32 live workers and no dead workers.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of root logs.
 - Next action: Continue the 15-minute check cadence and monitor both active sources.
+
+### 2026-08-12 09:47 UTC - East completes three sources
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 20 completed source artifacts. RNO has six completed source artifacts. The full run has 26 of 292 completed source artifacts.
+- East result: `swe-zero-12m_243316c3` succeeded with all 470 output shards and 11,549,124 documents.
+- East result: `starcoder2-documentation_871525e3` succeeded with all six output shards and 29,667 documents.
+- East result: `starcoder2-ir_low_resource_c2f6ee37` succeeded with all nine output shards and 259,025 documents.
+- East progress: `starcoder2-ir_rust_f431fcdb` started. It has four output shards, with all four workers alive and no dead workers.
+- RNO progress: `finetranslations_6ce00a47` got to 11,192 of 25,962 output shards with 32 live workers and no dead workers.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Shutdown diagnostic: Five late `swe-zero-12m` replacement workers tried to register endpoints after Iris had made their worker-group tasks terminal. Iris rejected the registrations. The source and coordinator succeeded, and East has no failed descendants. No recovery was necessary.
+- Error check: No error matched the active East or RNO source logs after the source transitions.
+- Next action: Continue the 15-minute check cadence and monitor both active sources.
