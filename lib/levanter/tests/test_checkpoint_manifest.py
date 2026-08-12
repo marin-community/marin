@@ -43,7 +43,7 @@ def test_read_manifest_is_none_for_a_checkpoint_written_before_manifests(tmp_pat
 
 
 def test_reading_a_newer_format_version_fails_loudly(tmp_path):
-    payload = _manifest().to_json()
+    payload = _manifest().model_dump()
     payload["format_version"] = CHECKPOINT_FORMAT_VERSION + 1
     (tmp_path / "manifest.json").write_text(json.dumps(payload))
 
