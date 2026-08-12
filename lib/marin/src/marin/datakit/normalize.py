@@ -136,6 +136,28 @@ def _text_from_value(value: Any) -> str:
 _INPUT_BATCH_ROWS = 8192
 
 
+def _align_dataframe_vertical_relaxed(
+    df: pl.DataFrame,
+    schema: pl.Schema,
+) -> tuple[pl.DataFrame, pl.Schema]:
+    """Reorder/cast *df* to a ``vertical_relaxed`` unify with *schema*.
+
+    Requires the same column names as *schema* (order is normalized). Returns the
+    aligned frame and the widened schema. Raises when column sets differ or when
+    dtypes have no common ``vertical_relaxed`` supertype.
+    """
+    expected = list(schema.names())
+    got = set(df.columns)
+    expected_set = set(expected)
+    if got != expected_set:
+        missing = sorted(expected_set - got)
+        extra = sorted(got - expected_set)
+        raise ValueError(f"column set mismatch: missing={missing}, extra={extra}")
+    ordered = df.select(expected)
+    widened = pl.concat([pl.DataFrame(schema=schema), ordered.clear()], how="vertical_relaxed").schema
+    return ordered.cast(dict(widened)), widened
+
+
 def _iter_input_batches(path: str) -> Iterator[pl.DataFrame]:
     """Yield Polars DataFrames from one input file.
 
@@ -143,20 +165,53 @@ def _iter_input_batches(path: str) -> Iterator[pl.DataFrame]:
     to DataFrames. Other supported formats are loaded as dicts and packed into
     DataFrames of ``_INPUT_BATCH_ROWS`` so the rest of the pipeline can stay
     columnar.
+
+    Non-Parquet batches use ``infer_schema_length=None`` within each chunk. The
+    first chunk's schema is the file contract: later chunks must be unifiable
+    under ``pl.concat(..., how="vertical_relaxed")`` (same columns; null/integer
+    widenings). Incompatible drift raises with a hint to enlarge
+    ``_INPUT_BATCH_ROWS`` when a field appears only after the first chunk.
     """
     if path.endswith(".parquet"):
         for batch in load_file_batch(path):
             yield pl.DataFrame(batch)
         return
 
+    schema: pl.Schema | None = None
+    rows_before = 0
     batch: list[dict[str, Any]] = []
+
+    def flush() -> Iterator[pl.DataFrame]:
+        nonlocal schema, rows_before, batch
+        if not batch:
+            return
+        df = pl.DataFrame(batch, infer_schema_length=None)
+        n = len(batch)
+        batch = []
+        if schema is None:
+            schema = df.schema
+            rows_before += n
+            yield df
+            return
+        try:
+            aligned, schema = _align_dataframe_vertical_relaxed(df, schema)
+        except (ValueError, pl.exceptions.ComputeError, pl.exceptions.SchemaError, pl.exceptions.ShapeError) as err:
+            raise ValueError(
+                f"Row structure changed after {rows_before} rows in {path} "
+                f"(batch size {_INPUT_BATCH_ROWS}). Running schema: {dict(schema)}. "
+                f"This batch could not be unified with pl.concat(how='vertical_relaxed'): {err}. "
+                f"If a field appears only later in the file, increase _INPUT_BATCH_ROWS so the "
+                f"first batch includes it. If row shape genuinely varies through the file, use "
+                f"Parquet or a homogeneous dump."
+            ) from err
+        rows_before += n
+        yield aligned
+
     for record in load_file(path):
         batch.append(record)
         if len(batch) >= _INPUT_BATCH_ROWS:
-            yield pl.DataFrame(batch)
-            batch = []
-    if batch:
-        yield pl.DataFrame(batch)
+            yield from flush()
+    yield from flush()
 
 
 def _as_text_series(series: pl.Series) -> pl.Series:

@@ -410,6 +410,22 @@ def test_merge_sorted_chunks_cross_shard_null_sort_value(tmp_path):
     assert sorted(x["v"] for x in merged) == [0, 1, 2, 3]
 
 
+def test_merge_sorted_chunks_rejects_incompatible_columnar_key_dtypes(tmp_path):
+    """Int vs Utf8 columnar keys must not be silently cast before merge_sorted."""
+    path_int = str(tmp_path / "shard-0000/scatter/")
+    path_str = str(tmp_path / "shard-0001/scatter/")
+    with ScatterWriter(data_path=path_int, key=col("k"), source_shard=0, num_output_shards=1) as w0:
+        w0.write_batch(pl.DataFrame({"k": pl.Series([2, 10], dtype=pl.Int64), "v": [1, 2]}))
+        paths_0 = list(w0.close())
+    with ScatterWriter(data_path=path_str, key=col("k"), source_shard=1, num_output_shards=1) as w1:
+        w1.write_batch(pl.DataFrame({"k": pl.Series(["2", "10"], dtype=pl.Utf8), "v": [3, 4]}))
+        paths_1 = list(w1.close())
+
+    shard = ScatterReader.from_sidecars(paths_0 + paths_1, target_shard=0)
+    with pytest.raises(ValueError, match="incompatible scatter sort-key"):
+        list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort")))
+
+
 def test_scatter_with_combiner(tmp_path):
     """ScatterWriter applies combiner_fn during flushes."""
     items = [

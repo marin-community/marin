@@ -35,6 +35,7 @@ from rigging.timing import RateLimiter, log_time
 
 from zephyr.expr import ColumnExpr
 from zephyr.external_sort import external_sort_merge
+from zephyr.frame_schema import assert_compatible_sort_key_dtypes, unified_schema
 from zephyr.shard_keys import encode_key
 from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
@@ -314,7 +315,12 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
     Different source shards may write the same column with different dtypes when
     Polars infers from Python values — most commonly a sort_value field that is
     Null on an all-None batch from one shard and Int64 from another.  This also
-    handles arbitrary user-column dtype drift when DataFrames are written directly.
+    handles arbitrary user-column dtype drift when DataFrames are written directly
+    (``diagonal_relaxed`` fills missing columns with nulls).
+
+    The sort-key ``key`` field is stricter: only null/integer/float widenings are
+    allowed. Cross-family casts (e.g. Int64 ↔ Utf8) would change ordering after
+    chunks were already sorted, so they raise before unify.
 
     collect_schema() reads only parquet file-footer metadata (no row data).
     The limit(0) concat derives the supertype schema without any I/O.  Casting
@@ -325,7 +331,8 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
     schemas = [f.collect_schema() for f in frames]
     if all(s == schemas[0] for s in schemas[1:]):
         return frames
-    unified = pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed").collect_schema()
+    assert_compatible_sort_key_dtypes(schemas, sort_key_col=_SORT_KEY_COL, field="key")
+    unified = unified_schema(frames, how="diagonal_relaxed")
     return [f.cast(dict(unified)) for f in frames]
 
 

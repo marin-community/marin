@@ -899,23 +899,33 @@ class Dataset(Generic[T]):
     ) -> "Dataset[R]":
         """Group items by key and apply reducer function.
 
-        The reducer receives (key, iterator_of_items) and returns a single result or an iterator of
-        results for that group.
+        The reducer receives ``(key, iterator_of_items)`` and returns a single
+        result or an iterator of results for that group. After scatter, items
+        delivered to the reducer are always plain dict rows (including when the
+        map side ingested ``pl.DataFrame`` / ``pa.RecordBatch`` batches).
+
+        ``key`` / ``sort_by`` must match the item shape:
+
+        * Python items (dicts, objects) — pass Callables.
+        * ``pl.DataFrame`` / ``pa.RecordBatch`` batches — pass
+          ``zephyr.expr.col(...)``. A Callable raises at scatter time because
+          routing needs a vectorized Polars expression. Columnar key columns
+          must share a stable dtype across mapper shards (null/integer/float
+          widenings only); incompatible key dtypes are rejected before
+          ``merge_sorted``.
 
         Incoming records are strongly encouraged to be Arrow-serializable (dicts, lists, scalars, etc.).
         Custom dataclasses and arbitrary objects will have degraded performance (serde via pickle).
 
         Args:
             key: Function extracting grouping key from item (must be hashable), or a
-                ``zephyr.expr.col(name)``. A ``col(...)`` is required when items are
-                ``pl.DataFrame``/``pa.RecordBatch`` batches (e.g. after
-                ``load_parquet(batch_mode=True)``), since it lets the scatter write
-                path compute routing columns as vectorized Polars expressions instead
-                of calling a Python function per row.
+                ``zephyr.expr.col(name)`` when items are columnar batches (e.g. after
+                ``load_parquet(batch_mode=True)``).
             reducer: Function from (key, Iterator[items]) -> result
             sort_by: Optional function (or ``col(...)``) extracting a sort key from each
                 item. When provided, items within each group are delivered to the
-                reducer sorted by this key.
+                reducer sorted by this key. Use the same Callable-vs-``col`` rule as
+                *key*.
             num_output_shards: Number of output shards (None = auto-detect, uses current shard count)
             combiner: Optional local pre-aggregation applied during scatter. Receives
                 (key, Iterator[items]) and yields reduced items of the same type. Must be
