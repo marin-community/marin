@@ -12,7 +12,7 @@ import equinox as eqx
 import haliax as hax
 import jax
 import numpy as np
-import pytest
+import pytest  # pyrefly: ignore[missing-import]  # Installed by Levanter's test group.
 from chex import assert_trees_all_close
 from equinox import nn as nn
 from haliax.partitioning import ResourceAxis, set_mesh
@@ -127,7 +127,7 @@ def has_torch():
 def has_soundlibs():
     try:
         import librosa  # noqa F401
-        import soundfile  # noqa F401
+        import soundfile  # noqa F401  # pyrefly: ignore[missing-import]  # Test-only optional dependency.
 
         return True
     except ImportError:
