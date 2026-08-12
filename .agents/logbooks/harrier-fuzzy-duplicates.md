@@ -847,3 +847,14 @@ author: Rafal Wojdyla
 - East progress: `nemotron_cc_v2-diverse_qa_016d1909` got to 1,360 of 4,416 embedding shards with 32 live workers and no dead workers.
 - Issue update: None. These are routine source completions, not a major run-state change.
 - Next action: Monitor both long sources and check Stack v3 through its join transition.
+
+### 2026-08-12 19:28 UTC - Stack v3 started embedding
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 45 completed source artifacts. RNO has 14 completed source artifacts. The full run has 59 of 292 completed source artifacts.
+- RNO progress: `stack-v3_6ac1a286` completed its 12,818-shard join and started embedding at about 19:26 UTC. It got to 154 of 12,818 embedding shards with 32 live workers and no dead workers. The initial rate gives a rough 21:00 UTC completion estimate.
+- East progress: `nemotron_cc_v2-diverse_qa_016d1909` got to 1,541 of 4,416 embedding shards with 32 live workers and no dead workers. Its recent rate gives a rough 22:30 UTC completion estimate.
+- Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Issue update: None. The stage change is routine and does not change the run state.
+- Next action: Measure the stable Stack v3 embedding rate and continue the regular health-check cadence.
