@@ -6,8 +6,7 @@
 import pytest
 from iris.client import LocalClientConfig
 from iris.client.local_client import local_client
-
-from scripts.iris.rollout_controllers import run_smoke_suite
+from iris.testing.rollout_smoke import run_smoke_suite
 
 
 @pytest.mark.requires_cluster
