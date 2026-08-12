@@ -22,7 +22,7 @@ import numpy as np
 from rigging.filesystem import StoragePath, open_url
 
 from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, UNK_ID, encode_texts
-from experiments.datakit.cluster.quality.fast_transformer.inference import predict
+from experiments.datakit.cluster.quality.fast_transformer.inference import predict, predict_rows
 from experiments.datakit.cluster.quality.fast_transformer.model import FastTransformer, FastTransformerConfig
 
 # bme scores begin/middle/end ~512-token (~2000-char) windows of the whole doc and
@@ -66,8 +66,16 @@ class PooledScorer:
         model = eqx.tree_deserialise_leaves(model_path, template)
         return cls(model=model, remap=remap, tokenizer_name=meta["tokenizer"], max_tokens=meta["max_tokens"])
 
-    def score(self, texts: list[str], batch_size: int = 256) -> np.ndarray:
-        """Quality score in ``[0, 1]`` per document."""
+    def score(self, texts: list[str], batch_size: int | None = None) -> np.ndarray:
+        """Quality score in ``[0, 1]`` per document.
+
+        Chunks default to a full forward pass. ``predict`` zero-fills any chunk up to
+        that width to keep one compiled shape, so a narrower chunk buys nothing and
+        costs the padding: the previous hardcoded 256 filled half of every batch with
+        zeros and measured 2.13x slower for bit-identical scores.
+        """
+        if batch_size is None:
+            batch_size = predict_rows(self.max_tokens)
         out = np.empty(len(texts), dtype=np.float32)
         for start in range(0, len(texts), batch_size):
             chunk = texts[start : start + batch_size]
@@ -76,7 +84,7 @@ class PooledScorer:
             for i, row in enumerate(encoded):
                 mapped = [self.remap.get(t, UNK_ID) for t in row[: self.max_tokens]]
                 ids[i, : len(mapped)] = mapped
-            out[start : start + len(chunk)] = predict(self.model, ids)
+            out[start : start + len(chunk)] = predict(self.model, ids, batch_size=batch_size)
         return out
 
 

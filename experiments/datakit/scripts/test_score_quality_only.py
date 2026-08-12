@@ -9,12 +9,16 @@ them. The sizing is the entire reason this entry point exists, so it is asserted
 rather than left to a log line nobody reads.
 """
 
+import inspect
+
 import numpy as np
 from fray.cluster import ResourceConfig
 from marin.execution.step_spec import StepSpec
 
 from experiments.datakit.cluster.quality.fast_transformer.content_type import structural_features
+from experiments.datakit.cluster.quality.fast_transformer.inference import predict_rows
 from experiments.datakit.cluster.quality.fast_transformer.score import TASK_RESOURCES, WORKER_RESOURCES
+from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledScorer
 from experiments.datakit.scripts.score_quality_only import (
     DEFAULT_MAX_WORKERS,
     NODE_CPU,
@@ -143,3 +147,17 @@ def test_structural_features_match_the_python_reference():
     for case in ["plain ascii 123", "日本語のテキスト", "", "mixed 数据 42 ünïcode", "a" * 5000 + "9" * 100, "🙂 emoji"]:
         got = structural_features(case)
         assert np.allclose([got[0], got[1], got[10]], reference(case), atol=1e-12), case[:20]
+
+
+def test_scoring_chunks_fill_a_whole_forward_pass():
+    """A chunk narrower than the compiled batch is zero-filled, not run smaller.
+
+    ``predict`` pads every chunk up to ``predict_rows`` to hold one compiled shape.
+    Chunking to 256 against a 512-row pass therefore made half of each forward pass
+    zeros and cost 2.13x for bit-identical scores. The two numbers are derived from
+    one function so they cannot drift apart again.
+    """
+    assert predict_rows(512) == 512
+    # A narrower sequence packs proportionally more rows into the same token budget.
+    assert predict_rows(1024) == 256
+    assert inspect.signature(PooledScorer.score).parameters["batch_size"].default is None

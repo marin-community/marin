@@ -22,6 +22,17 @@ from experiments.datakit.cluster.quality.fast_transformer.model import FastTrans
 _PREDICT_TOKEN_BUDGET = 262_144
 
 
+def predict_rows(max_tokens: int) -> int:
+    """Rows in one compiled forward pass at this sequence length.
+
+    Public because a caller that chunks before calling :func:`predict` must chunk to
+    *this* number. ``predict`` pads every chunk up to it to hold one compiled shape,
+    so a caller passing fewer rows does not run a smaller batch -- it runs the same
+    batch with the remainder zero-filled, and pays full price for the zeros.
+    """
+    return max(8, _PREDICT_TOKEN_BUDGET // max_tokens)
+
+
 def data_parallel_shardings():
     """(num_devices, replicated, batch-sharded) shardings over all chips.
 
@@ -49,7 +60,7 @@ def predict(model: FastTransformer, ids: np.ndarray, batch_size: int | None = No
     bounded.
     """
     if batch_size is None:
-        batch_size = max(8, _PREDICT_TOKEN_BUDGET // ids.shape[1])
+        batch_size = predict_rows(ids.shape[1])
     # Inference is data-parallel too: callers pass the global batch (sized for the
     # whole slice), so shard each chunk across chips -- otherwise a single device
     # would try to hold the full global-batch attention tensor and OOM/segfault.
