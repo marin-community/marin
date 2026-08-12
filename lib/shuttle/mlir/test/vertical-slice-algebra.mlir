@@ -20,22 +20,19 @@
 // FORWARD-SAME: selected_regions
 // FORWARD-SAME: zero_result_operations
 
-// The constant/broadcast/subtract island is a hard interval boundary. Within
-// the following interval, SSA connectivity separates the weight-gradient
-// transpose from the connected input/first-weight-gradient component.
+// The complete VJP graph is represented by generic Contract and Map algebra.
 // VJP: "shuttle.region"
 // VJP: "shuttle.contract"
 // VJP: "shuttle.map"
 // VJP: "math.tanh"
-// VJP: "stablehlo.constant"
-// VJP: "stablehlo.broadcast_in_dim"
-// VJP: "stablehlo.subtract"
-// VJP: "shuttle.region"
+// VJP: "shuttle.map"
+// VJP: "arith.constant"
+// VJP: "shuttle.map"
+// VJP: "shuttle.map"
+// VJP: "arith.subf"
 // VJP: "shuttle.contract"
 // VJP: "shuttle.map"
-// VJP: "shuttle.region"
 // VJP: "shuttle.contract"
-// VJP: "shuttle.map"
 // VJP: "arith.mulf"
 // VJP: "shuttle.map"
 // VJP: "arith.mulf"
@@ -46,5 +43,8 @@
 // VJP: "shuttle.contract"
 // VJP-NOT: "stablehlo.multiply"
 // VJP-NOT: "stablehlo.add"
+// VJP-NOT: "stablehlo.constant"
+// VJP-NOT: "stablehlo.broadcast_in_dim"
+// VJP-NOT: "stablehlo.subtract"
 // VJP: shuttle.coverage_manifest
-// VJP-SAME: excluded
+// VJP-SAME: excluded = []

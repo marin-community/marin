@@ -359,17 +359,17 @@ LogicalResult verifyDotGeneralElementTypes(ContractOp contract) {
     return contract.emitOpError(
         "dot_general lhs and rhs element types must match");
   }
-  if (!lhsElement.isF32()) {
+  if (!lhsElement.isF32() && !lhsElement.isBF16()) {
     return contract.emitOpError(
-        "the first dot_general slice supports only f32 operand elements");
+        "dot_general supports only bf16 or f32 operand elements");
   }
   if (!accumulator.isF32()) {
     return contract.emitOpError(
-        "the first dot_general slice requires an f32 accumulator");
+        "dot_general requires an f32 accumulator");
   }
   if (!resultElement.isF32()) {
     return contract.emitOpError(
-        "the first dot_general slice requires f32 result elements");
+        "dot_general requires f32 result elements");
   }
   return success();
 }
@@ -481,6 +481,37 @@ LogicalResult ContractOp::verify() {
     return failure();
   }
   return verifyDotGeneralIterators(*this);
+}
+
+LogicalResult ScalarConvertOp::verify() {
+  Type inputType = getInput().getType();
+  Type resultType = getResult().getType();
+  if (isa<ShapedType>(inputType) || isa<ShapedType>(resultType)) {
+    return emitOpError("requires scalar input and result types");
+  }
+  if ((!inputType.isBF16() && !inputType.isF32()) ||
+      (!resultType.isBF16() && !resultType.isF32())) {
+    return emitOpError("supports only bf16 and f32 scalar types");
+  }
+  if (inputType == resultType) {
+    if (!inputType.isF32() ||
+        getSemantics() != ScalarConvertSemantics::Exact) {
+      return emitOpError(
+          "same-type conversion supports only f32 exact semantics");
+    }
+    return success();
+  }
+  if (inputType.isBF16()) {
+    if (getSemantics() != ScalarConvertSemantics::Exact) {
+      return emitOpError("bf16 to f32 requires exact semantics");
+    }
+    return success();
+  }
+  if (getSemantics() != ScalarConvertSemantics::RoundNearestEven) {
+    return emitOpError(
+        "f32 to bf16 requires round_nearest_even semantics");
+  }
+  return success();
 }
 
 LogicalResult FoldOp::verifyRegions() {

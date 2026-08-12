@@ -24,6 +24,21 @@ def Shuttle_PolicyAttr
   let assemblyFormat = "`<` $value `>`";
 }
 
+def Shuttle_ScalarConvertSemantics
+    : I32EnumAttr<"ScalarConvertSemantics", "Scalar conversion semantics",
+                  [I32EnumAttrCase<"Exact", 0, "exact">,
+                   I32EnumAttrCase<"RoundNearestEven", 1,
+                                   "round_nearest_even">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_ScalarConvertSemanticsAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_ScalarConvertSemantics,
+               "scalar_convert_semantics"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
 def Shuttle_SourceRefAttr : Shuttle_Attr<"SourceRef"> {
   let mnemonic = "source_ref";
   let summary = "Rename-invariant structural reference to a source result";

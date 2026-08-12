@@ -47,6 +47,14 @@ def Shuttle_ContractOp
   let hasVerifier = 1;
 }
 
+def Shuttle_ScalarConvertOp : Shuttle_Op<"scalar_convert", [Pure]> {
+  let summary = "Scalar conversion with explicit rounding provenance";
+  let arguments = (ins AnyType:$input,
+      Shuttle_ScalarConvertSemanticsAttr:$semantics);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 def Shuttle_FoldOp
     : Shuttle_Op<
           "fold", [AttrSizedOperandSegments,

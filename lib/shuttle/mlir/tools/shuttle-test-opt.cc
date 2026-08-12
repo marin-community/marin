@@ -10,12 +10,14 @@
 #include "shuttle/IR/ShuttleDialect.h"
 #include "shuttle/Transforms/Passes.h"
 #include "stablehlo/dialect/Register.h"
+#include "stablehlo/transforms/Passes.h"
 #include "test/TestPasses.h"
 
 int main(int argc, char **argv) {
   mlir::shuttle::registerShuttlePasses();
   mlir::shuttle::registerShuttleStablehloPipelines();
   mlir::shuttle::test::registerMutationPasses();
+  mlir::stablehlo::registerPasses();
 
   mlir::DialectRegistry registry;
   mlir::stablehlo::registerAllDialects(registry);

@@ -298,7 +298,7 @@ module {
       %rhs: tensor<3x4xindex>) -> tensor<2x4xf32> {
     %result = "shuttle.region"(%lhs, %rhs) ({
     ^bb0(%region_lhs: tensor<2x3xindex>, %region_rhs: tensor<3x4xindex>):
-      // expected-error @+1 {{the first dot_general slice supports only f32 operand elements}}
+      // expected-error @+1 {{dot_general supports only bf16 or f32 operand elements}}
       %contract = "shuttle.contract"(%region_lhs, %region_rhs) {
         accumulator_types = [f32],
         algorithm = "dot_general",
@@ -356,7 +356,7 @@ module {
       %rhs: tensor<3x4xf32>) -> tensor<2x4xf32> {
     %result = "shuttle.region"(%lhs, %rhs) ({
     ^bb0(%region_lhs: tensor<2x3xf32>, %region_rhs: tensor<3x4xf32>):
-      // expected-error @+1 {{the first dot_general slice requires an f32 accumulator}}
+      // expected-error @+1 {{dot_general requires an f32 accumulator}}
       %contract = "shuttle.contract"(%region_lhs, %region_rhs) {
         accumulator_types = [f64],
         algorithm = "dot_general",
@@ -381,11 +381,11 @@ module {
 // -----
 
 module {
-  func.func @unsupported_result(%lhs: tensor<2x3xf32>,
-      %rhs: tensor<3x4xf32>) -> tensor<2x4xf64> {
+  func.func @bf16_requires_f32_result(%lhs: tensor<2x3xbf16>,
+      %rhs: tensor<3x4xbf16>) -> tensor<2x4xbf16> {
     %result = "shuttle.region"(%lhs, %rhs) ({
-    ^bb0(%region_lhs: tensor<2x3xf32>, %region_rhs: tensor<3x4xf32>):
-      // expected-error @+1 {{the first dot_general slice requires f32 result elements}}
+    ^bb0(%region_lhs: tensor<2x3xbf16>, %region_rhs: tensor<3x4xbf16>):
+      // expected-error @+1 {{dot_general requires f32 result elements}}
       %contract = "shuttle.contract"(%region_lhs, %region_rhs) {
         accumulator_types = [f32],
         algorithm = "dot_general",
@@ -397,13 +397,13 @@ module {
         iterator_kinds = ["parallel", "parallel", "reduction"],
         precision = ["DEFAULT", "DEFAULT"],
         source = #shuttle.source_ref<0, 0, 0, 0>
-      } : (tensor<2x3xf32>, tensor<3x4xf32>) -> tensor<2x4xf64>
-      "shuttle.yield"(%contract) : (tensor<2x4xf64>) -> ()
+      } : (tensor<2x3xbf16>, tensor<3x4xbf16>) -> tensor<2x4xbf16>
+      "shuttle.yield"(%contract) : (tensor<2x4xbf16>) -> ()
     }) {
       policy = #shuttle.policy<source_ordered>,
       source_refs = [#shuttle.source_ref<0, 0, 0, 0>]
-    } : (tensor<2x3xf32>, tensor<3x4xf32>) -> tensor<2x4xf64>
-    return %result : tensor<2x4xf64>
+    } : (tensor<2x3xbf16>, tensor<3x4xbf16>) -> tensor<2x4xbf16>
+    return %result : tensor<2x4xbf16>
   }
 }
 

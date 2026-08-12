@@ -223,6 +223,7 @@ cc_binary(
         "@llvm-project//mlir:SCFDialect",
         "@llvm-project//mlir:TensorDialect",
         "@stablehlo//:register",
+        "@stablehlo//:stablehlo_passes",
     ],
 )
 

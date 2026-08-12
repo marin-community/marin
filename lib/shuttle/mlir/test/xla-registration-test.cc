@@ -18,9 +18,9 @@
 namespace {
 
 constexpr char kSourceOrderedOptions[] =
-    R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion","maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}})json";
+    R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion","maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}})json";
 constexpr char kFastOptions[] =
-    R"json({"numerics":"fast","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+    R"json({"numerics":"fast","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
 constexpr char kProgram[] = R"mlir(
 module {
   func.func @main(%arg0: tensor<7xf32>) -> tensor<7xf32> {
@@ -50,7 +50,7 @@ TEST(ShuttleXlaOptionsTest, ParsesCanonicalPythonWireFormat) {
   mlir::shuttle::ShuttlePipelineIdentity sourceIdentity =
       mlir::shuttle::shuttlePipelineIdentity(*source);
   EXPECT_EQ(sourceIdentity.policyDigest,
-            "710641ca5be506e61fae8ffda50348e955ec0de75f51371332bc36beca146359");
+            "9f7f041aaf76ed1d83a230861d8a70b18c0dec6aafcb5c1c70c658073440ca57");
   EXPECT_EQ(sourceIdentity.tuningDigest,
             "ae69cb474b1ddc91067687e7351ee27afe4e3b0814ae59e310a42bec5911326f");
 
@@ -64,21 +64,21 @@ TEST(ShuttleXlaOptionsTest, ParsesCanonicalPythonWireFormat) {
 
 TEST(ShuttleXlaOptionsTest, RejectsInvalidOrNoncanonicalWireFormats) {
   constexpr const char *invalidOptions[] = {
-      R"json({"numerics":"source_ordered","numerics":"fast","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
-      R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]},"workload":"named"})json",
-      R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
-      R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":2,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
-      R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1})json",
-      R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1}})json",
-      R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[],"warps":4}})json",
-      R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[1,1,1,1],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
-      R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[1,1,1,1,1,1,1,1,1]}})json",
-      R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":0,"tile_sizes":[]}})json",
-      R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":true,"pipeline_stages":1,"tile_sizes":[]}})json",
-      R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":2147483648,"pipeline_stages":1,"tile_sizes":[]}})json",
-      R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"always_fuse","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
-      R"json({ "numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
-      R"json({"schema_version":1,"numerics":"source_ordered","pipeline_abi_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
+      R"json({"numerics":"source_ordered","numerics":"fast","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
+      R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]},"workload":"named"})json",
+      R"json({"numerics":"source_ordered","pipeline_abi_version":1,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
+      R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":2,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
+      R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1})json",
+      R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1}})json",
+      R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[],"warps":4}})json",
+      R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[1,1,1,1],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
+      R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[1,1,1,1,1,1,1,1,1]}})json",
+      R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":0,"tile_sizes":[]}})json",
+      R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":true,"pipeline_stages":1,"tile_sizes":[]}})json",
+      R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":2147483648,"pipeline_stages":1,"tile_sizes":[]}})json",
+      R"json({"numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"always_fuse","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
+      R"json({ "numerics":"source_ordered","pipeline_abi_version":2,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
+      R"json({"schema_version":1,"numerics":"source_ordered","pipeline_abi_version":2,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
   };
   for (const char *serialized : invalidOptions) {
     absl::StatusOr<mlir::shuttle::ShuttlePipelineOptions> parsed =
