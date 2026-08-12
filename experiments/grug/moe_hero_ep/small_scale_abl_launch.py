@@ -183,7 +183,7 @@ def _small_model(
     intermediate_dim: int | None,
     latent_dim: int | None,
     qb_use_histogram: bool = False,
-    qb_hist_bins: int = 4000,
+    qb_hist_bins: int = 1000,
 ) -> GrugModelConfig:
     """The hero shape (moe_hero_ep ``HERO_MODEL``) downsized to this width.
 
@@ -263,7 +263,7 @@ def build_small_run(
     intermediate_dim: int | None = None,
     latent_dim: int | None = None,
     qb_use_histogram: bool = False,
-    qb_hist_bins: int = 4000,
+    qb_hist_bins: int = 1000,
     tokens_per_active_param: int = 750,
     num_train_steps_override: int | None = None,
     watch_interval: int = 10,
@@ -528,7 +528,7 @@ def build_small_run(
 @click.option(
     "--qb-hist-bins",
     type=click.IntRange(min=1),
-    default=4000,
+    default=1000,
     show_default=True,
     help="Histogram bin count for the QB quantile estimator.",
 )
