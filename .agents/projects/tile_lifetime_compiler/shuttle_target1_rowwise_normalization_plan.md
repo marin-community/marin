@@ -199,7 +199,7 @@ results. Zero-result source operations are tracked separately:
 
 | Layer | Implemented at `f7de3385a3` | Missing for Target 1 fixture coverage |
 | --- | --- | --- |
-| Structural selection | Every fixture operation except mapped-singleton broadcasts | Mapped-singleton broadcasts |
+| Structural selection | Every fixture source-result operation except mapped-singleton broadcasts | Mapped-singleton broadcasts |
 | Algebra conversion | Lossless scalar and structural Map conversion plus recursive Reduce/Fold conversion | A lossless mapped-singleton input-index expression |
 | Algebra verification | Typed Map/Fold/Contract source references, typed structural Map semantics, Reduce owner provenance, nested combiner result provenance, reducer terminator provenance, and Fold ordering | Verification of the bounded-zero mapped-singleton expression |
 | Canonicalization | Empty pass | Policy-checked Fold/Map fusion and materialization choices |
@@ -214,8 +214,8 @@ for `81928ab3539c0f03`.
 | Boundary | Complete | Selected | Exact exclusions |
 | --- | ---: | ---: | --- |
 | Forward | 20 | 18 | `12`: broadcast `[R,1] -> [R,H]`, dims `[0,1]`; `16`: broadcast `[1,H] -> [R,H]`, dims `[0,1]` |
-| Backward | 48 | 45 | `16`: broadcast `[R,1] -> [R,H]`, dims `[0,1]`; `24`: broadcast `[1,H] -> [R,H]`, dims `[0,1]`; `31`: broadcast `[R,1] -> [R,H]`, dims `[0,1]` |
-| Composed | 51 | 47 | `16`: broadcast `[R,1] -> [R,H]`, dims `[0,1]`; `20`: broadcast `[1,H] -> [R,H]`, dims `[0,1]`; `27`: broadcast `[1,H] -> [R,H]`, dims `[0,1]`; `34`: broadcast `[R,1] -> [R,H]`, dims `[0,1]` |
+| Backward | 53 | 50 | `16`: broadcast `[R,1] -> [R,H]`, dims `[0,1]`; `24`: broadcast `[1,H] -> [R,H]`, dims `[0,1]`; `31`: broadcast `[R,1] -> [R,H]`, dims `[0,1]` |
+| Composed | 56 | 52 | `16`: broadcast `[R,1] -> [R,H]`, dims `[0,1]`; `20`: broadcast `[1,H] -> [R,H]`, dims `[0,1]`; `27`: broadcast `[1,H] -> [R,H]`, dims `[0,1]`; `34`: broadcast `[R,1] -> [R,H]`, dims `[0,1]` |
 
 ### Lossless shape-operation boundary
 
