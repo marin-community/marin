@@ -5,7 +5,6 @@
 # * Orbax: https://github.com/google/orbax/blob/11d2934ecfff77e86b5e07d0fef02b67eff4511b/orbax/checkpoint/pytree_checkpoint_handler.py#L312
 import asyncio
 import collections
-import contextlib
 import logging
 import math
 import os
@@ -41,6 +40,17 @@ logger = logging.getLogger(__name__)
 
 ARRAY_DRIVER = "zarr3"
 KVSTORE_DRIVER = "ocdbt"
+# JAX's memory kind for host memory a device can address. Offloaded optimizer state lives here.
+_HOST_MEMORY_KIND = "pinned_host"
+# Chunks a save stages at once by default. A wider window does not make a save faster --
+# the object store, not staging, sets the rate -- so this is chosen for headroom. A staged
+# chunk costs about four times its own bytes while its upload is in flight (the snapshot,
+# the encoded chunk, and the request buffer), which is what makes the window small: a GB200
+# node measured 837 GiB of an 850 GiB limit with four processes staging 32 GiB each.
+_DEFAULT_STAGED_CHUNKS = 32
+# Host memory a staged byte occupies while its write is in flight. Only used to report the
+# budget's expected cost, since the multiplier lives inside TensorStore.
+_STAGED_BYTE_OVERHEAD = 4
 
 
 def _format_gib(num_bytes: int) -> str:
@@ -125,11 +135,19 @@ async def _transfer_shard_to_pageable_host(shard, local_slice: tuple[int, int, i
 
     JAX's own staging path puts the shard in pinned host memory, which the TPU runtime never
     returns to the OS, so we stage in pageable memory instead (#6924).
+
+    A run that offloads its optimizer state already holds that state in host memory, and on
+    a coherent host-device part like GB200 that memory is directly readable. Asking for a
+    device-to-host copy of it would stage a second host buffer to copy out of, so the
+    snapshot is taken straight from the existing one instead. The copy itself stays: the
+    next training step donates these buffers, and a checkpoint that referenced them would
+    read bytes training is concurrently overwriting.
     """
     data = shard.data if local_slice is None else _slice_shard_on_device(shard.data, *local_slice)
-    data.copy_to_host_async()
-    # Yield so the remaining shards' copies can be enqueued before this one blocks.
-    await asyncio.sleep(0)
+    if getattr(data.sharding, "memory_kind", None) != _HOST_MEMORY_KIND:
+        data.copy_to_host_async()
+        # Yield so the remaining shards' copies can be enqueued before this one blocks.
+        await asyncio.sleep(0)
     # TensorStore may retain this array until the asynchronous commit finishes. It must
     # not keep an external reference to the JAX buffer that training donates next.
     return np.array(data, copy=True)
@@ -153,8 +171,25 @@ class TensorStoreWriteConfig:
     max_chunk_bytes: int = 512 * 1024**2
     """Upper bound on one zarr3 chunk. Bounds the size of a single object store write."""
 
-    max_staged_host_bytes: int = 4 * 1024**3
-    """Cap on host memory this process stages at once. Backpressure, not a hard allocation."""
+    max_staged_host_bytes: int = _DEFAULT_STAGED_CHUNKS * max_chunk_bytes
+    """Host memory this process may hold in staged snapshots at once.
+
+    A save that fits under this never blocks: it stages everything, issues the writes and
+    returns, and the commits drain while training runs the next step. A save that does not
+    fit rolls its shards through the budget, so peak host memory is set by this number
+    rather than by model size, and training resumes once the last shard is staged.
+
+    This is a memory knob, not a throughput one. A save that rolls through the budget runs
+    at the object store's rate, and widening the window does not raise that rate: the 546B
+    EP hero staged its 62.43 GiB per-process share in 140s through a 16 GiB budget and 143s
+    through a 32 GiB one. Widening it far enough to hold a whole share would remove the
+    blocking, but a staged chunk costs more host memory than its own bytes while its upload
+    is in flight, and a budget that large ran a GB200 node out of memory. So the default
+    buys headroom, which is the thing it can actually buy.
+
+    Lower it on a host with less memory per process. Raising it only helps a save whose
+    whole share fits, which is the case that already does not block.
+    """
 
     def __post_init__(self) -> None:
         if self.max_write_replicas < 1:
@@ -199,30 +234,55 @@ class _ShardWrite:
 
 
 class _HostStagingGate:
-    """Bounds how many bytes of shard snapshots are in flight before TensorStore copies them.
+    """Bounds the host memory a save holds in staged shard snapshots.
 
-    This gates staging, which is where a save allocates. It does not bound what TensorStore
-    retains afterwards; a fresh ``ts.Context`` per save handles that (#6785).
+    A snapshot stays live from the moment it is staged until TensorStore has committed it
+    and dropped its reference, so admission is held until the commit resolves rather than
+    until the copy future does. Shard writes pass
+    ``can_reference_source_data_indefinitely=True``: TensorStore never copies the snapshot,
+    so its copy future resolves while the buffer is still referenced, and releasing there
+    would bound nothing -- a save would stage its entire share of the checkpoint at once.
+
+    A save whose share fits in the budget never blocks: every shard is admitted, staged and
+    issued, and the save returns while the commits drain in the background. A larger share
+    rolls through the budget instead, which is what holds peak host memory flat as the
+    model grows.
     """
 
     def __init__(self, limit_bytes: int):
         self._limit = limit_bytes
         self._in_flight = 0
+        self._peak = 0
         self._condition = asyncio.Condition()
+        self._loop: asyncio.AbstractEventLoop | None = None
 
-    @contextlib.asynccontextmanager
-    async def reserve(self, num_bytes: int):
+    @property
+    def peak_bytes(self) -> int:
+        """High-water mark of staged bytes, so a save can report what it actually held."""
+        return self._peak
+
+    async def acquire(self, num_bytes: int) -> None:
+        # The gate is built before the save's loop exists, so bind on first use instead.
+        self._loop = asyncio.get_running_loop()
         async with self._condition:
             # A single snapshot larger than the whole budget still has to proceed, or the
             # save deadlocks on an array it can never admit.
             await self._condition.wait_for(lambda: self._in_flight == 0 or self._in_flight + num_bytes <= self._limit)
             self._in_flight += num_bytes
-        try:
-            yield
-        finally:
+            self._peak = max(self._peak, self._in_flight)
+
+    def release(self, num_bytes: int) -> None:
+        """Return admission from any thread; TensorStore resolves commits off the loop."""
+
+        async def notify() -> None:
             async with self._condition:
                 self._in_flight -= num_bytes
                 self._condition.notify_all()
+
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        asyncio.run_coroutine_threadsafe(notify(), loop)
 
 
 def _hashable_index(index) -> tuple:
@@ -266,7 +326,7 @@ def _is_safe_to_slice(sharding: Sharding, shard_shape: tuple[int, ...]) -> bool:
     a training run that offloads its optimizer state keeps that state in pinned host memory,
     which is exactly the state a checkpoint has to write.
     """
-    if getattr(sharding, "memory_kind", None) != "pinned_host":
+    if getattr(sharding, "memory_kind", None) != _HOST_MEMORY_KIND:
         return True
     return len(shard_shape) >= 2 and math.prod(shard_shape) % 1024 == 0 and shard_shape[-1] % 128 == 0
 
@@ -558,31 +618,49 @@ def _serialize_arrays(
     gate = _HostStagingGate(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
 
+    async def issue_write(num_bytes: int, stage):
+        """Admit ``num_bytes`` to the staging budget, then stage and issue one write.
+
+        The budget is held until TensorStore commits and releases the buffer, so a save
+        larger than the budget rolls its shards through it rather than staging them all.
+        """
+        await gate.acquire(num_bytes)
+        try:
+            write = await stage()
+        except BaseException:
+            gate.release(num_bytes)
+            raise
+        commit_futures.append(write.commit)
+        # Fires on failure as well as success, so a failed commit cannot strand the budget.
+        write.commit.add_done_callback(lambda _: gate.release(num_bytes))
+        await write.copy
+
     async def write_host_array(store, array):
         # Not sharded, and identical on every process, so process 0 writes all of it.
         if jax.process_index() != 0:
             return
-        async with gate.reserve(_estimate_array_nbytes(array)):
+
+        async def stage():
             # The caller owns this buffer and may mutate it, so TensorStore must copy.
-            write = store.write(np.asarray(array), can_reference_source_data_indefinitely=False)
-            commit_futures.append(write.commit)
-            await write.copy
+            return store.write(np.asarray(array), can_reference_source_data_indefinitely=False)
+
+        await issue_write(_estimate_array_nbytes(array), stage)
 
     async def write_shard(store, shard, plan):
         region = _shard_write_region(shard, plan)
         if region is None:
             return
 
-        async with gate.reserve(_estimate_array_nbytes(shard.data) // plan.write_replicas):
+        async def stage():
             data = await _transfer_shard_to_pageable_host(shard, region.local_slice)
-            write = store[region.index].write(
+            return store[region.index].write(
                 data,
                 # Our snapshot is private and never mutated, so TensorStore may hold the
                 # reference instead of copying it into the chunk cache.
                 can_reference_source_data_indefinitely=True,
             )
-            commit_futures.append(write.commit)
-            await write.copy
+
+        await issue_write(_estimate_array_nbytes(shard.data) // plan.write_replicas, stage)
 
     async def write_one(array, tspec, plan):
         store = await ts.open(ts.Spec(tspec), create=True, open=True, context=context)
@@ -595,6 +673,14 @@ def _serialize_arrays(
         await asyncio.gather(*(write_one(a, s, p) for a, s, p in zip(arrays, tspecs, plans)))
 
     asyncio.run(write_all())
+    logger.info(
+        "Checkpoint staged %.2f GiB peak against a %.2f GiB budget across %d writes "
+        "(about %.0f GiB of host memory while in flight)",
+        gate.peak_bytes / 1024**3,
+        config.max_staged_host_bytes / 1024**3,
+        len(commit_futures),
+        _STAGED_BYTE_OVERHEAD * gate.peak_bytes / 1024**3,
+    )
 
     # `_add_futures` and `_start_async_commit` are private to AsyncManager, but they are what
     # its own `serialize` calls. We replace only its per-shard write rule ("write if

@@ -24,6 +24,7 @@ from levanter.models.gpt2 import Gpt2Mlp
 from levanter.tensorstore_serialization import (
     TensorStoreWriteConfig,
     _capped_chunk_shape,
+    _HostStagingGate,
     _transfer_shard_to_pageable_host,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
@@ -230,6 +231,43 @@ def test_a_staging_budget_smaller_than_one_shard_still_completes():
             restored = tree_deserialize_leaves_tensorstore(tmpdir, {"w": hax.zeros(A)})
 
         assert hax.all(restored["w"] == state["w"])
+
+
+def test_staged_bytes_stay_admitted_until_their_write_is_released():
+    """TensorStore holds a shard snapshot until the commit, so admission must outlive the
+    copy. Releasing earlier would let a save stage its whole share of the checkpoint."""
+
+    async def scenario():
+        gate = _HostStagingGate(100)
+        await gate.acquire(60)
+
+        queued = asyncio.create_task(gate.acquire(60))
+        await asyncio.sleep(0)
+        assert not queued.done(), "120 bytes must not be admitted against a 100 byte budget"
+
+        gate.release(60)
+        await asyncio.wait_for(queued, timeout=5)
+        assert gate.peak_bytes == 60
+
+    asyncio.run(scenario())
+
+
+def test_a_save_larger_than_the_staging_budget_rolls_through_it():
+    """Peak host memory follows the budget, not the size of the state, and the checkpoint
+    that comes back is still complete."""
+    with use_test_mesh():
+        A = hax.Axis("A", 4096)
+        state = {f"w{i}": hax.full(A, float(i)) for i in range(8)}
+
+        with TemporaryDirectory() as tmpdir:
+            # Every array is 16 KiB, so a 32 KiB budget admits about two at a time.
+            tree_serialize_leaves_tensorstore(
+                tmpdir, state, write_config=TensorStoreWriteConfig(max_staged_host_bytes=32 * 1024)
+            )
+            restored = tree_deserialize_leaves_tensorstore(tmpdir, {name: hax.zeros(A) for name in state})
+
+        for name, expected in state.items():
+            assert hax.all(restored[name] == expected)
 
 
 @pytest.mark.parametrize(
