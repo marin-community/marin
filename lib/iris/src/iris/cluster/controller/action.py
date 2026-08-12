@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from rigging.timing import Timestamp
 
 from iris.cluster.controller.persistence import action as action_persistence
-from iris.cluster.controller.persistence.database import Tx
+from iris.cluster.controller.persistence.database import ControllerDB, Tx
 from iris.cluster.federation.protocol import CancelTarget
 from iris.resources.action import ActionKind, ActionReceipt, ActionResult, ActionState
 from iris.resources.errors import (
@@ -91,6 +91,40 @@ def _duplicate_action(
     receipt, stored_hash = existing
     if receipt.kind is not kind or stored_hash != payload_hash:
         raise ActionIdempotencyConflict("idempotency key was already used for a different action")
+    return receipt
+
+
+def _persist_remote_action(
+    db: ControllerDB,
+    receipt: ActionReceipt,
+    remote: _RemoteActionContext,
+    *,
+    principal_id: str,
+    kind: ActionKind,
+    idempotency_key: str,
+    payload_hash: str,
+) -> ActionReceipt:
+    with db.transaction() as tx:
+        duplicate = _duplicate_action(
+            tx,
+            principal_id=principal_id,
+            kind=kind,
+            idempotency_key=idempotency_key,
+            payload_hash=payload_hash,
+        )
+        if duplicate is not None:
+            return duplicate
+        action_persistence.insert_action(
+            tx,
+            receipt,
+            authority_cluster_id=remote.authority_cluster_id,
+            authority_action_id=receipt.action_id,
+            backend_id=remote.backend_id,
+            execution_cluster_id=remote.execution_cluster_id,
+            principal_id=principal_id,
+            idempotency_key=_require_idempotency_key(idempotency_key),
+            payload_hash=payload_hash,
+        )
     return receipt
 
 

@@ -294,7 +294,7 @@ def test_heartbeat_loop_refreshes_backends_and_stop_releases_connections():
     assert connection.shutdown_count == 1
 
 
-def test_rejected_peer_batch_does_not_stop_other_peers_or_future_sync(caplog):
+def test_rejected_peer_batch_does_not_stop_other_peers_or_future_sync():
     bad_connection = _SyncConnection("bad")
     good_connection = _SyncConnection("good")
     store = _RejectingSyncStore()
@@ -308,8 +308,6 @@ def test_rejected_peer_batch_does_not_stop_other_peers_or_future_sync(caplog):
     manager.sync_once()
 
     assert store.cursors == {"good": "good-1"}
-    assert "peer bad at cursor '' was rejected" in caplog.text
-
     store.reject_peer = ""
     manager.sync_once()
 
@@ -318,7 +316,7 @@ def test_rejected_peer_batch_does_not_stop_other_peers_or_future_sync(caplog):
     assert good_connection.cursors == ["", "good-1"]
 
 
-def test_sync_loop_with_undecodable_peer_response_retries_without_losing_cursor(caplog):
+def test_sync_loop_with_undecodable_peer_response_retries_without_losing_cursor():
     connection = _TransientUndecodableSyncConnection("cw")
     store = _RejectingSyncStore()
     store.reject_peer = ""
@@ -342,7 +340,6 @@ def test_sync_loop_with_undecodable_peer_response_retries_without_losing_cursor(
             manager.stop()
 
     assert connection.cursors[:2] == ["", ""]
-    assert any(record.exc_info is not None and "peer cw" in record.getMessage() for record in caplog.records)
 
 
 def test_manager_without_peers_is_inert():

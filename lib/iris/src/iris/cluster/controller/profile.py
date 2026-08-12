@@ -18,7 +18,6 @@ from iris.resources.endpoint import (
 )
 from iris.resources.errors import (
     ActionPolicyRejected,
-    BackendIdentityUnknown,
     ResourceNotFound,
     ResourceReplaced,
     ResourceSourceUnavailable,
@@ -96,7 +95,7 @@ class ProfileResources:
             raise ResourceNotFound(identity.task.resource_id)
         if task.current_attempt_id != identity.attempt_number or str(attempt.attempt_uid) != identity.attempt_uid:
             raise ResourceReplaced(f"{identity.task.resource_id}:{identity.attempt_number}")
-        backend = self._dependencies.backends[self._backend_id(str(task.backend_id))]
+        backend = self._dependencies.backends[self._dependencies.require_backend_id(str(task.backend_id))]
         if BackendCapability.CLUSTER_VIEW in backend.capabilities:
             return (
                 TaskTarget(
@@ -132,12 +131,3 @@ class ProfileResources:
             raise ResourceNotFound(identity.task.resource_id)
         if row.attempt_id != identity.attempt_number or str(row.attempt_uid or "") != identity.attempt_uid:
             raise ResourceReplaced(f"{identity.task.resource_id}:{identity.attempt_number}")
-
-    def _backend_id(self, stored: str) -> str:
-        if stored:
-            if stored not in self._dependencies.backends:
-                raise BackendIdentityUnknown(stored)
-            return stored
-        if len(self._dependencies.backends) == 1:
-            return next(iter(self._dependencies.backends))
-        raise BackendIdentityUnknown("Task has no retained backend coordinate")

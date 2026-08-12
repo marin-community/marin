@@ -29,6 +29,7 @@ from iris.cluster.controller.action import (
     _completed_action,
     _CompletedCancel,
     _duplicate_action,
+    _persist_remote_action,
     _RemoteActionContext,
     _require_idempotency_key,
 )
@@ -56,7 +57,9 @@ from iris.cluster.controller.persistence.json_codec import (
 from iris.cluster.controller.persistence.operations import job as job_ops
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.resource_identity import (
+    _authority_cluster,
     _execution_cluster,
+    _job_identity,
     _job_uid,
 )
 from iris.cluster.controller.source_status import resource_source_statuses
@@ -665,7 +668,7 @@ class JobService:
             coordinates = reads.job_coordinates(tx, {job_id}).get(job_id)
         if coordinates is None:
             raise ResourceNotFound(identity.key.resource_id)
-        if self._job_identity(coordinates) != identity:
+        if _job_identity(self._dependencies.cluster_id, coordinates) != identity:
             raise ResourceReplaced(identity.key.resource_id)
         return JobState(coordinates.state)
 
@@ -792,7 +795,8 @@ class JobService:
                 preparation.peer_id,
                 lambda peer: peer.cancel_job(identity, idempotency_key=idempotency_key, reason=reason),
             )
-            return self._persist_remote_action(
+            return _persist_remote_action(
+                self._dependencies.db,
                 receipt,
                 preparation,
                 principal_id=principal_id,
@@ -831,8 +835,8 @@ class JobService:
             if row is None:
                 raise ResourceNotFound(identity.key.resource_id)
             coordinates = self._job_rows(tx, {row.job_id})[row.job_id]
-            authority = self._authority_cluster(coordinates)
-            expected = self._job_identity(coordinates).job_uid
+            authority = _authority_cluster(self._dependencies.cluster_id, coordinates)
+            expected = _job_identity(self._dependencies.cluster_id, coordinates).job_uid
             if identity.key.cluster_id != authority or identity.job_uid != expected:
                 raise ResourceReplaced(identity.key.resource_id)
             execution_cluster_id = _execution_cluster(self._dependencies.cluster_id, row.cluster)
@@ -885,7 +889,7 @@ class JobService:
         parent_coordinates: Mapping[JobName, reads.JobCoordinates] | None = None,
     ) -> JobSummary:
         job_id = row.job_id
-        authority = self._authority_cluster(coordinates or row)
+        authority = _authority_cluster(self._dependencies.cluster_id, coordinates or row)
         execution = _execution_cluster(self._dependencies.cluster_id, str(row.cluster))
         submitted_at = row.submitted_at_ms
         parent = None
@@ -963,23 +967,6 @@ class JobService:
         scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
         return f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
-    def _job_identity(self, row: reads.JobCoordinates | reads.JobRecord) -> JobIdentity:
-        authority = self._authority_cluster(row)
-        return JobIdentity(
-            ResourceKey(authority, ResourceKind.JOB, row.job_id.to_wire()),
-            _job_uid(
-                authority,
-                row.job_id,
-                row.submitted_at_ms,
-                handoff_nonce=str(row.handoff_nonce or ""),
-            ),
-        )
-
-    def _authority_cluster(self, row: reads.JobCoordinates | reads.JobRecord) -> str:
-        if row.direction == int(FederationDirection.RECEIVED):
-            return str(row.peer_id)
-        return self._dependencies.cluster_id
-
     def _known_backend_id(self, stored: str, execution_cluster_id: str) -> str:
         if stored or execution_cluster_id != self._dependencies.cluster_id:
             return stored
@@ -993,7 +980,10 @@ class JobService:
     def _job_authorities(self, job_ids: Iterable[JobName]) -> dict[JobName, str]:
         ids = set(job_ids)
         with self._dependencies.db.read_snapshot() as tx:
-            return {job_id: self._authority_cluster(row) for job_id, row in self._job_rows(tx, ids).items()}
+            return {
+                job_id: _authority_cluster(self._dependencies.cluster_id, row)
+                for job_id, row in self._job_rows(tx, ids).items()
+            }
 
     @staticmethod
     def _job_coordinates_in_snapshot(
@@ -1001,36 +991,3 @@ class JobService:
         job_ids: set[JobName],
     ) -> dict[JobName, reads.JobCoordinates]:
         return reads.job_coordinates(tx, job_ids)
-
-    def _persist_remote_action(
-        self,
-        receipt: ActionReceipt,
-        remote: _RemoteActionContext,
-        *,
-        principal_id: str,
-        kind: ActionKind,
-        idempotency_key: str,
-        payload_hash: str,
-    ) -> ActionReceipt:
-        with self._dependencies.db.transaction() as tx:
-            duplicate = _duplicate_action(
-                tx,
-                principal_id=principal_id,
-                kind=kind,
-                idempotency_key=idempotency_key,
-                payload_hash=payload_hash,
-            )
-            if duplicate is not None:
-                return duplicate
-            action_persistence.insert_action(
-                tx,
-                receipt,
-                authority_cluster_id=remote.authority_cluster_id,
-                authority_action_id=receipt.action_id,
-                backend_id=remote.backend_id,
-                execution_cluster_id=remote.execution_cluster_id,
-                principal_id=principal_id,
-                idempotency_key=_require_idempotency_key(idempotency_key),
-                payload_hash=payload_hash,
-            )
-        return receipt

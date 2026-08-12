@@ -23,8 +23,8 @@ from iris.cluster.controller.persistence.json_codec import (
     decode_attribute_value,
 )
 from iris.cluster.controller.resource_identity import (
+    _authority_cluster,
     _execution_cluster,
-    _job_uid,
     _opaque_uid,
 )
 from iris.cluster.controller.source_status import (
@@ -33,7 +33,6 @@ from iris.cluster.controller.source_status import (
 )
 from iris.cluster.controller.task_state import AttemptRecord, TaskDetailRow
 from iris.cluster.controller.worker_health import WorkerLiveness
-from iris.cluster.federation.protocol import FederationDirection
 from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.resources.attempt import AttemptSummary
 from iris.resources.errors import (
@@ -42,7 +41,6 @@ from iris.resources.errors import (
 )
 from iris.resources.identity import (
     AttemptIdentity,
-    JobIdentity,
     NodeIdentity,
     NodeLocator,
     ResourceKey,
@@ -529,7 +527,7 @@ class NodeResources:
         attempt: AttemptRecord,
         job: reads.JobCoordinates,
     ) -> AttemptSummary:
-        authority = self._authority_cluster(job)
+        authority = _authority_cluster(self._dependencies.cluster_id, job)
         task_key = ResourceKey(authority, ResourceKind.TASK, task.task_id.to_wire())
         backend_id = str(attempt.backend_id or task.backend_id or "")
         execution = _execution_cluster(self._dependencies.cluster_id, str(task.cluster)) if backend_id else ""
@@ -551,18 +549,6 @@ class NodeResources:
             terminal_reason=str(attempt.terminal_reason or ""),
         )
 
-    def _job_identity(self, row: reads.JobCoordinates) -> JobIdentity:
-        authority = self._authority_cluster(row)
-        return JobIdentity(
-            ResourceKey(authority, ResourceKind.JOB, row.job_id.to_wire()),
-            _job_uid(
-                authority,
-                row.job_id,
-                row.submitted_at_ms,
-                handoff_nonce=str(row.handoff_nonce or ""),
-            ),
-        )
-
     def _current_node_identity(self, execution: str, backend_id: str, node_id: str) -> NodeIdentity | None:
         if execution != self._dependencies.cluster_id or not backend_id or not node_id:
             return None
@@ -570,11 +556,6 @@ class NodeResources:
         if backend is None or BackendCapability.WORKER_DAEMON not in backend.capabilities:
             return None
         return NodeIdentity(ResourceKey(execution, ResourceKind.NODE, node_id), backend_id, node_id)
-
-    def _authority_cluster(self, row: reads.JobCoordinates) -> str:
-        if row.direction == int(FederationDirection.RECEIVED):
-            return str(row.peer_id)
-        return self._dependencies.cluster_id
 
     def _job_rows(self, tx: Tx, job_ids: set[JobName]) -> dict[JobName, reads.JobCoordinates]:
         return reads.job_coordinates(tx, job_ids)

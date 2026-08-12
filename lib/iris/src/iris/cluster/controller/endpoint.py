@@ -30,11 +30,11 @@ from iris.cluster.controller.persistence.projections.endpoints import (
     EndpointRow,
     EndpointsProjection,
 )
+from iris.cluster.controller.resource_identity import _authority_cluster
 from iris.cluster.controller.source_status import (
     _available_source,
     peer_source_statuses,
 )
-from iris.cluster.federation.protocol import FederationDirection
 from iris.resources.endpoint import (
     EndpointAccess,
     EndpointDetail,
@@ -234,15 +234,10 @@ class EndpointResources:
             if job is None:
                 raise ResourceNotFound(row.task_id.root_job.to_wire())
             coordinates[row.endpoint_id] = (
-                self._authority_cluster(job),
+                _authority_cluster(self._dependencies.cluster_id, job),
                 row.peer_id or self._dependencies.cluster_id,
             )
         return coordinates
-
-    def _authority_cluster(self, row: reads.JobCoordinates) -> str:
-        if row.direction == int(FederationDirection.RECEIVED):
-            return str(row.peer_id)
-        return self._dependencies.cluster_id
 
     def _job_rows(self, tx: Tx, job_ids: set[JobName]) -> dict[JobName, reads.JobCoordinates]:
         return reads.job_coordinates(tx, job_ids)

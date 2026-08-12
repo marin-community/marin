@@ -21,6 +21,7 @@ from iris.cluster.controller.persistence.projections.endpoints import (
 )
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
+from iris.resources.errors import BackendIdentityUnknown
 from iris.resources.log import LogReader
 from iris.resources.names import WorkerId
 
@@ -96,3 +97,13 @@ class ResourceDependencies:
             raise ValueError("backend_configs keys must exactly match live backend keys")
         object.__setattr__(self, "backends", MappingProxyType(backends))
         object.__setattr__(self, "backend_configs", MappingProxyType(backend_configs))
+
+    def require_backend_id(self, stored: str) -> str:
+        """Resolve a retained backend coordinate, including single-backend rows."""
+        if stored:
+            if stored not in self.backends:
+                raise BackendIdentityUnknown(stored)
+            return stored
+        if len(self.backends) == 1:
+            return next(iter(self.backends))
+        raise BackendIdentityUnknown("Task has no retained backend coordinate")

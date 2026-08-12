@@ -29,7 +29,7 @@ def _require_kind(key: "ResourceKey", expected: ResourceKind) -> None:
 
 
 def _require_attempt_number(attempt_number: int) -> None:
-    if type(attempt_number) is not int or attempt_number < 0:
+    if not isinstance(attempt_number, int) or isinstance(attempt_number, bool) or attempt_number < 0:
         raise InvalidResourceKey("attempt_number must be a non-negative integer")
 
 

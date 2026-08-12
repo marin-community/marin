@@ -7,8 +7,12 @@ import uuid
 
 from rigging.timing import Timestamp
 
+from iris.cluster.controller.persistence import reads
+from iris.cluster.federation.protocol import FederationDirection
 from iris.cluster.types import LOCAL_CLUSTER
 from iris.resources.identity import (
+    JobIdentity,
+    ResourceKey,
     ResourceKind,
 )
 from iris.resources.names import JobName
@@ -36,6 +40,31 @@ def _job_uid(
 def _task_uid(job_uid: str, task_id: JobName) -> str:
     _, task_index = task_id.require_task()
     return _uid(ResourceKind.TASK, job_uid, task_index)
+
+
+def _authority_cluster(
+    cluster_id: str,
+    row: reads.JobCoordinates | reads.JobRecord,
+) -> str:
+    if row.direction == int(FederationDirection.RECEIVED):
+        return str(row.peer_id)
+    return cluster_id
+
+
+def _job_identity(
+    cluster_id: str,
+    row: reads.JobCoordinates | reads.JobRecord,
+) -> JobIdentity:
+    authority = _authority_cluster(cluster_id, row)
+    return JobIdentity(
+        ResourceKey(authority, ResourceKind.JOB, row.job_id.to_wire()),
+        _job_uid(
+            authority,
+            row.job_id,
+            row.submitted_at_ms,
+            handoff_nonce=str(row.handoff_nonce or ""),
+        ),
+    )
 
 
 def _execution_cluster(cluster_id: str, stored: str) -> str:

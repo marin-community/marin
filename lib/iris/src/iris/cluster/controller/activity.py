@@ -259,7 +259,12 @@ class ActivityResources:
         if len(source_key) != 7:
             raise InvalidPageToken("malformed task event activity position")
         attempt_id, attempt_uid, event_type, reason, message, source, count = source_key
-        if type(attempt_id) is not int or type(count) is not int:
+        if (
+            not isinstance(attempt_id, int)
+            or isinstance(attempt_id, bool)
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+        ):
             raise InvalidPageToken("malformed task event activity position")
         if not all(isinstance(value, str) for value in (attempt_uid, event_type, reason, message, source)):
             raise InvalidPageToken("malformed task event activity position")

@@ -10,6 +10,7 @@ from iris.cluster.controller.action import (
     _completed_action,
     _CompletedAction,
     _duplicate_action,
+    _persist_remote_action,
     _RemoteActionContext,
     _RemoteTerminalAction,
     _require_idempotency_key,
@@ -21,26 +22,24 @@ from iris.cluster.controller.persistence.database import Tx
 from iris.cluster.controller.persistence.operations.task import finalize
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.resource_identity import (
+    _authority_cluster,
     _execution_cluster,
-    _job_uid,
+    _job_identity,
     _task_uid,
 )
 from iris.cluster.controller.task import TaskResources
-from iris.cluster.federation.protocol import FederationDirection
 from iris.cluster.types import LOCAL_ADMIN_SUBMITTER
 from iris.resources.action import ActionKind, ActionReceipt, ActionResult
 from iris.resources.attempt import AttemptDetail, AttemptRuntimeObject
 from iris.resources.errors import (
     ActionIdempotencyConflict,
     ActionPolicyRejected,
-    BackendIdentityUnknown,
     ResourceNotFound,
     ResourceReplaced,
 )
 from iris.resources.identity import (
     AttemptIdentity,
     AttemptLocator,
-    JobIdentity,
     ResourceKey,
     ResourceKind,
     TaskIdentity,
@@ -230,7 +229,8 @@ class AttemptResources:
             expected_attempt_uid=expected_attempt_uid,
             reason=reason,
         )
-        return self._persist_remote_action(
+        return _persist_remote_action(
+            self._dependencies.db,
             receipt,
             preparation.context,
             principal_id=principal_id,
@@ -268,8 +268,8 @@ class AttemptResources:
             if row is None:
                 raise ResourceNotFound(identity.key.resource_id)
             job = self._job_rows(tx, {row.job_id})[row.job_id]
-            authority = self._authority_cluster(job)
-            current_identity = _task_uid(self._job_identity(job).job_uid, row.task_id)
+            authority = _authority_cluster(self._dependencies.cluster_id, job)
+            current_identity = _task_uid(_job_identity(self._dependencies.cluster_id, job).job_uid, row.task_id)
             if identity.key.cluster_id != authority or identity.task_uid != current_identity:
                 raise ResourceReplaced(identity.key.resource_id)
             attempt = reads.bulk_get_attempts(tx, [(row.task_id, int(row.current_attempt_id))]).get(
@@ -323,7 +323,7 @@ class AttemptResources:
                 receipt,
                 authority_cluster_id=authority,
                 authority_action_id=receipt.action_id,
-                backend_id=self._backend_id(str(row.backend_id)),
+                backend_id=self._dependencies.require_backend_id(str(row.backend_id)),
                 execution_cluster_id=_execution_cluster(self._dependencies.cluster_id, str(row.cluster)),
                 principal_id=principal_id,
                 idempotency_key=_require_idempotency_key(idempotency_key),
@@ -409,64 +409,5 @@ class AttemptResources:
             observed_at=observed_at,
         )
 
-    def _job_identity(self, row: reads.JobCoordinates) -> JobIdentity:
-        authority = self._authority_cluster(row)
-        return JobIdentity(
-            ResourceKey(authority, ResourceKind.JOB, row.job_id.to_wire()),
-            _job_uid(
-                authority,
-                row.job_id,
-                row.submitted_at_ms,
-                handoff_nonce=str(row.handoff_nonce or ""),
-            ),
-        )
-
-    def _authority_cluster(self, row: reads.JobCoordinates) -> str:
-        if row.direction == int(FederationDirection.RECEIVED):
-            return str(row.peer_id)
-        return self._dependencies.cluster_id
-
-    def _backend_id(self, stored: str) -> str:
-        if stored:
-            if stored not in self._dependencies.backends:
-                raise BackendIdentityUnknown(stored)
-            return stored
-        if len(self._dependencies.backends) == 1:
-            return next(iter(self._dependencies.backends))
-        raise BackendIdentityUnknown("Task has no retained backend coordinate")
-
     def _job_rows(self, tx: Tx, job_ids: set[JobName]) -> dict[JobName, reads.JobCoordinates]:
         return reads.job_coordinates(tx, job_ids)
-
-    def _persist_remote_action(
-        self,
-        receipt: ActionReceipt,
-        remote: _RemoteActionContext,
-        *,
-        principal_id: str,
-        kind: ActionKind,
-        idempotency_key: str,
-        payload_hash: str,
-    ) -> ActionReceipt:
-        with self._dependencies.db.transaction() as tx:
-            duplicate = _duplicate_action(
-                tx,
-                principal_id=principal_id,
-                kind=kind,
-                idempotency_key=idempotency_key,
-                payload_hash=payload_hash,
-            )
-            if duplicate is not None:
-                return duplicate
-            action_persistence.insert_action(
-                tx,
-                receipt,
-                authority_cluster_id=remote.authority_cluster_id,
-                authority_action_id=receipt.action_id,
-                backend_id=remote.backend_id,
-                execution_cluster_id=remote.execution_cluster_id,
-                principal_id=principal_id,
-                idempotency_key=_require_idempotency_key(idempotency_key),
-                payload_hash=payload_hash,
-            )
-        return receipt

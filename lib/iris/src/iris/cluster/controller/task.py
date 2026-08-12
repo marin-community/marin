@@ -22,8 +22,9 @@ from iris.cluster.controller.pagination import (
 from iris.cluster.controller.persistence import reads
 from iris.cluster.controller.persistence.database import Tx
 from iris.cluster.controller.resource_identity import (
+    _authority_cluster,
     _execution_cluster,
-    _job_uid,
+    _job_identity,
     _task_uid,
 )
 from iris.cluster.controller.source_status import (
@@ -32,18 +33,12 @@ from iris.cluster.controller.source_status import (
     resource_source_statuses,
 )
 from iris.cluster.controller.task_state import TaskDetailRow
-from iris.cluster.federation.protocol import FederationDirection
 from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
 from iris.resources.attempt import AttemptCounts, AttemptSummary
-from iris.resources.errors import (
-    BackendIdentityUnknown,
-    ResourceNotFound,
-    ResourceReplaced,
-)
+from iris.resources.errors import ResourceNotFound, ResourceReplaced
 from iris.resources.identity import (
     AttemptIdentity,
-    JobIdentity,
     NodeIdentity,
     ResourceKey,
     ResourceKind,
@@ -129,7 +124,7 @@ class TaskResources:
             )
             for row in page_rows
             if query.authority_cluster_id is None
-            or self._authority_cluster(jobs[row.job_id]) == query.authority_cluster_id
+            or _authority_cluster(self._dependencies.cluster_id, jobs[row.job_id]) == query.authority_cluster_id
         )
         if query.job is not None:
             items = tuple(item for item in items if item.job.key == query.job)
@@ -239,10 +234,10 @@ class TaskResources:
         counts: AttemptCounts,
         job: reads.JobCoordinates,
     ) -> TaskSummary:
-        authority = self._authority_cluster(job)
+        authority = _authority_cluster(self._dependencies.cluster_id, job)
         execution = _execution_cluster(self._dependencies.cluster_id, str(row.cluster))
         task_key = ResourceKey(authority, ResourceKind.TASK, row.task_id.to_wire())
-        job_identity = self._job_identity(job)
+        job_identity = _job_identity(self._dependencies.cluster_id, job)
         task_identity = TaskIdentity(task_key, _task_uid(job_identity.job_uid, row.task_id))
         attempt_identity = None
         node_identity = None
@@ -283,7 +278,7 @@ class TaskResources:
         attempt: reads.AttemptRecord,
         job: reads.JobCoordinates,
     ) -> AttemptSummary:
-        authority = self._authority_cluster(job)
+        authority = _authority_cluster(self._dependencies.cluster_id, job)
         task_key = ResourceKey(authority, ResourceKind.TASK, task.task_id.to_wire())
         backend_id = str(attempt.backend_id or task.backend_id or "")
         execution = _execution_cluster(self._dependencies.cluster_id, str(task.cluster)) if backend_id else ""
@@ -305,18 +300,6 @@ class TaskResources:
             terminal_reason=str(attempt.terminal_reason or ""),
         )
 
-    def _job_identity(self, row: reads.JobCoordinates) -> JobIdentity:
-        authority = self._authority_cluster(row)
-        return JobIdentity(
-            ResourceKey(authority, ResourceKind.JOB, row.job_id.to_wire()),
-            _job_uid(
-                authority,
-                row.job_id,
-                row.submitted_at_ms,
-                handoff_nonce=str(row.handoff_nonce or ""),
-            ),
-        )
-
     def _current_node_identity(self, execution: str, backend_id: str, node_id: str) -> NodeIdentity | None:
         if execution != self._dependencies.cluster_id or not backend_id or not node_id:
             return None
@@ -325,24 +308,10 @@ class TaskResources:
             return None
         return NodeIdentity(ResourceKey(execution, ResourceKind.NODE, node_id), backend_id, node_id)
 
-    def _authority_cluster(self, row: reads.JobCoordinates) -> str:
-        if row.direction == int(FederationDirection.RECEIVED):
-            return str(row.peer_id)
-        return self._dependencies.cluster_id
-
-    def _backend_id(self, stored: str) -> str:
-        if stored:
-            if stored not in self._dependencies.backends:
-                raise BackendIdentityUnknown(stored)
-            return stored
-        if len(self._dependencies.backends) == 1:
-            return next(iter(self._dependencies.backends))
-        raise BackendIdentityUnknown("Task has no retained backend coordinate")
-
     def _execution_backend_id(self, stored: str, execution_cluster_id: str) -> str:
         if execution_cluster_id != self._dependencies.cluster_id:
             return stored
-        return self._backend_id(stored)
+        return self._dependencies.require_backend_id(stored)
 
     def _job_rows(self, tx: Tx, job_ids: set[JobName]) -> dict[JobName, reads.JobCoordinates]:
         return reads.job_coordinates(tx, job_ids)

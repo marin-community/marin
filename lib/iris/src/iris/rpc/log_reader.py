@@ -85,11 +85,15 @@ def _task_event(row: dict[str, object]) -> TaskEvent:
     message = row["message"]
     source = row["source"]
     count = row["count"]
-    if type(attempt_id) is not int or not isinstance(attempt_uid, str):
+    if not isinstance(attempt_id, int) or isinstance(attempt_id, bool) or not isinstance(attempt_uid, str):
         raise ValueError("finelog task event has invalid Attempt identity")
     if not isinstance(occurred_at, datetime):
         raise ValueError("finelog task event has invalid timestamp")
-    if not all(isinstance(value, str) for value in (event_type, reason, message, source)) or type(count) is not int:
+    if (
+        not all(isinstance(value, str) for value in (event_type, reason, message, source))
+        or not isinstance(count, int)
+        or isinstance(count, bool)
+    ):
         raise ValueError("finelog task event has invalid typed fields")
     normalized = occurred_at.replace(tzinfo=UTC) if occurred_at.tzinfo is None else occurred_at.astimezone(UTC)
     return TaskEvent(
