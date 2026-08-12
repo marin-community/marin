@@ -10,15 +10,21 @@ rather than left to a log line nobody reads.
 """
 
 from fray.cluster import ResourceConfig
+from marin.execution.step_spec import StepSpec
 
 from experiments.datakit.cluster.quality.fast_transformer.score import TASK_RESOURCES, WORKER_RESOURCES
 from experiments.datakit.scripts.score_quality_only import (
     DEFAULT_MAX_WORKERS,
     NODE_CPU,
     NODE_RAM_GB,
+    quality_step,
     tasks_per_worker,
     worker_resources,
 )
+
+
+def _normalize_step() -> StepSpec:
+    return StepSpec(name="datakit/normalized/x", hash_attrs={"v": 1}, output_path_prefix="s3://b/marin")
 
 
 def test_a_worker_leaves_headroom_for_the_node_system_pods():
@@ -75,3 +81,40 @@ def test_memory_binds_when_a_task_is_memory_hungry():
     """Whichever of CPU or memory runs out first has to be the one that binds."""
     hungry = ResourceConfig(cpu=1, ram="256g")
     assert tasks_per_worker(worker_resources(), hungry) == 3  # 768 / 256, not 115 / 1
+
+
+def test_the_model_version_changes_the_output_directory():
+    """Production location, different hash — two scorers must not collide in the store.
+
+    The model directory is region-specific and deliberately not hashed; the version
+    tag is what separates one scorer's output from another's.
+    """
+    norm = _normalize_step()
+    deployed = quality_step("x", norm, "pooled-junkgate2", "s3://b/marin").output_path
+    candidate = quality_step("x", norm, "glm52-v3", "s3://b/marin").output_path
+    assert deployed != candidate
+    assert deployed.startswith("s3://b/marin/datakit/quality/x_")
+    assert candidate.startswith("s3://b/marin/datakit/quality/x_")
+
+
+def test_the_path_is_the_pipeline_step_name():
+    """Writing beside production output under a different name would defeat the point."""
+    path = quality_step("arxiv", _normalize_step(), "glm52-v3", "s3://b/marin").output_path
+    assert "/datakit/quality/arxiv_" in path
+
+
+def test_a_changed_dependency_changes_the_output_directory():
+    """The hash covers deps, so re-normalized input does not reuse stale scores."""
+    a = quality_step(
+        "x",
+        StepSpec(name="datakit/normalized/x", hash_attrs={"v": 1}, output_path_prefix="s3://b/marin"),
+        "glm52-v3",
+        "s3://b/marin",
+    ).output_path
+    b = quality_step(
+        "x",
+        StepSpec(name="datakit/normalized/x", hash_attrs={"v": 2}, output_path_prefix="s3://b/marin"),
+        "glm52-v3",
+        "s3://b/marin",
+    ).output_path
+    assert a != b

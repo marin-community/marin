@@ -40,13 +40,14 @@ import logging
 from fray.cluster import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
+from marin.execution.step_spec import StepSpec
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 from zephyr.execution import ZephyrContext
 from zephyr.runners import InlineRunner
 
 from experiments.datakit.cluster.quality.fast_transformer.score import TASK_RESOURCES, score_normalized
-from experiments.datakit.reference_pipeline import sample_sources
+from experiments.datakit.reference_pipeline import select_sources
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,10 @@ WORKER_FRACTION = 0.8
 # One worker per node across the reserved fleet. Asking for more cannot help: the
 # request is node-sized, so the 217th worker has nowhere to land.
 DEFAULT_MAX_WORKERS = 216
+# Names the pool's actors: zephyr appends its own segments, giving
+# ``zephyr-score-<uuid>-coordinator-<pool_id>``. Kept short and free of the stage
+# name so a pool is identifiable in the cluster without reading like a step.
+POOL_NAME = "score"
 
 
 def worker_resources(fraction: float = WORKER_FRACTION) -> ResourceConfig:
@@ -84,18 +89,38 @@ def _gb(value: str | int) -> int:
     return int(float(text.rstrip("g")) * (1 if text.endswith("g") else 1 / 1024))
 
 
+def quality_step(name: str, normalize_step: StepSpec, model_version: str, prefix: str | None) -> StepSpec:
+    """The reference pipeline's quality step for one source, built but not run.
+
+    Constructed rather than hand-rolled so the output path is the production one:
+    ``StepSpec`` hashes the step name, its ``hash_attrs`` and its dependency
+    hashes into the directory, and the model version is one of those attrs — which
+    is exactly what keeps two scorers from colliding in the store. Hand-building a
+    path would land beside production output with nothing distinguishing it.
+
+    ``fn`` is omitted because this step is never executed here; only its
+    ``output_path`` is read. The work runs in-process on the shared pool instead of
+    as one remote step per source.
+    """
+    return StepSpec(
+        name=f"datakit/quality/{name}",
+        deps=[normalize_step],
+        hash_attrs={"model_version": model_version, "v": 1},
+        output_path_prefix=prefix,
+    )
+
+
 def score_all(
     *,
-    source_prefix: str,
-    output_prefix: str,
     quality_model: str,
     quality_model_version: str,
+    output_prefix: str | None = None,
     names: list[str] | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
     fraction: float = WORKER_FRACTION,
 ) -> dict[str, dict[str, int | float]]:
     """Score every source through one shared pool; returns each source's counters."""
-    sources = sample_sources(source_prefix, names)
+    sources = select_sources(names)
     resources = worker_resources(fraction)
     packed = tasks_per_worker(resources)
     logger.info(
@@ -114,19 +139,19 @@ def score_all(
 
     written: dict[str, dict[str, int | float]] = {}
     with ZephyrContext(
-        name="ft-quality-shared",
+        name=POOL_NAME,
         resources=resources,
         max_workers=max_workers,
         stage_runner_factory=InlineRunner,
     ) as ctx:
-        for i, (name, normalized_path) in enumerate(sorted(sources.items()), start=1):
-            out = f"{output_prefix.rstrip('/')}/{name}"
+        for i, (name, normalize_step) in enumerate(sorted(sources.items()), start=1):
+            out = quality_step(name, normalize_step, quality_model_version, output_prefix).output_path
             # One source failing must not take the other 291 with it: the pool is
             # shared, and a raised exception here would tear it down mid-run.
             try:
                 scores = score_normalized(
                     output_path=out,
-                    normalized=read_artifact(normalized_path, NormalizedData),
+                    normalized=read_artifact(normalize_step.output_path, NormalizedData),
                     source=name,
                     model_dir=quality_model,
                     ctx=ctx,
@@ -141,8 +166,11 @@ def score_all(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-prefix", required=True, help="normalized tree whose sources are scored")
-    parser.add_argument("--output-prefix", required=True, help="root the per-source scores are written under")
+    parser.add_argument(
+        "--output-prefix",
+        default=None,
+        help="override the production prefix (default: MARIN_PREFIX, as the pipeline uses)",
+    )
     parser.add_argument("--quality-model", required=True, help="scorer + calibration + type classifier dir")
     parser.add_argument("--quality-model-version", required=True, help="identity tag for the scorer")
     parser.add_argument("--sources", help="comma-separated source names (default: every source found)")
@@ -162,7 +190,6 @@ def main() -> None:
     configure_coreweave_s3()
     names = [s.strip() for s in args.sources.split(",")] if args.sources else None
     written = score_all(
-        source_prefix=args.source_prefix,
         output_prefix=args.output_prefix,
         quality_model=args.quality_model,
         quality_model_version=args.quality_model_version,
