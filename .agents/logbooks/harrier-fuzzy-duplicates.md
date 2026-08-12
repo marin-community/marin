@@ -919,3 +919,17 @@ author: Rafal Wojdyla
 - Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
 - Issue update: None. There is no major run-state change.
 - Next action: Use aggregate shard counts for future progress reports and continue the regular health-check cadence.
+
+### 2026-08-12 21:47 UTC - Three StarCoder sources completed
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 45 completed source artifacts. RNO has 21 completed source artifacts. The full run has 66 of 292 completed source artifacts.
+- Aggregate progress: A fresh object count found 91,183 of 166,775 output shards, or 54.67%. There are 75,592 shards left.
+- RNO results: `starcoder2-ir_cpp_f66a5c36` completed 97 shards, `starcoder2-ir_python_f334a918` completed 11 shards, and `starcoder2-kaggle_f7b0c8ab` completed eight shards. All three source steps succeeded.
+- RNO progress: `biocollection-instruction_stream_003a7575` started 36 large shards. Its normalized input has 23,588,716 records. All 32 workers are alive, and four shards are queued.
+- RNO profile: An on-demand thread capture from worker zero found the shard task in `TeiEmbeddingClient.embed`. Its 16 request threads were waiting for TEI HTTP responses. A sampled TEI service was returning successful requests with active queue and inference time. This confirms GPU embedding work rather than a stalled join.
+- East progress: `nemotron_cc_v2-diverse_qa_016d1909` reached 3,744 of 4,416 output shards with 32 live workers and no dead workers.
+- Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
+- Service capacity: East has 96 healthy TEI services. RNO has 88 healthy TEI services. The remaining eight RNO services are still in the build state with zero failures and zero preemptions.
+- Issue update: None. There is no major run-state change.
+- Next action: Watch the large BioCollection shards for their first completion and continue the regular East health checks.
