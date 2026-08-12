@@ -714,6 +714,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         )
         state_callbacks.add_hook(callbacks.pbar_logger(total=stop_step), every=log_every)
         state_callbacks.add_hook(callbacks.log_step_info(stop_step), every=log_every)
+        state_callbacks.add_hook(log_device_memory, every=1)
         if profiler_enabled:
             state_callbacks.add_hook(
                 profiler_cfg.build(
@@ -848,6 +849,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
+
+
+def log_device_memory(step_info) -> None:
+    """Log this process's local-device HBM peak, live bytes, and allocator limit in GiB."""
+    stats = jax.local_devices()[0].memory_stats()
+    levanter.tracker.log(
+        {
+            "memory/peak_gib": stats["peak_bytes_in_use"] / 1024**3,
+            "memory/in_use_gib": stats["bytes_in_use"] / 1024**3,
+            "memory/limit_gib": stats["bytes_limit"] / 1024**3,
+        },
+        step=step_info.step,
+    )
 
 
 def run_grug(config: GrugRunConfig) -> None:
