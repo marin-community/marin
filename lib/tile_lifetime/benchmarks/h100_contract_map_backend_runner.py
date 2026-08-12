@@ -111,10 +111,10 @@ _NCU_METRICS = (
     "sm__warps_active.avg.pct_of_peak_sustained_active",
 )
 _NCU_SASS_METRIC_LABEL_COLUMN_BYTES = 6
-_MAX_NCU_SASS_METRIC_LABEL_ROWS = max(
-    (len(metric.encode("ascii")) + _NCU_SASS_METRIC_LABEL_COLUMN_BYTES - 1) // _NCU_SASS_METRIC_LABEL_COLUMN_BYTES
-    for metric in _NCU_METRICS
-)
+_MAX_NCU_SASS_METRIC_LABEL_BYTES = max(len(metric.encode("ascii")) for metric in _NCU_METRICS)
+_MAX_NCU_SASS_METRIC_LABEL_ROWS = (
+    _MAX_NCU_SASS_METRIC_LABEL_BYTES + _NCU_SASS_METRIC_LABEL_COLUMN_BYTES - 1
+) // _NCU_SASS_METRIC_LABEL_COLUMN_BYTES
 _NCU_IDENTITY_FIELDS = (
     "ID",
     "Process ID",
@@ -967,17 +967,28 @@ def _ncu_sass_header_matches(line: str, column_widths: tuple[int, ...]) -> bool:
     return all(re.fullmatch(rb"[a-z]{6}", column) is not None for column in columns[2:])
 
 
-def _ncu_sass_metric_labels_match(line: str, column_widths: tuple[int, ...]) -> bool:
+def _ncu_sass_metric_label_fragment_bytes(
+    line: str,
+    column_widths: tuple[int, ...],
+) -> tuple[int, ...] | None:
     columns = _ncu_sass_selected_columns(line, column_widths)
     if columns is None or any(column != b" " * len(column) for column in columns[:2]):
-        return False
-    fragments = tuple(column for column in columns[2:] if column != b" " * len(column))
-    return bool(fragments) and all(
-        len(fragment) == _NCU_SASS_METRIC_LABEL_COLUMN_BYTES
-        and all(value == ord("_") or ord("a") <= value <= ord("z") for value in fragment)
-        and any(ord("a") <= value <= ord("z") for value in fragment)
-        for fragment in fragments
-    )
+        return None
+
+    fragment_bytes: list[int] = []
+    for column in columns[2:]:
+        fragment = column.rstrip(b" ")
+        if not fragment:
+            fragment_bytes.append(0)
+            continue
+        if column != fragment + b" " * (len(column) - len(fragment)):
+            return None
+        if not all(value == ord("_") or ord("a") <= value <= ord("z") for value in fragment):
+            return None
+        if not any(ord("a") <= value <= ord("z") for value in fragment):
+            return None
+        fragment_bytes.append(len(fragment))
+    return tuple(fragment_bytes) if any(fragment_bytes) else None
 
 
 def _ncu_sass_selected_columns(line: str, column_widths: tuple[int, ...]) -> tuple[bytes, ...] | None:
@@ -1100,10 +1111,12 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
     identity_separator_seen = False
     header_seen = False
     metric_label_row_count = 0
+    metric_label_bytes = (0, 0, 0, 0)
     separator_seen = False
 
     def finish_section() -> None:
-        nonlocal current_name, instructions, identity_separator_seen, header_seen, metric_label_row_count, separator_seen
+        nonlocal current_name, instructions, identity_separator_seen, header_seen, metric_label_row_count
+        nonlocal metric_label_bytes, separator_seen
         if current_name is None:
             return
         if (
@@ -1120,6 +1133,7 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
         identity_separator_seen = False
         header_seen = False
         metric_label_row_count = 0
+        metric_label_bytes = (0, 0, 0, 0)
         separator_seen = False
 
     for line_number, line in enumerate(lines[1:], start=2):
@@ -1141,10 +1155,17 @@ def parse_ncu_sass(source: str, expected_names: Sequence[str]) -> tuple[NcuSassK
                     raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)
                 separator_seen = True
                 continue
-            if metric_label_row_count >= _MAX_NCU_SASS_METRIC_LABEL_ROWS or not _ncu_sass_metric_labels_match(
-                line, selected_separator_widths
+            fragment_bytes = _ncu_sass_metric_label_fragment_bytes(line, selected_separator_widths)
+            if fragment_bytes is None:
+                raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)
+            next_metric_label_bytes = tuple(
+                total + fragment for total, fragment in zip(metric_label_bytes, fragment_bytes, strict=True)
+            )
+            if metric_label_row_count >= _MAX_NCU_SASS_METRIC_LABEL_ROWS or any(
+                total > _MAX_NCU_SASS_METRIC_LABEL_BYTES for total in next_metric_label_bytes
             ):
                 raise _unrecognized_ncu_sass_record(line_number, line, selected_separator_widths)
+            metric_label_bytes = next_metric_label_bytes
             metric_label_row_count += 1
             continue
         section = selected_section_pattern.fullmatch(line)
