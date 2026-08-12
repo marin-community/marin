@@ -625,3 +625,10 @@ W&B: https://wandb.ai/marin-community/marin_moe/runs/mok-like-ab-mok-like-100-20
 
 - Status: after 1h03m38s, the feasible hard-topology fit fell from 10 of 16 tasks back to 2 of 16 as other capacity was occupied. All 16 tasks remained scheduling-gated with zero failures, preemptions, logs, or partial allocation.
 - Decision: continue the same pending request. The changing fit confirms an external capacity wait; no resource or launcher change is indicated.
+
+### 2026-08-11 13:00 PT - One-rack compile exceeds the 850 GiB pod limit
+
+- Result: the 16-task gang admitted at about 12:48 PT, then task one was `OOMKilled` with exit 137 during first-step compilation. The other 15 tasks terminated as coscheduled siblings. No optimizer update completed, so W&B has no loss, throughput, drop, runtime-audit, or profile row. [W&B](https://wandb.ai/marin-community/marin_moe/runs/mok-scale-005-v12-dropless-1rack-cpu96-25-20260811-1120).
+- Evidence: process-zero telemetry reached 775,573.875 MiB RSS before the kill, 79.25% process memory, and 93.25% system memory. XLA reported a 288.94 GiB rematerialized device plan against a 176.70 GiB target, but device allocation remained about 156.7 GiB/GPU; the Kubernetes event identifies host/container memory as the failing resource. The successful four-GPU and two-node runs peaked at 827,916.625 and 832,662.0625 MiB RSS under the same graph, showing that the 850 GiB pod limit has little compile headroom.
+- Decision: request 900 GiB per four-GB200 task. The cluster advertises about 955.5 GiB allocatable memory per GB200 node, so this adds 50 GiB of cgroup headroom without changing the model, mesh, XLA graph, allocator, or numerical contract. Run one rack before two racks because the same per-process compile peak applies to both topologies.
+- Next action: launch a new 16-node, 25-update attempt-zero identity from a clean pushed snapshot. Require all 16 tasks to compile, 25 finite zero-drop rows, exact all-process runtime telemetry, and at least 80% weak-scale efficiency before requesting two racks.

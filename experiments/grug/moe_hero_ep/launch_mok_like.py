@@ -46,6 +46,7 @@ DEFAULT_WANDB_PROJECT = "marin_moe"
 BATCH_SIZE_PER_NODE = 64
 GPUS_PER_NODE = 4
 CPUS_PER_NODE = 96
+RAM_PER_NODE = "900g"
 MATCHED_CAPACITY_FACTOR = 1.1
 PRODUCTION_MOK_LIKE_WORKSPACE_SLOTS = 1
 DEFAULT_GPU_DEVICE_MEMORY_FRACTION = 0.85
@@ -316,7 +317,7 @@ def build_backend_comparison_run(
         "GB200",
         count=GPUS_PER_NODE,
         cpu=CPUS_PER_NODE,
-        ram="850g",
+        ram=RAM_PER_NODE,
         disk="1t",
         replicas=num_nodes,
     )

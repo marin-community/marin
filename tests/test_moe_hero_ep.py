@@ -911,6 +911,7 @@ def test_mok_like_launcher_weak_scales_with_process_local_expert_groups(
 
     assert mesh_shape == (num_nodes, 1, 4, 1)
     assert trainer.train_batch_size // resources.chip_count() == 16
+    assert resources.ram == launch_mok_like.RAM_PER_NODE
     assert config.model.num_layers == 48
     assert config.model.mok_like is not None
     assert config.model.mok_like.schedule_capacity_factor == 4.0
