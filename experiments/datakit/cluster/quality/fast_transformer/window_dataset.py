@@ -45,7 +45,15 @@ WINDOW_LABELS = "s3://marin-us-east-02a/marin/user/muchanem/quality_v2/glm52_lab
 SCALEUP_JOINED = (
     "s3://marin-us-east-02a/marin/user/muchanem/quality_v2/glm52_labels_scaleup-x-harrier-oss-v1-0.6b-50m-text-v1"
 )
+# The bme2048 regrade campaign's grades: 2048-token windows, the excerpt marker
+# applied to cut begin windows, drawn with the seed-0 holdout ids excluded.
+BME2048_WINDOW_LABELS = (
+    "s3://marin-us-east-02a/marin/user/muchanem/quality_v2/glm52_labels_bme2048/labels/windows.parquet"
+)
 WINDOW_COLUMNS = ["id", "source", "window", "text", "quality", "score_normalized", "valid", "why"]
+# The window's token offsets say whether it ends before its document does, which
+# is what separates a cut window from a whole short document.
+BME2048_COLUMNS = [*WINDOW_COLUMNS, "token_end", "doc_tokens"]
 
 # A begin window is cut at exactly one window with no excerpt marker, so the
 # grader reads a mid-expression stop as document damage and marks the window
@@ -61,6 +69,8 @@ CUT_WHY_PATTERN = re.compile(
 BEGIN_CHAR_CAP = 20 * GEOMETRY_512.window_tokens
 
 BEGIN = "begin"
+# The positions whose grades can contradict a begin-window verdict.
+SIBLING_POSITIONS = ("middle", "end")
 
 
 @dataclass(frozen=True)
@@ -86,8 +96,8 @@ class AssemblyStats:
     begin_regrades_skipped: int
 
 
-def load_window_labels(path: str = WINDOW_LABELS) -> dict[str, list]:
-    """Scale-up window label rows, deduplicated by ``(id, window)`` keeping the first.
+def load_window_labels(path: str = WINDOW_LABELS, columns: list[str] | None = None) -> dict[str, list]:
+    """Window label rows, deduplicated by ``(id, window)`` keeping the first.
 
     A duplicated key whose rows disagree on text would mean one corpus id naming
     two different documents; the id-keyed embedding join cannot tell those
@@ -95,9 +105,10 @@ def load_window_labels(path: str = WINDOW_LABELS) -> dict[str, list]:
     identical text (the same window graded more than once) collapse to the
     first row, the same discipline as the 88k loader's id dedup.
     """
+    columns = columns or WINDOW_COLUMNS
     with StoragePath(path).open("rb") as fh:
-        table = pq.read_table(fh, columns=WINDOW_COLUMNS)
-    rows = {c: table.column(c).to_pylist() for c in WINDOW_COLUMNS}
+        table = pq.read_table(fh, columns=columns)
+    rows = {c: table.column(c).to_pylist() for c in columns}
     first_text: dict[tuple[str, str], str] = {}
     ambiguous: set[str] = set()
     for doc_id, window, text in zip(rows["id"], rows["window"], rows["text"], strict=True):
@@ -105,7 +116,7 @@ def load_window_labels(path: str = WINDOW_LABELS) -> dict[str, list]:
         if key in first_text and first_text[key] != text:
             ambiguous.add(doc_id)
         first_text.setdefault(key, text)
-    out: dict[str, list] = {c: [] for c in WINDOW_COLUMNS}
+    out: dict[str, list] = {c: [] for c in columns}
     seen: set[tuple[str, str]] = set()
     dupes = 0
     for i, (doc_id, window) in enumerate(zip(rows["id"], rows["window"], strict=True)):
@@ -114,7 +125,7 @@ def load_window_labels(path: str = WINDOW_LABELS) -> dict[str, list]:
             dupes += 1
             continue
         seen.add(key)
-        for c in WINDOW_COLUMNS:
+        for c in columns:
             out[c].append(rows[c][i])
     logger.info(
         "window labels: %d rows kept of %d (%d duplicate/ambiguous dropped, %d ambiguous ids)",
@@ -142,7 +153,80 @@ def drop_cut_artifact_grades(windows: dict[str, list]) -> dict[str, list]:
     ]
     dropped = len(windows["id"]) - len(keep)
     logger.info("cut-artifact filter: dropped %d invalid windows whose rationale blames the cut", dropped)
+    return _keep_rows(windows, keep)
+
+
+def _keep_rows(windows: dict[str, list], keep: list[int]) -> dict[str, list]:
     return {c: [windows[c][i] for i in keep] for c in windows}
+
+
+def drop_cross_window_disagreements(windows: dict[str, list], min_sibling_quality: float) -> dict[str, list]:
+    """Drop invalid begin grades that the document's own middle/end grades contradict.
+
+    A whole-document judgment cannot say whether an ``invalid`` verdict is about
+    the document or about the window the harness cut it to. A document graded at
+    three positions can: a begin window called invalid whose middle *and* end
+    windows are valid and average at least ``min_sibling_quality`` is a document
+    the grader read as fine everywhere it was not cut. Those begin grades score
+    the cut rather than the text.
+
+    Only begin grades are dropped, and only where both siblings exist — a
+    document with one graded window offers no such evidence, so its verdict
+    stands.
+    """
+    grade_by_key = {
+        (doc_id, window): (valid, quality)
+        for doc_id, window, valid, quality in zip(
+            windows["id"], windows["window"], windows["valid"], windows["quality"], strict=True
+        )
+    }
+
+    def sibling_mean_quality(doc_id: str) -> float | None:
+        """Mean quality of the document's middle and end grades, or None unless both exist and are valid."""
+        total = 0.0
+        for position in SIBLING_POSITIONS:
+            grade = grade_by_key.get((doc_id, position))
+            if grade is None or not grade[0]:
+                return None
+            total += grade[1]
+        return total / len(SIBLING_POSITIONS)
+
+    keep: list[int] = []
+    for i, (doc_id, window, valid) in enumerate(zip(windows["id"], windows["window"], windows["valid"], strict=True)):
+        if window != BEGIN or valid:
+            keep.append(i)
+            continue
+        siblings = sibling_mean_quality(doc_id)
+        if siblings is None or siblings < min_sibling_quality:
+            keep.append(i)
+    logger.info(
+        "cross-window filter: dropped %d invalid begin grades contradicted by valid siblings "
+        "averaging quality >= %.1f",
+        len(windows["id"]) - len(keep),
+        min_sibling_quality,
+    )
+    return _keep_rows(windows, keep)
+
+
+def drop_cut_window_invalids(windows: dict[str, list]) -> dict[str, list]:
+    """Drop every invalid grade on a window that ends before its document does.
+
+    The aggressive counterpart to :func:`drop_cross_window_disagreements`: it
+    needs no siblings, so it reaches the cut begin windows of documents too
+    short for three, but it also discards invalid verdicts that were about the
+    text. Whether the trade is worth it is what the arm measures.
+    """
+    keep = [
+        i
+        for i, (valid, token_end, doc_tokens) in enumerate(
+            zip(windows["valid"], windows["token_end"], windows["doc_tokens"], strict=True)
+        )
+        if valid or token_end >= doc_tokens
+    ]
+    logger.info(
+        "cut-invalid filter: dropped %d invalid grades on windows that end mid-document", len(windows["id"]) - len(keep)
+    )
+    return _keep_rows(windows, keep)
 
 
 def begin_window_texts(texts: list[str]) -> list[str]:
