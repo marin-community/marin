@@ -48,8 +48,10 @@ before handing off a change.
 Do not pass a partial marker expression such as `-m "not slow"` for routine
 local testing. Pytest replaces the configured expression instead of combining
 with it, which can select live-cluster or integration tests. Dedicated CI jobs
-run the excluded suites; opt into one locally only when the user or the relevant
-module guide explicitly requests it.
+run the excluded suites. The scheduled unified unit workflow runs slow CPU tests
+nightly; accelerator, integration, cluster, and Docker tests use their owning
+workflows. Opt into one locally only when the user or the relevant module guide
+explicitly requests it.
 
 Tests run from the repository root have a 60-second per-test timeout, including
 fixture setup and teardown. On POSIX, pytest-timeout first interrupts the test
