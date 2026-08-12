@@ -880,3 +880,11 @@ author: Rafal Wojdyla
 - East progress: `nemotron_cc_v2-diverse_qa_016d1909` got to 2,648 of 4,416 embedding shards with 32 live workers and no dead workers. Its stable rate gives a rough 22:25-22:35 UTC completion estimate.
 - Issue update: Post one major update for the RNO capacity loss and recovery.
 - Next action: Confirm that the disconnect burst has ended, then continue the regular health-check cadence.
+
+### 2026-08-12 20:44 UTC - RNO recovery remained stable
+
+- Root health: Both roots remain running with zero failures and zero preemptions.
+- RNO progress: `stack-v3_6ac1a286` got to 9,995 of 12,818 embedding shards with 32 live workers and no dead workers. No new disconnect or retry-two event appeared after 20:41:06 UTC. RNO still has 82 live TEI services.
+- East progress: `nemotron_cc_v2-diverse_qa_016d1909` got to 2,742 of 4,416 embedding shards with 32 live workers and no dead workers. East still has 96 live TEI services.
+- Issue update: None. The major recovery update is already on issue #8162.
+- Next action: Continue the regular health-check cadence and watch Stack v3 through completion.
