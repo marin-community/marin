@@ -41,10 +41,10 @@ if manifest["retry_limits"] != {"failure": 0, "preemption": 0, "task_failure": 0
 required = set(manifest["unresolved_external_identities"])
 if set(resolved) != required:
     raise SystemExit("resolved launch identities do not exactly close the reviewed placeholder set")
-digest = re.compile(r"^sha256:[0-9a-f]{64}$")
-for field in ("task_image_oci_digest", "init_image_oci_digest"):
-    if not digest.fullmatch(resolved[field]):
-        raise SystemExit(f"{field} must be an immutable OCI digest")
+immutable_image = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?/[a-z0-9]+(?:[._/-][a-z0-9]+)*@sha256:[0-9a-f]{64}$")
+for field in ("task_image_oci_ref", "init_image_oci_ref"):
+    if not immutable_image.fullmatch(resolved[field]):
+        raise SystemExit(f"{field} must be a complete immutable OCI reference")
 for field in ("bundle_content_sha256", "iris_config_sha256", "linux_dependency_lock_sha256"):
     if not re.fullmatch(r"[0-9a-f]{64}", resolved[field]):
         raise SystemExit(f"{field} must be a SHA-256")

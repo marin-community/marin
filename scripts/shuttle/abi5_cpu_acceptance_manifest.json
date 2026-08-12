@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "preparation_base_commit": "0ac70a0a21bd7935980827bbf39d95e378335f99",
   "pipeline_abi_version": 5,
   "launch_ready": false,
@@ -23,22 +23,14 @@
     "task_failure": 0,
     "preemption": 0
   },
-  "images": {
-    "task": "UNRESOLVED_TASK_IMAGE_OCI_DIGEST",
-    "init": "UNRESOLVED_INIT_IMAGE_OCI_DIGEST"
-  },
   "toolchain": {
-    "bazel_version": "7.7.0",
-    "bazel_linux_x86_64_sha256": "953f1235a590546a4a9a83d757c075ecf7c7d8dbc30221fd086959a20d8c7a69",
     "jax_version": "0.10.1",
     "jaxlib_version": "0.10.1",
     "jax_revision": "619764c15117fbefc4ba13ab941871cb514c23f6",
     "xla_revision": "9b635916ecc6df6efee62d8e4b0c7ef87ef84d69",
     "stablehlo_revision": "806a6844dfd92cca1ce5391c86dca0ef9e952550",
     "llvm_revision": "9a4faee1068c09efbf837cfb7b0f5693b24635f4",
-    "nanobind_revision": "30f12ae6650ecec86042053d522d9af585f269b0",
-    "python": "UNRESOLVED_LINUX_PYTHON_3_12_PATCH_AND_BUILD_IDENTITY",
-    "linux_dependency_lock_sha256": "UNRESOLVED_LINUX_X86_64_HASH_LOCK"
+    "nanobind_revision": "30f12ae6650ecec86042053d522d9af585f269b0"
   },
   "patch_sha256": {
     "lib/shuttle/mlir/jax_patch/0001-link-shuttle-xla-registry-adapter.patch": "1e8b1400ee05bf8c8037277046113e1f1b1fae5ef56077899b7e853855e3424e",
@@ -55,28 +47,93 @@
     "wrapper_count": 12,
     "future_fast_rewrite_rule": "Revise and independently review numerical tolerances before any non-bitwise FAST rewrite or timing run."
   },
-  "submitted_environment": {
-    "status": "unresolved_closed_allowlist_required",
-    "forbidden_inherited_variables": [
-      "HF_TOKEN",
-      "WANDB_API_KEY",
-      "GCS_RESOLVE_REFRESH_SECS",
-      "MARIN_PROVENANCE"
-    ],
-    "forbidden_files": [".marin.yaml", "coreweave.yaml"],
-    "iris_generated_provenance_requires_review": true
+  "execution_identity": {
+    "schema_version": 1,
+    "platform": {
+      "architecture": "x86_64",
+      "operating_system": "linux",
+      "python_abi": "cp312"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.11",
+      "build_identity": null,
+      "executable_sha256": null
+    },
+    "bazel": {
+      "version": "7.7.0",
+      "binary_sha256": "953f1235a590546a4a9a83d757c075ecf7c7d8dbc30221fd086959a20d8c7a69",
+      "verification": "sha256_before_first_execution"
+    },
+    "dependency_inputs": {
+      "path": "linux-dependency-inputs.json",
+      "sha256": "f872f3aa324f11a7b833ce4f1374ed2cc0118b5d030ae472c6d12a3b113328f7",
+      "lock_ready": false,
+      "unresolved": ["uv-build"]
+    },
+    "images": {
+      "task_ref": null,
+      "init_ref": null
+    },
+    "environment": {
+      "status": "unresolved_closed_allowlist_required",
+      "allowed_names": null,
+      "required_names": [
+        "HOME",
+        "IRIS_BUNDLE_ID",
+        "IRIS_BUNDLE_INIT_IMAGE",
+        "IRIS_NUM_TASKS",
+        "IRIS_TASK_ID",
+        "IRIS_WORKDIR",
+        "PATH",
+        "PWD",
+        "TMPDIR"
+      ],
+      "forbidden_names": [
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GCS_RESOLVE_REFRESH_SECS",
+        "GITHUB_TOKEN",
+        "HF_TOKEN",
+        "MARIN_PROVENANCE",
+        "WANDB_API_KEY"
+      ],
+      "forbidden_files": [".marin.yaml", "coreweave.yaml"]
+    },
+    "iris": {
+      "minimum_contract_commit": "e0689926329548e0b0c987b1e197c67c189c4523",
+      "controller_revision": null,
+      "config_sha256": null,
+      "required_capabilities": [
+        "exact_workspace_bundle_bytes",
+        "per_job_bundle_init_image"
+      ]
+    },
+    "post_submit_bundle_proof": {
+      "schema_version": 1,
+      "status": "required_after_submission",
+      "fields": {
+        "bundle_manifest_sha256": "lowerhex_sha256",
+        "controller_bundle_id": "lowerhex_sha256",
+        "expected_extraction_manifest_sha256": "lowerhex_sha256",
+        "reviewed_bundle_sha256": "lowerhex_sha256",
+        "task_iris_bundle_id": "lowerhex_sha256"
+      },
+      "identity_rule": "controller_bundle_id == task_iris_bundle_id == reviewed_bundle_sha256"
+    }
   },
   "unresolved_external_identities": [
     "bundle_init_pinning_implementation_review",
     "bundle_content_sha256",
     "exact_bundle_blob_submission_review",
-    "init_image_oci_digest",
+    "init_image_oci_ref",
     "iris_config_sha256",
     "iris_revision",
     "linux_dependency_lock_sha256",
     "linux_python_identity",
     "minimal_execution_environment_policy_review",
     "runner_implementation_review",
-    "task_image_oci_digest"
+    "task_image_oci_ref"
   ]
 }

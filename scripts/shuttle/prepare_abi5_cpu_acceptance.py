@@ -11,18 +11,19 @@ import re
 import shutil
 import stat
 import subprocess
+import tomllib
 import zipfile
 from pathlib import Path
 from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_SOURCE = Path(__file__).with_name("abi5_cpu_acceptance_manifest.json")
+DEPENDENCY_INPUT_SOURCE = Path(__file__).with_name("abi5_cpu_linux_dependency_inputs.json")
 RUNNER_SOURCE = Path(__file__).with_name("run_abi5_cpu_acceptance_preflight.sh")
 EXPECTED_BASE_COMMIT = "0ac70a0a21bd7935980827bbf39d95e378335f99"
 EXPECTED_JAX_REVISION = "619764c15117fbefc4ba13ab941871cb514c23f6"
 EXPECTED_XLA_REVISION = "9b635916ecc6df6efee62d8e4b0c7ef87ef84d69"
 SEALED_ARTIFACT = "lib/shuttle/mlir/artifacts/native-preflight-20260810-jaxacceptance6"
-PLACEHOLDER_PREFIX = "UNRESOLVED_"
 FORBIDDEN_COMPONENTS = frozenset(
     {
         ".git",
@@ -41,23 +42,24 @@ REQUIRED_EXTERNAL_IDENTITIES = frozenset(
         "bundle_init_pinning_implementation_review",
         "bundle_content_sha256",
         "exact_bundle_blob_submission_review",
-        "init_image_oci_digest",
+        "init_image_oci_ref",
         "iris_config_sha256",
         "iris_revision",
         "linux_dependency_lock_sha256",
         "linux_python_identity",
         "minimal_execution_environment_policy_review",
         "runner_implementation_review",
-        "task_image_oci_digest",
+        "task_image_oci_ref",
     }
 )
 EXPECTED_CAPSULE_PATH_COUNT = 143
 EXPECTED_CAPSULE_PATH_SET_SHA256 = "cea5fce42a01abb1c691a38591a7cc42ac1d6fdbf0913aad80c4f64ba8a10bc3"
+EXPECTED_DEPENDENCY_INPUT_SHA256 = "f872f3aa324f11a7b833ce4f1374ed2cc0118b5d030ae472c6d12a3b113328f7"
 EXPECTED_MANIFEST_FIELDS = frozenset(
     {
         "capsule_allowlist",
         "destination",
-        "images",
+        "execution_identity",
         "launch_ready",
         "patch_sha256",
         "pipeline_abi_version",
@@ -67,15 +69,12 @@ EXPECTED_MANIFEST_FIELDS = frozenset(
         "schema_version",
         "scorecard_status_changed",
         "sealed_artifact_prohibition",
-        "submitted_environment",
         "target1_contract",
         "toolchain",
         "unresolved_external_identities",
     }
 )
 EXPECTED_TOOLCHAIN = {
-    "bazel_version": "7.7.0",
-    "bazel_linux_x86_64_sha256": "953f1235a590546a4a9a83d757c075ecf7c7d8dbc30221fd086959a20d8c7a69",
     "jax_version": "0.10.1",
     "jaxlib_version": "0.10.1",
     "jax_revision": EXPECTED_JAX_REVISION,
@@ -83,8 +82,72 @@ EXPECTED_TOOLCHAIN = {
     "stablehlo_revision": "806a6844dfd92cca1ce5391c86dca0ef9e952550",
     "llvm_revision": "9a4faee1068c09efbf837cfb7b0f5693b24635f4",
     "nanobind_revision": "30f12ae6650ecec86042053d522d9af585f269b0",
-    "python": "UNRESOLVED_LINUX_PYTHON_3_12_PATCH_AND_BUILD_IDENTITY",
-    "linux_dependency_lock_sha256": "UNRESOLVED_LINUX_X86_64_HASH_LOCK",
+}
+EXPECTED_EXECUTION_IDENTITY = {
+    "schema_version": 1,
+    "platform": {"architecture": "x86_64", "operating_system": "linux", "python_abi": "cp312"},
+    "python": {
+        "implementation": "CPython",
+        "version": "3.12.11",
+        "build_identity": None,
+        "executable_sha256": None,
+    },
+    "bazel": {
+        "version": "7.7.0",
+        "binary_sha256": "953f1235a590546a4a9a83d757c075ecf7c7d8dbc30221fd086959a20d8c7a69",
+        "verification": "sha256_before_first_execution",
+    },
+    "dependency_inputs": {
+        "path": "linux-dependency-inputs.json",
+        "sha256": EXPECTED_DEPENDENCY_INPUT_SHA256,
+        "lock_ready": False,
+        "unresolved": ["uv-build"],
+    },
+    "images": {"task_ref": None, "init_ref": None},
+    "environment": {
+        "status": "unresolved_closed_allowlist_required",
+        "allowed_names": None,
+        "required_names": [
+            "HOME",
+            "IRIS_BUNDLE_ID",
+            "IRIS_BUNDLE_INIT_IMAGE",
+            "IRIS_NUM_TASKS",
+            "IRIS_TASK_ID",
+            "IRIS_WORKDIR",
+            "PATH",
+            "PWD",
+            "TMPDIR",
+        ],
+        "forbidden_names": [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GCS_RESOLVE_REFRESH_SECS",
+            "GITHUB_TOKEN",
+            "HF_TOKEN",
+            "MARIN_PROVENANCE",
+            "WANDB_API_KEY",
+        ],
+        "forbidden_files": [".marin.yaml", "coreweave.yaml"],
+    },
+    "iris": {
+        "minimum_contract_commit": "e0689926329548e0b0c987b1e197c67c189c4523",
+        "controller_revision": None,
+        "config_sha256": None,
+        "required_capabilities": ["exact_workspace_bundle_bytes", "per_job_bundle_init_image"],
+    },
+    "post_submit_bundle_proof": {
+        "schema_version": 1,
+        "status": "required_after_submission",
+        "fields": {
+            "bundle_manifest_sha256": "lowerhex_sha256",
+            "controller_bundle_id": "lowerhex_sha256",
+            "expected_extraction_manifest_sha256": "lowerhex_sha256",
+            "reviewed_bundle_sha256": "lowerhex_sha256",
+            "task_iris_bundle_id": "lowerhex_sha256",
+        },
+        "identity_rule": "controller_bundle_id == task_iris_bundle_id == reviewed_bundle_sha256",
+    },
 }
 EXPECTED_PATCHES = {
     "lib/shuttle/mlir/jax_patch/0001-link-shuttle-xla-registry-adapter.patch": (
@@ -126,13 +189,93 @@ def _load_strict_json(path: Path) -> Any:
         raise ValueError(f"invalid JSON in {path.name}") from error
 
 
+def _validate_dependency_inputs(path: Path) -> dict[str, Any]:
+    payload = _load_strict_json(path)
+    if not isinstance(payload, dict):
+        raise ValueError("dependency input contract must be a JSON object")
+    expected_fields = {
+        "schema_version",
+        "target",
+        "build_isolation",
+        "install_mode",
+        "lock_ready",
+        "unresolved",
+        "packages",
+    }
+    if set(payload) != expected_fields or payload.get("schema_version") != 1:
+        raise ValueError("dependency input contract schema changed")
+    if payload.get("target") != {
+        "architecture": "x86_64",
+        "operating_system": "linux",
+        "python_abi": "cp312",
+    }:
+        raise ValueError("dependency input contract target changed")
+    if payload.get("build_isolation") is not False or payload.get("install_mode") != "only_binary_require_hashes":
+        raise ValueError("dependency input contract installation mode changed")
+    if payload.get("lock_ready") is not False or payload.get("unresolved") != ["uv-build"]:
+        raise ValueError("dependency input contract must remain incomplete until uv-build is pinned")
+    packages = payload.get("packages")
+    expected_names = [
+        "iniconfig",
+        "ml-dtypes",
+        "numpy",
+        "opt-einsum",
+        "packaging",
+        "pluggy",
+        "pygments",
+        "pytest",
+        "pytest-timeout",
+        "scipy",
+        "setuptools",
+        "wheel",
+        "uv-build",
+    ]
+    if (
+        not isinstance(packages, list)
+        or [package.get("name") for package in packages if isinstance(package, dict)] != expected_names
+    ):
+        raise ValueError("dependency input contract package set changed")
+    if any(
+        not isinstance(package, dict) or set(package) != {"name", "version", "url", "sha256"} for package in packages
+    ):
+        raise ValueError("dependency input contract package fields changed")
+    for package in packages[:-1]:
+        if not isinstance(package["version"], str) or not package["version"]:
+            raise ValueError("dependency input contract has an unpinned known version")
+        if not isinstance(package["url"], str) or not package["url"].startswith("https://files.pythonhosted.org/"):
+            raise ValueError("dependency input contract has an unpinned known wheel URL")
+        if not isinstance(package["sha256"], str) or re.fullmatch(r"[0-9a-f]{64}", package["sha256"]) is None:
+            raise ValueError("dependency input contract has an invalid known wheel digest")
+    if packages[-1] != {"name": "uv-build", "version": None, "url": None, "sha256": None}:
+        raise ValueError("dependency input contract must leave only uv-build unresolved")
+    if _sha256(path) != EXPECTED_DEPENDENCY_INPUT_SHA256:
+        raise ValueError("dependency input contract digest changed")
+    locked_packages = tomllib.loads((REPOSITORY_ROOT / "uv.lock").read_text())["package"]
+    locked_by_name = {package["name"]: package for package in locked_packages}
+    for package in packages[:-1]:
+        locked = locked_by_name.get(package["name"])
+        expected_wheel = {"url": package["url"], "hash": f"sha256:{package['sha256']}"}
+        if locked is None or locked.get("version") != package["version"]:
+            raise ValueError("dependency input contract differs from the repository lock")
+        if not any(
+            wheel.get("url") == expected_wheel["url"] and wheel.get("hash") == expected_wheel["hash"]
+            for wheel in locked.get("wheels", [])
+        ):
+            raise ValueError("dependency input contract wheel differs from the repository lock")
+    if "uv-build" in locked_by_name:
+        raise ValueError(
+            "dependency input contract must be completed now that uv-build is present in the repository lock"
+        )
+    return payload
+
+
 def load_and_validate_manifest(path: Path) -> dict[str, Any]:
     payload = _load_strict_json(path)
     if not isinstance(payload, dict):
         raise ValueError("preparation manifest must be a JSON object")
     if set(payload) != EXPECTED_MANIFEST_FIELDS:
         raise ValueError("preparation manifest fields changed")
-    if payload.get("schema_version") != 1:
+    if payload.get("schema_version") != 2:
         raise ValueError("unknown preparation manifest schema")
     if payload.get("preparation_base_commit") != EXPECTED_BASE_COMMIT:
         raise ValueError("preparation base commit changed")
@@ -156,18 +299,16 @@ def load_and_validate_manifest(path: Path) -> dict[str, Any]:
     toolchain = payload.get("toolchain", {})
     if toolchain != EXPECTED_TOOLCHAIN:
         raise ValueError("pinned toolchain identity changed")
+    execution_identity = payload.get("execution_identity")
+    if not isinstance(execution_identity, dict):
+        raise ValueError("execution identity must be an object")
+    if execution_identity.get("images") != {"task_ref": None, "init_ref": None}:
+        raise ValueError("image references must remain unresolved until immutable OCI references are reviewed")
+    if execution_identity != EXPECTED_EXECUTION_IDENTITY:
+        raise ValueError("execution identity contract changed")
+    _validate_dependency_inputs(DEPENDENCY_INPUT_SOURCE)
     if payload.get("patch_sha256") != EXPECTED_PATCHES:
         raise ValueError("pinned patch identity changed")
-    images = payload.get("images", {})
-    if images != {
-        "task": "UNRESOLVED_TASK_IMAGE_OCI_DIGEST",
-        "init": "UNRESOLVED_INIT_IMAGE_OCI_DIGEST",
-    }:
-        raise ValueError("image fields must remain OCI digest placeholders")
-    if not str(toolchain.get("python", "")).startswith(PLACEHOLDER_PREFIX):
-        raise ValueError("Linux Python identity must remain unresolved locally")
-    if not str(toolchain.get("linux_dependency_lock_sha256", "")).startswith(PLACEHOLDER_PREFIX):
-        raise ValueError("Linux dependency lock must remain unresolved locally")
     contract = payload.get("target1_contract", {})
     if contract != {
         "boundaries": ["forward", "backward", "composed"],
@@ -197,18 +338,6 @@ def load_and_validate_manifest(path: Path) -> dict[str, Any]:
         raise ValueError("resource request changed")
     if payload.get("destination") != "s3://marin-us-east-02a/iris/cw-us-east-02a/state/bundles":
         raise ValueError("external destination changed")
-    if payload.get("submitted_environment") != {
-        "status": "unresolved_closed_allowlist_required",
-        "forbidden_inherited_variables": [
-            "HF_TOKEN",
-            "WANDB_API_KEY",
-            "GCS_RESOLVE_REFRESH_SECS",
-            "MARIN_PROVENANCE",
-        ],
-        "forbidden_files": [".marin.yaml", "coreweave.yaml"],
-        "iris_generated_provenance_requires_review": True,
-    }:
-        raise ValueError("submitted environment boundary changed")
     return payload
 
 
@@ -256,6 +385,8 @@ def _copy_capsule_sources(repository_root: Path, capsule: Path) -> None:
         os.chmod(destination, mode)
     shutil.copyfile(MANIFEST_SOURCE, capsule / "acceptance-manifest.json")
     os.chmod(capsule / "acceptance-manifest.json", 0o644)
+    shutil.copyfile(DEPENDENCY_INPUT_SOURCE, capsule / "linux-dependency-inputs.json")
+    os.chmod(capsule / "linux-dependency-inputs.json", 0o644)
     shutil.copyfile(RUNNER_SOURCE, capsule / "run_abi5_cpu_acceptance_preflight.sh")
     os.chmod(capsule / "run_abi5_cpu_acceptance_preflight.sh", 0o755)
 
@@ -377,6 +508,8 @@ def prepare_capsule(repository_root: Path, output: Path) -> dict[str, Any]:
         "bundle_sha256": _sha256(bundle),
         "bundle_size": bundle.stat().st_size,
         "bundle_manifest_sha256": _canonical_sha256(zip_manifest),
+        "dependency_inputs_sha256": _sha256(capsule / "linux-dependency-inputs.json"),
+        "execution_identity_schema_version": manifest["execution_identity"]["schema_version"],
         "expected_extraction_manifest_sha256": _canonical_sha256(extraction_manifest),
         "launch_ready": manifest["launch_ready"],
         "member_count": len(zip_manifest),

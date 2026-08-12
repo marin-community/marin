@@ -296,34 +296,47 @@ PYTHONPATH=lib/iris/src:scripts/shuttle \
     --output /fresh/abi5-cpu-capsule
 ```
 
-`scripts/shuttle/abi5_cpu_acceptance_manifest.json` pins every identity known
-locally: ABI 5, upstream revisions, patch digests, the Bazel 7.7.0 Linux binary
-digest, resource shape, destination, and zero failure, task-failure, and
-preemption retry ceilings. Task and init image digests, exact Linux Python,
-the Linux x86-64 hash lock, Iris client/config identities, bundle digest, and
-runner review commit remain explicit placeholders. The current CoreWeave
-controller always chooses its provider `default_image` for the bundle-fetch
-init container; an exact task-image override does not change it. The bundle
-route also requires a reviewed Iris API/controller change and authorized deploy
-that pins the init image per request. The alternative is a self-contained task
-OCI image with no bundle/workdir init path, which requires separate private
-image-push authorization. Neither option is implemented here.
+`scripts/shuttle/abi5_cpu_acceptance_manifest.json` schema 2 pins every identity
+known locally: ABI 5, upstream revisions, patch digests, CPython 3.12.11 and its
+`cp312` Linux x86-64 ABI, the Bazel 7.7.0 Linux binary digest and mandatory
+pre-execution digest check, resource shape, destination, and zero failure,
+task-failure, and preemption retry ceilings. The separate
+`abi5_cpu_linux_dependency_inputs.json` contract pins the twelve wheel inputs
+available in the repository lock by exact version, URL, and SHA-256. It disables
+build isolation and remains `lock_ready=false`: the repository lock has no
+`uv-build` package even though Shuttle requires `uv_build>=0.7.19,<0.10.0`.
+The Linux CPython build identity and executable digest, complete task and init
+OCI references, deployed Iris controller revision and config digest, closed
+environment allowlist, bundle receipt, complete dependency lock, and runner
+review commit remain explicit blockers.
 
-The current Iris CLI recreates a ZIP from the capsule directory and therefore
-does not submit the content-addressed prepared ZIP bytes. A future bundle route
-must submit the exact reviewed blob through a reviewed API change, or prove the
-controller's actual `IRIS_BUNDLE_ID` and ZIP inventory against the reviewed
-blob before any build. An inventory-equivalent CLI ZIP is not digest-equivalent
-evidence.
+The manifest requires Iris contract commit
+`e0689926329548e0b0c987b1e197c67c189c4523` or a descendant with exact workspace
+bundle bytes and a per-job bundle-init image. That source contract does not
+prove the deployed CoreWeave controller revision or configuration. A launch
+must use complete registry/repository references ending in immutable
+`@sha256:<digest>` values for both images. A self-contained task OCI image with
+no bundle/workdir init path remains an alternative, but it requires separate
+private image-push authorization.
+
+The ordinary Iris CLI recreates a ZIP from the capsule directory and therefore
+does not submit the content-addressed prepared ZIP bytes. The exact-bundle API
+must instead submit the reviewed blob and declared content ID. Before any build,
+the post-submit receipt must bind the controller bundle ID and task
+`IRIS_BUNDLE_ID` to the reviewed ZIP SHA-256, and bind the central-directory and
+expected-extraction manifest digests from the preparation report. An
+inventory-equivalent CLI ZIP is not digest-equivalent evidence.
 
 The copied runner exits before external work even when `resolved-launch.json`
 closes the placeholder set. It rejects inherited tokens, `.marin.yaml`, nonzero
-retry limits, mutable image references, or an `IRIS_BUNDLE_ID` that differs
-from the reviewed bundle digest. The runner contains no upload, build, or
-launch implementation.
+retry limits, incomplete or mutable image references, or an `IRIS_BUNDLE_ID`
+that differs from the reviewed bundle digest. The runner contains no upload,
+build, or launch implementation.
 
-The four named forbidden variables are not a closed credential boundary. A
-future execution runner must start build and test subprocesses with an explicit
+The manifest records the required Iris/path/temp names and known forbidden
+credential and provenance names, but leaves `allowed_names=null`. That is not a
+closed credential boundary. A future execution runner must start build and
+test subprocesses with an explicit
 minimal environment-name allowlist, covering only reviewed `PATH`, home/temp
 locations, locale, CPU selection, and required Iris bundle fields. It must
 reject every unexpected environment name and credential file. The exact
