@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "target": {
     "architecture": "x86_64",
     "operating_system": "linux",
@@ -9,6 +9,18 @@
   "install_mode": "only_binary_require_hashes",
   "lock_ready": false,
   "unresolved": ["uv-build"],
+  "uv_build_resolution": {
+    "requirement": "uv-build>=0.7.19,<0.10.0",
+    "repository_lock_package": null,
+    "checked_in_wheel_path": null,
+    "checked_in_wheel_sha256": null,
+    "completion_steps": [
+      "Resolve one Linux x86_64 CPython 3.12 uv-build wheel satisfying the declared requirement in an explicitly authorized networked lock update.",
+      "Record the exact version, files.pythonhosted.org wheel URL, and SHA-256 in uv.lock and this contract.",
+      "Verify the downloaded wheel against both recorded hashes before any build and install with --no-build-isolation.",
+      "Independently review the completed lock before setting lock_ready true."
+    ]
+  },
   "packages": [
     {
       "name": "iniconfig",

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import warnings
 import zipfile
 from pathlib import Path
@@ -19,7 +20,10 @@ from prepare_abi5_cpu_acceptance import (
     _validate_dependency_inputs,
     _zip_inventory,
     load_and_validate_manifest,
+    load_and_validate_post_submit_receipt,
     prepare_capsule,
+    validate_post_submit_receipt,
+    validate_submitted_environment,
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -49,7 +53,7 @@ def test_checked_in_manifest_fails_closed_until_external_identities_exist() -> N
         "task_image_oci_ref",
     }
     identity = manifest["execution_identity"]
-    assert identity["schema_version"] == 1
+    assert identity["schema_version"] == 2
     assert identity["platform"] == {
         "architecture": "x86_64",
         "operating_system": "linux",
@@ -62,6 +66,8 @@ def test_checked_in_manifest_fails_closed_until_external_identities_exist() -> N
         "version": "3.12.11",
     }
     assert identity["images"] == {"init_ref": None, "task_ref": None}
+    assert identity["environment"]["allowed_names"] == []
+    assert identity["environment"]["inherit_host_environment"] is False
     assert identity["iris"]["minimum_contract_commit"] == "e0689926329548e0b0c987b1e197c67c189c4523"
     assert identity["post_submit_bundle_proof"]["status"] == "required_after_submission"
 
@@ -75,6 +81,107 @@ def test_checked_in_dependency_inputs_pin_every_locally_known_wheel() -> None:
     assert packages[-1] == {"name": "uv-build", "sha256": None, "url": None, "version": None}
     assert contract["lock_ready"] is False
     assert contract["build_isolation"] is False
+    assert contract["uv_build_resolution"]["repository_lock_package"] is None
+    assert contract["uv_build_resolution"]["checked_in_wheel_sha256"] is None
+
+
+def test_submitted_environment_is_closed_and_empty() -> None:
+    validate_submitted_environment({})
+    for environment in ({"HF_TOKEN": "secret"}, {"PATH": "/usr/bin"}, [], None):
+        with pytest.raises(ValueError, match="submitted environment must be an empty JSON object"):
+            validate_submitted_environment(environment)
+
+
+def _valid_post_submit_receipt() -> tuple[dict[str, object], dict[str, object], str]:
+    reviewed = "1" * 64
+    manifest = "2" * 64
+    extraction = "3" * 64
+    image = "registry.example/iris/bundle-init@sha256:" + "4" * 64
+    preparation = {
+        "bundle_sha256": reviewed,
+        "bundle_manifest_sha256": manifest,
+        "expected_extraction_manifest_sha256": extraction,
+    }
+    receipt = {
+        "schema_version": 1,
+        "bundle_manifest_sha256": manifest,
+        "expected_extraction_manifest_sha256": extraction,
+        "launch_response_job_id": "/user/acceptance",
+        "persisted_bundle_id": reviewed,
+        "persisted_bundle_init_image": image,
+        "reviewed_bundle_sha256": reviewed,
+        "status_response_job_id": "/user/acceptance",
+        "task_iris_bundle_id": reviewed,
+        "task_iris_bundle_init_image": image,
+        "task_iris_num_tasks": "1",
+        "task_iris_task_id": "/user/acceptance/0:0",
+    }
+    return preparation, receipt, image
+
+
+def test_post_submit_receipt_binds_public_iris_observations_to_reviewed_bytes() -> None:
+    preparation, receipt, image = _valid_post_submit_receipt()
+    validate_post_submit_receipt(preparation, receipt, expected_init_image=image)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("schema_version", True, "schema_version"),
+        ("launch_response_job_id", "/user/other", "job IDs differ"),
+        ("persisted_bundle_id", "5" * 64, "bundle IDs differ"),
+        ("task_iris_bundle_id", "5" * 64, "bundle IDs differ"),
+        ("persisted_bundle_init_image", "registry.example/image:latest", "persisted_bundle_init_image"),
+        ("task_iris_bundle_init_image", None, "task_iris_bundle_init_image"),
+        ("task_iris_num_tasks", 1, "task_iris_num_tasks"),
+        ("task_iris_task_id", "/user/acceptance/1:0", "task_iris_task_id"),
+        ("bundle_manifest_sha256", "6" * 64, "bundle_manifest_sha256"),
+    ),
+)
+def test_post_submit_receipt_mutations_fail_closed(field: str, value: object, message: str) -> None:
+    preparation, receipt, image = _valid_post_submit_receipt()
+    receipt[field] = value
+    with pytest.raises(ValueError, match=message):
+        validate_post_submit_receipt(preparation, receipt, expected_init_image=image)
+
+
+def test_post_submit_receipt_rejects_unknown_fields() -> None:
+    preparation, receipt, image = _valid_post_submit_receipt()
+    receipt["controller_claim"] = "trusted"
+    with pytest.raises(ValueError, match="fields changed"):
+        validate_post_submit_receipt(preparation, receipt, expected_init_image=image)
+
+
+def test_post_submit_receipt_file_loader_rejects_duplicate_fields(tmp_path: Path) -> None:
+    preparation, receipt, image = _valid_post_submit_receipt()
+    preparation_path = tmp_path / "preparation.json"
+    preparation_path.write_text(json.dumps(preparation))
+    receipt_path = tmp_path / "receipt.json"
+    encoded = json.dumps(receipt)
+    receipt_path.write_text(encoded[:-1] + ',"schema_version":1}')
+    with pytest.raises(ValueError, match="duplicate JSON key: schema_version"):
+        load_and_validate_post_submit_receipt(preparation_path, receipt_path, expected_init_image=image)
+
+
+def test_post_submit_receipt_verifier_accepts_public_iris_receipt(tmp_path: Path) -> None:
+    preparation, receipt, image = _valid_post_submit_receipt()
+    preparation_path = tmp_path / "preparation.json"
+    preparation_path.write_text(json.dumps(preparation))
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt))
+    subprocess.run(
+        [
+            sys.executable,
+            str(REPOSITORY_ROOT / "scripts/shuttle/verify_abi5_cpu_post_submit_receipt.py"),
+            "--preparation-report",
+            str(preparation_path),
+            "--receipt",
+            str(receipt_path),
+            "--expected-init-image",
+            image,
+        ],
+        check=True,
+    )
 
 
 @pytest.mark.parametrize(
@@ -91,6 +198,16 @@ def test_checked_in_dependency_inputs_pin_every_locally_known_wheel() -> None:
             ("execution_identity", "environment", "allowed_names"),
             ["PATH", "PATH"],
             "execution_identity.environment.allowed_names",
+        ),
+        (
+            ("execution_identity", "environment", "inherit_host_environment"),
+            True,
+            "execution_identity.environment.inherit_host_environment",
+        ),
+        (
+            ("execution_identity", "iris", "checked_in_config_sha256"),
+            "0" * 64,
+            "execution_identity.iris.checked_in_config_sha256",
         ),
         (
             ("execution_identity", "iris", "controller_revision"),
@@ -155,9 +272,9 @@ def test_manifest_mutations_fail_closed(tmp_path: Path, path: tuple[str | int, .
             "execution_identity.post_submit_bundle_proof.schema_version",
         ),
         (
-            ("execution_identity", "post_submit_bundle_proof", "fields", "controller_bundle_id"),
+            ("execution_identity", "post_submit_bundle_proof", "fields", "persisted_bundle_id"),
             None,
-            "execution_identity.post_submit_bundle_proof.fields.controller_bundle_id",
+            "execution_identity.post_submit_bundle_proof.fields.persisted_bundle_id",
         ),
         (
             ("execution_identity", "post_submit_bundle_proof", "identity_rule"),
@@ -190,11 +307,12 @@ def test_preparation_builds_config_free_capsule_with_iris_equivalent_inventory(t
         report["dependency_inputs_sha256"]
         == load_and_validate_manifest(MANIFEST_SOURCE)["execution_identity"]["dependency_inputs"]["sha256"]
     )
-    assert report["execution_identity_schema_version"] == 1
+    assert report["execution_identity_schema_version"] == 2
     assert (output / "bundle.zip").stat().st_size == report["bundle_size"]
     assert (capsule / "run_abi5_cpu_acceptance_preflight.sh").is_file()
     assert (capsule / "acceptance-manifest.json").is_file()
     assert (capsule / "linux-dependency-inputs.json").is_file()
+    assert (capsule / "verify_abi5_cpu_post_submit_receipt.py").is_file()
     assert (capsule / "lib/shuttle/mlir/jax_patch/shuttle_jaxlib_target1_acceptance.py").is_file()
     iris_zip = tmp_path / "iris-client.zip"
     iris_zip.write_bytes(create_workspace_zip(capsule))
@@ -226,6 +344,8 @@ def test_dependency_input_mutations_fail_closed(tmp_path: Path) -> None:
         (("schema_version",), None, "schema_version"),
         (("build_isolation",), 0, "build_isolation"),
         (("lock_ready",), "false", "lock_ready"),
+        (("uv_build_resolution", "repository_lock_package"), "uv-build", "repository_lock_package"),
+        (("uv_build_resolution", "checked_in_wheel_sha256"), False, "checked_in_wheel_sha256"),
     ),
 )
 def test_dependency_contract_rejects_cross_type_scalar_substitutions(

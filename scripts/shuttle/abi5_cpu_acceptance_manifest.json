@@ -48,7 +48,7 @@
     "future_fast_rewrite_rule": "Revise and independently review numerical tolerances before any non-bitwise FAST rewrite or timing run."
   },
   "execution_identity": {
-    "schema_version": 1,
+    "schema_version": 2,
     "platform": {
       "architecture": "x86_64",
       "operating_system": "linux",
@@ -67,7 +67,7 @@
     },
     "dependency_inputs": {
       "path": "linux-dependency-inputs.json",
-      "sha256": "f872f3aa324f11a7b833ce4f1374ed2cc0118b5d030ae472c6d12a3b113328f7",
+      "sha256": "29674654100e474eb7e5d8ff1ffca4e5fe5a9a26cd07dce3bfa5d2bc7a671a73",
       "lock_ready": false,
       "unresolved": ["uv-build"]
     },
@@ -76,51 +76,51 @@
       "init_ref": null
     },
     "environment": {
-      "status": "unresolved_closed_allowlist_required",
-      "allowed_names": null,
-      "required_names": [
-        "HOME",
+      "status": "closed_empty_submitted_environment",
+      "allowed_names": [],
+      "inherit_host_environment": false,
+      "runtime_receipt_required_names": [
         "IRIS_BUNDLE_ID",
         "IRIS_BUNDLE_INIT_IMAGE",
         "IRIS_NUM_TASKS",
-        "IRIS_TASK_ID",
-        "IRIS_WORKDIR",
-        "PATH",
-        "PWD",
-        "TMPDIR"
+        "IRIS_TASK_ID"
       ],
-      "forbidden_names": [
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        "GCS_RESOLVE_REFRESH_SECS",
-        "GITHUB_TOKEN",
-        "HF_TOKEN",
-        "MARIN_PROVENANCE",
-        "WANDB_API_KEY"
-      ],
+      "runtime_value_rules": {
+        "IRIS_BUNDLE_ID": "equals_reviewed_bundle_sha256",
+        "IRIS_BUNDLE_INIT_IMAGE": "equals_reviewed_init_image_oci_ref",
+        "IRIS_NUM_TASKS": "decimal_integer_equals_1",
+        "IRIS_TASK_ID": "iris_task_attempt_wire"
+      },
       "forbidden_files": [".marin.yaml", "coreweave.yaml"]
     },
     "iris": {
       "minimum_contract_commit": "e0689926329548e0b0c987b1e197c67c189c4523",
       "controller_revision": null,
       "config_sha256": null,
+      "checked_in_config_path": "lib/iris/config/cw-us-east-02a.yaml",
+      "checked_in_config_sha256": "7c90860fd8a45f03aa8d7ff3fde0200edc19ab9b0ae6cbaa11ae74b723515507",
       "required_capabilities": [
         "exact_workspace_bundle_bytes",
         "per_job_bundle_init_image"
       ]
     },
     "post_submit_bundle_proof": {
-      "schema_version": 1,
+      "schema_version": 2,
       "status": "required_after_submission",
       "fields": {
         "bundle_manifest_sha256": "lowerhex_sha256",
-        "controller_bundle_id": "lowerhex_sha256",
         "expected_extraction_manifest_sha256": "lowerhex_sha256",
+        "launch_response_job_id": "iris_job_wire",
+        "persisted_bundle_id": "lowerhex_sha256",
+        "persisted_bundle_init_image": "immutable_oci_ref",
         "reviewed_bundle_sha256": "lowerhex_sha256",
-        "task_iris_bundle_id": "lowerhex_sha256"
+        "status_response_job_id": "iris_job_wire",
+        "task_iris_bundle_id": "lowerhex_sha256",
+        "task_iris_bundle_init_image": "immutable_oci_ref",
+        "task_iris_num_tasks": "decimal_integer_equals_1",
+        "task_iris_task_id": "iris_task_attempt_wire"
       },
-      "identity_rule": "controller_bundle_id == task_iris_bundle_id == reviewed_bundle_sha256"
+      "identity_rule": "launch and status job IDs match; persisted and task bundle IDs match reviewed bytes; persisted and task init images match the resolved immutable image"
     }
   },
   "unresolved_external_identities": [

@@ -305,6 +305,12 @@ task-failure, and preemption retry ceilings. The separate
 available in the repository lock by exact version, URL, and SHA-256. It disables
 build isolation and remains `lock_ready=false`: the repository lock has no
 `uv-build` package even though Shuttle requires `uv_build>=0.7.19,<0.10.0`.
+No checked-in wheel or source archive supplies that missing hash. The versioned
+contract therefore keeps all three `uv-build` identity fields null and records
+the completion sequence: an authorized networked lock update must select one
+Linux x86-64 CPython 3.12 wheel in the declared range, record the identical
+version, files.pythonhosted.org URL, and SHA-256 in both locks, verify both
+hashes before use, and receive independent review before `lock_ready` changes.
 The Linux CPython build identity and executable digest, complete task and init
 OCI references, deployed Iris controller revision and config digest, closed
 environment allowlist, bundle receipt, complete dependency lock, and runner
@@ -325,7 +331,14 @@ must instead submit the reviewed blob and declared content ID. Before any build,
 the post-submit receipt must bind the controller bundle ID and task
 `IRIS_BUNDLE_ID` to the reviewed ZIP SHA-256, and bind the central-directory and
 expected-extraction manifest digests from the preparation report. An
-inventory-equivalent CLI ZIP is not digest-equivalent evidence.
+inventory-equivalent CLI ZIP is not digest-equivalent evidence. Iris's launch
+response contains only the job ID. The versioned receipt contract therefore
+also reads the public job-status response's canonical persisted request and a
+task receipt: both public job IDs must match, persisted and task bundle IDs must
+equal the reviewed ZIP digest, and persisted and task init-image references
+must equal the reviewed immutable image. The capsule includes
+`verify_abi5_cpu_post_submit_receipt.py`, which strictly loads that receipt,
+rejects duplicate or unknown fields, and applies those comparisons.
 
 The copied runner exits before external work even when `resolved-launch.json`
 closes the placeholder set. It rejects inherited tokens, `.marin.yaml`, nonzero
@@ -333,16 +346,23 @@ retry limits, incomplete or mutable image references, or an `IRIS_BUNDLE_ID`
 that differs from the reviewed bundle digest. The runner contains no upload,
 build, or launch implementation.
 
-The manifest records the required Iris/path/temp names and known forbidden
-credential and provenance names, but leaves `allowed_names=null`. That is not a
-closed credential boundary. A future execution runner must start build and
-test subprocesses with an explicit
-minimal environment-name allowlist, covering only reviewed `PATH`, home/temp
-locations, locale, CPU selection, and required Iris bundle fields. It must
-reject every unexpected environment name and credential file. The exact
-allowlist and its review commit remain a `resolved-launch.json` placeholder;
-AWS, GCP, GitHub, SSH-agent, and other inherited credentials are not implicitly
-safe. Local preparation therefore makes no safe-submission claim.
+The submitted environment allowlist is now exactly empty and host-environment
+inheritance is forbidden. No token, path, locale, or toolchain value belongs in
+the Iris request's user environment map; Iris injects its system fields and the
+reviewed task image must provide its toolchain defaults. A runtime receipt must
+still record `IRIS_BUNDLE_ID`, `IRIS_BUNDLE_INIT_IMAGE`, `IRIS_NUM_TASKS`, and
+`IRIS_TASK_ID` under their declared value rules. `.marin.yaml` and
+`coreweave.yaml` remain forbidden capsule files. This closes the submitted-map
+boundary, not the runner blocker: the future submission implementation must
+construct that empty map explicitly and independently prove the runtime
+receipt.
+
+The checked-in CoreWeave config digest is recorded separately from the still
+null deployed config identity. Its task and init defaults are mutable `:latest`
+tags. No suitable immutable OCI manifest is checked in, and the local Docker
+daemon was unavailable during the offline audit, so neither image field was
+promoted. Building or resolving either image remains separate reviewed work;
+tags and locally named image IDs are not accepted as registry OCI identities.
 
 `lib/shuttle/mlir/jax_patch/shuttle_jaxlib_target1_acceptance.py` closes the
 installed-wheel driver source gap. It covers forward, JAX-owned backward, and

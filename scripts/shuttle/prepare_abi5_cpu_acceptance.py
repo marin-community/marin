@@ -20,6 +20,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_SOURCE = Path(__file__).with_name("abi5_cpu_acceptance_manifest.json")
 DEPENDENCY_INPUT_SOURCE = Path(__file__).with_name("abi5_cpu_linux_dependency_inputs.json")
 RUNNER_SOURCE = Path(__file__).with_name("run_abi5_cpu_acceptance_preflight.sh")
+RECEIPT_VERIFIER_SOURCE = Path(__file__).with_name("verify_abi5_cpu_post_submit_receipt.py")
 EXPECTED_BASE_COMMIT = "0ac70a0a21bd7935980827bbf39d95e378335f99"
 EXPECTED_JAX_REVISION = "619764c15117fbefc4ba13ab941871cb514c23f6"
 EXPECTED_XLA_REVISION = "9b635916ecc6df6efee62d8e4b0c7ef87ef84d69"
@@ -54,7 +55,7 @@ REQUIRED_EXTERNAL_IDENTITIES = frozenset(
 )
 EXPECTED_CAPSULE_PATH_COUNT = 143
 EXPECTED_CAPSULE_PATH_SET_SHA256 = "cea5fce42a01abb1c691a38591a7cc42ac1d6fdbf0913aad80c4f64ba8a10bc3"
-EXPECTED_DEPENDENCY_INPUT_SHA256 = "f872f3aa324f11a7b833ce4f1374ed2cc0118b5d030ae472c6d12a3b113328f7"
+EXPECTED_DEPENDENCY_INPUT_SHA256 = "29674654100e474eb7e5d8ff1ffca4e5fe5a9a26cd07dce3bfa5d2bc7a671a73"
 EXPECTED_MANIFEST_FIELDS = frozenset(
     {
         "capsule_allowlist",
@@ -84,7 +85,7 @@ EXPECTED_TOOLCHAIN = {
     "nanobind_revision": "30f12ae6650ecec86042053d522d9af585f269b0",
 }
 EXPECTED_EXECUTION_IDENTITY = {
-    "schema_version": 1,
+    "schema_version": 2,
     "platform": {"architecture": "x86_64", "operating_system": "linux", "python_abi": "cp312"},
     "python": {
         "implementation": "CPython",
@@ -105,48 +106,51 @@ EXPECTED_EXECUTION_IDENTITY = {
     },
     "images": {"task_ref": None, "init_ref": None},
     "environment": {
-        "status": "unresolved_closed_allowlist_required",
-        "allowed_names": None,
-        "required_names": [
-            "HOME",
+        "status": "closed_empty_submitted_environment",
+        "allowed_names": [],
+        "inherit_host_environment": False,
+        "runtime_receipt_required_names": [
             "IRIS_BUNDLE_ID",
             "IRIS_BUNDLE_INIT_IMAGE",
             "IRIS_NUM_TASKS",
             "IRIS_TASK_ID",
-            "IRIS_WORKDIR",
-            "PATH",
-            "PWD",
-            "TMPDIR",
         ],
-        "forbidden_names": [
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "GOOGLE_APPLICATION_CREDENTIALS",
-            "GCS_RESOLVE_REFRESH_SECS",
-            "GITHUB_TOKEN",
-            "HF_TOKEN",
-            "MARIN_PROVENANCE",
-            "WANDB_API_KEY",
-        ],
+        "runtime_value_rules": {
+            "IRIS_BUNDLE_ID": "equals_reviewed_bundle_sha256",
+            "IRIS_BUNDLE_INIT_IMAGE": "equals_reviewed_init_image_oci_ref",
+            "IRIS_NUM_TASKS": "decimal_integer_equals_1",
+            "IRIS_TASK_ID": "iris_task_attempt_wire",
+        },
         "forbidden_files": [".marin.yaml", "coreweave.yaml"],
     },
     "iris": {
         "minimum_contract_commit": "e0689926329548e0b0c987b1e197c67c189c4523",
         "controller_revision": None,
         "config_sha256": None,
+        "checked_in_config_path": "lib/iris/config/cw-us-east-02a.yaml",
+        "checked_in_config_sha256": "7c90860fd8a45f03aa8d7ff3fde0200edc19ab9b0ae6cbaa11ae74b723515507",
         "required_capabilities": ["exact_workspace_bundle_bytes", "per_job_bundle_init_image"],
     },
     "post_submit_bundle_proof": {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "required_after_submission",
         "fields": {
             "bundle_manifest_sha256": "lowerhex_sha256",
-            "controller_bundle_id": "lowerhex_sha256",
             "expected_extraction_manifest_sha256": "lowerhex_sha256",
+            "launch_response_job_id": "iris_job_wire",
+            "persisted_bundle_id": "lowerhex_sha256",
+            "persisted_bundle_init_image": "immutable_oci_ref",
             "reviewed_bundle_sha256": "lowerhex_sha256",
+            "status_response_job_id": "iris_job_wire",
             "task_iris_bundle_id": "lowerhex_sha256",
+            "task_iris_bundle_init_image": "immutable_oci_ref",
+            "task_iris_num_tasks": "decimal_integer_equals_1",
+            "task_iris_task_id": "iris_task_attempt_wire",
         },
-        "identity_rule": "controller_bundle_id == task_iris_bundle_id == reviewed_bundle_sha256",
+        "identity_rule": (
+            "launch and status job IDs match; persisted and task bundle IDs match reviewed bytes; "
+            "persisted and task init images match the resolved immutable image"
+        ),
     },
 }
 EXPECTED_PATCHES = {
@@ -162,6 +166,24 @@ EXPECTED_PATCHES = {
     "lib/shuttle/mlir/xla_patch/0002-anchor-lit-labels-to-xla-repository.patch": (
         "e4f3121f3123d7e2ee781cc5ee92f1ddeb0df662b6702d37615bcae821ecbc99"
     ),
+}
+EXPECTED_UV_BUILD_RESOLUTION = {
+    "requirement": "uv-build>=0.7.19,<0.10.0",
+    "repository_lock_package": None,
+    "checked_in_wheel_path": None,
+    "checked_in_wheel_sha256": None,
+    "completion_steps": [
+        (
+            "Resolve one Linux x86_64 CPython 3.12 uv-build wheel satisfying the declared requirement in an "
+            "explicitly authorized networked lock update."
+        ),
+        "Record the exact version, files.pythonhosted.org wheel URL, and SHA-256 in uv.lock and this contract.",
+        (
+            "Verify the downloaded wheel against both recorded hashes before any build and install with "
+            "--no-build-isolation."
+        ),
+        "Independently review the completed lock before setting lock_ready true.",
+    ],
 }
 
 
@@ -225,7 +247,7 @@ def _closed_mapping(value: object, expected_fields: set[str], name: str) -> dict
 
 def _validate_execution_identity(value: object) -> dict[str, Any]:
     identity = _closed_mapping(value, set(EXPECTED_EXECUTION_IDENTITY), "execution_identity")
-    _exact_int(identity["schema_version"], 1, "execution_identity.schema_version")
+    _exact_int(identity["schema_version"], 2, "execution_identity.schema_version")
 
     python = _closed_mapping(identity["python"], set(EXPECTED_EXECUTION_IDENTITY["python"]), "execution_identity.python")
     _unresolved_string(python["build_identity"], r"\S(?:.*\S)?", "execution_identity.python.build_identity")
@@ -246,18 +268,36 @@ def _validate_execution_identity(value: object) -> dict[str, Any]:
     environment = _closed_mapping(
         identity["environment"], set(EXPECTED_EXECUTION_IDENTITY["environment"]), "execution_identity.environment"
     )
-    _exact_none(environment["allowed_names"], "execution_identity.environment.allowed_names")
+    _exact_bool(
+        environment["inherit_host_environment"],
+        False,
+        "execution_identity.environment.inherit_host_environment",
+    )
+    if environment["allowed_names"] != []:
+        raise ValueError("execution_identity.environment.allowed_names must be the empty list")
 
     iris = _closed_mapping(identity["iris"], set(EXPECTED_EXECUTION_IDENTITY["iris"]), "execution_identity.iris")
     _unresolved_string(iris["controller_revision"], r"[0-9a-f]{40}", "execution_identity.iris.controller_revision")
     _unresolved_string(iris["config_sha256"], r"[0-9a-f]{64}", "execution_identity.iris.config_sha256")
+    _exact_string(
+        iris["checked_in_config_path"],
+        EXPECTED_EXECUTION_IDENTITY["iris"]["checked_in_config_path"],
+        "execution_identity.iris.checked_in_config_path",
+    )
+    _exact_string(
+        iris["checked_in_config_sha256"],
+        EXPECTED_EXECUTION_IDENTITY["iris"]["checked_in_config_sha256"],
+        "execution_identity.iris.checked_in_config_sha256",
+    )
+    if _sha256(REPOSITORY_ROOT / "lib/iris/config/cw-us-east-02a.yaml") != iris["checked_in_config_sha256"]:
+        raise ValueError("execution_identity.iris checked-in config digest changed")
 
     proof = _closed_mapping(
         identity["post_submit_bundle_proof"],
         set(EXPECTED_EXECUTION_IDENTITY["post_submit_bundle_proof"]),
         "execution_identity.post_submit_bundle_proof",
     )
-    _exact_int(proof["schema_version"], 1, "execution_identity.post_submit_bundle_proof.schema_version")
+    _exact_int(proof["schema_version"], 2, "execution_identity.post_submit_bundle_proof.schema_version")
     _exact_string(
         proof["status"],
         EXPECTED_EXECUTION_IDENTITY["post_submit_bundle_proof"]["status"],
@@ -291,11 +331,12 @@ def _validate_dependency_inputs(path: Path) -> dict[str, Any]:
         "install_mode",
         "lock_ready",
         "unresolved",
+        "uv_build_resolution",
         "packages",
     }
     if set(payload) != expected_fields:
         raise ValueError("dependency input contract fields changed")
-    _exact_int(payload["schema_version"], 1, "dependency_inputs.schema_version")
+    _exact_int(payload["schema_version"], 2, "dependency_inputs.schema_version")
     if payload.get("target") != {
         "architecture": "x86_64",
         "operating_system": "linux",
@@ -307,6 +348,13 @@ def _validate_dependency_inputs(path: Path) -> dict[str, Any]:
     _exact_bool(payload["lock_ready"], False, "dependency_inputs.lock_ready")
     if payload.get("unresolved") != ["uv-build"]:
         raise ValueError("dependency input contract must remain incomplete until uv-build is pinned")
+    resolution = _closed_mapping(
+        payload["uv_build_resolution"], set(EXPECTED_UV_BUILD_RESOLUTION), "dependency_inputs.uv_build_resolution"
+    )
+    for field in ("repository_lock_package", "checked_in_wheel_path", "checked_in_wheel_sha256"):
+        _exact_none(resolution[field], f"dependency_inputs.uv_build_resolution.{field}")
+    if resolution != EXPECTED_UV_BUILD_RESOLUTION:
+        raise ValueError("dependency input uv-build resolution workflow changed")
     packages = payload.get("packages")
     expected_names = [
         "iniconfig",
@@ -363,6 +411,101 @@ def _validate_dependency_inputs(path: Path) -> dict[str, Any]:
             "dependency input contract must be completed now that uv-build is present in the repository lock"
         )
     return payload
+
+
+def validate_submitted_environment(value: object) -> None:
+    """Reject every caller-supplied environment variable for this sealed run."""
+    if type(value) is not dict or value:
+        raise ValueError("submitted environment must be an empty JSON object")
+
+
+def validate_post_submit_receipt(
+    preparation_report: object,
+    receipt: object,
+    *,
+    expected_init_image: str,
+) -> None:
+    """Validate public Iris launch/status/task observations against reviewed bytes."""
+    if not isinstance(preparation_report, dict):
+        raise ValueError("preparation report must be a JSON object")
+    expected_fields = {
+        "schema_version",
+        "bundle_manifest_sha256",
+        "expected_extraction_manifest_sha256",
+        "launch_response_job_id",
+        "persisted_bundle_id",
+        "persisted_bundle_init_image",
+        "reviewed_bundle_sha256",
+        "status_response_job_id",
+        "task_iris_bundle_id",
+        "task_iris_bundle_init_image",
+        "task_iris_num_tasks",
+        "task_iris_task_id",
+    }
+    value = _closed_mapping(receipt, expected_fields, "post_submit_receipt")
+    _exact_int(value["schema_version"], 1, "post_submit_receipt.schema_version")
+    sha_fields = (
+        "bundle_manifest_sha256",
+        "expected_extraction_manifest_sha256",
+        "persisted_bundle_id",
+        "reviewed_bundle_sha256",
+        "task_iris_bundle_id",
+    )
+    for field in sha_fields:
+        if type(value[field]) is not str or re.fullmatch(r"[0-9a-f]{64}", value[field]) is None:
+            raise ValueError(f"post_submit_receipt.{field} must be a lower-case SHA-256")
+    for field in ("launch_response_job_id", "status_response_job_id"):
+        if type(value[field]) is not str or re.fullmatch(r"/[^/\s]+/[^/\s]+", value[field]) is None:
+            raise ValueError(f"post_submit_receipt.{field} must be a root Iris job wire ID")
+    _exact_string(value["task_iris_num_tasks"], "1", "post_submit_receipt.task_iris_num_tasks")
+    immutable_image = r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?/[a-z0-9]+(?:[._/-][a-z0-9]+)*@sha256:[0-9a-f]{64}"
+    if type(expected_init_image) is not str or re.fullmatch(immutable_image, expected_init_image) is None:
+        raise ValueError("expected_init_image must be an immutable OCI reference")
+    for field in ("persisted_bundle_init_image", "task_iris_bundle_init_image"):
+        _exact_string(value[field], expected_init_image, f"post_submit_receipt.{field}")
+    preparation_fields = {
+        "bundle_manifest_sha256",
+        "expected_extraction_manifest_sha256",
+        "bundle_sha256",
+    }
+    expected: dict[str, str] = {}
+    for field in preparation_fields:
+        item = preparation_report.get(field)
+        if type(item) is not str or re.fullmatch(r"[0-9a-f]{64}", item) is None:
+            raise ValueError(f"preparation_report.{field} must be a lower-case SHA-256")
+        expected[field] = item
+    _exact_string(
+        value["bundle_manifest_sha256"],
+        expected["bundle_manifest_sha256"],
+        "post_submit_receipt.bundle_manifest_sha256",
+    )
+    _exact_string(
+        value["expected_extraction_manifest_sha256"],
+        expected["expected_extraction_manifest_sha256"],
+        "post_submit_receipt.expected_extraction_manifest_sha256",
+    )
+    reviewed = expected["bundle_sha256"]
+    _exact_string(value["reviewed_bundle_sha256"], reviewed, "post_submit_receipt.reviewed_bundle_sha256")
+    if value["launch_response_job_id"] != value["status_response_job_id"]:
+        raise ValueError("post-submit launch and status job IDs differ")
+    expected_task_id = f"{value['launch_response_job_id']}/0:0"
+    _exact_string(value["task_iris_task_id"], expected_task_id, "post_submit_receipt.task_iris_task_id")
+    if value["persisted_bundle_id"] != reviewed or value["task_iris_bundle_id"] != reviewed:
+        raise ValueError("post-submit bundle IDs differ from the reviewed bundle bytes")
+
+
+def load_and_validate_post_submit_receipt(
+    preparation_report_path: Path,
+    receipt_path: Path,
+    *,
+    expected_init_image: str,
+) -> None:
+    """Strictly load and validate a post-submit receipt and preparation report."""
+    validate_post_submit_receipt(
+        _load_strict_json(preparation_report_path),
+        _load_strict_json(receipt_path),
+        expected_init_image=expected_init_image,
+    )
 
 
 def load_and_validate_manifest(path: Path) -> dict[str, Any]:
@@ -499,6 +642,8 @@ def _copy_capsule_sources(repository_root: Path, capsule: Path) -> None:
     os.chmod(capsule / "linux-dependency-inputs.json", 0o644)
     shutil.copyfile(RUNNER_SOURCE, capsule / "run_abi5_cpu_acceptance_preflight.sh")
     os.chmod(capsule / "run_abi5_cpu_acceptance_preflight.sh", 0o755)
+    shutil.copyfile(RECEIPT_VERIFIER_SOURCE, capsule / "verify_abi5_cpu_post_submit_receipt.py")
+    os.chmod(capsule / "verify_abi5_cpu_post_submit_receipt.py", 0o644)
 
 
 def _validate_repository_inputs(repository_root: Path, manifest: dict[str, Any]) -> str:
