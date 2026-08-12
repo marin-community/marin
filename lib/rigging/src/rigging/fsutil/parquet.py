@@ -4,10 +4,9 @@
 """Parquet previews for the CLI and the browser.
 
 Parquet keeps its schema and its row-group index in a footer, so the bounded head read
-that serves every other format returns nothing a reader can parse. These helpers open
-the object and seek instead: the footer costs one small range request, and the rows come
-from the first row group, which is decoded only when it is small enough to be worth the
-transfer.
+that serves every other format returns nothing a reader can parse. These helpers seek
+instead: the footer gives the schema and the statistics, and the rows come out of the
+first row group, which is decoded only when it stays inside the preview limit.
 """
 
 from rigging.filesystem.buckets import filesystem_for
@@ -16,6 +15,10 @@ from rigging.fsutil.render import aligned_lines, format_size, record_lines, tabl
 
 # Rows rendered when the caller asks for no particular count.
 PREVIEW_ROWS = 20
+
+
+class MissingParquetReader(RuntimeError):
+    """Raised when a preview runs where no parquet reader is installed."""
 
 
 def is_parquet(name: str) -> bool:
@@ -30,21 +33,20 @@ def is_parquet(name: str) -> bool:
 def parquet_lines(url: str, rows: int = PREVIEW_ROWS) -> list[str]:
     """Render *url* as its schema, its footer statistics, and its first *rows* rows."""
     # pyarrow is deliberately absent from marin-rigging's dependencies: rigging sits under
-    # every other package, and one more requirement there re-resolves the whole workspace
-    # lock. Every environment that holds parquet files already installs pyarrow.
+    # every other package, and one more requirement there re-resolves the workspace lock.
     try:
         import pyarrow.parquet as pq  # noqa: PLC0415  # optional dep
     except ImportError as exc:
-        raise RuntimeError("reading parquet requires pyarrow; install it with `pip install pyarrow`") from exc
+        raise MissingParquetReader("reading parquet requires pyarrow; install it with `pip install pyarrow`") from exc
 
     fs, path = filesystem_for(url)
     file_size = fs.size(path)
     with fs.open(path, "rb") as file:
         parquet_file = pq.ParquetFile(file)
         metadata = parquet_file.metadata
-        lines = ["schema:", *_schema_lines(parquet_file.schema_arrow), "", *_summary_lines(metadata, file_size), ""]
-        lines.extend(_row_lines(parquet_file, metadata, rows))
-    return lines
+        lines = ["schema:", *_schema_lines(parquet_file.schema_arrow), "", *_summary_lines(metadata, file_size)]
+        rendered_rows = _row_lines(parquet_file, metadata, rows)
+    return [*lines, "", *rendered_rows] if rendered_rows else lines
 
 
 def _schema_lines(schema) -> list[str]:
@@ -64,12 +66,16 @@ def _summary_lines(metadata, file_size: int) -> list[str]:
 
 
 def _row_lines(parquet_file, metadata, rows: int) -> list[str]:
-    """The first *rows* rows, or why they were not read.
+    """The first *rows* rows of row group 0, or why they were not read.
 
-    A batch is served out of the first row group, and parquet's smallest readable unit is
-    a whole column chunk. So the cost of one row is the cost of the row group that holds
-    it, and a row group above the preview limit is reported rather than pulled down.
+    Parquet's smallest readable unit is a whole column chunk, so one row costs the row
+    group that holds it. A first row group above the limit is reported rather than
+    decoded, and the read is pinned to that group so it never crosses into one the limit
+    has not cleared. A short first group therefore yields fewer rows than asked, which
+    the row count below the table states.
     """
+    if rows <= 0:
+        return []
     if metadata.num_rows == 0:
         return ["(no rows)"]
 
@@ -80,9 +86,7 @@ def _row_lines(parquet_file, metadata, rows: int) -> list[str]:
             f"above the {format_size(MAX_PREVIEW_BYTES)} preview limit — copy the file to read it]"
         ]
 
-    # A batch may otherwise run on into the next row group, which would put the read
-    # above the limit that the check just cleared.
-    batch = next(parquet_file.iter_batches(batch_size=max(1, min(rows, group.num_rows))), None)
+    batch = next(parquet_file.iter_batches(batch_size=rows, row_groups=[0]), None)
     if batch is None:
         return ["(no rows)"]
     lines = record_lines(batch.to_pylist())

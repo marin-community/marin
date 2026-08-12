@@ -63,11 +63,15 @@ at 10 MB of stored bytes. Use `cp` to fetch a whole object.
 
 A `.parquet` file is read through its footer rather than from the head of the object,
 so `cat`, `head`, and the browser show its schema, its row count, and its first rows.
-Parquet's smallest readable unit is a whole column chunk, so the rows come out of the
-first row group, and a first row group above the 10 MB limit is reported instead of
-pulled down — copy that file to read it. Parquet previews need pyarrow in the
-environment. It is not a `marin-rigging` dependency, because rigging sits under every
-other package, but the marin workspace installs it.
+`head -n` bounds the rows, not the printed lines. Parquet's smallest readable unit is a
+whole column chunk, so the rows come out of the first row group alone, and a first row
+group that decodes to more than 10 MB is reported instead of read — copy that file to
+read it. The footer itself is read whatever its size, so the 10 MB cap above bounds the
+column data rather than the whole preview.
+
+Parquet previews need pyarrow in the environment. It is not a `marin-rigging`
+dependency, because rigging sits under every other package, but the marin workspace
+installs it.
 
 ## The browser
 

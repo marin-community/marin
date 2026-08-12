@@ -27,7 +27,7 @@ from rigging.fsutil.listing import (
     read_preview,
     total_size,
 )
-from rigging.fsutil.parquet import PREVIEW_ROWS, is_parquet, parquet_lines
+from rigging.fsutil.parquet import PREVIEW_ROWS, MissingParquetReader, is_parquet, parquet_lines
 from rigging.fsutil.render import aligned_lines, file_lines, format_size, format_time, table_lines
 from rigging.fsutil.tui import run as run_browser
 
@@ -180,7 +180,10 @@ def _formatted_lines(url: str, rows: int) -> list[str]:
     """
     name = StoragePath(url).name
     if is_parquet(name):
-        return parquet_lines(url, rows)
+        try:
+            return parquet_lines(url, rows)
+        except MissingParquetReader as e:
+            raise click.ClickException(str(e)) from e
     return file_lines(name, _read(url))
 
 

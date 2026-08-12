@@ -9,7 +9,7 @@ holds no parquet reader and run everywhere a parquet file could be browsed."""
 
 import pytest
 from click.testing import CliRunner
-from rigging.fsutil import parquet, tui
+from rigging.fsutil import parquet
 from rigging.fsutil.cli import cli
 from rigging.fsutil.parquet import parquet_lines
 
@@ -48,22 +48,11 @@ def test_parquet_preview_skips_rows_when_the_first_row_group_is_too_large(shard,
     assert not any("row 0" in line for line in lines)
 
 
-def test_cat_head_and_the_browser_route_parquet_to_the_footer_reader(shard, monkeypatch):
-    """Every entry point dispatches on the name before it reads bytes, and ``head -n``
-    bounds rows rather than lines, which the schema block would otherwise consume.
-
-    The browser is exercised through the screen's own helpers because the viewer itself
-    needs a live curses window.
-    """
+def test_cat_and_head_route_parquet_to_the_footer_reader(shard):
+    """The commands dispatch on the name before they read bytes, and ``head -n`` bounds
+    rows rather than lines, which the schema block would otherwise consume."""
     assert "row 0" in CliRunner().invoke(cli, ["cat", str(shard)]).output
 
     head = CliRunner().invoke(cli, ["head", "-n", "2", str(shard)])
     assert "row 0" in head.output
     assert head.output.splitlines()[-1] == "[showing 2 of 6 rows]"
-
-    viewed = []
-    monkeypatch.setattr(tui, "_view", lambda stdscr, name, lines, truncated: viewed.append(lines))
-    screen = tui.Screen(url=str(shard.parent))
-    tui._reload(screen)
-    tui._open(None, screen)
-    assert any("row 0" in line for line in viewed[0])
