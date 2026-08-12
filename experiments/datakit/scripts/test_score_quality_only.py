@@ -15,6 +15,7 @@ import numpy as np
 from fray.cluster import ResourceConfig
 from marin.execution.step_spec import StepSpec
 from zephyr.execution import ZephyrContext
+from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.cluster.quality.fast_transformer.content_type import structural_features
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict_rows
@@ -23,9 +24,11 @@ from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledSc
 from experiments.datakit.scripts.score_quality_only import (
     COORDINATOR_RESOURCES,
     DEFAULT_MAX_WORKERS,
+    DEFAULT_STAGE_RUNNER,
     MAX_CONCURRENT_PIPELINES,
     NODE_CPU,
     NODE_RAM_GB,
+    STAGE_RUNNERS,
     WORKER_MAX_TASK_RETRIES,
     quality_step,
     score_all,
@@ -211,3 +214,14 @@ def test_the_coordinator_is_sized_for_the_fan_out_and_never_preempted():
     assert COORDINATOR_RESOURCES.cpu == 2
     assert COORDINATOR_RESOURCES.ram == "3g"
     assert COORDINATOR_RESOURCES.preemptible is False
+
+
+def test_shards_run_in_their_own_process_by_default():
+    """Threads in one worker process serialize on its GIL.
+
+    Measured on agenttrove (43 shards, 4 workers): inline finished 8 shards in 20
+    minutes against subprocess's 43 in ~6, for bit-identical scores, because only
+    the tokenizer and numpy release the GIL.
+    """
+    assert DEFAULT_STAGE_RUNNER == "subprocess"
+    assert STAGE_RUNNERS[DEFAULT_STAGE_RUNNER] is SubprocessRunner

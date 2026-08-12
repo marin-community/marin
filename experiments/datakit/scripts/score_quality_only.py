@@ -11,9 +11,11 @@ pool spends most of its wall clock starting containers, and the model cached in 
 worker process is discarded with the pool that held it. A 292-source run measured
 1h55m with the cluster mostly idle.
 
-This entry point opens one shared pool and runs every source through it. The pool
-outlives each source, so ``InlineRunner``'s per-process model cache is paid for
-once rather than 292 times.
+This entry point opens one shared pool and runs every source through it, scoring
+many sources at the same time so a one-file source does not hold the pool on its
+own. Shards run in subprocesses: under the in-process runner a worker's shards are
+threads sharing one GIL, which left 265 of 267 threads idle on a 115-CPU worker and
+ran ~18x slower for the same scores.
 
 It asks for **CPU and memory only**. Scoring is I/O-bound — a worker sits around
 25% CPU streaming parquet — so it is a good fit for the CPU on GPU nodes that
@@ -82,12 +84,16 @@ MAX_CONCURRENT_PIPELINES = 32
 # so it gets more than the default 0.1 CPU / 1 GB. It stays non-preemptible: losing
 # it loses every in-flight pipeline, while losing a worker costs one shard.
 COORDINATOR_RESOURCES = ResourceConfig(cpu=2, ram="3g", preemptible=False)
-# ``InlineRunner`` runs every shard as a thread of the worker's own process, so one
-# worker's ~57 concurrent shards share one GIL and one cached model. ``SubprocessRunner``
-# gives each shard its own process -- real parallelism, but it re-imports JAX and
-# reloads the model per shard. Which wins is an empirical question about how much of
-# the work releases the GIL, so it is a flag rather than a decision baked into the code.
+# ``InlineRunner`` runs a worker's shards as threads of one process, so they share
+# that process's GIL; ``SubprocessRunner`` gives each shard its own process and pays
+# a JAX import and model load per shard. Measured on agenttrove (43 shards, 781k rows,
+# 4 workers): inline managed 8 shards in 20 minutes, subprocess did all 43 in about 6
+# -- roughly 18x -- for bit-identical scores. A thread dump explains it: a worker
+# holding 115 CPUs had 265 of 267 threads idle, because only the tokenizer and numpy
+# calls release the GIL and the Python between them does not. Subprocess is therefore
+# the default; inline stays available for a stage whose work is mostly native.
 STAGE_RUNNERS = {"inline": InlineRunner, "subprocess": SubprocessRunner}
+DEFAULT_STAGE_RUNNER = "subprocess"
 
 
 def worker_resources(fraction: float = WORKER_FRACTION) -> ResourceConfig:
@@ -142,7 +148,7 @@ def score_all(
     names: list[str] | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
     fraction: float = WORKER_FRACTION,
-    stage_runner: str = "inline",
+    stage_runner: str = DEFAULT_STAGE_RUNNER,
 ) -> dict[str, dict[str, int | float]]:
     """Score every source through one shared pool; returns each source's counters."""
     sources = select_sources(names)
@@ -222,7 +228,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--stage-runner",
         choices=sorted(STAGE_RUNNERS),
-        default="inline",
+        default=DEFAULT_STAGE_RUNNER,
         help="inline: shards are threads of one worker process, sharing a cached model. "
         "subprocess: one process per shard, isolated but reloading the model each time.",
     )
