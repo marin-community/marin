@@ -2855,7 +2855,7 @@ FailureOr<SmallVector<int64_t>> mapDomainShape(MapOp map) {
   return domain;
 }
 
-bool isClosedRowFold(FoldOp fold) {
+bool isClosedRankTwoFold(FoldOp fold) {
   auto inputType =
       fold.getInputs().size() == 1
           ? dyn_cast<RankedTensorType>(fold.getInputs()[0].getType())
@@ -2872,13 +2872,19 @@ bool isClosedRowFold(FoldOp fold) {
       inputType.getRank() != 2 || inputType.getDimSize(0) <= 0 ||
       inputType.getDimSize(1) <= 0 || !inputType.getElementType().isF32() ||
       initType.getRank() != 0 || !initType.getElementType().isF32() ||
-      resultType.getShape() != ArrayRef<int64_t>{inputType.getDimSize(0)} ||
-      !resultType.getElementType().isF32() ||
       fold.getReductionDimensions().size() != 1 ||
-      fold.getReductionDimensions().front() != 1 || !fold.getOrderFree() ||
-      fold.getAccumulatorTypes().size() != 1 ||
+      fold.getReductionDimensions().front() < 0 ||
+      fold.getReductionDimensions().front() >= inputType.getRank() ||
+      !fold.getOrderFree() || fold.getAccumulatorTypes().size() != 1 ||
       cast<TypeAttr>(fold.getAccumulatorTypes()[0]).getValue() !=
           Float32Type::get(fold.getContext())) {
+    return false;
+  }
+  SmallVector<int64_t> expectedResultShape(inputType.getShape());
+  expectedResultShape.erase(expectedResultShape.begin() +
+                            fold.getReductionDimensions().front());
+  if (resultType.getShape() != ArrayRef<int64_t>(expectedResultShape) ||
+      !resultType.getElementType().isF32()) {
     return false;
   }
   Block &body = fold.getCombiner().front();
@@ -2902,6 +2908,8 @@ struct PlannedTask {
   Operation *operation;
   MaterializationTaskKind kind;
   SmallVector<int64_t> domain;
+  SmallVector<int64_t> reductionDimensions;
+  bool orderFree = false;
   SmallVector<int64_t> inputs;
   SmallVector<int64_t> outputs;
   SmallVector<int64_t> dependencies;
@@ -2919,7 +2927,7 @@ struct DerivedPlan {
   SmallVector<PlannedBuffer, 0> buffers;
 };
 
-FailureOr<DerivedPlan> deriveRowFoldPlan(RegionOp region) {
+FailureOr<DerivedPlan> deriveFoldPlan(RegionOp region) {
   SmallVector<Operation *> algebra;
   for (Operation &operation : region.getBody().front().without_terminator()) {
     if (!isa<MapOp, FoldOp>(operation)) {
@@ -2951,10 +2959,13 @@ FailureOr<DerivedPlan> deriveRowFoldPlan(RegionOp region) {
     task.kind = isa<FoldOp>(operation) ? MaterializationTaskKind::Fold
                                        : MaterializationTaskKind::Map;
     if (auto fold = dyn_cast<FoldOp>(operation)) {
-      if (!isClosedRowFold(fold)) {
+      if (!isClosedRankTwoFold(fold)) {
         return failure();
       }
       ++foldCount;
+      task.reductionDimensions.assign(fold.getReductionDimensions().begin(),
+                                      fold.getReductionDimensions().end());
+      task.orderFree = fold.getOrderFree();
       task.domain.assign(cast<RankedTensorType>(fold.getInputs()[0].getType())
                              .getShape()
                              .begin(),
@@ -3002,7 +3013,7 @@ FailureOr<DerivedPlan> deriveRowFoldPlan(RegionOp region) {
     }
     tasks.push_back(std::move(task));
   }
-  if (foldCount != 1) {
+  if (foldCount == 0) {
     return failure();
   }
   auto regionYield = cast<YieldOp>(region.getBody().front().getTerminator());
@@ -3070,7 +3081,7 @@ public:
     RegionOp selected;
     DerivedPlan derived;
     module.walk([&](RegionOp region) {
-      FailureOr<DerivedPlan> candidate = deriveRowFoldPlan(region);
+      FailureOr<DerivedPlan> candidate = deriveFoldPlan(region);
       if (succeeded(candidate)) {
         if (selected) {
           selected = RegionOp{};
@@ -3083,7 +3094,7 @@ public:
     });
     if (!selected) {
       module.emitError(
-          "requires exactly one connected static row Fold and Map region");
+          "requires exactly one connected static Fold and Map region");
       return signalPassFailure();
     }
 
@@ -3150,9 +3161,7 @@ public:
           builder.getNamedAttr(
               "reduction_dimensions",
               DenseI64ArrayAttr::get(module.getContext(),
-                                     task.kind == MaterializationTaskKind::Fold
-                                         ? ArrayRef<int64_t>{1}
-                                         : ArrayRef<int64_t>{})),
+                                     task.reductionDimensions)),
           builder.getNamedAttr(
               "input_buffers",
               DenseI64ArrayAttr::get(module.getContext(), task.inputs)),
@@ -3167,8 +3176,8 @@ public:
               builder.getStringAttr(semanticTaskFingerprint(task.operation))),
           builder.getNamedAttr("source", source)};
       if (task.kind == MaterializationTaskKind::Fold) {
-        attrs.push_back(
-            builder.getNamedAttr("order_free", builder.getBoolAttr(true)));
+        attrs.push_back(builder.getNamedAttr(
+            "order_free", builder.getBoolAttr(task.orderFree)));
       }
       createMaterializationRecord(builder, task.operation->getLoc(),
                                   MaterializationTaskOp::getOperationName(),
@@ -3283,7 +3292,7 @@ verifyMaterializationPlanAgainstSource(ModuleOp module,
       return failure();
     }
   }
-  FailureOr<DerivedPlan> expected = deriveRowFoldPlan(owner);
+  FailureOr<DerivedPlan> expected = deriveFoldPlan(owner);
   if (failed(expected) || expected->tasks.size() != tasks.size() ||
       expected->buffers.size() != buffers.size()) {
     plan.emitOpError("does not equal the plan derived from bound algebra");
@@ -3292,6 +3301,9 @@ verifyMaterializationPlanAgainstSource(ModuleOp module,
   for (auto [ordinal, expectedTask] : llvm::enumerate(expected->tasks)) {
     MaterializationTaskOp actual = tasks[ordinal];
     if (expectedTask.operation != sourceOperations.lookup(actual.getSource()) ||
+        actual.getReductionDimensions() !=
+            ArrayRef<int64_t>(expectedTask.reductionDimensions) ||
+        actual.getOrderFree().value_or(false) != expectedTask.orderFree ||
         actual.getInputBuffers() != ArrayRef<int64_t>(expectedTask.inputs) ||
         actual.getOutputBuffers() != ArrayRef<int64_t>(expectedTask.outputs) ||
         actual.getDependencies() !=
@@ -3388,15 +3400,25 @@ FailureOr<ScheduledGeometry> deriveSimt32Geometry(ScheduleTaskKind kind,
   if (domain.size() != 2 || domain[0] <= 0 || domain[1] <= 0) {
     return failure();
   }
-  int64_t tile = std::min(domain[1], kMaxThreads);
+  const int64_t reductionAxis =
+      kind == ScheduleTaskKind::RowFold
+          ? 1
+          : (kind == ScheduleTaskKind::ColumnFold ? 0 : -1);
+  if (reductionAxis < 0) {
+    return failure();
+  }
+  const int64_t outputAxis = 1 - reductionAxis;
+  int64_t tile = std::min(domain[reductionAxis], kMaxThreads);
   int64_t threads = scheduleThreads(tile);
-  return ScheduledGeometry{{domain[0]},
-                           {1, tile},
-                           ceilDivPositive(domain[1], tile),
+  SmallVector<int64_t> tileShape{1, 1};
+  tileShape[reductionAxis] = tile;
+  return ScheduledGeometry{{domain[outputAxis]},
+                           std::move(tileShape),
+                           ceilDivPositive(domain[reductionAxis], tile),
                            threads,
                            kSubgroup,
                            threads * static_cast<int64_t>(sizeof(float)),
-                           1};
+                           reductionAxis};
 }
 
 void createScheduleRecord(OpBuilder &builder, Location location,
@@ -3481,7 +3503,9 @@ public:
     for (auto [ordinal, task] : llvm::enumerate(sourceTasks)) {
       ScheduleTaskKind kind =
           task.getKind() == MaterializationTaskKind::Fold
-              ? ScheduleTaskKind::RowFold
+              ? (task.getReductionDimensions().front() == 1
+                     ? ScheduleTaskKind::RowFold
+                     : ScheduleTaskKind::ColumnFold)
               : (task.getDomainShape().empty() ? ScheduleTaskKind::Scalar
                                                : ScheduleTaskKind::Elementwise);
       FailureOr<ScheduledGeometry> geometry =
@@ -3573,7 +3597,9 @@ verifySchedulePlanAgainstMaterialization(MaterializationPlanOp source,
   for (auto [ordinal, actual, expected] : llvm::enumerate(tasks, sourceTasks)) {
     ScheduleTaskKind expectedKind =
         expected.getKind() == MaterializationTaskKind::Fold
-            ? ScheduleTaskKind::RowFold
+            ? (expected.getReductionDimensions().front() == 1
+                   ? ScheduleTaskKind::RowFold
+                   : ScheduleTaskKind::ColumnFold)
             : (expected.getDomainShape().empty()
                    ? ScheduleTaskKind::Scalar
                    : ScheduleTaskKind::Elementwise);
@@ -3623,7 +3649,7 @@ enum class CpuOpcode : uint8_t {
   F32ToBf16Rne = 6,
 };
 
-enum class CpuTaskKind : uint8_t { Map = 0, RowFold = 1 };
+enum class CpuTaskKind : uint8_t { Map = 0, Fold = 1 };
 enum class CpuElementType : uint8_t { Bf16 = 0, F32 = 1 };
 
 void appendByte(SmallVectorImpl<int8_t> &bytes, uint8_t value) {
@@ -3849,7 +3875,7 @@ FailureOr<SmallVector<int8_t>> encodeCpuTask(Operation *operation,
     return bytes;
   }
   auto fold = dyn_cast<FoldOp>(operation);
-  if (!fold || failed(appendTaskHeader(fold, CpuTaskKind::RowFold,
+  if (!fold || failed(appendTaskHeader(fold, CpuTaskKind::Fold,
                                        scheduleTask.getDomainShape(), bytes))) {
     return failure();
   }
@@ -3863,7 +3889,7 @@ FailureOr<SmallVector<int8_t>> encodeCpuTask(Operation *operation,
   appendByte(bytes, static_cast<uint8_t>(CpuElementType::F32));
   appendByte(bytes, 0);
   appendByte(bytes, static_cast<uint8_t>(CpuElementType::F32));
-  appendByte(bytes, 1);
+  appendByte(bytes, fold.getReductionDimensions().front());
   appendByte(bytes,
              static_cast<uint8_t>(
                  ScheduleReductionOrder::TreeAssociationFreeLeafOrderFixed));

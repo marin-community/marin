@@ -18,11 +18,11 @@
 // RUN: not shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-plan-row-fold-materialization --shuttle-plan-simt32-row-fold-schedule --shuttle-test-mutate-schedule-target --shuttle-verify-simt32-row-fold-schedule %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir 2>&1 | FileCheck %s --check-prefix=TARGET
 // RUN: not shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-plan-row-fold-materialization --shuttle-plan-simt32-row-fold-schedule --shuttle-test-mutate-schedule-order --shuttle-verify-simt32-row-fold-schedule %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir 2>&1 | FileCheck %s --check-prefix=ORDER
 // RUN: not shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-plan-row-fold-materialization --shuttle-plan-simt32-row-fold-schedule --shuttle-test-mutate-schedule-lifetime --shuttle-verify-simt32-row-fold-schedule %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir 2>&1 | FileCheck %s --check-prefix=LIFETIME
-// RUN: not shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-plan-row-fold-materialization --shuttle-plan-simt32-row-fold-schedule %S/Inputs/f32-reduce-add-axis0.mlir 2>&1 | FileCheck %s --check-prefix=BOUNDARY
+// RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-plan-row-fold-materialization --shuttle-plan-simt32-row-fold-schedule --shuttle-verify-simt32-row-fold-schedule --mlir-print-op-generic %S/Inputs/f32-reduce-add-axis0.mlir | FileCheck %s --check-prefix=AXIS0
 // RUN: not shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-plan-row-fold-materialization --shuttle-plan-simt32-row-fold-schedule %S/Inputs/bf16-row-fold.mlir 2>&1 | FileCheck %s --check-prefix=BOUNDARY
 
 // INDEXING: buffer indexing must equal logical tensor rank
-// AXIS: row Fold schedule requires reduction axis one
+// AXIS: Fold schedule kind must match its reduction axis
 // TILE: schedule geometry must equal the SIMT32 derivation
 // RESOURCE: schedule geometry must equal the SIMT32 derivation
 // DEPENDENCY: schedule dependencies must equal the materialization task
@@ -36,4 +36,5 @@
 // TARGET: schedule geometry must equal the SIMT32 derivation
 // ORDER: Fold reduction order must equal bound Fold semantics
 // LIFETIME: schedule buffer type and lifetime must equal materialization
-// BOUNDARY: requires exactly one connected static row Fold and Map region
+// AXIS0: "shuttle.schedule_task"() <{{.*}}domain_shape = array<i64: 3, 2>{{.*}}grid_shape = array<i64: 2>{{.*}}kind = #shuttle.schedule_task_kind<column_fold>{{.*}}reduction_axis = 0{{.*}}serial_tiles = 1{{.*}}tile_shape = array<i64: 3, 1>
+// BOUNDARY: requires exactly one connected static Fold and Map region

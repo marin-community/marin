@@ -128,7 +128,8 @@ def Shuttle_ScheduleTaskKind
     : I32EnumAttr<"ScheduleTaskKind", "Logical SIMT32 task schedule kind",
                   [I32EnumAttrCase<"Scalar", 0, "scalar">,
                    I32EnumAttrCase<"Elementwise", 1, "elementwise">,
-                   I32EnumAttrCase<"RowFold", 2, "row_fold">]> {
+                   I32EnumAttrCase<"RowFold", 2, "row_fold">,
+                   I32EnumAttrCase<"ColumnFold", 3, "column_fold">]> {
   let genSpecializedAttr = 0;
   let cppNamespace = "::mlir::shuttle";
 }

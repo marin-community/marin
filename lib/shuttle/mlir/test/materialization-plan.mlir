@@ -10,7 +10,7 @@
 // RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-test-set-fast-region-policy --shuttle-plan-row-fold-materialization --shuttle-verify-materialization-plan --shuttle-test-report-materialization-fingerprint %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir -o /dev/null > %t.fast
 // RUN: not diff %t.original %t.fast
 // RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-test-set-fast-region-policy --shuttle-plan-row-fold-materialization --shuttle-verify-materialization-plan --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir | FileCheck %s --check-prefix=FAST
-// RUN: not shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-plan-row-fold-materialization %S/Inputs/f32-reduce-add-axis0.mlir 2>&1 | FileCheck %s --check-prefix=BOUNDARY
+// RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-plan-row-fold-materialization --shuttle-verify-materialization-plan --mlir-print-op-generic %S/Inputs/f32-reduce-add-axis0.mlir | FileCheck %s --check-prefix=AXIS0
 // RUN: not shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-plan-row-fold-materialization %S/Inputs/two-row-folds.mlir 2>&1 | FileCheck %s --check-prefix=BOUNDARY
 
 // PLAN: "shuttle.materialization_plan"
@@ -35,4 +35,5 @@
 // FAST: "shuttle.materialization_plan"
 // FAST-SAME: policy = #shuttle.policy<fast>
 
-// BOUNDARY: requires exactly one connected static row Fold and Map region
+// AXIS0: "shuttle.materialization_task"() <{{.*}}domain_shape = array<i64: 3, 2>{{.*}}kind = #shuttle.materialization_task_kind<fold>{{.*}}reduction_dimensions = array<i64: 0>
+// BOUNDARY: requires exactly one connected static Fold and Map region

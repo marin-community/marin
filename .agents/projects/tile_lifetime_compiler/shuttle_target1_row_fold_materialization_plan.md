@@ -36,10 +36,11 @@ option parsing, cache identity, observer output, or exported StableHLO.
 
 `shuttle-plan-row-fold-materialization` accepts exactly one eligible
 `shuttle.region` in a module. The region must contain only a connected task
-graph of Maps and exactly one Fold. The Fold contract is:
+graph of Maps and at least one Fold. Each Fold contract is:
 
 - one positive static rank-two FP32 input and one rank-zero FP32 initializer;
-- reduction dimension `[1]`, rank-one FP32 result, and FP32 accumulator;
+- one reduction dimension, either `[0]` or `[1]`, with the corresponding
+  rank-one FP32 result and an FP32 accumulator;
 - `order_free=true` and an exact scalar FP32 add combiner;
 - every task result is consumed or returned by the region.
 
@@ -49,10 +50,10 @@ with an empty domain and a rank-zero materialized output; scalar constants and
 Fold initializers are never silently dropped. Repeated SSA operands remain
 repeated task inputs, while dependency and consumer lists remain unique.
 
-The pass rejects zero/dynamic extents, non-row reductions, multiple candidate
-regions, disconnected or dead tasks, non-Map/Fold operations, and unsupported
-types. Task and buffer identifiers are contiguous structural integers, never
-symbols or workload identifiers.
+The pass rejects zero/dynamic extents, other reduction dimensions, multiple
+candidate regions, disconnected or dead tasks, non-Map/Fold operations, and
+unsupported types. Task and buffer identifiers are contiguous structural
+integers, never symbols or workload identifiers.
 
 ## Verification and fingerprint
 
@@ -79,7 +80,9 @@ edges, materialization, or lifetime state.
 The bounded local gates are:
 
 - both frozen forward shapes (`2048x4096` and `7x13`) produce exactly 19 tasks
-  and 21 buffers, including rank-zero scalar Maps;
+  and 21 buffers, including rank-zero scalar Maps; the frozen `7x13` backward
+  and composed graphs produce 48 tasks/51 buffers and 51 tasks/54 buffers,
+  respectively, including five axis-zero-or-one Folds apiece;
 - symbol renaming preserves the plan fingerprint;
 - changing the already-converted Region policy to `fast` is structurally valid
   and changes the plan fingerprint. This tests policy binding only; it is not a
@@ -88,7 +91,8 @@ The bounded local gates are:
   replaying or duplicating source references, swapping same-typed SSA edges
   while recomputing dependencies/lifetimes, changing scalar/tensor domains,
   adding unknown attributes, or changing the Fold scalar body is rejected;
-- axis-zero and multiple-candidate row Folds are rejected;
+- other Fold axes, unsupported types, and multiple candidate regions are
+  rejected;
 - the existing CPU StableHLO round-trip parity suite remains the numerical
   gate because this opt-in analysis does not execute or replace the graph.
 

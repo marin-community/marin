@@ -6,11 +6,11 @@ execution path is added by this slice.
 ## Decision
 
 The compiler now has a closed local boundary below `shuttle.schedule_plan` for
-one static `7x13` row-Fold graph. It generates typed CPU bytecode from the
-actual Shuttle Map/Fold bodies, binds that code to a static byte-buffer ABI,
-and executes the stripped bundle synchronously in a local interpreter. The
-consumer does not inspect StableHLO, Shuttle algebra, task semantic digests, or
-source names after bundle construction.
+the static `7x13` forward, backward, and composed graphs. It generates typed CPU
+bytecode from the actual Shuttle Map/Fold bodies, binds that code to a static
+byte-buffer ABI, and executes the stripped bundle synchronously in a local
+interpreter. The consumer does not inspect StableHLO, Shuttle algebra, task
+semantic digests, or source names after bundle construction.
 
 This is a CPU consumer proof, not accelerator code generation. Adding NVVM or a
 custom call would still create an orphan backend: the XLA module-transform hook
@@ -45,11 +45,11 @@ The static boundary has three closed operations:
 The generator consumes the complete scalar regions and affine indexing maps of
 each Map and the exact Fold combiner. Its instruction set is limited to f32
 constants, add, multiply, divide, rsqrt, exact BF16-to-f32 conversion, and
-round-to-nearest-even f32-to-BF16 conversion. The row Fold is an explicit
-left-to-right leaf traversal initialized from its rank-zero buffer. This is one
-legal realization of `tree_association_free_leaf_order_fixed`; the test-only
-post-conversion FAST policy does not grant another reduction order or
-instruction set.
+round-to-nearest-even f32-to-BF16 conversion. Every dimension-zero or
+dimension-one Fold is an explicit increasing-coordinate leaf traversal
+initialized from its rank-zero buffer. This is one legal realization of
+`tree_association_free_leaf_order_fixed`; the test-only post-conversion FAST
+policy does not grant another reduction order or instruction set.
 
 The local consumer receives raw mutable byte spans for external buffers,
 allocates distinct host byte spans for temporaries, validates size, alignment,
@@ -60,13 +60,13 @@ output write completes. Code and temporary storage therefore remain owned for
 the whole synchronous call.
 
 The slice deliberately accepts only static Map/Fold task domains no larger than
-256 elements, one single-tile row Fold, BF16/f32 values, host buffers, zero
-offsets, natural alignment, unique alias/reuse groups, and one output per task.
-This includes the frozen `7x13` forward graph and excludes the `2048x4096`
-graph, multi-tile Fold realization, backward/composed graphs, dynamic shapes,
-other types, reuse, donation, and asynchronous execution. These restrictions
-are structural; module, function, workload, fixture, and source-operation names
-never select code or runtime behavior.
+256 elements, single-tile dimension-zero-or-one Folds, BF16/f32 values, host
+buffers, zero offsets, natural alignment, unique alias/reuse groups, and one
+output per task. This includes the frozen `7x13` forward, backward, and composed
+graphs and excludes the `2048x4096` graph, multi-tile Fold realization, dynamic
+shapes, other types, reuse, donation, and asynchronous execution. These
+restrictions are structural; module, function, workload, fixture, and
+source-operation names never select code or runtime behavior.
 
 ## Missing contracts
 

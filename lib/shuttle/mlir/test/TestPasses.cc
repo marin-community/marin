@@ -1782,6 +1782,49 @@ public:
       device.setCodeAttr(DenseI8ArrayAttr::get(module.getContext(), code));
       refreshExecutableBundle(module, true);
       return;
+    } else if (mutation == "output-binding") {
+      SmallVector<InvocationSlotOp> outputs;
+      for (InvocationSlotOp slot : slots) {
+        if (slot.getAccess() == ExecutableAccess::Write) {
+          outputs.push_back(slot);
+        }
+      }
+      std::optional<std::pair<int64_t, int64_t>> pair;
+      for (auto [index, first] : llvm::enumerate(outputs)) {
+        for (InvocationSlotOp second :
+             ArrayRef(outputs).drop_front(index + 1)) {
+          if (first.getTensorType() == second.getTensorType()) {
+            pair = std::make_pair(first.getOrdinal(), second.getOrdinal());
+            break;
+          }
+        }
+        if (pair) {
+          break;
+        }
+      }
+      if (!pair) {
+        module.emitError(
+            "test fixture has no two same-typed executable outputs");
+        return signalPassFailure();
+      }
+      DeviceEntryOp firstProducer;
+      DeviceEntryOp secondProducer;
+      for (DeviceEntryOp entry : entries) {
+        if (entry.getOutputBuffers() == ArrayRef<int64_t>{pair->first}) {
+          firstProducer = entry;
+        } else if (entry.getOutputBuffers() ==
+                   ArrayRef<int64_t>{pair->second}) {
+          secondProducer = entry;
+        }
+      }
+      if (!firstProducer || !secondProducer) {
+        module.emitError("test fixture outputs lack unique producers");
+        return signalPassFailure();
+      }
+      firstProducer.setOutputBuffersAttr(
+          DenseI64ArrayAttr::get(module.getContext(), {pair->second}));
+      secondProducer.setOutputBuffersAttr(
+          DenseI64ArrayAttr::get(module.getContext(), {pair->first}));
     } else if (mutation == "code-byte") {
       SmallVector<int8_t> code(device.getCode());
       code.back() ^= 1;

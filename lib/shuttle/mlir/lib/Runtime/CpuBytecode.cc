@@ -33,7 +33,7 @@ enum class Opcode : uint8_t {
   F32ToBf16Rne = 6,
 };
 
-enum class TaskKind : uint8_t { Map = 0, RowFold = 1 };
+enum class TaskKind : uint8_t { Map = 0, Fold = 1 };
 enum class ElementType : uint8_t { Bf16 = 0, F32 = 1 };
 
 struct IndexAxis {
@@ -154,7 +154,7 @@ FailureOr<ParsedTask> parseTask(ArrayRef<int8_t> bytes) {
     return failure();
   }
   task.outputType = *outputType;
-  if (task.kind == TaskKind::RowFold) {
+  if (task.kind == TaskKind::Fold) {
     std::optional<uint8_t> reductionAxis = reader.byte();
     std::optional<ScheduleReductionOrder> order =
         checkedEnum<ScheduleReductionOrder>(reader.byte(), 1);
@@ -421,7 +421,8 @@ LogicalResult executeMap(const ParsedTask &task, DeviceEntryOp entry,
 
 LogicalResult executeFold(const ParsedTask &task, DeviceEntryOp entry,
                           ArrayRef<RuntimeSlot> slots) {
-  if (task.domain.size() != 2 || task.reductionAxis != 1 ||
+  if (task.domain.size() != 2 || !task.reductionAxis ||
+      *task.reductionAxis >= task.domain.size() ||
       task.reductionOrder !=
           ScheduleReductionOrder::TreeAssociationFreeLeafOrderFixed ||
       entry.getReductionOrder() != task.reductionOrder ||
@@ -446,27 +447,37 @@ LogicalResult executeFold(const ParsedTask &task, DeviceEntryOp entry,
   auto initializerType =
       cast<RankedTensorType>(initializer.descriptor.getTensorType());
   auto outputType = cast<RankedTensorType>(output.descriptor.getTensorType());
+  const int64_t reductionAxis = *task.reductionAxis;
+  const int64_t outputAxis = 1 - reductionAxis;
   if (!inputType.getElementType().isF32() ||
       inputType.getShape() != ArrayRef<int64_t>(task.domain) ||
       !initializerType.getElementType().isF32() ||
       initializerType.getRank() != 0 || !outputType.getElementType().isF32() ||
-      outputType.getShape() != ArrayRef<int64_t>(task.domain).take_front()) {
+      outputType.getShape() != ArrayRef<int64_t>{task.domain[outputAxis]}) {
     return failure();
   }
-  for (int64_t row = 0; row < task.domain[0]; ++row) {
+  for (int64_t outputIndex = 0; outputIndex < task.domain[outputAxis];
+       ++outputIndex) {
     FailureOr<Scalar> accumulator = loadScalar(initializer, {});
     if (failed(accumulator)) {
       return failure();
     }
-    for (int64_t feature = 0; feature < task.domain[1]; ++feature) {
-      FailureOr<Scalar> leaf = loadScalar(input, {row, feature});
+    for (int64_t leafIndex = 0; leafIndex < task.domain[reductionAxis];
+         ++leafIndex) {
+      std::array<int64_t, 2> coordinates{};
+      coordinates[outputAxis] = outputIndex;
+      coordinates[reductionAxis] = leafIndex;
+      FailureOr<Scalar> leaf = loadScalar(input, coordinates);
       if (failed(leaf)) {
         return failure();
       }
       std::array<Scalar, 2> arguments{*leaf, *accumulator};
       accumulator = evaluate(task, arguments);
+      if (failed(accumulator)) {
+        return failure();
+      }
     }
-    if (failed(storeScalar(output, {row}, *accumulator))) {
+    if (failed(storeScalar(output, {outputIndex}, *accumulator))) {
       return failure();
     }
   }

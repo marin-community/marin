@@ -16,7 +16,8 @@ This slice therefore names only an abstract `simt32` capability profile:
 
 - subgroup width 32;
 - at most 256 candidate workgroup threads;
-- scalar, flattened elementwise, and one-workgroup-per-row Fold task families;
+- scalar, flattened elementwise, and one-grid-item-per-non-reduced-index Fold
+  task families;
 - a bounded FP32 scratch-resource envelope for the Fold candidate.
 
 The profile is an explicit opt-in planner choice. It is not inferred from a
@@ -34,11 +35,12 @@ row-major storage, strides, alignment, address space, or aliasing.
 
 Each materialization task binds one schedule task by structural ordinal. Scalar
 Maps have one logical scalar instance. Other Maps flatten their positive static
-domain into disjoint, contiguous tiles of at most 256 logical elements. The row
-Fold candidate assigns one grid item to each row and partitions the feature
-axis into contiguous chunks of at most 256 elements. The final chunk may be
-partial. These formulas prove complete in-bounds domain coverage without
-overlap.
+domain into disjoint, contiguous tiles of at most 256 logical elements. A
+rank-two Fold candidate assigns one grid item to each index of the non-reduced
+axis and partitions reduction dimension zero or one into contiguous chunks of
+at most 256 elements. The typed task kind distinguishes `column_fold` from
+`row_fold`; the final chunk may be partial. These formulas prove complete
+in-bounds domain coverage without overlap.
 
 Each schedule buffer also copies the exact task-ordinal lifetime interval from
 the materialization plan. This retains lifetime information for a later
@@ -75,6 +77,8 @@ Both frozen forward shapes emit 21 schedule buffers and 19 schedule tasks.
 `2048x4096` produces a row-Fold candidate with grid `[2048]`, tile `[1,256]`,
 16 feature chunks, 256 threads, and a 1024-byte scratch envelope. `7x13`
 produces grid `[7]`, tile `[1,13]`, one chunk, 32 threads, and 128 bytes.
+The frozen `7x13` backward and composed graphs emit 51 buffers/48 tasks and 54
+buffers/51 tasks, respectively, with five typed axis-zero-or-one Fold tasks.
 Rank-zero scalar Maps remain explicit. Symbol renaming preserves the schedule
 fingerprint; changing the already-converted Region policy to `fast` changes the
 plan policy and fingerprint but retains the Fold-derived reduction constraint.
@@ -86,9 +90,9 @@ boundary gate covers partial subgroup rounding at `7x13`, exact 256-element
 tiles, 4096-element multi-tile Fold scheduling, and an `INT64_MAX` feature
 extent without signed addition overflow.
 
-Mutation gates reject logical iteration, reduction axis/order, tile, resource
+Mutation gates reject logical iteration, reduction axis/order, task kind, tile, resource
 profile, dependency, task deletion/reorder, source-task, buffer type,
-unknown-attribute, and multiple-plan corruption. Axis-zero and BF16-accumulator
+unknown-attribute, and multiple-plan corruption. Other axes and BF16-accumulator
 Folds remain outside the source materialization boundary.
 
 No static GPU-code or runtime gate is meaningful yet. The next consumer must

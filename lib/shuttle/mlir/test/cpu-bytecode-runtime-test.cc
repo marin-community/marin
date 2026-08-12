@@ -5,9 +5,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <iterator>
 #include <memory>
+#include <sstream>
 #include <string>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -21,6 +23,7 @@
 #include "shuttle/Runtime/CpuBytecode.h"
 #include "shuttle/Transforms/Passes.h"
 #include "stablehlo/dialect/Register.h"
+#include "tools/cpp/runfiles/runfiles.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
@@ -84,7 +87,7 @@ struct BuiltBundle {
   mlir::OwningOpRef<mlir::ModuleOp> module;
 };
 
-std::unique_ptr<BuiltBundle> buildBundle() {
+std::unique_ptr<BuiltBundle> compileBundle(llvm::StringRef program, bool fast) {
   mlir::DialectRegistry registry;
   mlir::stablehlo::registerAllDialects(registry);
   registry.insert<mlir::arith::ArithDialect, mlir::func::FuncDialect,
@@ -92,14 +95,23 @@ std::unique_ptr<BuiltBundle> buildBundle() {
   auto built = std::make_unique<BuiltBundle>();
   built->context = std::make_unique<mlir::MLIRContext>(registry);
   built->module =
-      mlir::parseSourceString<mlir::ModuleOp>(kProgram, built->context.get());
+      mlir::parseSourceString<mlir::ModuleOp>(program, built->context.get());
   if (!built->module) {
     return {};
   }
+  mlir::PassManager algebra(built->context.get());
+  algebra.addPass(mlir::shuttle::createAnnotateSourcePass());
+  algebra.addPass(mlir::shuttle::createFormStructuralRegionsPass());
+  algebra.addPass(mlir::shuttle::createConvertStablehloToAlgebraPass());
+  if (mlir::failed(algebra.run(*built->module))) {
+    return {};
+  }
+  if (fast) {
+    built->module->walk([](mlir::shuttle::RegionOp region) {
+      region.setPolicy(mlir::shuttle::NumericalPolicy::Fast);
+    });
+  }
   mlir::PassManager manager(built->context.get());
-  manager.addPass(mlir::shuttle::createAnnotateSourcePass());
-  manager.addPass(mlir::shuttle::createFormStructuralRegionsPass());
-  manager.addPass(mlir::shuttle::createConvertStablehloToAlgebraPass());
   manager.addPass(mlir::shuttle::createPlanRowFoldMaterializationPass());
   manager.addPass(mlir::shuttle::createPlanSimt32RowFoldSchedulePass());
   manager.addPass(mlir::shuttle::createBuildCpuExecutableBundlePass());
@@ -116,6 +128,32 @@ std::unique_ptr<BuiltBundle> buildBundle() {
     }
   }
   return built;
+}
+
+std::unique_ptr<BuiltBundle> buildBundle() {
+  return compileBundle(kProgram, false);
+}
+
+std::unique_ptr<BuiltBundle> buildFixtureBundle(llvm::StringRef boundary,
+                                                bool fast) {
+  std::string error;
+  std::unique_ptr<bazel::tools::cpp::runfiles::Runfiles> runfiles(
+      bazel::tools::cpp::runfiles::Runfiles::CreateForTest(&error));
+  if (!runfiles) {
+    return {};
+  }
+  std::string path =
+      runfiles->Rlocation(("shuttle_mlir/test/Inputs/"
+                           "jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-" +
+                           boundary + ".mlir")
+                              .str());
+  std::ifstream input(path);
+  std::ostringstream contents;
+  contents << input.rdbuf();
+  if (!input || contents.str().empty()) {
+    return {};
+  }
+  return compileBundle(contents.str(), fast);
 }
 
 struct ExternalBuffers {
@@ -170,6 +208,117 @@ independentReference(const ExternalBuffers &buffers) {
   return expected;
 }
 
+uint16_t doubleToBf16(double value) {
+  llvm::APFloat converted(value);
+  bool losesInfo = false;
+  converted.convert(llvm::APFloat::BFloat(), llvm::APFloat::rmNearestTiesToEven,
+                    &losesInfo);
+  return converted.bitcastToAPInt().getZExtValue();
+}
+
+template <size_t Size>
+void populateLinspace(std::array<uint16_t, Size> &values, float start,
+                      float stop) {
+  for (size_t index = 0; index < Size; ++index) {
+    const float step =
+        static_cast<float>(stop - start) / static_cast<float>(Size - 1);
+    values[index] =
+        toBf16(static_cast<float>(start + static_cast<float>(index) * step));
+  }
+}
+
+struct VjpBuffers {
+  alignas(64) std::array<uint16_t, 7 * 13> x{};
+  alignas(64) std::array<uint16_t, 13> gamma{};
+  alignas(64) std::array<uint16_t, 7 * 13> dy{};
+  alignas(64) std::array<uint16_t, 7 * 13> y{};
+  alignas(64) std::array<uint16_t, 7 * 13> dx{};
+  alignas(64) std::array<uint16_t, 13> dgamma{};
+
+  llvm::SmallVector<mlir::shuttle::CpuExternalBuffer, 6>
+  views(llvm::StringRef boundary) {
+    llvm::SmallVector<mlir::shuttle::CpuExternalBuffer, 6> result{
+        {0, llvm::MutableArrayRef<uint8_t>(
+                reinterpret_cast<uint8_t *>(x.data()), sizeof(x))},
+        {1, llvm::MutableArrayRef<uint8_t>(
+                reinterpret_cast<uint8_t *>(gamma.data()), sizeof(gamma))},
+        {2, llvm::MutableArrayRef<uint8_t>(
+                reinterpret_cast<uint8_t *>(dy.data()), sizeof(dy))}};
+    if (boundary == "backward") {
+      result.push_back({32, llvm::MutableArrayRef<uint8_t>(
+                                reinterpret_cast<uint8_t *>(dgamma.data()),
+                                sizeof(dgamma))});
+      result.push_back(
+          {50, llvm::MutableArrayRef<uint8_t>(
+                   reinterpret_cast<uint8_t *>(dx.data()), sizeof(dx))});
+    } else {
+      result.push_back(
+          {25, llvm::MutableArrayRef<uint8_t>(
+                   reinterpret_cast<uint8_t *>(y.data()), sizeof(y))});
+      result.push_back({35, llvm::MutableArrayRef<uint8_t>(
+                                reinterpret_cast<uint8_t *>(dgamma.data()),
+                                sizeof(dgamma))});
+      result.push_back(
+          {53, llvm::MutableArrayRef<uint8_t>(
+                   reinterpret_cast<uint8_t *>(dx.data()), sizeof(dx))});
+    }
+    return result;
+  }
+};
+
+void populateVjpInputs(VjpBuffers &buffers) {
+  populateLinspace(buffers.x, -0.75f, 0.875f);
+  populateLinspace(buffers.gamma, -0.625f, 1.0f);
+  populateLinspace(buffers.dy, -0.5f, 1.125f);
+}
+
+struct VjpReference {
+  std::array<uint16_t, 7 * 13> y{};
+  std::array<uint16_t, 7 * 13> dx{};
+  std::array<uint16_t, 13> dgamma{};
+};
+
+VjpReference independentVjpReference(const VjpBuffers &buffers) {
+  VjpReference result;
+  std::array<double, 7> inverse{};
+  for (int64_t row = 0; row < 7; ++row) {
+    double sumSquares = 0.0;
+    for (int64_t feature = 0; feature < 13; ++feature) {
+      const double x = fromBf16(buffers.x[row * 13 + feature]);
+      sumSquares += x * x;
+    }
+    inverse[row] = 1.0 / std::sqrt(sumSquares / 13.0 + 1.0e-5);
+    double rowCotangent = 0.0;
+    for (int64_t feature = 0; feature < 13; ++feature) {
+      const int64_t index = row * 13 + feature;
+      const double x = fromBf16(buffers.x[index]);
+      const double gamma = fromBf16(buffers.gamma[feature]);
+      const double dy = fromBf16(buffers.dy[index]);
+      rowCotangent += dy * x * gamma;
+      result.y[index] = doubleToBf16(x * inverse[row] * gamma);
+    }
+    for (int64_t feature = 0; feature < 13; ++feature) {
+      const int64_t index = row * 13 + feature;
+      const double x = fromBf16(buffers.x[index]);
+      const double gamma = fromBf16(buffers.gamma[feature]);
+      const double dy = fromBf16(buffers.dy[index]);
+      result.dx[index] = doubleToBf16(dy * gamma * inverse[row] -
+                                      x * inverse[row] * inverse[row] *
+                                          inverse[row] * rowCotangent / 13.0);
+    }
+  }
+  for (int64_t feature = 0; feature < 13; ++feature) {
+    double sum = 0.0;
+    for (int64_t row = 0; row < 7; ++row) {
+      const int64_t index = row * 13 + feature;
+      sum += fromBf16(buffers.dy[index]) * fromBf16(buffers.x[index]) *
+             inverse[row];
+    }
+    result.dgamma[feature] = doubleToBf16(sum);
+  }
+  return result;
+}
+
 void refreshClosedFingerprints(mlir::ModuleOp module, bool codeChanged) {
   auto device = *module.getOps<mlir::shuttle::DeviceModuleOp>().begin();
   if (codeChanged) {
@@ -204,6 +353,82 @@ TEST(CpuBytecodeRuntimeTest, ExecutesGeneratedBodyWithRawAbiBuffers) {
   ASSERT_TRUE(mlir::succeeded(
       mlir::shuttle::executeCpuExecutableBundle(*module->module, views)));
   EXPECT_EQ(buffers.output, expected);
+}
+
+TEST(CpuBytecodeRuntimeTest, ExecutesGeneratedVjpBodiesWithRawAbiBuffers) {
+  for (llvm::StringRef boundary :
+       {llvm::StringRef("backward"), llvm::StringRef("composed")}) {
+    for (bool fast : {false, true}) {
+      auto bundle = buildFixtureBundle(boundary, fast);
+      ASSERT_TRUE(bundle) << boundary.str() << " fast=" << fast;
+      ASSERT_TRUE(bundle->module->getOps<mlir::func::FuncOp>().empty());
+      ASSERT_TRUE(bundle->module->getOps<mlir::shuttle::MaterializationPlanOp>()
+                      .empty());
+      ASSERT_TRUE(
+          bundle->module->getOps<mlir::shuttle::SchedulePlanOp>().empty());
+      auto device =
+          *bundle->module->getOps<mlir::shuttle::DeviceModuleOp>().begin();
+      EXPECT_EQ(device.getPolicy(),
+                fast ? mlir::shuttle::NumericalPolicy::Fast
+                     : mlir::shuttle::NumericalPolicy::SourceOrdered);
+      EXPECT_EQ(std::distance(device.getBody()
+                                  .front()
+                                  .getOps<mlir::shuttle::DeviceEntryOp>()
+                                  .begin(),
+                              device.getBody()
+                                  .front()
+                                  .getOps<mlir::shuttle::DeviceEntryOp>()
+                                  .end()),
+                boundary == "backward" ? 48 : 51);
+
+      VjpBuffers buffers;
+      populateVjpInputs(buffers);
+      VjpReference expected = independentVjpReference(buffers);
+      auto views = buffers.views(boundary);
+      ASSERT_TRUE(mlir::succeeded(
+          mlir::shuttle::executeCpuExecutableBundle(*bundle->module, views)))
+          << boundary.str() << " fast=" << fast;
+      EXPECT_EQ(buffers.dx, expected.dx);
+      EXPECT_EQ(buffers.dgamma, expected.dgamma);
+      if (boundary == "composed") {
+        EXPECT_EQ(buffers.y, expected.y);
+      }
+    }
+  }
+}
+
+TEST(CpuBytecodeRuntimeTest, ObservesMutatedVjpOutputBinding) {
+  auto bundle = buildFixtureBundle("composed", false);
+  ASSERT_TRUE(bundle);
+  auto device =
+      *bundle->module->getOps<mlir::shuttle::DeviceModuleOp>().begin();
+  mlir::shuttle::DeviceEntryOp yProducer;
+  mlir::shuttle::DeviceEntryOp dxProducer;
+  for (auto entry :
+       device.getBody().front().getOps<mlir::shuttle::DeviceEntryOp>()) {
+    if (entry.getOutputBuffers() == llvm::ArrayRef<int64_t>{25}) {
+      yProducer = entry;
+    } else if (entry.getOutputBuffers() == llvm::ArrayRef<int64_t>{53}) {
+      dxProducer = entry;
+    }
+  }
+  ASSERT_TRUE(yProducer);
+  ASSERT_TRUE(dxProducer);
+  yProducer.setOutputBuffersAttr(
+      mlir::DenseI64ArrayAttr::get(bundle->context.get(), {53}));
+  dxProducer.setOutputBuffersAttr(
+      mlir::DenseI64ArrayAttr::get(bundle->context.get(), {25}));
+  refreshClosedFingerprints(*bundle->module, false);
+
+  VjpBuffers buffers;
+  populateVjpInputs(buffers);
+  VjpReference expected = independentVjpReference(buffers);
+  auto views = buffers.views("composed");
+  ASSERT_TRUE(mlir::succeeded(
+      mlir::shuttle::executeCpuExecutableBundle(*bundle->module, views)));
+  EXPECT_EQ(buffers.y, expected.dx);
+  EXPECT_EQ(buffers.dx, expected.y);
+  EXPECT_EQ(buffers.dgamma, expected.dgamma);
 }
 
 TEST(CpuBytecodeRuntimeTest, Bf16RoundingMatchesApFloatEdgeCases) {

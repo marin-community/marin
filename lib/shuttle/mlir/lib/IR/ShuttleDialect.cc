@@ -867,13 +867,14 @@ LogicalResult MaterializationPlanOp::verifyRegions() {
     if (task.getKind() == MaterializationTaskKind::Fold) {
       ++foldCount;
       if (task.getReductionDimensions().size() != 1 ||
-          task.getReductionDimensions().front() != 1 ||
+          task.getReductionDimensions().front() < 0 ||
+          task.getReductionDimensions().front() >= 2 ||
           !task.getOrderFree().value_or(false) ||
           task.getDomainShape().size() != 2 ||
           task.getInputBuffers().size() != 2 ||
           task.getOutputBuffers().size() != 1) {
         return task.emitOpError(
-            "row Fold tasks require rank-two domain, dimension 1, and "
+            "Fold tasks require rank-two domain, one in-range dimension, and "
             "order_free=true");
       }
       auto inputType = cast<RankedTensorType>(
@@ -882,15 +883,17 @@ LogicalResult MaterializationPlanOp::verifyRegions() {
           buffers[task.getInputBuffers()[1]].getTensorType());
       auto resultType = cast<RankedTensorType>(
           buffers[task.getOutputBuffers()[0]].getTensorType());
+      SmallVector<int64_t> expectedResultShape(task.getDomainShape());
+      expectedResultShape.erase(expectedResultShape.begin() +
+                                task.getReductionDimensions().front());
       if (inputType.getShape() != task.getDomainShape() ||
           inputType.getRank() != 2 || !inputType.getElementType().isF32() ||
           initializerType.getRank() != 0 ||
           !initializerType.getElementType().isF32() ||
-          resultType.getShape() !=
-              ArrayRef<int64_t>{task.getDomainShape().front()} ||
+          resultType.getShape() != ArrayRef<int64_t>(expectedResultShape) ||
           !resultType.getElementType().isF32()) {
         return task.emitOpError(
-            "row Fold buffer types must match its f32 domain and accumulator");
+            "Fold buffer types must match its f32 domain and accumulator");
       }
     } else {
       if (!task.getReductionDimensions().empty() || task.getOrderFree()) {
@@ -909,8 +912,8 @@ LogicalResult MaterializationPlanOp::verifyRegions() {
       }
     }
   }
-  if (foldCount != 1) {
-    return emitOpError("requires exactly one Fold task");
+  if (foldCount == 0) {
+    return emitOpError("requires at least one Fold task");
   }
 
   for (auto [position, buffer] : llvm::enumerate(buffers)) {
@@ -1023,15 +1026,25 @@ FailureOr<Simt32Geometry> simt32Geometry(ScheduleTaskKind kind,
   if (domain.size() != 2 || domain[0] <= 0 || domain[1] <= 0) {
     return failure();
   }
-  int64_t tile = std::min(domain[1], kMaxThreads);
+  const int64_t reductionAxis =
+      kind == ScheduleTaskKind::RowFold
+          ? 1
+          : (kind == ScheduleTaskKind::ColumnFold ? 0 : -1);
+  if (reductionAxis < 0) {
+    return failure();
+  }
+  const int64_t outputAxis = 1 - reductionAxis;
+  int64_t tile = std::min(domain[reductionAxis], kMaxThreads);
   int64_t threads = roundUpToSubgroup(tile);
-  return Simt32Geometry{{domain[0]},
-                        {1, tile},
-                        ceilDivPositive(domain[1], tile),
+  SmallVector<int64_t> tileShape{1, 1};
+  tileShape[reductionAxis] = tile;
+  return Simt32Geometry{{domain[outputAxis]},
+                        std::move(tileShape),
+                        ceilDivPositive(domain[reductionAxis], tile),
                         threads,
                         kSubgroup,
                         threads * static_cast<int64_t>(sizeof(float)),
-                        1};
+                        reductionAxis};
 }
 
 } // namespace
@@ -1118,7 +1131,7 @@ LogicalResult SchedulePlanOp::verifyRegions() {
     }
   }
 
-  unsigned rowFoldCount = 0;
+  unsigned foldCount = 0;
   for (auto [ordinal, task] : llvm::enumerate(tasks)) {
     if (task.getOrdinal() != static_cast<int64_t>(ordinal) ||
         task.getSourceTask() != static_cast<int64_t>(ordinal)) {
@@ -1145,12 +1158,15 @@ LogicalResult SchedulePlanOp::verifyRegions() {
             "dependencies must be unique earlier schedule tasks");
       }
     }
-    if (task.getKind() == ScheduleTaskKind::RowFold &&
-        task.getReductionAxis() != 1) {
-      return task.emitOpError("row Fold schedule requires reduction axis one");
+    const bool isFold = task.getKind() == ScheduleTaskKind::RowFold ||
+                        task.getKind() == ScheduleTaskKind::ColumnFold;
+    if (isFold && task.getReductionAxis() !=
+                      (task.getKind() == ScheduleTaskKind::RowFold ? 1 : 0)) {
+      return task.emitOpError(
+          "Fold schedule kind must match its reduction axis");
     }
     std::optional<ScheduleReductionOrder> expectedOrder;
-    if (task.getKind() == ScheduleTaskKind::RowFold) {
+    if (isFold) {
       expectedOrder = ScheduleReductionOrder::TreeAssociationFreeLeafOrderFixed;
     }
     if (task.getReductionOrder() != expectedOrder) {
@@ -1170,12 +1186,12 @@ LogicalResult SchedulePlanOp::verifyRegions() {
       return task.emitOpError(
           "schedule geometry must equal the SIMT32 derivation");
     }
-    if (task.getKind() == ScheduleTaskKind::RowFold) {
-      ++rowFoldCount;
+    if (isFold) {
+      ++foldCount;
     }
   }
-  if (rowFoldCount != 1) {
-    return emitOpError("requires exactly one row Fold schedule task");
+  if (foldCount == 0) {
+    return emitOpError("requires at least one Fold schedule task");
   }
   if (getFingerprint() != schedulePlanFingerprint(*this)) {
     return emitOpError("fingerprint does not match the closed schedule plan");

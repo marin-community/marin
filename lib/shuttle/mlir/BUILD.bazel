@@ -264,6 +264,10 @@ cc_test(
 cc_test(
     name = "cpu_bytecode_runtime_test",
     srcs = ["test/cpu-bytecode-runtime-test.cc"],
+    data = [
+        "test/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-backward.mlir",
+        "test/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-composed.mlir",
+    ],
     deps = [
         ":ShuttleCpuBytecode",
         ":ShuttleDialect",
@@ -277,6 +281,7 @@ cc_test(
         "@llvm-project//mlir:Parser",
         "@llvm-project//mlir:Pass",
         "@stablehlo//:register",
+        "@bazel_tools//tools/cpp/runfiles",
     ],
 )
 

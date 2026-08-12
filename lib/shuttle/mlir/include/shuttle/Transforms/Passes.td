@@ -66,7 +66,7 @@ def ShuttleVerifyNoShuttleOpsPass
 
 def ShuttlePlanRowFoldMaterializationPass
     : Pass<"shuttle-plan-row-fold-materialization", "::mlir::ModuleOp"> {
-  let summary = "Derive one row Fold and Map materialization plan";
+  let summary = "Derive a bounded rank-two Fold and Map materialization plan";
   let dependentDialects = ["::mlir::shuttle::ShuttleDialect"];
   let constructor = "createPlanRowFoldMaterializationPass()";
 }
@@ -79,7 +79,7 @@ def ShuttleVerifyMaterializationPlanPass
 
 def ShuttlePlanSimt32RowFoldSchedulePass
     : Pass<"shuttle-plan-simt32-row-fold-schedule", "::mlir::ModuleOp"> {
-  let summary = "Derive one bounded SIMT32 row Fold schedule candidate";
+  let summary = "Derive a bounded SIMT32 rank-two Fold schedule candidate";
   let dependentDialects = ["::mlir::shuttle::ShuttleDialect"];
   let constructor = "createPlanSimt32RowFoldSchedulePass()";
 }
