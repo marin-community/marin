@@ -25,6 +25,8 @@ import requests
 from haliax import Axis
 from jax.sharding import PartitionSpec as P
 from levanter.models.snowball import SnowballLMHeadModel
+from rigging.timing import Duration, ExponentialBackoff
+
 from marin.inference.backend import ModelSpec
 from marin.inference.config import LevanterEngineConfig, VllmEngineConfig, VllmLauncherType, VllmSource
 from marin.inference.iris_vllm import (
@@ -36,16 +38,14 @@ from marin.inference.iris_vllm import (
 from marin.inference.levanter_backend import LevanterBackend
 from marin.inference.model_preparation import read_attention_heads, select_tensor_parallel_size
 from marin.inference.vllm_backend import VllmBackend
-from rigging.timing import Duration, ExponentialBackoff
-
-from tests.cluster.vllm.backend_parity import (
+from marin.testing.inference.backend_parity import (
     NextTokenObservation,
     NextTokenParity,
     assert_same_rank_repeatability,
     cross_rank_diagnostic,
     parity_from_logprob_row,
 )
-from tests.cluster.vllm.snowball import (
+from marin.testing.inference.snowball import (
     BATCH_SIZE,
     MAX_PROBABILITY_ERROR,
     SNOWBALL,

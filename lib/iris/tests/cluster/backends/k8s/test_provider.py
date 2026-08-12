@@ -39,9 +39,8 @@ from iris.cluster.stats.tables import IrisTaskStat, ProfileTrigger
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable, wait_for_condition
+from iris.testing.k8s import make_batch, make_kueue_provider, make_run_req, pod_config, populate_node, populate_pod
 from rigging.timing import Duration
-
-from .conftest import make_batch, make_kueue_provider, make_run_req, pod_config, populate_node, populate_pod
 
 # ---------------------------------------------------------------------------
 # sync(): tasks_to_run

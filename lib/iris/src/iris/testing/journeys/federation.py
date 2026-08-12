@@ -1,19 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Two-controller federation journeys over the authenticated peer boundary."""
+"""Federation journeys over the authenticated peer boundary."""
 
 from pathlib import Path
 
-import pytest
+from rigging.server_auth import VerifiedIdentity, identity_scope
+
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
 from iris.cluster.controller.controller import Controller
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from rigging.server_auth import VerifiedIdentity, identity_scope
-from tests.journeys.world import JobRef, JourneyWorld, TaskRef
+from iris.testing.journeys.world import JobRef, JourneyWorld, TaskRef
 
 PARENT_CLUSTER_ID = "journey-parent"
 PEER_ID = "peer-b"
@@ -77,7 +77,7 @@ class InProcessPeerConnection:
 class FederationJourney:
     """Drive two real controllers while scripting only peer reachability."""
 
-    def __init__(self, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def __init__(self, root: Path, monkeypatch) -> None:
         self.peer = JourneyWorld(root / "peer", monkeypatch)
         self.connection = InProcessPeerConnection(self.peer.controller)
         self._federation_peer = FederationPeer(

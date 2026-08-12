@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""E2ECluster: context manager for running Controller + Worker clusters in tests.
+"""Context manager for running Controller and Worker clusters in tests.
 
 Supports both in-process (LocalCluster) and Docker (real containers) modes.
 Docker mode manually wires up Controller + Workers with DockerRuntime, which is
@@ -16,6 +16,8 @@ from pathlib import Path
 
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
+from rigging.timing import Duration
+
 from iris.client import IrisClient
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.bundle import BundleStore
@@ -49,7 +51,6 @@ from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from rigging.timing import Duration
 
 # Factory type for creating per-worker environment providers.
 # Signature: (worker_id, num_workers) -> EnvironmentProvider

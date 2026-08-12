@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A deterministic external-boundary backend for Iris journeys."""
+"""Deterministic external-boundary backend for Iris journeys."""
 
 import threading
 from collections import defaultdict, deque
@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from finelog.rpc import logging_pb2
+from rigging.timing import Timestamp
+
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -29,7 +31,6 @@ from iris.cluster.controller.task_state import job_scheduling_deadline
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
-from rigging.timing import Timestamp
 
 
 @dataclass(frozen=True, slots=True)
