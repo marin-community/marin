@@ -11,7 +11,7 @@ from jax.sharding import Mesh
 import haliax as hax
 from haliax.nn import MoELinear
 from haliax.partitioning import ResourceAxis, axis_mapping
-from test_utils import skip_if_not_enough_devices
+from lib.haliax.tests.test_utils import skip_if_not_enough_devices
 
 
 def _expected_moe_linear_output(moe: MoELinear, x: hax.NamedArray, group_sizes: hax.NamedArray):

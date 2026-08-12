@@ -19,7 +19,7 @@ from haliax.partitioning import (
     set_mesh,
     pspec_for,
 )
-from test_utils import skip_if_not_enough_devices
+from lib.haliax.tests.test_utils import skip_if_not_enough_devices
 
 
 class MyModule(eqx.Module):

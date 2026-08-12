@@ -16,12 +16,12 @@ from transformers import GPT2Config as HfGpt2Config
 import haliax
 
 import levanter.main.export_lm_to_hf as export_lm_to_hf
-import tiny_test_corpus
+from lib.levanter.tests import tiny_test_corpus
 from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, SAFE_TENSORS_INDEX_NAME
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.utils.jax_utils import is_inexact_arrayish
-from test_utils import has_torch
+from lib.levanter.tests.test_utils import has_torch
 
 
 class TokenizerlessGpt2Config(Gpt2Config):

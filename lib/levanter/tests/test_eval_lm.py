@@ -9,13 +9,13 @@ import jax
 import haliax
 
 import levanter.main.eval_lm as eval_lm
-import tiny_test_corpus
+from lib.levanter.tests import tiny_test_corpus
 from levanter.checkpoint import save_checkpoint
 from levanter.distributed import DistributedConfig
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.tracker import NoopConfig
 from levanter.trainer_state import TrainerState
-from test_utils import skip_if_no_torch
+from lib.levanter.tests.test_utils import skip_if_no_torch
 
 
 def test_eval_lm():

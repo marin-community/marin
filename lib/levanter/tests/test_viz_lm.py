@@ -10,7 +10,7 @@ import jax
 import haliax
 
 import levanter.main.viz_logprobs as viz_logprobs
-import tiny_test_corpus
+from lib.levanter.tests import tiny_test_corpus
 from levanter.checkpoint import save_checkpoint
 from levanter.distributed import DistributedConfig
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel

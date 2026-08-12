@@ -51,9 +51,14 @@ uv run pytest <relevant test paths>
 uv run --no-project infra/ci/run_tests.py
 ```
 
-The runner selects transitive import dependents and uses the workspace test
-dependencies and pytest settings. Use `uv run pytest <relevant test paths>`
-during the edit-test loop, or add `--all` to run the full safe unit suite.
+The runner selects transitive import dependents and runs the selected paths in
+one pytest process with the workspace test dependencies and pytest settings.
+When Haliax and another package are both selected, Haliax gets a clean pytest
+process for its process-wide JAX device setup; both phases share one synced
+environment.
+Use `uv run pytest <relevant test paths>` during the edit-test loop. Changes to
+shared dependency or pytest configuration fall back to `uv run pytest` because
+they cannot be narrowed safely.
 `pyproject.toml` already excludes the slow, integration, data-integration,
 live-cluster, Docker, and manual markers by default. Do not pass `-m 'not slow'`:
 `-m` replaces the whole default expression, so it re-selects the cluster and

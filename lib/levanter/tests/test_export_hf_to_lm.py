@@ -14,12 +14,12 @@ import haliax
 
 import levanter.main.export_hf_to_lm as export_hf_to_lm
 import levanter.main.export_lm_to_hf as export_lm_to_hf
-import tiny_test_corpus
+from lib.levanter.tests import tiny_test_corpus
 from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.utils.jax_utils import is_inexact_arrayish
-from test_utils import use_test_mesh
+from lib.levanter.tests.test_utils import use_test_mesh
 
 # Pad the model embedding past the tokenizer vocab (as Qwen does for TPU efficiency), so the
 # emit_padded_tokenizer path has something to pad.

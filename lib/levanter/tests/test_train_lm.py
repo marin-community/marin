@@ -18,7 +18,7 @@ from haliax import Axis
 from haliax.quantization import QuantizationConfig
 
 import levanter.main.train_lm as train_lm
-import tiny_test_corpus
+from lib.levanter.tests import tiny_test_corpus
 from levanter.adaptor import LoraAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
 from levanter.data.dataset import ListAsyncDataset
@@ -28,7 +28,7 @@ from levanter.distributed import DistributedConfig
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer_state import trainables_only
-from test_utils import arrays_only
+from lib.levanter.tests.test_utils import arrays_only
 
 
 def _array_leaves(tree):

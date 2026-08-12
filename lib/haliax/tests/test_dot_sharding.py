@@ -16,7 +16,7 @@ except Exception:
 import haliax as hax
 from haliax import Axis
 from haliax.partitioning import axis_mapping, set_mesh
-from test_utils import skip_if_not_enough_devices
+from lib.haliax.tests.test_utils import skip_if_not_enough_devices
 
 
 def _build_explicit_mesh():

@@ -7,7 +7,7 @@ import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
+from lib.levanter.tests.test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
 from transformers import AutoModelForCausalLM
 from transformers.models.apertus.configuration_apertus import ApertusConfig as HfApertusConfig
 

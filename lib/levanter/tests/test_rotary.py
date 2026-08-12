@@ -5,8 +5,8 @@ import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-from test_llama import _get_llama_config
-from test_utils import skip_if_no_torch
+from lib.levanter.tests.test_llama import _get_llama_config
+from lib.levanter.tests.test_utils import skip_if_no_torch
 from transformers import LlamaConfig
 
 from levanter.layers.rotary import YarnRotaryEmbeddingsConfig

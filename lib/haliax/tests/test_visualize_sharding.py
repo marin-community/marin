@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import haliax as hax
 from haliax import Axis
 from haliax.partitioning import ResourceAxis, axis_mapping, named_jit
-from test_utils import skip_if_not_enough_devices
+from lib.haliax.tests.test_utils import skip_if_not_enough_devices
 from haliax.debug import visualize_shardings
 
 Dim1 = Axis("dim1", 8)

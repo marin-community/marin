@@ -7,7 +7,7 @@ import pytest
 from datasets import load_dataset
 
 from levanter.tokenizers import load_tokenizer
-from test_utils import skip_if_hf_model_not_accessible, skip_if_no_soundlibs
+from lib.levanter.tests.test_utils import skip_if_hf_model_not_accessible, skip_if_no_soundlibs
 from transformers import AutoProcessor
 
 from levanter.data.audio import AudioDatasetSourceConfig, AudioIODatasetConfig, BatchAudioProcessor

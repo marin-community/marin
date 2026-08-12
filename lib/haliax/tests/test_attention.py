@@ -4,7 +4,7 @@
 
 import numpy as np
 from jax.random import PRNGKey
-from test_utils import skip_if_no_torch
+from lib.haliax.tests.test_utils import skip_if_no_torch
 
 import haliax as hax
 from haliax.nn.attention import (

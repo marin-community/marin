@@ -73,9 +73,13 @@ uv run pyrefly check
 uv run --no-project infra/ci/run_tests.py
 - The runner compares committed, staged, unstaged, and untracked changes with
   the merge base of `origin/main`, selects transitive import dependents, and
-  uses each package's uv test group plus the unified CI xdist settings.
-- Use `--dry-run` to inspect the plan, `--all` for every safe unit-test scope,
-  and `--base-ref <ref>` when the branch targets something other than main.
+  runs the selected paths in one pytest process with every workspace test group
+  plus the unified CI xdist settings. Haliax runs in a separate process when
+  another package is selected because it configures JAX before import; the
+  phases share one synced environment.
+- Use `--dry-run` to inspect the plan and `--base-ref <ref>` when the branch
+  targets something other than main. Shared dependency or pytest configuration
+  changes fall back to the ordinary `uv run pytest` suite.
 
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
@@ -86,8 +90,8 @@ uv run --no-project infra/ci/run_tests.py
 ```
 
 - Python >=3.12. Use `uv run` for entry points; the stdlib-only local test
-  runner uses `uv run --no-project infra/ci/run_tests.py` so it can select a
-  package before uv installs that package's test dependencies.
+  runner uses `uv run --no-project infra/ci/run_tests.py` so it can select test
+  paths before uv installs the workspace test dependencies.
 - Do not replace pytest's default marker expression with a partial expression
   such as `-m "not slow"`; `-m` overrides the whole default and can select live
   cluster tests. Run excluded markers only when the user or a dedicated task

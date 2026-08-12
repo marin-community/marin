@@ -8,7 +8,7 @@ import haliax as hax
 import numpy as np
 import pytest
 from jax import random
-from test_utils import skip_if_no_torch, use_test_mesh
+from lib.levanter.tests.test_utils import skip_if_no_torch, use_test_mesh
 
 from levanter.layers.attention import AttentionMask
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel

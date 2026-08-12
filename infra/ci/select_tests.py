@@ -57,22 +57,19 @@ class SourceRoot:
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES),
     SourceRoot("experiments", "."),
+    SourceRoot("infra/ci", "."),
     SourceRoot("infra/evaldash/src", "."),
 )
 
-# Files whose change triggers running every package's full test suite. The Rust
-# source-build machinery is included so a change to it re-runs the full matrix
-# and exercises a source build somewhere.
-BROAD_TRIGGERS: frozenset[str] = frozenset(
-    {
-        "uv.lock",
-        "pyproject.toml",
-        "infra/ci/run_tests.py",
-        "infra/ci/select_tests.py",
-        "scripts/rust_mode.py",
-        ".github/workflows/unified-unit.yaml",
-    }
-)
+# Dependency and native-build changes can affect every local test environment.
+LOCAL_BROAD_TRIGGERS: frozenset[str] = frozenset({"uv.lock", "pyproject.toml", "scripts/rust_mode.py"})
+
+# Selector and workflow changes run the complete CI matrix to validate the
+# orchestration itself. Locally, their import-dependent tests are sufficient;
+# the exhaustive matrix still runs after the branch is pushed.
+CI_BROAD_TRIGGERS: frozenset[str] = frozenset({"infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"})
+
+BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 
 # uv package names and pytest paths for each workspace scope.
 UV_PACKAGE: dict[str, str] = {
@@ -317,19 +314,19 @@ def has_static_test_items(path: Path) -> bool:
 
 
 def _test_tree(scope: str, repo_root: Path) -> dict[str, Path]:
-    """Every .py under a scope's test directory, keyed by the name it imports itself as.
+    """Every .py under a scope's test directory, keyed by its repo-root module name.
 
-    Test trees are imported as the ``tests`` package rooted at the test directory's parent,
-    which is what both relative (``from .conftest import x``) and absolute
-    (``from tests.cluster.conftest import x``) intra-tree imports resolve against.
+    Package test trees need distinct names when pytest collects paths from more
+    than one workspace package. For example, Levanter helpers are imported as
+    ``lib.levanter.tests.test_utils`` rather than the ambiguous ``test_utils``.
+    Relative imports resolve against the same canonical name.
     """
     test_dir = repo_root / TEST_DIR[scope]
     if not test_dir.exists():
         return {}
-    import_root = repo_root / PurePosixPath(TEST_DIR[scope]).parent
     tree: dict[str, Path] = {}
     for py in test_dir.rglob("*.py"):
-        module = path_to_module(py, import_root)
+        module = path_to_module(py, repo_root)
         if module:
             tree[module] = py
     return tree
@@ -408,7 +405,11 @@ class ClassifyResult:
     """Scopes whose native crate (lib/<scope>/rust) changed — need a source build."""
 
 
-def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
+def classify(
+    changed_files: list[str],
+    repo_root: Path,
+    broad_triggers: frozenset[str] = BROAD_TRIGGERS,
+) -> ClassifyResult:
     """Classify repo-root-relative changed file paths."""
     broad = False
     src_modules: set[str] = set()
@@ -417,7 +418,7 @@ def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
     native_changed: set[str] = set()
 
     for filepath in changed_files:
-        if filepath in BROAD_TRIGGERS:
+        if filepath in broad_triggers:
             broad = True
             continue
 
@@ -741,24 +742,14 @@ class SelectionResult:
     suite_test_paths: dict[str, list[str]]
 
 
-def select_changed_tests(
+def _select_changed_tests(
     changed_files: list[str],
     repo_root: Path,
+    broad_triggers: frozenset[str],
     *,
     run_all_tests: bool = False,
 ) -> SelectionResult:
-    """Return the safe test plan for repo-relative changed paths.
-
-    Args:
-        changed_files: Changed paths relative to ``repo_root``.
-        repo_root: Workspace root used to resolve imports and test files.
-        run_all_tests: Select every safe unit-test scope regardless of the paths.
-
-    Returns:
-        Matrix jobs and dedicated suites selected for the change. Native source
-        changes mark their owning matrix jobs for a source build.
-    """
-    classification = classify(changed_files, repo_root)
+    classification = classify(changed_files, repo_root, broad_triggers)
     source_build_scopes = set(classification.native_changed)
 
     if run_all_tests:
@@ -782,6 +773,36 @@ def select_changed_tests(
         matrix=matrix,
         suites=suites,
         suite_test_paths=suite_test_paths,
+    )
+
+
+def select_changed_tests(
+    changed_files: list[str],
+    repo_root: Path,
+    *,
+    run_all_tests: bool = False,
+) -> SelectionResult:
+    """Return the CI test plan for repo-relative changed paths."""
+    return _select_changed_tests(
+        changed_files,
+        repo_root,
+        BROAD_TRIGGERS,
+        run_all_tests=run_all_tests,
+    )
+
+
+def select_local_tests(
+    changed_files: list[str],
+    repo_root: Path,
+    *,
+    run_all_tests: bool = False,
+) -> SelectionResult:
+    """Return affected local tests without expanding CI-only orchestration changes."""
+    return _select_changed_tests(
+        changed_files,
+        repo_root,
+        LOCAL_BROAD_TRIGGERS,
+        run_all_tests=run_all_tests,
     )
 
 

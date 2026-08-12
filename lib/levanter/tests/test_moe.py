@@ -13,7 +13,7 @@ from haliax import Axis
 
 from levanter.models.moe import dense_router_delta
 from levanter.utils.activation import ActivationFunctionEnum
-from test_utils import use_test_mesh
+from lib.levanter.tests.test_utils import use_test_mesh
 
 
 def _inputs(Token: Axis, Embed: Axis, Mlp: Axis, Experts: Axis):

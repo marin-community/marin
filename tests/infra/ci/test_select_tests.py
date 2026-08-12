@@ -23,6 +23,7 @@ from infra.ci.select_tests import (
     matrix_leg,
     scope_legs,
     select_changed_tests,
+    select_local_tests,
     shard_files,
     torch_membership_for_test_file,
 )
@@ -139,7 +140,7 @@ def test_test_helper_module_propagates_source_changes(tmp_path: Path) -> None:
     write(tmp_path, "lib/iris/src/iris/__init__.py")
     write(tmp_path, "lib/iris/src/iris/scheduler.py", "SCHED = 1\n")
     write(tmp_path, "lib/iris/tests/support.py", "from iris.scheduler import SCHED\n")
-    write(tmp_path, "lib/iris/tests/test_via_helper.py", "from tests.support import SCHED\n")
+    write(tmp_path, "lib/iris/tests/test_via_helper.py", "from lib.iris.tests.support import SCHED\n")
     write(tmp_path, "lib/iris/tests/test_relative_helper.py", "from .support import SCHED\n")
     write(tmp_path, "lib/iris/tests/test_direct.py", "def test_x():\n    pass\n")
 
@@ -190,7 +191,6 @@ def test_classify_broad_triggers(tmp_path: Path) -> None:
     for path in (
         "uv.lock",
         "pyproject.toml",
-        "infra/ci/run_tests.py",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
     ):
@@ -201,6 +201,25 @@ def test_classify_broad_triggers(tmp_path: Path) -> None:
     assert not ignored.src_modules
     assert not ignored.direct_tests
     assert not ignored.forced
+
+
+def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
+    write(tmp_path, "infra/ci/__init__.py")
+    write(tmp_path, "infra/ci/select_tests.py", "def select():\n    pass\n")
+    write(tmp_path, "infra/ci/run_tests.py", "from infra.ci.select_tests import select\n")
+    write(tmp_path, "tests/infra/ci/test_select_tests.py", "from infra.ci.select_tests import select\n")
+    write(tmp_path, "tests/infra/ci/test_run_tests.py", "from infra.ci.run_tests import select\n")
+
+    selection = select_local_tests(
+        ["infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"],
+        tmp_path,
+    )
+
+    assert selection.reason == "diff-driven"
+    assert leg_paths(selection.matrix, "marin") == [
+        "tests/infra/ci/test_run_tests.py",
+        "tests/infra/ci/test_select_tests.py",
+    ]
 
 
 def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:

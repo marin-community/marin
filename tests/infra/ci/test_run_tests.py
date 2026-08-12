@@ -7,7 +7,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-from infra.ci.run_tests import PytestInvocation, local_invocations, worktree_diff
+from infra.ci.run_tests import (
+    PackageSelection,
+    PytestInvocation,
+    local_invocation,
+    pytest_command,
+    pytest_invocations,
+    worktree_diff,
+)
 from infra.ci.select_tests import MatrixLeg, SelectionResult
 
 
@@ -58,7 +65,7 @@ def test_worktree_diff_includes_branch_local_and_untracked_changes(tmp_path: Pat
     assert set(diff.changed_files) == {"tracked.py", "staged.py", "deleted.py", "untracked.py"}
 
 
-def test_local_invocations_collapse_ci_shards_and_keep_package_configuration() -> None:
+def test_local_invocation_combines_ci_shards_in_one_workspace_process() -> None:
     selection = SelectionResult(
         reason="diff-driven",
         matrix=[
@@ -97,25 +104,58 @@ def test_local_invocations_collapse_ci_shards_and_keep_package_configuration() -
         suite_test_paths={},
     )
 
-    invocations = local_invocations(selection)
+    invocation = local_invocation(selection)
 
-    assert invocations == (
-        PytestInvocation(
-            label="levanter",
-            package="marin-levanter",
-            python="3.12",
-            extras=(),
-            pytest_args=("--durations=5", "-n", "auto", "--dist=worksteal", "--tb=short"),
-            test_paths=("lib/levanter/tests/test_a.py", "lib/levanter/tests/test_b.py"),
-            source_build=False,
-        ),
-        PytestInvocation(
-            label="marin",
-            package="marin-core",
-            python="3.12",
-            extras=("--extra", "cpu", "--extra", "dedup"),
-            pytest_args=("--durations=5", "-n", "auto", "--dist=worksteal", "--tb=short"),
-            test_paths=("tests/test_training.py",),
-            source_build=False,
+    assert invocation == PytestInvocation(
+        python="3.12",
+        extras=("cpu", "dedup"),
+        pytest_args=("--durations=5", "-n", "auto", "--dist=worksteal", "--tb=short"),
+        packages=(
+            PackageSelection(
+                label="levanter",
+                test_paths=("lib/levanter/tests/test_a.py", "lib/levanter/tests/test_b.py"),
+                source_build=False,
+            ),
+            PackageSelection(
+                label="marin",
+                test_paths=("tests/test_training.py",),
+                source_build=False,
+            ),
         ),
     )
+
+    command = pytest_command(invocation, ("-x",))
+    assert command[:2] == ("uv", "run")
+    assert "--all-packages" in command
+    assert "--no-default-groups" in command
+    assert command.count("--extra") == 2
+    marker_expression = command[command.index("-m") + 1]
+    assert "not requires_cluster" in marker_expression
+    assert "not torch" in marker_expression
+    assert command[-4:] == (
+        "lib/levanter/tests/test_a.py",
+        "lib/levanter/tests/test_b.py",
+        "tests/test_training.py",
+        "-x",
+    )
+
+
+def test_haliax_runs_in_a_clean_jax_process_when_other_packages_are_selected() -> None:
+    invocation = PytestInvocation(
+        python="3.12",
+        extras=("cpu",),
+        pytest_args=("-n", "auto"),
+        packages=(
+            PackageSelection("haliax", ("lib/haliax/tests/test_axis.py",), False),
+            PackageSelection("levanter", ("lib/levanter/tests/test_model.py",), False),
+        ),
+    )
+
+    phases = pytest_invocations(invocation)
+
+    assert [phase.test_paths for phase in phases] == [
+        ("lib/haliax/tests/test_axis.py",),
+        ("lib/levanter/tests/test_model.py",),
+    ]
+    assert "--no-sync" not in pytest_command(phases[0])
+    assert "--no-sync" in pytest_command(phases[1], sync=False)

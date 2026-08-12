@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import transformers
 from jax import random
-from test_utils import (
+from lib.levanter.tests.test_utils import (
     check_load_config,
     check_model_works_with_seqlen,
     parameterize_with_configs,

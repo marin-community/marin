@@ -8,7 +8,7 @@ import tempfile
 import haliax as hax
 import numpy as np
 from jax import random
-from test_utils import skip_if_no_torch, use_test_mesh
+from lib.levanter.tests.test_utils import skip_if_no_torch, use_test_mesh
 from transformers.models.qwen3 import Qwen3Config as HFQwen3Config
 
 from levanter.layers.attention import AttentionMask

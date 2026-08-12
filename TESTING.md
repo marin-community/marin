@@ -16,11 +16,20 @@ uv run --no-project infra/ci/run_tests.py
 
 The runner compares committed, staged, unstaged, and untracked files with the
 branch point from `origin/main`. It uses `infra/ci/select_tests.py` to find test
-files that transitively import changed modules, then runs one pytest process per
-affected package with the same uv extras and xdist flags as unified unit CI.
-Use `--dry-run` to inspect the commands, `--all` to run every safe unit-test
-scope, or `--base-ref <ref>` when the branch targets another ref. Extra pytest
-arguments follow `--`, for example
+files that transitively import changed modules, then runs the selected paths in
+one top-level pytest process with every workspace test group and the same uv
+extras and xdist flags as unified unit CI. It reuses the worktree environment,
+so repeated runs do not rebuild an isolated environment. A package shown as
+`full suite` has its test directory selected, not a single test. The runner
+prints the command it executes and abbreviates only long test-path lists.
+Haliax uses a separate pytest phase only when another package is also selected,
+because its eight-device CPU setup must happen before JAX initializes. Both
+phases reuse the same synced workspace environment.
+CI selector and workflow changes run their import-dependent tests locally while
+the pushed branch exercises the complete CI matrix. Changes to shared dependency
+or pytest configuration cannot be narrowed, so the runner falls back to
+`uv run pytest`. Use `--dry-run` to inspect the command or `--base-ref <ref>`
+when the branch targets another ref. Extra pytest arguments follow `--`, for example
 `uv run --no-project infra/ci/run_tests.py -- -x`.
 
 The repository defaults exclude `slow`, `integration`, `data_integration`,

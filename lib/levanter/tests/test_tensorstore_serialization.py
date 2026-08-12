@@ -15,7 +15,7 @@ import pytest
 from chex import assert_trees_all_close
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
-from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
+from lib.levanter.tests.test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.models.gpt2 import Gpt2Mlp
 from levanter.tensorstore_serialization import (
