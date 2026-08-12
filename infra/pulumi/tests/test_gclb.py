@@ -69,9 +69,7 @@ class RecordedGclb:
     imports: ImportCatalog
 
 
-def _record_gclb(monkeypatch, args: GcpGclbIapArgs | None = None) -> RecordedGclb:
-    if args is None:
-        args = _args()
+def _record_gclb(monkeypatch) -> RecordedGclb:
     imports = ImportCatalog()
     options_by_name: dict[str, pulumi.ResourceOptions] = {}
     inputs_by_name: dict[str, dict] = {}
@@ -114,7 +112,7 @@ def _record_gclb(monkeypatch, args: GcpGclbIapArgs | None = None) -> RecordedGcl
     monkeypatch.setattr(pulumi.ComponentResource, "__init__", initialize_component)
     monkeypatch.setattr(GcpGclbIap, "register_outputs", lambda *_args, **_kwargs: None)
 
-    GcpGclbIap("gclb", args, gcp_provider=None, imports=imports)
+    GcpGclbIap("gclb", _args(), gcp_provider=None, imports=imports)
     return RecordedGclb(inputs_by_name=inputs_by_name, options_by_name=options_by_name, imports=imports)
 
 
