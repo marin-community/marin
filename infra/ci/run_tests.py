@@ -35,7 +35,7 @@ LOCAL_SAFE_MARKERS = (
 )
 MAX_DISPLAYED_TEST_PATHS = 5
 HALIAX_CPU_DEVICE_COUNT = 8
-DEFAULT_WORKERS = 8
+DEFAULT_WORKERS = max(2, os.cpu_count() or 2)
 JAX_CPU_DEVICE_ENV = "JAX_NUM_CPU_DEVICES"
 
 
@@ -343,7 +343,7 @@ def run(argv: list[str] | None = None) -> int:
         "--workers",
         type=int,
         default=DEFAULT_WORKERS,
-        help=f"total xdist worker budget (default: {DEFAULT_WORKERS})",
+        help=f"total xdist worker budget (default: host CPU count, currently {DEFAULT_WORKERS})",
     )
     parser.add_argument("pytest_args", nargs=argparse.REMAINDER, help="extra pytest arguments after --")
     args = parser.parse_args(argv)

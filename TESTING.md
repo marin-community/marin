@@ -25,8 +25,8 @@ commands it executes and abbreviates only long test-path lists. When Haliax and
 other packages are selected together, one worker runs Haliax with eight virtual
 CPU devices while the remaining workers run the other affected tests
 concurrently. This keeps a single worker budget without imposing Haliax's JAX
-topology on every test process. The default budget is eight workers; override it
-with `--workers <count>`.
+topology on every test process. The default budget is the host CPU count;
+override it with `--workers <count>`.
 CI selector and workflow changes run their import-dependent tests locally while
 the pushed branch exercises the complete CI matrix. Changes to shared dependency
 or pytest configuration cannot be narrowed, so the runner falls back to

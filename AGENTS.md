@@ -79,8 +79,8 @@ uv run --no-project infra/ci/run_tests.py
   remaining workers run the other affected tests concurrently.
 - Use `--dry-run` to inspect the plan and `--base-ref <ref>` when the branch
   targets something other than main. Use `--workers <count>` to change the
-  eight-worker default. Shared dependency or pytest configuration changes fall
-  back to the ordinary `uv run pytest` suite.
+  host CPU count default. Shared dependency or pytest configuration changes
+  fall back to the ordinary `uv run pytest` suite.
 
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
