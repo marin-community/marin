@@ -4250,3 +4250,58 @@ author: dlwh
   boundary beneath the abstract schedule, including buffer binding, memory
   spaces, offsets, synchronization, and runtime ownership. Keep it opt-in until
   device-code and ordinary-JAX execution gates are independently reviewable.
+
+### 2026-08-12 - TLTC-MLIR-006 expert oracle and executable ownership stop
+
+- Canonical commit `875d45e228` pins the Target 1 Transformer Engine 2.17
+  expert-oracle contract to official tag `v2.17`, commit
+  `2e559f062497bef768dfbe9d7e45548fadeca80a`, exact source and API hashes, and
+  empty hardware result cells. The public BF16 tensors, FP32 `rsigma`, exact
+  workspace-query protocol, independent forward/backward backend controls,
+  and forward, recompute-backward, and composed timing boundaries are closed.
+- The expert-oracle contract declares no GPU tolerance or result. Standalone
+  recompute-backward includes the required forward call and throwaway BF16
+  output inside timing; composed execution retains the forward result and
+  saved FP32 `rsigma`. Workspace query and plan construction remain outside
+  timing, while each call uses the exact queried tensor metadata.
+- Canonical commits `2d154fb965`, `ba1a982ac7`, and `4c5e4e3d3e` record the
+  executable-device ownership boundary. Source audit established that the
+  abstract schedule is not executable: it lacks instruction/body IR, buffer
+  assignment, physical layout, launch semantics, synchronization, and an XLA
+  or runtime owner. Emitting NVVM or interpreting the surviving algebra would
+  bypass those contracts, so this slice intentionally adds no executable IR.
+- The next implementation is split into a static `device_module`, a static
+  `invocation_abi`, and a closed root executable-bundle digest. It must bind
+  generated instructions to complete Map/Fold bodies, bind the two schemas to
+  one another, hash resolved code-object bytes before load or lookup, and keep
+  code, temporaries, async failures, and executable state alive through an
+  explicit completion token.
+- The pinned XLA typed FFI exposes dtype, pointer, rank, and dimensions. It does
+  not expose allocation extent, strides, offsets, address spaces, or
+  alias/donation metadata. Those properties must be established by custom-call
+  construction and XLA buffer assignment or supplied through a new explicit
+  backend ABI; the handler cannot infer them. The ordinary FFI scratch
+  allocator is insufficient for asynchronously enqueued temporary storage
+  unless the runtime proves deferred lifetime through completion.
+- Canonical commits `6da2f4941f` and `3ae37e01e2` close the local ABI 5 Linux
+  environment identity as far as the repository permits. Twelve Linux x86-64
+  CPython 3.12 wheel inputs are pinned by exact URL and SHA-256 from `uv.lock`,
+  Bazel 7.7.0 is hash-checked before execution, and the post-submit bundle
+  receipt has a strict typed schema. All integer, boolean, null, and string
+  fields reject Python/JSON cross-type aliases.
+- The CPU acceptance manifest remains `launch_ready=false`. `uv-build` is not
+  present in the checked-in lock and remains the only dependency-lock blocker.
+  The Linux Python build/executable, immutable task and init images, deployed
+  Iris controller/config, closed environment allowlist, and exact post-submit
+  receipt also remain unresolved. Two preparations are byte-identical: 146
+  members and bundle SHA-256
+  `d2ca6e2dfbacac8f8041c5c88bf1b07c5e7e9d474cee89d8621b5897caa03f65`.
+- Integrated validation passes 112 focused expert-oracle/acceptance tests and
+  all required changed-files pre-commit checks. No controller deployment,
+  private bundle upload, CPU launch, GPU allocation, or scorecard promotion
+  occurred.
+- Next action: implement one closed executable-bundle schema and a real local
+  consumer that executes generated instruction/body IR rather than the source
+  algebra. In parallel, make the Transformer Engine oracle runner buildable and
+  close the remaining local Linux dependency and image identities without
+  weakening `launch_ready=false`.
