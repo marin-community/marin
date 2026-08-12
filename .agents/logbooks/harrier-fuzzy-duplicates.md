@@ -296,3 +296,15 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI pods. RNO has 82 running TEI pods and 14 replacement pods waiting for interactive capacity.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of coordinator logs.
 - Next action: Continue the 15-minute check cadence and validate RNO replacements when capacity becomes available.
+
+### 2026-08-12 02:38 UTC - Embedding throughput profile
+
+- Current health: Both roots have zero failures and zero preemptions. East reached 4,216 of 5,872 output shards. RNO reached 5,171 of 8,018 output shards. Each stage has 32 live workers and no dead workers.
+- Thread profiles: Worker 0 in each region had all 16 embedding request threads blocked in `http.client.getresponse()` from `TEIClient.embed()`. The active shard thread waited for those futures. No active Parquet or S3 call was in that path.
+- CPU profiles: The 10-second East capture contained 2.05 CPU-seconds across all threads. The RNO capture contained 0.20 CPU-seconds. Minor East samples were in Arrow conversion. CPU work is not the limit.
+- GPU samples: A 20-second East TEI sample had 86.6% mean utilization, 98% median utilization, and 565 W mean power. RNO had 99.6% mean utilization, 100% median utilization, and 670 W mean power.
+- East TEI timing: Across 1,325 requests, mean total time was 451 ms. Mean queue time was 180 ms. Mean inference time was 244 ms. Queue plus inference was 93.9% of total time.
+- RNO TEI timing: Across 389 requests, mean total time was 2.006 seconds. Mean queue time was 1.175 seconds. Mean inference time was 692 ms. Queue plus inference was 93.1% of total time.
+- Result: Both Zephyr stages wait for GPU embedding responses. RNO has the larger TEI queue because 82 live GPUs are saturated while 14 replacement pods wait for interactive capacity.
+- Captures: `scratch/harrier-profile-20260812-0232-east-zephyr-threads.txt`, `scratch/harrier-profile-20260812-0232-rno-zephyr-threads.txt`, `scratch/harrier-profile-20260812-0236-east-zephyr.speedscope.json`, and `scratch/harrier-profile-20260812-0236-rno-zephyr.speedscope.json`.
+- Next action: Keep the live configuration. Continue to wait for the 14 RNO replacement workers and monitor source progress.
