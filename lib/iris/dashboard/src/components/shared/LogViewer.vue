@@ -533,7 +533,10 @@ function setStartTime(entry: LogEntry) {
 
 /** Promote the client-side search into the server-side filter over the whole log. */
 function promoteSearchToFilter() {
-  filter.value = search.query.value
+  const pattern = search.useRegex.value
+    ? search.query.value
+    : search.query.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  filter.value = search.caseSensitive.value ? pattern : `(?i)${pattern}`
   resetAndFetch()
 }
 
