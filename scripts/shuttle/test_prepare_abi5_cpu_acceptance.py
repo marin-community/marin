@@ -13,10 +13,10 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from iris.cluster.client.bundle import create_workspace_zip
 from prepare_abi5_cpu_acceptance import (
     DEPENDENCY_INPUT_SOURCE,
     MANIFEST_SOURCE,
+    RUNNER_SOURCE,
     _validate_dependency_inputs,
     _zip_inventory,
     load_and_validate_manifest,
@@ -297,33 +297,11 @@ def test_manifest_rejects_cross_type_scalar_substitutions(
         load_and_validate_manifest(mutated)
 
 
-def test_preparation_builds_config_free_capsule_with_iris_equivalent_inventory(tmp_path: Path) -> None:
+def test_historical_abi5_preparation_rejects_current_abi6_source(tmp_path: Path) -> None:
     output = tmp_path / "prepared"
-    report = prepare_capsule(REPOSITORY_ROOT, output)
-    capsule = output / "capsule"
-    assert report["launch_ready"] is False
-    assert report["bundle_sha256"] == report["bundle_content_id"]
-    assert (
-        report["dependency_inputs_sha256"]
-        == load_and_validate_manifest(MANIFEST_SOURCE)["execution_identity"]["dependency_inputs"]["sha256"]
-    )
-    assert report["execution_identity_schema_version"] == 2
-    assert (output / "bundle.zip").stat().st_size == report["bundle_size"]
-    assert (capsule / "run_abi5_cpu_acceptance_preflight.sh").is_file()
-    assert (capsule / "acceptance-manifest.json").is_file()
-    assert (capsule / "linux-dependency-inputs.json").is_file()
-    assert (capsule / "verify_abi5_cpu_post_submit_receipt.py").is_file()
-    assert (capsule / "lib/shuttle/mlir/jax_patch/shuttle_jaxlib_target1_acceptance.py").is_file()
-    iris_zip = tmp_path / "iris-client.zip"
-    iris_zip.write_bytes(create_workspace_zip(capsule))
-    assert _zip_inventory(iris_zip) == _zip_inventory(output / "bundle.zip")
-    forbidden = (".git", ".venv", "artifacts", "coreweave.yaml", ".marin.yaml")
-    members = json.loads((output / "bundle-members.json").read_text())
-    assert members
-    assert all(not any(component in forbidden for component in Path(item["path"]).parts) for item in members)
-    extraction = json.loads((output / "expected-extraction.json").read_text())
-    assert all("mode" not in item for item in extraction)
-    assert all("mode" in item for item in members)
+    with pytest.raises(ValueError, match=r"Python and C\+\+ pipeline ABI pins must both be 5"):
+        prepare_capsule(REPOSITORY_ROOT, output)
+    assert not output.exists()
 
 
 def test_dependency_input_mutations_fail_closed(tmp_path: Path) -> None:
@@ -362,15 +340,6 @@ def test_dependency_contract_rejects_cross_type_scalar_substitutions(
         _validate_dependency_inputs(mutated)
 
 
-def test_two_fresh_preparations_have_identical_content_addressed_bytes(tmp_path: Path) -> None:
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-    first_report = prepare_capsule(REPOSITORY_ROOT, first)
-    second_report = prepare_capsule(REPOSITORY_ROOT, second)
-    assert (first / "bundle.zip").read_bytes() == (second / "bundle.zip").read_bytes()
-    assert first_report["bundle_sha256"] == second_report["bundle_sha256"]
-
-
 def test_duplicate_json_keys_and_zip_paths_fail_closed(tmp_path: Path) -> None:
     duplicate_json = tmp_path / "duplicate.json"
     duplicate_json.write_text('{"schema_version":1,"schema_version":1}')
@@ -393,12 +362,19 @@ def test_duplicate_json_keys_and_zip_paths_fail_closed(tmp_path: Path) -> None:
         _zip_inventory(alias_zip)
 
 
-def test_runner_rejects_unresolved_manifest_before_external_work(tmp_path: Path) -> None:
-    output = tmp_path / "prepared"
-    prepare_capsule(REPOSITORY_ROOT, output)
+def _historical_runner_capsule(tmp_path: Path) -> Path:
+    capsule = tmp_path / "capsule"
+    capsule.mkdir()
+    (capsule / "acceptance-manifest.json").write_bytes(MANIFEST_SOURCE.read_bytes())
+    (capsule / "run_abi5_cpu_acceptance_preflight.sh").write_bytes(RUNNER_SOURCE.read_bytes())
+    return capsule
+
+
+def test_historical_runner_rejects_unresolved_manifest_before_external_work(tmp_path: Path) -> None:
+    capsule = _historical_runner_capsule(tmp_path)
     result = subprocess.run(
         ["bash", "run_abi5_cpu_acceptance_preflight.sh"],
-        cwd=output / "capsule",
+        cwd=capsule,
         capture_output=True,
         text=True,
         check=False,
@@ -423,16 +399,12 @@ def _resolved_launch(bundle_sha256: str) -> dict[str, str]:
     }
 
 
-def test_runner_validates_closed_resolved_schema_and_exact_bundle_id(tmp_path: Path) -> None:
-    output = tmp_path / "prepared"
-    report = prepare_capsule(REPOSITORY_ROOT, output)
-    capsule = output / "capsule"
-    resolved = _resolved_launch(report["bundle_sha256"])
+def test_historical_runner_validates_resolved_schema_and_bundle_id(tmp_path: Path) -> None:
+    capsule = _historical_runner_capsule(tmp_path)
+    bundle_sha256 = "0" * 64
+    resolved = _resolved_launch(bundle_sha256)
     (capsule / "resolved-launch.json").write_text(json.dumps(resolved))
-    environment = {
-        "PATH": os.environ["PATH"],
-        "IRIS_BUNDLE_ID": report["bundle_sha256"],
-    }
+    environment = {"PATH": os.environ["PATH"], "IRIS_BUNDLE_ID": bundle_sha256}
     result = subprocess.run(
         ["bash", "run_abi5_cpu_acceptance_preflight.sh"],
         cwd=capsule,
@@ -444,7 +416,7 @@ def test_runner_validates_closed_resolved_schema_and_exact_bundle_id(tmp_path: P
     assert result.returncode == 2
     assert "external execution is intentionally not implemented" in result.stderr
 
-    environment["IRIS_BUNDLE_ID"] = "0" * 64
+    environment["IRIS_BUNDLE_ID"] = "f" * 64
     mismatch = subprocess.run(
         ["bash", "run_abi5_cpu_acceptance_preflight.sh"],
         cwd=capsule,
@@ -461,7 +433,7 @@ def test_runner_validates_closed_resolved_schema_and_exact_bundle_id(tmp_path: P
     mutable_image = subprocess.run(
         ["bash", "run_abi5_cpu_acceptance_preflight.sh"],
         cwd=capsule,
-        env={**environment, "IRIS_BUNDLE_ID": report["bundle_sha256"]},
+        env={**environment, "IRIS_BUNDLE_ID": bundle_sha256},
         capture_output=True,
         text=True,
         check=False,
@@ -475,7 +447,7 @@ def test_runner_validates_closed_resolved_schema_and_exact_bundle_id(tmp_path: P
     extra = subprocess.run(
         ["bash", "run_abi5_cpu_acceptance_preflight.sh"],
         cwd=capsule,
-        env={**environment, "IRIS_BUNDLE_ID": report["bundle_sha256"]},
+        env={**environment, "IRIS_BUNDLE_ID": bundle_sha256},
         capture_output=True,
         text=True,
         check=False,

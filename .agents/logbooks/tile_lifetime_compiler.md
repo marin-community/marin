@@ -4450,3 +4450,37 @@ author: dlwh
   binary-byte, role, backend, input, threshold, and duplicate/missing/extra
   mutations fail closed. Hardware results remain empty and scorecard status is
   unchanged.
+
+### 2026-08-12 - TLTC-MLIR-011 ABI 6 typed-FFI CPU consumer
+
+- Canonical commits `5249011509` through `f8dfc44f67` add an opt-in ABI 6 CPU
+  execution mode for the exact `7x13` SOURCE_ORDERED forward bundle. The
+  pipeline replaces the closed Shuttle region with one API-version-4 Host typed
+  FFI custom call and erases source, algebra, materialization, schedule, and
+  bundle sidecars.
+- The canonical little-endian transport records explicit operand and result
+  bindings. Instantiate validates BF16 types, ranks, dimensions, byte counts,
+  alignment, and binding indices, then retains the decoded slot ordinals.
+  Execute uses those ordinals and an immutable bundle parsed once per call site.
+- Transport schema 1 limits the encoded payload to 16 MiB, repeated records and
+  task elements to 256, each slot to 1 MiB, and aggregate temporaries to 16 MiB.
+  Serializer and loader share the validation. Checked arithmetic and exception
+  translation keep allocation failures inside `absl::Status`.
+- A rebuilt JAX/jaxlib 0.10.1 run on the original implementation executed
+  ordinary `jax.jit` twice with bitwise output digest
+  `6bd95b599dd3a774de3127e29a7925bc68b8690f6df768007f3fc4b9c8a91cd5`.
+  Separate populate and reuse processes observed one persistent-cache hit with
+  unchanged cache bytes; round-trip mode produced a distinct miss and key.
+  Later resource-closure follow-ups did not rerun the rebuilt wheel, so the
+  final code is covered by the real Host LocalClient and static/native gates,
+  not a second wheel claim.
+- The final integrated native aggregate passes 44 targets. Independent review
+  replayed 40 native/XLA/MLIR targets and returned GO. The wrong-projection
+  transport loads through the public runtime but fails Host instantiation; the
+  closed 257-record producer mutation fails at serialization.
+- The ABI 5 capsule remains a historical exact-base artifact. Current ABI 6
+  source must fail its preparation gate; changing the old manifest to ABI 6
+  would incorrectly claim `2048x4096`, backward, composed, and FAST support.
+- No H100/GB200 execution, upload, launch, scorecard promotion, or performance
+  evidence occurred. ABI 6 remains limited to `7x13` forward SOURCE_ORDERED on
+  the Host CPU consumer.
