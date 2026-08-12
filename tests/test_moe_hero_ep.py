@@ -40,6 +40,7 @@ from experiments.grug.moe_hero_ep import (
     launch_mok_like,
     model,
     mok_like_correctness,
+    mok_like_stateful_parity,
     train,
 )
 
@@ -1097,6 +1098,188 @@ def test_mok_like_correctness_counts_nonpadding_macrobuffers(macrobatch_size: in
         )
         == expected
     )
+
+
+def test_mok_like_stateful_parity_route_plan_alternates_imbalance_and_exact_capacity_boundary() -> None:
+    plan = mok_like_stateful_parity._stateful_route_plan(8)
+    config = MokLikeConfig(schedule_capacity_factor=3.75)
+    capacity = schedule_capacity(
+        512,
+        mok_like_stateful_parity.TOP_K,
+        mok_like_stateful_parity.NUM_LOCAL_EXPERTS,
+        config,
+    )
+    all_to_one_routes = mok_like_stateful_parity._routes(
+        512,
+        mok_like_stateful_parity.RouteScenario.ALL_TO_ONE,
+    )
+
+    assert plan == (
+        mok_like_stateful_parity.RouteScenario.BALANCED,
+        mok_like_stateful_parity.RouteScenario.ZERO_TOKEN_EXPERT,
+        mok_like_stateful_parity.RouteScenario.ALL_TO_ONE,
+        mok_like_stateful_parity.RouteScenario.SKEWED,
+        mok_like_stateful_parity.RouteScenario.ALL_TO_ONE,
+        mok_like_stateful_parity.RouteScenario.ZERO_TOKEN_EXPERT,
+        mok_like_stateful_parity.RouteScenario.ALL_TO_ONE,
+        mok_like_stateful_parity.RouteScenario.SKEWED,
+    )
+    assert mok_like_stateful_parity._required_schedule_capacity(all_to_one_routes) == capacity
+    assert mok_like_stateful_parity._route_metrics(all_to_one_routes, capacity=capacity) == {
+        "assignment_counts": [4096, 4096, 0, 0, 0, 0, 0, 0],
+        "zero_token_experts": [2, 3, 4, 5, 6, 7],
+        "required_schedule_capacity": 8192,
+        "schedule_capacity": 8192,
+        "at_capacity_boundary": True,
+    }
+
+
+def test_mok_like_stateful_parity_inputs_are_fixed_per_replica_and_distinct_between_replicas() -> None:
+    first = mok_like_stateful_parity._step_inputs(
+        seed=17,
+        replica_index=0,
+        step=3,
+        num_tokens=256,
+        hidden_dim=256,
+    )
+    repeated = mok_like_stateful_parity._step_inputs(
+        seed=17,
+        replica_index=0,
+        step=3,
+        num_tokens=256,
+        hidden_dim=256,
+    )
+    other_replica = mok_like_stateful_parity._step_inputs(
+        seed=17,
+        replica_index=1,
+        step=3,
+        num_tokens=256,
+        hidden_dim=256,
+    )
+
+    for first_array, repeated_array in zip(first, repeated, strict=True):
+        np.testing.assert_array_equal(first_array, repeated_array)
+    assert any(
+        not np.array_equal(first_array, other_array)
+        for first_array, other_array in zip(first, other_replica, strict=True)
+    )
+    np.testing.assert_allclose(first[1].sum(axis=-1), 2.5, rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("replica_index", "replica_count", "environ", "expected"),
+    [
+        (1, 3, {}, (1, 3)),
+        (None, None, {"IRIS_TASK_ID": "/dlwh/parity/1:0", "IRIS_NUM_TASKS": "2"}, (1, 2)),
+        (None, None, {}, (0, 1)),
+    ],
+)
+def test_mok_like_stateful_parity_resolves_replica_identity(
+    replica_index: int | None,
+    replica_count: int | None,
+    environ: dict[str, str],
+    expected: tuple[int, int],
+) -> None:
+    assert (
+        mok_like_stateful_parity._replica_identity(
+            replica_index,
+            replica_count,
+            environ=environ,
+        )
+        == expected
+    )
+
+
+def test_mok_like_stateful_parity_error_metrics_report_pointwise_and_relative_drift() -> None:
+    metrics = mok_like_stateful_parity._reduced_error_metrics(
+        jnp.asarray([1.0, 3.5, -2.0]),
+        jnp.asarray([1.0, 3.0, -1.0]),
+        absolute_tolerance=0.25,
+    )
+
+    assert not metrics["allclose"]
+    assert metrics["max_absolute_error"] == 1.0
+    assert metrics["mean_absolute_error"] == pytest.approx(0.5)
+    assert metrics["mismatch_fraction"] == pytest.approx(2 / 3)
+    assert metrics["relative_l2_error"] > 0
+
+
+def test_mok_like_stateful_parity_rejects_optimizer_state_divergence() -> None:
+    close = {"allclose": True}
+    divergent = {"allclose": False, "max_absolute_error": 0.5}
+    metrics = {
+        "step": 7,
+        "dropped_assignments": 0,
+        "output": close,
+        "loss": close,
+        "gradients": {"routed_gate": close},
+        "parameters": {"routed_gate": close},
+        "optimizer_state": {"routed_gate": divergent},
+    }
+
+    with pytest.raises(AssertionError, match="diverged at step 7"):
+        mok_like_stateful_parity._assert_step_parity(metrics)
+
+
+def test_mok_like_stateful_parity_rejects_gradient_on_inactive_routed_expert() -> None:
+    gradients = (
+        jnp.zeros((8, 1, 1)),
+        jnp.zeros((8, 1, 1)),
+        jnp.zeros((8, 1, 1)),
+        jnp.zeros((1, 1)),
+        jnp.zeros((1, 1)),
+        jnp.zeros((1, 1)),
+    )
+    bad_gradient = gradients[0].at[7, 0, 0].set(1.0)
+
+    with pytest.raises(AssertionError, match="inactive routed expert received a gradient"):
+        mok_like_stateful_parity._assert_inactive_expert_gradients(
+            mok_like_stateful_parity._routes(
+                1,
+                mok_like_stateful_parity.RouteScenario.ALL_TO_ONE,
+            ),
+            (bad_gradient, *gradients[1:]),
+        )
+
+
+def test_mok_like_stateful_parity_derives_inactive_experts_from_the_full_route_batch() -> None:
+    routes = mok_like_stateful_parity._routes(
+        512,
+        mok_like_stateful_parity.RouteScenario.SKEWED,
+    )
+    gradients = (
+        jnp.ones((8, 1, 1)),
+        jnp.ones((8, 1, 1)),
+        jnp.ones((8, 1, 1)),
+    )
+
+    assert mok_like_stateful_parity._assert_inactive_expert_gradients(routes, gradients) == {}
+
+
+def test_mok_like_stateful_parity_optimizer_carries_state_across_updates() -> None:
+    parameters = (jnp.asarray([1.0], dtype=jnp.float32),)
+    momentum_state = (jnp.asarray([0.0], dtype=jnp.float32),)
+    gradients = (jnp.asarray([2.0], dtype=jnp.float32),)
+
+    first_parameters, first_momentum = mok_like_stateful_parity._optimizer_update(
+        parameters,
+        momentum_state,
+        gradients,
+        learning_rate=0.1,
+        momentum=0.5,
+    )
+    second_parameters, second_momentum = mok_like_stateful_parity._optimizer_update(
+        first_parameters,
+        first_momentum,
+        gradients,
+        learning_rate=0.1,
+        momentum=0.5,
+    )
+
+    np.testing.assert_allclose(first_parameters[0], [0.8])
+    np.testing.assert_allclose(first_momentum[0], [2.0])
+    np.testing.assert_allclose(second_parameters[0], [0.5])
+    np.testing.assert_allclose(second_momentum[0], [3.0])
 
 
 def test_expert_bank_override_must_divide_the_expert_axis():
