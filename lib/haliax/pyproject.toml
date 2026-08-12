@@ -56,7 +56,7 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "-n auto --import-mode=importlib"
 testpaths = ["tests"]
-pythonpath = ["src", "tests"]
+pythonpath = ["src", "tests", "../.."]
 
 [tool.hatch.version]
 path = "src/haliax/__about__.py"
