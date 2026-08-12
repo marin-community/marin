@@ -710,22 +710,23 @@ def test_fused_cross_entropy_default_grad_matches_reference():
 
 
 @pytest.mark.parametrize(
-    ("implementation", "required_backend", "block_sizes"),
+    ("implementation", "required_backend", "vocab_size", "block_sizes"),
     [
-        ("pallas_tpu", "tpu", fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)),
-        ("batched_xla", "gpu", None),
+        ("pallas_tpu", "tpu", 256, fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)),
+        ("batched_xla", "gpu", 128, None),
     ],
 )
 def test_fused_cross_entropy_named_implementation_matches_reference(
     implementation: str,
     required_backend: str,
+    vocab_size: int,
     block_sizes: fused_api.BlockSizes | None,
 ):
     if jax.default_backend() != required_backend:
         pytest.skip(f"requires {required_backend.upper()} backend")
 
     x = jnp.zeros((128, 128), dtype=jnp.float32)
-    w = jnp.zeros((128, 128), dtype=jnp.float32)
+    w = jnp.zeros((128, vocab_size), dtype=jnp.float32)
     y = jnp.zeros((128,), dtype=jnp.int32)
 
     loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
