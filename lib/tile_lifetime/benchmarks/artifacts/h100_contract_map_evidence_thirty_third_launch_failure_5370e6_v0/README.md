@@ -26,7 +26,7 @@ The selected widths are `(18, 60, 6, 6, 6, 6)` with five exact ASCII-space
 gaps. The existing public-pattern classifier reports `instruction=true`, but
 that classifier is diagnostic only and does not establish that the record is a
 valid instruction in the current parser state. The parser rejected the record
-before address monotonicity, opcode allowlist, or kernel-coverage validation.
+before opcode allowlist or kernel-coverage validation.
 
 The observation retains only bounded aggregate and fixed-column counts. It
 contains no raw or redacted line, adjacent records, paths, or environment. The
