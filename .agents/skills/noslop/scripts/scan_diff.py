@@ -12,38 +12,47 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-PROSE_SUFFIXES = {".md", ".rst", ".txt", ".py", ".rs", ".go", ".ts", ".tsx", ".js", ".jsx"}
+PROSE_SUFFIXES = frozenset({".md", ".rst", ".txt", ".py", ".rs", ".go", ".ts", ".tsx", ".js", ".jsx"})
 TEST_PATH = re.compile(r"(^|/)(tests?|test_[^/]+|[^/]+_test\.[^/]+)(/|$)")
-PATTERN_CATALOGS = {
+PATTERN_CATALOGS = (
     ".agents/skills/noslop/",
     ".agents/skills/writing-style/ai-writing-donts.md",
-}
+)
 
-PROSE_PATTERNS = {
-    "stock-contrast": re.compile(
-        r"(,\s*not\s+\w+|\bnot (?:just|only)\b.{0,80}\bbut|not\b.{0,80}\bbut|more than just|"
-        r"the question is no longer|the real story is|what matters (?:most )?is)\b",
-        re.IGNORECASE,
+PROSE_PATTERNS = (
+    (
+        "stock-contrast",
+        re.compile(
+            r"(,\s*not\s+\w+|\bnot (?:just|only)\b.{0,80}\bbut|not\b.{0,80}\bbut|more than just|"
+            r"the question is no longer|the real story is|what matters (?:most )?is)\b",
+            re.IGNORECASE,
+        ),
     ),
-    "bridge-prose": re.compile(
-        r"\b(the main change (?:is|here)|what this means is|stepping back|"
-        r"it is worth noting|importantly|notably|in this section|let'?s dive in)\b",
-        re.IGNORECASE,
+    (
+        "bridge-prose",
+        re.compile(
+            r"\b(the main change (?:is|here)|what this means is|stepping back|"
+            r"it is worth noting|importantly|notably|in this section|let'?s dive in)\b",
+            re.IGNORECASE,
+        ),
     ),
-    "ai-vocabulary": re.compile(
-        r"\b(crucial|pivotal|groundbreaking|seamless|tapestry|testament|"
-        r"interplay|landscape|delve|showcase|underscore|foster)\b",
-        re.IGNORECASE,
+    (
+        "ai-vocabulary",
+        re.compile(
+            r"\b(crucial|pivotal|groundbreaking|seamless|tapestry|testament|"
+            r"interplay|landscape|delve|showcase|underscore|foster)\b",
+            re.IGNORECASE,
+        ),
     ),
-}
+)
 
-TEST_PATTERNS = {
-    "weak-assertion": re.compile(r"\bassert\s+.+\s+is\s+not\s+None\b"),
-    "type-assertion": re.compile(r"\bassert\s+isinstance\("),
-    "mock-dispatch": re.compile(r"\bassert_(?:called|called_once|called_once_with|any_call)\b"),
-    "private-state": re.compile(r"\bassert\s+[^#\n]*\._[A-Za-z]"),
-    "log-text": re.compile(r"\b(?:caplog\.text|record\.message)\b"),
-}
+TEST_PATTERNS = (
+    ("weak-assertion", re.compile(r"\bassert\s+.+\s+is\s+not\s+None\b")),
+    ("type-assertion", re.compile(r"\bassert\s+isinstance\(")),
+    ("mock-dispatch", re.compile(r"\bassert_(?:called|called_once|called_once_with|any_call)\b")),
+    ("private-state", re.compile(r"\bassert\s+[^#\n]*\._[A-Za-z]")),
+    ("log-text", re.compile(r"\b(?:caplog\.text|record\.message)\b")),
+)
 
 
 @dataclass(frozen=True)
@@ -109,9 +118,9 @@ def main() -> int:
     findings: list[tuple[AddedLine, str]] = []
     for line in [*added_lines(base), *untracked_lines()]:
         if suffix(line.path) in PROSE_SUFFIXES and not is_pattern_catalog(line.path):
-            findings.extend((line, name) for name, pattern in PROSE_PATTERNS.items() if pattern.search(line.text))
+            findings.extend((line, name) for name, pattern in PROSE_PATTERNS if pattern.search(line.text))
         if TEST_PATH.search(line.path):
-            findings.extend((line, name) for name, pattern in TEST_PATTERNS.items() if pattern.search(line.text))
+            findings.extend((line, name) for name, pattern in TEST_PATTERNS if pattern.search(line.text))
 
     for line, name in findings:
         print(f"{line.path}:{line.line}: {name}: {line.text.strip()}")
