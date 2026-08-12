@@ -252,10 +252,11 @@ def _validated_inactive_expert_gradient_maxima(
     inactive_experts = np.setdiff1d(np.arange(NUM_EXPERTS), active_experts)
     if not len(inactive_experts):
         return {}
+    inactive_mask = jnp.asarray(np.isin(np.arange(NUM_EXPERTS), inactive_experts))[:, None, None]
     maxima: dict[str, float] = {}
     for name, gradient in zip(PARAMETER_NAMES[:3], gradients[:3], strict=True):
-        inactive = jnp.take(gradient, jnp.asarray(inactive_experts), axis=0)
-        maximum = float(jax.device_get(jnp.max(jnp.abs(inactive.astype(jnp.float32)))))
+        inactive = jnp.where(inactive_mask, jnp.abs(gradient.astype(jnp.float32)), 0)
+        maximum = float(jax.device_get(jnp.max(inactive)))
         maxima[name] = maximum
     if any(maximum != 0.0 for maximum in maxima.values()):
         raise AssertionError(f"inactive routed expert received a gradient: {maxima}")
