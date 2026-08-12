@@ -27,6 +27,7 @@ from rigging.fsutil.listing import (
     read_preview,
     total_size,
 )
+from rigging.fsutil.parquet import PREVIEW_ROWS, is_parquet, parquet_lines
 from rigging.fsutil.render import aligned_lines, file_lines, format_size, format_time, table_lines
 from rigging.fsutil.tui import run as run_browser
 
@@ -82,13 +83,12 @@ def list_command(url: str, long: bool) -> None:
 @click.argument("url")
 @click.option("--raw", is_flag=True, help="Write bytes to stdout without formatting.")
 def cat(url: str, raw: bool) -> None:
-    """Print a file, rendering tabular JSON and JSONL as a table."""
+    """Print a file, rendering tabular JSON, JSONL, and parquet as a table."""
     if raw:
         data = _read_raw(url)
         sys.stdout.buffer.write(data)
         return
-    data = _read(url)
-    for line in file_lines(StoragePath(url).name, data):
+    for line in _formatted_lines(url, PREVIEW_ROWS):
         click.echo(line)
 
 
@@ -96,9 +96,9 @@ def cat(url: str, raw: bool) -> None:
 @click.argument("url")
 @click.option("-n", "--lines", default=20, show_default=True, help="Number of lines to print.")
 def head(url: str, lines: int) -> None:
-    """Print the first lines of a file."""
-    data = _read(url)
-    for line in file_lines(StoragePath(url).name, data)[:lines]:
+    """Print the first lines of a file, or the first rows of a parquet file."""
+    rendered = _formatted_lines(url, lines)
+    for line in rendered if is_parquet(StoragePath(url).name) else rendered[:lines]:
         click.echo(line)
 
 
@@ -170,6 +170,18 @@ def _print_long_entries(entries: list[Entry]) -> None:
         rows.append([format_size(entry.size), format_time(entry.mtime), name])
     for line in table_lines(["size", "modified", "name"], rows):
         click.echo(line)
+
+
+def _formatted_lines(url: str, rows: int) -> list[str]:
+    """Render *url* for display, reading parquet through its footer and the rest by head.
+
+    A parquet file states its own row count in the returned lines, so it takes *rows*
+    rather than a line budget the caller applies afterwards.
+    """
+    name = StoragePath(url).name
+    if is_parquet(name):
+        return parquet_lines(url, rows)
+    return file_lines(name, _read(url))
 
 
 def _read(url: str) -> bytes:
