@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from finelog.rpc import logging_pb2
+from rigging.timing import Timestamp
+
 from iris.backends.protocol import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -36,7 +38,6 @@ from iris.resources.names import (
 )
 from iris.resources.system import ProcessInfo
 from iris.rpc import job_pb2
-from rigging.timing import Timestamp
 
 
 @dataclass(frozen=True, slots=True)

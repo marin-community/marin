@@ -6,6 +6,8 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from rigging.timing import Duration, Timestamp
+
 from iris.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.composition import compose_controller_process
@@ -29,7 +31,6 @@ from iris.resources.state import TaskState
 from iris.resources.task import TaskDetail
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.worker_client import RpcWorkerClient
-from rigging.timing import Duration, Timestamp
 
 
 @dataclass(slots=True)

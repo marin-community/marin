@@ -13,6 +13,9 @@ per-worker batch of :class:`WorkerTaskUpdates` into native reconcile
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from rigging.timing import Timestamp
+from sqlalchemy import select
+
 from iris.cluster.controller.persistence.database import Tx
 from iris.cluster.controller.persistence.reconcile.commit import commit_effects
 from iris.cluster.controller.persistence.reconcile.loader import load_closed_snapshot
@@ -38,8 +41,6 @@ from iris.resources.names import (
     WorkerId,
 )
 from iris.resources.state import TaskState
-from rigging.timing import Timestamp
-from sqlalchemy import select
 
 
 @dataclass(frozen=True)

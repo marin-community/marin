@@ -6,6 +6,8 @@
 from pathlib import Path
 
 from google.protobuf import any_pb2
+from rigging.server_auth import VerifiedIdentity, identity_scope
+
 from iris.cluster.config import PeerConfig
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
 from iris.cluster.controller.composition import wire_resource_service
@@ -47,9 +49,8 @@ from iris.rpc.resource_codec import (
     attempt_identity_to_proto,
 )
 from iris.rpc.resource_types import ATTEMPT, EXEC_SESSION, JOB, PROFILE_CAPTURE, TASK
-from iris.time_proto import duration_to_proto
-from rigging.server_auth import VerifiedIdentity, identity_scope
 from iris.testing.journeys.world import JobRef, JourneyWorld, TaskRef
+from iris.time_proto import duration_to_proto
 
 PARENT_CLUSTER_ID = "journey-parent"
 PEER_ID = "peer-b"

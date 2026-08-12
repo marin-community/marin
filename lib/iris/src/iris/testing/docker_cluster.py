@@ -16,6 +16,8 @@ from pathlib import Path
 
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
+from rigging.timing import Duration
+
 from iris.backends.rpc.backend import RpcTaskBackend
 from iris.client import IrisClient
 from iris.cluster.bundle import BundleStore
@@ -51,7 +53,6 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.worker_client import RpcWorkerClient, RpcWorkerStubFactory
 from iris.rpc.worker_runtime import worker_rpc_bindings
-from rigging.timing import Duration
 
 # Factory type for creating per-worker environment providers.
 # Signature: (worker_id, num_workers) -> EnvironmentProvider

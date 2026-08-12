@@ -11,12 +11,13 @@ import logging
 import os
 import time
 
+from rigging.timing import Duration
+
 from iris.client.job_info import get_job_info
 from iris.resources.endpoint import EndpointQuery
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import EndpointServiceClientSync
 from iris.rpc.resource_client import ResourceRpcClient
-from rigging.timing import Duration
 
 
 class TestJobs:
