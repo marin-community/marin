@@ -214,9 +214,14 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   tasks report `killed` with a preemption each). Size the timeout for wait plus
   run.
 
-Object storage is not readable from a workstation with no cluster credentials
-(`NoCredentialsError` against `s3://marin-us-east-02a`). Validate a job's output
-from a small job on the same cluster.
+Reading a job's output needs a CoreWeave object-storage key exported as
+`CW_KEY_ID`/`CW_KEY_SECRET`; without one, `s3://marin-us-east-02a` raises
+`NoCredentialsError`. `fsutil buckets` reports which backends are reachable, and
+[`fsutil`](../../docs/references/fsutil.md) reads them:
+
+```bash
+uv run fsutil ls -l s3://marin-us-east-02a/tmp/my-run/step-1
+```
 
 For machine-readable job data, use the Iris Python client (`IrisClient`) directly.
 
