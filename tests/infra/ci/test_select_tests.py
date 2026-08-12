@@ -13,33 +13,25 @@ from infra.ci.select_tests import (
     SCOPES,
     SHARD_COUNT,
     UV_PACKAGE,
+    MatrixLeg,
     accelerator_suite_test_paths,
     classify,
-    compute_matrix,
     dependencies_by_test_file,
     extra_suites,
     full_matrix,
     is_test_module,
     matrix_leg,
     scope_legs,
+    select_changed_tests,
+    select_local_tests,
     shard_files,
     torch_membership_for_test_file,
 )
 
 
-def select_matrix(changed_files: list[str], repo_root: Path) -> list[dict[str, str | int]]:
-    """Mirror the diff-driven branch of select_tests.main without git."""
-    classification = classify(changed_files, repo_root)
-    source_build_scopes = set(classification.native_changed)
-    if classification.broad:
-        return full_matrix(repo_root, source_build_scopes)
-    return compute_matrix(
-        classification.src_modules,
-        classification.direct_tests,
-        classification.forced,
-        source_build_scopes,
-        repo_root,
-    )
+def select_matrix(changed_files: list[str], repo_root: Path) -> list[MatrixLeg]:
+    """Return the selector's diff-driven matrix without invoking git."""
+    return select_changed_tests(changed_files, repo_root).matrix
 
 
 def select_accelerator_paths(changed_files: list[str], repo_root: Path) -> dict[str, list[str]]:
@@ -54,13 +46,13 @@ def write(repo_root: Path, relative: str, body: str = "") -> Path:
     return path
 
 
-def leg_paths(matrix: list[dict[str, str | int]], scope: str) -> list[str]:
-    leg = next(entry for entry in matrix if entry["package"] == UV_PACKAGE[scope])
-    return str(leg["test_paths"]).split()
+def leg_paths(matrix: list[MatrixLeg], scope: str) -> list[str]:
+    leg = next(entry for entry in matrix if entry.package == UV_PACKAGE[scope])
+    return leg.test_paths.split()
 
 
-def scopes_in(matrix: list[dict[str, str | int]]) -> set[str]:
-    packages = {entry["package"] for entry in matrix}
+def scopes_in(matrix: list[MatrixLeg]) -> set[str]:
+    packages = {entry.package for entry in matrix}
     return {scope for scope in SCOPES if UV_PACKAGE[scope] in packages}
 
 
@@ -148,7 +140,7 @@ def test_test_helper_module_propagates_source_changes(tmp_path: Path) -> None:
     write(tmp_path, "lib/iris/src/iris/__init__.py")
     write(tmp_path, "lib/iris/src/iris/scheduler.py", "SCHED = 1\n")
     write(tmp_path, "lib/iris/tests/support.py", "from iris.scheduler import SCHED\n")
-    write(tmp_path, "lib/iris/tests/test_via_helper.py", "from tests.support import SCHED\n")
+    write(tmp_path, "lib/iris/tests/test_via_helper.py", "from lib.iris.tests.support import SCHED\n")
     write(tmp_path, "lib/iris/tests/test_relative_helper.py", "from .support import SCHED\n")
     write(tmp_path, "lib/iris/tests/test_direct.py", "def test_x():\n    pass\n")
 
@@ -196,7 +188,12 @@ def test_conftest_and_package_metadata_force_full_scope(tmp_path: Path) -> None:
 
 
 def test_classify_broad_triggers(tmp_path: Path) -> None:
-    for path in ("uv.lock", "pyproject.toml", "infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"):
+    for path in (
+        "uv.lock",
+        "pyproject.toml",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+    ):
         assert classify([path], tmp_path).broad, path
 
     ignored = classify(["docs/index.md", "lib/iris/docs/coreweave.md"], tmp_path)
@@ -204,6 +201,25 @@ def test_classify_broad_triggers(tmp_path: Path) -> None:
     assert not ignored.src_modules
     assert not ignored.direct_tests
     assert not ignored.forced
+
+
+def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
+    write(tmp_path, "infra/ci/__init__.py")
+    write(tmp_path, "infra/ci/select_tests.py", "def select():\n    pass\n")
+    write(tmp_path, "infra/ci/analyze_import_graph.py", "from infra.ci.select_tests import select\n")
+    write(tmp_path, "tests/infra/ci/test_analyze_import_graph.py", "from infra.ci.analyze_import_graph import select\n")
+    write(tmp_path, "tests/infra/ci/test_select_tests.py", "from infra.ci.select_tests import select\n")
+
+    selection = select_local_tests(
+        ["infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"],
+        tmp_path,
+    )
+
+    assert selection.reason == "diff-driven"
+    assert leg_paths(selection.matrix, "marin") == [
+        "tests/infra/ci/test_analyze_import_graph.py",
+        "tests/infra/ci/test_select_tests.py",
+    ]
 
 
 def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:
@@ -452,9 +468,9 @@ def test_scope_legs_shards_a_large_levanter_selection(tmp_path: Path) -> None:
     legs = scope_legs("levanter", files, tmp_path)
 
     assert len(legs) == SHARD_COUNT["levanter"]
-    assert [leg["label"] for leg in legs] == ["levanter 1/4", "levanter 2/4", "levanter 3/4", "levanter 4/4"]
+    assert [leg.label for leg in legs] == ["levanter 1/4", "levanter 2/4", "levanter 3/4", "levanter 4/4"]
     # Every selected file runs exactly once across the shards.
-    covered = [path for leg in legs for path in leg["test_paths"].split()]
+    covered = [path for leg in legs for path in leg.test_paths.split()]
     assert sorted(covered) == files
     assert len(covered) == len(set(covered))
 
@@ -465,7 +481,7 @@ def test_scope_legs_keeps_a_small_selection_in_one_leg(tmp_path: Path) -> None:
     legs = scope_legs("levanter", files, tmp_path)
 
     assert len(legs) == 1
-    assert legs[0]["label"] == "levanter"
+    assert legs[0].label == "levanter"
 
 
 def test_scope_legs_never_shards_below_the_minimum(tmp_path: Path) -> None:
@@ -473,12 +489,12 @@ def test_scope_legs_never_shards_below_the_minimum(tmp_path: Path) -> None:
     # Just over the threshold and just under two full shards both stay a single leg...
     for count in (MIN_FILES_PER_SHARD + 1, 2 * MIN_FILES_PER_SHARD - 1):
         legs = scope_legs("levanter", _levanter_suite(tmp_path, count), tmp_path)
-        assert [leg["label"] for leg in legs] == ["levanter"], count
+        assert [leg.label for leg in legs] == ["levanter"], count
 
     # ...and two full shards' worth is the first size that fans out, each at/above the minimum.
     legs = scope_legs("levanter", _levanter_suite(tmp_path, 2 * MIN_FILES_PER_SHARD), tmp_path)
     assert len(legs) == 2
-    assert all(len(leg["test_paths"].split()) >= MIN_FILES_PER_SHARD for leg in legs)
+    assert all(len(leg.test_paths.split()) >= MIN_FILES_PER_SHARD for leg in legs)
 
 
 def test_scope_legs_shards_the_full_levanter_suite(tmp_path: Path) -> None:
@@ -488,7 +504,7 @@ def test_scope_legs_shards_the_full_levanter_suite(tmp_path: Path) -> None:
     legs = scope_legs("levanter", None, tmp_path)
 
     assert len(legs) == SHARD_COUNT["levanter"]
-    covered = sorted(path for leg in legs for path in leg["test_paths"].split())
+    covered = sorted(path for leg in legs for path in leg.test_paths.split())
     assert covered == files
 
 
@@ -502,24 +518,26 @@ def test_scope_legs_does_not_shard_other_scopes(tmp_path: Path) -> None:
     legs = scope_legs("iris", sorted(files), tmp_path)
 
     assert len(legs) == 1
-    assert legs[0]["label"] == "iris"
-    assert legs[0]["test_paths"].split() == sorted(files)
+    assert legs[0].label == "iris"
+    assert legs[0].test_paths.split() == sorted(files)
 
 
 def test_broad_trigger_runs_every_scope() -> None:
-    assert matrix_leg("marin", []) == {
-        "label": "marin",
-        "package": "marin-core",
-        "extras": "--extra cpu --extra dedup",
-        "test_paths": "tests",
-        "setup": "",
-        "timeout": 15,
-    }
+    assert matrix_leg("marin", []) == MatrixLeg(
+        label="marin",
+        package="marin-core",
+        python="3.12",
+        extras="--extra cpu --extra dedup",
+        pytest_args="--durations=5 -n auto --dist=worksteal --tb=short",
+        test_paths="tests",
+        setup="",
+        timeout=15,
+    )
     assert select_matrix(["uv.lock"], Path("/unused")) == full_matrix(Path("/unused"), set())
 
 
-def _leg(matrix: list[dict[str, str | int]], label: str) -> dict[str, str | int]:
-    return next(entry for entry in matrix if entry["label"] == label)
+def _leg(matrix: list[MatrixLeg], label: str) -> MatrixLeg:
+    return next(entry for entry in matrix if entry.label == label)
 
 
 def test_native_rust_change_forces_the_owning_scope(tmp_path: Path) -> None:
@@ -537,8 +555,8 @@ def test_native_rust_only_change_runs_just_the_owning_scope(tmp_path: Path) -> N
     and consumers are not pulled in."""
     matrix = select_matrix(["lib/dupekit/rust/src/lib.rs"], tmp_path)
     assert scopes_in(matrix) == {"dupekit"}
-    assert _leg(matrix, "dupekit")["setup"] == "rust"
-    assert _leg(matrix, "dupekit")["timeout"] == 30
+    assert _leg(matrix, "dupekit").setup == "rust"
+    assert _leg(matrix, "dupekit").timeout == 30
 
 
 def test_native_change_source_builds_only_the_owning_scope(tmp_path: Path) -> None:
@@ -550,12 +568,12 @@ def test_native_change_source_builds_only_the_owning_scope(tmp_path: Path) -> No
 
     matrix = select_matrix(["lib/finelog/rust/pyext/src/lib.rs", "lib/iris/src/iris/log.py"], tmp_path)
 
-    assert _leg(matrix, "finelog")["setup"] == "rust"
-    assert _leg(matrix, "iris")["setup"] == ""
+    assert _leg(matrix, "finelog").setup == "rust"
+    assert _leg(matrix, "iris").setup == ""
 
 
 def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
     """A uv.lock bump reruns the full matrix but keeps every leg on the prebuilt wheel."""
     matrix = select_matrix(["uv.lock"], tmp_path)
     assert matrix, "broad trigger emits the full matrix"
-    assert all(leg["setup"] == "" for leg in matrix)
+    assert all(leg.setup == "" for leg in matrix)

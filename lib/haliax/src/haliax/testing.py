@@ -5,7 +5,7 @@
 from typing import TypeVar
 
 import jax
-import pytest
+import pytest  # pyrefly: ignore[missing-import]  # Installed by Haliax's test group.
 
 T = TypeVar("T")
 

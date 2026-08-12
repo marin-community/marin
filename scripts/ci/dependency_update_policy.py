@@ -55,5 +55,5 @@ DEPENDENCY_UPDATE_POLICIES = MappingProxyType(
     }
 )
 
-REQUIRED_CHECKS = ("marin-integration", "marin-lint", "rust-checks", "unit-tests")
+REQUIRED_CHECKS = ("marin-docs", "marin-integration", "marin-lint", "rust-checks", "unit-tests")
 GITHUB_ACTIONS_APP_ID = 15368

@@ -100,8 +100,8 @@ committing.
 ## Development
 
 ```bash
-cd lib/finelog
-uv run --group dev pytest --tb=short tests/
+# Full safe Finelog suite
+uv run --package marin-finelog --group test pytest --tb=short lib/finelog/tests/
 ```
 
 Regenerate protos after editing `proto/logging.proto`:
