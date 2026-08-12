@@ -1,19 +1,22 @@
 # H100 Contract/Map backend evidence staging plan
 
-TL;DR: the first H100 sweep will compare ordinary XLA, Shuttle
+TL;DR: the H100 sweep compares ordinary XLA, Shuttle
 `SOURCE_ORDERED`, and Shuttle `FAST` on anonymous dense Contract/Map programs.
 It measures kernel-only and full forward/backward boundaries separately. The
-checked-in runner is executable but has not been launched. GPU execution
-remains gated on review, and the direct FFI backends remain outside the native
-ordinary-JAX Shuttle transform seam.
+direct campaign has executed 33 single-attempt H100 jobs with zero configured
+failure retries. No accepted 24-record bundle exists. The latest sealed run,
+v33, passed compilation, numerical, timing, cache, Nsight Systems, and Nsight
+Compute CSV gates before rejecting an unrecognized public SASS record. The
+direct FFI backends remain outside the native ordinary-JAX Shuttle transform
+seam and therefore remain architecture-nonconforming.
 
 ## Status and architecture boundary
 
-This checkpoint is `architecture_nonconforming`. It contains no GPU results and
-has not reserved an H100. The staging-manifest CLI remains package-independent
-and refuses `--execute-gpu` before importing JAX. The separate executable
-runner performs its source, tool, device, and fresh-directory preflight before
-importing JAX in isolated workers.
+This checkpoint is `architecture_nonconforming`. It contains sealed negative
+H100 results but no accepted benchmark bundle. The staging-manifest CLI remains
+package-independent and refuses `--execute-gpu` before importing JAX. The
+separate executable runner performs its source, tool, device, and
+fresh-directory preflight before importing JAX in isolated workers.
 
 The current native path under `lib/shuttle/mlir` forms generic f32 Contract and
 Map algebra and lowers it back to StableHLO inside XLA. It does not yet lower
@@ -56,13 +59,21 @@ is part of this checkpoint.
 one-CTA shared-memory body and reconstruct a different residual-gated graph
 from an HLO artifact. Current H100 backend code must not import them.
 
-The launch gate requires all of the following:
+The direct-backend evidence launch gate requires all of the following:
 
-1. A reviewed generated `SOURCE_ORDERED` backend reached through the native
-   ordinary-JAX Shuttle transform.
-2. A reviewed generated `FAST` backend reached through the same transform.
-3. Review of the checked-in generated and ordinary-XLA resource collectors.
-4. A review that removes the `architecture_nonconforming` status.
+1. Reviewed generated `SOURCE_ORDERED` and `FAST` backends derived from the
+   same anonymous generic algebra.
+2. Reviewed generated and ordinary-XLA resource collectors.
+3. A clean exact source tree, authenticated source capsule, immutable image
+   digest, fresh artifact directory, and zero failure retries.
+4. Retention of the `architecture_nonconforming` status in every result and
+   publisher until the native ordinary-JAX GPU path is proven.
+
+Target acceptance has a separate gate. Both generated policies must be reached
+through the native ordinary-JAX Shuttle transform, the GPU PJRT plugin must
+carry the reviewed registry adapter, and the conforming collector and bundle
+schema must pass independent review. Direct FFI evidence cannot remove the
+nonconforming status.
 
 The source-only runner is
 `lib/tile_lifetime/benchmarks/h100_contract_map_backend_runner.py`. Direct local
@@ -98,8 +109,11 @@ to call the dedicated workflow from the dispatch commit. Its default
 A launch must use
 `ghcr.io/marin-community/iris-task-h100-evidence:<full-git-sha>@sha256:<digest>`;
 the tag alone, `latest`, and a date tag are not accepted. The launch overrides
-the task image and requests `--gpu H100x1` explicitly against
-`cw-us-west-04a`; it does not modify that cluster's shared default image.
+the task image and requests `--gpu H100x1` explicitly against the reviewed Iris
+cluster; it does not modify that cluster's shared default image. The current
+campaign uses `cw-us-east-02a`. Uploading a private source capsule to that
+external destination requires explicit trusted-user authorization for the
+payload and destination.
 
 This image is necessary but not sufficient for launch. The repository's full
 tracked tree exceeds Iris's 25 MiB bundle limit and includes historical evidence
@@ -291,15 +305,16 @@ the canonical SHA-256 digest of the complete floor tuple. Plan construction and
 result validation reject a different tuple or digest even when every replacement
 value is finite and internally consistent.
 
-`SOURCE_ORDERED` uses an explicit source-ordered FP32 reference, a maximum
-absolute error of `0.0078125`, a mean absolute error of `0.0005`, a maximum ULP
-distance of `1`, a mean ULP distance of `0.05`, and bitwise repeatability.
+`SOURCE_ORDERED` uses an explicit source-ordered FP32 reference. Every output
+has maximum absolute error `0.0078125`, mean absolute error `0.0005`, maximum
+ULP distance `1`, mean ULP distance `0.05`, and bitwise repeatability.
 
-Ordinary XLA and `FAST` use an FP64 real-algebra reference. Their maximum
-absolute error is `0.03125`, mean absolute error is `0.002`, maximum ULP
-distance is `4`, and mean ULP distance is `0.25`. Repeat drift is bounded at
-`0.0078125` maximum and `0.0005` mean. All policies permit zero nonfinite
-values.
+Ordinary XLA and `FAST` use an FP64 real-algebra reference. ULP distances remain
+required diagnostics but are not acceptance gates for this reference. The
+maximum absolute floors are `0.03125` for `forward`, `dx`, and `dw0`, and
+`0.0625` for `dw1`; every output has mean absolute floor `0.00390625`. Repeat
+drift is bounded at `0.0078125` maximum and `0.0005` mean. All policies permit
+zero nonfinite values.
 
 ULP distance is computed after converting each physical BF16 result to its
 ordered unsigned BF16 bit representation. Absolute and ULP metrics are emitted
