@@ -156,6 +156,12 @@ def main() -> None:
         action="store_true",
         help="drop invalid scale-up grades whose rationale blames the window cut (harness artifact, not content)",
     )
+    p.add_argument(
+        "--moe-experts",
+        type=int,
+        default=MOE_EXPERTS,
+        help="routed experts per layer for --arm moe (top-2 stays fixed, so active flops do not grow with it)",
+    )
     args = p.parse_args()
     configure_logging(logging.INFO)
     configure_coreweave_s3()
@@ -248,7 +254,7 @@ def main() -> None:
         doc_embed_dim=EMBED_DIM,
         doc_embed_super_token=True,
         frozen_donor_dim=donor.shape[1],
-        moe_experts=MOE_EXPERTS if args.arm == "moe" else 0,
+        moe_experts=args.moe_experts if args.arm == "moe" else 0,
         moe_expert_ratio=MOE_EXPERT_RATIO,
         moe_top_k=MOE_TOP_K,
         **WINNER_TRUNK,
