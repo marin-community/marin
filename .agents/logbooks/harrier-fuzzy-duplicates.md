@@ -344,3 +344,15 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI pods. RNO has 82 running TEI pods and 14 replacement pods waiting for interactive capacity.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of coordinator logs.
 - Next action: Continue the 15-minute check cadence and validate RNO replacements when capacity becomes available.
+
+### 2026-08-12 05:30 UTC - East source transition
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 11 completed source artifacts. RNO has two completed source artifacts. The full run has 13 of 292 completed source artifacts.
+- East result: `eai-taxonomy-code-w-dclm_39527a3d`, `ghalogs-public_414133b4`, `gpt-oss-rollouts_733e1cb8`, `identity-data-content_49ce1d92`, and `massive_function_calling_e02ff837` succeeded.
+- East progress: `nemotron_code_v1-content_085c2c96` got to 636 of 2,341 output shards with 32 live workers and no dead workers.
+- RNO progress: `common_corpus-english_0e1cf2c4` got to 7,859 of 8,018 output shards with 32 live workers and no dead workers.
+- Service capacity: East has 96 running TEI pods. RNO has 82 running TEI pods. Fourteen replacement jobs still wait for interactive capacity.
+- Archive check: The restored model archive still exists at the original v3 S3 path.
+- Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of coordinator logs.
+- Next action: Verify the RNO source transition, continue the 15-minute check cadence, and validate replacement services when RNO capacity becomes available.
