@@ -583,3 +583,13 @@ author: Rafal Wojdyla
 - Recovery evidence: All 32 Zephyr workers remain running, no new TEI job failed, and RNO resumed normal shard progress. The 25 failed shards remain queued for later retry. No manual recovery was necessary.
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Next action: Continue the 15-minute check cadence. Escalate if transport errors repeat, a shard reaches task error two, or worker health changes.
+
+### 2026-08-12 12:45 UTC - Long-source health check
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 35 completed source artifacts. RNO has six completed source artifacts. The full run has 41 of 292 completed source artifacts.
+- East progress: `finepdfs_cf4aed04` got to 2,975 of 9,244 output shards with 32 live workers and no dead workers.
+- RNO progress: `finetranslations_6ce00a47` got to 23,511 of 25,962 output shards with 32 live workers and no dead workers.
+- Recovery evidence: No new transport error, task error two or three, dead worker, or other selected error matched either active source log during the last 15 minutes.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Next action: Continue the 15-minute check cadence. Monitor the expected FineTranslations completion and the next RNO source start.
