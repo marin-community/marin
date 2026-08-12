@@ -75,8 +75,12 @@ def main(
         raise click.ClickException("drop gate FAILED: moe/drop_fraction not logged in gate window")
     mean_drop, worst_drop = statistics.mean(drops), max(drops)
 
+    # Median, not mean: identical-config runs measured mean step-time swings of 11%
+    # (run-to-run tail events — placement, checkpoint writes) while medians agreed to
+    # 0.04%. The loop's keep/discard needs the stable estimator.
     mean_duration = statistics.mean(durations)
-    tokens_per_second = tokens_per_step / mean_duration
+    median_duration = statistics.median(durations)
+    tokens_per_second = tokens_per_step / median_duration
     flops_per_example = run.summary.get("throughput/flops_per_example_analytic")
     mfu = (
         100.0 * flops_per_example * batch_size / mean_duration / (gpus * peak_flops_per_gpu)
@@ -86,7 +90,7 @@ def main(
 
     print(
         f"run={run_id} window={start_step}-{end_step} "
-        f"step_mean={mean_duration:.4f}s step_median={statistics.median(durations):.4f}s "
+        f"step_mean={mean_duration:.4f}s step_median={median_duration:.4f}s "
         f"mfu={mfu:.3f}% drop_mean[{drop_start}-{drop_end}]={mean_drop:.4%} drop_worst={worst_drop:.4%} "
         f"budget={drop_budget:.2%}",
         file=sys.stderr,
