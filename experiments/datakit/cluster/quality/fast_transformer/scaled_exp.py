@@ -59,7 +59,12 @@ from experiments.datakit.cluster.quality.fast_transformer.model import (
     expert_utilization,
 )
 from experiments.datakit.cluster.quality.fast_transformer.scorer import load_pooled_scorer, score_bme
-from experiments.datakit.cluster.quality.fast_transformer.train import MAX_TOKENS, TrainHParams, _save_scorer, train_regressor
+from experiments.datakit.cluster.quality.fast_transformer.train import (
+    MAX_TOKENS,
+    TrainHParams,
+    _save_scorer,
+    train_regressor,
+)
 from experiments.datakit.cluster.quality.fast_transformer.train_exp import (
     TRAIN_SEED,
     donor_embedding_table,
@@ -130,10 +135,21 @@ def main() -> None:
     p.add_argument("--scaleup-joined", default=SCALEUP_JOINED, help="scale-up labels-x-embeddings join root")
     p.add_argument("--window-labels", default=WINDOW_LABELS, help="scale-up window labels parquet")
     p.add_argument("--domain-mlp", default=DEFAULT_DOMAIN_MLP, help="existing typer npz (kept for comparability)")
-    p.add_argument("--baseline-model-dir", default=V3_BASELINE_DIR, help="text-only scorer re-reported (bme path); '' skips")
-    p.add_argument("--fused-baseline-model-dir", default=FUSED_88K_BASELINE_DIR, help="fused scorer re-reported; '' skips")
+    p.add_argument(
+        "--baseline-model-dir", default=V3_BASELINE_DIR, help="text-only scorer re-reported (bme path); '' skips"
+    )
+    p.add_argument(
+        "--fused-baseline-model-dir", default=FUSED_88K_BASELINE_DIR, help="fused scorer re-reported; '' skips"
+    )
     p.add_argument("--epochs", type=int, default=None, help="override the epoch cap (smoke runs)")
     p.add_argument("--subsample", type=int, default=1, help="keep 1-in-N doc ids everywhere (smoke runs)")
+    p.add_argument(
+        "--train-windows",
+        choices=("all", "begin", "legacy-begin"),
+        default="all",
+        help="ablations: 'begin' drops middle/end training rows; 'legacy-begin' additionally drops every "
+        "scale-up window, leaving only the recut 88k begin grades",
+    )
     args = p.parse_args()
     configure_logging(logging.INFO)
     configure_coreweave_s3()
@@ -144,6 +160,12 @@ def main() -> None:
     legacy = load_joined(args.legacy_joined)
     scaleup = load_joined(args.scaleup_joined, columns=["id", "embedding"])
     windows = load_window_labels(args.window_labels)
+    if args.train_windows != "all":
+        keep = (
+            [] if args.train_windows == "legacy-begin" else [i for i, w in enumerate(windows["window"]) if w == "begin"]
+        )
+        windows = {c: [windows[c][i] for i in keep] for c in windows}
+        logger.info("train-windows ablation %s: %d scale-up rows kept", args.train_windows, len(windows["id"]))
     if args.subsample > 1:
         for table in (legacy, scaleup, windows):
             keep = subsample_mask(table["id"], args.subsample)

@@ -9,6 +9,8 @@ import jax.random as jr
 import numpy as np
 
 from experiments.datakit.cluster.quality.fast_transformer.model import FastTransformer, FastTransformerConfig
+from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledScorer, artifact_names
+from experiments.datakit.cluster.quality.fast_transformer.train import _save_scorer
 
 BASE_KW = dict(
     vocab_size=128,
@@ -84,9 +86,6 @@ def test_moe_checkpoint_round_trips_through_the_scorer_format(tmp_path):
     """The serialized config must rebuild the exact MoE architecture — a field
     silently falling back to its dataclass default would deserialize a
     shape-mismatched or dense model."""
-    from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledScorer, artifact_names
-    from experiments.datakit.cluster.quality.fast_transformer.train import _save_scorer
-
     config = FastTransformerConfig(**BASE_KW, moe_experts=4, moe_top_k=2, moe_expert_ratio=1)
     model = _open_gates(FastTransformer(config, key=jr.PRNGKey(0)))
     remap = {t: t + 2 for t in range(BASE_KW["vocab_size"] - 2)}
@@ -95,6 +94,4 @@ def test_moe_checkpoint_round_trips_through_the_scorer_format(tmp_path):
     scorer = PooledScorer.load(str(tmp_path / eqx_name), str(tmp_path / remap_name), str(tmp_path / meta_name))
     assert scorer.model.config == config
     ids, emb = _batch(n=4)
-    np.testing.assert_array_equal(
-        np.asarray(scorer.model(ids, doc_embed=emb)), np.asarray(model(ids, doc_embed=emb))
-    )
+    np.testing.assert_array_equal(np.asarray(scorer.model(ids, doc_embed=emb)), np.asarray(model(ids, doc_embed=emb)))
