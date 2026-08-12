@@ -66,7 +66,7 @@ class TeiEmbeddingClient:
                 if error.code not in RETRYABLE_HTTP_CODES:
                     raise
                 last_error = error
-            except urllib.error.URLError as error:
+            except OSError as error:
                 last_error = error
 
             if attempt + 1 < REQUEST_MAX_ATTEMPTS:

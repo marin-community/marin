@@ -1,14 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import http.client
 import io
 import json
 import urllib.error
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
-from experiments.datakit.embeddings.harrier import tei_client
+from experiments.datakit.embeddings.harrier import tei, tei_client
 from experiments.datakit.embeddings.harrier.pipeline import EmbeddingAttrData
 
 EMBEDDING_DIM = 4
@@ -40,7 +42,21 @@ def _embedding(value: float) -> list[float]:
     return [value, *([0.0] * (EMBEDDING_DIM - 1))]
 
 
-def test_tei_client_retries_against_refreshed_endpoints(monkeypatch):
+def test_tei_ports_follow_gpu_pci_bus(monkeypatch):
+    monkeypatch.setattr(tei.subprocess, "check_output", lambda *args, **kwargs: "00000000:3B:00.0\n")
+
+    assert tei._tei_ports() == (25_059, 26_059)
+
+
+@pytest.mark.parametrize(
+    "transient_error",
+    [
+        urllib.error.URLError("connection refused"),
+        TimeoutError("timed out"),
+        http.client.RemoteDisconnected("connection closed"),
+    ],
+)
+def test_tei_client_retries_against_refreshed_endpoints(monkeypatch, transient_error):
     resolver = _Resolver([["http://dead"], ["http://live"]])
     monkeypatch.setattr(tei_client, "iris_ctx", lambda: SimpleNamespace(resolver=resolver))
     monkeypatch.setattr(tei_client.time, "sleep", lambda _delay: None)
@@ -48,7 +64,7 @@ def test_tei_client_retries_against_refreshed_endpoints(monkeypatch):
 
     def urlopen(request, timeout):
         if request.full_url.startswith("http://dead"):
-            raise urllib.error.URLError("connection refused")
+            raise transient_error
         texts = json.loads(request.data)["inputs"]
         return io.BytesIO(json.dumps([_embedding(float(index)) for index, _text in enumerate(texts)]).encode())
 

@@ -11,7 +11,6 @@ import subprocess
 import tarfile
 import tempfile
 import time
-import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Iterator
@@ -36,8 +35,8 @@ TEI_IMAGE = (
     "ghcr.io/huggingface/text-embeddings-inference:hopper-latest@"
     "sha256:45dd59a35a1ee98cc5c56548bbd3c9cccf418724b83606b9ae4a11bcfeadb52f"
 )
-TEI_PORT = 8080
-TEI_PROMETHEUS_PORT = 18_080
+TEI_PORT_BASE = 25_000
+TEI_PROMETHEUS_PORT_BASE = 26_000
 TEI_MAX_BATCH_TOKENS = 131_072
 TEI_MAX_BATCH_REQUESTS = 2_048
 TEI_TOKENIZATION_WORKERS = 4
@@ -52,6 +51,14 @@ class TeiServiceConfig:
     endpoint_name: str
     model_archive: str
     max_input_tokens: int
+
+
+def _tei_ports() -> tuple[int, int]:
+    pci_bus_id = subprocess.check_output(
+        ["nvidia-smi", "--query-gpu=pci.bus_id", "--format=csv,noheader"], text=True
+    ).strip()
+    bus = int(pci_bus_id.split(":")[-2], 16)
+    return TEI_PORT_BASE + bus, TEI_PROMETHEUS_PORT_BASE + bus
 
 
 def _prepare_model(config: TeiServiceConfig, root: Path) -> Path:
@@ -72,15 +79,15 @@ def _prepare_model(config: TeiServiceConfig, root: Path) -> Path:
     return model_path
 
 
-def _wait_until_ready(process: subprocess.Popen[bytes]) -> None:
+def _wait_until_ready(process: subprocess.Popen[bytes], port: int) -> None:
     deadline = Deadline.from_seconds(TEI_READY_TIMEOUT)
     while True:
         if process.poll() is not None:
             raise RuntimeError(f"TEI exited with code {process.returncode}")
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{TEI_PORT}/health", timeout=5):
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5):
                 return
-        except urllib.error.URLError:
+        except OSError:
             deadline.raise_if_expired("TEI did not become healthy")
             time.sleep(1)
 
@@ -92,6 +99,8 @@ def run_tei_service(config: TeiServiceConfig) -> None:
         raise RuntimeError("TEI service must run inside an Iris job")
 
     configure_logging()
+    ctx = iris_ctx()
+    port, prometheus_port = _tei_ports()
     with tempfile.TemporaryDirectory() as temporary_directory:
         model_path = _prepare_model(config, Path(temporary_directory))
         process = subprocess.Popen(
@@ -100,7 +109,7 @@ def run_tei_service(config: TeiServiceConfig) -> None:
                 "--model-id",
                 str(model_path),
                 "--port",
-                str(TEI_PORT),
+                str(port),
                 "--max-batch-tokens",
                 str(TEI_MAX_BATCH_TOKENS),
                 "--max-batch-requests",
@@ -110,15 +119,15 @@ def run_tei_service(config: TeiServiceConfig) -> None:
                 "--tokenization-workers",
                 str(TEI_TOKENIZATION_WORKERS),
                 "--prometheus-port",
-                str(TEI_PROMETHEUS_PORT),
+                str(prometheus_port),
                 "--payload-limit",
                 str(TEI_PAYLOAD_LIMIT),
             ]
         )
         try:
-            _wait_until_ready(process)
-            address = f"http://{job_info.advertise_host}:{TEI_PORT}"
-            with iris_ctx().registry.registered(config.endpoint_name, address, {"backend": "tei"}):
+            _wait_until_ready(process, port)
+            address = f"http://{job_info.advertise_host}:{port}"
+            with ctx.registry.registered(config.endpoint_name, address, {"backend": "tei"}):
                 return_code = process.wait()
                 raise RuntimeError(f"TEI exited with code {return_code}")
         finally:
