@@ -1,0 +1,16 @@
+# GPU-guard failure allowlist: tests that fail on clean origin/main (070673668)
+# on a GB200x4 node, 2026-08-11 control run (ar8062-guardctl-mainclean), or that
+# flake under xdist GPU contention. Guard passes iff the failed set is a subset
+# of this list. Re-baseline when the loop branch rebases onto a main that fixes
+# or changes any of these.
+#
+# Pre-existing on clean main (6):
+lib/levanter/tests/grug/test_grugformer_moe.py::test_functional_moe_mlp_accepts_enum_and_callable_activation
+lib/levanter/tests/grug/test_grugformer_moe.py::test_moe_mlp_default_matches_explicit_ring_without_ep_axis
+lib/levanter/tests/grug/test_grugformer_moe.py::test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available
+tests/test_moe_hero_ep.py::test_latent_moe_is_absent_by_default
+tests/test_moe_hero_ep.py::test_latent_moe_shrinks_the_dispatched_width_but_not_the_token
+tests/test_moe_hero_ep.py::test_latent_moe_state_dict_contains_the_projection_state
+# Flaky under -n 4 GPU contention (failed on branch, passed on identical-code control):
+lib/levanter/tests/grug/test_grugformer_moe.py::test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity
+lib/levanter/tests/grug/test_grugformer_moe.py::test_moe_mlp_runs_with_ep_axis_when_available
