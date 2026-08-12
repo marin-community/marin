@@ -68,7 +68,8 @@ InstantiateShuttleCpuExecutable(int64_t transportSchemaVersion,
                                 absl::string_view bundleSha256) {
   try {
     if (transportSchemaVersion != 1 || bundleSize < 0 ||
-        static_cast<size_t>(bundleSize) != bundleBytes.size()) {
+        static_cast<size_t>(bundleSize) != bundleBytes.size() ||
+        bundleBytes.size() > mlir::shuttle::kMaximumCpuTransportBytes) {
       return absl::InvalidArgumentError(
           "invalid Shuttle CPU executable transport metadata");
     }

@@ -403,16 +403,14 @@ TEST(CpuBytecodeRuntimeTest, CanonicalTransportLoadsAndExecutesImmutableBody) {
   refreshClosedFingerprints(*selfConsistentInvalid->module, true);
   auto invalidBytes = mlir::shuttle::serializeCpuExecutableBundle(
       *selfConsistentInvalid->module);
-  ASSERT_TRUE(mlir::succeeded(invalidBytes));
-  EXPECT_FALSE(mlir::shuttle::CpuExecutable::Load(*invalidBytes).ok());
+  EXPECT_TRUE(mlir::failed(invalidBytes));
 }
 
 TEST(CpuBytecodeRuntimeTest, CanonicalTransportEnforcesClosedResourceLimits) {
-  auto expectLoadRejected = [](std::unique_ptr<BuiltBundle> bundle) {
+  auto expectSerializationRejected = [](std::unique_ptr<BuiltBundle> bundle) {
     ASSERT_TRUE(bundle);
     auto bytes = mlir::shuttle::serializeCpuExecutableBundle(*bundle->module);
-    ASSERT_TRUE(mlir::succeeded(bytes));
-    EXPECT_FALSE(mlir::shuttle::CpuExecutable::Load(*bytes).ok());
+    EXPECT_TRUE(mlir::failed(bytes));
   };
 
   auto oversizedTask = buildBundle();
@@ -440,7 +438,26 @@ TEST(CpuBytecodeRuntimeTest, CanonicalTransportEnforcesClosedResourceLimits) {
   device.setCodeAttr(
       mlir::DenseI8ArrayAttr::get(oversizedTask->context.get(), code));
   refreshClosedFingerprints(*oversizedTask->module, true);
-  expectLoadRejected(std::move(oversizedTask));
+  expectSerializationRejected(std::move(oversizedTask));
+
+  auto excessiveRecords = buildBundle();
+  ASSERT_TRUE(excessiveRecords);
+  device = *excessiveRecords->module->getOps<mlir::shuttle::DeviceModuleOp>()
+                .begin();
+  auto entry =
+      *device.getBody().front().getOps<mlir::shuttle::DeviceEntryOp>().begin();
+  llvm::SmallVector<int64_t> repeatedBuffers(
+      mlir::shuttle::kMaximumCpuExecutableRecords + 1, 0);
+  entry.setInputBuffersAttr(mlir::DenseI64ArrayAttr::get(
+      excessiveRecords->context.get(), repeatedBuffers));
+  llvm::SmallVector<mlir::Attribute> repeatedAccesses(
+      repeatedBuffers.size(), mlir::shuttle::ExecutableAccessAttr::get(
+                                  excessiveRecords->context.get(),
+                                  mlir::shuttle::ExecutableAccess::Read));
+  entry.setInputAccessesAttr(
+      mlir::ArrayAttr::get(excessiveRecords->context.get(), repeatedAccesses));
+  refreshClosedFingerprints(*excessiveRecords->module, false);
+  expectSerializationRejected(std::move(excessiveRecords));
 
   auto oversizedSlot = buildBundle();
   ASSERT_TRUE(oversizedSlot);
@@ -459,7 +476,7 @@ TEST(CpuBytecodeRuntimeTest, CanonicalTransportEnforcesClosedResourceLimits) {
   temporary.setStridesAttr(
       mlir::DenseI64ArrayAttr::get(oversizedSlot->context.get(), {4}));
   refreshClosedFingerprints(*oversizedSlot->module, false);
-  expectLoadRejected(std::move(oversizedSlot));
+  expectSerializationRejected(std::move(oversizedSlot));
 
   auto excessiveAggregate = buildBundle();
   ASSERT_TRUE(excessiveAggregate);
@@ -482,7 +499,7 @@ TEST(CpuBytecodeRuntimeTest, CanonicalTransportEnforcesClosedResourceLimits) {
         mlir::DenseI64ArrayAttr::get(excessiveAggregate->context.get(), {4}));
   }
   refreshClosedFingerprints(*excessiveAggregate->module, false);
-  expectLoadRejected(std::move(excessiveAggregate));
+  expectSerializationRejected(std::move(excessiveAggregate));
 }
 
 TEST(CpuBytecodeRuntimeTest, ExecutesGeneratedVjpBodiesWithRawAbiBuffers) {

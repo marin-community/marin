@@ -504,7 +504,6 @@ LogicalResult runtimeError(ModuleOp module, StringRef message) {
 
 constexpr uint8_t kTransportMagic[] = {'S', 'H', 'U', 'T', 'C', 'P', 'U', 0};
 constexpr uint32_t kTransportVersion = 1;
-constexpr uint64_t kMaximumTransportBytes = 16 * 1024 * 1024;
 
 class BundleWriter {
 public:
@@ -637,7 +636,7 @@ public:
 
 private:
   bool bounded(uint64_t size) const {
-    return size <= kMaximumTransportBytes && size <= bytes.size() - position;
+    return size <= kMaximumCpuTransportBytes && size <= bytes.size() - position;
   }
   ArrayRef<uint8_t> bytes;
   size_t position = 0;
@@ -702,7 +701,7 @@ struct DecodedModule {
 };
 
 FailureOr<DecodedModule> decodeCpuExecutableBundle(ArrayRef<uint8_t> bytes) {
-  if (bytes.size() > kMaximumTransportBytes) {
+  if (bytes.size() > kMaximumCpuTransportBytes) {
     return failure();
   }
   BundleReader reader(bytes);
@@ -946,6 +945,59 @@ executeCpuExecutableBundleImpl(ModuleOp module,
                                ArrayRef<CpuExternalBuffer> externalBuffers,
                                ArrayRef<ParsedTask> preParsedTasks);
 
+FailureOr<SmallVector<ParsedTask, 0>>
+validateCpuExecutableResources(ModuleOp module) {
+  DeviceModuleOp device = *module.getOps<DeviceModuleOp>().begin();
+  InvocationAbiOp abi = *module.getOps<InvocationAbiOp>().begin();
+  SmallVector<DeviceEntryOp> entries(
+      device.getBody().front().getOps<DeviceEntryOp>());
+  SmallVector<InvocationSlotOp> slots(
+      abi.getBody().front().getOps<InvocationSlotOp>());
+  if (entries.size() > kMaximumCpuExecutableRecords ||
+      slots.size() > kMaximumCpuExecutableRecords) {
+    return failure();
+  }
+  SmallVector<ParsedTask, 0> tasks;
+  tasks.reserve(entries.size());
+  for (DeviceEntryOp entry : entries) {
+    if (entry.getInputBuffers().size() > kMaximumCpuExecutableRecords ||
+        entry.getOutputBuffers().size() > kMaximumCpuExecutableRecords ||
+        entry.getInputAccesses().size() > kMaximumCpuExecutableRecords ||
+        entry.getOutputAccesses().size() > kMaximumCpuExecutableRecords ||
+        entry.getDependencies().size() > kMaximumCpuExecutableRecords) {
+      return failure();
+    }
+    FailureOr<ParsedTask> task = parseTask(
+        device.getCode().slice(entry.getCodeOffset(), entry.getCodeLength()));
+    if (failed(task)) {
+      return failure();
+    }
+    tasks.push_back(std::move(*task));
+  }
+  uint64_t temporaryBytes = 0;
+  for (InvocationSlotOp slot : slots) {
+    auto tensor = dyn_cast<RankedTensorType>(slot.getTensorType());
+    if (!tensor || tensor.getRank() > 8 ||
+        slot.getStrides().size() > kMaximumCpuExecutableRecords) {
+      return failure();
+    }
+    const int64_t requiredBytes = slot.getRequiredBytes();
+    if (requiredBytes <= 0 ||
+        static_cast<uint64_t>(requiredBytes) > kMaximumCpuSlotBytes) {
+      return failure();
+    }
+    if (slot.getStorage() != MaterializationStorage::Temporary) {
+      continue;
+    }
+    const uint64_t bytes = static_cast<uint64_t>(requiredBytes);
+    if (temporaryBytes > kMaximumCpuTemporaryBytes - bytes) {
+      return failure();
+    }
+    temporaryBytes += bytes;
+  }
+  return tasks;
+}
+
 } // namespace
 
 class CpuExecutable::Impl {
@@ -989,40 +1041,14 @@ CpuExecutable::Load(ArrayRef<uint8_t> bytes) {
       return absl::InvalidArgumentError(
           "non-canonical Shuttle CPU executable transport");
     }
-    DeviceModuleOp device = *decoded->module->getOps<DeviceModuleOp>().begin();
-    SmallVector<ParsedTask, 0> tasks;
-    for (DeviceEntryOp entry :
-         device.getBody().front().getOps<DeviceEntryOp>()) {
-      FailureOr<ParsedTask> task = parseTask(
-          device.getCode().slice(entry.getCodeOffset(), entry.getCodeLength()));
-      if (failed(task)) {
-        return absl::InvalidArgumentError(
-            "invalid or oversized Shuttle CPU bytecode task");
-      }
-      tasks.push_back(std::move(*task));
-    }
-    InvocationAbiOp abi = *decoded->module->getOps<InvocationAbiOp>().begin();
-    uint64_t temporaryBytes = 0;
-    for (InvocationSlotOp slot :
-         abi.getBody().front().getOps<InvocationSlotOp>()) {
-      const int64_t requiredBytes = slot.getRequiredBytes();
-      if (requiredBytes <= 0 ||
-          static_cast<uint64_t>(requiredBytes) > kMaximumCpuSlotBytes) {
-        return absl::InvalidArgumentError(
-            "Shuttle CPU executable slot exceeds the closed byte limit");
-      }
-      if (slot.getStorage() != MaterializationStorage::Temporary) {
-        continue;
-      }
-      const uint64_t bytes = static_cast<uint64_t>(requiredBytes);
-      if (temporaryBytes > kMaximumCpuTemporaryBytes - bytes) {
-        return absl::InvalidArgumentError(
-            "Shuttle CPU executable exceeds the temporary byte limit");
-      }
-      temporaryBytes += bytes;
+    FailureOr<SmallVector<ParsedTask, 0>> tasks =
+        validateCpuExecutableResources(*decoded->module);
+    if (failed(tasks)) {
+      return absl::InvalidArgumentError(
+          "Shuttle CPU executable exceeds closed runtime resource limits");
     }
     std::shared_ptr<const Impl> implementation =
-        std::make_shared<Impl>(std::move(*decoded), std::move(tasks));
+        std::make_shared<Impl>(std::move(*decoded), std::move(*tasks));
     return std::shared_ptr<const CpuExecutable>(
         new CpuExecutable(std::move(implementation)));
   } catch (const std::bad_alloc &) {
@@ -1091,7 +1117,8 @@ FailureOr<SmallVector<uint8_t>> serializeCpuExecutableBundle(ModuleOp module) {
   if (devices.size() != 1 || abis.size() != 1 || bundles.size() != 1 ||
       failed(devices.front().verifyRegions()) ||
       failed(abis.front().verifyRegions()) ||
-      failed(bundles.front().verify())) {
+      failed(bundles.front().verify()) ||
+      failed(validateCpuExecutableResources(module))) {
     return failure();
   }
   DeviceModuleOp device = devices.front();
@@ -1148,7 +1175,7 @@ FailureOr<SmallVector<uint8_t>> serializeCpuExecutableBundle(ModuleOp module) {
   writer.u8(static_cast<uint8_t>(bundle.getCompletion()));
   writer.string(bundle.getFingerprint());
   SmallVector<uint8_t> bytes = writer.take();
-  if (bytes.size() > kMaximumTransportBytes) {
+  if (bytes.size() > kMaximumCpuTransportBytes) {
     return failure();
   }
   return bytes;

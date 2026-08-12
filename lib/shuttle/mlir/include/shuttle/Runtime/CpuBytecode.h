@@ -28,6 +28,7 @@ inline constexpr char kCpuExecutableBundleFfiTarget[] =
     "shuttle.cpu.executable_bundle.v1";
 // Canonical transport v1 is deliberately bounded before immutable state or
 // per-invocation temporary storage is allocated.
+inline constexpr uint64_t kMaximumCpuTransportBytes = 16 * 1024 * 1024;
 inline constexpr uint64_t kMaximumCpuExecutableRecords = 256;
 inline constexpr uint64_t kMaximumCpuTaskElements = 256;
 inline constexpr uint64_t kMaximumCpuSlotBytes = 1024 * 1024;
