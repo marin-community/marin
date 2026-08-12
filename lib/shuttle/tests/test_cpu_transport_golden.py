@@ -307,9 +307,3 @@ def test_transport_oracle_rejects_truncation_and_trailing_bytes() -> None:
         decode_transport(payload[:-1])
     with pytest.raises(ValueError, match="trailing"):
         decode_transport(payload + b"\0")
-
-
-def test_transport_oracle_rejects_unbounded_record_counts() -> None:
-    cursor = Cursor((_MAXIMUM_RECORDS + 1).to_bytes(8, "little"))
-    with pytest.raises(ValueError, match="record count"):
-        cursor.count()

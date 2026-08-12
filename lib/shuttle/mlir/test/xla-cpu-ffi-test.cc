@@ -252,6 +252,17 @@ TEST(XlaCpuFfiTest, InstantiateRejectsMismatchedBundleMetadata) {
                    .ok());
 }
 
+TEST(XlaCpuFfiTest, InstantiateRejectsWrongTypedCanonicalProjection) {
+  llvm::SmallVector<uint8_t> bytes =
+      goldenBytes("cpu-forward-7x13-wrong-projection-transport.hex");
+  ASSERT_FALSE(bytes.empty());
+  ASSERT_TRUE(mlir::shuttle::CpuExecutable::Load(bytes).ok());
+  TF_ASSERT_OK_AND_ASSIGN(xla::LocalClient * client, hostClient());
+  EXPECT_FALSE(compileCall(client, bytes, bytes.size(),
+                           mlir::shuttle::cpuExecutableBundleDigest(bytes))
+                   .ok());
+}
+
 TEST(XlaCpuFfiTest, SharedCompiledExecutableRunsConcurrently) {
   llvm::SmallVector<uint8_t> bytes =
       goldenBytes("cpu-forward-7x13-transport.hex");

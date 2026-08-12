@@ -253,6 +253,31 @@ TEST(CpuTransportContractTest, PublicLoaderRejectsStructuralBindingMutations) {
 }
 
 TEST(CpuTransportContractTest,
+     WrongTypedProjectionIsCanonicalButNotTheFfiContract) {
+  auto built = buildBundle(
+      readText("jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir"));
+  ASSERT_TRUE(built);
+  auto abi = *built->module->getOps<mlir::shuttle::InvocationAbiOp>().begin();
+  auto slots = abi.getBody().front().getOps<mlir::shuttle::InvocationSlotOp>();
+  auto first = slots.begin();
+  mlir::Builder builder(built->context.get());
+  (*first).setTensorType(
+      mlir::RankedTensorType::get({7, 13}, builder.getF32Type()));
+  (*first).setRequiredBytes(7 * 13 * sizeof(float));
+  (*first).setStridesAttr(builder.getDenseI64ArrayAttr({13 * 4, 4}));
+  (*first).setAlignment(sizeof(float));
+  refreshAbiRoots(*built->module);
+  auto serialized = mlir::shuttle::serializeCpuExecutableBundle(*built->module);
+  ASSERT_TRUE(mlir::succeeded(serialized));
+  ASSERT_TRUE(mlir::shuttle::CpuExecutable::Load(*serialized).ok());
+  llvm::SmallVector<uint8_t> golden =
+      goldenBytes("cpu-forward-7x13-wrong-projection-transport.hex");
+  EXPECT_EQ(*serialized, golden);
+  EXPECT_EQ(mlir::shuttle::cpuExecutableBundleDigest(golden),
+            "8c51fd1aedeb8b37958926b909071e607caa51a2f9157d4b37ce3f1f484ec570");
+}
+
+TEST(CpuTransportContractTest,
      LoadedExecutableIsImmutableAcrossConcurrentCalls) {
   auto executable = mlir::shuttle::CpuExecutable::Load(
       goldenBytes("cpu-forward-7x13-transport.hex"));

@@ -313,6 +313,7 @@ cc_test(
         "test/Inputs/cpu-forward-7x13-epsilon-quarter-transport.hex",
         "test/Inputs/cpu-forward-7x13-epsilon-quarter.mlir",
         "test/Inputs/cpu-forward-7x13-transport.hex",
+        "test/Inputs/cpu-forward-7x13-wrong-projection-transport.hex",
         "test/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir",
     ],
     deps = [
@@ -374,6 +375,7 @@ cc_test(
     data = [
         "test/Inputs/cpu-forward-7x13-epsilon-quarter-transport.hex",
         "test/Inputs/cpu-forward-7x13-transport.hex",
+        "test/Inputs/cpu-forward-7x13-wrong-projection-transport.hex",
     ],
     deps = [
         ":ShuttleCpuBytecode",
