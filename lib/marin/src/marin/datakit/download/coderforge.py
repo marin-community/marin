@@ -13,9 +13,6 @@ import json
 
 from fray.types import ResourceConfig
 from zephyr import counters
-from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
-from zephyr.readers import load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
@@ -23,6 +20,7 @@ from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_SOLVED_TAG,
     render_tool_message,
     text_document,
+    write_document_shards,
 )
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
@@ -62,14 +60,13 @@ def row_to_doc(row: dict) -> list[dict]:
 
 def transform(input_path: str, output_path: str) -> None:
     # The download already filters to only the splits we want via hf_urls_glob
-    pipeline = (
-        Dataset.from_files(f"{input_path}/**/*.parquet")
-        .flat_map(load_parquet)
-        .flat_map(row_to_doc)
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    write_document_shards(
+        f"{input_path}/**/*.parquet",
+        output_path,
+        name="coderforge-transform",
+        row_to_doc=row_to_doc,
+        resources=ResourceConfig(cpu=1, ram="8g"),
     )
-    ctx = ZephyrContext(name="coderforge-transform", resources=ResourceConfig(cpu=1, ram="8g"))
-    ctx.execute(pipeline)
 
 
 def download_coderforge_step() -> StepSpec:

@@ -9,12 +9,9 @@ answer, topic, and answer type. We render these into a single document.
 
 from fray.types import ResourceConfig
 from zephyr import counters
-from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
-from zephyr.readers import load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import text_document
+from marin.datakit.download.rollout_transforms import text_document, write_document_shards
 from marin.execution.step_spec import StepSpec
 
 HF_DATASET_ID = "facebook/principia-collection"
@@ -47,14 +44,13 @@ def row_to_doc(row: dict) -> list[dict]:
 
 
 def transform(input_path: str, output_path: str) -> None:
-    pipeline = (
-        Dataset.from_files(f"{input_path}/**/*.parquet")
-        .flat_map(load_parquet)
-        .flat_map(row_to_doc)
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    write_document_shards(
+        f"{input_path}/**/*.parquet",
+        output_path,
+        name="principia-transform",
+        row_to_doc=row_to_doc,
+        resources=ResourceConfig(cpu=1, ram="4g"),
     )
-    ctx = ZephyrContext(name="principia-transform", resources=ResourceConfig(cpu=1, ram="4g"))
-    ctx.execute(pipeline)
 
 
 def download_principia_step() -> StepSpec:

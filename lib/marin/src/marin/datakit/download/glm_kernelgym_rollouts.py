@@ -27,17 +27,16 @@ token budget mid-reasoning: 3,711 of 3,724 untruncated turns close exactly once,
 2,181 of 2,459 truncated turns never close.
 """
 
+import functools
 from enum import StrEnum
 
 from fray.types import ResourceConfig
 from rigging.filesystem import prefix_join
 from zephyr import counters
-from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import render_role_message, text_document
+from marin.datakit.download.rollout_transforms import render_role_message, text_document, write_document_shards
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -129,14 +128,14 @@ def row_to_doc(row: dict, truncation_filter: TruncationFilter) -> list[dict]:
 
 
 def transform(input_path: str, output_path: str, truncation_filter: TruncationFilter) -> None:
-    pipeline = (
-        Dataset.from_files(prefix_join(input_path, "**/*.jsonl.gz"))
-        .flat_map(load_jsonl)
-        .flat_map(lambda row: row_to_doc(row, truncation_filter))
-        .write_parquet(prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
+    write_document_shards(
+        prefix_join(input_path, "**/*.jsonl.gz"),
+        output_path,
+        name="glm-kernelgym-rollouts-transform",
+        row_to_doc=functools.partial(row_to_doc, truncation_filter=truncation_filter),
+        resources=ResourceConfig(cpu=1, ram="8g"),
+        loader=load_jsonl,
     )
-    ctx = ZephyrContext(name="glm-kernelgym-rollouts-transform", resources=ResourceConfig(cpu=1, ram="8g"))
-    ctx.execute(pipeline)
 
 
 def download_glm_kernelgym_rollouts_step(truncation_filter: TruncationFilter) -> StepSpec:

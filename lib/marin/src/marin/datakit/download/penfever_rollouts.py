@@ -14,8 +14,6 @@ from dataclasses import dataclass
 
 from fray.types import ResourceConfig
 from zephyr import counters
-from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
@@ -25,6 +23,7 @@ from marin.datakit.download.rollout_transforms import (
     load_parquet_batched,
     render_role_message,
     text_document,
+    write_document_shards,
 )
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
@@ -1091,17 +1090,14 @@ def row_to_doc(dataset: PenfeverRollout) -> Callable[[dict], list[dict]]:
 
 
 def transform(dataset: PenfeverRollout, input_path: str, output_path: str) -> None:
-    pipeline = (
-        Dataset.from_files(f"{input_path}/**/*.parquet")
-        .flat_map(load_parquet_batched)
-        .flat_map(row_to_doc(dataset))
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
-    )
-    ctx = ZephyrContext(
+    write_document_shards(
+        f"{input_path}/**/*.parquet",
+        output_path,
         name=f"penfever-{dataset.cohort_name}-{dataset.task_source}-transform",
+        row_to_doc=row_to_doc(dataset),
         resources=ResourceConfig(cpu=1, ram="32g"),
+        loader=load_parquet_batched,
     )
-    ctx.execute(pipeline)
 
 
 def _rollout_steps(dataset: PenfeverRollout) -> tuple[StepSpec, StepSpec]:
