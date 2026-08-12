@@ -103,4 +103,10 @@ def ShuttleVerifyCpuExecutableBundlePass
   let constructor = "createVerifyCpuExecutableBundlePass()";
 }
 
+def ShuttleReplaceWithCpuExecutableBundlePass
+    : Pass<"shuttle-replace-with-cpu-executable-bundle", "::mlir::ModuleOp"> {
+  let summary = "Replace the closed 7x13 host bundle with one typed FFI call";
+  let constructor = "createReplaceWithCpuExecutableBundlePass()";
+}
+
 #endif // SHUTTLE_TRANSFORMS_PASSES_TD_

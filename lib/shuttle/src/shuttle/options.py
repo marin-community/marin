@@ -11,7 +11,7 @@ from enum import StrEnum
 SCHEMA_VERSION = 1
 # Bump when unchanged JSON fields acquire new compiler semantics. This forces a
 # distinct JAX/XLA cache identity even when the wire schema itself is stable.
-PIPELINE_ABI_VERSION = 5
+PIPELINE_ABI_VERSION = 6
 ENABLE_OPTION = "xla_shuttle_enable"
 OPTIONS_OPTION = "xla_shuttle_options"
 MAXIMUM_TENSOR_RANK = 8
@@ -24,6 +24,13 @@ class Numerics(StrEnum):
 
     SOURCE_ORDERED = "source_ordered"
     FAST = "fast"
+
+
+class ExecutionMode(StrEnum):
+    """Output language produced by the Shuttle compiler pipeline."""
+
+    STABLEHLO_ROUND_TRIP = "stablehlo_round_trip"
+    CPU_EXECUTABLE_BUNDLE = "cpu_executable_bundle"
 
 
 class Materialization(StrEnum):
@@ -58,11 +65,14 @@ class Options:
     """Closed public configuration for one Shuttle compilation."""
 
     numerics: Numerics
+    execution_mode: ExecutionMode
     tuning: Tuning
 
     def __post_init__(self) -> None:
         if type(self.numerics) is not Numerics:
             raise TypeError("numerics must be a Numerics value")
+        if type(self.execution_mode) is not ExecutionMode:
+            raise TypeError("execution_mode must be an ExecutionMode value")
         if type(self.tuning) is not Tuning:
             raise TypeError("tuning must be a Tuning value")
 
@@ -70,9 +80,16 @@ class Options:
 CompilerOptions = dict[str, bool | str]
 
 
-def compiler_options(*, numerics: Numerics, tuning: Tuning) -> CompilerOptions:
+def compiler_options(
+    *,
+    numerics: Numerics,
+    tuning: Tuning,
+    execution_mode: ExecutionMode = ExecutionMode.STABLEHLO_ROUND_TRIP,
+) -> CompilerOptions:
     """Return canonical XLA compiler options for a Shuttle-enabled jaxlib."""
-    options = Options(numerics=numerics, tuning=tuning)
+    options = Options(numerics=numerics, execution_mode=execution_mode, tuning=tuning)
+    if execution_mode is ExecutionMode.CPU_EXECUTABLE_BUNDLE and numerics is not Numerics.SOURCE_ORDERED:
+        raise ValueError("cpu_executable_bundle requires source_ordered numerics")
     return {
         ENABLE_OPTION: True,
         OPTIONS_OPTION: canonical_options_json(options),
@@ -82,6 +99,7 @@ def compiler_options(*, numerics: Numerics, tuning: Tuning) -> CompilerOptions:
 def canonical_options_json(options: Options) -> str:
     """Serialize options into the closed cache-identity wire format."""
     payload = {
+        "execution_mode": options.execution_mode.value,
         "numerics": options.numerics.value,
         "pipeline_abi_version": PIPELINE_ABI_VERSION,
         "schema_version": SCHEMA_VERSION,
@@ -96,9 +114,14 @@ def canonical_options_json(options: Options) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
-def options_digest(*, numerics: Numerics, tuning: Tuning) -> str:
+def options_digest(
+    *,
+    numerics: Numerics,
+    tuning: Tuning,
+    execution_mode: ExecutionMode = ExecutionMode.STABLEHLO_ROUND_TRIP,
+) -> str:
     """Return the stable digest used in compilation evidence."""
-    options = Options(numerics=numerics, tuning=tuning)
+    options = Options(numerics=numerics, execution_mode=execution_mode, tuning=tuning)
     return hashlib.sha256(canonical_options_json(options).encode()).hexdigest()
 
 

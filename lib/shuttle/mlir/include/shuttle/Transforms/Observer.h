@@ -12,10 +12,16 @@
 
 namespace mlir::shuttle {
 
+enum class ExecutionMode {
+  StablehloRoundTrip,
+  CpuExecutableBundle,
+};
+
 struct ShuttlePipelineOptions {
   NumericalPolicy numerics = NumericalPolicy::SourceOrdered;
+  ExecutionMode executionMode = ExecutionMode::StablehloRoundTrip;
   std::string canonicalOptions =
-      R"json({"numerics":"source_ordered","pipeline_abi_version":5,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+      R"json({"execution_mode":"stablehlo_round_trip","numerics":"source_ordered","pipeline_abi_version":6,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
   std::string canonicalTuning =
       R"json({"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]})json";
 };

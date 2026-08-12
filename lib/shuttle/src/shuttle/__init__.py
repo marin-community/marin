@@ -4,6 +4,7 @@
 """MLIR compiler extension for JAX and XLA programs."""
 
 from shuttle.options import (
+    ExecutionMode,
     Materialization,
     Numerics,
     Tuning,

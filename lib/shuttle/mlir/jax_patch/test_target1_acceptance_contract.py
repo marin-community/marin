@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavior tests for the ABI 5 Target 1 installed-wheel contract."""
+"""Behavior tests for the ABI 6 Target 1 installed-wheel contract."""
 
 import copy
 
@@ -19,7 +19,7 @@ def identity(policy: str) -> ObserverIdentity:
         policy=policy,
         policy_digest=f"{policy}-policy-digest",
         tuning_digest="tuning-digest",
-        canonical_options=f'{{"numerics":"{policy}","pipeline_abi_version":5}}',
+        canonical_options=f'{{"execution_mode":"stablehlo_round_trip","numerics":"{policy}","pipeline_abi_version":6}}',
         canonical_tuning="{}",
     )
 

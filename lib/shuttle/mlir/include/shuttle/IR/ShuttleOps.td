@@ -228,7 +228,8 @@ def Shuttle_InvocationSlotOp
       Shuttle_ExecutableAddressSpaceAttr:$address_space,
       Shuttle_ExecutableAccessAttr:$access,
       Shuttle_MaterializationStorageAttr:$storage, I64Attr:$alias_group,
-      I64Attr:$reuse_group);
+      I64Attr:$reuse_group, Shuttle_ExecutableBindingKindAttr:$binding,
+      OptionalAttr<I64Attr>:$binding_index);
 }
 
 def Shuttle_InvocationAbiYieldOp

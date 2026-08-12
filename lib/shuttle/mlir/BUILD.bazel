@@ -104,6 +104,7 @@ cc_library(
     ],
     strip_include_prefix = "include",
     deps = [
+        ":ShuttleCpuBytecode",
         ":ShuttleDialect",
         ":shuttle_passes_inc_gen",
         "@llvm-project//llvm:Support",
@@ -125,6 +126,8 @@ cc_library(
     strip_include_prefix = "include",
     deps = [
         ":ShuttleDialect",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
@@ -171,11 +174,14 @@ cc_library(
     srcs = ["lib/Transforms/XlaRegistryRegistration.cc"],
     alwayslink = True,
     deps = [
+        ":ShuttleCpuBytecode",
         ":ShuttleXlaRegistration",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
+        "@xla//xla/ffi",
         "@xla//xla/pjrt:stablehlo_module_transform",
     ],
 )
@@ -331,6 +337,7 @@ cc_test(
         "@llvm-project//mlir:Parser",
         "@llvm-project//mlir:SCFDialect",
         "@stablehlo//:register",
+        "@xla//xla/ffi:ffi_api",
         "@xla//xla/pjrt:stablehlo_module_transform",
     ],
 )

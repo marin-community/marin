@@ -109,8 +109,11 @@ Current implemented behavior is deliberately narrow:
   registry. The separate pinned JAX patch links it at final CPU `_jax`
   composition. The `jaxacceptance6` artifact proves that CPU composition path;
   dynamically loaded GPU PJRT plugins still require their own linkage and
-  registration proof. That artifact covers the earlier ABI 1 f32 slice; ABI 2
-  requires a rebuilt CPU jaxlib acceptance run; ABI 3 through ABI 5 do as well.
+  registration proof. Pipeline ABI 6 adds the opt-in `cpu_executable_bundle`
+  mode for the exact `7x13` forward `SOURCE_ORDERED` Host slice. It transports
+  one verified stripped bundle through the fixed typed-FFI target
+  `shuttle.cpu.executable_bundle.v1`; other shapes, VJP boundaries, FAST, and
+  accelerator execution remain unsupported by that mode.
 
 The export verifier keys operation rejection on the operation-name namespace,
 so it also covers opaque `shuttle.*` operations in a context where the Shuttle

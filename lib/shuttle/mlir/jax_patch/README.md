@@ -144,7 +144,7 @@ SSA names. The inventory includes every top-level operand, attribute, result
 type, source-result reference, output anchor, and each reducer block's scalar
 `stablehlo.add` result and `stablehlo.return` operation reference.
 
-`shuttle_jaxlib_target1_acceptance.py` is the installed-wheel ABI 5 CPU
+`shuttle_jaxlib_target1_acceptance.py` is the installed-wheel ABI 6 CPU
 contract for those six boundaries. It runs each boundary under
 `source_ordered` and `fast`, for twelve distinct compiler/cache identities. A
 cache-disabled process saves disabled ordinary-JAX BF16 baselines. Separate

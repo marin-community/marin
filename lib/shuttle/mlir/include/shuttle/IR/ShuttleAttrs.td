@@ -210,6 +210,21 @@ def Shuttle_ExecutableCompletionAttr
   let assemblyFormat = "`<` $value `>`";
 }
 
+def Shuttle_ExecutableBindingKind
+    : I32EnumAttr<"ExecutableBindingKind", "External invocation binding kind",
+                  [I32EnumAttrCase<"None", 0, "none">,
+                   I32EnumAttrCase<"Operand", 1, "operand">,
+                   I32EnumAttrCase<"Result", 2, "result">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_ExecutableBindingKindAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_ExecutableBindingKind,
+               "executable_binding_kind"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
 def Shuttle_SourceRefAttr : Shuttle_Attr<"SourceRef"> {
   let mnemonic = "source_ref";
   let summary = "Rename-invariant structural reference to a source result";

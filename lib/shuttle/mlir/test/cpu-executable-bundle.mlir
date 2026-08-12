@@ -50,7 +50,7 @@
 // COUNT-COUNT-21: "shuttle.invocation_slot"
 // BUNDLE: "shuttle.device_entry"() <{{.*}}ordinal = 3{{.*}}predication = #shuttle.executable_predication<domain_bounds>{{.*}}reduction_order = #shuttle.schedule_reduction_order<tree_association_free_leaf_order_fixed>
 // BUNDLE: "shuttle.invocation_abi"
-// BUNDLE-SAME: schema_version = 1
+// BUNDLE-SAME: schema_version = 2
 // BUNDLE: "shuttle.invocation_slot"() <{{.*}}access = #shuttle.executable_access<read>{{.*}}address_space = #shuttle.executable_address_space<host>{{.*}}offset = 0{{.*}}ordinal = 0{{.*}}strides = array<i64: 26, 2>
 // BUNDLE: "shuttle.invocation_slot"() <{{.*}}access = #shuttle.executable_access<write>{{.*}}ordinal = 20
 // BUNDLE: "shuttle.executable_bundle"

@@ -33,6 +33,7 @@
 #include "shuttle/IR/ShuttleAttrs.h"
 #include "shuttle/IR/ShuttleDialect.h"
 #include "shuttle/IR/ShuttleOps.h"
+#include "shuttle/Runtime/CpuBytecode.h"
 #include "stablehlo/dialect/StablehloOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -63,6 +64,7 @@ namespace mlir::shuttle {
 #define GEN_PASS_DEF_SHUTTLEVERIFYSIMT32ROWFOLDSCHEDULEPASS
 #define GEN_PASS_DEF_SHUTTLEBUILDCPUEXECUTABLEBUNDLEPASS
 #define GEN_PASS_DEF_SHUTTLEVERIFYCPUEXECUTABLEBUNDLEPASS
+#define GEN_PASS_DEF_SHUTTLEREPLACEWITHCPUEXECUTABLEBUNDLEPASS
 #include "shuttle/Transforms/Passes.h.inc"
 
 namespace {
@@ -72,7 +74,7 @@ ShuttlePipelineOptions commandLinePipelineOptions(NumericalPolicy numerics) {
   options.numerics = numerics;
   if (numerics == NumericalPolicy::Fast) {
     options.canonicalOptions =
-        R"json({"numerics":"fast","pipeline_abi_version":5,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+        R"json({"execution_mode":"stablehlo_round_trip","numerics":"fast","pipeline_abi_version":6,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
   }
   return options;
 }
@@ -1745,15 +1747,24 @@ LogicalResult verifyManifestCoverage(ModuleOp module, DictionaryAttr manifest) {
       !tuningDigest || failed(selected) || failed(excluded)) {
     return module.emitError("has a malformed Shuttle coverage manifest");
   }
-  std::string policyPrefix = "{\"numerics\":\"";
-  policyPrefix.append(policy.getValue().data(), policy.getValue().size());
-  policyPrefix.push_back('"');
+  std::string roundTripPrefix =
+      "{\"execution_mode\":\"stablehlo_round_trip\",\"numerics\":\"";
+  roundTripPrefix.append(policy.getValue().data(), policy.getValue().size());
+  roundTripPrefix.push_back('"');
+  std::string cpuPrefix =
+      "{\"execution_mode\":\"cpu_executable_bundle\",\"numerics\":\"";
+  cpuPrefix.append(policy.getValue().data(), policy.getValue().size());
+  cpuPrefix.push_back('"');
+  const bool validOptionsPrefix =
+      canonicalOptions.getValue().starts_with(roundTripPrefix) ||
+      (policy.getValue() == "source_ordered" &&
+       canonicalOptions.getValue().starts_with(cpuPrefix));
   if ((policy.getValue() != "source_ordered" && policy.getValue() != "fast") ||
       tuningDigest.getValue().size() != 64 ||
       !llvm::all_of(tuningDigest.getValue(), llvm::isHexDigit) ||
       tuningDigest.getValue() != sha256(canonicalTuning.getValue()) ||
       policyDigest.getValue() != sha256(canonicalOptions.getValue()) ||
-      !canonicalOptions.getValue().starts_with(policyPrefix)) {
+      !validOptionsPrefix) {
     return module.emitError("has inconsistent Shuttle policy digests");
   }
   llvm::SmallDenseSet<Attribute> complete = attributeSet(completeArray);
@@ -4087,7 +4098,7 @@ public:
     builder.setInsertionPointToEnd(module.getBody());
     OperationState abiState(module.getLoc(),
                             InvocationAbiOp::getOperationName());
-    abiState.addAttribute("schema_version", builder.getI64IntegerAttr(1));
+    abiState.addAttribute("schema_version", builder.getI64IntegerAttr(2));
     abiState.addAttribute("source_plan_fingerprint",
                           materializations.front().getFingerprintAttr());
     abiState.addAttribute("source_schedule_fingerprint",
@@ -4099,35 +4110,54 @@ public:
     Block *abiBody = new Block();
     abi.getBody().push_back(abiBody);
     builder.setInsertionPointToEnd(abiBody);
+    int64_t operandBinding = 0;
+    int64_t resultBinding = 0;
     for (auto [ordinal, slot] : llvm::enumerate(spec->slots)) {
-      createScheduleRecord(
-          builder, module.getLoc(), InvocationSlotOp::getOperationName(),
-          {builder.getNamedAttr("ordinal", builder.getI64IntegerAttr(ordinal)),
-           builder.getNamedAttr("source_buffer",
-                                builder.getI64IntegerAttr(ordinal)),
-           builder.getNamedAttr("tensor_type", TypeAttr::get(slot.tensorType)),
-           builder.getNamedAttr("required_bytes",
-                                builder.getI64IntegerAttr(slot.requiredBytes)),
-           builder.getNamedAttr(
-               "strides",
-               DenseI64ArrayAttr::get(module.getContext(), slot.strides)),
-           builder.getNamedAttr("offset", builder.getI64IntegerAttr(0)),
-           builder.getNamedAttr("alignment",
-                                builder.getI64IntegerAttr(slot.alignment)),
-           builder.getNamedAttr(
-               "address_space",
-               ExecutableAddressSpaceAttr::get(module.getContext(),
-                                               ExecutableAddressSpace::Host)),
-           builder.getNamedAttr(
-               "access",
-               ExecutableAccessAttr::get(module.getContext(), slot.access)),
-           builder.getNamedAttr(
-               "storage", MaterializationStorageAttr::get(module.getContext(),
-                                                          slot.storage)),
-           builder.getNamedAttr("alias_group",
-                                builder.getI64IntegerAttr(ordinal)),
-           builder.getNamedAttr("reuse_group",
-                                builder.getI64IntegerAttr(ordinal))});
+      ExecutableBindingKind binding = ExecutableBindingKind::None;
+      std::optional<int64_t> bindingIndex;
+      if (slot.storage == MaterializationStorage::External &&
+          slot.access == ExecutableAccess::Read) {
+        binding = ExecutableBindingKind::Operand;
+        bindingIndex = operandBinding++;
+      } else if (slot.storage == MaterializationStorage::External &&
+                 slot.access == ExecutableAccess::Write) {
+        binding = ExecutableBindingKind::Result;
+        bindingIndex = resultBinding++;
+      }
+      SmallVector<NamedAttribute> attributes{
+          builder.getNamedAttr("ordinal", builder.getI64IntegerAttr(ordinal)),
+          builder.getNamedAttr("source_buffer",
+                               builder.getI64IntegerAttr(ordinal)),
+          builder.getNamedAttr("tensor_type", TypeAttr::get(slot.tensorType)),
+          builder.getNamedAttr("required_bytes",
+                               builder.getI64IntegerAttr(slot.requiredBytes)),
+          builder.getNamedAttr(
+              "strides",
+              DenseI64ArrayAttr::get(module.getContext(), slot.strides)),
+          builder.getNamedAttr("offset", builder.getI64IntegerAttr(0)),
+          builder.getNamedAttr("alignment",
+                               builder.getI64IntegerAttr(slot.alignment)),
+          builder.getNamedAttr(
+              "address_space",
+              ExecutableAddressSpaceAttr::get(module.getContext(),
+                                              ExecutableAddressSpace::Host)),
+          builder.getNamedAttr("access", ExecutableAccessAttr::get(
+                                             module.getContext(), slot.access)),
+          builder.getNamedAttr(
+              "storage", MaterializationStorageAttr::get(module.getContext(),
+                                                         slot.storage)),
+          builder.getNamedAttr("alias_group",
+                               builder.getI64IntegerAttr(ordinal)),
+          builder.getNamedAttr("reuse_group",
+                               builder.getI64IntegerAttr(ordinal)),
+          builder.getNamedAttr("binding", ExecutableBindingKindAttr::get(
+                                              module.getContext(), binding))};
+      if (bindingIndex) {
+        attributes.push_back(builder.getNamedAttr(
+            "binding_index", builder.getI64IntegerAttr(*bindingIndex)));
+      }
+      createScheduleRecord(builder, module.getLoc(),
+                           InvocationSlotOp::getOperationName(), attributes);
     }
     builder.create<InvocationAbiYieldOp>(module.getLoc());
     abi.setFingerprint(invocationAbiFingerprint(abi));
@@ -4202,7 +4232,20 @@ LogicalResult verifyCpuExecutableAgainstSource(ModuleOp module) {
       return failure();
     }
   }
+  int64_t operandBinding = 0;
+  int64_t resultBinding = 0;
   for (auto [actual, spec] : llvm::zip_equal(slots, expected->slots)) {
+    ExecutableBindingKind binding = ExecutableBindingKind::None;
+    std::optional<int64_t> bindingIndex;
+    if (spec.storage == MaterializationStorage::External &&
+        spec.access == ExecutableAccess::Read) {
+      binding = ExecutableBindingKind::Operand;
+      bindingIndex = operandBinding++;
+    } else if (spec.storage == MaterializationStorage::External &&
+               spec.access == ExecutableAccess::Write) {
+      binding = ExecutableBindingKind::Result;
+      bindingIndex = resultBinding++;
+    }
     if (actual.getTensorType() != spec.tensorType ||
         actual.getRequiredBytes() != spec.requiredBytes ||
         actual.getStrides() != ArrayRef<int64_t>(spec.strides) ||
@@ -4211,7 +4254,9 @@ LogicalResult verifyCpuExecutableAgainstSource(ModuleOp module) {
         actual.getAccess() != spec.access ||
         actual.getStorage() != spec.storage ||
         actual.getAliasGroup() != actual.getOrdinal() ||
-        actual.getReuseGroup() != actual.getOrdinal()) {
+        actual.getReuseGroup() != actual.getOrdinal() ||
+        actual.getBinding() != binding ||
+        actual.getBindingIndex() != bindingIndex) {
       return failure();
     }
   }
@@ -4227,6 +4272,142 @@ public:
       getOperation().emitError(
           "executable bundle no longer matches Shuttle algebra and schedule");
       signalPassFailure();
+    }
+  }
+};
+
+DenseIntElementsAttr rowMajorLayout(RankedTensorType type) {
+  SmallVector<int64_t> order;
+  for (int64_t axis = type.getRank(); axis > 0; --axis) {
+    order.push_back(axis - 1);
+  }
+  auto layoutType = RankedTensorType::get({type.getRank()},
+                                          IndexType::get(type.getContext()));
+  return DenseIntElementsAttr::get(layoutType, order);
+}
+
+class ReplaceWithCpuExecutableBundlePass
+    : public impl::ShuttleReplaceWithCpuExecutableBundlePassBase<
+          ReplaceWithCpuExecutableBundlePass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    SmallVector<RegionOp> regions;
+    module.walk([&](RegionOp region) { regions.push_back(region); });
+    SmallVector<MaterializationPlanOp> materializations(
+        module.getOps<MaterializationPlanOp>());
+    SmallVector<SchedulePlanOp> schedules(module.getOps<SchedulePlanOp>());
+    SmallVector<DeviceModuleOp> devices(module.getOps<DeviceModuleOp>());
+    SmallVector<InvocationAbiOp> abis(module.getOps<InvocationAbiOp>());
+    SmallVector<ExecutableBundleOp> bundles(
+        module.getOps<ExecutableBundleOp>());
+    if (regions.size() != 1 || materializations.size() != 1 ||
+        schedules.size() != 1 || devices.size() != 1 || abis.size() != 1 ||
+        bundles.size() != 1 ||
+        failed(verifyCpuExecutableAgainstSource(module))) {
+      module.emitError("requires one source-bound closed CPU executable");
+      return signalPassFailure();
+    }
+    RegionOp region = regions.front();
+    if (region.getPolicy() != NumericalPolicy::SourceOrdered ||
+        region.getInputs().size() != 2 || region.getResults().size() != 1 ||
+        region.getInputs()[0].getType() !=
+            RankedTensorType::get({7, 13},
+                                  BFloat16Type::get(module.getContext())) ||
+        region.getInputs()[1].getType() !=
+            RankedTensorType::get({13},
+                                  BFloat16Type::get(module.getContext())) ||
+        region.getResults()[0].getType() !=
+            RankedTensorType::get({7, 13},
+                                  BFloat16Type::get(module.getContext()))) {
+      region.emitOpError(
+          "CPU typed-FFI bridge is bounded to the 7x13 source-ordered host "
+          "signature");
+      signalPassFailure();
+      return;
+    }
+    int64_t folds = 0;
+    region.walk([&](FoldOp) { ++folds; });
+    if (folds != 1) {
+      region.emitOpError("CPU typed-FFI bridge requires one Fold");
+      signalPassFailure();
+      return;
+    }
+    SmallVector<InvocationSlotOp> slots(
+        abis.front().getBody().front().getOps<InvocationSlotOp>());
+    if (slots.size() != 21 ||
+        slots[0].getBinding() != ExecutableBindingKind::Operand ||
+        slots[0].getBindingIndex() != std::optional<uint64_t>(0) ||
+        slots[1].getBinding() != ExecutableBindingKind::Operand ||
+        slots[1].getBindingIndex() != std::optional<uint64_t>(1) ||
+        slots[20].getBinding() != ExecutableBindingKind::Result ||
+        slots[20].getBindingIndex() != std::optional<uint64_t>(0) ||
+        llvm::any_of(ArrayRef<InvocationSlotOp>(slots).slice(2, 18),
+                     [](InvocationSlotOp slot) {
+                       return slot.getBinding() != ExecutableBindingKind::None;
+                     })) {
+      abis.front().emitOpError(
+          "does not match the closed forward external-slot projection");
+      signalPassFailure();
+      return;
+    }
+
+    OpBuilder builder(module.getContext());
+    OwningOpRef<ModuleOp> stripped = ModuleOp::create(module.getLoc());
+    builder.setInsertionPointToEnd(stripped->getBody());
+    builder.insert(devices.front()->clone());
+    builder.insert(abis.front()->clone());
+    builder.insert(bundles.front()->clone());
+    FailureOr<SmallVector<uint8_t>> bundleBytes =
+        serializeCpuExecutableBundle(*stripped);
+    if (failed(bundleBytes)) {
+      module.emitError("failed to serialize the closed CPU executable");
+      return signalPassFailure();
+    }
+    const std::string digest = cpuExecutableBundleDigest(*bundleBytes);
+    StringRef opaqueBytes(reinterpret_cast<const char *>(bundleBytes->data()),
+                          bundleBytes->size());
+    DictionaryAttr backendConfig = builder.getDictionaryAttr({
+        builder.getNamedAttr("bundle_bytes",
+                             builder.getStringAttr(opaqueBytes)),
+        builder.getNamedAttr("bundle_sha256", builder.getStringAttr(digest)),
+        builder.getNamedAttr("bundle_size",
+                             builder.getI64IntegerAttr(bundleBytes->size())),
+        builder.getNamedAttr("transport_schema_version",
+                             builder.getI64IntegerAttr(1)),
+    });
+    SmallVector<Attribute> operandLayouts;
+    for (Value input : region.getInputs()) {
+      operandLayouts.push_back(
+          rowMajorLayout(cast<RankedTensorType>(input.getType())));
+    }
+    SmallVector<Attribute> resultLayouts{
+        rowMajorLayout(cast<RankedTensorType>(region.getResult(0).getType()))};
+    builder.setInsertionPoint(region);
+    OperationState callState(region.getLoc(), "stablehlo.custom_call");
+    callState.addOperands(region.getInputs());
+    callState.addTypes(region.getResultTypes());
+    callState.addAttribute(
+        "call_target_name",
+        builder.getStringAttr(kCpuExecutableBundleFfiTarget));
+    callState.addAttribute("api_version", builder.getI32IntegerAttr(4));
+    callState.addAttribute("backend_config", backendConfig);
+    callState.addAttribute("called_computations", builder.getArrayAttr({}));
+    callState.addAttribute("has_side_effect", builder.getBoolAttr(false));
+    callState.addAttribute("operand_layouts",
+                           builder.getArrayAttr(operandLayouts));
+    callState.addAttribute("output_operand_aliases", builder.getArrayAttr({}));
+    callState.addAttribute("result_layouts",
+                           builder.getArrayAttr(resultLayouts));
+    Operation *call = builder.create(callState);
+    region.getResults().replaceAllUsesWith(call->getResults());
+    region.erase();
+    for (Operation &operation :
+         llvm::make_early_inc_range(module.getBody()->without_terminator())) {
+      if (isa<MaterializationPlanOp, SchedulePlanOp, DeviceModuleOp,
+              InvocationAbiOp, ExecutableBundleOp>(operation)) {
+        operation.erase();
+      }
     }
   }
 };
@@ -4323,6 +4504,32 @@ void buildShuttleStablehloCorePipeline(
       ShuttlePipelinePhase::FinalErasure, invocation));
 }
 
+void buildShuttleCpuExecutablePipeline(
+    OpPassManager &manager, const ShuttlePipelineOptions &options,
+    const std::shared_ptr<detail::ShuttleObserverInvocation> &invocation) {
+  manager.addPass(createAnnotateSourcePass());
+  manager.addPass(createFormStructuralRegionsPass(
+      options.numerics, options.canonicalOptions, options.canonicalTuning));
+  manager.addPass(createConvertStablehloToAlgebraPass());
+  manager.addPass(createVerifySourceCoveragePass());
+  manager.addPass(std::make_unique<EmitObserverPass>(
+      ShuttlePipelinePhase::AlgebraCoverage, invocation));
+  manager.addPass(createVerifySemanticErasurePass());
+  manager.addPass(createShuttleCanonicalizePass());
+  manager.addPass(createPlanRowFoldMaterializationPass());
+  manager.addPass(createVerifyMaterializationPlanPass());
+  manager.addPass(createPlanSimt32RowFoldSchedulePass());
+  manager.addPass(createVerifySimt32RowFoldSchedulePass());
+  manager.addPass(createBuildCpuExecutableBundlePass());
+  manager.addPass(createVerifyCpuExecutableBundlePass());
+  manager.addPass(createVerifySourceCoveragePass());
+  manager.addPass(createReplaceWithCpuExecutableBundlePass());
+  manager.addPass(createStripSourceProvenancePass());
+  manager.addPass(createVerifyNoShuttleOpsPass());
+  manager.addPass(std::make_unique<EmitObserverPass>(
+      ShuttlePipelinePhase::FinalErasure, invocation));
+}
+
 class RunShuttleStablehloPipelinePass
     : public PassWrapper<RunShuttleStablehloPipelinePass,
                          OperationPass<ModuleOp>> {
@@ -4356,7 +4563,11 @@ public:
     PassManager manager(module.getContext(), ModuleOp::getOperationName());
     manager.addInstrumentation(
         std::make_unique<FailureCaptureInstrumentation>(failure));
-    buildShuttleStablehloCorePipeline(manager, options, invocation);
+    if (options.executionMode == ExecutionMode::CpuExecutableBundle) {
+      buildShuttleCpuExecutablePipeline(manager, options, invocation);
+    } else {
+      buildShuttleStablehloCorePipeline(manager, options, invocation);
+    }
     if (failed(manager.run(module))) {
       emitObserverSnapshot(invocation, module, ShuttlePipelinePhase::Failure,
                            failure->pass);
@@ -4443,6 +4654,10 @@ std::unique_ptr<Pass> createVerifyCpuExecutableBundlePass() {
   return std::make_unique<VerifyCpuExecutableBundlePass>();
 }
 
+std::unique_ptr<Pass> createReplaceWithCpuExecutableBundlePass() {
+  return std::make_unique<ReplaceWithCpuExecutableBundlePass>();
+}
+
 void buildShuttleStablehloPipeline(
     OpPassManager &manager, const ShuttlePipelineOptions &options,
     std::shared_ptr<const ShuttlePipelineObserver> observer) {
@@ -4465,6 +4680,17 @@ void registerShuttleStablehloPipelines() {
       [](OpPassManager &manager) {
         buildShuttleStablehloPipeline(
             manager, commandLinePipelineOptions(NumericalPolicy::Fast));
+      });
+  PassPipelineRegistration<>(
+      "shuttle-cpu-executable-bundle-pipeline",
+      "Replace the closed 7x13 source-ordered graph with a typed FFI call",
+      [](OpPassManager &manager) {
+        ShuttlePipelineOptions options =
+            commandLinePipelineOptions(NumericalPolicy::SourceOrdered);
+        options.executionMode = ExecutionMode::CpuExecutableBundle;
+        options.canonicalOptions =
+            R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":6,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+        buildShuttleStablehloPipeline(manager, options);
       });
 }
 

@@ -1,7 +1,8 @@
 # Shuttle XLA CPU typed-FFI consumer design
 
-Status: design only. No XLA consumer, production pipeline change, runtime
-registration, rebuilt `jaxlib`, execution evidence, or acceptance claim exists.
+Status: implemented as an opt-in local Host CPU proof for the exact `7x13`
+forward `SOURCE_ORDERED` slice. This remains outside the default pipeline and
+is not GPU, representative-shape, performance, or scorecard acceptance.
 
 ## Decision
 
@@ -12,11 +13,11 @@ closed serialization of the stripped CPU executable bundle. One fixed generic
 handler decodes and verifies that serialization during FFI instantiation, then
 executes the immutable decoded state for each invocation.
 
-This slice is independently implementable, but it is not implemented now. The
-current repository has a closed local CPU bundle and interpreter, not a
-lossless binding from XLA operands and results to bundle slots. The binding,
-transport, handler lifecycle, replacement pass, and cache identity below must
-land together before ordinary JAX may execute the bundle.
+The implementation binds XLA operands and results to the closed local CPU
+bundle, transports and verifies the stripped bundle, instantiates immutable
+handler state, replaces the selected graph without fallback, and separates the
+new execution mode in pipeline ABI 6. The remaining exclusions in this design
+still apply.
 
 ## Pinned upstream contract
 

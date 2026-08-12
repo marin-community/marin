@@ -1279,7 +1279,7 @@ std::string deviceModuleFingerprint(DeviceModuleOp module) {
 
 std::string invocationAbiFingerprint(InvocationAbiOp abi) {
   return executablePlanFingerprint<InvocationAbiOp, InvocationAbiYieldOp>(
-      abi, "shuttle.invocation_abi.v1");
+      abi, "shuttle.invocation_abi.v2");
 }
 
 std::string executableBundleFingerprint(ExecutableBundleOp bundle) {
@@ -1398,12 +1398,12 @@ LogicalResult InvocationAbiOp::verifyRegions() {
   if (!getOperation()->getDiscardableAttrs().empty()) {
     return emitOpError("does not permit discardable attributes");
   }
-  if (getSchemaVersion() != 1 ||
+  if (getSchemaVersion() != 2 ||
       !isLowerHexDigest(getSourcePlanFingerprint()) ||
       !isLowerHexDigest(getSourceScheduleFingerprint()) ||
       !isLowerHexDigest(getFingerprint())) {
     return emitOpError(
-        "requires ABI schema 1 and lowercase SHA-256 fingerprints");
+        "requires ABI schema 2 and lowercase SHA-256 fingerprints");
   }
   Region &body = getBody();
   if (body.empty() || !llvm::hasSingleElement(body) ||
@@ -1414,6 +1414,8 @@ LogicalResult InvocationAbiOp::verifyRegions() {
   int64_t ordinal = 0;
   llvm::SmallDenseSet<int64_t> aliasGroups;
   llvm::SmallDenseSet<int64_t> reuseGroups;
+  int64_t operandBinding = 0;
+  int64_t resultBinding = 0;
   for (Operation &operation : body.front().without_terminator()) {
     auto slot = dyn_cast<InvocationSlotOp>(operation);
     if (!slot) {
@@ -1467,6 +1469,22 @@ LogicalResult InvocationAbiOp::verifyRegions() {
     if (slot.getStorage() == MaterializationStorage::Temporary &&
         slot.getAccess() != ExecutableAccess::ReadWrite) {
       return slot.emitOpError("temporary slots must be read-write");
+    }
+    ExecutableBindingKind expectedBinding = ExecutableBindingKind::None;
+    std::optional<int64_t> expectedIndex;
+    if (slot.getStorage() == MaterializationStorage::External &&
+        slot.getAccess() == ExecutableAccess::Read) {
+      expectedBinding = ExecutableBindingKind::Operand;
+      expectedIndex = operandBinding++;
+    } else if (slot.getStorage() == MaterializationStorage::External &&
+               slot.getAccess() == ExecutableAccess::Write) {
+      expectedBinding = ExecutableBindingKind::Result;
+      expectedIndex = resultBinding++;
+    }
+    if (slot.getBinding() != expectedBinding ||
+        slot.getBindingIndex() != expectedIndex) {
+      return slot.emitOpError(
+          "binding kind and index must be the structural external ABI order");
     }
   }
   if (ordinal == 0) {

@@ -355,6 +355,58 @@ TEST(CpuBytecodeRuntimeTest, ExecutesGeneratedBodyWithRawAbiBuffers) {
   EXPECT_EQ(buffers.output, expected);
 }
 
+TEST(CpuBytecodeRuntimeTest, CanonicalTransportLoadsAndExecutesImmutableBody) {
+  auto module = buildBundle();
+  ASSERT_TRUE(module);
+  auto bytes = mlir::shuttle::serializeCpuExecutableBundle(*module->module);
+  ASSERT_TRUE(mlir::succeeded(bytes));
+  EXPECT_EQ(mlir::shuttle::cpuExecutableBundleDigest(*bytes).size(), 64);
+  auto executable = mlir::shuttle::CpuExecutable::Load(*bytes);
+  ASSERT_TRUE(executable.ok()) << executable.status();
+  ASSERT_EQ((*executable)->externalBindings().size(), 3);
+  EXPECT_EQ((*executable)->externalBindings()[0].kind,
+            mlir::shuttle::ExecutableBindingKind::Operand);
+  EXPECT_EQ((*executable)->externalBindings()[0].index, 0);
+  EXPECT_EQ((*executable)->externalBindings()[0].slotOrdinal, 0);
+  EXPECT_EQ((*executable)->externalBindings()[1].kind,
+            mlir::shuttle::ExecutableBindingKind::Operand);
+  EXPECT_EQ((*executable)->externalBindings()[1].index, 1);
+  EXPECT_EQ((*executable)->externalBindings()[1].slotOrdinal, 1);
+  EXPECT_EQ((*executable)->externalBindings()[2].kind,
+            mlir::shuttle::ExecutableBindingKind::Result);
+  EXPECT_EQ((*executable)->externalBindings()[2].index, 0);
+  EXPECT_EQ((*executable)->externalBindings()[2].slotOrdinal, 20);
+
+  ExternalBuffers buffers;
+  populateInputs(buffers);
+  auto expected = independentReference(buffers);
+  auto views = buffers.views();
+  ASSERT_TRUE((*executable)->Execute(views).ok());
+  EXPECT_EQ(buffers.output, expected);
+
+  llvm::SmallVector<uint8_t> corrupted = *bytes;
+  corrupted[corrupted.size() / 2] ^= 1;
+  EXPECT_FALSE(mlir::shuttle::CpuExecutable::Load(corrupted).ok());
+  corrupted = *bytes;
+  corrupted.push_back(0);
+  EXPECT_FALSE(mlir::shuttle::CpuExecutable::Load(corrupted).ok());
+
+  auto selfConsistentInvalid = buildBundle();
+  ASSERT_TRUE(selfConsistentInvalid);
+  auto device =
+      *selfConsistentInvalid->module->getOps<mlir::shuttle::DeviceModuleOp>()
+           .begin();
+  llvm::SmallVector<int8_t> code(device.getCode());
+  code.front() ^= 1;
+  device.setCodeAttr(
+      mlir::DenseI8ArrayAttr::get(selfConsistentInvalid->context.get(), code));
+  refreshClosedFingerprints(*selfConsistentInvalid->module, true);
+  auto invalidBytes = mlir::shuttle::serializeCpuExecutableBundle(
+      *selfConsistentInvalid->module);
+  ASSERT_TRUE(mlir::succeeded(invalidBytes));
+  EXPECT_FALSE(mlir::shuttle::CpuExecutable::Load(*invalidBytes).ok());
+}
+
 TEST(CpuBytecodeRuntimeTest, ExecutesGeneratedVjpBodiesWithRawAbiBuffers) {
   for (llvm::StringRef boundary :
        {llvm::StringRef("backward"), llvm::StringRef("composed")}) {
