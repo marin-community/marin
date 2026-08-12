@@ -13,8 +13,49 @@ from optax import tree_utils as otu
 import haliax
 
 from levanter.optim.config import OptimizerConfig
-from levanter.optim.util import is_linear_like_module, label_linear_like_module
+from levanter.optim.util import is_linear_like_module, label_linear_like_module, norm_preserving_update
 from levanter.utils.jax_utils import leaf_key_paths
+
+
+def adamh_transform(
+    *,
+    max_grad_norm: Optional[float],
+    beta1: float,
+    beta2: float,
+    epsilon: float,
+    learning_rate: jax.Array | float,
+) -> optax.GradientTransformation:
+    """Optional global-norm clipping followed by the norm-preserving AdamH step.
+
+    ``scale_by_adamh`` already folds in the learning rate and the sign flip, so no
+    ``optax.scale`` is appended here.
+    """
+    components = []
+    if max_grad_norm:
+        components.append(optax.clip_by_global_norm(max_grad_norm))
+    components.append(scale_by_adamh(beta1, beta2, epsilon, learning_rate))
+    return optax.chain(*components)
+
+
+def adam_transform(
+    *,
+    max_grad_norm: Optional[float],
+    beta1: float,
+    beta2: float,
+    epsilon: float,
+    learning_rate: jax.Array | float,
+) -> optax.GradientTransformation:
+    """Optional global-norm clipping followed by a plain Adam descent step.
+
+    Used for the parameters that AdamH/MuonH route away from the norm-preserving path
+    (embeddings, biases, norms).
+    """
+    components = []
+    if max_grad_norm:
+        components.append(optax.clip_by_global_norm(max_grad_norm))
+    components.append(optax.scale_by_adam(beta1, beta2, epsilon))
+    components.append(optax.scale(-learning_rate))
+    return optax.chain(*components)
 
 
 @OptimizerConfig.register_subclass("adamH")
@@ -39,7 +80,6 @@ class AdamHConfig(OptimizerConfig):
     beta2: float = 0.95
     epsilon: float = 1e-8
     max_grad_norm: Optional[float] = 1.0
-    nesterov: bool = False
     adam_lr: float = 6e-4  # learning rate used for weight without weight decay
 
     def build(self, num_train_steps):
@@ -49,27 +89,21 @@ class AdamHConfig(OptimizerConfig):
 
         # indirection makes it work with optax.inject_hyperparams so we can log the learning rate
         def optimizer(learning_rate, adam_lr):
-
-            def adamh_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
-                optimizer = optax.chain(*components)
-                return optimizer
-
-            def adam_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
-                components.append(optax.scale(-adam_lr))
-                optimizer = optax.chain(*components)
-                return optimizer
-
             transformations = {
-                "adamh": adamh_transform(),
-                "adam": adam_transform(),
+                "adamh": adamh_transform(
+                    max_grad_norm=self.max_grad_norm,
+                    beta1=self.beta1,
+                    beta2=self.beta2,
+                    epsilon=self.epsilon,
+                    learning_rate=learning_rate,
+                ),
+                "adam": adam_transform(
+                    max_grad_norm=self.max_grad_norm,
+                    beta1=self.beta1,
+                    beta2=self.beta2,
+                    epsilon=self.epsilon,
+                    learning_rate=adam_lr,
+                ),
             }
 
             return optax.multi_transform(transformations, self.create_mask)
@@ -150,23 +184,8 @@ def scale_by_adamh(
         mu = otu.tree_cast(mu, mu_dtype)
 
         # projected training for linear weight
-        def scale_invariant_update(p, u):
-            if p is None:
-                return None
-            if p.ndim == 2:
-                # this is the case for no layer stacking
-                new_p = p - learning_rate * u * jnp.linalg.norm(p) / jnp.maximum(jnp.linalg.norm(u), 1e-10)
-                return new_p / jnp.linalg.norm(new_p) * jnp.linalg.norm(p) - p
-            else:
-                axes = tuple(range(1, p.ndim))
-                p_norm = jnp.sqrt(jnp.sum(jnp.square(p), axis=axes, keepdims=True))
-                u_norm = jnp.sqrt(jnp.sum(jnp.square(u), axis=axes, keepdims=True))
-                new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
-                new_p_norm = jnp.sqrt(jnp.sum(jnp.square(new_p), axis=axes, keepdims=True))
-                return new_p / jnp.maximum(new_p_norm, 1e-10) * p_norm - p
-
         adamh_updates = jax.tree_util.tree_map(
-            scale_invariant_update,
+            lambda p, u: norm_preserving_update(p, u, learning_rate),
             params,
             adam_updates,
             is_leaf=lambda x: x is None,

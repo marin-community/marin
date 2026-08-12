@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import NamedTuple
 
 import jax
-import jax.numpy as jnp
 import optax
 from optax import tree_utils as otu
 
@@ -17,10 +16,11 @@ from levanter.optim.util import (
     CoefficientType,
     label_linear_like_module,
     map_flattened_linear_layers,
+    norm_preserving_update,
     zeropower_via_newtonschulz5,
 )
 from levanter.utils.jax_utils import leaf_key_paths
-from levanter.optim.adamh import scale_by_adamh
+from levanter.optim.adamh import adam_transform, adamh_transform
 
 
 @OptimizerConfig.register_subclass("muonH")
@@ -76,27 +76,23 @@ class MuonHConfig(OptimizerConfig):
                 optimizer = optax.chain(*components)
                 return optimizer
 
-            def adamh_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
-                optimizer = optax.chain(*components)
-                return optimizer
-
-            def adam_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
-                components.append(optax.scale(-adam_lr))
-                optimizer = optax.chain(*components)
-                return optimizer
-
             transformations = {
                 "muonh": muonh_transform(),
-                "adamh": adamh_transform(),
-                "adam": adam_transform(),
+                "adamh": adamh_transform(
+                    max_grad_norm=self.max_grad_norm,
+                    beta1=self.beta1,
+                    beta2=self.beta2,
+                    epsilon=self.epsilon,
+                    learning_rate=learning_rate,
+                ),
+                # self.nesterov applies to the Muon momentum buffer, not to this Adam branch.
+                "adam": adam_transform(
+                    max_grad_norm=self.max_grad_norm,
+                    beta1=self.beta1,
+                    beta2=self.beta2,
+                    epsilon=self.epsilon,
+                    learning_rate=adam_lr,
+                ),
             }
 
             return optax.multi_transform(transformations, self.create_mask)
@@ -176,23 +172,8 @@ def scale_with_muonh(
         muon_updates = map_flattened_linear_layers(transform_linear_layer, updates)
 
         # projected training for linear weight
-        def scale_invariant_update(p, u):
-            if p is None:
-                return None
-            if p.ndim == 2:
-                # this is the case for no layer stacking
-                new_p = p - learning_rate * u * jnp.linalg.norm(p) / jnp.maximum(jnp.linalg.norm(u), 1e-10)
-                return new_p / jnp.linalg.norm(new_p) * jnp.linalg.norm(p) - p
-            else:
-                axes = tuple(range(1, p.ndim))
-                p_norm = jnp.sqrt(jnp.sum(jnp.square(p), axis=axes, keepdims=True))
-                u_norm = jnp.sqrt(jnp.sum(jnp.square(u), axis=axes, keepdims=True))
-                new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
-                new_p_norm = jnp.sqrt(jnp.sum(jnp.square(new_p), axis=axes, keepdims=True))
-                return new_p / jnp.maximum(new_p_norm, 1e-10) * p_norm - p
-
         muonh_updates = jax.tree_util.tree_map(
-            scale_invariant_update,
+            lambda p, u: norm_preserving_update(p, u, learning_rate),
             params,
             muon_updates,
             is_leaf=lambda x: x is None,
