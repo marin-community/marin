@@ -163,6 +163,17 @@ jobs:
           [ "$status" -eq 5 ] && exit 0
           exit "$status"
 
+  notify_slow_tests:
+    needs: slow
+    if: ${{ always() && github.event_name == 'schedule' && needs.slow.result == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        uses: marin-community/marin-style/actions/notify-slack@main
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: ":red_circle: *Nightly slow tests failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
   levanter_torch:
     name: levanter-torch
     needs: select
