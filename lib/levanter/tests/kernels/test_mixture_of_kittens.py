@@ -17,6 +17,7 @@ from levanter.kernels.mixture_of_kittens import (
     MokLikeConfig,
     MokLikeForwardXStorage,
     initialize_mok_like_runtime,
+    mok_like_reference,
     mok_like_preflight_status,
     mok_like_runtime_initialized,
     validate_mok_like_expert_groups,
@@ -622,6 +623,39 @@ def test_runtime_failure_gate_uses_rank_phase_point_and_concurrency_abi(tmp_path
 
     assert arm_failure.calls == [(2, 1, 1, 1)]
     assert arm_failure.argtypes == [runtime.ctypes.c_int] * 4
+
+
+def test_reference_caps_ring_capacity_to_assignment_population() -> None:
+    mesh = jax.sharding.AbstractMesh(
+        (1, 1, 4, 1),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(jax.sharding.AxisType.Explicit,) * 4,
+    )
+    x = jax.ShapeDtypeStruct((2048, 256), jnp.bfloat16)
+    selected_experts = jax.ShapeDtypeStruct((2048, 4), jnp.int32)
+    combine_weights = jax.ShapeDtypeStruct((2048, 4), jnp.float32)
+    routed_weight = jax.ShapeDtypeStruct((8, 256, 256), jnp.bfloat16)
+    shared_weight = jax.ShapeDtypeStruct((256, 256), jnp.bfloat16)
+
+    output = jax.eval_shape(
+        lambda *arguments: mok_like_reference(
+            *arguments,
+            mesh=mesh,
+            config=MokLikeConfig(schedule_capacity_factor=4, workspace_slots=2),
+            fallback_implementation="ring",
+        ),
+        x,
+        selected_experts,
+        combine_weights,
+        routed_weight,
+        routed_weight,
+        routed_weight,
+        shared_weight,
+        shared_weight,
+        shared_weight,
+    )
+
+    assert output.shape == x.shape
 
 
 def test_generated_peer_wait_validator_requires_cancellation_on_every_wait() -> None:

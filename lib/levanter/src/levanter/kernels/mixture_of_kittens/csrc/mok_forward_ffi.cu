@@ -488,24 +488,20 @@ class RuntimeManager {
   }
 
   bool ConsumeTestFailure(int rank, InvocationPhase phase, TestFailurePoint point) {
-    std::unique_lock<std::mutex> lock(mu_);
+    std::lock_guard<std::mutex> lock(mu_);
     if (!test_failure_armed_ || test_failure_rank_ != rank || test_failure_phase_ != phase ||
         test_failure_point_ != point) {
       return false;
     }
     if (test_failure_require_two_active_slots_) {
-      const bool both_slots_active = cv_.wait_for(lock, kWorkspaceAcquireTimeout, [&] {
-        const int fully_leased_invocations = static_cast<int>(std::count_if(
-            invocations_.begin(), invocations_.end(), [](const auto& item) {
-              return !item.second->cancelled && item.second->leased_mask == kAllRanksMask;
-            }));
-        return !test_failure_armed_ || fully_leased_invocations >= 2;
-      });
-      if (!both_slots_active) {
-        test_failure_armed_ = false;
-        throw std::runtime_error("Mixture-of-Kittens concurrent failure gate did not occupy both workspace slots");
-      }
-      if (!test_failure_armed_) {
+      const int fully_leased_invocations = static_cast<int>(std::count_if(
+          invocations_.begin(), invocations_.end(), [](const auto& item) {
+            return !item.second->cancelled && item.second->leased_mask == kAllRanksMask;
+          }));
+      // PJRT may serialize host callbacks for one device. Never wait inside the
+      // target callback for that same device's next callback: leave the hook
+      // armed and let the first matching invocation proceed normally.
+      if (fully_leased_invocations < 2) {
         return false;
       }
     }

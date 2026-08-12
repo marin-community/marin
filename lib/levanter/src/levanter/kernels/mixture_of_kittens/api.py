@@ -477,6 +477,17 @@ def mok_like_reference(
     fallback_implementation: MoeImplementation,
 ) -> jax.Array:
     """Run the JAX forward used to differentiate the fused call."""
+    expert_axis_size = int(mesh.shape[_EXPERT_AXIS])
+    reference_capacity_factor = schedule_capacity(
+        x.shape[0] // expert_axis_size,
+        selected_experts.shape[1],
+        w_gate.shape[0] // expert_axis_size,
+        config,
+    ) / ((x.shape[0] // expert_axis_size) * selected_experts.shape[1])
+    if fallback_implementation == "ring":
+        # Ring selects from all assignments on one expert rank; padding
+        # capacity past that population is invalid for lax.top_k.
+        reference_capacity_factor = min(reference_capacity_factor, float(expert_axis_size))
     routed = moe_mlp(
         x,
         selected_experts,
@@ -486,15 +497,7 @@ def mok_like_reference(
         activation=ActivationFunctionEnum.silu,
         implementation=fallback_implementation,
         mesh=mesh,
-        capacity_factor=(
-            schedule_capacity(
-                x.shape[0] // int(mesh.shape[_EXPERT_AXIS]),
-                selected_experts.shape[1],
-                w_gate.shape[0] // int(mesh.shape[_EXPERT_AXIS]),
-                config,
-            )
-            / ((x.shape[0] // int(mesh.shape[_EXPERT_AXIS])) * selected_experts.shape[1])
-        ),
+        capacity_factor=reference_capacity_factor,
     )
     if isinstance(routed, tuple):
         raise AssertionError("The fallback MoE returned capacity data when only output was requested")
