@@ -603,3 +603,13 @@ author: Rafal Wojdyla
 - Error check: No new transport, retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the last 15 minutes.
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Next action: Continue the 15-minute check cadence. Monitor the expected FineTranslations completion near 13:22 UTC and the next RNO source start.
+
+### 2026-08-12 13:29 UTC - RNO completes FineTranslations and GLM KernelGym
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 35 completed source artifacts. RNO has eight completed source artifacts. The full run has 43 of 292 completed source artifacts.
+- RNO result: `finetranslations_6ce00a47` succeeded with all 25,962 output shards and 111,482,016 duplicate documents. Final counters prove that all 25 shards from the 12:18 transport event completed after one shard retry.
+- RNO result: `glm-5.2-kernelgym-rollouts_70abd4f9` succeeded with its one output shard and 456 duplicate documents.
+- RNO progress: `hplt_v3_528b745e` started. Its 6,330-shard join stage got to 510 completed shards with 32 live workers and no dead workers.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Next action: Continue the 15-minute check cadence and monitor HPLT through its join and embedding stages.
