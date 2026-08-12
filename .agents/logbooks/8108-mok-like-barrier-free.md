@@ -632,3 +632,24 @@ W&B: https://wandb.ai/marin-community/marin_moe/runs/mok-like-ab-mok-like-100-20
 - Evidence: process-zero telemetry reached 775,573.875 MiB RSS before the kill, 79.25% process memory, and 93.25% system memory. XLA reported a 288.94 GiB rematerialized device plan against a 176.70 GiB target, but device allocation remained about 156.7 GiB/GPU; the Kubernetes event identifies host/container memory as the failing resource. The successful four-GPU and two-node runs peaked at 827,916.625 and 832,662.0625 MiB RSS under the same graph, showing that the 850 GiB pod limit has little compile headroom.
 - Decision: request 900 GiB per four-GB200 task. The cluster advertises about 955.5 GiB allocatable memory per GB200 node, so this adds 50 GiB of cgroup headroom without changing the model, mesh, XLA graph, allocator, or numerical contract. Run one rack before two racks because the same per-process compile peak applies to both topologies.
 - Next action: launch a new 16-node, 25-update attempt-zero identity from a clean pushed snapshot. Require all 16 tasks to compile, 25 finite zero-drop rows, exact all-process runtime telemetry, and at least 80% weak-scale efficiency before requesting two racks.
+
+### 2026-08-12 10:18 PT - One-rack 900 GiB retry prepared
+
+- DRI: dlwh. Source: clean pushed branch `codex/upstream-mok-like` at `c8558b7cfa62133d427dba5f509d7c1542d451ed`; native schema v12 with pinned MoK and ThunderKittens revisions unchanged. The launcher requests 16 tasks, each with four GB200s, 96 CPUs, 900 GiB RAM, and 1 TiB disk. Current Iris budget spend is zero under the 128,000 interactive limit.
+- Contract: local EP4/DP16, global batch 1,024, 48 layers, 25 optimizer updates, strict factor-four capacity, one workspace slot, forward XLA-peer storage, staged backward storage, shared eager cuda-async at fraction 0.80, local-only autotune cache, profile steps 5-9, and zero retries or tolerated task failures. The run writes metrics and a profile but no final model checkpoint; `initialize_from` is unset.
+- Output identity: artifact `grug/moe-backend-comparison/mok_like/mok-scale-006-v12-dropless-1rack-ram900-25-20260812-1018/c8558b7cfa`; W&B id/name `mok-scale-006-v12-dropless-1rack-ram900-25-20260812-1018`, project `marin-community/marin_moe`, group `moe-backend-comparison-1rack`, resume `allow`.
+- Exact submission, with the secret value scrubbed:
+
+  ```bash
+  .venv/bin/python -c 'import iris.cluster.platforms.k8s.service as service; from iris.cluster.platforms.types import find_free_port; service.find_free_port = lambda start=10000: find_free_port(); from iris.cli.main import main; main()' \
+    --config lib/iris/config/cw-us-east-08a.yaml job run --no-wait --enable-extra-resources \
+    --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 \
+    --job-name mok-scale-006-v12-dropless-1rack-ram900-25-20260812-1018-coord \
+    -e WANDB_API_KEY '<redacted>' -e WANDB_PROJECT marin_moe -- \
+    .venv/bin/python -m experiments.grug.moe_hero_ep.launch_mok_like \
+      --run-id mok-scale-006-v12-dropless-1rack-ram900-25-20260812-1018 \
+      --backend mok_like --num-steps 25 --num-nodes 16 \
+      --mok-like-preset promoted_dropless_v12 --version c8558b7cfa --run
+  ```
+
+- Acceptance: all 16 tasks and coordinator terminal-successful; 25 finite losses with exact zero drops; 4,800 forward and 4,800 backward handlers per process; forward staging zero; exact staged-backward bytes/calls; slot one unused with maximum active slots one; zero generation, reuse, trim, or protocol anomalies. Score steps 10-24 and require at least 80% weak-scale efficiency before launching two racks.
