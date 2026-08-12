@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "manifest_id": "target1_te_2_17_oracle_runner_build_v1",
+  "runner": {
+    "path": "lib/shuttle/mlir/jax_patch/target1_te_oracle_runner.cpp",
+    "sha256": "6bbec708db6b9a70a9702ef1a70ed632c5ccc297beb1c2afab073c9ca0734e62",
+    "language": "c++20",
+    "dispatch": "boundary_shape_and_independent_backend_flags_only"
+  },
+  "provider": {
+    "distribution": "transformer_engine",
+    "version": "2.17.0",
+    "tag": "v2.17",
+    "commit": "2e559f062497bef768dfbe9d7e45548fadeca80a",
+    "headers": [
+      "transformer_engine/common/include/transformer_engine/transformer_engine.h",
+      "transformer_engine/common/include/transformer_engine/normalization.h"
+    ]
+  },
+  "static_abi_gate": {
+    "status": "passed_on_clean_official_checkout",
+    "scope": "c++20_syntax_and_exact_public_header_signatures_no_link",
+    "host": "darwin_arm64",
+    "compiler_family": "apple_clang",
+    "cuda_declarations": "test_only_stub_no_runtime_implementation"
+  },
+  "build": {
+    "cuda_link_status": "blocked_not_attempted_on_macos",
+    "required_libraries": ["transformer_engine", "cudart"],
+    "resolved_compiler": null,
+    "build_flags": null,
+    "target_architectures": null,
+    "runner_binary_sha256": null,
+    "transformer_engine_library_sha256": null
+  },
+  "execution": {
+    "status": "blocked_not_executed",
+    "hardware_results": [],
+    "oracle_relative_thresholds": null,
+    "scorecard_status_changed": false
+  }
+}
