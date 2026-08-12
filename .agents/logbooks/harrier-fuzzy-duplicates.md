@@ -484,3 +484,16 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of root logs.
 - Next action: Continue the 15-minute check cadence and monitor both active sources.
+
+### 2026-08-12 10:48 UTC - East completes four Common Pile sources
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 29 completed source artifacts. RNO has six completed source artifacts. The full run has 35 of 292 completed source artifacts.
+- East result: `cp-github_archive_540aca13` succeeded with all 56 output shards and 1,598,567 documents.
+- East result: `cp-libretexts_9aa4c8ae` succeeded with its one output shard and 26,947 documents.
+- East result: `cp-oercommons_26367272` succeeded with its one output shard and 1,766 documents.
+- East result: `cp-peps_c79187ca` succeeded with its one output shard and 593 documents.
+- East progress: `cp-pressbooks_4e5ce25d` started. It has one output shard and its worker is alive.
+- RNO progress: `finetranslations_6ce00a47` got to 15,673 of 25,962 output shards with 32 live workers and no dead workers.
+- Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the active source logs.
+- Next action: Continue the 15-minute check cadence and monitor both active sources.
