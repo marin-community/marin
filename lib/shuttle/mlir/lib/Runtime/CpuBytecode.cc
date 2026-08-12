@@ -494,6 +494,12 @@ uint16_t roundF32ToBf16Rne(uint32_t bits) {
 LogicalResult
 executeCpuExecutableBundle(ModuleOp module,
                            ArrayRef<CpuExternalBuffer> externalBuffers) {
+  for (Operation &operation : module.getBody()->without_terminator()) {
+    if (!isa<DeviceModuleOp, InvocationAbiOp, ExecutableBundleOp>(operation)) {
+      return runtimeError(
+          module, "CPU executable module contains an unstripped sidecar");
+    }
+  }
   SmallVector<DeviceModuleOp> devices(module.getOps<DeviceModuleOp>());
   SmallVector<InvocationAbiOp> abis(module.getOps<InvocationAbiOp>());
   SmallVector<ExecutableBundleOp> bundles(module.getOps<ExecutableBundleOp>());

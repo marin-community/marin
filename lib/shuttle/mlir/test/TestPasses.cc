@@ -1478,6 +1478,25 @@ public:
   }
 };
 
+class ScheduleSourcePlanFingerprintPass
+    : public MutationPass<ScheduleSourcePlanFingerprintPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      ScheduleSourcePlanFingerprintPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-mutate-schedule-source-plan";
+  }
+  void runOnOperation() override {
+    SchedulePlanOp plan = schedulePlan(getOperation());
+    if (!plan) {
+      getOperation().emitError("test fixture has no schedule plan");
+      return signalPassFailure();
+    }
+    plan.setSourcePlanFingerprint(std::string(64, '0'));
+    refreshScheduleFingerprint(plan);
+  }
+};
+
 class ScheduleTypePass : public MutationPass<ScheduleTypePass> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScheduleTypePass)
@@ -1851,6 +1870,7 @@ void registerMutationPasses() {
   PassRegistration<ScheduleDeleteTaskPass>();
   PassRegistration<ScheduleSelfConsistentReorderPass>();
   PassRegistration<ScheduleReplaySourceTaskPass>();
+  PassRegistration<ScheduleSourcePlanFingerprintPass>();
   PassRegistration<ScheduleTypePass>();
   PassRegistration<ClonePlanPass<MaterializationPlanOp>>();
   PassRegistration<ClonePlanPass<SchedulePlanOp>>();

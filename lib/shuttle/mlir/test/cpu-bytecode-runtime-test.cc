@@ -387,4 +387,18 @@ TEST(CpuBytecodeRuntimeTest, RejectsInvalidDynamicBufferBindings) {
       mlir::shuttle::executeCpuExecutableBundle(*bundle->module, aliased)));
 }
 
+TEST(CpuBytecodeRuntimeTest, RejectsUnstrippedModuleSidecars) {
+  auto bundle = buildBundle();
+  ASSERT_TRUE(bundle);
+  mlir::OpBuilder builder(bundle->context.get());
+  builder.setInsertionPointToStart(bundle->module->getBody());
+  builder.create<mlir::func::FuncOp>(bundle->module->getLoc(), "source_sidecar",
+                                     builder.getFunctionType({}, {}));
+  ExternalBuffers buffers;
+  populateInputs(buffers);
+  auto views = buffers.views();
+  EXPECT_TRUE(mlir::failed(
+      mlir::shuttle::executeCpuExecutableBundle(*bundle->module, views)));
+}
+
 } // namespace

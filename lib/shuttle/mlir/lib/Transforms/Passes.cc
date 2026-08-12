@@ -3538,6 +3538,59 @@ public:
   }
 };
 
+LogicalResult
+verifySchedulePlanAgainstMaterialization(MaterializationPlanOp source,
+                                         SchedulePlanOp schedule) {
+  if (schedule.getTarget() != ScheduleTarget::Simt32 ||
+      schedule.getPolicy() != source.getPolicy() ||
+      schedule.getSourcePlanFingerprint() != source.getFingerprint()) {
+    return schedule.emitOpError(
+        "target, policy, and source fingerprint must bind materialization");
+  }
+  SmallVector<MaterializationBufferOp> sourceBuffers(
+      source.getBody().front().getOps<MaterializationBufferOp>());
+  SmallVector<MaterializationTaskOp> sourceTasks(
+      source.getBody().front().getOps<MaterializationTaskOp>());
+  SmallVector<ScheduleBufferOp> buffers(
+      schedule.getBody().front().getOps<ScheduleBufferOp>());
+  SmallVector<ScheduleTaskOp> tasks(
+      schedule.getBody().front().getOps<ScheduleTaskOp>());
+  if (buffers.size() != sourceBuffers.size() ||
+      tasks.size() != sourceTasks.size()) {
+    return schedule.emitOpError(
+        "must cover every materialization buffer and task exactly once");
+  }
+  for (auto [ordinal, actual, expected] :
+       llvm::enumerate(buffers, sourceBuffers)) {
+    if (actual.getSourceBuffer() != static_cast<int64_t>(ordinal) ||
+        actual.getTensorType() != expected.getTensorType() ||
+        actual.getLifetimeStart() != expected.getLifetimeStart() ||
+        actual.getLifetimeEnd() != expected.getLifetimeEnd()) {
+      return actual.emitOpError(
+          "schedule buffer type and lifetime must equal materialization");
+    }
+  }
+  for (auto [ordinal, actual, expected] : llvm::enumerate(tasks, sourceTasks)) {
+    ScheduleTaskKind expectedKind =
+        expected.getKind() == MaterializationTaskKind::Fold
+            ? ScheduleTaskKind::RowFold
+            : (expected.getDomainShape().empty()
+                   ? ScheduleTaskKind::Scalar
+                   : ScheduleTaskKind::Elementwise);
+    if (actual.getSourceTask() != static_cast<int64_t>(ordinal) ||
+        actual.getKind() != expectedKind ||
+        actual.getDomainShape() != expected.getDomainShape() ||
+        actual.getInputBuffers() != expected.getInputBuffers() ||
+        actual.getOutputBuffers() != expected.getOutputBuffers() ||
+        actual.getDependencies() != expected.getDependencies() ||
+        actual.getSemanticFingerprint() != expected.getSemanticFingerprint()) {
+      return actual.emitOpError(
+          "schedule dependencies must equal the materialization task");
+    }
+  }
+  return success();
+}
+
 class VerifySimt32RowFoldSchedulePass
     : public impl::ShuttleVerifySimt32RowFoldSchedulePassBase<
           VerifySimt32RowFoldSchedulePass> {
@@ -3550,65 +3603,12 @@ public:
     if (materializationPlans.size() != 1 || schedules.size() != 1 ||
         failed(verifyMaterializationPlanAgainstSource(
             module, materializationPlans.front())) ||
-        failed(schedules.front().verifyRegions())) {
+        failed(schedules.front().verifyRegions()) ||
+        failed(verifySchedulePlanAgainstMaterialization(
+            materializationPlans.front(), schedules.front()))) {
       module.emitError(
           "requires exactly one valid materialization and schedule plan");
       return signalPassFailure();
-    }
-    MaterializationPlanOp source = materializationPlans.front();
-    SchedulePlanOp schedule = schedules.front();
-    if (schedule.getTarget() != ScheduleTarget::Simt32 ||
-        schedule.getPolicy() != source.getPolicy() ||
-        schedule.getSourcePlanFingerprint() != source.getFingerprint()) {
-      schedule.emitOpError(
-          "target, policy, and source fingerprint must bind materialization");
-      return signalPassFailure();
-    }
-    SmallVector<MaterializationBufferOp> sourceBuffers(
-        source.getBody().front().getOps<MaterializationBufferOp>());
-    SmallVector<MaterializationTaskOp> sourceTasks(
-        source.getBody().front().getOps<MaterializationTaskOp>());
-    SmallVector<ScheduleBufferOp> buffers(
-        schedule.getBody().front().getOps<ScheduleBufferOp>());
-    SmallVector<ScheduleTaskOp> tasks(
-        schedule.getBody().front().getOps<ScheduleTaskOp>());
-    if (buffers.size() != sourceBuffers.size() ||
-        tasks.size() != sourceTasks.size()) {
-      schedule.emitOpError(
-          "must cover every materialization buffer and task exactly once");
-      return signalPassFailure();
-    }
-    for (auto [ordinal, actual, expected] :
-         llvm::enumerate(buffers, sourceBuffers)) {
-      if (actual.getSourceBuffer() != static_cast<int64_t>(ordinal) ||
-          actual.getTensorType() != expected.getTensorType() ||
-          actual.getLifetimeStart() != expected.getLifetimeStart() ||
-          actual.getLifetimeEnd() != expected.getLifetimeEnd()) {
-        actual.emitOpError(
-            "schedule buffer type and lifetime must equal materialization");
-        return signalPassFailure();
-      }
-    }
-    for (auto [ordinal, actual, expected] :
-         llvm::enumerate(tasks, sourceTasks)) {
-      ScheduleTaskKind expectedKind =
-          expected.getKind() == MaterializationTaskKind::Fold
-              ? ScheduleTaskKind::RowFold
-              : (expected.getDomainShape().empty()
-                     ? ScheduleTaskKind::Scalar
-                     : ScheduleTaskKind::Elementwise);
-      if (actual.getSourceTask() != static_cast<int64_t>(ordinal) ||
-          actual.getKind() != expectedKind ||
-          actual.getDomainShape() != expected.getDomainShape() ||
-          actual.getInputBuffers() != expected.getInputBuffers() ||
-          actual.getOutputBuffers() != expected.getOutputBuffers() ||
-          actual.getDependencies() != expected.getDependencies() ||
-          actual.getSemanticFingerprint() !=
-              expected.getSemanticFingerprint()) {
-        actual.emitOpError(
-            "schedule dependencies must equal the materialization task");
-        return signalPassFailure();
-      }
     }
   }
 };
@@ -3976,7 +3976,9 @@ public:
         !module.getOps<ExecutableBundleOp>().empty() ||
         failed(verifyMaterializationPlanAgainstSource(
             module, materializations.front())) ||
-        failed(schedules.front().verifyRegions())) {
+        failed(schedules.front().verifyRegions()) ||
+        failed(verifySchedulePlanAgainstMaterialization(
+            materializations.front(), schedules.front()))) {
       module.emitError(
           "requires one source-bound plan and no executable bundle");
       return signalPassFailure();
@@ -4137,6 +4139,8 @@ LogicalResult verifyCpuExecutableAgainstSource(ModuleOp module) {
       failed(verifyMaterializationPlanAgainstSource(
           module, materializations.front())) ||
       failed(schedules.front().verifyRegions()) ||
+      failed(verifySchedulePlanAgainstMaterialization(materializations.front(),
+                                                      schedules.front())) ||
       failed(devices.front().verifyRegions()) ||
       failed(abis.front().verifyRegions()) ||
       failed(bundles.front().verify())) {
