@@ -497,3 +497,17 @@ author: Rafal Wojdyla
 - RNO progress: `finetranslations_6ce00a47` got to 15,673 of 25,962 output shards with 32 live workers and no dead workers.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the active source logs.
 - Next action: Continue the 15-minute check cadence and monitor both active sources.
+
+### 2026-08-12 10:56 UTC - East completes four more Common Pile sources
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 33 completed source artifacts. RNO has six completed source artifacts. The full run has 39 of 292 completed source artifacts.
+- East result: `cp-pressbooks_4e5ce25d` succeeded with its one output shard and 32,931 documents.
+- East result: `cp-public_domain_review_9221823d` succeeded with its one output shard and 1,038 documents.
+- East result: `cp-regulations_99079523` succeeded with all four output shards and 150,779 documents.
+- East result: `cp-ubuntu_irc_e64c4be0` succeeded with all six output shards and 27,525 documents.
+- East progress: `cp-usgpo_1e7881f3` started. It has 36 output shards, with 32 in flight, 32 live workers, and no dead workers.
+- RNO progress: `finetranslations_6ce00a47` got to approximately 16,333 of 25,962 output shards with 32 live workers and no dead workers.
+- Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
+- Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of root logs.
+- Next action: Continue the 15-minute check cadence and monitor both active sources.
