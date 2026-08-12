@@ -321,6 +321,11 @@ has useful generic row/column Fold code and corrected H100 and GB200 timing
 artifacts. It imports StableHLO into Python objects and dispatches typed FFI
 outside the current Shuttle MLIR path. It is reference-only for this work.
 
+The proposed native XLA Host consumer is specified in the
+[`shuttle_xla_cpu_typed_ffi_consumer_design.md`](shuttle_xla_cpu_typed_ffi_consumer_design.md).
+Its first gate is only the `7x13` forward `SOURCE_ORDERED` fixture and does not
+close a representative, hardware, performance, or acceptance cell.
+
 ## Smallest test-first sequence
 
 The implemented Reduce/Fold provenance, ordering, initializer, lowering, and

@@ -178,6 +178,10 @@ One of these ownership models must be selected before executable IR is useful:
    operand/result ABI, code-object lifecycle, stream ownership, and error
    propagation.
 
+The bounded Host form of the second model is specified in the
+[`shuttle_xla_cpu_typed_ffi_consumer_design.md`](shuttle_xla_cpu_typed_ffi_consumer_design.md).
+That document is a design, not an implemented XLA path or acceptance claim.
+
 The second model also needs a proof that replacing the StableHLO region with the
 call preserves source coverage and that compilation cache identity includes the
 device ABI, code generator, target profile, and code-object digest. Either model
