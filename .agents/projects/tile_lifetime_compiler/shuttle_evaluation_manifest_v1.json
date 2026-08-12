@@ -1,0 +1,2340 @@
+{
+  "schema_version": 1,
+  "manifest_id": "shuttle_evaluation_v1",
+  "baseline_commit": "92b5dd7da84492d3766a51b8cb915a08b2a9e56a",
+  "acceptance_thresholds": {
+    "oracle_latency_ratio": 1.2,
+    "stretch_oracle_latency_ratio": 1.1
+  },
+  "shapes": [
+    {
+      "id": "tanh_dot_primary_f32",
+      "declaration_status": "accepted",
+      "specification": "x:f32[2,3], w0:f32[3,4], w1:f32[4,5], output_cotangent:f32[2,5]"
+    },
+    {
+      "id": "rmsnorm_representative_pending",
+      "declaration_status": "blocked",
+      "specification": "Representative shape and exact public layouts remain to be declared before timing."
+    },
+    {
+      "id": "layernorm_representative_pending",
+      "declaration_status": "blocked",
+      "specification": "Representative shape and exact public layouts remain to be declared before timing."
+    },
+    {
+      "id": "dot_product_attention_representative_pending",
+      "declaration_status": "blocked",
+      "specification": "Representative shape and exact public layouts remain to be declared before timing."
+    },
+    {
+      "id": "msa_representative_pending",
+      "declaration_status": "blocked",
+      "specification": "Representative shape and exact public layouts remain to be declared before timing."
+    },
+    {
+      "id": "gated_delta_net_representative_pending",
+      "declaration_status": "blocked",
+      "specification": "Representative shape and exact public layouts remain to be declared before timing."
+    },
+    {
+      "id": "dense_transformer_block_representative_pending",
+      "declaration_status": "blocked",
+      "specification": "Representative shape and exact public layouts remain to be declared before timing."
+    },
+    {
+      "id": "local_moe_mlp_representative_pending",
+      "declaration_status": "blocked",
+      "specification": "Representative shape and exact public layouts remain to be declared before timing."
+    },
+    {
+      "id": "distributed_moe_representative_pending",
+      "declaration_status": "blocked",
+      "specification": "Representative shape and exact public layouts remain to be declared before timing."
+    },
+    {
+      "id": "grug_moe_representative_pending",
+      "declaration_status": "blocked",
+      "specification": "Representative shape and exact public layouts remain to be declared before timing."
+    },
+    {
+      "id": "complete_grug_train_step_representative_pending",
+      "declaration_status": "blocked",
+      "specification": "Representative shape and exact public layouts remain to be declared before timing."
+    }
+  ],
+  "evidence": [
+    {
+      "id": "cpu_ordinary_jax_acceptance6",
+      "path": "lib/shuttle/mlir/artifacts/native-preflight-20260810-jaxacceptance6/acceptance-summary.txt",
+      "source_commit": "6340706df454d699124fc7b676499f5db9cccd4a",
+      "record_commit": "35be60b001cf3af12c00fdf61279e4acf3696a00",
+      "sha256": "70b27ee83b3d8ee463de09a6ae6dce3f50ddbf99573a068eab66bc29c47197ed",
+      "architecture_conformance": "conforming",
+      "format": "cpu_ordinary_jax_acceptance_v1"
+    }
+  ],
+  "excluded_evidence": [
+    {
+      "id": "direct_h100_contract_map_backend",
+      "path": ".agents/projects/tile_lifetime_compiler/h100_contract_map_backend_evidence.md",
+      "source_commit": "92b5dd7da84492d3766a51b8cb915a08b2a9e56a",
+      "record_commit": "92b5dd7da84492d3766a51b8cb915a08b2a9e56a",
+      "sha256": "31d071ccaaccee4f84e0ffe7ed000a846fe76e209cb1efe7513ec5d99240d69d",
+      "architecture_conformance": "nonconforming",
+      "format": "architecture_status_document_v1",
+      "exclusion_reason": "architecture_nonconforming"
+    }
+  ],
+  "targets": [
+    {
+      "id": 0,
+      "name": "jax_xla_plugin_and_stablehlo_conversion",
+      "status": "partial",
+      "required_boundaries": [
+        "forward",
+        "backward"
+      ],
+      "required_shapes": [
+        "tanh_dot_primary_f32"
+      ],
+      "required_policies": [
+        "source_ordered",
+        "fast"
+      ],
+      "required_hardware": [
+        "cpu",
+        "h100",
+        "gb200_or_b200"
+      ],
+      "blockers": [
+        "architecture_path_unavailable",
+        "performance_evidence_missing"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "rmsnorm",
+      "status": "blocked",
+      "required_boundaries": [
+        "forward",
+        "backward",
+        "composed_forward_backward"
+      ],
+      "required_shapes": [
+        "rmsnorm_representative_pending"
+      ],
+      "required_policies": [
+        "source_ordered",
+        "fast"
+      ],
+      "required_hardware": [
+        "h100",
+        "gb200_or_b200"
+      ],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "layernorm",
+      "status": "blocked",
+      "required_boundaries": [
+        "forward",
+        "backward",
+        "composed_forward_backward"
+      ],
+      "required_shapes": [
+        "layernorm_representative_pending"
+      ],
+      "required_policies": [
+        "source_ordered",
+        "fast"
+      ],
+      "required_hardware": [
+        "h100",
+        "gb200_or_b200"
+      ],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "dot_product_attention",
+      "status": "blocked",
+      "required_boundaries": [
+        "forward",
+        "backward",
+        "composed_forward_backward"
+      ],
+      "required_shapes": [
+        "dot_product_attention_representative_pending"
+      ],
+      "required_policies": [
+        "source_ordered",
+        "fast"
+      ],
+      "required_hardware": [
+        "h100",
+        "gb200_or_b200"
+      ],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "msa",
+      "status": "blocked",
+      "required_boundaries": [
+        "forward",
+        "backward",
+        "composed_forward_backward"
+      ],
+      "required_shapes": [
+        "msa_representative_pending"
+      ],
+      "required_policies": [
+        "source_ordered",
+        "fast"
+      ],
+      "required_hardware": [
+        "h100",
+        "gb200_or_b200"
+      ],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "gated_delta_net",
+      "status": "blocked",
+      "required_boundaries": [
+        "forward",
+        "backward",
+        "composed_forward_backward"
+      ],
+      "required_shapes": [
+        "gated_delta_net_representative_pending"
+      ],
+      "required_policies": [
+        "source_ordered",
+        "fast"
+      ],
+      "required_hardware": [
+        "h100",
+        "gb200_or_b200"
+      ],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "dense_transformer_block",
+      "status": "blocked",
+      "required_boundaries": [
+        "forward",
+        "backward",
+        "composed_forward_backward"
+      ],
+      "required_shapes": [
+        "dense_transformer_block_representative_pending"
+      ],
+      "required_policies": [
+        "source_ordered",
+        "fast"
+      ],
+      "required_hardware": [
+        "h100",
+        "gb200_or_b200"
+      ],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "local_moe_mlp",
+      "status": "blocked",
+      "required_boundaries": [
+        "forward",
+        "backward",
+        "composed_forward_backward"
+      ],
+      "required_shapes": [
+        "local_moe_mlp_representative_pending"
+      ],
+      "required_policies": [
+        "source_ordered",
+        "fast"
+      ],
+      "required_hardware": [
+        "h100",
+        "gb200_or_b200"
+      ],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "id": 8,
+      "name": "distributed_moe",
+      "status": "blocked",
+      "required_boundaries": [
+        "forward",
+        "backward",
+        "composed_forward_backward"
+      ],
+      "required_shapes": [
+        "distributed_moe_representative_pending"
+      ],
+      "required_policies": [
+        "source_ordered",
+        "fast"
+      ],
+      "required_hardware": [
+        "gb200x4"
+      ],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "id": 9,
+      "name": "grug_moe",
+      "status": "blocked",
+      "required_boundaries": [
+        "forward",
+        "backward",
+        "composed_forward_backward"
+      ],
+      "required_shapes": [
+        "grug_moe_representative_pending"
+      ],
+      "required_policies": [
+        "source_ordered",
+        "fast"
+      ],
+      "required_hardware": [
+        "gb200x4"
+      ],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "id": 10,
+      "name": "complete_grug_train_step",
+      "status": "blocked",
+      "required_boundaries": [
+        "forward",
+        "backward",
+        "composed_forward_backward",
+        "train_step"
+      ],
+      "required_shapes": [
+        "complete_grug_train_step_representative_pending"
+      ],
+      "required_policies": [
+        "source_ordered",
+        "fast"
+      ],
+      "required_hardware": [
+        "gb200x4"
+      ],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    }
+  ],
+  "cells": [
+    {
+      "target_id": 0,
+      "boundary": "forward",
+      "shape": "tanh_dot_primary_f32",
+      "policy": "source_ordered",
+      "hardware": "cpu",
+      "status": "partial",
+      "architecture_status": "accepted",
+      "numerical_status": "partial",
+      "performance_status": "not_started",
+      "evidence_ids": [
+        "cpu_ordinary_jax_acceptance6"
+      ],
+      "blockers": [
+        "performance_evidence_missing"
+      ]
+    },
+    {
+      "target_id": 0,
+      "boundary": "forward",
+      "shape": "tanh_dot_primary_f32",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "performance_evidence_missing"
+      ]
+    },
+    {
+      "target_id": 0,
+      "boundary": "forward",
+      "shape": "tanh_dot_primary_f32",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "performance_evidence_missing"
+      ]
+    },
+    {
+      "target_id": 0,
+      "boundary": "forward",
+      "shape": "tanh_dot_primary_f32",
+      "policy": "fast",
+      "hardware": "cpu",
+      "status": "partial",
+      "architecture_status": "accepted",
+      "numerical_status": "partial",
+      "performance_status": "not_started",
+      "evidence_ids": [
+        "cpu_ordinary_jax_acceptance6"
+      ],
+      "blockers": [
+        "performance_evidence_missing"
+      ]
+    },
+    {
+      "target_id": 0,
+      "boundary": "forward",
+      "shape": "tanh_dot_primary_f32",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "performance_evidence_missing"
+      ]
+    },
+    {
+      "target_id": 0,
+      "boundary": "forward",
+      "shape": "tanh_dot_primary_f32",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "performance_evidence_missing"
+      ]
+    },
+    {
+      "target_id": 0,
+      "boundary": "backward",
+      "shape": "tanh_dot_primary_f32",
+      "policy": "source_ordered",
+      "hardware": "cpu",
+      "status": "partial",
+      "architecture_status": "accepted",
+      "numerical_status": "partial",
+      "performance_status": "not_started",
+      "evidence_ids": [
+        "cpu_ordinary_jax_acceptance6"
+      ],
+      "blockers": [
+        "performance_evidence_missing"
+      ]
+    },
+    {
+      "target_id": 0,
+      "boundary": "backward",
+      "shape": "tanh_dot_primary_f32",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "performance_evidence_missing"
+      ]
+    },
+    {
+      "target_id": 0,
+      "boundary": "backward",
+      "shape": "tanh_dot_primary_f32",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "performance_evidence_missing"
+      ]
+    },
+    {
+      "target_id": 0,
+      "boundary": "backward",
+      "shape": "tanh_dot_primary_f32",
+      "policy": "fast",
+      "hardware": "cpu",
+      "status": "partial",
+      "architecture_status": "accepted",
+      "numerical_status": "partial",
+      "performance_status": "not_started",
+      "evidence_ids": [
+        "cpu_ordinary_jax_acceptance6"
+      ],
+      "blockers": [
+        "performance_evidence_missing"
+      ]
+    },
+    {
+      "target_id": 0,
+      "boundary": "backward",
+      "shape": "tanh_dot_primary_f32",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "performance_evidence_missing"
+      ]
+    },
+    {
+      "target_id": 0,
+      "boundary": "backward",
+      "shape": "tanh_dot_primary_f32",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "performance_evidence_missing"
+      ]
+    },
+    {
+      "target_id": 1,
+      "boundary": "forward",
+      "shape": "rmsnorm_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 1,
+      "boundary": "forward",
+      "shape": "rmsnorm_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 1,
+      "boundary": "forward",
+      "shape": "rmsnorm_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 1,
+      "boundary": "forward",
+      "shape": "rmsnorm_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 1,
+      "boundary": "backward",
+      "shape": "rmsnorm_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 1,
+      "boundary": "backward",
+      "shape": "rmsnorm_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 1,
+      "boundary": "backward",
+      "shape": "rmsnorm_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 1,
+      "boundary": "backward",
+      "shape": "rmsnorm_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 1,
+      "boundary": "composed_forward_backward",
+      "shape": "rmsnorm_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 1,
+      "boundary": "composed_forward_backward",
+      "shape": "rmsnorm_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 1,
+      "boundary": "composed_forward_backward",
+      "shape": "rmsnorm_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 1,
+      "boundary": "composed_forward_backward",
+      "shape": "rmsnorm_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 2,
+      "boundary": "forward",
+      "shape": "layernorm_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 2,
+      "boundary": "forward",
+      "shape": "layernorm_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 2,
+      "boundary": "forward",
+      "shape": "layernorm_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 2,
+      "boundary": "forward",
+      "shape": "layernorm_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 2,
+      "boundary": "backward",
+      "shape": "layernorm_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 2,
+      "boundary": "backward",
+      "shape": "layernorm_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 2,
+      "boundary": "backward",
+      "shape": "layernorm_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 2,
+      "boundary": "backward",
+      "shape": "layernorm_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 2,
+      "boundary": "composed_forward_backward",
+      "shape": "layernorm_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 2,
+      "boundary": "composed_forward_backward",
+      "shape": "layernorm_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 2,
+      "boundary": "composed_forward_backward",
+      "shape": "layernorm_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 2,
+      "boundary": "composed_forward_backward",
+      "shape": "layernorm_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 3,
+      "boundary": "forward",
+      "shape": "dot_product_attention_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 3,
+      "boundary": "forward",
+      "shape": "dot_product_attention_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 3,
+      "boundary": "forward",
+      "shape": "dot_product_attention_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 3,
+      "boundary": "forward",
+      "shape": "dot_product_attention_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 3,
+      "boundary": "backward",
+      "shape": "dot_product_attention_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 3,
+      "boundary": "backward",
+      "shape": "dot_product_attention_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 3,
+      "boundary": "backward",
+      "shape": "dot_product_attention_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 3,
+      "boundary": "backward",
+      "shape": "dot_product_attention_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 3,
+      "boundary": "composed_forward_backward",
+      "shape": "dot_product_attention_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 3,
+      "boundary": "composed_forward_backward",
+      "shape": "dot_product_attention_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 3,
+      "boundary": "composed_forward_backward",
+      "shape": "dot_product_attention_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 3,
+      "boundary": "composed_forward_backward",
+      "shape": "dot_product_attention_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 4,
+      "boundary": "forward",
+      "shape": "msa_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 4,
+      "boundary": "forward",
+      "shape": "msa_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 4,
+      "boundary": "forward",
+      "shape": "msa_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 4,
+      "boundary": "forward",
+      "shape": "msa_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 4,
+      "boundary": "backward",
+      "shape": "msa_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 4,
+      "boundary": "backward",
+      "shape": "msa_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 4,
+      "boundary": "backward",
+      "shape": "msa_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 4,
+      "boundary": "backward",
+      "shape": "msa_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 4,
+      "boundary": "composed_forward_backward",
+      "shape": "msa_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 4,
+      "boundary": "composed_forward_backward",
+      "shape": "msa_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 4,
+      "boundary": "composed_forward_backward",
+      "shape": "msa_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 4,
+      "boundary": "composed_forward_backward",
+      "shape": "msa_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 5,
+      "boundary": "forward",
+      "shape": "gated_delta_net_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 5,
+      "boundary": "forward",
+      "shape": "gated_delta_net_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 5,
+      "boundary": "forward",
+      "shape": "gated_delta_net_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 5,
+      "boundary": "forward",
+      "shape": "gated_delta_net_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 5,
+      "boundary": "backward",
+      "shape": "gated_delta_net_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 5,
+      "boundary": "backward",
+      "shape": "gated_delta_net_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 5,
+      "boundary": "backward",
+      "shape": "gated_delta_net_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 5,
+      "boundary": "backward",
+      "shape": "gated_delta_net_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 5,
+      "boundary": "composed_forward_backward",
+      "shape": "gated_delta_net_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 5,
+      "boundary": "composed_forward_backward",
+      "shape": "gated_delta_net_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 5,
+      "boundary": "composed_forward_backward",
+      "shape": "gated_delta_net_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 5,
+      "boundary": "composed_forward_backward",
+      "shape": "gated_delta_net_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 6,
+      "boundary": "forward",
+      "shape": "dense_transformer_block_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 6,
+      "boundary": "forward",
+      "shape": "dense_transformer_block_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 6,
+      "boundary": "forward",
+      "shape": "dense_transformer_block_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 6,
+      "boundary": "forward",
+      "shape": "dense_transformer_block_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 6,
+      "boundary": "backward",
+      "shape": "dense_transformer_block_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 6,
+      "boundary": "backward",
+      "shape": "dense_transformer_block_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 6,
+      "boundary": "backward",
+      "shape": "dense_transformer_block_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 6,
+      "boundary": "backward",
+      "shape": "dense_transformer_block_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 6,
+      "boundary": "composed_forward_backward",
+      "shape": "dense_transformer_block_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 6,
+      "boundary": "composed_forward_backward",
+      "shape": "dense_transformer_block_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 6,
+      "boundary": "composed_forward_backward",
+      "shape": "dense_transformer_block_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 6,
+      "boundary": "composed_forward_backward",
+      "shape": "dense_transformer_block_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 7,
+      "boundary": "forward",
+      "shape": "local_moe_mlp_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 7,
+      "boundary": "forward",
+      "shape": "local_moe_mlp_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 7,
+      "boundary": "forward",
+      "shape": "local_moe_mlp_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 7,
+      "boundary": "forward",
+      "shape": "local_moe_mlp_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 7,
+      "boundary": "backward",
+      "shape": "local_moe_mlp_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 7,
+      "boundary": "backward",
+      "shape": "local_moe_mlp_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 7,
+      "boundary": "backward",
+      "shape": "local_moe_mlp_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 7,
+      "boundary": "backward",
+      "shape": "local_moe_mlp_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 7,
+      "boundary": "composed_forward_backward",
+      "shape": "local_moe_mlp_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 7,
+      "boundary": "composed_forward_backward",
+      "shape": "local_moe_mlp_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 7,
+      "boundary": "composed_forward_backward",
+      "shape": "local_moe_mlp_representative_pending",
+      "policy": "fast",
+      "hardware": "h100",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 7,
+      "boundary": "composed_forward_backward",
+      "shape": "local_moe_mlp_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200_or_b200",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 8,
+      "boundary": "forward",
+      "shape": "distributed_moe_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 8,
+      "boundary": "forward",
+      "shape": "distributed_moe_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 8,
+      "boundary": "backward",
+      "shape": "distributed_moe_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 8,
+      "boundary": "backward",
+      "shape": "distributed_moe_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 8,
+      "boundary": "composed_forward_backward",
+      "shape": "distributed_moe_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 8,
+      "boundary": "composed_forward_backward",
+      "shape": "distributed_moe_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 9,
+      "boundary": "forward",
+      "shape": "grug_moe_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 9,
+      "boundary": "forward",
+      "shape": "grug_moe_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 9,
+      "boundary": "backward",
+      "shape": "grug_moe_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 9,
+      "boundary": "backward",
+      "shape": "grug_moe_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 9,
+      "boundary": "composed_forward_backward",
+      "shape": "grug_moe_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 9,
+      "boundary": "composed_forward_backward",
+      "shape": "grug_moe_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 10,
+      "boundary": "forward",
+      "shape": "complete_grug_train_step_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 10,
+      "boundary": "forward",
+      "shape": "complete_grug_train_step_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 10,
+      "boundary": "backward",
+      "shape": "complete_grug_train_step_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 10,
+      "boundary": "backward",
+      "shape": "complete_grug_train_step_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 10,
+      "boundary": "composed_forward_backward",
+      "shape": "complete_grug_train_step_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 10,
+      "boundary": "composed_forward_backward",
+      "shape": "complete_grug_train_step_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 10,
+      "boundary": "train_step",
+      "shape": "complete_grug_train_step_representative_pending",
+      "policy": "source_ordered",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    },
+    {
+      "target_id": 10,
+      "boundary": "train_step",
+      "shape": "complete_grug_train_step_representative_pending",
+      "policy": "fast",
+      "hardware": "gb200x4",
+      "status": "blocked",
+      "architecture_status": "not_started",
+      "numerical_status": "not_started",
+      "performance_status": "not_started",
+      "evidence_ids": [],
+      "blockers": [
+        "architecture_path_unavailable",
+        "representative_shape_not_declared",
+        "oracle_not_pinned"
+      ]
+    }
+  ]
+}
