@@ -23,7 +23,8 @@ PORT=$((33000 + $(cksum <<<"$RUN_ID" | cut -d' ' -f1) % 999))
 IRIS=(uv run iris --config lib/iris/config/marin.yaml)
 
 # --- Rack-quota guard: never run a second verify rack concurrently (2-rack cap incl. guard node).
-running=$("${IRIS[@]}" job list --prefix ar8062 2>/dev/null | grep -cE 'RUNNING|PENDING' || true)
+# Job paths are namespaced (/mwittmann/...) and states print lowercase.
+running=$("${IRIS[@]}" job list --prefix "/mwittmann/ar8062-" 2>/dev/null | grep -vE 'guard' | grep -ciE 'running|pending' || true)
 if [[ "$running" -gt 0 ]]; then
   echo "quota guard: $running ar8062 job(s) still live; refusing to submit" >&2
   exit 1
@@ -45,18 +46,18 @@ echo "submitting ${RUN_ID} (${SIZE}/${FLAVOR}, ${NUM_STEPS} steps, port ${PORT})
 deadline=$((SECONDS + TIMEOUT_SECONDS))
 state=""
 while (( SECONDS < deadline )); do
-  state=$("${IRIS[@]}" job list --prefix "${RUN_ID}-coord" 2>/dev/null \
-    | grep -oE 'SUCCEEDED|COMPLETED|FAILED|KILLED|ERROR|RUNNING|PENDING' | head -1 || true)
+  state=$("${IRIS[@]}" job list --prefix "/mwittmann/${RUN_ID}-coord" 2>/dev/null \
+    | awk '$1 == "/mwittmann/'"${RUN_ID}"'-coord" {print tolower($2); exit}' || true)
   case "$state" in
-    SUCCEEDED|COMPLETED) break ;;
-    FAILED|KILLED|ERROR)
+    succeeded|completed) break ;;
+    failed|killed|error)
       echo "job ${RUN_ID}-coord ended in state ${state}; recent logs:" >&2
       "${IRIS[@]}" job logs --since-seconds 600 "${RUN_ID}-coord" >&2 || true
       exit 1 ;;
   esac
   sleep 120
 done
-if [[ "$state" != SUCCEEDED && "$state" != COMPLETED ]]; then
+if [[ "$state" != succeeded && "$state" != completed ]]; then
   echo "timeout after ${TIMEOUT_SECONDS}s in state '${state}'; killing job to free the rack" >&2
   "${IRIS[@]}" job kill "${RUN_ID}-coord" >&2 || true
   exit 1
