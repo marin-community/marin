@@ -4,7 +4,8 @@
 """Regression guards for the Kueue manifests Iris renders."""
 
 from iris.cluster.platforms.k8s.kueue_manifests import (
-    PROTECTED_WORKLOAD_PRIORITY_CLASSES,
+    IRIS_WORKLOAD_PRIORITY_CLASSES,
+    WorkloadPriorityKind,
     build_cks_values,
     build_cluster_queue,
     build_resource_flavor,
@@ -49,17 +50,20 @@ def test_resource_flavor_and_cluster_queue_use_one_all_node_tas_flavor():
     assert flavor["metadata"]["name"] == "cw-tas"
     assert flavor["spec"]["nodeLabels"] == {"iris.kueue": "true"}
     assert [entry["name"] for entry in queue["spec"]["resourceGroups"][0]["flavors"]] == ["cw-tas"]
+    assert queue["spec"]["preemption"] == {"withinClusterQueue": "LowerPriority"}
 
 
-def test_protected_workload_priority_classes_preserve_band_ordering():
+def test_workload_priority_classes_order_cpu_accelerator_and_gang_within_each_band():
     native_values = {
         class_name.removeprefix("iris-"): value
         for class_name, value, _ in IRIS_PRIORITY_CLASSES
         if class_name != IRIS_PRIORITY_CLASS_SYSTEM
     }
-    protected_values = {
-        priority_class.band: priority_class.value for priority_class in PROTECTED_WORKLOAD_PRIORITY_CLASSES
+    values = {
+        (priority_class.band, priority_class.kind): priority_class.value
+        for priority_class in IRIS_WORKLOAD_PRIORITY_CLASSES
     }
 
-    assert protected_values.keys() == native_values.keys()
-    assert all(protected_values[band] == value + 1 for band, value in native_values.items())
+    for band, gang_value in native_values.items():
+        assert values[band, WorkloadPriorityKind.CPU] == gang_value - 2
+        assert values[band, WorkloadPriorityKind.ACCELERATOR] == gang_value - 1

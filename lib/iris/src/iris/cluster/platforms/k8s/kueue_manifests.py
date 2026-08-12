@@ -11,6 +11,7 @@ functions return plain dicts and do no I/O.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 import yaml
 
@@ -118,27 +119,42 @@ NON_BINDING_QUOTA = {
 COVERED_RESOURCES = list(NON_BINDING_QUOTA)
 
 
-# Kueue-only priority offset for GPU and protected coordinator Workloads. The
-# one-point gaps preserve Iris's user-facing priority bands while allowing a
-# protected Workload to reclaim capacity from ordinary CPU work in the same
-# band. Kubernetes Pod PriorityClasses remain unchanged.
+# Kueue-only priorities within each Iris band. Co-scheduled gangs keep the
+# native band value; ordinary and standalone-accelerator Workloads sit one step
+# apart below it. Keeping the top tier at the native value makes rollout safe:
+# new work never sees an unfinished legacy Workload as a lower-priority victim.
+class WorkloadPriorityKind(StrEnum):
+    CPU = "cpu"
+    ACCELERATOR = "accelerator"
+
+
 @dataclass(frozen=True)
-class ProtectedWorkloadPriorityClass:
+class IrisWorkloadPriorityClass:
     band: str
+    kind: WorkloadPriorityKind
     name: str
     value: int
 
 
-PROTECTED_WORKLOAD_PRIORITY_CLASSES = tuple(
-    ProtectedWorkloadPriorityClass(
+def workload_priority_class_name(band: str, kind: WorkloadPriorityKind) -> str:
+    """Return the Kueue priority class name for a workload tier and Iris band."""
+    return f"iris-{kind.value}-{band}"
+
+
+IRIS_WORKLOAD_PRIORITY_CLASSES = tuple(
+    IrisWorkloadPriorityClass(
         band=class_name.removeprefix("iris-"),
-        name=f"iris-protected-{class_name.removeprefix('iris-')}",
-        value=value + 1,
+        kind=kind,
+        name=workload_priority_class_name(class_name.removeprefix("iris-"), kind),
+        value=value + offset,
     )
     for class_name, value, _ in IRIS_PRIORITY_CLASSES
     if class_name != IRIS_PRIORITY_CLASS_SYSTEM
+    for kind, offset in (
+        (WorkloadPriorityKind.CPU, -2),
+        (WorkloadPriorityKind.ACCELERATOR, -1),
+    )
 )
-WORKLOAD_PRIORITY_CLASS_SOURCE = "kueue.x-k8s.io/workloadpriorityclass"
 
 
 # --------------------------------------------------------------------------
@@ -311,13 +327,13 @@ def build_resource_flavor(topology_name: str = INFINIBAND_TOPOLOGY_NAME) -> dict
 
 
 def build_workload_priority_class(name: str, value: int) -> dict:
-    """Return a Kueue WorkloadPriorityClass for protected Iris work."""
+    """Return a Kueue WorkloadPriorityClass for Iris admission ordering."""
     return {
         "apiVersion": "kueue.x-k8s.io/v1beta1",
         "kind": "WorkloadPriorityClass",
         "metadata": {"name": name},
         "value": value,
-        "description": "Iris GPU and coordinator workload priority",
+        "description": "Iris workload admission priority within its user-selected band",
     }
 
 

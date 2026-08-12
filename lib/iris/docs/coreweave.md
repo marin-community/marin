@@ -159,19 +159,44 @@ in the same flavor as GPU gangs. `preemption.withinClusterQueue: LowerPriority`
 can then remove a lower-priority CPU Workload from the topology snapshot before
 retrying a blocked GPU gang's fit.
 
-`kubernetes_provider.kueue.protect_accelerator_workloads` gives GPU Workloads a
-Kueue-only one-point offset within their Iris band: batch uses `1`, interactive
-uses `11`, and production uses `1001`. Ordinary CPU Workloads remain at `0`,
-`10`, and `1000`, so GPU work can reclaim its requested host CPU from same-band
-CPU work without crossing a user-selected priority band. Single-task CPU
-coordinators receive the same offset because Kueue deletes preemption victims
-without consulting their PodDisruptionBudget. Pod `priorityClassName` stays at
-the ordinary Iris band; the offset changes Kueue admission only.
+Each Iris band has three Kueue admission tiers. The controller reconciles the
+six explicit CPU and accelerator `WorkloadPriorityClass` objects at startup;
+co-scheduled groups inherit the numeric value of their Pod `PriorityClass`.
 
-The first controller start with this mapping refuses activation while an
-unfinished GPU or coordinator Workload still uses the old priority. Let those
-Workloads finish before rollout. This prevents the first offset Workload from
-selecting existing same-band protected work as a victim.
+| Iris band | Ordinary CPU | Standalone accelerator | Co-scheduled group |
+| --- | ---: | ---: | ---: |
+| batch | -2 | -1 | 0 |
+| interactive | 8 | 9 | 10 |
+| production | 998 | 999 | 1000 |
+
+The ordering is CPU < accelerator < co-scheduled group within a band. Kueue can
+therefore reclaim same-band CPU reservations for one accelerator Pod, or both
+lower tiers for a co-scheduled GPU group. A user-selected higher band still
+outranks every tier in the band below it. Pod `priorityClassName` remains the
+ordinary Iris band, so this ordering affects Kueue admission and preemption but
+does not change kube-scheduler priority within an admitted workload.
+
+The highest tier retains the native band value. Workloads created before this
+mapping also use that value, so rollout cannot make existing same-band work a
+lower-priority victim. Same-band preemption becomes fully effective after old
+CPU and standalone-accelerator Workloads finish.
+
+```mermaid
+flowchart TD
+    request[RunTaskRequest] --> gang{Co-scheduled group?}
+    gang -- Yes --> native[Use native Iris band<br/>co-scheduled tier]
+    gang -- No --> accelerator{Accelerator requested?}
+    accelerator -- Yes --> gpu[Use band minus 1<br/>accelerator tier]
+    accelerator -- No --> cpu[Use band minus 2<br/>CPU tier]
+    native --> queue[Kueue LocalQueue and shared ClusterQueue]
+    gpu --> queue
+    cpu --> queue
+    queue --> fit{TAS topology fit?}
+    fit -- Yes --> admit[Admit workload and release scheduling gate]
+    fit -- No --> preempt[withinClusterQueue: LowerPriority<br/>select compatible victims]
+    preempt --> fit
+    admit --> schedule[Kubernetes schedules Pods]
+```
 
 Accelerator-free jobs use any compatible node by default. Iris does not expose
 a CPU-only placement constraint; rare jobs that require hard CPU-node placement
@@ -198,8 +223,8 @@ topology cache.
 | Resource | Owner |
 | --- | --- |
 | CKS cluster and operator kubeconfig | CoreWeave and the cluster operator |
-| Namespace, RBAC, NodePools, Kueue cluster objects, ingress, and DNS | `infra/pulumi` |
-| Kueue LocalQueue, controller ConfigMap, Deployment, Service, PDB, state volume, and Secrets | `K8sControllerProvider` |
+| Namespace, RBAC, NodePools, Kueue operator, ClusterQueue, ResourceFlavor, ingress, and DNS | `infra/pulumi` |
+| Pod and Workload priority classes, Kueue LocalQueue, controller ConfigMap, Deployment, Service, PDB, state volume, and Secrets | `K8sControllerProvider` |
 | Task Pods and their lifecycle | `K8sTaskProvider` |
 | Node scheduling and provisioning | Kubernetes and CoreWeave |
 
@@ -243,7 +268,6 @@ their Kubernetes service account inside the cluster.
 | `kubernetes_provider.cache_dir` | Node-local cache root. CoreWeave configs use `/mnt/local/iris-cache`. |
 | `kubernetes_provider.controller_address` | In-cluster controller address injected into task Pods. |
 | `kubernetes_provider.kueue.cluster_queue` | Pulumi-owned ClusterQueue to which Iris binds its LocalQueue. This is required. |
-| `kubernetes_provider.kueue.protect_accelerator_workloads` | Enables the Kueue-only GPU/coordinator priority offset. |
 | `kubernetes_provider.kueue.topologies` | Optional `group_by` to CoreWeave node-label mappings. |
 | `kubernetes_provider.preempt_namespaces` | Namespaces containing provider health-check Pods that Iris may clear when they block an admitted GPU job. |
 

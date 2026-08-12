@@ -36,17 +36,10 @@ from iris.cluster.platforms.k8s.controller import (
     _CONTROLLER_STATE_PVC_SIZE,
     K8sControllerProvider,
     PrerequisitesNotProvisionedError,
-    UnsafeWorkloadPriorityActivationError,
     configure_client_s3,
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
-from iris.cluster.platforms.k8s.kueue_manifests import (
-    PROTECTED_WORKLOAD_PRIORITY_CLASSES,
-    RESOURCE_FLAVOR_NAME,
-    WORKLOAD_PRIORITY_CLASS_SOURCE,
-    build_cluster_queue,
-    build_workload_priority_class,
-)
+from iris.cluster.platforms.k8s.kueue_manifests import RESOURCE_FLAVOR_NAME, build_cluster_queue
 from iris.cluster.platforms.k8s.nodepool_manifests import (
     CPU_TOPOLOGY_NODE_LABELS,
     compute_target_racks,
@@ -265,9 +258,6 @@ def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConf
     k8s.apply_json(
         {"apiVersion": "kueue.x-k8s.io/v1beta1", "kind": "ResourceFlavor", "metadata": {"name": RESOURCE_FLAVOR_NAME}}
     )
-    if cluster_config.kubernetes_provider.kueue.protect_accelerator_workloads:
-        for priority_class in PROTECTED_WORKLOAD_PRIORITY_CLASSES:
-            k8s.apply_json(build_workload_priority_class(priority_class.name, priority_class.value))
 
 
 def test_start_controller_creates_controller_resources():
@@ -307,6 +297,24 @@ def test_start_controller_creates_controller_resources():
     # is provisioned so the reference resolves at admission.
     assert deploy_spec["template"]["spec"]["priorityClassName"] == "iris-system"
     assert k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-system") is not None
+    assert {
+        name: k8s.get_json(K8sResource.WORKLOAD_PRIORITY_CLASSES, name)["value"]
+        for name in (
+            "iris-cpu-batch",
+            "iris-accelerator-batch",
+            "iris-cpu-interactive",
+            "iris-accelerator-interactive",
+            "iris-cpu-production",
+            "iris-accelerator-production",
+        )
+    } == {
+        "iris-cpu-batch": -2,
+        "iris-accelerator-batch": -1,
+        "iris-cpu-interactive": 8,
+        "iris-accelerator-interactive": 9,
+        "iris-cpu-production": 998,
+        "iris-accelerator-production": 999,
+    }
 
     agent_spec = node_agent["spec"]["template"]["spec"]
     assert agent_spec["hostNetwork"] is True
@@ -752,18 +760,6 @@ def test_verify_prerequisites_reports_only_the_missing_pieces():
     provider.shutdown()
 
 
-def test_verify_prerequisites_requires_configured_workload_priority_value():
-    provider, k8s = _make_provider()
-    cluster_config = _make_cluster_config()
-    cluster_config.kubernetes_provider.kueue.protect_accelerator_workloads = True
-    _seed_prerequisites(k8s, cluster_config)
-    k8s.apply_json(build_workload_priority_class("iris-protected-batch", 0))
-
-    with pytest.raises(PrerequisitesNotProvisionedError, match=r"iris-protected-batch\(value=1\)"):
-        provider.verify_prerequisites(cluster_config)
-    provider.shutdown()
-
-
 # ============================================================================
 # Tests: tunnel
 # ============================================================================
@@ -1028,62 +1024,6 @@ def test_ensure_kueue_queues_raises_without_cluster_queue():
     cfg.kubernetes_provider.kueue.cluster_queue = ""
     with pytest.raises(ValueError, match=r"kueue\.cluster_queue is required"):
         provider.ensure_kueue_queues(cfg)
-    provider.shutdown()
-
-
-def _kueue_workload(name: str, *, resources: dict, priority_class: str = "iris-batch") -> dict:
-    return {
-        "apiVersion": "kueue.x-k8s.io/v1beta1",
-        "kind": "Workload",
-        "metadata": {"name": name, "namespace": "iris"},
-        "spec": {
-            "queueName": "iris-lq",
-            "priorityClassName": priority_class,
-            "priorityClassSource": "scheduling.k8s.io/priorityclass",
-            "podSets": [
-                {
-                    "name": "main",
-                    "count": 1,
-                    "template": {
-                        "spec": {
-                            "priorityClassName": priority_class,
-                            "containers": [{"name": "task", "resources": resources}],
-                        }
-                    },
-                }
-            ],
-        },
-    }
-
-
-@pytest.mark.parametrize(
-    "resources",
-    [{"requests": {"cpu": "1"}}, {"limits": {"nvidia.com/gpu": "1"}}],
-    ids=["coordinator", "gpu"],
-)
-def test_protected_priority_activation_rejects_legacy_workloads(resources):
-    provider, k8s = _make_provider()
-    config = _make_cluster_config()
-    config.kubernetes_provider.kueue.protect_accelerator_workloads = True
-    workload = _kueue_workload("legacy-protected", resources=resources)
-    k8s.seed_resource(K8sResource.WORKLOADS, "legacy-protected", workload)
-
-    with pytest.raises(UnsafeWorkloadPriorityActivationError, match="legacy-protected"):
-        provider.verify_protected_priority_activation(config)
-    provider.shutdown()
-
-
-def test_protected_priority_activation_accepts_current_workload():
-    provider, k8s = _make_provider()
-    config = _make_cluster_config()
-    config.kubernetes_provider.kueue.protect_accelerator_workloads = True
-    workload = _kueue_workload("current-protected", resources={"limits": {"nvidia.com/gpu": "1"}})
-    workload["spec"]["priorityClassName"] = "iris-protected-batch"
-    workload["spec"]["priorityClassSource"] = WORKLOAD_PRIORITY_CLASS_SOURCE
-    k8s.seed_resource(K8sResource.WORKLOADS, "current-protected", workload)
-
-    # A controller restart after activation must accept Workloads already using the offset.
-    assert provider.verify_protected_priority_activation(config) is None
     provider.shutdown()
 
 

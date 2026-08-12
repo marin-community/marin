@@ -38,14 +38,13 @@ Both variants:
   3. Create the Topology CRs (infiniband + multinode-nvlink-ib) so TAS can resolve
      the podset-topology annotations (``backend.coreweave.cloud/leafgroup``,
      ``ds.coreweave.com/nvlink.domain``).
-  4. (``--with-queues``) Create the cluster-scoped protected
-     WorkloadPriorityClasses, admin-owned ``cw-tas`` ResourceFlavor, and ClusterQueue.
-     The flavor selects ``iris.kueue=true`` and every Iris Pod requests TAS, so
-     lower-priority CPU reservations are reclaimable during GPU topology fit. The
-     ClusterQueue enables priority preemption within the queue
+  4. (``--with-queues``) Create the cluster-scoped, admin-owned ``cw-tas``
+     ResourceFlavor + ClusterQueue. The flavor selects ``iris.kueue=true`` and every
+     Iris Pod requests TAS, so lower-priority CPU reservations are reclaimable during
+     GPU topology fit. The ClusterQueue enables priority preemption within the queue
      (``preemption.withinClusterQueue: LowerPriority``). Quota stays non-binding, so
-     the pressure signal is TAS, not quota. The namespaced LocalQueue is NOT created
-     here: Iris reconciles its own (``{label_prefix}-lq``) at controller start
+     the pressure signal is TAS, not quota. The namespaced LocalQueue is NOT created here:
+     Iris reconciles its own (``{label_prefix}-lq``) at controller start
      (``K8sControllerProvider.ensure_kueue_queues``), binding it to this ClusterQueue
      via ``kubernetes_provider.kueue.cluster_queue``.
 
@@ -90,7 +89,6 @@ from iris.cluster.platforms.k8s.kueue_manifests import (
     INFINIBAND_TOPOLOGY_NAME,
     MULTINODE_TOPOLOGY_NAME,
     OPERATOR_NS,
-    PROTECTED_WORKLOAD_PRIORITY_CLASSES,
     RELEASE_DEFAULT,
     TOPOLOGIES,
     TOPOLOGY_CRD,
@@ -101,7 +99,6 @@ from iris.cluster.platforms.k8s.kueue_manifests import (
     build_resource_flavor,
     build_topology_cr,
     build_upstream_values,
-    build_workload_priority_class,
 )
 from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_SYSTEM, iris_priority_class_manifest
 
@@ -248,10 +245,6 @@ def run_install(
     kflags = kubectl_flags(kubeconfig, context)
     if with_queues:
         queue_docs = [
-            *[
-                build_workload_priority_class(priority_class.name, priority_class.value)
-                for priority_class in PROTECTED_WORKLOAD_PRIORITY_CLASSES
-            ],
             build_resource_flavor(flavor_topology),
             build_cluster_queue(cluster_queue),
         ]
@@ -275,11 +268,7 @@ def run_install(
     click.secho("==> Rendered helm values:", fg="blue", bold=True)
     click.echo(yaml.safe_dump(values, default_flow_style=False, sort_keys=False))
     if with_queues:
-        click.secho(
-            f"==> WorkloadPriorityClasses + ResourceFlavor + ClusterQueue ({cluster_queue}):",
-            fg="blue",
-            bold=True,
-        )
+        click.secho(f"==> ResourceFlavor + ClusterQueue ({cluster_queue}):", fg="blue", bold=True)
         click.echo(yaml.safe_dump_all(queue_docs, default_flow_style=False, sort_keys=False))
 
     if not apply:
@@ -295,11 +284,7 @@ def run_install(
     _apply(values, chart, release, hflags, kflags, version_args)
 
     if with_queues:
-        click.secho(
-            f"==> Applying WorkloadPriorityClasses + ResourceFlavor + ClusterQueue ({cluster_queue})",
-            fg="blue",
-            bold=True,
-        )
+        click.secho(f"==> Applying ResourceFlavor + ClusterQueue ({cluster_queue})", fg="blue", bold=True)
         kubectl_apply_docs(queue_docs, kflags)
 
     click.secho(

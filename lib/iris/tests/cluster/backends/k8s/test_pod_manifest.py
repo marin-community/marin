@@ -1354,38 +1354,28 @@ def test_kueue_pod_group_pod_index_from_task_ordinal():
     assert m3["metadata"]["labels"][_KUEUE_POD_GROUP_POD_INDEX] == "3"
 
 
-def test_kueue_priority_class_not_stamped_without_config():
-    req = _cosched_req("/job/task/0", num_tasks=64, priority=job_pb2.PRIORITY_BAND_BATCH)
-    manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
-    assert _KUEUE_PRIORITY_CLASS not in manifest["metadata"]["labels"]
-
-
-def test_kueue_priority_class_not_stamped_on_ordinary_cpu_work():
-    req = _cosched_req("/job/task/0", num_tasks=64, priority=job_pb2.PRIORITY_BAND_BATCH)
-    manifest = _build_pod_manifest(
-        req,
-        pod_config(
-            local_queue="iris-lq",
-            protected_priority_classes={job_pb2.PRIORITY_BAND_BATCH: "iris-protected-batch"},
-        ),
-    )
-    assert _KUEUE_PRIORITY_CLASS not in manifest["metadata"]["labels"]
-
-
-@pytest.mark.parametrize("shape", ["gpu", "coordinator"])
-def test_kueue_priority_class_stamped_on_protected_work(shape):
+@pytest.mark.parametrize(
+    "device, expected_workload_priority_class",
+    [(None, "iris-cpu-batch"), ("gpu", "iris-accelerator-batch")],
+)
+def test_kueue_priority_class_orders_cpu_below_standalone_accelerator(device, expected_workload_priority_class):
     req = make_run_req("/job/task/0", num_tasks=1, priority=job_pb2.PRIORITY_BAND_BATCH)
-    if shape == "gpu":
+    if device == "gpu":
         req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
-    manifest = _build_pod_manifest(
-        req,
-        pod_config(
-            local_queue="iris-lq",
-            protected_priority_classes={job_pb2.PRIORITY_BAND_BATCH: "iris-protected-batch"},
-        ),
-    )
 
-    assert manifest["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == "iris-protected-batch"
+    manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
+
+    assert manifest["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == expected_workload_priority_class
+    assert manifest["spec"]["priorityClassName"] == "iris-batch"
+
+
+def test_kueue_coscheduled_gang_keeps_native_band_above_standalone_accelerator():
+    req = _cosched_req("/job/task/0", num_tasks=64, priority=job_pb2.PRIORITY_BAND_BATCH)
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
+
+    manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
+
+    assert _KUEUE_PRIORITY_CLASS not in manifest["metadata"]["labels"]
     assert manifest["spec"]["priorityClassName"] == "iris-batch"
 
 

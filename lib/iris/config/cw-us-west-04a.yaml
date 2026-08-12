@@ -81,7 +81,6 @@ kubernetes_provider:
     # Pulumi owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor;
     # Iris reconciles the namespaced LocalQueue bound to it at controller start.
     cluster_queue: iris-cq
-    protect_accelerator_workloads: true
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest

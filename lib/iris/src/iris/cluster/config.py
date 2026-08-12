@@ -618,7 +618,6 @@ class KueueTopology(_Config):
 
 class KueueConfig(_Config):
     cluster_queue: str = ""  # setting this ENABLES Kueue gang admission
-    protect_accelerator_workloads: bool = False
     topologies: dict[str, KueueTopology] = Field(default_factory=dict)  # group_by -> topo
 
 

@@ -59,6 +59,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
     gpu_gang_rack_slice_size,
 )
+from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_BATCH,
@@ -103,7 +104,7 @@ from iris.cluster.stats.tables import (
 )
 from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
-from iris.rpc.proto_display import resolve_container_profile
+from iris.rpc.proto_display import priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -254,9 +255,7 @@ _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 #                 slices, each hard-bound to its own nvlink.domain, with a soft leafgroup
 #                 preference so the racks cluster on one IB leaf group.
 # A cluster whose Topology uses different levels overrides this via
-# kubernetes_provider.kueue.topologies. Priority classes have NO default: Iris
-# never invents WorkloadPriorityClass names (a missing one is rejected by
-# Kueue), so a band is stamped only when the config maps it explicitly.
+# kubernetes_provider.kueue.topologies.
 _CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
     COSCHEDULE_LEAFGROUP: KueueTopologyBinding(CW_LABEL_LEAFGROUP, TopologyMode.PREFERRED),
     COSCHEDULE_NVLINK_DOMAIN: KueueTopologyBinding(CW_LABEL_NVLINK_DOMAIN, TopologyMode.REQUIRED),
@@ -496,9 +495,6 @@ class PodConfig:
     # this: dispatching one with no LocalQueue configured raises (Kueue or
     # nothing — there is no non-Kueue colocation fallback).
     local_queue: str = ""
-    # PriorityBand -> WorkloadPriorityClass name for GPU and coordinator work.
-    # A band with no entry leaves all Workloads at the native Pod priority.
-    protected_priority_classes: dict[int, str] = field(default_factory=dict)
     # coscheduling group_by -> KueueTopologyBinding. Defaults to CoreWeave
     # conventions; a group_by with no entry carries no topology annotation.
     kueue_topologies: dict[str, KueueTopologyBinding] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
@@ -909,12 +905,9 @@ def _build_pod_manifest(
     assert config.local_queue, "K8s backend requires a Kueue LocalQueue (kubernetes_provider.kueue.cluster_queue)"
     labels[_KUEUE_QUEUE_NAME] = config.local_queue
     effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
-    # Kueue preempts plain Pods with a delete, which bypasses PodDisruptionBudgets.
-    # Coordinators therefore share the GPU offset so reclaim never selects one as
-    # a same-band CPU victim. Ordinary CPU Workloads retain the native band value.
-    wpc = config.protected_priority_classes.get(effective_band)
-    if wpc and (gpu_count > 0 or _is_coordinator_task(run_req)):
-        labels[_KUEUE_PRIORITY_CLASS] = wpc
+    if not is_gang:
+        priority_kind = WorkloadPriorityKind.ACCELERATOR if has_accelerator else WorkloadPriorityKind.CPU
+        labels[_KUEUE_PRIORITY_CLASS] = workload_priority_class_name(priority_band_name(effective_band), priority_kind)
     if is_gang:
         group_by = run_req.coscheduling.group_by
         # group_by must name a topology level this cluster provisioned. An

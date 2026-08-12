@@ -51,7 +51,6 @@ kubernetes_provider:
     # Mandatory on the K8s backend: every pod is admitted through Kueue. Pulumi
     # owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor.
     cluster_queue: iris-cq
-    protect_accelerator_workloads: true
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest

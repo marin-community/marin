@@ -31,7 +31,6 @@ kubernetes_provider:
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
   kueue:
     cluster_queue: iris-cq   # enables Kueue gang admission; empty topologies => CoreWeave-default pool->leafgroup
-    protect_accelerator_workloads: true
 
 defaults:
   # The K8s direct provider has no worker daemons; these satisfy config validation
