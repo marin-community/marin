@@ -14,9 +14,9 @@ from enum import StrEnum
 
 from scripts.ci.dependency_update_policy import (
     DEPENDENCY_UPDATE_POLICIES,
+    REQUIRED_CHECKS,
     DependencyUpdate,
     PullRequestPolicy,
-    REQUIRED_CHECKS,
 )
 
 
@@ -209,9 +209,7 @@ def merge_when_green(
         if decision is MergeDecision.DONE:
             return
         if decision is MergeDecision.FAIL:
-            raise RuntimeError(
-                f"dependency update is blocked: state={snapshot.state}, failing={list(checks.failing)}"
-            )
+            raise RuntimeError(f"dependency update is blocked: state={snapshot.state}, failing={list(checks.failing)}")
         if decision is MergeDecision.MERGE:
             subprocess.run(
                 ["gh", "pr", "merge", pr, "--repo", repository, "--squash"],
