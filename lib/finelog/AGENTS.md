@@ -225,9 +225,10 @@ bytes carry no trigram and drop out. `NOT LIKE`, `ILIKE`, and an explicit
 
 `regexp_matches(col, pattern)` contributes only literals that every match must
 contain. Concatenated and mandatory repeated literals prune; optional text and
-branch-specific alternatives do not. Case-insensitive or invalid patterns with
-no safe literal fall back to an unpruned scan. The regex predicate remains in
-the physical plan to check surviving rows exactly.
+branch-specific alternatives do not. Case-insensitive patterns without a safe
+literal scan unpruned; invalid patterns fail when the exact predicate compiles.
+The regex predicate remains in the physical plan to check surviving rows
+exactly.
 
 Enabling an index is additive and can be done on a live namespace. Maintenance
 backfills L≥1 segments a few at a time, reading all required index columns once
