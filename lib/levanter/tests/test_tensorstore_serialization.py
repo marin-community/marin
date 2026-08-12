@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import json
 from tempfile import TemporaryDirectory
 from typing import Any
 
@@ -13,12 +14,19 @@ import numpy as np
 import optax
 import pytest
 from chex import assert_trees_all_close
+import eight_device_checkpoints
+from eight_device_checkpoints import run_on_eight_devices
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
+from levanter.checkpoint import load_checkpoint, save_checkpoint
+from levanter.checkpoint_manifest import CHECKPOINT_FORMAT_VERSION, manifest_path, read_manifest
 from levanter.models.gpt2 import Gpt2Mlp
 from levanter.tensorstore_serialization import (
+    TensorStoreWriteConfig,
+    _capped_chunk_shape,
+    _HostStagingGate,
     _transfer_shard_to_pageable_host,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
@@ -209,3 +217,165 @@ def test_tensorstore_ok_with_missing():
             m3 = tree_deserialize_leaves_tensorstore(tmpdir, m2, allow_missing=True)
             assert hax.all(m3.a == hax.full(A, 4))
             assert hax.all(m3.b == hax.zeros(A))
+
+
+def test_a_staging_budget_smaller_than_one_shard_still_completes():
+    """The gate must always admit the first snapshot, or a save deadlocks."""
+    with use_test_mesh():
+        A = hax.Axis("A", 1024)
+        state = {"w": hax.full(A, 3.0)}
+
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(
+                tmpdir, state, write_config=TensorStoreWriteConfig(max_staged_host_bytes=1)
+            )
+            restored = tree_deserialize_leaves_tensorstore(tmpdir, {"w": hax.zeros(A)})
+
+        assert hax.all(restored["w"] == state["w"])
+
+
+def test_staged_bytes_stay_admitted_until_their_write_is_released():
+    """TensorStore holds a shard snapshot until the commit, so admission must outlive the copy."""
+
+    async def scenario():
+        gate = _HostStagingGate(100)
+        await gate.acquire(60)
+
+        queued = asyncio.create_task(gate.acquire(60))
+        await asyncio.sleep(0)
+        assert not queued.done(), "120 bytes must not be admitted against a 100 byte budget"
+
+        gate.release(60)
+        await asyncio.wait_for(queued, timeout=5)
+        assert gate.peak_bytes == 60
+
+    asyncio.run(scenario())
+
+
+def test_a_save_larger_than_the_staging_budget_rolls_through_it():
+    """Peak host memory follows the budget. The checkpoint that comes back is still complete."""
+    with use_test_mesh():
+        A = hax.Axis("A", 4096)
+        state = {f"w{i}": hax.full(A, float(i)) for i in range(8)}
+
+        with TemporaryDirectory() as tmpdir:
+            # Every array is 16 KiB, so a 32 KiB budget admits about two at a time.
+            tree_serialize_leaves_tensorstore(
+                tmpdir, state, write_config=TensorStoreWriteConfig(max_staged_host_bytes=32 * 1024)
+            )
+            restored = tree_deserialize_leaves_tensorstore(tmpdir, {name: hax.zeros(A) for name in state})
+
+        for name, expected in state.items():
+            assert hax.all(restored[name] == expected)
+
+
+@pytest.mark.parametrize(
+    "local_shape, itemsize, max_bytes, expected",
+    [
+        ((8, 16), 4, 4096, (8, 16)),  # already under the cap
+        ((64, 16), 4, 1024, (16, 16)),  # halve the largest even axis until it fits
+        ((3, 5), 4, 1, (3, 5)),  # nothing divides: one chunk, cap exceeded
+        ((), 4, 1024, ()),  # scalar
+        ((0, 16), 4, 1024, (1, 16)),  # zarr3 rejects a zero-length chunk dimension
+    ],
+)
+def test_capped_chunk_shape_stays_a_divisor(local_shape, itemsize, max_bytes, expected):
+    chunk = _capped_chunk_shape(local_shape, itemsize, max_bytes)
+    assert chunk == expected
+    assert all(dim % size == 0 for dim, size in zip(local_shape, chunk)), "chunks must tile the writer's slice"
+
+
+def test_every_replica_writes_a_disjoint_slice_covering_the_array():
+    """The contract replica-parallel writes rest on: no idle replicas, no byte written twice."""
+    run_on_eight_devices(eight_device_checkpoints.disjoint_slices_cover_the_array)
+
+
+def test_replicated_arrays_survive_a_replica_parallel_roundtrip():
+    run_on_eight_devices(eight_device_checkpoints.replicated_arrays_survive_a_roundtrip)
+
+
+def test_checkpoint_written_on_one_mesh_loads_on_another():
+    """Content must not depend on the mesh that wrote it, so writer layout can keep changing."""
+    run_on_eight_devices(eight_device_checkpoints.a_checkpoint_loads_on_another_mesh)
+
+
+def test_small_arrays_are_not_split_into_tiny_objects():
+    run_on_eight_devices(eight_device_checkpoints.small_arrays_are_not_split)
+
+
+def test_a_replica_count_that_divides_nothing_still_splits():
+    """A rack count that is not a power of two must not drop an array to one writer."""
+    run_on_eight_devices(eight_device_checkpoints.a_replica_count_that_divides_nothing_still_splits)
+
+
+def test_arrays_no_split_applies_to_are_spread_over_replicas():
+    """Every such array otherwise lands on replica 0, one process for the whole run."""
+    run_on_eight_devices(eight_device_checkpoints.un_splittable_arrays_spread_over_replicas)
+
+
+def test_host_arrays_without_a_sharding_roundtrip():
+    """Numpy leaves reach the serializer through ``is_jax_array_like`` and have no shards."""
+    source = {"w": np.arange(10, dtype=np.float32)}
+
+    with TemporaryDirectory() as tmpdir:
+        tree_serialize_leaves_tensorstore(tmpdir, source)
+        restored = tree_deserialize_leaves_tensorstore(tmpdir, {"w": jnp.zeros(10, dtype=jnp.float32)})
+
+    np.testing.assert_array_equal(np.asarray(restored["w"]), source["w"])
+
+
+def test_arrays_with_a_zero_length_axis_roundtrip():
+    """An empty array still needs a positive chunk grid, which zarr3 enforces on creation."""
+    with use_test_mesh():
+        source = {"empty": jnp.zeros((0, 16), dtype=jnp.float32), "w": jnp.arange(8, dtype=jnp.float32)}
+
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(tmpdir, source)
+            restored = tree_deserialize_leaves_tensorstore(
+                tmpdir, {key: jnp.zeros_like(value) for key, value in source.items()}
+            )
+
+        assert restored["empty"].shape == (0, 16)
+        np.testing.assert_array_equal(np.asarray(restored["w"]), np.asarray(source["w"]))
+
+
+def test_reading_a_newer_format_version_fails_loudly(tmp_path):
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "format_version": CHECKPOINT_FORMAT_VERSION + 1,
+                "array_driver": "zarr3",
+                "kvstore_driver": "ocdbt",
+                "arrays": [],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="Upgrade levanter"):
+        read_manifest(str(tmp_path))
+
+
+def test_saving_writes_a_manifest_listing_every_array(tmp_path):
+    with use_test_mesh():
+        A = hax.Axis("A", 8)
+
+        save_checkpoint({"model": {"w": hax.zeros(A)}, "step": jnp.array(3)}, step=3, checkpoint_path=str(tmp_path))
+
+        manifest = read_manifest(str(tmp_path))
+        assert manifest is not None
+        assert {array.path: array.shape for array in manifest.arrays} == {"model/w": (8,), "step": ()}
+
+
+def test_checkpoints_without_a_manifest_still_load(tmp_path):
+    """Checkpoints predating the manifest have none, so the reader has to fall back."""
+    with use_test_mesh():
+        A = hax.Axis("A", 8)
+        state = {"model": {"w": hax.full(A, 5.0)}}
+
+        save_checkpoint(state, step=0, checkpoint_path=str(tmp_path))
+        (tmp_path / manifest_path("")).unlink()
+        assert read_manifest(str(tmp_path)) is None
+
+        restored = load_checkpoint({"model": {"w": hax.zeros(A)}}, str(tmp_path))
+
+        assert jax.numpy.array_equal(restored["model"]["w"].array, state["model"]["w"].array)
