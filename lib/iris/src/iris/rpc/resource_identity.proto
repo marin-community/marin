@@ -1,0 +1,69 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+edition = "2023";
+
+package iris.resource;
+
+option features.field_presence = EXPLICIT;
+
+enum ResourceKind {
+  RESOURCE_KIND_UNSPECIFIED = 0;
+  RESOURCE_KIND_JOB = 1;
+  RESOURCE_KIND_TASK = 2;
+  RESOURCE_KIND_ATTEMPT = 3;
+  RESOURCE_KIND_ENDPOINT = 4;
+  RESOURCE_KIND_NODE = 5;
+  RESOURCE_KIND_SLICE = 6;
+}
+
+message ResourceKey {
+  string cluster_id = 1;
+  ResourceKind kind = 2;
+  string resource_id = 3;
+}
+
+message JobIdentity {
+  ResourceKey key = 1;
+  string job_uid = 2;
+}
+
+message TaskIdentity {
+  ResourceKey key = 1;
+  string task_uid = 2;
+}
+
+message AttemptLocator {
+  ResourceKey task = 1;
+  int32 attempt_number = 2;
+}
+
+message AttemptIdentity {
+  ResourceKey task = 1;
+  int32 attempt_number = 2;
+  string attempt_uid = 3;
+}
+
+message NodeIdentity {
+  ResourceKey key = 1;
+  string backend_id = 2;
+  string node_uid = 3;
+}
+
+message NodeLocator {
+  ResourceKey key = 1;
+  string backend_id = 2;
+  string node_uid = 3;
+}
+
+message SliceIdentity {
+  ResourceKey key = 1;
+  string backend_id = 2;
+  string slice_uid = 3;
+}
+
+message SliceLocator {
+  ResourceKey key = 1;
+  string backend_id = 2;
+  string slice_uid = 3;
+}

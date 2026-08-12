@@ -1,0 +1,215 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+edition = "2023";
+
+package iris.resource;
+
+import "resource.proto";
+import "resource_identity.proto";
+import "time.proto";
+
+option features.field_presence = EXPLICIT;
+
+enum JobState {
+  JOB_STATE_UNSPECIFIED = 0;
+  JOB_STATE_PENDING = 1;
+  JOB_STATE_BUILDING = 2;
+  JOB_STATE_RUNNING = 3;
+  JOB_STATE_SUCCEEDED = 4;
+  JOB_STATE_FAILED = 5;
+  JOB_STATE_KILLED = 6;
+  JOB_STATE_WORKER_FAILED = 7;
+  JOB_STATE_UNSCHEDULABLE = 8;
+}
+
+enum ConstraintOp {
+  CONSTRAINT_OP_EQ = 0;
+  CONSTRAINT_OP_NE = 1;
+  CONSTRAINT_OP_EXISTS = 2;
+  CONSTRAINT_OP_NOT_EXISTS = 3;
+  CONSTRAINT_OP_GT = 4;
+  CONSTRAINT_OP_GE = 5;
+  CONSTRAINT_OP_LT = 6;
+  CONSTRAINT_OP_LE = 7;
+  CONSTRAINT_OP_IN = 8;
+}
+
+enum ConstraintMode {
+  CONSTRAINT_MODE_REQUIRED = 0;
+  CONSTRAINT_MODE_PREFERRED = 1;
+}
+
+enum JobPreemptionPolicy {
+  JOB_PREEMPTION_POLICY_UNSPECIFIED = 0;
+  JOB_PREEMPTION_POLICY_TERMINATE_CHILDREN = 1;
+  JOB_PREEMPTION_POLICY_PRESERVE_CHILDREN = 2;
+}
+
+enum ExistingJobPolicy {
+  EXISTING_JOB_POLICY_UNSPECIFIED = 0;
+  EXISTING_JOB_POLICY_ERROR = 1;
+  EXISTING_JOB_POLICY_KEEP = 2;
+  EXISTING_JOB_POLICY_RECREATE = 3;
+}
+
+enum PriorityBand {
+  PRIORITY_BAND_INHERIT = 0;
+  PRIORITY_BAND_PRODUCTION = 1;
+  PRIORITY_BAND_INTERACTIVE = 2;
+  PRIORITY_BAND_BATCH = 3;
+}
+
+enum ContainerProfile {
+  CONTAINER_PROFILE_UNSPECIFIED = 0;
+  CONTAINER_PROFILE_RESTRICTED = 1;
+  CONTAINER_PROFILE_DEFAULT = 2;
+  CONTAINER_PROFILE_DOCKER_ACCESS = 3;
+  CONTAINER_PROFILE_PRIVILEGED = 4;
+  CONTAINER_PROFILE_GVISOR = 5;
+}
+
+message DeviceConfig {
+  oneof device {
+    CpuDevice cpu = 1;
+    GpuDevice gpu = 2;
+    TpuDevice tpu = 3;
+  }
+}
+
+message CpuDevice {
+  string variant = 1;
+}
+
+message GpuDevice {
+  string variant = 1;
+  int32 count = 2;
+}
+
+message TpuDevice {
+  string variant = 1;
+  string topology = 2;
+  int32 count = 3;
+}
+
+message ResourceSpecProto {
+  int32 cpu_millicores = 1;
+  int64 memory_bytes = 4;
+  int64 disk_bytes = 9;
+  DeviceConfig device = 5;
+}
+
+message EnvironmentConfig {
+  map<string, string> env_vars = 2;
+  repeated string setup_scripts = 6;
+
+  reserved 1, 3, 4, 5;
+}
+
+message CommandEntrypoint {
+  repeated string argv = 1;
+}
+
+message RuntimeEntrypoint {
+  repeated string setup_commands = 1;
+  CommandEntrypoint run_command = 2;
+  map<string, bytes> workdir_files = 3;
+  map<string, string> workdir_file_refs = 4;
+}
+
+message AttributeValue {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double float_value = 3;
+  }
+}
+
+message Constraint {
+  string key = 1;
+  ConstraintOp op = 2;
+  AttributeValue value = 3;
+  repeated AttributeValue values = 4;
+  ConstraintMode mode = 5;
+}
+
+message CoschedulingConfig {
+  string group_by = 1;
+}
+
+message JobSpec {
+  uint32 version = 1;
+  string name = 2;
+  RuntimeEntrypoint entrypoint = 3;
+  ResourceSpecProto resources = 4;
+  EnvironmentConfig environment = 5;
+  string bundle_id = 6;
+  iris.time.Duration scheduling_timeout = 7;
+  repeated string ports = 8;
+  int32 max_task_failures = 9;
+  int32 max_retries_failure = 10;
+  int32 max_retries_preemption = 11;
+  repeated Constraint constraints = 12;
+  CoschedulingConfig coscheduling = 13;
+  int32 replicas = 14;
+  iris.time.Duration timeout = 15;
+  bool fail_if_exists = 16;
+  JobPreemptionPolicy preemption_policy = 17;
+  ExistingJobPolicy existing_job_policy = 18;
+  PriorityBand priority_band = 19;
+  string task_image = 20;
+  repeated string submit_argv = 21;
+  string client_revision_date = 22;
+  ContainerProfile container_profile = 23;
+}
+
+message CreateJob {
+  JobSpec spec = 1;
+  bytes bundle_blob = 2;
+}
+
+message CreatedJob {
+  JobIdentity job = 1;
+}
+
+message JobQuery {
+  string owner_id = 1;
+  ResourceKey parent = 2;
+  string job_id_prefix = 3;
+  repeated JobState states = 4;
+  string backend_id = 5;
+  string execution_cluster_id = 6;
+  PageRequest page = 7;
+  string resource_id = 8;
+  bool top_level_only = 9;
+}
+
+message JobSummary {
+  JobIdentity identity = 1;
+  string owner_id = 2;
+  JobIdentity parent = 3;
+  JobState state = 4;
+  string execution_cluster_id = 5;
+  string backend_id = 6;
+  int32 num_tasks = 7;
+  iris.time.Timestamp submitted_at = 8;
+  iris.time.Timestamp started_at = 9;
+  iris.time.Timestamp finished_at = 10;
+  string error_message = 11;
+  string pending_reason = 12;
+  int32 exit_code = 13;
+  ResourceSpecProto resources = 14;
+}
+
+message JobDetail {
+  JobSummary summary = 1;
+  JobSpec spec = 2;
+}
+
+message CancelJobUpdate {}
+
+message JobUpdate {
+  oneof intent {
+    CancelJobUpdate cancel = 1;
+  }
+}

@@ -19,6 +19,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.config import BackendConfig
 from iris.cluster.constraints import Constraint, ConstraintMode, ConstraintOp
 from iris.cluster.controller.auth import ControllerAuth
+from iris.cluster.controller.composition import wire_resource_service
 from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
 from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.operations import OperationalServices
@@ -46,7 +47,7 @@ from iris.resources.job import (
     PriorityBand,
 )
 from iris.resources.names import JobName
-from iris.rpc import controller_pb2, job_pb2, resource_pb2
+from iris.rpc import controller_pb2, job_pb2, resource_job_pb2
 from iris.rpc.endpoint_service import EndpointServiceImpl
 from iris.rpc.legacy.controller_service import LegacyControllerService
 from iris.rpc.legacy.job_codec import (
@@ -66,8 +67,6 @@ from iris.rpc.resource_codec import (
     job_spec_to_proto,
     resource_spec_from_proto,
 )
-from iris.rpc.resource_registrations import resource_catalog
-from iris.rpc.resource_service import ResourceServiceImpl
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select, update
 from tests.cluster.controller._test_support import ControllerTestState
@@ -170,7 +169,7 @@ def _controller_boundaries(
         operations=OperationalServices.from_database(db),
         endpoint_service=endpoint_service,
         controller=resources,
-        resource_service=ResourceServiceImpl(resource_catalog(resources)),
+        resource_service=wire_resource_service(resources),
     )
     return resources, legacy
 
@@ -279,7 +278,7 @@ def test_native_job_spec_survives_public_and_legacy_reopen(tmp_path, mock_contro
 
 
 def test_omitted_gpu_count_defaults_once_across_wires_and_storage(state, mock_controller, tmp_path, log_client) -> None:
-    resource_device = device_from_proto(resource_pb2.DeviceConfig(gpu=resource_pb2.GpuDevice(variant="H100")))
+    resource_device = device_from_proto(resource_job_pb2.DeviceConfig(gpu=resource_job_pb2.GpuDevice(variant="H100")))
     legacy_device = legacy_device_from_proto(job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="H100")))
     assert resource_device == legacy_device == GpuDevice(variant="H100", count=1)
 
@@ -322,7 +321,7 @@ def test_omitted_gpu_count_defaults_once_across_wires_and_storage(state, mock_co
 @pytest.mark.parametrize(
     ("message", "decoder"),
     [
-        (resource_pb2.DeviceConfig.FromString(b"\x22\x00"), device_from_proto),
+        (resource_job_pb2.DeviceConfig.FromString(b"\x22\x00"), device_from_proto),
         (job_pb2.DeviceConfig.FromString(b"\x22\x00"), legacy_device_from_proto),
     ],
 )
@@ -334,7 +333,7 @@ def test_unknown_nonempty_device_is_not_silently_dropped(message, decoder) -> No
 def test_resource_spec_with_present_empty_device_decodes_device_less_across_wires() -> None:
     legacy = job_pb2.ResourceSpecProto(cpu_millicores=2_000)
     legacy.device.SetInParent()
-    resource = resource_pb2.ResourceSpecProto(cpu_millicores=2_000)
+    resource = resource_job_pb2.ResourceSpecProto(cpu_millicores=2_000)
     resource.device.SetInParent()
 
     assert legacy_resource_spec_from_proto(legacy) == ResourceSpec(cpu=2.0)

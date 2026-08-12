@@ -19,7 +19,7 @@ from iris.resources.identity import (
     TaskIdentity,
 )
 from iris.resources.source import Freshness, ResourceSourceStatus, SourceState
-from iris.rpc import resource_pb2
+from iris.rpc import resource_action_pb2, resource_endpoint_pb2, resource_identity_pb2, resource_job_pb2
 from iris.rpc.resource_codec import (
     action_receipt_from_proto,
     action_receipt_to_proto,
@@ -145,27 +145,27 @@ def test_status_and_action_codecs_preserve_presence_and_zero_valued_enums() -> N
         completed_at=observed_at,
     )
 
-    assert endpoint_access_to_proto(EndpointAccess.PRIVATE) == resource_pb2.ENDPOINT_ACCESS_PRIVATE
-    assert endpoint_access_from_proto(resource_pb2.ENDPOINT_ACCESS_PRIVATE) is EndpointAccess.PRIVATE
+    assert endpoint_access_to_proto(EndpointAccess.PRIVATE) == resource_endpoint_pb2.ENDPOINT_ACCESS_PRIVATE
+    assert endpoint_access_from_proto(resource_endpoint_pb2.ENDPOINT_ACCESS_PRIVATE) is EndpointAccess.PRIVATE
     assert resource_source_status_from_proto(resource_source_status_to_proto(source)) == source
     assert action_receipt_from_proto(action_receipt_to_proto(receipt)) == receipt
 
 
 def test_shared_decoders_reject_unspecified_resource_and_action_enums() -> None:
     with pytest.raises(ValueError, match="resource kind wire value"):
-        resource_key_from_proto(resource_pb2.ResourceKey(cluster_id="cluster", resource_id="node"))
+        resource_key_from_proto(resource_identity_pb2.ResourceKey(cluster_id="cluster", resource_id="node"))
     with pytest.raises(ValueError, match="action kind wire value"):
-        action_receipt_from_proto(resource_pb2.ActionReceipt())
+        action_receipt_from_proto(resource_action_pb2.ActionReceipt())
 
 
 def test_redacted_job_spec_omits_secrets_and_workdir_payloads() -> None:
     spec = job_spec_from_proto(
-        resource_pb2.JobSpec(
+        resource_job_pb2.JobSpec(
             name="/owner/job",
-            environment=resource_pb2.EnvironmentConfig(
+            environment=resource_job_pb2.EnvironmentConfig(
                 env_vars={"WANDB_API_KEY": "secret", "SAFE": "visible"},
             ),
-            entrypoint=resource_pb2.RuntimeEntrypoint(
+            entrypoint=resource_job_pb2.RuntimeEntrypoint(
                 workdir_files={"secret.txt": b"payload"},
                 workdir_file_refs={"model": "gs://private/model"},
             ),

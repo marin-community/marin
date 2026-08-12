@@ -1,0 +1,68 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+edition = "2023";
+
+package iris.resource;
+
+import "iris_logging.proto";
+import "resource.proto";
+import "resource_identity.proto";
+import "time.proto";
+
+option features.field_presence = EXPLICIT;
+
+message UserSummary {
+  string user_id = 1;
+  map<string, int32> task_state_counts = 2;
+  map<string, int32> job_state_counts = 3;
+  string role = 4;
+  int64 budget_limit = 5;
+  int64 budget_spent = 6;
+  int32 max_band = 7;
+  bool budget_configured = 8;
+}
+
+message UserQuery {}
+
+message ActivityQuery {
+  ResourceKey target = 1;
+  string attempt_uid = 2;
+  iris.time.Timestamp after = 3;
+  PageRequest page = 4;
+}
+
+message ActivityEntry {
+  string entry_id = 1;
+  iris.time.Timestamp occurred_at = 2;
+  string source = 3;
+  string severity = 4;
+  string kind = 5;
+  string message = 6;
+  ResourceKey target = 7;
+  string attempt_uid = 8;
+  string correlation_id = 9;
+  map<string, string> attributes = 10;
+}
+
+message LogFilter {
+  iris.time.Timestamp after = 1;
+  int64 cursor = 2;
+  int32 max_lines = 3;
+  string substring = 4;
+  iris.logging.LogLevel minimum_level = 5;
+  bool tail = 6;
+}
+
+message LogTarget {
+  oneof target {
+    JobIdentity job = 1;
+    TaskIdentity task = 2;
+    AttemptIdentity attempt = 3;
+  }
+}
+
+message LogQuery {
+  LogTarget target = 1;
+  LogFilter filter = 2;
+}

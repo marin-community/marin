@@ -20,6 +20,7 @@ from iris.backends.status import (
 )
 from iris.cluster.config import BackendConfig
 from iris.cluster.controller.auth import ControllerAuth
+from iris.cluster.controller.composition import wire_resource_service
 from iris.cluster.controller.controller import CapabilityUrlConfig, Controller
 from iris.cluster.controller.endpoint_registry import EndpointRegistry
 from iris.cluster.controller.persistence.database import ControllerDB
@@ -36,9 +37,7 @@ from iris.resources.identity import NodeLocator, ResourceKind, SliceLocator
 from iris.resources.node import NodeHealth, NodeQuery
 from iris.resources.slice import SliceCapacityState, SliceLifecycle, SliceQuery
 from iris.resources.source import SourceState
-from iris.rpc import resource_pb2
-from iris.rpc.resource_registrations import resource_catalog
-from iris.rpc.resource_service import ResourceServiceImpl
+from iris.rpc import resource_fleet_pb2, resource_pb2
 from iris.rpc.resource_types import CAPACITY
 from rigging.provenance import Provenance
 from rigging.timing import Timestamp
@@ -454,14 +453,14 @@ def test_slices_filter_page_and_describe_observed_membership(resources: Controll
 
 
 def test_capacity_resource_carries_backend_authored_fleet_and_routing_facts(resources: Controller) -> None:
-    response = ResourceServiceImpl(resource_catalog(resources)).get_resource(
+    response = wire_resource_service(resources).get_resource(
         resource_pb2.GetResourceRequest(
             ref=resource_pb2.ResourceRef(authority_cluster_id="test", type=CAPACITY, id="capacity"),
             view=resource_pb2.RESOURCE_VIEW_FULL,
         ),
         None,
     )
-    capacity = resource_pb2.GetCapacityStatusResponse.FromString(response.resource.body.value)
+    capacity = resource_fleet_pb2.CapacityStatus.FromString(response.resource.body.value)
     backend = next(item for item in capacity.backends if item.backend_id == "rpc")
     group = next(item for item in backend.scaling_groups if item.name == "pool-a")
     capacity_slice = next(item for item in group.slices if item.summary.identity.key.resource_id == "slice-a")
@@ -477,5 +476,5 @@ def test_capacity_resource_carries_backend_authored_fleet_and_routing_facts(reso
     assert backend.availability.total_amounts == {"h100": 8}
     assert [(held.band, dict(held.amounts)) for held in backend.availability.held_by_band] == [(3, {"h100": 6})]
     assert capacity_slice.summary.running_task_count == 2
-    assert capacity_slice.summary.capacity_state == resource_pb2.SLICE_CAPACITY_STATE_IN_USE
+    assert capacity_slice.summary.capacity_state == resource_fleet_pb2.SLICE_CAPACITY_STATE_IN_USE
     assert capacity_slice.members[0].node.key.resource_id == "node-a"

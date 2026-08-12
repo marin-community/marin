@@ -3,12 +3,15 @@
 
 """Generic Connect RPC boundary for registered Iris resources."""
 
+from collections.abc import Callable
+from typing import cast
+
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.rpc import resource_pb2
-from iris.rpc.resource_registry import ResourceCatalog
+from iris.rpc.resource_registry import ResourceRouteRegistry, ResourceVerb
 
 PROTOCOL_VERSION = "resource.v1"
 
@@ -16,23 +19,28 @@ PROTOCOL_VERSION = "resource.v1"
 class ResourceServiceImpl:
     """Dispatch ResourceService verbs without importing concrete resource types."""
 
-    def __init__(self, catalog: ResourceCatalog, *, controller_generation: str = "") -> None:
-        self._catalog = catalog
+    def __init__(
+        self,
+        registry: ResourceRouteRegistry,
+        *,
+        controller_generation: str = "",
+    ) -> None:
+        self._registry = registry
         self._controller_generation = controller_generation
-
-    @property
-    def catalog(self) -> ResourceCatalog:
-        return self._catalog
 
     def create_resource(
         self,
         request: resource_pb2.CreateResourceRequest,
         context: RequestContext,
     ) -> resource_pb2.Operation:
-        registration = self._catalog.get(request.type)
         _require_mutation(request.mutation)
-        registration.require_create_body(request.body.type_url)
-        return self._catalog.require(request.type, "create")(request, context)
+        route = self._registry.require(request.type, ResourceVerb.CREATE)
+        route.require_type_url(request.type, request.body.type_url)
+        handler = cast(
+            Callable[[resource_pb2.CreateResourceRequest, RequestContext], resource_pb2.Operation],
+            route.endpoint,
+        )
+        return handler(request, context)
 
     def get_resource(
         self,
@@ -40,32 +48,44 @@ class ResourceServiceImpl:
         context: RequestContext,
     ) -> resource_pb2.GetResourceResponse:
         _require_ref(request.ref)
-        registration = self._catalog.get(request.ref.type)
-        registration.require_view(request.view)
-        return self._catalog.require(request.ref.type, "get")(request, context)
+        route = self._registry.require(request.ref.type, ResourceVerb.GET)
+        route.require_view(request.ref.type, request.view)
+        handler = cast(
+            Callable[[resource_pb2.GetResourceRequest, RequestContext], resource_pb2.GetResourceResponse],
+            route.endpoint,
+        )
+        return handler(request, context)
 
     def batch_get_resources(
         self,
         request: resource_pb2.BatchGetResourcesRequest,
         context: RequestContext,
     ) -> resource_pb2.BatchGetResourcesResponse:
-        registration = self._catalog.get(request.type)
-        registration.require_view(request.view)
+        route = self._registry.require(request.type, ResourceVerb.BATCH_GET)
+        route.require_view(request.type, request.view)
         for ref in request.refs:
             _require_ref(ref)
             if ref.type != request.type:
                 raise ConnectError(Code.INVALID_ARGUMENT, f"batch ref type {ref.type!r} does not match {request.type!r}")
-        return self._catalog.require(request.type, "batch_get")(request, context)
+        handler = cast(
+            Callable[[resource_pb2.BatchGetResourcesRequest, RequestContext], resource_pb2.BatchGetResourcesResponse],
+            route.endpoint,
+        )
+        return handler(request, context)
 
     def list_resources(
         self,
         request: resource_pb2.ListResourcesRequest,
         context: RequestContext,
     ) -> resource_pb2.ListResourcesResponse:
-        registration = self._catalog.get(request.type)
-        registration.require_view(request.view)
-        registration.require_query(request.query.type_url)
-        return self._catalog.require(request.type, "list")(request, context)
+        route = self._registry.require(request.type, ResourceVerb.LIST)
+        route.require_view(request.type, request.view)
+        route.require_type_url(request.type, request.query.type_url)
+        handler = cast(
+            Callable[[resource_pb2.ListResourcesRequest, RequestContext], resource_pb2.ListResourcesResponse],
+            route.endpoint,
+        )
+        return handler(request, context)
 
     def update_resource(
         self,
@@ -74,9 +94,13 @@ class ResourceServiceImpl:
     ) -> resource_pb2.Operation:
         _require_mutation(request.mutation)
         _require_ref(request.ref)
-        registration = self._catalog.get(request.ref.type)
-        registration.require_update(request.update.patch.type_url)
-        return self._catalog.require(request.ref.type, "update")(request, context)
+        route = self._registry.require(request.ref.type, ResourceVerb.UPDATE)
+        route.require_type_url(request.ref.type, request.update.type_url)
+        handler = cast(
+            Callable[[resource_pb2.UpdateResourceRequest, RequestContext], resource_pb2.Operation],
+            route.endpoint,
+        )
+        return handler(request, context)
 
     def delete_resource(
         self,
@@ -85,7 +109,12 @@ class ResourceServiceImpl:
     ) -> resource_pb2.Operation:
         _require_mutation(request.mutation)
         _require_ref(request.ref)
-        return self._catalog.require(request.ref.type, "delete")(request, context)
+        route = self._registry.require(request.ref.type, ResourceVerb.DELETE)
+        handler = cast(
+            Callable[[resource_pb2.DeleteResourceRequest, RequestContext], resource_pb2.Operation],
+            route.endpoint,
+        )
+        return handler(request, context)
 
     def get_service_info(
         self,
@@ -95,8 +124,8 @@ class ResourceServiceImpl:
         return resource_pb2.GetServiceInfoResponse(
             protocol_version=PROTOCOL_VERSION,
             controller_generation=self._controller_generation,
-            resources=self._catalog.capabilities,
-            backend_resources=self._catalog.backend_capabilities,
+            resources=self._registry.capabilities,
+            backend_resources=self._registry.backend_capabilities,
         )
 
 

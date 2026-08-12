@@ -40,7 +40,15 @@ from iris.resources.execution import ResourceSpec
 from iris.resources.identity import AttemptIdentity, JobIdentity, TaskIdentity
 from iris.resources.names import JobName
 from iris.resources.system import ProcessInfo
-from iris.rpc import controller_pb2, job_pb2, resource_pb2
+from iris.rpc import (
+    controller_pb2,
+    job_pb2,
+    resource_action_pb2,
+    resource_command_pb2,
+    resource_job_pb2,
+    resource_pb2,
+    resource_task_pb2,
+)
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.legacy.job_codec import (
     device_from_proto,
@@ -55,7 +63,6 @@ from iris.rpc.resource_client_codec import (
 from iris.rpc.resource_codec import (
     action_receipt_from_proto,
     attempt_identity_to_proto,
-    task_identity_to_proto,
 )
 from iris.rpc.resource_connect import ResourceServiceClientSync
 from iris.rpc.resource_types import ATTEMPT, EXEC_SESSION, JOB, PROFILE_CAPTURE, TASK
@@ -189,11 +196,11 @@ class ConnectPeerConnection:
                 resource_pb2.UpdateResourceRequest(
                     mutation=resource_pb2.MutationMetadata(request_id=idempotency_key, reason=reason),
                     ref=_ref(identity.key.cluster_id, JOB, identity.key.resource_id, identity.job_uid),
-                    update=resource_pb2.ResourceUpdate(new_state=resource_pb2.REQUESTED_RESOURCE_STATE_CANCELLED),
+                    update=_pack(resource_job_pb2.JobUpdate(cancel=resource_job_pb2.CancelJobUpdate())),
                 )
             )
         )
-        return action_receipt_from_proto(_unpack(operation.result, resource_pb2.ActionReceipt))
+        return action_receipt_from_proto(_unpack(operation.result, resource_action_pb2.ActionReceipt))
 
     def retry_task(
         self,
@@ -203,23 +210,21 @@ class ConnectPeerConnection:
         idempotency_key: str,
         reason: str,
     ) -> ActionReceipt:
-        condition = resource_pb2.RetryTaskRequest(
-            task=task_identity_to_proto(identity),
-            expected_attempt_uid=expected_attempt_uid,
-        )
         operation = peer_transport_call(
             lambda: self._resources.update_resource(
                 resource_pb2.UpdateResourceRequest(
                     mutation=resource_pb2.MutationMetadata(request_id=idempotency_key, reason=reason),
                     ref=_ref(identity.key.cluster_id, TASK, identity.key.resource_id, identity.task_uid),
-                    update=resource_pb2.ResourceUpdate(
-                        new_state=resource_pb2.REQUESTED_RESOURCE_STATE_PENDING,
-                        patch=_pack(condition),
+                    update=_pack(
+                        resource_task_pb2.TaskUpdate(
+                            expected_attempt_uid=expected_attempt_uid,
+                            preempt=resource_task_pb2.PreemptTaskUpdate(),
+                        )
                     ),
                 )
             )
         )
-        return action_receipt_from_proto(_unpack(operation.result, resource_pb2.ActionReceipt))
+        return action_receipt_from_proto(_unpack(operation.result, resource_action_pb2.ActionReceipt))
 
     def terminate_attempt(
         self,
@@ -233,11 +238,11 @@ class ConnectPeerConnection:
                 resource_pb2.UpdateResourceRequest(
                     mutation=resource_pb2.MutationMetadata(request_id=idempotency_key, reason=reason),
                     ref=_attempt_ref(identity),
-                    update=resource_pb2.ResourceUpdate(new_state=resource_pb2.REQUESTED_RESOURCE_STATE_CANCELLED),
+                    update=_pack(resource_task_pb2.AttemptUpdate(terminate=resource_task_pb2.TerminateAttemptUpdate())),
                 )
             )
         )
-        return action_receipt_from_proto(_unpack(operation.result, resource_pb2.ActionReceipt))
+        return action_receipt_from_proto(_unpack(operation.result, resource_action_pb2.ActionReceipt))
 
     def fail_attempt(
         self,
@@ -251,17 +256,17 @@ class ConnectPeerConnection:
                 resource_pb2.UpdateResourceRequest(
                     mutation=resource_pb2.MutationMetadata(request_id=idempotency_key, reason=reason),
                     ref=_attempt_ref(identity),
-                    update=resource_pb2.ResourceUpdate(new_state=resource_pb2.REQUESTED_RESOURCE_STATE_FAILED),
+                    update=_pack(resource_task_pb2.AttemptUpdate(fail=resource_task_pb2.FailAttemptUpdate())),
                 )
             )
         )
-        return action_receipt_from_proto(_unpack(operation.result, resource_pb2.ActionReceipt))
+        return action_receipt_from_proto(_unpack(operation.result, resource_action_pb2.ActionReceipt))
 
     def profile_task(self, request: ProfileRequest) -> ProfileResult:
         if request.attempt is None:
             raise ValueError("federated task profiling requires an Attempt identity")
         duration_seconds = int(request.duration.to_seconds()) if request.duration is not None else 0
-        wire_request = resource_pb2.ProfileAttemptRequest(
+        wire_request = resource_command_pb2.CreateProfileCapture(
             attempt=attempt_identity_to_proto(request.attempt),
             profile=profile_configuration_to_proto(request.profile),
         )
@@ -279,11 +284,11 @@ class ConnectPeerConnection:
                 timeout_ms=timeout_ms,
             )
         )
-        return profile_result_from_proto(_unpack(operation.result, resource_pb2.ProfileAttemptResponse))
+        return profile_result_from_proto(_unpack(operation.result, resource_command_pb2.ProfileCaptureResult))
 
     def exec_in_container(self, request: ExecRequest) -> ExecResult:
         timeout_seconds = int(request.timeout.to_seconds()) if request.timeout is not None else 0
-        wire_request = resource_pb2.ExecAttemptRequest(
+        wire_request = resource_command_pb2.CreateExecSession(
             attempt=attempt_identity_to_proto(request.attempt),
             command=request.command,
         )
@@ -305,7 +310,7 @@ class ConnectPeerConnection:
                 timeout_ms=budget_ms + _EXEC_PROXY_TIMEOUT_MARGIN_MS,
             )
         )
-        return exec_result_from_proto(_unpack(operation.result, resource_pb2.ExecAttemptResponse))
+        return exec_result_from_proto(_unpack(operation.result, resource_command_pb2.ExecSessionResult))
 
     def get_process_status(self, target: str) -> ProcessInfo:
         response = peer_transport_call(

@@ -4,8 +4,8 @@
 """Public list and diagnostic views over completed journeys."""
 
 from google.protobuf import any_pb2
-from iris.rpc import job_pb2, resource_pb2
-from iris.rpc.resource_registrations import resource_catalog
+from iris.cluster.controller.composition import wire_resource_service
+from iris.rpc import job_pb2, resource_job_pb2, resource_observability_pb2, resource_pb2
 from iris.rpc.resource_service import ResourceServiceImpl
 from iris.rpc.resource_types import JOB, USER_SUMMARY
 from rigging.server_auth import VerifiedIdentity, identity_scope
@@ -18,7 +18,7 @@ def _pack(value) -> any_pb2.Any:
 
 
 def _service(journey) -> ResourceServiceImpl:
-    return ResourceServiceImpl(resource_catalog(journey.controller.controller))
+    return wire_resource_service(journey.controller.controller)
 
 
 def _body(resource: resource_pb2.Resource, message_type):
@@ -37,13 +37,14 @@ def test_resource_user_summary_groups_active_work_and_limits_ordinary_users(jour
     response = service.list_resources(
         resource_pb2.ListResourcesRequest(
             type=USER_SUMMARY,
-            query=_pack(resource_pb2.ListUsersRequest()),
+            query=_pack(resource_observability_pb2.UserQuery()),
             view=resource_pb2.RESOURCE_VIEW_BASIC,
         ),
         None,
     )
     users = {
-        user.user_id: user for user in (_body(resource, resource_pb2.UserSummary) for resource in response.resources)
+        user.user_id: user
+        for user in (_body(resource, resource_observability_pb2.UserSummary) for resource in response.resources)
     }
 
     assert set(users) == {"alice", "bob", "idle-user"}
@@ -60,13 +61,15 @@ def test_resource_user_summary_groups_active_work_and_limits_ordinary_users(jour
         restricted = service.list_resources(
             resource_pb2.ListResourcesRequest(
                 type=USER_SUMMARY,
-                query=_pack(resource_pb2.ListUsersRequest()),
+                query=_pack(resource_observability_pb2.UserQuery()),
                 view=resource_pb2.RESOURCE_VIEW_BASIC,
             ),
             None,
         )
 
-    assert [_body(resource, resource_pb2.UserSummary).user_id for resource in restricted.resources] == ["alice"]
+    assert [_body(resource, resource_observability_pb2.UserSummary).user_id for resource in restricted.resources] == [
+        "alice"
+    ]
 
 
 def test_resource_job_list_can_return_only_top_level_jobs(journey):
@@ -76,15 +79,15 @@ def test_resource_job_list_can_return_only_top_level_jobs(journey):
     response = _service(journey).list_resources(
         resource_pb2.ListResourcesRequest(
             type=JOB,
-            query=_pack(resource_pb2.JobQuery(owner_id="alice", top_level_only=True)),
+            query=_pack(resource_job_pb2.JobQuery(owner_id="alice", top_level_only=True)),
             view=resource_pb2.RESOURCE_VIEW_BASIC,
         ),
         None,
     )
 
-    assert [_body(resource, resource_pb2.JobSummary).identity.key.resource_id for resource in response.resources] == [
-        root.wire_id
-    ]
+    assert [
+        _body(resource, resource_job_pb2.JobSummary).identity.key.resource_id for resource in response.resources
+    ] == [root.wire_id]
 
 
 def test_list_jobs_filters_terminal_and_pending_jobs_and_cancel_finished_is_noop(journey):

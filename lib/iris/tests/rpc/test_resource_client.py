@@ -15,14 +15,25 @@ from iris.resources.job import ContainerProfile, ExistingJobPolicy, JobPreemptio
 from iris.resources.names import Namespace
 from iris.resources.node import NodeQuery
 from iris.resources.task import TaskQuery
-from iris.rpc import job_pb2, resource_pb2, time_pb2
+from iris.rpc import (
+    job_pb2,
+    resource_action_pb2,
+    resource_command_pb2,
+    resource_endpoint_pb2,
+    resource_fleet_pb2,
+    resource_identity_pb2,
+    resource_job_pb2,
+    resource_pb2,
+    resource_task_pb2,
+    time_pb2,
+)
 from iris.rpc.resource_client import ResourceRpcClient
 from iris.rpc.resource_types import ATTEMPT, ENDPOINT, EXEC_SESSION, JOB, NODE, PROFILE_CAPTURE, TASK
 from rigging.timing import Duration
 
 
-def _key(kind: int, resource_id: str) -> resource_pb2.ResourceKey:
-    return resource_pb2.ResourceKey(cluster_id="prod", kind=kind, resource_id=resource_id)
+def _key(kind: int, resource_id: str) -> resource_identity_pb2.ResourceKey:
+    return resource_identity_pb2.ResourceKey(cluster_id="prod", kind=kind, resource_id=resource_id)
 
 
 def _pack(value: Message) -> any_pb2.Any:
@@ -67,37 +78,37 @@ class _ResourceRpc:
         self.rpc_timeouts.append((request.type, timeout_ms))
         if request.type == JOB:
             return _operation(
-                resource_pb2.SubmitJobResponse(
-                    job=resource_pb2.JobIdentity(
-                        key=_key(resource_pb2.RESOURCE_KIND_JOB, "/alice/train"),
+                resource_job_pb2.CreatedJob(
+                    job=resource_identity_pb2.JobIdentity(
+                        key=_key(resource_identity_pb2.RESOURCE_KIND_JOB, "/alice/train"),
                         job_uid="job-uid",
                     )
                 )
             )
         if request.type == EXEC_SESSION:
-            return _operation(resource_pb2.ExecAttemptResponse(exit_code=0, stdout="done"))
+            return _operation(resource_command_pb2.ExecSessionResult(exit_code=0, stdout="done"))
         if request.type == PROFILE_CAPTURE:
-            return _operation(resource_pb2.ProfileAttemptResponse(profile_data=b"profile"))
+            return _operation(resource_command_pb2.ProfileCaptureResult(profile_data=b"profile"))
         raise AssertionError(request.type)
 
     def list_resources(self, request: resource_pb2.ListResourcesRequest) -> resource_pb2.ListResourcesResponse:
         self.requests.append(request)
         if request.type == TASK:
-            item = resource_pb2.TaskSummary(
-                identity=resource_pb2.TaskIdentity(
-                    key=_key(resource_pb2.RESOURCE_KIND_TASK, "/alice/train/7"),
+            item = resource_task_pb2.TaskSummary(
+                identity=resource_identity_pb2.TaskIdentity(
+                    key=_key(resource_identity_pb2.RESOURCE_KIND_TASK, "/alice/train/7"),
                     task_uid="task-uid-7",
                 ),
-                job=resource_pb2.JobIdentity(
-                    key=_key(resource_pb2.RESOURCE_KIND_JOB, "/alice/train"),
+                job=resource_identity_pb2.JobIdentity(
+                    key=_key(resource_identity_pb2.RESOURCE_KIND_JOB, "/alice/train"),
                     job_uid="job-uid",
                 ),
                 task_index=7,
                 state=job_pb2.TASK_STATE_RUNNING,
                 execution_cluster_id="prod",
                 backend_id="east",
-                current_attempt=resource_pb2.AttemptIdentity(
-                    task=_key(resource_pb2.RESOURCE_KIND_TASK, "/alice/train/7"),
+                current_attempt=resource_identity_pb2.AttemptIdentity(
+                    task=_key(resource_identity_pb2.RESOURCE_KIND_TASK, "/alice/train/7"),
                     attempt_number=2,
                     attempt_uid="attempt-uid-2",
                 ),
@@ -127,15 +138,15 @@ class _ResourceRpc:
                 ],
             )
         if request.type == NODE:
-            item = resource_pb2.NodeSummary(
-                identity=resource_pb2.NodeIdentity(
-                    key=_key(resource_pb2.RESOURCE_KIND_NODE, "worker-1"),
+            item = resource_fleet_pb2.NodeSummary(
+                identity=resource_identity_pb2.NodeIdentity(
+                    key=_key(resource_identity_pb2.RESOURCE_KIND_NODE, "worker-1"),
                     backend_id="east",
                     node_uid="node-uid-1",
                 ),
-                health=resource_pb2.NODE_HEALTH_READY,
+                health=resource_fleet_pb2.NODE_HEALTH_READY,
                 schedulable=True,
-                capacity=resource_pb2.NodeCapacity(cpu_millicores=2_000, memory_bytes=4_096),
+                capacity=resource_fleet_pb2.NodeCapacity(cpu_millicores=2_000, memory_bytes=4_096),
                 observed_at=time_pb2.Timestamp(epoch_ms=1_000),
                 region="us-east5",
             )
@@ -153,7 +164,7 @@ class _ResourceRpc:
                 ]
             )
         if request.type == ENDPOINT:
-            query = _unpack(request.query, resource_pb2.EndpointQuery)
+            query = _unpack(request.query, resource_endpoint_pb2.EndpointQuery)
             if not query.page.page_token:
                 endpoints = (
                     ("endpoint-1", "/actors/coordinator"),
@@ -167,8 +178,8 @@ class _ResourceRpc:
                 resources=[
                     _resource(
                         resource_pb2.ResourceRef(authority_cluster_id="prod", type=ENDPOINT, id=endpoint_id),
-                        resource_pb2.EndpointSummary(
-                            key=_key(resource_pb2.RESOURCE_KIND_ENDPOINT, endpoint_id),
+                        resource_endpoint_pb2.EndpointSummary(
+                            key=_key(resource_identity_pb2.RESOURCE_KIND_ENDPOINT, endpoint_id),
                             endpoint_id=endpoint_id,
                             name=name,
                             execution_cluster_id="prod",
@@ -183,21 +194,21 @@ class _ResourceRpc:
     def get_resource(self, request: resource_pb2.GetResourceRequest) -> resource_pb2.GetResourceResponse:
         self.requests.append(request)
         if request.ref.type == JOB:
-            summary = resource_pb2.JobSummary(
-                identity=resource_pb2.JobIdentity(
-                    key=_key(resource_pb2.RESOURCE_KIND_JOB, request.ref.id),
+            summary = resource_job_pb2.JobSummary(
+                identity=resource_identity_pb2.JobIdentity(
+                    key=_key(resource_identity_pb2.RESOURCE_KIND_JOB, request.ref.id),
                     job_uid="job-uid",
                 ),
-                state=resource_pb2.JOB_STATE_RUNNING,
+                state=resource_job_pb2.JOB_STATE_RUNNING,
             )
             return resource_pb2.GetResourceResponse(resource=_resource(request.ref, summary))
         if request.ref.type == ATTEMPT:
             _, attempt = request.ref.id.rsplit(":", 1)
             number = 4 if attempt == "current" else int(attempt)
-            detail = resource_pb2.AttemptDetail(
-                summary=resource_pb2.AttemptSummary(
-                    identity=resource_pb2.AttemptIdentity(
-                        task=_key(resource_pb2.RESOURCE_KIND_TASK, "/alice/train/7"),
+            detail = resource_task_pb2.AttemptDetail(
+                summary=resource_task_pb2.AttemptSummary(
+                    identity=resource_identity_pb2.AttemptIdentity(
+                        task=_key(resource_identity_pb2.RESOURCE_KIND_TASK, "/alice/train/7"),
                         attempt_number=number,
                         attempt_uid=f"attempt-{number}",
                     ),
@@ -217,14 +228,14 @@ class _ResourceRpc:
         if request.type == TASK:
             results = []
             for ref in request.refs:
-                detail = resource_pb2.TaskDetail(
-                    summary=resource_pb2.TaskSummary(
-                        identity=resource_pb2.TaskIdentity(
-                            key=_key(resource_pb2.RESOURCE_KIND_TASK, ref.id),
+                detail = resource_task_pb2.TaskDetail(
+                    summary=resource_task_pb2.TaskSummary(
+                        identity=resource_identity_pb2.TaskIdentity(
+                            key=_key(resource_identity_pb2.RESOURCE_KIND_TASK, ref.id),
                             task_uid=f"uid-{ref.id}",
                         ),
-                        job=resource_pb2.JobIdentity(
-                            key=_key(resource_pb2.RESOURCE_KIND_JOB, "/alice/train"),
+                        job=resource_identity_pb2.JobIdentity(
+                            key=_key(resource_identity_pb2.RESOURCE_KIND_JOB, "/alice/train"),
                             job_uid="job-uid",
                         ),
                         state=job_pb2.TASK_STATE_RUNNING,
@@ -241,9 +252,9 @@ class _ResourceRpc:
                     resource_pb2.BatchGetResourceResult(
                         resource=_resource(
                             ref,
-                            resource_pb2.EndpointDetail(
-                                summary=resource_pb2.EndpointSummary(
-                                    key=_key(resource_pb2.RESOURCE_KIND_ENDPOINT, ref.id),
+                            resource_endpoint_pb2.EndpointDetail(
+                                summary=resource_endpoint_pb2.EndpointSummary(
+                                    key=_key(resource_identity_pb2.RESOURCE_KIND_ENDPOINT, ref.id),
                                     endpoint_id=ref.id,
                                     name="/actors/coordinator",
                                     execution_cluster_id="prod",
@@ -261,13 +272,13 @@ class _ResourceRpc:
     def update_resource(self, request: resource_pb2.UpdateResourceRequest) -> resource_pb2.Operation:
         self.requests.append(request)
         assert request.ref.type == JOB
-        receipt = resource_pb2.ActionReceipt(
+        receipt = resource_action_pb2.ActionReceipt(
             action_id="action-1",
-            kind=resource_pb2.ACTION_KIND_CANCEL_JOB,
-            target=_key(resource_pb2.RESOURCE_KIND_JOB, request.ref.id),
+            kind=resource_action_pb2.ACTION_KIND_CANCEL_JOB,
+            target=_key(resource_identity_pb2.RESOURCE_KIND_JOB, request.ref.id),
             expected_target_uid=request.ref.uid,
-            state=resource_pb2.ACTION_STATE_SUCCEEDED,
-            result_code=resource_pb2.ACTION_RESULT_SATISFIED,
+            state=resource_action_pb2.ACTION_STATE_SUCCEEDED,
+            result_code=resource_action_pb2.ACTION_RESULT_SATISFIED,
             created_at=time_pb2.Timestamp(epoch_ms=1_000),
             updated_at=time_pb2.Timestamp(epoch_ms=2_000),
             completed_at=time_pb2.Timestamp(epoch_ms=2_000),
@@ -343,7 +354,7 @@ def test_submit_job_uses_generic_create_with_replacement_deadline(monkeypatch) -
     identity = client.submit_job(_job_spec(), bundle=b"bundle")
     assert identity.job_uid == "job-uid"
     request = rpc.requests[-1]
-    body = _unpack(request.body, resource_pb2.SubmitJobRequest)
+    body = _unpack(request.body, resource_job_pb2.CreateJob)
     assert request.type == JOB
     assert body.bundle_blob == b"bundle"
     assert rpc.rpc_timeouts[-1] == (JOB, 180_000)
@@ -356,7 +367,7 @@ def test_list_tasks_returns_rows_alongside_unavailable_source(monkeypatch) -> No
     assert page.items[0].current_attempt.attempt_uid == "attempt-uid-2"
     assert page.source_statuses[0].error_code == "backend_unavailable"
     request = rpc.requests[0]
-    query = _unpack(request.query, resource_pb2.TaskQuery)
+    query = _unpack(request.query, resource_task_pb2.TaskQuery)
     assert request.type == TASK
     assert query.backend_id == "east"
     assert query.page.page_size == 17
@@ -398,7 +409,7 @@ def test_list_nodes_preserves_region_and_typed_query(monkeypatch) -> None:
     client, rpc = _client(monkeypatch)
     page = client.list_nodes(NodeQuery(page_size=500))
     assert page.items[0].region == "us-east5"
-    query = _unpack(rpc.requests[0].query, resource_pb2.NodeQuery)
+    query = _unpack(rpc.requests[0].query, resource_fleet_pb2.NodeQuery)
     assert query.page.page_size == 500
 
 
@@ -430,7 +441,8 @@ def test_cancel_job_uses_generic_update_with_exact_ref(monkeypatch) -> None:
     assert receipt.result_code is ActionResult.SATISFIED
     request = rpc.requests[0]
     assert request.ref.uid == "job-uid"
-    assert request.update.new_state == resource_pb2.REQUESTED_RESOURCE_STATE_CANCELLED
+    update = _unpack(request.update, resource_job_pb2.JobUpdate)
+    assert update.WhichOneof("intent") == "cancel"
     assert request.mutation.request_id == "operator-request-9"
 
 
@@ -445,7 +457,7 @@ def test_exec_attempt_generic_create_deadline_outlasts_command_timeout(monkeypat
     )
     assert result.stdout == "done"
     request = rpc.requests[-1]
-    body = _unpack(request.body, resource_pb2.ExecAttemptRequest)
+    body = _unpack(request.body, resource_command_pb2.CreateExecSession)
     assert body.timeout.milliseconds == requested_timeout.to_ms()
     assert request.parent.uid == "attempt-uid"
     operation, rpc_timeout_ms = rpc.rpc_timeouts[-1]
@@ -464,7 +476,7 @@ def test_profile_attempt_generic_create_deadline_outlasts_capture_duration(monke
     )
     assert result.profile_data == b"profile"
     request = rpc.requests[-1]
-    body = _unpack(request.body, resource_pb2.ProfileAttemptRequest)
+    body = _unpack(request.body, resource_command_pb2.CreateProfileCapture)
     assert body.duration.milliseconds == requested_duration.to_ms()
     operation, rpc_timeout_ms = rpc.rpc_timeouts[-1]
     assert operation == PROFILE_CAPTURE

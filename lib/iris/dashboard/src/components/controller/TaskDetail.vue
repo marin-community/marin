@@ -179,11 +179,10 @@ async function retryTask() {
   try {
     const operation = await updateResource<ResourceActionReceipt>(
       { ...taskRef.value, uid: summary.value!.identity.taskUid },
-      'PENDING',
-      {},
+      RESOURCE_MESSAGES.taskUpdate,
       {
-        type: RESOURCE_MESSAGES.retryTaskRequest,
-        value: { expectedAttemptUid: current.attemptUid },
+        expectedAttemptUid: current.attemptUid,
+        preempt: {},
       },
     )
     action.value = { receipt: operation.result }
@@ -202,12 +201,16 @@ async function terminateAttempt() {
   acting.value = true
   actionError.value = null
   try {
-    const operation = await updateResource<ResourceActionReceipt>({
-      authorityClusterId: attempt.task.clusterId,
-      type: RESOURCE_TYPES.attempt,
-      id: `${attempt.task.resourceId}:${attempt.attemptNumber}`,
-      uid: attempt.attemptUid,
-    }, 'CANCELLED')
+    const operation = await updateResource<ResourceActionReceipt>(
+      {
+        authorityClusterId: attempt.task.clusterId,
+        type: RESOURCE_TYPES.attempt,
+        id: `${attempt.task.resourceId}:${attempt.attemptNumber}`,
+        uid: attempt.attemptUid,
+      },
+      RESOURCE_MESSAGES.attemptUpdate,
+      { terminate: {} },
+    )
     action.value = { receipt: operation.result }
     await refreshPage()
   } catch (cause) {

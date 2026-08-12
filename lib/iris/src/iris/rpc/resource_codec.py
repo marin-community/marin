@@ -50,53 +50,61 @@ from iris.resources.job import (
 from iris.resources.node import NodeHealth
 from iris.resources.slice import MembershipState, SliceCapacityState, SliceLifecycle
 from iris.resources.source import Freshness, ResourceSourceStatus, SourceState
-from iris.rpc import resource_pb2
+from iris.rpc import (
+    resource_action_pb2,
+    resource_command_pb2,
+    resource_endpoint_pb2,
+    resource_fleet_pb2,
+    resource_identity_pb2,
+    resource_job_pb2,
+    resource_pb2,
+)
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_from_proto, timestamp_to_proto
 
 _CPU_FORMAT_TO_PROTO = {
-    CpuProfileFormat.UNSPECIFIED: resource_pb2.CpuProfile.FORMAT_UNSPECIFIED,
-    CpuProfileFormat.FLAMEGRAPH: resource_pb2.CpuProfile.FLAMEGRAPH,
-    CpuProfileFormat.SPEEDSCOPE: resource_pb2.CpuProfile.SPEEDSCOPE,
-    CpuProfileFormat.RAW: resource_pb2.CpuProfile.RAW,
+    CpuProfileFormat.UNSPECIFIED: resource_command_pb2.CpuProfile.FORMAT_UNSPECIFIED,
+    CpuProfileFormat.FLAMEGRAPH: resource_command_pb2.CpuProfile.FLAMEGRAPH,
+    CpuProfileFormat.SPEEDSCOPE: resource_command_pb2.CpuProfile.SPEEDSCOPE,
+    CpuProfileFormat.RAW: resource_command_pb2.CpuProfile.RAW,
 }
 _CPU_FORMAT_FROM_PROTO = {value: key for key, value in _CPU_FORMAT_TO_PROTO.items()}
 _MEMORY_FORMAT_TO_PROTO = {
-    MemoryProfileFormat.UNSPECIFIED: resource_pb2.MemoryProfile.FORMAT_UNSPECIFIED,
-    MemoryProfileFormat.FLAMEGRAPH: resource_pb2.MemoryProfile.FLAMEGRAPH,
-    MemoryProfileFormat.TABLE: resource_pb2.MemoryProfile.TABLE,
-    MemoryProfileFormat.STATS: resource_pb2.MemoryProfile.STATS,
-    MemoryProfileFormat.RAW: resource_pb2.MemoryProfile.RAW,
+    MemoryProfileFormat.UNSPECIFIED: resource_command_pb2.MemoryProfile.FORMAT_UNSPECIFIED,
+    MemoryProfileFormat.FLAMEGRAPH: resource_command_pb2.MemoryProfile.FLAMEGRAPH,
+    MemoryProfileFormat.TABLE: resource_command_pb2.MemoryProfile.TABLE,
+    MemoryProfileFormat.STATS: resource_command_pb2.MemoryProfile.STATS,
+    MemoryProfileFormat.RAW: resource_command_pb2.MemoryProfile.RAW,
 }
 _MEMORY_FORMAT_FROM_PROTO = {value: key for key, value in _MEMORY_FORMAT_TO_PROTO.items()}
 _RESOURCE_KIND_TO_PROTO = {
-    ResourceKind.JOB: resource_pb2.RESOURCE_KIND_JOB,
-    ResourceKind.TASK: resource_pb2.RESOURCE_KIND_TASK,
-    ResourceKind.ATTEMPT: resource_pb2.RESOURCE_KIND_ATTEMPT,
-    ResourceKind.ENDPOINT: resource_pb2.RESOURCE_KIND_ENDPOINT,
-    ResourceKind.NODE: resource_pb2.RESOURCE_KIND_NODE,
-    ResourceKind.SLICE: resource_pb2.RESOURCE_KIND_SLICE,
+    ResourceKind.JOB: resource_identity_pb2.RESOURCE_KIND_JOB,
+    ResourceKind.TASK: resource_identity_pb2.RESOURCE_KIND_TASK,
+    ResourceKind.ATTEMPT: resource_identity_pb2.RESOURCE_KIND_ATTEMPT,
+    ResourceKind.ENDPOINT: resource_identity_pb2.RESOURCE_KIND_ENDPOINT,
+    ResourceKind.NODE: resource_identity_pb2.RESOURCE_KIND_NODE,
+    ResourceKind.SLICE: resource_identity_pb2.RESOURCE_KIND_SLICE,
 }
 _RESOURCE_KIND_FROM_PROTO = {value: key for key, value in _RESOURCE_KIND_TO_PROTO.items()}
 _ACTION_KIND_TO_PROTO = {
-    ActionKind.CANCEL_JOB: resource_pb2.ACTION_KIND_CANCEL_JOB,
-    ActionKind.RETRY_TASK: resource_pb2.ACTION_KIND_RETRY_TASK,
-    ActionKind.TERMINATE_ATTEMPT: resource_pb2.ACTION_KIND_TERMINATE_ATTEMPT,
-    ActionKind.FAIL_ATTEMPT: resource_pb2.ACTION_KIND_FAIL_ATTEMPT,
+    ActionKind.CANCEL_JOB: resource_action_pb2.ACTION_KIND_CANCEL_JOB,
+    ActionKind.RETRY_TASK: resource_action_pb2.ACTION_KIND_RETRY_TASK,
+    ActionKind.TERMINATE_ATTEMPT: resource_action_pb2.ACTION_KIND_TERMINATE_ATTEMPT,
+    ActionKind.FAIL_ATTEMPT: resource_action_pb2.ACTION_KIND_FAIL_ATTEMPT,
 }
 _ACTION_KIND_FROM_PROTO = {value: key for key, value in _ACTION_KIND_TO_PROTO.items()}
 _ACTION_STATE_TO_PROTO = {
-    ActionState.ACCEPTED: resource_pb2.ACTION_STATE_ACCEPTED,
-    ActionState.VERIFYING: resource_pb2.ACTION_STATE_VERIFYING,
-    ActionState.SUCCEEDED: resource_pb2.ACTION_STATE_SUCCEEDED,
-    ActionState.FAILED: resource_pb2.ACTION_STATE_FAILED,
+    ActionState.ACCEPTED: resource_action_pb2.ACTION_STATE_ACCEPTED,
+    ActionState.VERIFYING: resource_action_pb2.ACTION_STATE_VERIFYING,
+    ActionState.SUCCEEDED: resource_action_pb2.ACTION_STATE_SUCCEEDED,
+    ActionState.FAILED: resource_action_pb2.ACTION_STATE_FAILED,
 }
 _ACTION_STATE_FROM_PROTO = {value: key for key, value in _ACTION_STATE_TO_PROTO.items()}
 _ACTION_RESULT_TO_PROTO = {
-    ActionResult.NONE: resource_pb2.ACTION_RESULT_NONE,
-    ActionResult.SATISFIED: resource_pb2.ACTION_RESULT_SATISFIED,
-    ActionResult.TARGET_ABSENT: resource_pb2.ACTION_RESULT_TARGET_ABSENT,
-    ActionResult.PROVIDER_REJECTED: resource_pb2.ACTION_RESULT_PROVIDER_REJECTED,
-    ActionResult.INTERNAL_ERROR: resource_pb2.ACTION_RESULT_INTERNAL_ERROR,
+    ActionResult.NONE: resource_action_pb2.ACTION_RESULT_NONE,
+    ActionResult.SATISFIED: resource_action_pb2.ACTION_RESULT_SATISFIED,
+    ActionResult.TARGET_ABSENT: resource_action_pb2.ACTION_RESULT_TARGET_ABSENT,
+    ActionResult.PROVIDER_REJECTED: resource_action_pb2.ACTION_RESULT_PROVIDER_REJECTED,
+    ActionResult.INTERNAL_ERROR: resource_action_pb2.ACTION_RESULT_INTERNAL_ERROR,
 }
 _ACTION_RESULT_FROM_PROTO = {value: key for key, value in _ACTION_RESULT_TO_PROTO.items()}
 _SOURCE_STATE_TO_PROTO = {
@@ -112,35 +120,35 @@ _FRESHNESS_TO_PROTO = {
 }
 _FRESHNESS_FROM_PROTO = {value: key for key, value in _FRESHNESS_TO_PROTO.items()}
 _NODE_HEALTH_TO_PROTO = {
-    NodeHealth.READY: resource_pb2.NODE_HEALTH_READY,
-    NodeHealth.DEGRADED: resource_pb2.NODE_HEALTH_DEGRADED,
-    NodeHealth.UNAVAILABLE: resource_pb2.NODE_HEALTH_UNAVAILABLE,
-    NodeHealth.RETIRED: resource_pb2.NODE_HEALTH_RETIRED,
+    NodeHealth.READY: resource_fleet_pb2.NODE_HEALTH_READY,
+    NodeHealth.DEGRADED: resource_fleet_pb2.NODE_HEALTH_DEGRADED,
+    NodeHealth.UNAVAILABLE: resource_fleet_pb2.NODE_HEALTH_UNAVAILABLE,
+    NodeHealth.RETIRED: resource_fleet_pb2.NODE_HEALTH_RETIRED,
 }
 _NODE_HEALTH_FROM_PROTO = {value: key for key, value in _NODE_HEALTH_TO_PROTO.items()}
 _SLICE_LIFECYCLE_TO_PROTO = {
-    SliceLifecycle.CREATING: resource_pb2.SLICE_LIFECYCLE_CREATING,
-    SliceLifecycle.READY: resource_pb2.SLICE_LIFECYCLE_READY,
-    SliceLifecycle.DELETING: resource_pb2.SLICE_LIFECYCLE_DELETING,
-    SliceLifecycle.FAILED: resource_pb2.SLICE_LIFECYCLE_FAILED,
+    SliceLifecycle.CREATING: resource_fleet_pb2.SLICE_LIFECYCLE_CREATING,
+    SliceLifecycle.READY: resource_fleet_pb2.SLICE_LIFECYCLE_READY,
+    SliceLifecycle.DELETING: resource_fleet_pb2.SLICE_LIFECYCLE_DELETING,
+    SliceLifecycle.FAILED: resource_fleet_pb2.SLICE_LIFECYCLE_FAILED,
 }
 _SLICE_LIFECYCLE_FROM_PROTO = {value: key for key, value in _SLICE_LIFECYCLE_TO_PROTO.items()}
 _MEMBERSHIP_STATE_TO_PROTO = {
-    MembershipState.UNKNOWN: resource_pb2.MEMBERSHIP_STATE_UNKNOWN,
-    MembershipState.OBSERVED: resource_pb2.MEMBERSHIP_STATE_OBSERVED,
+    MembershipState.UNKNOWN: resource_fleet_pb2.MEMBERSHIP_STATE_UNKNOWN,
+    MembershipState.OBSERVED: resource_fleet_pb2.MEMBERSHIP_STATE_OBSERVED,
 }
 _MEMBERSHIP_STATE_FROM_PROTO = {value: key for key, value in _MEMBERSHIP_STATE_TO_PROTO.items()}
 _SLICE_CAPACITY_STATE_TO_PROTO = {
-    SliceCapacityState.UNKNOWN: resource_pb2.SLICE_CAPACITY_STATE_UNKNOWN,
-    SliceCapacityState.AVAILABLE: resource_pb2.SLICE_CAPACITY_STATE_AVAILABLE,
-    SliceCapacityState.IN_USE: resource_pb2.SLICE_CAPACITY_STATE_IN_USE,
-    SliceCapacityState.IDLE: resource_pb2.SLICE_CAPACITY_STATE_IDLE,
-    SliceCapacityState.DEGRADED: resource_pb2.SLICE_CAPACITY_STATE_DEGRADED,
+    SliceCapacityState.UNKNOWN: resource_fleet_pb2.SLICE_CAPACITY_STATE_UNKNOWN,
+    SliceCapacityState.AVAILABLE: resource_fleet_pb2.SLICE_CAPACITY_STATE_AVAILABLE,
+    SliceCapacityState.IN_USE: resource_fleet_pb2.SLICE_CAPACITY_STATE_IN_USE,
+    SliceCapacityState.IDLE: resource_fleet_pb2.SLICE_CAPACITY_STATE_IDLE,
+    SliceCapacityState.DEGRADED: resource_fleet_pb2.SLICE_CAPACITY_STATE_DEGRADED,
 }
 _SLICE_CAPACITY_STATE_FROM_PROTO = {value: key for key, value in _SLICE_CAPACITY_STATE_TO_PROTO.items()}
 _ENDPOINT_ACCESS_TO_PROTO = {
-    EndpointAccess.PRIVATE: resource_pb2.ENDPOINT_ACCESS_PRIVATE,
-    EndpointAccess.LINK: resource_pb2.ENDPOINT_ACCESS_LINK,
+    EndpointAccess.PRIVATE: resource_endpoint_pb2.ENDPOINT_ACCESS_PRIVATE,
+    EndpointAccess.LINK: resource_endpoint_pb2.ENDPOINT_ACCESS_LINK,
 }
 _ENDPOINT_ACCESS_FROM_PROTO = {value: key for key, value in _ENDPOINT_ACCESS_TO_PROTO.items()}
 
@@ -152,81 +160,81 @@ def _enum_from_proto[T](mapping: Mapping[int, T], value: int, field_name: str) -
         raise ValueError(f"{field_name} wire value is unspecified") from exc
 
 
-def resource_key_to_proto(value: ResourceKey) -> resource_pb2.ResourceKey:
-    return resource_pb2.ResourceKey(
+def resource_key_to_proto(value: ResourceKey) -> resource_identity_pb2.ResourceKey:
+    return resource_identity_pb2.ResourceKey(
         cluster_id=value.cluster_id,
         kind=_RESOURCE_KIND_TO_PROTO[value.kind],
         resource_id=value.resource_id,
     )
 
 
-def resource_key_from_proto(value: resource_pb2.ResourceKey) -> ResourceKey:
+def resource_key_from_proto(value: resource_identity_pb2.ResourceKey) -> ResourceKey:
     kind = _enum_from_proto(_RESOURCE_KIND_FROM_PROTO, value.kind, "resource kind")
     return ResourceKey(value.cluster_id, kind, value.resource_id)
 
 
-def job_identity_to_proto(value: JobIdentity) -> resource_pb2.JobIdentity:
-    return resource_pb2.JobIdentity(key=resource_key_to_proto(value.key), job_uid=value.job_uid)
+def job_identity_to_proto(value: JobIdentity) -> resource_identity_pb2.JobIdentity:
+    return resource_identity_pb2.JobIdentity(key=resource_key_to_proto(value.key), job_uid=value.job_uid)
 
 
-def job_identity_from_proto(value: resource_pb2.JobIdentity) -> JobIdentity:
+def job_identity_from_proto(value: resource_identity_pb2.JobIdentity) -> JobIdentity:
     return JobIdentity(resource_key_from_proto(value.key), value.job_uid)
 
 
-def task_identity_to_proto(value: TaskIdentity) -> resource_pb2.TaskIdentity:
-    return resource_pb2.TaskIdentity(key=resource_key_to_proto(value.key), task_uid=value.task_uid)
+def task_identity_to_proto(value: TaskIdentity) -> resource_identity_pb2.TaskIdentity:
+    return resource_identity_pb2.TaskIdentity(key=resource_key_to_proto(value.key), task_uid=value.task_uid)
 
 
-def task_identity_from_proto(value: resource_pb2.TaskIdentity) -> TaskIdentity:
+def task_identity_from_proto(value: resource_identity_pb2.TaskIdentity) -> TaskIdentity:
     return TaskIdentity(resource_key_from_proto(value.key), value.task_uid)
 
 
-def attempt_identity_to_proto(value: AttemptIdentity) -> resource_pb2.AttemptIdentity:
-    return resource_pb2.AttemptIdentity(
+def attempt_identity_to_proto(value: AttemptIdentity) -> resource_identity_pb2.AttemptIdentity:
+    return resource_identity_pb2.AttemptIdentity(
         task=resource_key_to_proto(value.task),
         attempt_number=value.attempt_number,
         attempt_uid=value.attempt_uid,
     )
 
 
-def attempt_identity_from_proto(value: resource_pb2.AttemptIdentity) -> AttemptIdentity:
+def attempt_identity_from_proto(value: resource_identity_pb2.AttemptIdentity) -> AttemptIdentity:
     return AttemptIdentity(resource_key_from_proto(value.task), value.attempt_number, value.attempt_uid)
 
 
-def attempt_locator_to_proto(value: AttemptLocator) -> resource_pb2.AttemptLocator:
-    result = resource_pb2.AttemptLocator(task=resource_key_to_proto(value.task))
+def attempt_locator_to_proto(value: AttemptLocator) -> resource_identity_pb2.AttemptLocator:
+    result = resource_identity_pb2.AttemptLocator(task=resource_key_to_proto(value.task))
     if value.attempt_number is not None:
         result.attempt_number = value.attempt_number
     return result
 
 
-def attempt_locator_from_proto(value: resource_pb2.AttemptLocator) -> AttemptLocator:
+def attempt_locator_from_proto(value: resource_identity_pb2.AttemptLocator) -> AttemptLocator:
     return AttemptLocator(
         resource_key_from_proto(value.task),
         value.attempt_number if value.HasField("attempt_number") else None,
     )
 
 
-def node_identity_to_proto(value: NodeIdentity) -> resource_pb2.NodeIdentity:
-    return resource_pb2.NodeIdentity(
+def node_identity_to_proto(value: NodeIdentity) -> resource_identity_pb2.NodeIdentity:
+    return resource_identity_pb2.NodeIdentity(
         key=resource_key_to_proto(value.key),
         backend_id=value.backend_id,
         node_uid=value.node_uid,
     )
 
 
-def node_identity_from_proto(value: resource_pb2.NodeIdentity) -> NodeIdentity:
+def node_identity_from_proto(value: resource_identity_pb2.NodeIdentity) -> NodeIdentity:
     return NodeIdentity(resource_key_from_proto(value.key), value.backend_id, value.node_uid)
 
 
-def node_locator_to_proto(value: NodeLocator) -> resource_pb2.NodeLocator:
-    result = resource_pb2.NodeLocator(key=resource_key_to_proto(value.key), backend_id=value.backend_id)
+def node_locator_to_proto(value: NodeLocator) -> resource_identity_pb2.NodeLocator:
+    result = resource_identity_pb2.NodeLocator(key=resource_key_to_proto(value.key), backend_id=value.backend_id)
     if value.node_uid is not None:
         result.node_uid = value.node_uid
     return result
 
 
-def node_locator_from_proto(value: resource_pb2.NodeLocator) -> NodeLocator:
+def node_locator_from_proto(value: resource_identity_pb2.NodeLocator) -> NodeLocator:
     return NodeLocator(
         key=resource_key_from_proto(value.key),
         backend_id=value.backend_id,
@@ -234,26 +242,26 @@ def node_locator_from_proto(value: resource_pb2.NodeLocator) -> NodeLocator:
     )
 
 
-def slice_identity_to_proto(value: SliceIdentity) -> resource_pb2.SliceIdentity:
-    return resource_pb2.SliceIdentity(
+def slice_identity_to_proto(value: SliceIdentity) -> resource_identity_pb2.SliceIdentity:
+    return resource_identity_pb2.SliceIdentity(
         key=resource_key_to_proto(value.key),
         backend_id=value.backend_id,
         slice_uid=value.slice_uid,
     )
 
 
-def slice_identity_from_proto(value: resource_pb2.SliceIdentity) -> SliceIdentity:
+def slice_identity_from_proto(value: resource_identity_pb2.SliceIdentity) -> SliceIdentity:
     return SliceIdentity(resource_key_from_proto(value.key), value.backend_id, value.slice_uid)
 
 
-def slice_locator_to_proto(value: SliceLocator) -> resource_pb2.SliceLocator:
-    result = resource_pb2.SliceLocator(key=resource_key_to_proto(value.key), backend_id=value.backend_id)
+def slice_locator_to_proto(value: SliceLocator) -> resource_identity_pb2.SliceLocator:
+    result = resource_identity_pb2.SliceLocator(key=resource_key_to_proto(value.key), backend_id=value.backend_id)
     if value.slice_uid is not None:
         result.slice_uid = value.slice_uid
     return result
 
 
-def slice_locator_from_proto(value: resource_pb2.SliceLocator) -> SliceLocator:
+def slice_locator_from_proto(value: resource_identity_pb2.SliceLocator) -> SliceLocator:
     return SliceLocator(
         key=resource_key_from_proto(value.key),
         backend_id=value.backend_id,
@@ -343,8 +351,8 @@ def resource_source_status_from_proto(value: resource_pb2.ResourceSourceStatus) 
     )
 
 
-def action_receipt_to_proto(value: ActionReceipt) -> resource_pb2.ActionReceipt:
-    result = resource_pb2.ActionReceipt(
+def action_receipt_to_proto(value: ActionReceipt) -> resource_action_pb2.ActionReceipt:
+    result = resource_action_pb2.ActionReceipt(
         action_id=value.action_id,
         kind=_ACTION_KIND_TO_PROTO[value.kind],
         target=resource_key_to_proto(value.target),
@@ -363,7 +371,7 @@ def action_receipt_to_proto(value: ActionReceipt) -> resource_pb2.ActionReceipt:
     return result
 
 
-def action_receipt_from_proto(value: resource_pb2.ActionReceipt) -> ActionReceipt:
+def action_receipt_from_proto(value: resource_action_pb2.ActionReceipt) -> ActionReceipt:
     kind = _enum_from_proto(_ACTION_KIND_FROM_PROTO, value.kind, "action kind")
     state = _enum_from_proto(_ACTION_STATE_FROM_PROTO, value.state, "action state")
     result = _enum_from_proto(_ACTION_RESULT_FROM_PROTO, value.result_code, "action result")
@@ -383,17 +391,17 @@ def action_receipt_from_proto(value: resource_pb2.ActionReceipt) -> ActionReceip
     )
 
 
-def device_to_proto(value: CpuDevice | GpuDevice | TpuDevice) -> resource_pb2.DeviceConfig:
+def device_to_proto(value: CpuDevice | GpuDevice | TpuDevice) -> resource_job_pb2.DeviceConfig:
     if isinstance(value, CpuDevice):
-        return resource_pb2.DeviceConfig(cpu=resource_pb2.CpuDevice(variant=value.variant))
+        return resource_job_pb2.DeviceConfig(cpu=resource_job_pb2.CpuDevice(variant=value.variant))
     if isinstance(value, GpuDevice):
-        return resource_pb2.DeviceConfig(gpu=resource_pb2.GpuDevice(variant=value.variant, count=value.count))
-    return resource_pb2.DeviceConfig(
-        tpu=resource_pb2.TpuDevice(variant=value.variant, topology=value.topology, count=value.count)
+        return resource_job_pb2.DeviceConfig(gpu=resource_job_pb2.GpuDevice(variant=value.variant, count=value.count))
+    return resource_job_pb2.DeviceConfig(
+        tpu=resource_job_pb2.TpuDevice(variant=value.variant, topology=value.topology, count=value.count)
     )
 
 
-def device_from_proto(value: resource_pb2.DeviceConfig) -> CpuDevice | GpuDevice | TpuDevice | None:
+def device_from_proto(value: resource_job_pb2.DeviceConfig) -> CpuDevice | GpuDevice | TpuDevice | None:
     """Decode a device, treating an empty message as no device."""
     match value.WhichOneof("device"):
         case "cpu":
@@ -408,8 +416,8 @@ def device_from_proto(value: resource_pb2.DeviceConfig) -> CpuDevice | GpuDevice
             raise ValueError("device has no selected kind")
 
 
-def resource_spec_to_proto(value: ResourceSpec) -> resource_pb2.ResourceSpecProto:
-    result = resource_pb2.ResourceSpecProto(
+def resource_spec_to_proto(value: ResourceSpec) -> resource_job_pb2.ResourceSpecProto:
+    result = resource_job_pb2.ResourceSpecProto(
         cpu_millicores=value.cpu_millicores,
         memory_bytes=value.memory,
         disk_bytes=value.disk,
@@ -419,7 +427,7 @@ def resource_spec_to_proto(value: ResourceSpec) -> resource_pb2.ResourceSpecProt
     return result
 
 
-def resource_spec_from_proto(value: resource_pb2.ResourceSpecProto) -> ResourceSpec:
+def resource_spec_from_proto(value: resource_job_pb2.ResourceSpecProto) -> ResourceSpec:
     return ResourceSpec(
         cpu=value.cpu_millicores / 1_000,
         memory=value.memory_bytes,
@@ -428,24 +436,24 @@ def resource_spec_from_proto(value: resource_pb2.ResourceSpecProto) -> ResourceS
     )
 
 
-def environment_to_proto(value: Environment) -> resource_pb2.EnvironmentConfig:
-    return resource_pb2.EnvironmentConfig(env_vars=dict(value.env_vars), setup_scripts=value.setup_scripts)
+def environment_to_proto(value: Environment) -> resource_job_pb2.EnvironmentConfig:
+    return resource_job_pb2.EnvironmentConfig(env_vars=dict(value.env_vars), setup_scripts=value.setup_scripts)
 
 
-def environment_from_proto(value: resource_pb2.EnvironmentConfig) -> Environment:
+def environment_from_proto(value: resource_job_pb2.EnvironmentConfig) -> Environment:
     return Environment(env_vars=dict(value.env_vars), setup_scripts=tuple(value.setup_scripts))
 
 
-def runtime_entrypoint_to_proto(value: RuntimeEntrypoint) -> resource_pb2.RuntimeEntrypoint:
-    return resource_pb2.RuntimeEntrypoint(
+def runtime_entrypoint_to_proto(value: RuntimeEntrypoint) -> resource_job_pb2.RuntimeEntrypoint:
+    return resource_job_pb2.RuntimeEntrypoint(
         setup_commands=value.setup_commands,
-        run_command=resource_pb2.CommandEntrypoint(argv=value.run_command.argv),
+        run_command=resource_job_pb2.CommandEntrypoint(argv=value.run_command.argv),
         workdir_files=dict(value.workdir_files),
         workdir_file_refs=dict(value.workdir_file_refs),
     )
 
 
-def runtime_entrypoint_from_proto(value: resource_pb2.RuntimeEntrypoint) -> RuntimeEntrypoint:
+def runtime_entrypoint_from_proto(value: resource_job_pb2.RuntimeEntrypoint) -> RuntimeEntrypoint:
     return RuntimeEntrypoint(
         setup_commands=tuple(value.setup_commands),
         run_command=CommandEntrypoint(tuple(value.run_command.argv)),
@@ -454,8 +462,8 @@ def runtime_entrypoint_from_proto(value: resource_pb2.RuntimeEntrypoint) -> Runt
     )
 
 
-def _attribute_value_to_proto(value: AttributeValue) -> resource_pb2.AttributeValue:
-    result = resource_pb2.AttributeValue()
+def _attribute_value_to_proto(value: AttributeValue) -> resource_job_pb2.AttributeValue:
+    result = resource_job_pb2.AttributeValue()
     if isinstance(value.value, str):
         result.string_value = value.value
     elif isinstance(value.value, int):
@@ -465,7 +473,7 @@ def _attribute_value_to_proto(value: AttributeValue) -> resource_pb2.AttributeVa
     return result
 
 
-def _attribute_value_from_proto(value: resource_pb2.AttributeValue) -> AttributeValue:
+def _attribute_value_from_proto(value: resource_job_pb2.AttributeValue) -> AttributeValue:
     match value.WhichOneof("value"):
         case "string_value":
             return AttributeValue(value.string_value)
@@ -477,8 +485,8 @@ def _attribute_value_from_proto(value: resource_pb2.AttributeValue) -> Attribute
             return AttributeValue("")
 
 
-def constraint_to_proto(value: Constraint) -> resource_pb2.Constraint:
-    result = resource_pb2.Constraint(key=value.key, op=int(value.op), mode=int(value.mode))
+def constraint_to_proto(value: Constraint) -> resource_job_pb2.Constraint:
+    result = resource_job_pb2.Constraint(key=value.key, op=int(value.op), mode=int(value.mode))
     if value.op is ConstraintOp.IN:
         result.values.extend(_attribute_value_to_proto(item) for item in value.values)
     elif value.values:
@@ -486,7 +494,7 @@ def constraint_to_proto(value: Constraint) -> resource_pb2.Constraint:
     return result
 
 
-def constraint_from_proto(value: resource_pb2.Constraint) -> Constraint:
+def constraint_from_proto(value: resource_job_pb2.Constraint) -> Constraint:
     op = ConstraintOp(value.op)
     if op in (ConstraintOp.EXISTS, ConstraintOp.NOT_EXISTS):
         values = ()
@@ -497,8 +505,8 @@ def constraint_from_proto(value: resource_pb2.Constraint) -> Constraint:
     return Constraint(key=value.key, op=op, values=values, mode=ConstraintMode(value.mode))
 
 
-def job_spec_to_proto(value: JobSpec) -> resource_pb2.JobSpec:
-    result = resource_pb2.JobSpec(
+def job_spec_to_proto(value: JobSpec) -> resource_job_pb2.JobSpec:
+    result = resource_job_pb2.JobSpec(
         version=value.version,
         name=value.name,
         entrypoint=runtime_entrypoint_to_proto(value.entrypoint),
@@ -529,7 +537,7 @@ def job_spec_to_proto(value: JobSpec) -> resource_pb2.JobSpec:
     return result
 
 
-def redacted_job_spec_to_proto(value: JobSpec) -> resource_pb2.JobSpec:
+def redacted_job_spec_to_proto(value: JobSpec) -> resource_job_pb2.JobSpec:
     """Encode a Job spec without exposing submitted secrets or workdir payloads."""
     result = job_spec_to_proto(value)
     redacted_env = redact_value(dict(result.environment.env_vars))
@@ -541,7 +549,7 @@ def redacted_job_spec_to_proto(value: JobSpec) -> resource_pb2.JobSpec:
     return result
 
 
-def job_spec_from_proto(value: resource_pb2.JobSpec) -> JobSpec:
+def job_spec_from_proto(value: resource_job_pb2.JobSpec) -> JobSpec:
     return JobSpec(
         version=value.version,
         name=value.name,
@@ -573,22 +581,22 @@ def job_spec_from_proto(value: resource_pb2.JobSpec) -> JobSpec:
     )
 
 
-def profile_configuration_to_proto(value: ProfileConfiguration | None) -> resource_pb2.ProfileType:
+def profile_configuration_to_proto(value: ProfileConfiguration | None) -> resource_command_pb2.ProfileType:
     if isinstance(value, CpuProfileConfiguration):
-        cpu = resource_pb2.CpuProfile(format=_CPU_FORMAT_TO_PROTO[value.format], rate_hz=value.rate_hz)
+        cpu = resource_command_pb2.CpuProfile(format=_CPU_FORMAT_TO_PROTO[value.format], rate_hz=value.rate_hz)
         if value.native is not None:
             cpu.native = value.native
-        return resource_pb2.ProfileType(cpu=cpu)
+        return resource_command_pb2.ProfileType(cpu=cpu)
     if isinstance(value, MemoryProfileConfiguration):
-        return resource_pb2.ProfileType(
-            memory=resource_pb2.MemoryProfile(format=_MEMORY_FORMAT_TO_PROTO[value.format], leaks=value.leaks)
+        return resource_command_pb2.ProfileType(
+            memory=resource_command_pb2.MemoryProfile(format=_MEMORY_FORMAT_TO_PROTO[value.format], leaks=value.leaks)
         )
     if isinstance(value, ThreadsProfileConfiguration):
-        return resource_pb2.ProfileType(threads=resource_pb2.ThreadsProfile(locals=value.include_locals))
-    return resource_pb2.ProfileType()
+        return resource_command_pb2.ProfileType(threads=resource_command_pb2.ThreadsProfile(locals=value.include_locals))
+    return resource_command_pb2.ProfileType()
 
 
-def profile_configuration_from_proto(value: resource_pb2.ProfileType) -> ProfileConfiguration | None:
+def profile_configuration_from_proto(value: resource_command_pb2.ProfileType) -> ProfileConfiguration | None:
     match value.WhichOneof("profiler"):
         case "cpu":
             return CpuProfileConfiguration(

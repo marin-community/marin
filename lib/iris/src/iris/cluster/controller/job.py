@@ -156,8 +156,8 @@ class JobRuntime(Protocol):
     def wake(self) -> None: ...
 
 
-class JobSubmissionService:
-    """Admit Jobs from typed specifications."""
+class _JobAdmission:
+    """Validate, route, persist, and replace submitted Jobs."""
 
     def __init__(
         self,
@@ -522,7 +522,7 @@ class JobService:
         user_budget_defaults: UserBudgetDefaults,
     ) -> None:
         self._dependencies = dependencies
-        self._submissions = JobSubmissionService(
+        self._admission = _JobAdmission(
             db=dependencies.db,
             runtime=dependencies.runtime,
             bundle_store=bundle_store,
@@ -542,7 +542,7 @@ class JobService:
         *,
         enforce_client_freshness: bool = True,
     ) -> JobIdentity:
-        job_id = self._submissions.submit(
+        job_id = self._admission.submit(
             spec,
             bundle_blob,
             enforce_client_freshness=enforce_client_freshness,
@@ -557,7 +557,7 @@ class JobService:
         bundle_blob: bytes,
         federation: FederationSubmission,
     ) -> JobIdentity:
-        job_id = self._submissions.submit(
+        job_id = self._admission.submit(
             spec,
             bundle_blob,
             federation=federation,

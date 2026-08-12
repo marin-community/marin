@@ -7,14 +7,23 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from google.protobuf import any_pb2
+from iris.cluster.controller.composition import wire_resource_service
 from iris.cluster.controller.persistence.schema import task_attempts_table, tasks_table
 from iris.resources.activity import ActivityQuery
 from iris.resources.endpoint import ExecResult, ProfileResult
 from iris.resources.identity import ResourceKey, ResourceKind
 from iris.resources.names import JobName
 from iris.resources.state import JobState
-from iris.rpc import iris_logging_pb2, resource_pb2
-from iris.rpc.resource_registrations import resource_catalog
+from iris.rpc import (
+    iris_logging_pb2,
+    resource_command_pb2,
+    resource_fleet_pb2,
+    resource_identity_pb2,
+    resource_job_pb2,
+    resource_observability_pb2,
+    resource_pb2,
+    resource_task_pb2,
+)
 from iris.rpc.resource_service import ResourceServiceImpl
 from iris.rpc.resource_types import (
     ACTIVITY_ENTRY,
@@ -29,13 +38,13 @@ from iris.rpc.resource_types import (
 from sqlalchemy import update
 
 
-def _key(key) -> resource_pb2.ResourceKey:
+def _key(key) -> resource_identity_pb2.ResourceKey:
     kinds = {
-        "job": resource_pb2.RESOURCE_KIND_JOB,
-        "task": resource_pb2.RESOURCE_KIND_TASK,
-        "attempt": resource_pb2.RESOURCE_KIND_ATTEMPT,
+        "job": resource_identity_pb2.RESOURCE_KIND_JOB,
+        "task": resource_identity_pb2.RESOURCE_KIND_TASK,
+        "attempt": resource_identity_pb2.RESOURCE_KIND_ATTEMPT,
     }
-    return resource_pb2.ResourceKey(
+    return resource_identity_pb2.ResourceKey(
         cluster_id=key.cluster_id,
         kind=kinds[key.kind.value],
         resource_id=key.resource_id,
@@ -49,7 +58,7 @@ def _pack(value) -> any_pb2.Any:
 
 
 def _service(journey) -> ResourceServiceImpl:
-    return ResourceServiceImpl(resource_catalog(journey.controller.controller))
+    return wire_resource_service(journey.controller.controller)
 
 
 def _ref(
@@ -68,7 +77,7 @@ def _ref(
     return result
 
 
-def _attempt_ref(identity: resource_pb2.AttemptIdentity) -> resource_pb2.ResourceRef:
+def _attempt_ref(identity: resource_identity_pb2.AttemptIdentity) -> resource_pb2.ResourceRef:
     return _ref(
         identity.task.cluster_id,
         ATTEMPT,
@@ -79,9 +88,9 @@ def _attempt_ref(identity: resource_pb2.AttemptIdentity) -> resource_pb2.Resourc
 
 def _fetch_logs(
     service: ResourceServiceImpl,
-    request: resource_pb2.FetchLogsRequest,
-) -> resource_pb2.FetchLogsResponse:
-    response = service.list_resources(
+    request: resource_observability_pb2.LogQuery,
+) -> resource_pb2.ListResourcesResponse:
+    return service.list_resources(
         resource_pb2.ListResourcesRequest(
             type=LOG_ENTRY,
             query=_pack(request),
@@ -89,51 +98,37 @@ def _fetch_logs(
         ),
         None,
     )
-    return resource_pb2.FetchLogsResponse(
-        entries=[iris_logging_pb2.LogEntry.FromString(resource.body.value) for resource in response.resources],
-        next_cursor=int(response.next_page_token or 0),
-        source_statuses=response.source_statuses,
-    )
 
 
 def _list_activity(
     service: ResourceServiceImpl,
-    request: resource_pb2.ListActivityRequest,
-) -> resource_pb2.ListActivityResponse:
-    response = service.list_resources(
+    query: resource_observability_pb2.ActivityQuery,
+) -> resource_pb2.ListResourcesResponse:
+    return service.list_resources(
         resource_pb2.ListResourcesRequest(
             type=ACTIVITY_ENTRY,
-            query=_pack(request.query),
-            page_size=request.query.page.page_size,
-            page_token=request.query.page.page_token,
+            query=_pack(query),
+            page_size=query.page.page_size,
+            page_token=query.page.page_token,
             view=resource_pb2.RESOURCE_VIEW_FULL,
         ),
         None,
     )
-    return resource_pb2.ListActivityResponse(
-        entries=[resource_pb2.ActivityEntry.FromString(resource.body.value) for resource in response.resources],
-        page=resource_pb2.PageInfo(
-            next_page_token=response.next_page_token,
-            source_statuses=response.source_statuses,
-        ),
-    )
 
 
-def _batch_tasks(
+def _batch_task_details(
     service: ResourceServiceImpl,
-    request: resource_pb2.BatchDescribeTasksRequest,
-) -> resource_pb2.BatchDescribeTasksResponse:
+    keys: list[resource_identity_pb2.ResourceKey],
+) -> tuple[resource_task_pb2.TaskDetail, ...]:
     response = service.batch_get_resources(
         resource_pb2.BatchGetResourcesRequest(
             type=TASK,
-            refs=[_ref(key.cluster_id, TASK, key.resource_id) for key in request.tasks],
+            refs=[_ref(key.cluster_id, TASK, key.resource_id) for key in keys],
             view=resource_pb2.RESOURCE_VIEW_FULL,
         ),
         None,
     )
-    return resource_pb2.BatchDescribeTasksResponse(
-        tasks=[resource_pb2.TaskDetail.FromString(result.resource.body.value) for result in response.results]
-    )
+    return tuple(resource_task_pb2.TaskDetail.FromString(result.resource.body.value) for result in response.results)
 
 
 def _create_attempt_child(
@@ -155,7 +150,7 @@ def _create_attempt_child(
 
 def _job_state(
     service: ResourceServiceImpl,
-    identity: resource_pb2.JobIdentity,
+    identity: resource_identity_pb2.JobIdentity,
 ) -> int:
     response = service.get_resource(
         resource_pb2.GetResourceRequest(
@@ -164,10 +159,10 @@ def _job_state(
         ),
         None,
     )
-    return resource_pb2.JobSummary.FromString(response.resource.body.value).state
+    return resource_job_pb2.JobSummary.FromString(response.resource.body.value).state
 
 
-def _capacity(service: ResourceServiceImpl) -> resource_pb2.GetCapacityStatusResponse:
+def _capacity(service: ResourceServiceImpl) -> resource_fleet_pb2.CapacityStatus:
     response = service.get_resource(
         resource_pb2.GetResourceRequest(
             ref=_ref("journey", CAPACITY, "capacity"),
@@ -175,60 +170,58 @@ def _capacity(service: ResourceServiceImpl) -> resource_pb2.GetCapacityStatusRes
         ),
         None,
     )
-    return resource_pb2.GetCapacityStatusResponse.FromString(response.resource.body.value)
+    return resource_fleet_pb2.CapacityStatus.FromString(response.resource.body.value)
 
 
-def _job_target(identity, *, uid: str | None = None) -> resource_pb2.LogTarget:
-    return resource_pb2.LogTarget(
-        job=resource_pb2.JobIdentity(
+def _job_target(identity, *, uid: str | None = None) -> resource_observability_pb2.LogTarget:
+    return resource_observability_pb2.LogTarget(
+        job=resource_identity_pb2.JobIdentity(
             key=_key(identity.key),
             job_uid=identity.job_uid if uid is None else uid,
         )
     )
 
 
-def _task_target(identity, *, uid: str | None = None) -> resource_pb2.LogTarget:
-    return resource_pb2.LogTarget(
-        task=resource_pb2.TaskIdentity(
+def _task_target(identity, *, uid: str | None = None) -> resource_observability_pb2.LogTarget:
+    return resource_observability_pb2.LogTarget(
+        task=resource_identity_pb2.TaskIdentity(
             key=_key(identity.key),
             task_uid=identity.task_uid if uid is None else uid,
         )
     )
 
 
-def _attempt_target(identity, *, uid: str | None = None) -> resource_pb2.LogTarget:
-    return resource_pb2.LogTarget(attempt=_attempt_identity(identity, uid=uid))
+def _attempt_target(identity, *, uid: str | None = None) -> resource_observability_pb2.LogTarget:
+    return resource_observability_pb2.LogTarget(attempt=_attempt_identity(identity, uid=uid))
 
 
-def _attempt_identity(identity, *, uid: str | None = None) -> resource_pb2.AttemptIdentity:
-    return resource_pb2.AttemptIdentity(
+def _attempt_identity(identity, *, uid: str | None = None) -> resource_identity_pb2.AttemptIdentity:
+    return resource_identity_pb2.AttemptIdentity(
         task=_key(identity.task),
         attempt_number=identity.attempt_number,
         attempt_uid=identity.attempt_uid if uid is None else uid,
     )
 
 
-def _log_lines(service: ResourceServiceImpl, target: resource_pb2.LogTarget) -> set[str]:
-    response = _fetch_logs(service, resource_pb2.FetchLogsRequest(target=target))
-    return {entry.data for entry in response.entries}
+def _log_lines(service: ResourceServiceImpl, target: resource_observability_pb2.LogTarget) -> set[str]:
+    response = _fetch_logs(service, resource_observability_pb2.LogQuery(target=target))
+    return {iris_logging_pb2.LogEntry.FromString(item.body.value).data for item in response.resources}
 
 
 def test_state_only_rpc_tracks_one_exact_job_incarnation(journey) -> None:
     job = journey.submit("state-only")
     identity = journey.job(job).summary.identity
     service = _service(journey)
-    request = resource_pb2.GetJobStateRequest(
-        job=resource_pb2.JobIdentity(key=_key(identity.key), job_uid=identity.job_uid)
-    )
+    selected = resource_identity_pb2.JobIdentity(key=_key(identity.key), job_uid=identity.job_uid)
 
-    assert JobState(_job_state(service, request.job)) is JobState.PENDING
+    assert JobState(_job_state(service, selected)) is JobState.PENDING
 
     journey.settle()
 
-    assert JobState(_job_state(service, request.job)) is JobState.RUNNING
-    request.job.job_uid = "replaced-job"
+    assert JobState(_job_state(service, selected)) is JobState.RUNNING
+    selected.job_uid = "replaced-job"
     with pytest.raises(ConnectError) as exc_info:
-        _job_state(service, request.job)
+        _job_state(service, selected)
     assert exc_info.value.code is Code.FAILED_PRECONDITION
 
 
@@ -272,14 +265,14 @@ def test_logs_are_scoped_to_exact_job_task_and_attempt_identities(journey) -> No
     assert _log_lines(service, _attempt_target(first_attempt)) == {"selected-first-attempt"}
     assert _log_lines(service, _attempt_target(current_attempt)) == {"selected-current-attempt"}
 
-    stale_targets: tuple[Callable[[], resource_pb2.LogTarget], ...] = (
+    stale_targets: tuple[Callable[[], resource_observability_pb2.LogTarget], ...] = (
         lambda: _job_target(job, uid="replacement-job"),
         lambda: _task_target(task, uid="replacement-task"),
         lambda: _attempt_target(current_attempt, uid="replacement-attempt"),
     )
     for stale_target in stale_targets:
         with pytest.raises(ConnectError) as exc_info:
-            _fetch_logs(service, resource_pb2.FetchLogsRequest(target=stale_target()))
+            _fetch_logs(service, resource_observability_pb2.LogQuery(target=stale_target()))
         assert exc_info.value.code is Code.FAILED_PRECONDITION
 
 
@@ -303,18 +296,17 @@ def test_activity_after_restart_keeps_durable_actions_when_task_events_are_unava
     service = _service(journey)
     response = _list_activity(
         service,
-        resource_pb2.ListActivityRequest(
-            query=resource_pb2.ActivityQuery(
-                target=_key(task.identity.key),
-                attempt_uid=current.attempt_uid,
-            )
+        resource_observability_pb2.ActivityQuery(
+            target=_key(task.identity.key),
+            attempt_uid=current.attempt_uid,
         ),
     )
 
-    assert [(entry.entry_id, entry.correlation_id) for entry in response.entries] == [
+    entries = [resource_observability_pb2.ActivityEntry.FromString(item.body.value) for item in response.resources]
+    assert [(entry.entry_id, entry.correlation_id) for entry in entries] == [
         (f"action:{receipt.action_id}", receipt.action_id)
     ]
-    assert {(status.source_id, status.state) for status in response.page.source_statuses} == {
+    assert {(status.source_id, status.state) for status in response.source_statuses} == {
         ("controller:journey", resource_pb2.SOURCE_STATE_AVAILABLE),
         ("finelog:journey", resource_pb2.SOURCE_STATE_UNAVAILABLE),
     }
@@ -322,11 +314,9 @@ def test_activity_after_restart_keeps_durable_actions_when_task_events_are_unava
     with pytest.raises(ConnectError) as exc_info:
         _list_activity(
             service,
-            resource_pb2.ListActivityRequest(
-                query=resource_pb2.ActivityQuery(
-                    target=_key(task.identity.key),
-                    attempt_uid="replacement-attempt",
-                )
+            resource_observability_pb2.ActivityQuery(
+                target=_key(task.identity.key),
+                attempt_uid="replacement-attempt",
             ),
         )
     assert exc_info.value.code is Code.FAILED_PRECONDITION
@@ -337,15 +327,13 @@ def test_batch_describe_tasks_returns_ordered_details_with_attempts(journey) -> 
     journey.settle()
     service = _service(journey)
 
-    response = _batch_tasks(
+    details = _batch_task_details(
         service,
-        resource_pb2.BatchDescribeTasksRequest(
-            tasks=[_key(journey.task(job[index]).summary.identity.key) for index in (1, 0)]
-        ),
+        [_key(journey.task(job[index]).summary.identity.key) for index in (1, 0)],
     )
 
-    assert [detail.summary.identity.key.resource_id for detail in response.tasks] == [job[1].wire_id, job[0].wire_id]
-    assert [detail.attempts[0].identity.attempt_uid for detail in response.tasks] == [
+    assert [detail.summary.identity.key.resource_id for detail in details] == [job[1].wire_id, job[0].wire_id]
+    assert [detail.attempts[0].identity.attempt_uid for detail in details] == [
         journey.attempt(job[1]).summary.identity.attempt_uid,
         journey.attempt(job[0]).summary.identity.attempt_uid,
     ]
@@ -362,18 +350,16 @@ def test_batch_describe_many_failed_tasks_does_not_fan_out_to_finelog(journey, m
         raise AssertionError("batch Task details must not issue per-Task finelog calls")
 
     monkeypatch.setattr(journey.log_stack.client, "fetch_logs", unexpected_finelog_call)
-    response = _batch_tasks(
+    details = _batch_task_details(
         _service(journey),
-        resource_pb2.BatchDescribeTasksRequest(
-            tasks=[
-                _key(ResourceKey(job[index].authority_cluster_id, ResourceKind.TASK, job[index].wire_id))
-                for index in range(job.tasks)
-            ]
-        ),
+        [
+            _key(ResourceKey(job[index].authority_cluster_id, ResourceKind.TASK, job[index].wire_id))
+            for index in range(job.tasks)
+        ],
     )
 
-    assert len(response.tasks) == job.tasks
-    assert all(not detail.root_cause_highlights for detail in response.tasks)
+    assert len(details) == job.tasks
+    assert all(not detail.root_cause_highlights for detail in details)
 
 
 def test_activity_page_token_continues_past_each_sources_first_batch(journey) -> None:
@@ -483,7 +469,7 @@ def test_exec_and_profile_after_restart_refuse_a_superseded_attempt_before_runti
         _create_attempt_child(
             service,
             EXEC_SESSION,
-            resource_pb2.ExecAttemptRequest(attempt=stale, command=["echo", "hello"]),
+            resource_command_pb2.CreateExecSession(attempt=stale, command=["echo", "hello"]),
         )
     assert exec_error.value.code is Code.FAILED_PRECONDITION
 
@@ -491,9 +477,9 @@ def test_exec_and_profile_after_restart_refuse_a_superseded_attempt_before_runti
         _create_attempt_child(
             service,
             PROFILE_CAPTURE,
-            resource_pb2.ProfileAttemptRequest(
+            resource_command_pb2.CreateProfileCapture(
                 attempt=stale,
-                profile=resource_pb2.ProfileType(cpu=resource_pb2.CpuProfile()),
+                profile=resource_command_pb2.ProfileType(cpu=resource_command_pb2.CpuProfile()),
             ),
         )
     assert profile_error.value.code is Code.FAILED_PRECONDITION
@@ -502,18 +488,18 @@ def test_exec_and_profile_after_restart_refuse_a_superseded_attempt_before_runti
     exec_result = _create_attempt_child(
         service,
         EXEC_SESSION,
-        resource_pb2.ExecAttemptRequest(attempt=current_identity, command=["echo", "hello"]),
+        resource_command_pb2.CreateExecSession(attempt=current_identity, command=["echo", "hello"]),
     )
     profile_result = _create_attempt_child(
         service,
         PROFILE_CAPTURE,
-        resource_pb2.ProfileAttemptRequest(
+        resource_command_pb2.CreateProfileCapture(
             attempt=current_identity,
-            profile=resource_pb2.ProfileType(cpu=resource_pb2.CpuProfile()),
+            profile=resource_command_pb2.ProfileType(cpu=resource_command_pb2.CpuProfile()),
         ),
     )
-    exec_response = resource_pb2.ExecAttemptResponse.FromString(exec_result.value)
-    profile_response = resource_pb2.ProfileAttemptResponse.FromString(profile_result.value)
+    exec_response = resource_command_pb2.ExecSessionResult.FromString(exec_result.value)
+    profile_response = resource_command_pb2.ProfileCaptureResult.FromString(profile_result.value)
 
     assert (exec_response.exit_code, exec_response.stdout) == (0, "current exec")
     assert profile_response.profile_data == b"current profile"
@@ -552,15 +538,15 @@ def test_exec_and_profile_refuse_an_attempt_from_a_replaced_task_incarnation(jou
         _create_attempt_child(
             service,
             EXEC_SESSION,
-            resource_pb2.ExecAttemptRequest(attempt=stale_proto, command=["true"]),
+            resource_command_pb2.CreateExecSession(attempt=stale_proto, command=["true"]),
         )
     with pytest.raises(ConnectError) as profile_error:
         _create_attempt_child(
             service,
             PROFILE_CAPTURE,
-            resource_pb2.ProfileAttemptRequest(
+            resource_command_pb2.CreateProfileCapture(
                 attempt=stale_proto,
-                profile=resource_pb2.ProfileType(cpu=resource_pb2.CpuProfile()),
+                profile=resource_command_pb2.ProfileType(cpu=resource_command_pb2.CpuProfile()),
             ),
         )
 

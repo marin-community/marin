@@ -5,16 +5,25 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from google.protobuf import any_pb2
-from iris.rpc import iris_logging_pb2, resource_pb2
+from iris.cluster.controller.composition import wire_resource_service
+from iris.rpc import (
+    iris_logging_pb2,
+    resource_action_pb2,
+    resource_endpoint_pb2,
+    resource_identity_pb2,
+    resource_job_pb2,
+    resource_observability_pb2,
+    resource_pb2,
+    resource_task_pb2,
+)
 from iris.rpc.auth import DASHBOARD_ROLE
-from iris.rpc.resource_registrations import resource_catalog
 from iris.rpc.resource_service import ResourceServiceImpl
 from iris.rpc.resource_types import ACTIVITY_ENTRY, ENDPOINT, JOB, LOG_ENTRY, OPERATION, TASK
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
 
-def _key(kind: int, resource_id: str) -> resource_pb2.ResourceKey:
-    return resource_pb2.ResourceKey(cluster_id="journey", kind=kind, resource_id=resource_id)
+def _key(kind: int, resource_id: str) -> resource_identity_pb2.ResourceKey:
+    return resource_identity_pb2.ResourceKey(cluster_id="journey", kind=kind, resource_id=resource_id)
 
 
 def _pack(value) -> any_pb2.Any:
@@ -24,7 +33,7 @@ def _pack(value) -> any_pb2.Any:
 
 
 def _service(journey) -> ResourceServiceImpl:
-    return ResourceServiceImpl(resource_catalog(journey.controller.controller))
+    return wire_resource_service(journey.controller.controller)
 
 
 def _ref(resource_type: str, resource_id: str) -> resource_pb2.ResourceRef:
@@ -41,7 +50,7 @@ def test_resource_reads_scope_users_before_rows_cross_the_rpc_boundary(journey) 
         jobs = service.list_resources(
             resource_pb2.ListResourcesRequest(
                 type=JOB,
-                query=_pack(resource_pb2.JobQuery()),
+                query=_pack(resource_job_pb2.JobQuery()),
                 view=resource_pb2.RESOURCE_VIEW_BASIC,
             ),
             None,
@@ -49,13 +58,13 @@ def test_resource_reads_scope_users_before_rows_cross_the_rpc_boundary(journey) 
         tasks = service.list_resources(
             resource_pb2.ListResourcesRequest(
                 type=TASK,
-                query=_pack(resource_pb2.TaskQuery()),
+                query=_pack(resource_task_pb2.TaskQuery()),
                 view=resource_pb2.RESOURCE_VIEW_BASIC,
             ),
             None,
         )
-        job_bodies = [resource_pb2.JobSummary.FromString(resource.body.value) for resource in jobs.resources]
-        task_bodies = [resource_pb2.TaskSummary.FromString(resource.body.value) for resource in tasks.resources]
+        job_bodies = [resource_job_pb2.JobSummary.FromString(resource.body.value) for resource in jobs.resources]
+        task_bodies = [resource_task_pb2.TaskSummary.FromString(resource.body.value) for resource in tasks.resources]
         assert [job.identity.key.resource_id for job in job_bodies] == [alice.wire_id]
         assert [task.identity.key.resource_id for task in task_bodies] == [f"{alice.wire_id}/0"]
 
@@ -99,10 +108,10 @@ def test_dashboard_identity_can_read_logs_activity_and_action_receipts(journey) 
             resource_pb2.ListResourcesRequest(
                 type=LOG_ENTRY,
                 query=_pack(
-                    resource_pb2.FetchLogsRequest(
-                        target=resource_pb2.LogTarget(
-                            task=resource_pb2.TaskIdentity(
-                                key=_key(resource_pb2.RESOURCE_KIND_TASK, task.identity.key.resource_id),
+                    resource_observability_pb2.LogQuery(
+                        target=resource_observability_pb2.LogTarget(
+                            task=resource_identity_pb2.TaskIdentity(
+                                key=_key(resource_identity_pb2.RESOURCE_KIND_TASK, task.identity.key.resource_id),
                                 task_uid=task.identity.task_uid,
                             )
                         )
@@ -116,8 +125,8 @@ def test_dashboard_identity_can_read_logs_activity_and_action_receipts(journey) 
             resource_pb2.ListResourcesRequest(
                 type=ACTIVITY_ENTRY,
                 query=_pack(
-                    resource_pb2.ActivityQuery(
-                        target=_key(resource_pb2.RESOURCE_KIND_TASK, task.identity.key.resource_id)
+                    resource_observability_pb2.ActivityQuery(
+                        target=_key(resource_identity_pb2.RESOURCE_KIND_TASK, task.identity.key.resource_id)
                     )
                 ),
                 view=resource_pb2.RESOURCE_VIEW_FULL,
@@ -133,9 +142,11 @@ def test_dashboard_identity_can_read_logs_activity_and_action_receipts(journey) 
         )
 
     log_bodies = [iris_logging_pb2.LogEntry.FromString(resource.body.value) for resource in logs.resources]
-    activity_bodies = [resource_pb2.ActivityEntry.FromString(resource.body.value) for resource in activity.resources]
+    activity_bodies = [
+        resource_observability_pb2.ActivityEntry.FromString(resource.body.value) for resource in activity.resources
+    ]
     durable_operation = resource_pb2.Operation.FromString(durable.resource.body.value)
-    durable_body = resource_pb2.ActionReceipt.FromString(durable_operation.result.value)
+    durable_body = resource_action_pb2.ActionReceipt.FromString(durable_operation.result.value)
     assert [entry.data for entry in log_bodies] == ["worker became ready"]
     assert any(entry.correlation_id == receipt.action_id for entry in activity_bodies)
     assert durable_body.action_id == receipt.action_id
@@ -153,7 +164,7 @@ def test_endpoint_reads_are_scoped_to_the_resource_owner(journey) -> None:
         listed = service.list_resources(
             resource_pb2.ListResourcesRequest(
                 type=ENDPOINT,
-                query=_pack(resource_pb2.EndpointQuery()),
+                query=_pack(resource_endpoint_pb2.EndpointQuery()),
                 view=resource_pb2.RESOURCE_VIEW_BASIC,
             ),
             None,
@@ -167,7 +178,9 @@ def test_endpoint_reads_are_scoped_to_the_resource_owner(journey) -> None:
                 None,
             )
 
-    endpoint_bodies = [resource_pb2.EndpointSummary.FromString(resource.body.value) for resource in listed.resources]
+    endpoint_bodies = [
+        resource_endpoint_pb2.EndpointSummary.FromString(resource.body.value) for resource in listed.resources
+    ]
     assert [endpoint.endpoint_id for endpoint in endpoint_bodies] == ["alice-endpoint"]
     assert denied.value.code is Code.PERMISSION_DENIED
 
@@ -185,7 +198,7 @@ def test_worker_endpoint_reads_expose_only_system_discovery(journey) -> None:
         response = service.list_resources(
             resource_pb2.ListResourcesRequest(
                 type=ENDPOINT,
-                query=_pack(resource_pb2.EndpointQuery()),
+                query=_pack(resource_endpoint_pb2.EndpointQuery()),
                 view=resource_pb2.RESOURCE_VIEW_BASIC,
             ),
             None,
@@ -208,8 +221,10 @@ def test_worker_endpoint_reads_expose_only_system_discovery(journey) -> None:
                 None,
             )
 
-    endpoints = [resource_pb2.EndpointSummary.FromString(resource.body.value) for resource in response.resources]
+    endpoints = [
+        resource_endpoint_pb2.EndpointSummary.FromString(resource.body.value) for resource in response.resources
+    ]
     assert [endpoint.name for endpoint in endpoints] == ["/system/log-server"]
-    system_detail = resource_pb2.EndpointDetail.FromString(system.results[0].resource.body.value)
+    system_detail = resource_endpoint_pb2.EndpointDetail.FromString(system.results[0].resource.body.value)
     assert system_detail.summary.name == "/system/log-server"
     assert denied.value.code is Code.PERMISSION_DENIED

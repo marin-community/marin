@@ -1,0 +1,53 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+edition = "2023";
+
+package iris.resource;
+
+import "resource.proto";
+import "resource_identity.proto";
+import "time.proto";
+
+option features.field_presence = EXPLICIT;
+
+enum EndpointAccess {
+  ENDPOINT_ACCESS_PRIVATE = 0;
+  ENDPOINT_ACCESS_LINK = 1;
+}
+
+message EndpointQuery {
+  string name_prefix = 1;
+  ResourceKey task = 2;
+  PageRequest page = 3;
+}
+
+message EndpointSummary {
+  ResourceKey key = 1;
+  string endpoint_id = 2;
+  string name = 3;
+  ResourceKey task = 4;
+  string execution_cluster_id = 5;
+  EndpointAccess access = 6;
+  iris.time.Timestamp lease_deadline = 7;
+}
+
+message EndpointDetail {
+  EndpointSummary summary = 1;
+  string address = 2;
+  map<string, string> metadata = 3;
+}
+
+message CreateEndpointCapability {
+  oneof selector {
+    ResourceKey endpoint = 1;
+    string endpoint_name = 3;
+  }
+  iris.time.Duration ttl = 2;
+}
+
+message EndpointCapability {
+  string token = 1;
+  iris.time.Timestamp expires_at = 2;
+  string capability_url = 3;
+}

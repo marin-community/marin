@@ -6,7 +6,7 @@
 import secrets
 from collections.abc import Sequence
 
-from iris.backends.protocol import TaskBackend
+from iris.backends.protocol import BackendCapability, TaskBackend
 from iris.cluster.config import BackendConfig
 from iris.cluster.controller.auth import (
     ControllerAuth,
@@ -30,8 +30,32 @@ from iris.rpc.endpoint_service import EndpointServiceImpl
 from iris.rpc.federation_client import peer_connection_factory
 from iris.rpc.legacy.controller_service import LegacyControllerService
 from iris.rpc.log_reader import FinelogLogReader
-from iris.rpc.resource_registrations import resource_catalog
+from iris.rpc.resource_endpoints.command import CreateExecSession, CreateProfileCapture
+from iris.rpc.resource_endpoints.endpoint import (
+    BatchGetEndpoints,
+    CreateEndpointCapability,
+    GetEndpoint,
+    ListEndpoints,
+)
+from iris.rpc.resource_endpoints.fleet import GetCapacity, GetNode, GetSlice, ListNodes, ListSlices
+from iris.rpc.resource_endpoints.job import CreateJob, GetJob, ListJobs, UpdateJob
+from iris.rpc.resource_endpoints.observability import (
+    GetOperation,
+    ListActivity,
+    ListLogs,
+    ListUsers,
+)
+from iris.rpc.resource_endpoints.task import (
+    BatchGetTasks,
+    GetAttempt,
+    GetTask,
+    ListTasks,
+    UpdateAttempt,
+    UpdateTask,
+)
+from iris.rpc.resource_registry import ResourceRouteRegistryBuilder, ResourceVerb
 from iris.rpc.resource_service import ResourceServiceImpl
+from iris.rpc.resource_types import ATTEMPT, EXEC_SESSION, NODE, PROFILE_CAPTURE, SLICE
 
 
 def _federation_token_provider(config: ControllerConfig) -> FederationTokenProvider | None:
@@ -50,6 +74,54 @@ def _federation_peers(
         config.peers,
         connect=peer_connection_factory(_federation_token_provider(config)),
     )
+
+
+def wire_resource_service(controller: Controller) -> ResourceServiceImpl:
+    """Define controller nouns by binding their verbs to installed behavior."""
+    builder = ResourceRouteRegistryBuilder()
+
+    builder.bind("/job/create", CreateJob(controller))
+    builder.bind("/job/get", GetJob(controller))
+    builder.bind("/job/list", ListJobs(controller))
+    builder.bind("/job/update", UpdateJob(controller))
+    builder.bind("/task/get", GetTask(controller))
+    builder.bind("/task/batch-get", BatchGetTasks(controller))
+    builder.bind("/task/list", ListTasks(controller))
+    builder.bind("/task/update", UpdateTask(controller))
+    builder.bind("/attempt/get", GetAttempt(controller))
+    builder.bind("/attempt/update", UpdateAttempt(controller))
+
+    builder.bind("/node/get", GetNode(controller))
+    builder.bind("/node/list", ListNodes(controller))
+    builder.bind("/slice/get", GetSlice(controller))
+    builder.bind("/slice/list", ListSlices(controller))
+    builder.bind("/endpoint/get", GetEndpoint(controller))
+    builder.bind("/endpoint/list", ListEndpoints(controller))
+    builder.bind("/endpoint/batch-get", BatchGetEndpoints(controller))
+
+    builder.bind("/capacity/get", GetCapacity(controller))
+    builder.bind("/user-summary/list", ListUsers(controller))
+    builder.bind("/activity-entry/list", ListActivity(controller))
+    builder.bind("/log-entry/list", ListLogs(controller))
+    builder.bind("/operation/get", GetOperation(controller))
+    builder.bind("/exec-session/create", CreateExecSession(controller))
+    builder.bind("/profile-capture/create", CreateProfileCapture(controller))
+    builder.bind("/endpoint-capability/create", CreateEndpointCapability(controller))
+
+    for backend_id, backend in controller.backends.items():
+        features = tuple(sorted(capability.value for capability in backend.capabilities))
+        for resource_type, verbs in (
+            (ATTEMPT, (ResourceVerb.UPDATE,)),
+            (EXEC_SESSION, (ResourceVerb.CREATE,)),
+            (PROFILE_CAPTURE, (ResourceVerb.CREATE,)),
+            (NODE, (ResourceVerb.GET, ResourceVerb.LIST)),
+        ):
+            for verb in verbs:
+                builder.register_backend(backend_id, resource_type, verb, features=features)
+        if backend.capabilities & {BackendCapability.IRIS_AUTOSCALER, BackendCapability.CLUSTER_VIEW}:
+            builder.register_backend(backend_id, SLICE, ResourceVerb.GET, features=features)
+            builder.register_backend(backend_id, SLICE, ResourceVerb.LIST, features=features)
+    return ResourceServiceImpl(builder.freeze())
 
 
 def compose_controller_runtime(
@@ -115,8 +187,7 @@ def compose_controller_process(
         backend_configs=runtime.backend_configs,
         log_reader=FinelogLogReader(runtime.log_client),
     )
-    catalog = resource_catalog(controller)
-    resource_service = ResourceServiceImpl(catalog)
+    resource_service = wire_resource_service(controller)
     controller_service = LegacyControllerService(
         runtime=runtime,
         bundle_store=runtime.bundle_store,

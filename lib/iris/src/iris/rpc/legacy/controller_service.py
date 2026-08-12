@@ -85,7 +85,18 @@ from iris.resources.names import (
 from iris.resources.node import NodeAttributeKind, NodeHealth, NodeQuery
 from iris.resources.state import JobState
 from iris.resources.task import TaskQuery, TaskSummary
-from iris.rpc import controller_pb2, job_pb2, query_pb2, resource_pb2, vm_pb2
+from iris.rpc import (
+    controller_pb2,
+    job_pb2,
+    query_pb2,
+    resource_command_pb2,
+    resource_endpoint_pb2,
+    resource_identity_pb2,
+    resource_job_pb2,
+    resource_pb2,
+    resource_task_pb2,
+    vm_pb2,
+)
 from iris.rpc.auth import FEDERATION_PEER_ROLE, AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.backend_status_codec import autoscaler_status_to_proto, backend_status_to_proto, kubernetes_status_to_proto
 from iris.rpc.endpoint_service import EndpointServiceImpl
@@ -98,14 +109,13 @@ from iris.rpc.legacy.job_service_codec import (
     redact_request_env_vars,
     task_detail_to_legacy,
 )
-from iris.rpc.profile_codec import profile_configuration_from_proto, profile_configuration_to_proto
+from iris.rpc.profile_codec import profile_configuration_from_proto
 from iris.rpc.proto_display import (
     job_state_friendly,
     task_state_friendly,
 )
 from iris.rpc.resource_client_codec import (
     attempt_detail_from_proto,
-    endpoint_page_from_proto,
     endpoint_token_from_proto,
     exec_result_from_proto,
     job_detail_from_proto,
@@ -116,7 +126,13 @@ from iris.rpc.resource_client_codec import (
     task_page_from_proto,
     task_query_to_proto,
 )
-from iris.rpc.resource_codec import attempt_identity_to_proto, job_spec_to_proto
+from iris.rpc.resource_codec import (
+    attempt_identity_to_proto,
+    job_spec_to_proto,
+)
+from iris.rpc.resource_codec import (
+    profile_configuration_to_proto as resource_profile_configuration_to_proto,
+)
 from iris.rpc.resource_errors import resource_call
 from iris.rpc.resource_service import ResourceServiceImpl
 from iris.rpc.resource_types import ATTEMPT, ENDPOINT, ENDPOINT_CAPABILITY, EXEC_SESSION, JOB, PROFILE_CAPTURE, TASK
@@ -737,7 +753,7 @@ class LegacyControllerService:
                     type=JOB,
                     id=spec.name,
                     body=_pack(
-                        resource_pb2.SubmitJobRequest(
+                        resource_job_pb2.CreateJob(
                             spec=job_spec_to_proto(spec),
                             bundle_blob=request.bundle_blob,
                         )
@@ -745,7 +761,7 @@ class LegacyControllerService:
                 ),
                 ctx,
             )
-            identity = _unpack(operation.result, resource_pb2.SubmitJobResponse).job
+            identity = _unpack(operation.result, resource_job_pb2.CreatedJob).job
             return controller_pb2.Controller.LaunchJobResponse(job_id=identity.key.resource_id)
         return controller_pb2.Controller.LaunchJobResponse(job_id=identity.key.resource_id)
 
@@ -765,7 +781,7 @@ class LegacyControllerService:
                 ),
                 None,
             )
-            detail = job_detail_from_proto(_unpack(response.resource.body, resource_pb2.JobDetail))
+            detail = job_detail_from_proto(_unpack(response.resource.body, resource_job_pb2.JobDetail))
             legacy_spec = self._controller.describe_job(key).spec
         except ResourceNotFound as exc:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found") from exc
@@ -791,13 +807,11 @@ class LegacyControllerService:
                 None,
             )
             page = task_page_from_proto(
-                resource_pb2.ListTasksResponse(
-                    tasks=[_unpack(resource.body, resource_pb2.TaskSummary) for resource in response.resources],
-                    page=resource_pb2.PageInfo(
-                        next_page_token=response.next_page_token,
-                        source_statuses=response.source_statuses,
-                    ),
-                )
+                (_unpack(resource.body, resource_task_pb2.TaskSummary) for resource in response.resources),
+                resource_pb2.PageInfo(
+                    next_page_token=response.next_page_token,
+                    source_statuses=response.source_statuses,
+                ),
             )
             items.extend(page.items)
             page_token = page.next_page_token
@@ -816,13 +830,11 @@ class LegacyControllerService:
             None,
         )
         page = job_page_from_proto(
-            resource_pb2.ListJobsResponse(
-                jobs=[_unpack(resource.body, resource_pb2.JobSummary) for resource in response.resources],
-                page=resource_pb2.PageInfo(
-                    next_page_token=response.next_page_token,
-                    source_statuses=response.source_statuses,
-                ),
-            )
+            (_unpack(resource.body, resource_job_pb2.JobSummary) for resource in response.resources),
+            resource_pb2.PageInfo(
+                next_page_token=response.next_page_token,
+                source_statuses=response.source_statuses,
+            ),
         )
         if not page.items:
             raise ResourceNotFound(wire_id)
@@ -850,13 +862,11 @@ class LegacyControllerService:
                 None,
             )
             page = task_page_from_proto(
-                resource_pb2.ListTasksResponse(
-                    tasks=[_unpack(resource.body, resource_pb2.TaskSummary) for resource in response.resources],
-                    page=resource_pb2.PageInfo(
-                        next_page_token=response.next_page_token,
-                        source_statuses=response.source_statuses,
-                    ),
-                )
+                (_unpack(resource.body, resource_task_pb2.TaskSummary) for resource in response.resources),
+                resource_pb2.PageInfo(
+                    next_page_token=response.next_page_token,
+                    source_statuses=response.source_statuses,
+                ),
             )
             for summary in page.items:
                 if summary.identity.key.resource_id == wire_id:
@@ -913,7 +923,7 @@ class LegacyControllerService:
             resource_pb2.UpdateResourceRequest(
                 mutation=resource_pb2.MutationMetadata(request_id=f"legacy-terminate:{identity.job_uid}"),
                 ref=_ref(identity.key.cluster_id, JOB, identity.key.resource_id, identity.job_uid),
-                update=resource_pb2.ResourceUpdate(new_state=resource_pb2.REQUESTED_RESOURCE_STATE_CANCELLED),
+                update=_pack(resource_job_pb2.JobUpdate(cancel=resource_job_pb2.CancelJobUpdate())),
             ),
             None,
         )
@@ -983,7 +993,7 @@ class LegacyControllerService:
                 ),
                 None,
             )
-            detail = task_detail_from_proto(_unpack(task_response.resource.body, resource_pb2.TaskDetail))
+            detail = task_detail_from_proto(_unpack(task_response.resource.body, resource_task_pb2.TaskDetail))
             job_key = detail.summary.job.key
             job_response = self._resources.get_resource(
                 resource_pb2.GetResourceRequest(
@@ -992,7 +1002,7 @@ class LegacyControllerService:
                 ),
                 None,
             )
-            job = job_detail_from_proto(_unpack(job_response.resource.body, resource_pb2.JobDetail))
+            job = job_detail_from_proto(_unpack(job_response.resource.body, resource_job_pb2.JobDetail))
         except ResourceNotFound as exc:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found") from exc
         legacy_task = task_detail_to_legacy(detail, local_cluster_id=self._controller.cluster_id)
@@ -1010,7 +1020,7 @@ class LegacyControllerService:
                 ),
                 None,
             )
-            attempt = attempt_detail_from_proto(_unpack(attempt_response.resource.body, resource_pb2.AttemptDetail))
+            attempt = attempt_detail_from_proto(_unpack(attempt_response.resource.body, resource_task_pb2.AttemptDetail))
             if attempt.runtime is not None:
                 legacy_task.container_id = attempt.runtime.container_id
         if detail.summary.current_node is not None:
@@ -1051,7 +1061,7 @@ class LegacyControllerService:
                 None,
             )
             details.extend(
-                task_detail_from_proto(_unpack(result.resource.body, resource_pb2.TaskDetail))
+                task_detail_from_proto(_unpack(result.resource.body, resource_task_pb2.TaskDetail))
                 for result in response.results
             )
         tasks = [
@@ -1435,21 +1445,22 @@ class LegacyControllerService:
         self._authorize_federated_debug_target(target.task_id.root_job)
         try:
             task_key = self._resource_task_summary(target.task_id.to_wire()).identity.key
+            attempt_qualifier = "current" if target.attempt_id is None else str(target.attempt_id)
             attempt_response = self._resources.get_resource(
                 resource_pb2.GetResourceRequest(
                     ref=_ref(
                         task_key.cluster_id,
                         ATTEMPT,
-                        f"{task_key.resource_id}:{target.attempt_id}",
+                        f"{task_key.resource_id}:{attempt_qualifier}",
                     ),
                     view=resource_pb2.RESOURCE_VIEW_FULL,
                 ),
                 None,
             )
-            attempt = attempt_detail_from_proto(_unpack(attempt_response.resource.body, resource_pb2.AttemptDetail))
-            wire_request = resource_pb2.ProfileAttemptRequest(
+            attempt = attempt_detail_from_proto(_unpack(attempt_response.resource.body, resource_task_pb2.AttemptDetail))
+            wire_request = resource_command_pb2.CreateProfileCapture(
                 attempt=attempt_identity_to_proto(attempt.summary.identity),
-                profile=profile_configuration_to_proto(profile_configuration_from_proto(request.profile_type)),
+                profile=resource_profile_configuration_to_proto(profile_configuration_from_proto(request.profile_type)),
             )
             if request.duration_seconds:
                 wire_request.duration.CopyFrom(duration_to_proto(Duration.from_seconds(request.duration_seconds)))
@@ -1464,7 +1475,7 @@ class LegacyControllerService:
                     None,
                 )
             )
-            result = profile_result_from_proto(_unpack(operation.result, resource_pb2.ProfileAttemptResponse))
+            result = profile_result_from_proto(_unpack(operation.result, resource_command_pb2.ProfileCaptureResult))
         except ResourceNotFound as exc:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found") from exc
         return job_pb2.ProfileTaskResponse(profile_data=result.profile_data, error=result.error_message)
@@ -1650,50 +1661,19 @@ class LegacyControllerService:
     ) -> controller_pb2.Controller.MintEndpointTokenResponse:
         """Mint a capability token for the named Endpoint."""
         del ctx
-        endpoint_query = resource_pb2.EndpointQuery(
-            name_prefix=request.endpoint_name,
-            page=resource_pb2.PageRequest(page_size=100),
-        )
-        response = self._resources.list_resources(
-            resource_pb2.ListResourcesRequest(
-                type=ENDPOINT,
-                query=_pack(endpoint_query),
-                page_size=100,
-                view=resource_pb2.RESOURCE_VIEW_BASIC,
-            ),
-            None,
-        )
-        matches = endpoint_page_from_proto(
-            resource_pb2.ListEndpointsResponse(
-                endpoints=[_unpack(resource.body, resource_pb2.EndpointSummary) for resource in response.resources],
-                page=resource_pb2.PageInfo(
-                    next_page_token=response.next_page_token,
-                    source_statuses=response.source_statuses,
-                ),
-            )
-        )
-        endpoint = next((item for item in matches.items if item.name == request.endpoint_name), None)
-        if endpoint is None:
-            raise ConnectError(Code.NOT_FOUND, f"No endpoint {request.endpoint_name!r}")
-        mint_request = resource_pb2.MintEndpointTokenRequest(
-            endpoint=resource_pb2.ResourceKey(
-                cluster_id=endpoint.key.cluster_id,
-                kind=resource_pb2.RESOURCE_KIND_ENDPOINT,
-                resource_id=endpoint.key.resource_id,
-            )
-        )
+        mint_request = resource_endpoint_pb2.CreateEndpointCapability(endpoint_name=request.endpoint_name)
         if request.HasField("ttl"):
             mint_request.ttl.CopyFrom(request.ttl)
         operation = self._resources.create_resource(
             resource_pb2.CreateResourceRequest(
                 mutation=resource_pb2.MutationMetadata(request_id=uuid.uuid4().hex),
                 type=ENDPOINT_CAPABILITY,
-                parent=_ref(endpoint.key.cluster_id, ENDPOINT, endpoint.key.resource_id),
+                parent=_ref(self.cluster_id, ENDPOINT, request.endpoint_name),
                 body=_pack(mint_request),
             ),
             None,
         )
-        token = endpoint_token_from_proto(_unpack(operation.result, resource_pb2.MintEndpointTokenResponse))
+        token = endpoint_token_from_proto(_unpack(operation.result, resource_endpoint_pb2.EndpointCapability))
         return controller_pb2.Controller.MintEndpointTokenResponse(
             token=token.token,
             expires_at=timestamp_to_proto(token.expires_at),
@@ -1731,11 +1711,11 @@ class LegacyControllerService:
             if task.current_attempt is None:
                 raise ResourceNotFound(request.task_id)
             attempt = task.current_attempt
-            wire_request = resource_pb2.ExecAttemptRequest(
-                attempt=resource_pb2.AttemptIdentity(
-                    task=resource_pb2.ResourceKey(
+            wire_request = resource_command_pb2.CreateExecSession(
+                attempt=resource_identity_pb2.AttemptIdentity(
+                    task=resource_identity_pb2.ResourceKey(
                         cluster_id=attempt.task.cluster_id,
-                        kind=resource_pb2.RESOURCE_KIND_TASK,
+                        kind=resource_identity_pb2.RESOURCE_KIND_TASK,
                         resource_id=attempt.task.resource_id,
                     ),
                     attempt_number=attempt.attempt_number,
@@ -1762,7 +1742,7 @@ class LegacyControllerService:
                     None,
                 )
             )
-            result = exec_result_from_proto(_unpack(operation.result, resource_pb2.ExecAttemptResponse))
+            result = exec_result_from_proto(_unpack(operation.result, resource_command_pb2.ExecSessionResult))
         except ResourceNotFound as exc:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found") from exc
         return controller_pb2.Controller.ExecInContainerResponse(

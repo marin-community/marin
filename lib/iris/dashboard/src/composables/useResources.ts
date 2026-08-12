@@ -31,7 +31,9 @@ export const RESOURCE_MESSAGES = {
   endpointQuery: 'iris.resource.EndpointQuery',
   listUsersRequest: 'iris.resource.ListUsersRequest',
   activityQuery: 'iris.resource.ActivityQuery',
-  retryTaskRequest: 'iris.resource.RetryTaskRequest',
+  jobUpdate: 'iris.resource.JobUpdate',
+  taskUpdate: 'iris.resource.TaskUpdate',
+  attemptUpdate: 'iris.resource.AttemptUpdate',
   profileAttemptRequest: 'iris.resource.ProfileAttemptRequest',
 } as const
 
@@ -71,7 +73,6 @@ export interface ResourceOperation<T> {
   requestedRef?: ResourceRef
   resolvedRef?: ResourceRef
   affected?: ResourceRef[]
-  requestedState?: string
   result?: T & { '@type'?: string }
 }
 
@@ -159,9 +160,9 @@ export async function listResources<T>(
 
 export async function updateResource<T>(
   ref: ResourceRef,
-  newState: 'PENDING' | 'CANCELLED' | 'PREEMPTED' | 'FAILED',
+  updateType: string,
+  update: Record<string, unknown>,
   options: MutationOptions = {},
-  patch?: { type: string; value: Record<string, unknown> },
 ): Promise<ResourceOperation<T>> {
   return resourceRpcCall<ResourceOperation<T>>('UpdateResource', {
     mutation: {
@@ -169,10 +170,7 @@ export async function updateResource<T>(
       reason: options.reason,
     },
     ref,
-    update: {
-      newState: `REQUESTED_RESOURCE_STATE_${newState}`,
-      patch: patch ? anyMessage(patch.type, patch.value) : undefined,
-    },
+    update: anyMessage(updateType, update),
   })
 }
 

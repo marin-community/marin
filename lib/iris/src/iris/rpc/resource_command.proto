@@ -1,0 +1,73 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+edition = "2023";
+
+package iris.resource;
+
+import "resource_identity.proto";
+import "time.proto";
+
+option features.field_presence = EXPLICIT;
+
+message CpuProfile {
+  enum Format {
+    FORMAT_UNSPECIFIED = 0;
+    FLAMEGRAPH = 1;
+    SPEEDSCOPE = 2;
+    RAW = 3;
+  }
+
+  Format format = 1;
+  int32 rate_hz = 2;
+  bool native = 3;
+}
+
+message MemoryProfile {
+  enum Format {
+    FORMAT_UNSPECIFIED = 0;
+    FLAMEGRAPH = 1;
+    TABLE = 2;
+    STATS = 3;
+    RAW = 4;
+  }
+
+  Format format = 1;
+  bool leaks = 2;
+}
+
+message ThreadsProfile {
+  bool locals = 1;
+}
+
+message ProfileType {
+  oneof profiler {
+    CpuProfile cpu = 1;
+    MemoryProfile memory = 2;
+    ThreadsProfile threads = 3;
+  }
+}
+
+message CreateExecSession {
+  AttemptIdentity attempt = 1;
+  repeated string command = 2;
+  iris.time.Duration timeout = 3;
+}
+
+message ExecSessionResult {
+  int32 exit_code = 1;
+  string stdout = 2;
+  string stderr = 3;
+  string error_message = 4;
+}
+
+message CreateProfileCapture {
+  AttemptIdentity attempt = 1;
+  ProfileType profile = 2;
+  iris.time.Duration duration = 3;
+}
+
+message ProfileCaptureResult {
+  bytes profile_data = 1;
+  string error_message = 2;
+}

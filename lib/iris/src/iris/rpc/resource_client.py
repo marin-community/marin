@@ -42,7 +42,17 @@ from iris.resources.slice import SliceDetail, SliceQuery, SliceSummary
 from iris.resources.source import Page
 from iris.resources.state import JobState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
-from iris.rpc import iris_logging_pb2, resource_pb2
+from iris.rpc import (
+    iris_logging_pb2,
+    resource_action_pb2,
+    resource_command_pb2,
+    resource_endpoint_pb2,
+    resource_fleet_pb2,
+    resource_job_pb2,
+    resource_observability_pb2,
+    resource_pb2,
+    resource_task_pb2,
+)
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.errors import call_with_retry
 from iris.rpc.resource_client_codec import (
@@ -214,7 +224,7 @@ class ResourceRpcClient:
         )
 
     def submit_job(self, spec: JobSpec, *, bundle: bytes | None = None) -> JobIdentity:
-        body = resource_pb2.SubmitJobRequest(spec=job_spec_to_proto(spec), bundle_blob=bundle or b"")
+        body = resource_job_pb2.CreateJob(spec=job_spec_to_proto(spec), bundle_blob=bundle or b"")
         operation = self._client.create_resource(
             resource_pb2.CreateResourceRequest(
                 mutation=_mutation(),
@@ -224,7 +234,7 @@ class ResourceRpcClient:
             ),
             timeout_ms=_SUBMIT_JOB_TIMEOUT_MS,
         )
-        return job_identity_from_proto(_unpack(operation.result, resource_pb2.SubmitJobResponse).job)
+        return job_identity_from_proto(_unpack(operation.result, resource_job_pb2.CreatedJob).job)
 
     def list_jobs(self, query: JobQuery = JobQuery()) -> Page[JobSummary]:
         request = resource_pb2.ListResourcesRequest(
@@ -234,13 +244,11 @@ class ResourceRpcClient:
         )
         response = call_with_retry("list_resources", lambda: self._client.list_resources(request))
         return job_page_from_proto(
-            resource_pb2.ListJobsResponse(
-                jobs=[_unpack(item.body, resource_pb2.JobSummary) for item in response.resources],
-                page=resource_pb2.PageInfo(
-                    next_page_token=response.next_page_token,
-                    source_statuses=response.source_statuses,
-                ),
-            )
+            (_unpack(item.body, resource_job_pb2.JobSummary) for item in response.resources),
+            resource_pb2.PageInfo(
+                next_page_token=response.next_page_token,
+                source_statuses=response.source_statuses,
+            ),
         )
 
     def describe_job(self, key: ResourceKey) -> JobDetail:
@@ -249,7 +257,7 @@ class ResourceRpcClient:
             view=resource_pb2.RESOURCE_VIEW_FULL,
         )
         response = call_with_retry("get_resource", lambda: self._client.get_resource(request))
-        return job_detail_from_proto(_unpack(response.resource.body, resource_pb2.JobDetail))
+        return job_detail_from_proto(_unpack(response.resource.body, resource_job_pb2.JobDetail))
 
     def job_state(self, identity: JobIdentity) -> JobState:
         request = resource_pb2.GetResourceRequest(
@@ -257,7 +265,7 @@ class ResourceRpcClient:
             view=resource_pb2.RESOURCE_VIEW_BASIC,
         )
         response = call_with_retry("get_resource", lambda: self._client.get_resource(request))
-        return JobState(_unpack(response.resource.body, resource_pb2.JobSummary).state)
+        return JobState(_unpack(response.resource.body, resource_job_pb2.JobSummary).state)
 
     def list_tasks(self, query: TaskQuery = TaskQuery()) -> Page[TaskSummary]:
         request = resource_pb2.ListResourcesRequest(
@@ -267,13 +275,11 @@ class ResourceRpcClient:
         )
         response = call_with_retry("list_resources", lambda: self._client.list_resources(request))
         return task_page_from_proto(
-            resource_pb2.ListTasksResponse(
-                tasks=[_unpack(item.body, resource_pb2.TaskSummary) for item in response.resources],
-                page=resource_pb2.PageInfo(
-                    next_page_token=response.next_page_token,
-                    source_statuses=response.source_statuses,
-                ),
-            )
+            (_unpack(item.body, resource_task_pb2.TaskSummary) for item in response.resources),
+            resource_pb2.PageInfo(
+                next_page_token=response.next_page_token,
+                source_statuses=response.source_statuses,
+            ),
         )
 
     def describe_task(self, key: ResourceKey) -> TaskDetail:
@@ -282,7 +288,7 @@ class ResourceRpcClient:
             view=resource_pb2.RESOURCE_VIEW_FULL,
         )
         response = call_with_retry("get_resource", lambda: self._client.get_resource(request))
-        return task_detail_from_proto(_unpack(response.resource.body, resource_pb2.TaskDetail))
+        return task_detail_from_proto(_unpack(response.resource.body, resource_task_pb2.TaskDetail))
 
     def describe_tasks(self, keys: Sequence[ResourceKey]) -> tuple[TaskDetail, ...]:
         request = resource_pb2.BatchGetResourcesRequest(
@@ -295,8 +301,8 @@ class ResourceRpcClient:
         for result in response.results:
             if result.WhichOneof("result") == "error":
                 raise RuntimeError(result.error.message)
-            details.append(_unpack(result.resource.body, resource_pb2.TaskDetail))
-        return task_details_from_proto(resource_pb2.BatchDescribeTasksResponse(tasks=details))
+            details.append(_unpack(result.resource.body, resource_task_pb2.TaskDetail))
+        return task_details_from_proto(details)
 
     def describe_attempt(self, locator: AttemptLocator) -> AttemptDetail:
         attempt = "current" if locator.attempt_number is None else str(locator.attempt_number)
@@ -305,7 +311,7 @@ class ResourceRpcClient:
             view=resource_pb2.RESOURCE_VIEW_FULL,
         )
         response = call_with_retry("get_resource", lambda: self._client.get_resource(request))
-        return attempt_detail_from_proto(_unpack(response.resource.body, resource_pb2.AttemptDetail))
+        return attempt_detail_from_proto(_unpack(response.resource.body, resource_task_pb2.AttemptDetail))
 
     def list_nodes(self, query: NodeQuery = NodeQuery()) -> Page[NodeSummary]:
         request = resource_pb2.ListResourcesRequest(
@@ -315,13 +321,11 @@ class ResourceRpcClient:
         )
         response = call_with_retry("list_resources", lambda: self._client.list_resources(request))
         return node_page_from_proto(
-            resource_pb2.ListNodesResponse(
-                nodes=[_unpack(item.body, resource_pb2.NodeSummary) for item in response.resources],
-                page=resource_pb2.PageInfo(
-                    next_page_token=response.next_page_token,
-                    source_statuses=response.source_statuses,
-                ),
-            )
+            (_unpack(item.body, resource_fleet_pb2.NodeSummary) for item in response.resources),
+            resource_pb2.PageInfo(
+                next_page_token=response.next_page_token,
+                source_statuses=response.source_statuses,
+            ),
         )
 
     def describe_node(self, locator: NodeLocator) -> NodeDetail:
@@ -335,7 +339,7 @@ class ResourceRpcClient:
             view=resource_pb2.RESOURCE_VIEW_FULL,
         )
         response = call_with_retry("get_resource", lambda: self._client.get_resource(request))
-        return node_detail_from_proto(_unpack(response.resource.body, resource_pb2.NodeDetail))
+        return node_detail_from_proto(_unpack(response.resource.body, resource_fleet_pb2.NodeDetail))
 
     def list_slices(self, query: SliceQuery = SliceQuery()) -> Page[SliceSummary]:
         request = resource_pb2.ListResourcesRequest(
@@ -345,13 +349,11 @@ class ResourceRpcClient:
         )
         response = call_with_retry("list_resources", lambda: self._client.list_resources(request))
         return slice_page_from_proto(
-            resource_pb2.ListSlicesResponse(
-                slices=[_unpack(item.body, resource_pb2.SliceSummary) for item in response.resources],
-                page=resource_pb2.PageInfo(
-                    next_page_token=response.next_page_token,
-                    source_statuses=response.source_statuses,
-                ),
-            )
+            (_unpack(item.body, resource_fleet_pb2.SliceSummary) for item in response.resources),
+            resource_pb2.PageInfo(
+                next_page_token=response.next_page_token,
+                source_statuses=response.source_statuses,
+            ),
         )
 
     def describe_slice(self, locator: SliceLocator) -> SliceDetail:
@@ -365,7 +367,7 @@ class ResourceRpcClient:
             view=resource_pb2.RESOURCE_VIEW_FULL,
         )
         response = call_with_retry("get_resource", lambda: self._client.get_resource(request))
-        return slice_detail_from_proto(_unpack(response.resource.body, resource_pb2.SliceDetail))
+        return slice_detail_from_proto(_unpack(response.resource.body, resource_fleet_pb2.SliceDetail))
 
     def list_endpoints(self, query: EndpointQuery = EndpointQuery()) -> Page[EndpointSummary]:
         request = resource_pb2.ListResourcesRequest(
@@ -375,13 +377,11 @@ class ResourceRpcClient:
         )
         response = call_with_retry("list_resources", lambda: self._client.list_resources(request))
         return endpoint_page_from_proto(
-            resource_pb2.ListEndpointsResponse(
-                endpoints=[_unpack(item.body, resource_pb2.EndpointSummary) for item in response.resources],
-                page=resource_pb2.PageInfo(
-                    next_page_token=response.next_page_token,
-                    source_statuses=response.source_statuses,
-                ),
-            )
+            (_unpack(item.body, resource_endpoint_pb2.EndpointSummary) for item in response.resources),
+            resource_pb2.PageInfo(
+                next_page_token=response.next_page_token,
+                source_statuses=response.source_statuses,
+            ),
         )
 
     def describe_endpoint(self, key: ResourceKey) -> EndpointDetail:
@@ -390,7 +390,7 @@ class ResourceRpcClient:
             view=resource_pb2.RESOURCE_VIEW_FULL,
         )
         response = call_with_retry("get_resource", lambda: self._client.get_resource(request))
-        return endpoint_detail_from_proto(_unpack(response.resource.body, resource_pb2.EndpointDetail))
+        return endpoint_detail_from_proto(_unpack(response.resource.body, resource_endpoint_pb2.EndpointDetail))
 
     def describe_endpoints(self, keys: Sequence[ResourceKey]) -> tuple[EndpointDetail, ...]:
         request = resource_pb2.BatchGetResourcesRequest(
@@ -403,8 +403,8 @@ class ResourceRpcClient:
         for result in response.results:
             if result.WhichOneof("result") == "error":
                 raise RuntimeError(result.error.message)
-            details.append(_unpack(result.resource.body, resource_pb2.EndpointDetail))
-        return endpoint_details_from_proto(resource_pb2.BatchDescribeEndpointsResponse(endpoints=details))
+            details.append(_unpack(result.resource.body, resource_endpoint_pb2.EndpointDetail))
+        return endpoint_details_from_proto(details)
 
     def resolve_endpoints(self, name: str) -> tuple[EndpointDetail, ...]:
         """Return every endpoint with the exact resource name."""
@@ -426,7 +426,7 @@ class ResourceRpcClient:
                 return tuple(details)
 
     def mint_endpoint_token(self, key: ResourceKey, *, ttl: Duration) -> EndpointToken:
-        body = resource_pb2.MintEndpointTokenRequest(
+        body = resource_endpoint_pb2.CreateEndpointCapability(
             endpoint=resource_key_to_proto(key),
             ttl=duration_to_proto(ttl),
         )
@@ -441,7 +441,7 @@ class ResourceRpcClient:
                 )
             ),
         )
-        return endpoint_token_from_proto(_unpack(operation.result, resource_pb2.MintEndpointTokenResponse))
+        return endpoint_token_from_proto(_unpack(operation.result, resource_endpoint_pb2.EndpointCapability))
 
     def list_activity(self, query: ActivityQuery) -> Page[ActivityEntry]:
         request = resource_pb2.ListResourcesRequest(
@@ -451,29 +451,27 @@ class ResourceRpcClient:
         )
         response = call_with_retry("list_resources", lambda: self._client.list_resources(request))
         return activity_page_from_proto(
-            resource_pb2.ListActivityResponse(
-                entries=[_unpack(item.body, resource_pb2.ActivityEntry) for item in response.resources],
-                page=resource_pb2.PageInfo(
-                    next_page_token=response.next_page_token,
-                    source_statuses=response.source_statuses,
-                ),
-            )
+            (_unpack(item.body, resource_observability_pb2.ActivityEntry) for item in response.resources),
+            resource_pb2.PageInfo(
+                next_page_token=response.next_page_token,
+                source_statuses=response.source_statuses,
+            ),
         )
 
     def fetch_job_logs(self, identity: JobIdentity, query: LogQuery = LogQuery()) -> LogPage:
-        target = resource_pb2.LogTarget(job=job_identity_to_proto(identity))
+        target = resource_observability_pb2.LogTarget(job=job_identity_to_proto(identity))
         return self._fetch_logs(target, query)
 
     def fetch_task_logs(self, identity: TaskIdentity, query: LogQuery = LogQuery()) -> LogPage:
-        target = resource_pb2.LogTarget(task=task_identity_to_proto(identity))
+        target = resource_observability_pb2.LogTarget(task=task_identity_to_proto(identity))
         return self._fetch_logs(target, query)
 
     def fetch_attempt_logs(self, identity: AttemptIdentity, query: LogQuery = LogQuery()) -> LogPage:
-        target = resource_pb2.LogTarget(attempt=attempt_identity_to_proto(identity))
+        target = resource_observability_pb2.LogTarget(attempt=attempt_identity_to_proto(identity))
         return self._fetch_logs(target, query)
 
-    def _fetch_logs(self, target: resource_pb2.LogTarget, query: LogQuery) -> LogPage:
-        body = resource_pb2.FetchLogsRequest(target=target, query=log_query_to_proto(query))
+    def _fetch_logs(self, target: resource_observability_pb2.LogTarget, query: LogQuery) -> LogPage:
+        body = resource_observability_pb2.LogQuery(target=target, filter=log_query_to_proto(query))
         request = resource_pb2.ListResourcesRequest(
             type=LOG_ENTRY,
             query=_pack(body),
@@ -481,11 +479,9 @@ class ResourceRpcClient:
         )
         response = call_with_retry("list_resources", lambda: self._client.list_resources(request))
         return log_page_from_proto(
-            resource_pb2.FetchLogsResponse(
-                entries=[_unpack(item.body, iris_logging_pb2.LogEntry) for item in response.resources],
-                next_cursor=int(response.next_page_token or 0),
-                source_statuses=response.source_statuses,
-            )
+            (_unpack(item.body, iris_logging_pb2.LogEntry) for item in response.resources),
+            int(response.next_page_token or 0),
+            response.source_statuses,
         )
 
     def stream_job_logs(
@@ -525,10 +521,10 @@ class ResourceRpcClient:
         request = resource_pb2.UpdateResourceRequest(
             mutation=resource_pb2.MutationMetadata(request_id=idempotency_key),
             ref=_ref(identity.key.cluster_id, JOB, identity.key.resource_id, identity.job_uid),
-            update=resource_pb2.ResourceUpdate(new_state=resource_pb2.REQUESTED_RESOURCE_STATE_CANCELLED),
+            update=_pack(resource_job_pb2.JobUpdate(cancel=resource_job_pb2.CancelJobUpdate())),
         )
         operation = call_with_retry("update_resource", lambda: self._client.update_resource(request))
-        return action_receipt_from_proto(_unpack(operation.result, resource_pb2.ActionReceipt))
+        return action_receipt_from_proto(_unpack(operation.result, resource_action_pb2.ActionReceipt))
 
     def retry_task(
         self,
@@ -537,19 +533,18 @@ class ResourceRpcClient:
         expected_attempt_uid: str,
         idempotency_key: str,
     ) -> ActionReceipt:
-        condition = resource_pb2.RetryTaskRequest(
-            task=task_identity_to_proto(identity), expected_attempt_uid=expected_attempt_uid
-        )
         request = resource_pb2.UpdateResourceRequest(
             mutation=resource_pb2.MutationMetadata(request_id=idempotency_key),
             ref=_ref(identity.key.cluster_id, TASK, identity.key.resource_id, identity.task_uid),
-            update=resource_pb2.ResourceUpdate(
-                new_state=resource_pb2.REQUESTED_RESOURCE_STATE_PENDING,
-                patch=_pack(condition),
+            update=_pack(
+                resource_task_pb2.TaskUpdate(
+                    expected_attempt_uid=expected_attempt_uid,
+                    preempt=resource_task_pb2.PreemptTaskUpdate(),
+                )
             ),
         )
         operation = call_with_retry("update_resource", lambda: self._client.update_resource(request))
-        return action_receipt_from_proto(_unpack(operation.result, resource_pb2.ActionReceipt))
+        return action_receipt_from_proto(_unpack(operation.result, resource_action_pb2.ActionReceipt))
 
     def terminate_attempt(self, identity: AttemptIdentity, *, idempotency_key: str) -> ActionReceipt:
         request = resource_pb2.UpdateResourceRequest(
@@ -560,10 +555,10 @@ class ResourceRpcClient:
                 f"{identity.task.resource_id}:{identity.attempt_number}",
                 identity.attempt_uid,
             ),
-            update=resource_pb2.ResourceUpdate(new_state=resource_pb2.REQUESTED_RESOURCE_STATE_CANCELLED),
+            update=_pack(resource_task_pb2.AttemptUpdate(terminate=resource_task_pb2.TerminateAttemptUpdate())),
         )
         operation = call_with_retry("update_resource", lambda: self._client.update_resource(request))
-        return action_receipt_from_proto(_unpack(operation.result, resource_pb2.ActionReceipt))
+        return action_receipt_from_proto(_unpack(operation.result, resource_action_pb2.ActionReceipt))
 
     def get_action_receipt(self, action_id: str) -> ActionReceipt:
         request = resource_pb2.GetResourceRequest(
@@ -572,7 +567,7 @@ class ResourceRpcClient:
         )
         response = call_with_retry("get_resource", lambda: self._client.get_resource(request))
         operation = _unpack(response.resource.body, resource_pb2.Operation)
-        return action_receipt_from_proto(_unpack(operation.result, resource_pb2.ActionReceipt))
+        return action_receipt_from_proto(_unpack(operation.result, resource_action_pb2.ActionReceipt))
 
     def wait_for_action(self, action_id: str, *, timeout: Duration) -> ActionReceipt:
         deadline = Deadline.from_seconds(timeout.to_seconds())
@@ -591,7 +586,7 @@ class ResourceRpcClient:
         command: Sequence[str],
         timeout: Duration,
     ) -> ExecResult:
-        body = resource_pb2.ExecAttemptRequest(
+        body = resource_command_pb2.CreateExecSession(
             attempt=attempt_identity_to_proto(identity),
             command=command,
             timeout=duration_to_proto(timeout),
@@ -611,7 +606,7 @@ class ResourceRpcClient:
             ),
             timeout_ms=rpc_timeout_ms,
         )
-        return exec_result_from_proto(_unpack(operation.result, resource_pb2.ExecAttemptResponse))
+        return exec_result_from_proto(_unpack(operation.result, resource_command_pb2.ExecSessionResult))
 
     def profile_attempt(
         self,
@@ -620,7 +615,7 @@ class ResourceRpcClient:
         profile: ProfileConfiguration,
         duration: Duration,
     ) -> ProfileResult:
-        body = resource_pb2.ProfileAttemptRequest(
+        body = resource_command_pb2.CreateProfileCapture(
             attempt=attempt_identity_to_proto(identity),
             profile=profile_configuration_to_proto(profile),
             duration=duration_to_proto(duration),
@@ -640,4 +635,4 @@ class ResourceRpcClient:
             ),
             timeout_ms=rpc_timeout_ms,
         )
-        return profile_result_from_proto(_unpack(operation.result, resource_pb2.ProfileAttemptResponse))
+        return profile_result_from_proto(_unpack(operation.result, resource_command_pb2.ProfileCaptureResult))

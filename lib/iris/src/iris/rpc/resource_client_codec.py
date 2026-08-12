@@ -8,6 +8,8 @@ Generated protobuf messages stay at the RPC boundary because their mutable,
 presence-sensitive semantics are transport concerns rather than resource behavior.
 """
 
+from collections.abc import Iterable
+
 from iris.resources.activity import ActivityEntry, ActivityQuery
 from iris.resources.attempt import AttemptDetail, AttemptRuntimeObject, AttemptSummary
 from iris.resources.endpoint import (
@@ -32,7 +34,16 @@ from iris.resources.slice import SliceDetail, SliceMember, SliceQuery, SliceSumm
 from iris.resources.source import Page
 from iris.resources.state import JobState, TaskState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
-from iris.rpc import resource_pb2
+from iris.rpc import (
+    iris_logging_pb2,
+    resource_command_pb2,
+    resource_endpoint_pb2,
+    resource_fleet_pb2,
+    resource_job_pb2,
+    resource_observability_pb2,
+    resource_pb2,
+    resource_task_pb2,
+)
 from iris.rpc.resource_codec import (
     attempt_identity_from_proto as _attempt_identity_from_proto,
 )
@@ -78,8 +89,8 @@ def _page[T](items: tuple[T, ...], value: resource_pb2.PageInfo) -> Page[T]:
     )
 
 
-def job_query_to_proto(value: JobQuery) -> resource_pb2.JobQuery:
-    result = resource_pb2.JobQuery(
+def job_query_to_proto(value: JobQuery) -> resource_job_pb2.JobQuery:
+    result = resource_job_pb2.JobQuery(
         resource_id=value.resource_id or "",
         owner_id=value.owner_id or "",
         job_id_prefix=value.job_id_prefix or "",
@@ -94,7 +105,7 @@ def job_query_to_proto(value: JobQuery) -> resource_pb2.JobQuery:
     return result
 
 
-def _job_summary_from_proto(value: resource_pb2.JobSummary) -> JobSummary:
+def _job_summary_from_proto(value: resource_job_pb2.JobSummary) -> JobSummary:
     return JobSummary(
         identity=job_identity_from_proto(value.identity),
         owner_id=value.owner_id,
@@ -113,16 +124,19 @@ def _job_summary_from_proto(value: resource_pb2.JobSummary) -> JobSummary:
     )
 
 
-def job_detail_from_proto(value: resource_pb2.JobDetail) -> JobDetail:
+def job_detail_from_proto(value: resource_job_pb2.JobDetail) -> JobDetail:
     return JobDetail(_job_summary_from_proto(value.summary), job_spec_from_proto(value.spec))
 
 
-def job_page_from_proto(value: resource_pb2.ListJobsResponse) -> Page[JobSummary]:
-    return _page(tuple(_job_summary_from_proto(item) for item in value.jobs), value.page)
+def job_page_from_proto(
+    items: Iterable[resource_job_pb2.JobSummary],
+    page: resource_pb2.PageInfo,
+) -> Page[JobSummary]:
+    return _page(tuple(_job_summary_from_proto(item) for item in items), page)
 
 
-def task_query_to_proto(value: TaskQuery) -> resource_pb2.TaskQuery:
-    result = resource_pb2.TaskQuery(
+def task_query_to_proto(value: TaskQuery) -> resource_task_pb2.TaskQuery:
+    result = resource_task_pb2.TaskQuery(
         job_id_prefix=value.job_id_prefix or "",
         states=value.states,
         backend_id=value.backend_id or "",
@@ -135,7 +149,7 @@ def task_query_to_proto(value: TaskQuery) -> resource_pb2.TaskQuery:
     return result
 
 
-def _task_summary_from_proto(value: resource_pb2.TaskSummary) -> TaskSummary:
+def _task_summary_from_proto(value: resource_task_pb2.TaskSummary) -> TaskSummary:
     return TaskSummary(
         identity=_task_identity_from_proto(value.identity),
         job=job_identity_from_proto(value.job),
@@ -157,7 +171,7 @@ def _task_summary_from_proto(value: resource_pb2.TaskSummary) -> TaskSummary:
     )
 
 
-def _attempt_summary_from_proto(value: resource_pb2.AttemptSummary) -> AttemptSummary:
+def _attempt_summary_from_proto(value: resource_task_pb2.AttemptSummary) -> AttemptSummary:
     return AttemptSummary(
         identity=_attempt_identity_from_proto(value.identity),
         state=TaskState(value.state),
@@ -173,11 +187,14 @@ def _attempt_summary_from_proto(value: resource_pb2.AttemptSummary) -> AttemptSu
     )
 
 
-def task_page_from_proto(value: resource_pb2.ListTasksResponse) -> Page[TaskSummary]:
-    return _page(tuple(_task_summary_from_proto(item) for item in value.tasks), value.page)
+def task_page_from_proto(
+    items: Iterable[resource_task_pb2.TaskSummary],
+    page: resource_pb2.PageInfo,
+) -> Page[TaskSummary]:
+    return _page(tuple(_task_summary_from_proto(item) for item in items), page)
 
 
-def task_detail_from_proto(value: resource_pb2.TaskDetail) -> TaskDetail:
+def task_detail_from_proto(value: resource_task_pb2.TaskDetail) -> TaskDetail:
     return TaskDetail(
         summary=_task_summary_from_proto(value.summary),
         attempts=tuple(_attempt_summary_from_proto(item) for item in value.attempts),
@@ -186,11 +203,11 @@ def task_detail_from_proto(value: resource_pb2.TaskDetail) -> TaskDetail:
     )
 
 
-def task_details_from_proto(value: resource_pb2.BatchDescribeTasksResponse) -> tuple[TaskDetail, ...]:
-    return tuple(task_detail_from_proto(item) for item in value.tasks)
+def task_details_from_proto(items: Iterable[resource_task_pb2.TaskDetail]) -> tuple[TaskDetail, ...]:
+    return tuple(task_detail_from_proto(item) for item in items)
 
 
-def attempt_detail_from_proto(value: resource_pb2.AttemptDetail) -> AttemptDetail:
+def attempt_detail_from_proto(value: resource_task_pb2.AttemptDetail) -> AttemptDetail:
     runtime = None
     if value.HasField("runtime"):
         runtime = AttemptRuntimeObject(
@@ -210,8 +227,8 @@ def attempt_detail_from_proto(value: resource_pb2.AttemptDetail) -> AttemptDetai
     )
 
 
-def node_query_to_proto(value: NodeQuery) -> resource_pb2.NodeQuery:
-    return resource_pb2.NodeQuery(
+def node_query_to_proto(value: NodeQuery) -> resource_fleet_pb2.NodeQuery:
+    return resource_fleet_pb2.NodeQuery(
         backend_id=value.backend_id or "",
         contains=value.contains or "",
         health=[node_health_to_proto(item) for item in value.health],
@@ -219,7 +236,7 @@ def node_query_to_proto(value: NodeQuery) -> resource_pb2.NodeQuery:
     )
 
 
-def _node_summary_from_proto(value: resource_pb2.NodeSummary) -> NodeSummary:
+def _node_summary_from_proto(value: resource_fleet_pb2.NodeSummary) -> NodeSummary:
     health = node_health_from_proto(value.health)
     capacity = value.capacity
     return NodeSummary(
@@ -242,7 +259,7 @@ def _node_summary_from_proto(value: resource_pb2.NodeSummary) -> NodeSummary:
     )
 
 
-def _node_attribute(value: resource_pb2.NodeAttribute) -> NodeAttribute:
+def _node_attribute(value: resource_fleet_pb2.NodeAttribute) -> NodeAttribute:
     selected = value.WhichOneof("value")
     if selected == "string_value":
         return NodeAttribute(value.key, NodeAttributeKind.STRING, string_value=value.string_value)
@@ -253,11 +270,14 @@ def _node_attribute(value: resource_pb2.NodeAttribute) -> NodeAttribute:
     raise ValueError("node response contains an attribute without a value")
 
 
-def node_page_from_proto(value: resource_pb2.ListNodesResponse) -> Page[NodeSummary]:
-    return _page(tuple(_node_summary_from_proto(item) for item in value.nodes), value.page)
+def node_page_from_proto(
+    items: Iterable[resource_fleet_pb2.NodeSummary],
+    page: resource_pb2.PageInfo,
+) -> Page[NodeSummary]:
+    return _page(tuple(_node_summary_from_proto(item) for item in items), page)
 
 
-def node_detail_from_proto(value: resource_pb2.NodeDetail) -> NodeDetail:
+def node_detail_from_proto(value: resource_fleet_pb2.NodeDetail) -> NodeDetail:
     return NodeDetail(
         summary=_node_summary_from_proto(value.summary),
         address=value.address or None,
@@ -268,15 +288,15 @@ def node_detail_from_proto(value: resource_pb2.NodeDetail) -> NodeDetail:
     )
 
 
-def slice_query_to_proto(value: SliceQuery) -> resource_pb2.SliceQuery:
-    return resource_pb2.SliceQuery(
+def slice_query_to_proto(value: SliceQuery) -> resource_fleet_pb2.SliceQuery:
+    return resource_fleet_pb2.SliceQuery(
         backend_id=value.backend_id or "",
         scaling_group_id=value.scaling_group_id or "",
         page=_page_request(value.page_size, value.page_token),
     )
 
 
-def _slice_summary_from_proto(value: resource_pb2.SliceSummary) -> SliceSummary:
+def _slice_summary_from_proto(value: resource_fleet_pb2.SliceSummary) -> SliceSummary:
     lifecycle = slice_lifecycle_from_proto(value.lifecycle)
     membership = membership_state_from_proto(value.membership_state)
     capacity_state = slice_capacity_state_from_proto(value.capacity_state)
@@ -297,11 +317,14 @@ def _slice_summary_from_proto(value: resource_pb2.SliceSummary) -> SliceSummary:
     )
 
 
-def slice_page_from_proto(value: resource_pb2.ListSlicesResponse) -> Page[SliceSummary]:
-    return _page(tuple(_slice_summary_from_proto(item) for item in value.slices), value.page)
+def slice_page_from_proto(
+    items: Iterable[resource_fleet_pb2.SliceSummary],
+    page: resource_pb2.PageInfo,
+) -> Page[SliceSummary]:
+    return _page(tuple(_slice_summary_from_proto(item) for item in items), page)
 
 
-def slice_detail_from_proto(value: resource_pb2.SliceDetail) -> SliceDetail:
+def slice_detail_from_proto(value: resource_fleet_pb2.SliceDetail) -> SliceDetail:
     return SliceDetail(
         summary=_slice_summary_from_proto(value.summary),
         members=tuple(
@@ -321,8 +344,8 @@ def slice_detail_from_proto(value: resource_pb2.SliceDetail) -> SliceDetail:
     )
 
 
-def endpoint_query_to_proto(value: EndpointQuery) -> resource_pb2.EndpointQuery:
-    result = resource_pb2.EndpointQuery(
+def endpoint_query_to_proto(value: EndpointQuery) -> resource_endpoint_pb2.EndpointQuery:
+    result = resource_endpoint_pb2.EndpointQuery(
         name_prefix=value.name_prefix or "",
         page=_page_request(value.page_size, value.page_token),
     )
@@ -331,7 +354,7 @@ def endpoint_query_to_proto(value: EndpointQuery) -> resource_pb2.EndpointQuery:
     return result
 
 
-def _endpoint_summary_from_proto(value: resource_pb2.EndpointSummary) -> EndpointSummary:
+def _endpoint_summary_from_proto(value: resource_endpoint_pb2.EndpointSummary) -> EndpointSummary:
     access = endpoint_access_from_proto(value.access)
     return EndpointSummary(
         key=_resource_key_from_proto(value.key),
@@ -344,24 +367,29 @@ def _endpoint_summary_from_proto(value: resource_pb2.EndpointSummary) -> Endpoin
     )
 
 
-def endpoint_page_from_proto(value: resource_pb2.ListEndpointsResponse) -> Page[EndpointSummary]:
-    return _page(tuple(_endpoint_summary_from_proto(item) for item in value.endpoints), value.page)
+def endpoint_page_from_proto(
+    items: Iterable[resource_endpoint_pb2.EndpointSummary],
+    page: resource_pb2.PageInfo,
+) -> Page[EndpointSummary]:
+    return _page(tuple(_endpoint_summary_from_proto(item) for item in items), page)
 
 
-def endpoint_detail_from_proto(value: resource_pb2.EndpointDetail) -> EndpointDetail:
+def endpoint_detail_from_proto(value: resource_endpoint_pb2.EndpointDetail) -> EndpointDetail:
     return EndpointDetail(_endpoint_summary_from_proto(value.summary), value.address, dict(value.metadata))
 
 
-def endpoint_details_from_proto(value: resource_pb2.BatchDescribeEndpointsResponse) -> tuple[EndpointDetail, ...]:
-    return tuple(endpoint_detail_from_proto(endpoint) for endpoint in value.endpoints)
+def endpoint_details_from_proto(
+    items: Iterable[resource_endpoint_pb2.EndpointDetail],
+) -> tuple[EndpointDetail, ...]:
+    return tuple(endpoint_detail_from_proto(endpoint) for endpoint in items)
 
 
-def endpoint_token_from_proto(value: resource_pb2.MintEndpointTokenResponse) -> EndpointToken:
+def endpoint_token_from_proto(value: resource_endpoint_pb2.EndpointCapability) -> EndpointToken:
     return EndpointToken(value.token, timestamp_from_proto(value.expires_at), value.capability_url)
 
 
-def activity_query_to_proto(value: ActivityQuery) -> resource_pb2.ActivityQuery:
-    result = resource_pb2.ActivityQuery(
+def activity_query_to_proto(value: ActivityQuery) -> resource_observability_pb2.ActivityQuery:
+    result = resource_observability_pb2.ActivityQuery(
         target=resource_key_to_proto(value.target),
         attempt_uid=value.attempt_uid or "",
         page=_page_request(value.page_size, value.page_token),
@@ -371,7 +399,10 @@ def activity_query_to_proto(value: ActivityQuery) -> resource_pb2.ActivityQuery:
     return result
 
 
-def activity_page_from_proto(value: resource_pb2.ListActivityResponse) -> Page[ActivityEntry]:
+def activity_page_from_proto(
+    items: Iterable[resource_observability_pb2.ActivityEntry],
+    page: resource_pb2.PageInfo,
+) -> Page[ActivityEntry]:
     return _page(
         tuple(
             ActivityEntry(
@@ -386,14 +417,14 @@ def activity_page_from_proto(value: resource_pb2.ListActivityResponse) -> Page[A
                 correlation_id=item.correlation_id or None,
                 attributes=dict(item.attributes),
             )
-            for item in value.entries
+            for item in items
         ),
-        value.page,
+        page,
     )
 
 
-def log_query_to_proto(value: LogQuery) -> resource_pb2.LogQuery:
-    result = resource_pb2.LogQuery(
+def log_query_to_proto(value: LogQuery) -> resource_observability_pb2.LogFilter:
+    result = resource_observability_pb2.LogFilter(
         cursor=value.cursor,
         max_lines=value.max_lines,
         substring=value.substring,
@@ -405,7 +436,11 @@ def log_query_to_proto(value: LogQuery) -> resource_pb2.LogQuery:
     return result
 
 
-def log_page_from_proto(value: resource_pb2.FetchLogsResponse) -> LogPage:
+def log_page_from_proto(
+    entries: Iterable[iris_logging_pb2.LogEntry],
+    next_cursor: int,
+    source_statuses: Iterable[resource_pb2.ResourceSourceStatus],
+) -> LogPage:
     return LogPage(
         entries=tuple(
             LogEntry(
@@ -417,16 +452,16 @@ def log_page_from_proto(value: resource_pb2.FetchLogsResponse) -> LogPage:
                 key=entry.key,
                 sequence=entry.seq,
             )
-            for entry in value.entries
+            for entry in entries
         ),
-        next_cursor=value.next_cursor,
-        source_statuses=tuple(_source_status_from_proto(status) for status in value.source_statuses),
+        next_cursor=next_cursor,
+        source_statuses=tuple(_source_status_from_proto(status) for status in source_statuses),
     )
 
 
-def exec_result_from_proto(value: resource_pb2.ExecAttemptResponse) -> ExecResult:
+def exec_result_from_proto(value: resource_command_pb2.ExecSessionResult) -> ExecResult:
     return ExecResult(value.exit_code, value.stdout, value.stderr, value.error_message)
 
 
-def profile_result_from_proto(value: resource_pb2.ProfileAttemptResponse) -> ProfileResult:
+def profile_result_from_proto(value: resource_command_pb2.ProfileCaptureResult) -> ProfileResult:
     return ProfileResult(value.profile_data, value.error_message)

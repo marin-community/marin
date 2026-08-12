@@ -208,7 +208,8 @@ async function cancelJob() {
   try {
     const operation = await updateResource<ResourceActionReceipt>(
       { ...jobRef.value, uid: job.value.summary.identity.jobUid },
-      'CANCELLED',
+      RESOURCE_MESSAGES.jobUpdate,
+      { cancel: {} },
     )
     action.value = { receipt: operation.result }
     await refreshPage()

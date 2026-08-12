@@ -8,7 +8,7 @@ from iris.cluster.federation.protocol import PeerCallError, PeerErrorCode
 from iris.resources.endpoint import ExecRequest
 from iris.resources.identity import AttemptIdentity, ResourceKey, ResourceKind
 from iris.resources.names import JobName
-from iris.rpc import controller_pb2, resource_pb2
+from iris.rpc import controller_pb2, resource_command_pb2, resource_pb2
 from iris.rpc import federation_client as federation_transport
 from iris.rpc.worker_client import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from rigging.timing import Duration
@@ -46,10 +46,10 @@ class _ResourceStub:
 
     def create_resource(self, request, timeout_ms):
         self.exec_timeout_ms = timeout_ms
-        self.exec_request = resource_pb2.ExecAttemptRequest()
+        self.exec_request = resource_command_pb2.CreateExecSession()
         assert request.body.Unpack(self.exec_request)
         result = resource_pb2.Operation()
-        result.result.Pack(resource_pb2.ExecAttemptResponse())
+        result.result.Pack(resource_command_pb2.ExecSessionResult())
         return result
 
     def close(self):

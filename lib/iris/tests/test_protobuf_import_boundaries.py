@@ -97,8 +97,9 @@ def test_worker_core_does_not_import_iris_rpc_transport() -> None:
     assert not violations, f"Iris RPC imports in worker core: {sorted(violations)}"
 
 
-def test_resource_service_wire_is_independent_of_the_retired_job_wire() -> None:
-    assert "job.proto" not in {dependency.name for dependency in resource_pb2.DESCRIPTOR.dependencies}
+def test_resource_service_wire_imports_only_generic_transport_dependencies() -> None:
+    dependencies = {dependency.name for dependency in resource_pb2.DESCRIPTOR.dependencies}
+    assert dependencies == {"google/protobuf/any.proto", "time.proto"}
 
 
 def test_controller_sqlalchemy_is_confined_to_persistence() -> None:
