@@ -21,7 +21,7 @@ from iris.cluster.controller.resource_operations.support import (
     _selected_ref_from_action,
     _task_ref,
 )
-from iris.resources.action import ActionKind
+from iris.resources.action import ActionKind, ActionReceipt
 from iris.resources.attempt import AttemptSummary
 from iris.resources.errors import (
     InvalidResourceRequest,
@@ -29,7 +29,7 @@ from iris.resources.errors import (
     ResourcePreconditionFailed,
     ResourceReplaced,
 )
-from iris.resources.identity import ResourceKey, ResourceKind
+from iris.resources.identity import AttemptIdentity, ResourceKey, ResourceKind, TaskIdentity
 from iris.resources.state import TaskState
 from iris.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.rpc import resource_pb2, resource_task_pb2
@@ -159,6 +159,56 @@ def _replayed_operation(
     )
 
 
+def _attempt_action_kind_and_reason(
+    intent: str | None,
+    requested_reason: str,
+    resource_name: str,
+) -> tuple[ActionKind, str]:
+    if intent == "preempt":
+        return ActionKind.RETRY_TASK, requested_reason or "Requested through the resource API"
+    if intent == "terminate":
+        return ActionKind.TERMINATE_ATTEMPT, requested_reason or "Requested through the resource API"
+    if intent == "fail":
+        return ActionKind.FAIL_ATTEMPT, requested_reason or "Failed through the resource API"
+    raise InvalidResourceRequest(f"{resource_name} update requires preempt, terminate, or fail")
+
+
+def _apply_attempt_action(
+    resources: Controller,
+    attempt: AttemptIdentity,
+    retry_task: TaskIdentity | None,
+    *,
+    kind: ActionKind,
+    request: resource_pb2.UpdateResourceRequest,
+    reason: str,
+    principal: str,
+) -> ActionReceipt:
+    if kind is ActionKind.TERMINATE_ATTEMPT:
+        return resources.terminate_attempt(
+            attempt,
+            idempotency_key=request.mutation.request_id,
+            reason=reason,
+            principal_id=principal,
+        )
+    if kind is ActionKind.FAIL_ATTEMPT:
+        return resources.fail_attempt(
+            attempt,
+            idempotency_key=request.mutation.request_id,
+            reason=reason,
+            principal_id=principal,
+        )
+    if kind is ActionKind.RETRY_TASK:
+        task = retry_task if retry_task is not None else resources.describe_task(attempt.task).summary.identity
+        return resources.retry_task(
+            task,
+            expected_attempt_uid=attempt.attempt_uid,
+            idempotency_key=request.mutation.request_id,
+            reason=reason,
+            principal_id=principal,
+        )
+    raise AssertionError(f"unsupported Attempt action kind: {kind}")
+
+
 class GetTask:
     contract = ResourceWireContract(
         views=(resource_pb2.RESOURCE_VIEW_BASIC, resource_pb2.RESOURCE_VIEW_FULL),
@@ -270,18 +320,11 @@ class UpdateTask:
         _context: RequestContext,
     ):
         _require_ref_type(request.ref, TASK)
-        intent = update.WhichOneof("intent")
-        if intent == "preempt":
-            kind = ActionKind.RETRY_TASK
-            reason = request.mutation.reason or "Requested through the resource API"
-        elif intent == "terminate":
-            kind = ActionKind.TERMINATE_ATTEMPT
-            reason = request.mutation.reason or "Requested through the resource API"
-        elif intent == "fail":
-            kind = ActionKind.FAIL_ATTEMPT
-            reason = request.mutation.reason or "Failed through the resource API"
-        else:
-            raise InvalidResourceRequest("Task update requires preempt, terminate, or fail")
+        kind, reason = _attempt_action_kind_and_reason(
+            update.WhichOneof("intent"),
+            request.mutation.reason,
+            "Task",
+        )
         replay = _replayed_operation(self._resources, request, kind=kind, reason=reason)
         if replay is not None:
             return replay
@@ -297,28 +340,15 @@ class UpdateTask:
             raise ResourcePreconditionFailed("Task has no current Attempt")
         if update.expected_attempt_uid and update.expected_attempt_uid != attempt.attempt_uid:
             raise ResourceReplaced("Task's current Attempt was replaced")
-        if kind is ActionKind.RETRY_TASK:
-            receipt = self._resources.retry_task(
-                summary.identity,
-                expected_attempt_uid=attempt.attempt_uid,
-                idempotency_key=request.mutation.request_id,
-                reason=reason,
-                principal_id=principal,
-            )
-        elif kind is ActionKind.TERMINATE_ATTEMPT:
-            receipt = self._resources.terminate_attempt(
-                attempt,
-                idempotency_key=request.mutation.request_id,
-                reason=reason,
-                principal_id=principal,
-            )
-        else:
-            receipt = self._resources.fail_attempt(
-                attempt,
-                idempotency_key=request.mutation.request_id,
-                reason=reason,
-                principal_id=principal,
-            )
+        receipt = _apply_attempt_action(
+            self._resources,
+            attempt,
+            summary.identity,
+            kind=kind,
+            request=request,
+            reason=reason,
+            principal=principal,
+        )
         receipt_proto = _action_receipt_to_proto(receipt)
         return _operation_from_action(
             request.ref,
@@ -366,18 +396,11 @@ class UpdateAttempt:
         _context: RequestContext,
     ):
         _require_ref_type(request.ref, ATTEMPT)
-        intent = update.WhichOneof("intent")
-        if intent == "terminate":
-            kind = ActionKind.TERMINATE_ATTEMPT
-            reason = request.mutation.reason or "Requested through the resource API"
-        elif intent == "preempt":
-            kind = ActionKind.RETRY_TASK
-            reason = request.mutation.reason or "Requested through the resource API"
-        elif intent == "fail":
-            kind = ActionKind.FAIL_ATTEMPT
-            reason = request.mutation.reason or "Failed through the resource API"
-        else:
-            raise InvalidResourceRequest("Attempt update requires preempt, terminate, or fail")
+        kind, reason = _attempt_action_kind_and_reason(
+            update.WhichOneof("intent"),
+            request.mutation.reason,
+            "Attempt",
+        )
         replay = _replayed_operation(self._resources, request, kind=kind, reason=reason)
         if replay is not None:
             return replay
@@ -386,29 +409,15 @@ class UpdateAttempt:
         detail = self._resources.describe_attempt(attempt_locator_from_proto(_attempt_locator(request.ref)))
         identity = detail.summary.identity
         _require_exact_uid(request.ref, identity.attempt_uid)
-        if kind is ActionKind.TERMINATE_ATTEMPT:
-            receipt = self._resources.terminate_attempt(
-                identity,
-                idempotency_key=request.mutation.request_id,
-                reason=reason,
-                principal_id=principal,
-            )
-        elif kind is ActionKind.RETRY_TASK:
-            task = self._resources.describe_task(identity.task).summary.identity
-            receipt = self._resources.retry_task(
-                task,
-                expected_attempt_uid=identity.attempt_uid,
-                idempotency_key=request.mutation.request_id,
-                reason=reason,
-                principal_id=principal,
-            )
-        else:
-            receipt = self._resources.fail_attempt(
-                identity,
-                idempotency_key=request.mutation.request_id,
-                reason=reason,
-                principal_id=principal,
-            )
+        receipt = _apply_attempt_action(
+            self._resources,
+            identity,
+            None,
+            kind=kind,
+            request=request,
+            reason=reason,
+            principal=principal,
+        )
         receipt_proto = _action_receipt_to_proto(receipt)
         return _operation_from_action(
             request.ref,
