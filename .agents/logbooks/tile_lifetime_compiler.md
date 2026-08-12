@@ -4501,3 +4501,37 @@ author: dlwh
   then reused it with one public cache hit and unchanged bytes. Round-trip mode
   reported no hit and added a distinct 3583-byte entry with SHA-256
   `e87bfa41c4c1def92f6bd15f61300580a9cc8c6d0067a8cb2b33f020c3e756f3`.
+
+### 2026-08-12 - TLTC-MLIR-012 ABI 7 VJP typed-FFI consumer
+
+- Pipeline ABI 7 replaces the fixed forward handler with one workload-free
+  `shuttle.cpu.executable_bundle.v2` Host target using XLA typed FFI variadic
+  arguments and results. The decoded bundle remains the only program selector;
+  boundary arity and `7x13` shapes only bound the accepted surface.
+- Exact SOURCE_ORDERED backward and composed regions now lower to one custom
+  call each. Backward binds three operands and two region results; composed
+  binds three operands and three region results. Custom-call tuple leaves remain
+  in region-result order, while the existing `func.return` permutations retain
+  public JAX order `(dx, dgamma)` and `(y, dx, dgamma)`.
+- Instantiate validates and retains the closed decoded projection from bundle
+  attributes. Execute validates variadic buffer counts, binding-index order,
+  BF16 dtype, rank, dimensions, byte spans, alignment, address overflow, and
+  pairwise non-aliasing before mapping the decoded slot ordinals. XLA supplies
+  no call-frame buffers at instantiate time, so dynamic view checks occur only
+  at Execute.
+- Rebuilt JAX/jaxlib 0.10.1 ordinary-JAX backward and composed processes match
+  Shuttle-disabled BF16 outputs bitwise. Cache population reports zero hits;
+  reuse reports two hits with exactly two unchanged files. Backward uses a
+  4770-byte cache entry with SHA-256
+  `a48f702dcb661111632cfd4e56261027d2d53541419390d6a5794f74674632f6`;
+  composed uses 4969 bytes with SHA-256
+  `762ee33ee770bea66e5a7eb4119a483b2a1bf0b232c5695cb2dcfb0c25aaf0cf`.
+  The rebuilt `libjax_common.dylib` SHA-256 is
+  `3bda9becccc388a3cf379296448aec6400b130cdf0934a2f22b01a0089ee71f2`.
+- Canonical integration passes 44 native targets and 351 Shuttle Python tests.
+  Independent review replayed 40 native targets, 12 focused Python tests, the
+  rebuilt ordinary-JAX cache gate, and a deliberate persisted-BF16 bit flip;
+  all behaved as required and review returned GO.
+- Scope remains exact `7x13` SOURCE_ORDERED Host forward, backward, and
+  composed. FAST, other shapes, GPU lowering, performance evidence, hardware
+  execution, and scorecard promotion remain unsupported or blocked.
