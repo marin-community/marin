@@ -58,7 +58,10 @@ def join_shard(task: dict) -> dict:
     """Join one docs shard against the begin-window labels."""
     relpath = task["relpath"]
     fs = fsspec.filesystem("s3")
-    out_path = f"{task['out']}/outputs/{relpath}"
+    # Rounds select from the same corpus shards, so their docs shards share
+    # relpaths; each round gets its own directory or the rounds clobber and
+    # skip one another under a single outputs tree.
+    out_path = f"{task['out']}/outputs/{task['round_name']}/{relpath}"
     if fs.exists(out_path):
         return {"shard": relpath, "skipped": True}
     with fs.open(f"{task['docs']}/{relpath}", "rb") as fh:
@@ -86,11 +89,25 @@ def main() -> None:
 
     fs = fsspec.filesystem("s3")
     tasks = []
+    round_names = set()
     for docs in args.docs:
         docs = docs.rstrip("/")
+        # .../glm52_labels_scaleup/mine2/docs -> "mine2"
+        round_name = docs.removesuffix("/docs").rsplit("/", 1)[-1]
+        round_names.add(round_name)
         base_key = docs.removeprefix("s3://")
         for path in sorted(fs.glob(f"{base_key}/**/*.parquet")):
-            tasks.append({"relpath": path[len(base_key) + 1 :], "docs": docs, "labels": args.labels, "out": args.out})
+            tasks.append(
+                {
+                    "relpath": path[len(base_key) + 1 :],
+                    "docs": docs,
+                    "round_name": round_name,
+                    "labels": args.labels,
+                    "out": args.out,
+                }
+            )
+    if len(round_names) != len(args.docs):
+        raise ValueError(f"docs prefixes must have distinct round directories, got {sorted(round_names)}")
     logger.info("join: %d docs shards across %d rounds", len(tasks), len(args.docs))
 
     outcome = ZephyrContext(
