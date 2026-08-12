@@ -40,6 +40,7 @@ HARRIER_DIM = 1_024
 HARRIER_MAX_TOKENS = 8_192
 HARRIER_MAX_RAW_TEXT_CHARS = 100_000
 HARRIER_MAX_WORKERS = 256
+HARRIER_STAGING_TTL_DAYS = 14
 
 DEFAULT_BATCH_SIZE = 4_096
 
@@ -101,7 +102,13 @@ def dequantize_to_fp32(arr: np.ndarray, scale: float = QUANT_SCALE) -> np.ndarra
 def stage_harrier(repo_id: str, revision: str, destination_path: str) -> str:
     """Download and archive a pinned model in the output region."""
     archive_url = str(
-        StoragePath(marin_temp_bucket(ttl_days=1, prefix="harrier-staging", source_prefix=destination_path))
+        StoragePath(
+            marin_temp_bucket(
+                ttl_days=HARRIER_STAGING_TTL_DAYS,
+                prefix="harrier-staging",
+                source_prefix=destination_path,
+            )
+        )
         / repo_id.replace("/", "__")
         / revision
         / _MODEL_ARCHIVE_NAME
