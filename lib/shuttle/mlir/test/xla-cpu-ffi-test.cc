@@ -97,8 +97,7 @@ llvm::SmallVector<uint8_t> fixtureBundle(llvm::StringRef boundary) {
                   mlir::math::MathDialect, mlir::shuttle::ShuttleDialect>();
   mlir::MLIRContext context(registry);
   std::string name =
-      ("jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-" + boundary +
-       ".mlir")
+      ("jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-" + boundary + ".mlir")
           .str();
   mlir::OwningOpRef<mlir::ModuleOp> module =
       mlir::parseSourceString<mlir::ModuleOp>(readText(name), &context);
@@ -116,8 +115,8 @@ llvm::SmallVector<uint8_t> fixtureBundle(llvm::StringRef boundary) {
   if (mlir::failed(manager.run(*module))) {
     return {};
   }
-  for (mlir::Operation &operation : llvm::make_early_inc_range(
-           module->getBody()->getOperations())) {
+  for (mlir::Operation &operation :
+       llvm::make_early_inc_range(module->getBody()->getOperations())) {
     if (!mlir::isa<mlir::shuttle::DeviceModuleOp,
                    mlir::shuttle::InvocationAbiOp,
                    mlir::shuttle::ExecutableBundleOp>(operation)) {
@@ -126,7 +125,7 @@ llvm::SmallVector<uint8_t> fixtureBundle(llvm::StringRef boundary) {
   }
   auto serialized = mlir::shuttle::serializeCpuExecutableBundle(*module);
   return mlir::succeeded(serialized) ? std::move(*serialized)
-                                    : llvm::SmallVector<uint8_t>{};
+                                     : llvm::SmallVector<uint8_t>{};
 }
 
 std::string escapedMlirString(llvm::ArrayRef<uint8_t> bytes) {
@@ -164,7 +163,7 @@ absl::StatusOr<CompiledCall>
 compileCall(xla::LocalClient *client, llvm::ArrayRef<uint8_t> bundle,
             int64_t declaredSize, llvm::StringRef declaredDigest,
             int64_t transportSchema = 1,
-            llvm::StringRef additionalAttribute = {}) {
+            llvm::StringRef additionalAttribute = {}, bool aliasInput = false) {
   xla::Shape inputShape =
       xla::ShapeUtil::MakeShapeWithDenseLayout(xla::BF16, {7, 13}, {1, 0});
   xla::Shape scaleShape =
@@ -178,10 +177,15 @@ compileCall(xla::LocalClient *client, llvm::ArrayRef<uint8_t> bundle,
       "\", bundle_size = " + std::to_string(declaredSize) +
       " : i64, transport_schema_version = " + std::to_string(transportSchema) +
       " : i64" + additionalAttribute.str() + "}";
+  std::vector<std::pair<xla::ShapeIndex, std::pair<int64_t, xla::ShapeIndex>>>
+      aliases;
+  if (aliasInput) {
+    aliases.push_back({{}, {0, {}}});
+  }
   xla::CustomCall(&builder, mlir::shuttle::kCpuExecutableBundleFfiTarget,
                   {input, scale}, inputShape, backendConfig,
                   /*has_side_effect=*/false,
-                  /*output_operand_aliasing=*/{}, /*literal=*/nullptr,
+                  /*output_operand_aliasing=*/aliases, /*literal=*/nullptr,
                   xla::CustomCallSchedule::SCHEDULE_NONE,
                   xla::CustomCallApiVersion::API_VERSION_TYPED_FFI);
   TF_ASSIGN_OR_RETURN(auto computation, builder.Build());
@@ -197,18 +201,17 @@ compileCall(xla::LocalClient *client, llvm::ArrayRef<uint8_t> bundle,
   return CompiledCall{std::move(executables.front())};
 }
 
-absl::StatusOr<CompiledCall>
-compileVjpCall(xla::LocalClient *client, llvm::ArrayRef<uint8_t> bundle,
-               llvm::StringRef boundary,
-               bool wrongResultOrder = false) {
+absl::StatusOr<CompiledCall> compileVjpCall(xla::LocalClient *client,
+                                            llvm::ArrayRef<uint8_t> bundle,
+                                            llvm::StringRef boundary,
+                                            bool wrongResultOrder = false) {
   xla::Shape matrix =
       xla::ShapeUtil::MakeShapeWithDenseLayout(xla::BF16, {7, 13}, {1, 0});
   xla::Shape vector =
       xla::ShapeUtil::MakeShapeWithDenseLayout(xla::BF16, {13}, {0});
   std::vector<xla::Shape> results =
-      boundary == "backward"
-          ? std::vector<xla::Shape>{vector, matrix}
-          : std::vector<xla::Shape>{matrix, vector, matrix};
+      boundary == "backward" ? std::vector<xla::Shape>{vector, matrix}
+                             : std::vector<xla::Shape>{matrix, vector, matrix};
   if (wrongResultOrder) {
     std::swap(results[0], results[1]);
   }
@@ -335,18 +338,17 @@ VjpReference referenceVjp(const xla::Literal &x, const xla::Literal &gamma,
       double input = fromBf16(xValues[index]);
       double scale = fromBf16(gammaValues[feature]);
       double cotangent = fromBf16(dyValues[index]);
-      result.dx[index] =
-          doubleToBf16(cotangent * scale * inverse[row] -
-                       input * inverse[row] * inverse[row] * inverse[row] *
-                           rowCotangent / 13.0);
+      result.dx[index] = doubleToBf16(cotangent * scale * inverse[row] -
+                                      input * inverse[row] * inverse[row] *
+                                          inverse[row] * rowCotangent / 13.0);
     }
   }
   for (int64_t feature = 0; feature < 13; ++feature) {
     double sum = 0.0;
     for (int64_t row = 0; row < 7; ++row) {
       int64_t index = row * 13 + feature;
-      sum += fromBf16(dyValues[index]) * fromBf16(xValues[index]) *
-             inverse[row];
+      sum +=
+          fromBf16(dyValues[index]) * fromBf16(xValues[index]) * inverse[row];
     }
     result.dgamma[feature] = doubleToBf16(sum);
   }
@@ -472,6 +474,26 @@ TEST(XlaCpuFfiTest, InstantiateRejectsMismatchedBundleMetadata) {
                    .ok());
 }
 
+TEST(XlaCpuFfiTest, ExecuteRejectsAliasedExternalBuffers) {
+  llvm::SmallVector<uint8_t> bytes =
+      goldenBytes("cpu-forward-7x13-transport.hex");
+  ASSERT_FALSE(bytes.empty());
+  TF_ASSERT_OK_AND_ASSIGN(xla::LocalClient * client, hostClient());
+  TF_ASSERT_OK_AND_ASSIGN(
+      CompiledCall call,
+      compileCall(client, bytes, bytes.size(),
+                  mlir::shuttle::cpuExecutableBundleDigest(bytes),
+                  /*transportSchema=*/1, /*additionalAttribute=*/{},
+                  /*aliasInput=*/true));
+  xla::Literal input = inputLiteral();
+  xla::Literal scale = scaleLiteral();
+  auto executed = runCompiled(client, call.executable.get(), input, scale);
+  ASSERT_FALSE(executed.ok());
+  EXPECT_NE(executed.status().message().find(
+                "typed FFI external buffers must not alias"),
+            std::string::npos);
+}
+
 TEST(XlaCpuFfiTest, InstantiateRejectsWrongTypedCanonicalProjection) {
   llvm::SmallVector<uint8_t> bytes =
       goldenBytes("cpu-forward-7x13-wrong-projection-transport.hex");
@@ -513,14 +535,19 @@ TEST(XlaCpuFfiTest,
   }
 }
 
-TEST(XlaCpuFfiTest, V2InstantiateRejectsSelfConsistentWrongResultTupleOrder) {
+TEST(XlaCpuFfiTest, V2ExecuteRejectsSelfConsistentWrongResultTupleOrder) {
   TF_ASSERT_OK_AND_ASSIGN(xla::LocalClient * client, hostClient());
   llvm::SmallVector<uint8_t> bytes = fixtureBundle("backward");
   ASSERT_FALSE(bytes.empty());
-  auto compiled =
-      compileVjpCall(client, bytes, "backward", /*wrongResultOrder=*/true);
-  ASSERT_FALSE(compiled.ok());
-  EXPECT_NE(compiled.status().message().find(
+  TF_ASSERT_OK_AND_ASSIGN(
+      CompiledCall call,
+      compileVjpCall(client, bytes, "backward", /*wrongResultOrder=*/true));
+  xla::Literal x = linspaceMatrixLiteral(-0.75f, 0.875f);
+  xla::Literal gamma = linspaceVectorLiteral(-0.625f, 1.0f);
+  xla::Literal dy = linspaceMatrixLiteral(-0.5f, 1.125f);
+  auto executed = runVjpCompiled(client, call.executable.get(), x, gamma, dy);
+  ASSERT_FALSE(executed.ok());
+  EXPECT_NE(executed.status().message().find(
                 "external bindings do not match the typed FFI contract"),
             std::string::npos);
 }

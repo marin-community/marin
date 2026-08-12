@@ -74,7 +74,7 @@ ShuttlePipelineOptions commandLinePipelineOptions(NumericalPolicy numerics) {
   options.numerics = numerics;
   if (numerics == NumericalPolicy::Fast) {
     options.canonicalOptions =
-        R"json({"execution_mode":"stablehlo_round_trip","numerics":"fast","pipeline_abi_version":6,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+        R"json({"execution_mode":"stablehlo_round_trip","numerics":"fast","pipeline_abi_version":7,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
   }
   return options;
 }
@@ -4309,45 +4309,84 @@ public:
       return signalPassFailure();
     }
     RegionOp region = regions.front();
+    const Type matrix =
+        RankedTensorType::get({7, 13}, BFloat16Type::get(module.getContext()));
+    const Type vector =
+        RankedTensorType::get({13}, BFloat16Type::get(module.getContext()));
+    const bool twoInputOneResult = region.getInputs().size() == 2 &&
+                                   region.getResults().size() == 1 &&
+                                   region.getInputs()[0].getType() == matrix &&
+                                   region.getInputs()[1].getType() == vector &&
+                                   region.getResults()[0].getType() == matrix;
+    const bool threeInputTwoResult =
+        region.getInputs().size() == 3 && region.getResults().size() == 2 &&
+        region.getInputs()[0].getType() == matrix &&
+        region.getInputs()[1].getType() == vector &&
+        region.getInputs()[2].getType() == matrix &&
+        region.getResults()[0].getType() == vector &&
+        region.getResults()[1].getType() == matrix;
+    const bool threeInputThreeResult =
+        region.getInputs().size() == 3 && region.getResults().size() == 3 &&
+        region.getInputs()[0].getType() == matrix &&
+        region.getInputs()[1].getType() == vector &&
+        region.getInputs()[2].getType() == matrix &&
+        region.getResults()[0].getType() == matrix &&
+        region.getResults()[1].getType() == vector &&
+        region.getResults()[2].getType() == matrix;
     if (region.getPolicy() != NumericalPolicy::SourceOrdered ||
-        region.getInputs().size() != 2 || region.getResults().size() != 1 ||
-        region.getInputs()[0].getType() !=
-            RankedTensorType::get({7, 13},
-                                  BFloat16Type::get(module.getContext())) ||
-        region.getInputs()[1].getType() !=
-            RankedTensorType::get({13},
-                                  BFloat16Type::get(module.getContext())) ||
-        region.getResults()[0].getType() !=
-            RankedTensorType::get({7, 13},
-                                  BFloat16Type::get(module.getContext()))) {
+        (!twoInputOneResult && !threeInputTwoResult &&
+         !threeInputThreeResult)) {
       region.emitOpError(
-          "CPU typed-FFI bridge is bounded to the 7x13 source-ordered host "
-          "signature");
+          "CPU typed-FFI bridge requires a supported closed 7x13 "
+          "source-ordered signature");
       signalPassFailure();
       return;
     }
     int64_t folds = 0;
     region.walk([&](FoldOp) { ++folds; });
-    if (folds != 1) {
-      region.emitOpError("CPU typed-FFI bridge requires one Fold");
+    if ((twoInputOneResult && folds != 1) ||
+        (!twoInputOneResult && folds != 5)) {
+      region.emitOpError(
+          "CPU typed-FFI bridge has an unsupported reduction structure");
       signalPassFailure();
       return;
     }
     SmallVector<InvocationSlotOp> slots(
         abis.front().getBody().front().getOps<InvocationSlotOp>());
-    if (slots.size() != 21 ||
-        slots[0].getBinding() != ExecutableBindingKind::Operand ||
-        slots[0].getBindingIndex() != std::optional<uint64_t>(0) ||
-        slots[1].getBinding() != ExecutableBindingKind::Operand ||
-        slots[1].getBindingIndex() != std::optional<uint64_t>(1) ||
-        slots[20].getBinding() != ExecutableBindingKind::Result ||
-        slots[20].getBindingIndex() != std::optional<uint64_t>(0) ||
-        llvm::any_of(ArrayRef<InvocationSlotOp>(slots).slice(2, 18),
-                     [](InvocationSlotOp slot) {
-                       return slot.getBinding() != ExecutableBindingKind::None;
-                     })) {
+    SmallVector<InvocationSlotOp> operandSlots(region.getInputs().size());
+    SmallVector<InvocationSlotOp> resultSlots(region.getResults().size());
+    bool invalidProjection = false;
+    for (InvocationSlotOp slot : slots) {
+      const std::optional<uint64_t> index = slot.getBindingIndex();
+      if (slot.getBinding() == ExecutableBindingKind::None) {
+        invalidProjection |= index.has_value();
+        continue;
+      }
+      if (!index) {
+        invalidProjection = true;
+        continue;
+      }
+      if (slot.getBinding() == ExecutableBindingKind::Operand &&
+          *index < operandSlots.size() && !operandSlots[*index]) {
+        operandSlots[*index] = slot;
+      } else if (slot.getBinding() == ExecutableBindingKind::Result &&
+                 *index < resultSlots.size() && !resultSlots[*index]) {
+        resultSlots[*index] = slot;
+      } else {
+        invalidProjection = true;
+      }
+    }
+    for (auto [index, slot] : llvm::enumerate(operandSlots)) {
+      invalidProjection |=
+          !slot || slot.getTensorType() != region.getInputs()[index].getType();
+    }
+    for (auto [index, slot] : llvm::enumerate(resultSlots)) {
+      invalidProjection |=
+          !slot || slot.getTensorType() != region.getResults()[index].getType();
+    }
+    if (invalidProjection) {
       abis.front().emitOpError(
-          "does not match the closed forward external-slot projection");
+          "does not match the closed region external-slot projection");
       signalPassFailure();
       return;
     }
@@ -4381,8 +4420,11 @@ public:
       operandLayouts.push_back(
           rowMajorLayout(cast<RankedTensorType>(input.getType())));
     }
-    SmallVector<Attribute> resultLayouts{
-        rowMajorLayout(cast<RankedTensorType>(region.getResult(0).getType()))};
+    SmallVector<Attribute> resultLayouts;
+    for (Value result : region.getResults()) {
+      resultLayouts.push_back(
+          rowMajorLayout(cast<RankedTensorType>(result.getType())));
+    }
     builder.setInsertionPoint(region);
     OperationState callState(region.getLoc(), "stablehlo.custom_call");
     callState.addOperands(region.getInputs());
@@ -4689,7 +4731,7 @@ void registerShuttleStablehloPipelines() {
             commandLinePipelineOptions(NumericalPolicy::SourceOrdered);
         options.executionMode = ExecutionMode::CpuExecutableBundle;
         options.canonicalOptions =
-            R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":6,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+            R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":7,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
         buildShuttleStablehloPipeline(manager, options);
       });
 }

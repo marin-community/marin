@@ -4,6 +4,7 @@
 """Ordinary-JAX ABI 7 Host proof for the 7x13 VJP boundaries."""
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -23,7 +24,6 @@ from shuttle_jaxlib_target1_acceptance import (
     configure_cache,
     fixed_inputs,
     ready,
-    require_bitwise,
 )
 
 from shuttle import ExecutionMode, Numerics, compiler_options
@@ -61,15 +61,21 @@ def save_baseline(path: Path) -> dict[str, object]:
     for boundary in BOUNDARIES:
         values = arrays(ready(jax.jit(boundary_function(boundary))(*fixed_inputs(SHAPE, boundary))))
         for result, value in enumerate(values):
-            stored[_key(boundary, result)] = value
+            if value.dtype != np.dtype("bfloat16"):
+                raise AssertionError(f"{boundary}: disabled baseline dtype changed")
+            stored[_key(boundary, result)] = value.view(np.uint16)
     np.savez(path, **stored)
     return {"worker": "baseline", "boundaries": list(BOUNDARIES)}
 
 
 def load_baseline(path: Path, boundary: str) -> tuple[np.ndarray, ...]:
-    count = 2 if boundary == "backward" else 3
+    expected_shapes = ((7, 13), (13,)) if boundary == "backward" else ((7, 13), (7, 13), (13,))
     with np.load(path) as stored:
-        return tuple(stored[_key(boundary, result)].copy() for result in range(count))
+        values = tuple(stored[_key(boundary, result)].copy() for result in range(len(expected_shapes)))
+    for result, (value, shape) in enumerate(zip(values, expected_shapes, strict=True)):
+        if value.dtype != np.uint16 or value.shape != shape:
+            raise AssertionError(f"{boundary}: disabled baseline bit payload {result} changed")
+    return values
 
 
 def run_subject(worker: str, baseline: Path, cache_directory: Path) -> dict[str, object]:
@@ -87,7 +93,17 @@ def run_subject(worker: str, baseline: Path, cache_directory: Path) -> dict[str,
         hits = counter.count
         compiled = jax.jit(boundary_function(boundary), compiler_options=subject_options())
         actual = ready(compiled(*fixed_inputs(SHAPE, boundary)))
-        parity = require_bitwise(actual, load_baseline(baseline, boundary), boundary)
+        actual_arrays = arrays(actual)
+        expected_bits = load_baseline(baseline, boundary)
+        for result, (value, bits) in enumerate(zip(actual_arrays, expected_bits, strict=True)):
+            if value.dtype != np.dtype("bfloat16") or value.shape != bits.shape:
+                raise AssertionError(f"{boundary}: output {result} shape or dtype changed")
+            if not np.array_equal(value.view(np.uint16), bits):
+                raise AssertionError(f"{boundary}: output differs from disabled ordinary JAX")
+        parity = {
+            "bitwise_disabled_jax_parity": True,
+            "output_digests": [hashlib.sha256(bits.tobytes(order="C")).hexdigest() for bits in expected_bits],
+        }
         after = cache_snapshot(cache_directory)
         if worker == "populate":
             if len(after) != len(before) + 1 or counter.count != hits:

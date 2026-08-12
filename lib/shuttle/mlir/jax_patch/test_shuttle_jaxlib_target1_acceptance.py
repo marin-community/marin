@@ -32,12 +32,12 @@ def test_driver_has_exact_twelve_cell_identity_matrix() -> None:
 
 
 def test_driver_pins_abi_and_policy_in_public_compiler_options() -> None:
-    assert PIPELINE_ABI_VERSION == 6
+    assert PIPELINE_ABI_VERSION == 7
     for numerics in Numerics:
         canonical = compiler_options(numerics=numerics, tuning=acceptance_tuning())["xla_shuttle_options"]
         payload = json.loads(canonical)
         identity = expected_identity(numerics)
-        assert payload["pipeline_abi_version"] == 6
+        assert payload["pipeline_abi_version"] == 7
         assert payload["numerics"] == numerics.value
         assert identity.policy == numerics.value
         assert identity.canonical_options == canonical

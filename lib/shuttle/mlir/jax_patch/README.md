@@ -144,7 +144,7 @@ SSA names. The inventory includes every top-level operand, attribute, result
 type, source-result reference, output anchor, and each reducer block's scalar
 `stablehlo.add` result and `stablehlo.return` operation reference.
 
-`shuttle_jaxlib_target1_acceptance.py` is the installed-wheel ABI 6 CPU
+`shuttle_jaxlib_target1_acceptance.py` is the installed-wheel ABI 7 CPU
 contract for those six boundaries. It runs each boundary under
 `source_ordered` and `fast`, for twelve distinct compiler/cache identities. A
 cache-disabled process saves disabled ordinary-JAX BF16 baselines. Separate
@@ -154,6 +154,13 @@ attributed cache entries, and twelve public second-process cache hits. The
 current pipelines round-trip these operations, so bitwise parity is required.
 A future non-bitwise `fast` rewrite needs a separately reviewed tolerance
 revision before any timing run.
+
+`shuttle_jaxlib_cpu_ffi_vjp_acceptance.py` is the narrower installed-wheel ABI
+7 Host execution proof for the ordinary-JAX `7x13` backward and composed
+boundaries. It uses the fixed v2 typed-FFI target, requires exact BF16 result
+parity, and proves fresh population and separate-process reuse of the two
+distinct compiled cache entries. It does not cover FAST, other shapes, GPU, or
+production acceptance.
 
 The driver is checked locally without claiming wheel execution:
 

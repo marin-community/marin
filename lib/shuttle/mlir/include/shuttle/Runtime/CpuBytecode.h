@@ -25,7 +25,7 @@ struct CpuExternalBuffer {
 };
 
 inline constexpr char kCpuExecutableBundleFfiTarget[] =
-    "shuttle.cpu.executable_bundle.v1";
+    "shuttle.cpu.executable_bundle.v2";
 // Canonical transport v1 is deliberately bounded before immutable state or
 // per-invocation temporary storage is allocated.
 inline constexpr uint64_t kMaximumCpuTransportBytes = 16 * 1024 * 1024;
