@@ -23,6 +23,9 @@ import pulumi_docker_build as docker_build
 import pulumi_gcp as gcp
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
 
+from iac.docker import DockerImageConfig, cached_amd64_image
+from iac.gcp.cloud_run_traffic import FULL_TRAFFIC_PERCENT, LATEST_TRAFFIC_TYPE
+
 # Cloud Run terminates the browser session as the IAP service agent, so that agent —
 # not the end user — is what invokes the service. People are admitted separately, through
 # IAP's httpsResourceAccessor role.
@@ -31,7 +34,6 @@ OPENATHENA_IAP_MEMBER = "domain:openathena.ai"
 LOOM_VM_IAP_MEMBER = "serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com"
 MARIN_INTERNAL_IAP_MEMBERS = (OPENATHENA_IAP_MEMBER, LOOM_VM_IAP_MEMBER)
 BUILD_CACHE_TAG = "buildcache"
-BUILD_CACHE_COMPRESSION_LEVEL = 3
 
 
 @dataclass(frozen=True)
@@ -240,37 +242,18 @@ def dockerfile_image(
     cache_ref = repo.repository_id.apply(
         lambda repo_id: f"{region}-docker.pkg.dev/{project}/{repo_id}/{image_name}:{BUILD_CACHE_TAG}"
     )
-    return docker_build.Image(
+    return cached_amd64_image(
         "image",
-        context=docker_build.BuildContextArgs(location=build_context),
-        dockerfile=docker_build.DockerfileArgs(location=f"{build_context}/{dockerfile}"),
-        # GitHub-hosted runners have no durable local BuildKit state. Export the full
-        # cache beside the image so later CI and local builds can reuse every stage.
-        cache_from=[
-            docker_build.CacheFromArgs(
-                registry=docker_build.CacheFromRegistryArgs(ref=cache_ref),
-            )
-        ],
-        cache_to=[
-            docker_build.CacheToArgs(
-                registry=docker_build.CacheToRegistryArgs(
-                    ref=cache_ref,
-                    mode=docker_build.CacheMode.MAX,
-                    compression=docker_build.CompressionType.ZSTD,
-                    compression_level=BUILD_CACHE_COMPRESSION_LEVEL,
-                    oci_media_types=True,
-                    image_manifest=True,
-                ),
-            )
-        ],
-        # Cloud Run is linux/amd64; pin it so a build from an arm64 workstation still
-        # produces a runnable image.
-        platforms=[docker_build.Platform.LINUX_AMD64],
-        tags=[image_tag],
-        push=True,
-        # Preview plans the graph without invoking buildx; the build + push happen on up.
-        build_on_preview=False,
-        opts=pulumi.ResourceOptions(parent=parent, provider=gcp_provider, depends_on=[repo]),
+        DockerImageConfig(
+            build_context=build_context,
+            dockerfile=dockerfile,
+            build_args={},
+            cache_ref=cache_ref,
+            tags=(image_tag,),
+        ),
+        parent=parent,
+        provider=gcp_provider,
+        depends_on=(repo,),
     )
 
 
@@ -352,8 +335,8 @@ class CloudRunService(pulumi.ComponentResource):
             # revision created from this template.
             traffics=[
                 gcp.cloudrunv2.ServiceTrafficArgs(
-                    type="TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST",
-                    percent=100,
+                    type=LATEST_TRAFFIC_TYPE,
+                    percent=FULL_TRAFFIC_PERCENT,
                 )
             ],
             template=gcp.cloudrunv2.ServiceTemplateArgs(

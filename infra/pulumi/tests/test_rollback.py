@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from iac.rollback import (
+    ActivationUncertain,
     Release,
     ReleaseHistory,
     RollbackFailed,
@@ -22,8 +23,9 @@ def _release(name: str, age: int, *, ready: bool = True) -> Release:
 
 
 class RecordingBackend:
-    def __init__(self, history: ReleaseHistory):
+    def __init__(self, history: ReleaseHistory, *, uncertain_activation: bool = False):
         self._history = history
+        self._uncertain_activation = uncertain_activation
         self.events: list[tuple[str, str]] = []
 
     def history(self) -> ReleaseHistory:
@@ -33,6 +35,8 @@ class RecordingBackend:
         assert expected_current == self._history.current.name
         assert expected_version == self._history.version
         self.events.append(("begin", release.name))
+        if self._uncertain_activation:
+            raise ActivationUncertain("connection closed after request")
 
     def wait_active(self, release: Release) -> None:
         self.events.append(("active", release.name))
@@ -77,9 +81,7 @@ def test_rollback_plan_walks_backward_from_current_traffic() -> None:
 def test_failed_target_health_restores_and_verifies_source_release() -> None:
     current = _release("service-00005", 0)
     previous = _release("service-00004", 1)
-    backend = RecordingBackend(
-        ReleaseHistory(current=current, releases=(current, previous), version="etag-3")
-    )
+    backend = RecordingBackend(ReleaseHistory(current=current, releases=(current, previous), version="etag-3"))
     verifier = RecordingVerifier(failing_release=previous.name)
     plan = rollback_plan(backend.history())
 
@@ -92,3 +94,19 @@ def test_failed_target_health_restores_and_verifies_source_release() -> None:
         ("recover", current.name),
     ]
     assert verifier.releases == [previous.name, current.name]
+
+
+def test_uncertain_activation_restores_and_verifies_source_release() -> None:
+    current = _release("service-00005", 0)
+    previous = _release("service-00004", 1)
+    backend = RecordingBackend(
+        ReleaseHistory(current=current, releases=(current, previous), version="etag-4"),
+        uncertain_activation=True,
+    )
+    verifier = RecordingVerifier()
+
+    with pytest.raises(RollbackFailed, match="restored service-00005"):
+        execute_rollback(backend, verifier, rollback_plan(backend.history()))
+
+    assert backend.events == [("begin", previous.name), ("recover", current.name)]
+    assert verifier.releases == [current.name]

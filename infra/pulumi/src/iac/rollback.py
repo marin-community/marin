@@ -49,6 +49,10 @@ class RollbackRecoveryFailed(RollbackError):
     """Both target activation and source recovery failed."""
 
 
+class ActivationUncertain(RollbackError):
+    """The platform may have accepted an activation request whose response was lost."""
+
+
 class RollbackBackend(Protocol):
     """A platform that exposes immutable release history and traffic activation."""
 
@@ -105,15 +109,23 @@ def rollback_plan(history: ReleaseHistory, *, target: str | None = None) -> Roll
 
 def execute_rollback(backend: RollbackBackend, verifier: ReleaseVerifier, plan: RollbackPlan) -> None:
     """Activate and verify ``plan.target``, restoring ``plan.current`` on failure."""
-    backend.begin_activation(
-        plan.target,
-        expected_current=plan.current.name,
-        expected_version=plan.version,
-    )
+    activation_may_have_started = False
     try:
+        try:
+            backend.begin_activation(
+                plan.target,
+                expected_current=plan.current.name,
+                expected_version=plan.version,
+            )
+        except ActivationUncertain:
+            activation_may_have_started = True
+            raise
+        activation_may_have_started = True
         backend.wait_active(plan.target)
         verifier.verify(plan.target)
     except BaseException as failure:
+        if not activation_may_have_started:
+            raise
         try:
             backend.recover(plan.current)
             verifier.verify(plan.current)

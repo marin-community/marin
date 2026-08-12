@@ -24,7 +24,13 @@ from rigging.auth import (
 )
 from rigging.credentials import iap_edge_provider
 
+from iac.gcp.cloud_run_traffic import (
+    FULL_TRAFFIC_PERCENT,
+    LATEST_TRAFFIC_TYPE,
+    REVISION_TRAFFIC_TYPE,
+)
 from iac.rollback import (
+    ActivationUncertain,
     Release,
     ReleaseHistory,
     RollbackError,
@@ -39,7 +45,6 @@ DEFAULT_ACTIVATION_TIMEOUT = 300.0
 DEFAULT_HEALTH_TIMEOUT = 60.0
 DEFAULT_POLL_INTERVAL = 2.0
 HTTP_REQUEST_TIMEOUT = 30.0
-REVISION_TRAFFIC_TYPE = "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION"
 READY_CONDITION = "Ready"
 SUCCEEDED_CONDITION_STATE = "CONDITION_SUCCEEDED"
 
@@ -48,24 +53,35 @@ class HttpResponse(Protocol):
     status_code: int
     text: str
 
-    def json(self) -> Any:
-        """Decode the response body."""
+    def json(self) -> Any: ...
 
-    def raise_for_status(self) -> None:
-        """Raise for an unsuccessful response."""
+    def raise_for_status(self) -> None: ...
 
 
 class JsonHttpSession(Protocol):
-    def get(self, url: str, **kwargs) -> HttpResponse:
-        """Issue an HTTP GET."""
+    def get(self, url: str, **kwargs) -> HttpResponse: ...
 
-    def patch(self, url: str, **kwargs) -> HttpResponse:
-        """Issue an HTTP PATCH."""
+    def patch(self, url: str, **kwargs) -> HttpResponse: ...
 
 
 class HealthHttpSession(Protocol):
-    def get(self, url: str, *, headers: dict[str, str], timeout: float) -> HttpResponse:
-        """Issue an application health request."""
+    def get(self, url: str, *, headers: dict[str, str], timeout: float) -> HttpResponse: ...
+
+
+@dataclass(frozen=True)
+class CloudRunTarget:
+    """Resource identity of one Cloud Run service."""
+
+    project: str
+    region: str
+    service: str
+
+    @property
+    def resource_name(self) -> str:
+        return (
+            f"projects/{quote(self.project, safe='')}/locations/{quote(self.region, safe='')}/"
+            f"services/{quote(self.service, safe='')}"
+        )
 
 
 @dataclass(frozen=True)
@@ -80,33 +96,13 @@ class CloudRunServiceSnapshot:
     terminal_error: str | None = None
 
 
-@dataclass(frozen=True)
-class CloudRunRevisionSnapshot:
-    """Immutable Cloud Run revision metadata used for release selection."""
-
-    name: str
-    created_at: datetime
-    ready: bool
-    image: str | None = None
-    source_revision: str | None = None
-
-    def release(self) -> Release:
-        return Release(
-            name=self.name,
-            created_at=self.created_at,
-            platform_ready=self.ready,
-            artifact=self.image,
-            source_revision=self.source_revision,
-        )
-
-
 class CloudRunApi(Protocol):
     """The Cloud Run API operations required by the rollback backend."""
 
     def service(self) -> CloudRunServiceSnapshot:
         """Return current service traffic and reconciliation state."""
 
-    def revisions(self) -> tuple[CloudRunRevisionSnapshot, ...]:
+    def revisions(self) -> tuple[Release, ...]:
         """Return retained revisions."""
 
     def set_traffic(self, revision: str, *, etag: str) -> None:
@@ -121,12 +117,12 @@ def _active_revision(traffic_statuses: object, latest_ready_revision: object) ->
     if not isinstance(traffic_statuses, list):
         return None
     active = [target for target in traffic_statuses if isinstance(target, dict) and target.get("percent", 0) > 0]
-    if len(active) != 1 or active[0].get("percent") != 100:
+    if len(active) != 1 or active[0].get("percent") != FULL_TRAFFIC_PERCENT:
         return None
     revision = active[0].get("revision")
     if isinstance(revision, str) and revision:
         return _short_name(revision)
-    if active[0].get("type") != "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST":
+    if active[0].get("type") != LATEST_TRAFFIC_TYPE:
         return None
     if not isinstance(latest_ready_revision, str) or not latest_ready_revision:
         return None
@@ -175,26 +171,21 @@ class CloudRunRestApi:
         self,
         session: JsonHttpSession,
         *,
-        project: str,
-        region: str,
-        service: str,
+        target: CloudRunTarget,
     ):
         self._session = session
-        self._service_name = (
-            f"projects/{quote(project, safe='')}/locations/{quote(region, safe='')}/"
-            f"services/{quote(service, safe='')}"
-        )
+        self._service_name = target.resource_name
         self._service_url = f"{CLOUD_RUN_API}/{self._service_name}"
 
     @classmethod
-    def from_adc(cls, *, project: str, region: str, service: str) -> "CloudRunRestApi":
+    def from_adc(cls, target: CloudRunTarget) -> "CloudRunRestApi":
         try:
             credentials, _ = google.auth.default(scopes=[CLOUD_PLATFORM_SCOPE])
         except google_auth_exceptions.DefaultCredentialsError as exc:
             raise RollbackError(
                 "Cloud Run API credentials are unavailable; run `gcloud auth application-default login`"
             ) from exc
-        return cls(AuthorizedSession(credentials), project=project, region=region, service=service)
+        return cls(AuthorizedSession(credentials), target=target)
 
     def _json(self, response: HttpResponse) -> Mapping[str, Any]:
         try:
@@ -217,8 +208,18 @@ class CloudRunRestApi:
         try:
             response = self._session.patch(url, **kwargs)
         except requests.RequestException as exc:
+            raise ActivationUncertain(f"Cloud Run traffic request outcome is unknown: {exc}") from exc
+        try:
+            response.raise_for_status()
+        except requests.RequestException as exc:
             raise RollbackError(f"Cloud Run API request failed: {exc}") from exc
-        return self._json(response)
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise ActivationUncertain("Cloud Run accepted the traffic request but returned invalid JSON") from exc
+        if not isinstance(body, dict):
+            raise ActivationUncertain("Cloud Run accepted the traffic request but returned a non-object response")
+        return cast(Mapping[str, Any], body)
 
     def service(self) -> CloudRunServiceSnapshot:
         body = self._get(self._service_url, timeout=HTTP_REQUEST_TIMEOUT)
@@ -236,8 +237,8 @@ class CloudRunRestApi:
             terminal_error=_terminal_error(body.get("terminalCondition")),
         )
 
-    def revisions(self) -> tuple[CloudRunRevisionSnapshot, ...]:
-        revisions: list[CloudRunRevisionSnapshot] = []
+    def revisions(self) -> tuple[Release, ...]:
+        revisions: list[Release] = []
         page_token: str | None = None
         url = f"{self._service_url}/revisions"
         while True:
@@ -257,11 +258,11 @@ class CloudRunRestApi:
                     raw_image = containers[0].get("image")
                     image = raw_image if isinstance(raw_image, str) else None
                 revisions.append(
-                    CloudRunRevisionSnapshot(
+                    Release(
                         name=_short_name(name),
                         created_at=_parse_time(raw.get("createTime")),
-                        ready=_ready(raw.get("conditions")),
-                        image=image,
+                        platform_ready=_ready(raw.get("conditions")),
+                        artifact=image,
                         source_revision=_source_revision(raw.get("labels")),
                     )
                 )
@@ -278,7 +279,7 @@ class CloudRunRestApi:
                 {
                     "type": REVISION_TRAFFIC_TYPE,
                     "revision": revision,
-                    "percent": 100,
+                    "percent": FULL_TRAFFIC_PERCENT,
                 }
             ],
         }
@@ -310,10 +311,7 @@ class CloudRunRevisionBackend:
             raise RollbackError(f"Cloud Run service {_short_name(service.name)} is reconciling")
         if service.active_revision is None:
             raise RollbackError("Cloud Run service must have exactly one revision receiving 100% of traffic")
-        releases = tuple(
-            revision.release()
-            for revision in sorted(self._api.revisions(), key=lambda item: item.created_at, reverse=True)
-        )
+        releases = tuple(sorted(self._api.revisions(), key=lambda item: item.created_at, reverse=True))
         current = next((release for release in releases if release.name == service.active_revision), None)
         if current is None:
             raise RollbackError(f"serving revision {service.active_revision} is absent from retained history")
@@ -334,7 +332,8 @@ class CloudRunRevisionBackend:
             raise RollbackError(f"Cloud Run service {_short_name(service.name)} began reconciling")
         if service.active_revision != expected_current:
             raise RollbackError(
-                f"Cloud Run traffic changed from {expected_current} to {service.active_revision}; plan the rollback again"
+                f"Cloud Run traffic changed from {expected_current} to {service.active_revision}; "
+                "plan the rollback again"
             )
         if service.etag != expected_version:
             raise RollbackError("Cloud Run service configuration changed; plan the rollback again")
@@ -449,7 +448,8 @@ def main(
     if not health_path.startswith("/") or health_path.startswith("//"):
         raise click.UsageError("--health-path must begin with one '/' character")
     try:
-        api = CloudRunRestApi.from_adc(project=project, region=region, service=service)
+        target_service = CloudRunTarget(project=project, region=region, service=service)
+        api = CloudRunRestApi.from_adc(target_service)
         backend = CloudRunRevisionBackend(api, activation_timeout=activation_timeout)
         plan: RollbackPlan = rollback_plan(backend.history(), target=target)
         health_url = f"{backend.service_uri().rstrip('/')}{health_path}"

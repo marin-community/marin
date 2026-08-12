@@ -8,8 +8,8 @@ from iac.gcp.cloud_run_rollback import (
     CloudRunHealthVerifier,
     CloudRunRestApi,
     CloudRunRevisionBackend,
-    CloudRunRevisionSnapshot,
     CloudRunServiceSnapshot,
+    CloudRunTarget,
 )
 from iac.rollback import Release, RollbackError
 
@@ -18,7 +18,7 @@ class FakeCloudRunApi:
     def __init__(
         self,
         service: CloudRunServiceSnapshot,
-        revisions: tuple[CloudRunRevisionSnapshot, ...],
+        revisions: tuple[Release, ...],
     ):
         self.current_service = service
         self._revisions = revisions
@@ -27,7 +27,7 @@ class FakeCloudRunApi:
     def service(self) -> CloudRunServiceSnapshot:
         return self.current_service
 
-    def revisions(self) -> tuple[CloudRunRevisionSnapshot, ...]:
+    def revisions(self) -> tuple[Release, ...]:
         return self._revisions
 
     def set_traffic(self, revision: str, *, etag: str) -> None:
@@ -41,12 +41,12 @@ class FakeCloudRunApi:
         )
 
 
-def _revision(name: str, age: int, *, ready: bool = True) -> CloudRunRevisionSnapshot:
-    return CloudRunRevisionSnapshot(
+def _revision(name: str, age: int, *, ready: bool = True) -> Release:
+    return Release(
         name=name,
         created_at=datetime(2026, 8, 12, tzinfo=UTC) - timedelta(minutes=age),
-        ready=ready,
-        image=f"us-central1-docker.pkg.dev/project/service/image@sha256:{age:064x}",
+        platform_ready=ready,
+        artifact=f"us-central1-docker.pkg.dev/project/service/image@sha256:{age:064x}",
     )
 
 
@@ -198,9 +198,7 @@ class FakeJsonSession:
                         "percent": 100,
                     }
                 ],
-                "latestReadyRevision": (
-                    "projects/project/locations/us-central1/services/service/revisions/service-00002"
-                ),
+                "latestReadyRevision": "projects/project/locations/us-central1/services/service/revisions/service-00002",
                 "terminalCondition": {"state": "CONDITION_SUCCEEDED"},
             }
         )
@@ -212,7 +210,10 @@ class FakeJsonSession:
 
 def test_cloud_run_rest_api_maps_revision_history_and_traffic_patch() -> None:
     session = FakeJsonSession()
-    api = CloudRunRestApi(session, project="project", region="us-central1", service="service")
+    api = CloudRunRestApi(
+        session,
+        target=CloudRunTarget(project="project", region="us-central1", service="service"),
+    )
 
     service = api.service()
     revisions = api.revisions()
@@ -220,11 +221,11 @@ def test_cloud_run_rest_api_maps_revision_history_and_traffic_patch() -> None:
 
     assert service.active_revision == "service-00002"
     assert revisions == (
-        CloudRunRevisionSnapshot(
+        Release(
             name="service-00002",
             created_at=datetime(2026, 8, 12, 20, tzinfo=UTC),
-            ready=True,
-            image="image@sha256:abc",
+            platform_ready=True,
+            artifact="image@sha256:abc",
             source_revision="0123456",
         ),
     )
