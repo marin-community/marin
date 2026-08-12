@@ -11,12 +11,13 @@ from experiments.datakit.cluster.quality.fast_transformer.scaled_exp import grou
 from experiments.datakit.cluster.quality.fast_transformer.window_dataset import (
     WINDOW_COLUMNS,
     assemble_training_windows,
+    drop_cut_artifact_grades,
     load_window_labels,
     subsample_mask,
 )
 
 
-def _window_row(doc_id, window, text, quality=3.0):
+def _window_row(doc_id, window, text, quality=3.0, valid=True, why="fine"):
     return {
         "id": doc_id,
         "source": "src/a",
@@ -24,6 +25,8 @@ def _window_row(doc_id, window, text, quality=3.0):
         "text": text,
         "quality": quality,
         "score_normalized": (quality - 1) / 4,
+        "valid": valid,
+        "why": why,
     }
 
 
@@ -112,6 +115,25 @@ def test_assemble_aligns_each_window_with_its_documents_embedding():
     assert stats.begin_regrades_skipped == 1
     assert stats.missing_embedding == 1
     assert len(examples.ids) == 3
+
+
+def test_cut_artifact_filter_drops_only_invalid_grades_that_blame_the_cut():
+    """A quality-1 verdict for the harness cutting mid-expression labels the
+    harness, not the document; a genuine-junk invalid and any valid grade
+    (even one mentioning the cut) must survive."""
+    rows = {
+        "id": ["cut", "junk", "downgraded", "clean"],
+        "window": ["begin"] * 4,
+        "valid": [False, False, True, True],
+        "why": [
+            "Code is truncated mid-expression at 'x.size(0' — incomplete.",
+            "SEO spam with keyword-stuffed nonsense.",
+            "Solid tutorial, though the example is truncated at the end.",
+            "Well-structured reference page.",
+        ],
+    }
+    out = drop_cut_artifact_grades(rows)
+    assert out["id"] == ["junk", "downgraded", "clean"]
 
 
 def test_grouped_val_split_never_straddles_a_doc():

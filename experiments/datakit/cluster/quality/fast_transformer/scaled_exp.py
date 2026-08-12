@@ -75,6 +75,7 @@ from experiments.datakit.cluster.quality.fast_transformer.window_dataset import 
     WINDOW_LABELS,
     assemble_training_windows,
     begin_window_texts,
+    drop_cut_artifact_grades,
     load_window_labels,
     subsample_mask,
 )
@@ -150,6 +151,11 @@ def main() -> None:
         help="ablations: 'begin' drops middle/end training rows; 'legacy-begin' additionally drops every "
         "scale-up window, leaving only the recut 88k begin grades",
     )
+    p.add_argument(
+        "--drop-cut-artifacts",
+        action="store_true",
+        help="drop invalid scale-up grades whose rationale blames the window cut (harness artifact, not content)",
+    )
     args = p.parse_args()
     configure_logging(logging.INFO)
     configure_coreweave_s3()
@@ -160,6 +166,8 @@ def main() -> None:
     legacy = load_joined(args.legacy_joined)
     scaleup = load_joined(args.scaleup_joined, columns=["id", "embedding"])
     windows = load_window_labels(args.window_labels)
+    if args.drop_cut_artifacts:
+        windows = drop_cut_artifact_grades(windows)
     if args.train_windows != "all":
         keep = (
             [] if args.train_windows == "legacy-begin" else [i for i, w in enumerate(windows["window"]) if w == "begin"]

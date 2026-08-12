@@ -25,6 +25,7 @@ including the scale-up's middle/end top-ups of those documents.
 """
 
 import logging
+import re
 import zlib
 from dataclasses import dataclass
 
@@ -44,7 +45,16 @@ WINDOW_LABELS = "s3://marin-us-east-02a/marin/user/muchanem/quality_v2/glm52_lab
 SCALEUP_JOINED = (
     "s3://marin-us-east-02a/marin/user/muchanem/quality_v2/glm52_labels_scaleup-x-harrier-oss-v1-0.6b-50m-text-v1"
 )
-WINDOW_COLUMNS = ["id", "source", "window", "text", "quality", "score_normalized"]
+WINDOW_COLUMNS = ["id", "source", "window", "text", "quality", "score_normalized", "valid", "why"]
+
+# A begin window is cut at exactly WINDOW_TOKENS with no excerpt marker, so the
+# grader reads a mid-expression stop as document damage and marks the window
+# invalid — the same harness artifact the 88k campaign's excerpt marker fixed
+# (93% of invalid new-doc begin code windows cite it). These grades score the
+# cut, not the document, and can be dropped before training.
+CUT_WHY_PATTERN = re.compile(
+    r"truncat|cut[- ]?off|cuts off|abrupt|mid-token|mid-sentence|mid-expression|mid-statement|incomplete", re.I
+)
 # Characters that always cover 512 gemma tokens (the campaign's graded
 # 10,500-char prefixes never fell short); a document whose capped prefix still
 # tokenizes under the window is re-tokenized in full.
@@ -114,6 +124,25 @@ def load_window_labels(path: str = WINDOW_LABELS) -> dict[str, list]:
         len(ambiguous),
     )
     return out
+
+
+def drop_cut_artifact_grades(windows: dict[str, list]) -> dict[str, list]:
+    """Remove invalid grades whose ``why`` blames the window cut, not the text.
+
+    Only rows the grader marked invalid *and* whose rationale matches
+    :data:`CUT_WHY_PATTERN` are dropped — a quality-1 verdict for the harness
+    cutting mid-expression is a label for the harness. Valid rows that mention
+    the cut keep their (mildly depressed) grade: they cannot be separated from
+    real flaws without relabeling.
+    """
+    keep = [
+        i
+        for i, (valid, why) in enumerate(zip(windows["valid"], windows["why"], strict=True))
+        if valid or not CUT_WHY_PATTERN.search(why or "")
+    ]
+    dropped = len(windows["id"]) - len(keep)
+    logger.info("cut-artifact filter: dropped %d invalid windows whose rationale blames the cut", dropped)
+    return {c: [windows[c][i] for i in keep] for c in windows}
 
 
 def begin_window_texts(texts: list[str]) -> list[str]:
