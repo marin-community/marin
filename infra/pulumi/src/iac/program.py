@@ -22,6 +22,7 @@ import pulumi
 import pulumi_gcp as gcp
 import pulumi_kubernetes as k8s
 from finelog.deploy.config import GcpDeployment
+from iris.cluster.endpoints import gcp_instance_internal_ip
 from iris.cluster.platforms.types import Labels
 from iris.cluster.platforms.vm_lifecycle import DEFAULT_CONTROLLER_PORT, controller_vm_name
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
@@ -226,17 +227,8 @@ def _instance_ip(
     name: str,
     project: str,
     zone: str,
-    gcp_provider: pulumi.ProviderResource,
 ) -> str:
-    instance = gcp.compute.get_instance(
-        name=name,
-        project=project,
-        zone=zone,
-        opts=pulumi.InvokeOptions(provider=gcp_provider),
-    )
-    if not instance.network_interfaces:
-        raise ValueError(f"GCE instance {name!r} has no network interfaces")
-    return instance.network_interfaces[0].network_ip
+    return gcp_instance_internal_ip(name, project=project, zone=zone)
 
 
 def _build_gclb(
@@ -272,7 +264,6 @@ def _build_gclb(
                     name=instance,
                     project=project,
                     zone=controller_config.zone,
-                    gcp_provider=gcp_provider,
                 ),
                 backend_service_id=iap_identity.backend_service_id,
                 network_tag=Labels(label_prefix).iris_controller,
@@ -309,7 +300,6 @@ def _build_gclb(
                     name=finelog_config.name,
                     project=project,
                     zone=deployment.zone,
-                    gcp_provider=gcp_provider,
                 ),
                 port=finelog_config.port,
                 network_tag=network_tag,
