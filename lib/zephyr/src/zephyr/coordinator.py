@@ -45,6 +45,12 @@ logger = logging.getLogger(__name__)
 
 MAX_SHARD_FAILURES = 3
 MAX_SHARD_INFRA_FAILURES = 20
+# Concurrent calls the coordinator actor will serve. ``run_pipeline`` blocks in
+# ``_wait_for_stage`` for the whole life of its pipeline, so every running pipeline
+# holds one of these permanently and the rest are what remains to serve workers'
+# ``pull_task`` and completion RPCs. Size it above pipelines + workers, or workers
+# starve behind the pipelines and their completions time out.
+COORDINATOR_MAX_CONCURRENCY = 100
 # Cumulative worker-task failures Iris tolerates before it kills the worker gang.
 # Iris counts a preemption as a failure, so this is spent by eviction as well as by
 # real faults; a preemptible or long-running pool should raise it.

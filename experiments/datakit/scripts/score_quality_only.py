@@ -79,11 +79,26 @@ WORKER_MAX_TASK_RETRIES = 5_000
 # single file, so the pool sits idle unless many are in flight together. The pool
 # rejects a pipeline past its limit rather than queueing it, so the driver's
 # fan-out reads this same number off the context.
-MAX_CONCURRENT_PIPELINES = 32
+MAX_CONCURRENT_PIPELINES = 30
 # The coordinator tracks 32 pipelines at once instead of zephyr's default handful,
 # so it gets more than the default 0.1 CPU / 1 GB. It stays non-preemptible: losing
 # it loses every in-flight pipeline, while losing a worker costs one shard.
 COORDINATOR_RESOURCES = ResourceConfig(cpu=2, ram="3g", preemptible=False)
+
+
+def coordinator_max_concurrency(max_workers: int) -> int:
+    """Concurrent calls the coordinator must serve for this pool to make progress.
+
+    ``run_pipeline`` blocks for the whole life of its pipeline, so every running
+    pipeline holds one slot permanently and only the remainder serve workers. At
+    zephyr's default of 100 with 30 pipelines, 70 slots were left for 64 workers
+    polling twice a second: workers queued behind the pipelines, their completions
+    timed out, and shards retried forever with nothing in flight. Two slots per
+    worker covers a poll overlapping a completion report.
+    """
+    return MAX_CONCURRENT_PIPELINES + 2 * max_workers + 32
+
+
 # ``InlineRunner`` runs a worker's shards as threads of one process, so they share
 # that process's GIL; ``SubprocessRunner`` gives each shard its own process and pays
 # a JAX import and model load per shard. Measured on agenttrove (43 shards, 781k rows,
@@ -178,6 +193,7 @@ def score_all(
         worker_max_task_retries=WORKER_MAX_TASK_RETRIES,
         max_concurrent_pipelines=MAX_CONCURRENT_PIPELINES,
         coordinator_resources=COORDINATOR_RESOURCES,
+        coordinator_max_concurrency=coordinator_max_concurrency(max_workers),
     ) as ctx:
 
         def score_one(item: tuple[str, StepSpec]) -> tuple[str, dict[str, int | float] | None]:

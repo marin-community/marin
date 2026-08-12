@@ -29,6 +29,7 @@ from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_b
 from rigging.timing import ExponentialBackoff
 
 from zephyr.coordinator import (
+    COORDINATOR_MAX_CONCURRENCY,
     MAX_CONCURRENT_PIPELINES,
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
@@ -255,6 +256,11 @@ class ZephyrContext:
         max_concurrent_pipelines: Maximum pipelines one pool runs at the same
             time. A pipeline past the limit is rejected, not queued. Raise it
             for a driver that fans many pipelines onto one shared pool.
+        coordinator_max_concurrency: Concurrent calls the coordinator actor serves.
+            Each running pipeline holds one for its whole life, so this must exceed
+            ``max_concurrent_pipelines`` by enough to serve every worker's task
+            polling -- otherwise workers queue behind the pipelines, their
+            completions time out, and shards retry forever while nothing runs.
         worker_max_task_retries: Cumulative worker-task failures the pool tolerates
             before Iris kills the whole worker gang. Iris counts a preemption as a
             failure, so a job at batch priority on a contended cluster spends this
@@ -278,6 +284,7 @@ class ZephyrContext:
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
     max_concurrent_pipelines: int = MAX_CONCURRENT_PIPELINES
     worker_max_task_retries: int = WORKER_MAX_TASK_RETRIES
+    coordinator_max_concurrency: int = COORDINATOR_MAX_CONCURRENCY
 
     _shared_data: ContextVar[dict[str, Any] | None] = field(init=False, repr=False)
     _state: _ContextState = field(init=False, default=_ContextState.NEW, repr=False)
@@ -519,7 +526,7 @@ class ZephyrContext:
             name=coordinator_name,
             count=1,
             resources=self.coordinator_resources,
-            actor_config=ActorConfig(max_concurrency=100),
+            actor_config=ActorConfig(max_concurrency=self.coordinator_max_concurrency),
         )
         coordinator: ActorHandle | None = None
         try:

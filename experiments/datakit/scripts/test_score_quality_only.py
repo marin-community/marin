@@ -30,6 +30,7 @@ from experiments.datakit.scripts.score_quality_only import (
     NODE_RAM_GB,
     STAGE_RUNNERS,
     WORKER_MAX_TASK_RETRIES,
+    coordinator_max_concurrency,
     quality_step,
     score_all,
     tasks_per_worker,
@@ -201,7 +202,7 @@ def test_the_pool_admits_the_fan_out_it_is_given():
     Left at zephyr's default of 16, half the fan-out would be rejected outright --
     the pool rejects a pipeline past its limit rather than queueing it.
     """
-    assert MAX_CONCURRENT_PIPELINES == 32
+    assert MAX_CONCURRENT_PIPELINES == 30
     assert MAX_CONCURRENT_PIPELINES > ZephyrContext().max_concurrent_pipelines
 
 
@@ -225,3 +226,16 @@ def test_shards_run_in_their_own_process_by_default():
     """
     assert DEFAULT_STAGE_RUNNER == "subprocess"
     assert STAGE_RUNNERS[DEFAULT_STAGE_RUNNER] is SubprocessRunner
+
+
+def test_the_coordinator_has_slots_left_over_for_workers():
+    """Pipelines hold coordinator slots for life; workers need what remains.
+
+    At zephyr's default of 100 with 30 pipelines, 70 slots served 64 workers
+    polling twice a second. Workers queued behind the pipelines, completions timed
+    out, and the coordinator logged `0 in-flight` with shards retrying forever.
+    """
+    for workers in (4, 64, 216):
+        slots = coordinator_max_concurrency(workers)
+        assert slots > MAX_CONCURRENT_PIPELINES + workers, f"{workers} workers get {slots - MAX_CONCURRENT_PIPELINES}"
+    assert coordinator_max_concurrency(64) > ZephyrContext().coordinator_max_concurrency
