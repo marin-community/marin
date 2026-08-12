@@ -892,9 +892,7 @@ def test_stale_result_ignored_while_reassigned_worker_in_flight(coordinator):
     assert run.in_flight[0].worker_id == "worker-B"
 
 
-def test_shard_streaming_low_memory(tmp_path):
-    """ListShard concatenates its on-disk refs in order without caching them."""
-    # Write 3 refs to disk (directly readable, no finalize needed)
+def test_list_shard_iterates_disk_chunks_in_order_and_can_repeat(tmp_path):
     refs = []
     for i in range(3):
         path = str(tmp_path / f"chunk-{i}.pkl")
@@ -903,10 +901,7 @@ def test_shard_streaming_low_memory(tmp_path):
 
     shard = ListShard(refs=refs)
 
-    # flat iteration yields all items in order
     assert list(shard) == [0, 1, 2, 3, 4, 10, 11, 12, 13, 14, 20, 21, 22, 23, 24]
-
-    # Re-iteration works (reads from disk again, not cached)
     assert list(shard) == [0, 1, 2, 3, 4, 10, 11, 12, 13, 14, 20, 21, 22, 23, 24]
 
 

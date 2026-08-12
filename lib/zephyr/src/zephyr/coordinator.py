@@ -26,7 +26,7 @@ from rigging.filesystem import StoragePath
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.memory_store import MemoryTableRegistration
-from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, Shard, SourceItem, StageType
+from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, SourceItem, StageType
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
     ShardTask,
@@ -1322,13 +1322,13 @@ class ZephyrCoordinator:
         self,
         run: _PipelineExecution,
         stage: PhysicalStage,
-        shards: list[Shard],
+        shards: list[ListShard],
         *,
         stage_label: str,
         stage_index_for_state: int,
-        aux_per_shard: list[dict[int, Shard]] | None = None,
+        aux_per_shard: list[dict[int, ListShard]] | None = None,
         is_last_stage: bool = False,
-    ) -> list[Shard]:
+    ) -> list[ListShard]:
         """Submit a worker stage, wait for completion, return regrouped output shards.
 
         ``stage_index_for_state`` is the index reported in coordinator state for
@@ -1364,11 +1364,11 @@ class ZephyrCoordinator:
         self,
         run: _PipelineExecution,
         operations: list[PhysicalOp],
-        shard_refs: list[Shard],
+        shard_refs: list[ListShard],
         parent_stage_idx: int,
-    ) -> list[dict[int, Shard]] | None:
+    ) -> list[dict[int, ListShard]] | None:
         """Execute right sub-plans for join operations, returning aux refs per shard."""
-        all_right_shard_refs: dict[int, list[Shard]] = {}
+        all_right_shard_refs: dict[int, list[ListShard]] = {}
 
         for i, op in enumerate(operations):
             if not isinstance(op, Join) or op.right_plan is None:
@@ -1487,7 +1487,7 @@ def _regroup_scatter_refs(
     result_refs: dict[int, TaskResult],
     input_shard_count: int,
     output_shard_count: int | None,
-) -> list[Shard]:
+) -> list[ListShard]:
     """Fan a scatter stage's outputs out to its reducers without loading data.
 
     Scatter routes records into exactly ``output_shard_count`` buckets via
@@ -1508,7 +1508,7 @@ def _regroup_scatter_refs(
     return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
 
 
-def _regroup_map_refs(result_refs: dict[int, TaskResult], input_shard_count: int) -> list[Shard]:
+def _regroup_map_refs(result_refs: dict[int, TaskResult], input_shard_count: int) -> list[ListShard]:
     """Map a non-scatter stage's outputs 1:1 from input shard index to output.
 
     Each worker's ListShard keeps its own index. Resharding to a different
@@ -1566,23 +1566,18 @@ def _try_read_coordinator_result(result_path: str) -> Any:
         return None
 
 
-def _reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
-    """Reshard shard refs by output shard index without loading data.
-
-    Only supported on ListShards (non-scatter data).
-    """
+def _reshard_refs(shards: list[ListShard], num_shards: int) -> list[ListShard]:
+    """Reshard ListShard refs by output shard index without loading data."""
     output_by_shard: dict[int, list[Iterable]] = defaultdict(list)
     output_idx = 0
     for shard in shards:
-        if not isinstance(shard, ListShard):
-            raise ValueError("Reshard is only supported on ListShard (non-scatter data)")
         for chunk in shard.refs:
             output_by_shard[output_idx].append(chunk)
             output_idx = (output_idx + 1) % num_shards
     return [ListShard(refs=output_by_shard.get(idx, [])) for idx in range(num_shards)]
 
 
-def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
+def _build_source_shards(source_items: list[SourceItem]) -> list[ListShard]:
     """Build shard data from source items.
 
     Each source item becomes a single-element chunk in its assigned shard.
@@ -1592,7 +1587,7 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
         items_by_shard[item.shard_idx].append(item.data)
 
     num_shards = max(items_by_shard.keys()) + 1 if items_by_shard else 0
-    shards: list[Shard] = []
+    shards: list[ListShard] = []
     for i in range(num_shards):
         shards.append(ListShard(refs=[MemChunk(items=items_by_shard.get(i, []))]))
 
@@ -1600,10 +1595,10 @@ def _build_source_shards(source_items: list[SourceItem]) -> list[Shard]:
 
 
 def _compute_tasks_from_shards(
-    shard_refs: list[Shard],
+    shard_refs: list[ListShard],
     stage: PhysicalStage,
     stage_name: str,
-    aux_per_shard: list[dict[int, Shard]] | None,
+    aux_per_shard: list[dict[int, ListShard]] | None,
     cost: ZephyrTaskResources,
 ) -> list[ShardTask]:
     """Convert shard references into ShardTasks for the coordinator."""

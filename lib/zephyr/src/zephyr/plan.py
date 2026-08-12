@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from itertools import groupby, islice
-from typing import Any, Protocol
+from typing import Any
 
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
@@ -49,23 +49,6 @@ from zephyr.shuffle import ScatterReader
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Shard protocol
-# ---------------------------------------------------------------------------
-
-
-class Shard(Protocol):
-    """Protocol for a shard of data assigned to a single worker.
-
-    ``ListShard`` is the only implementation: a list of iterable references
-    (source items, pickle chunks, or scatter-data paths) streamed one ref at a
-    time. Reduce stages turn a shard of scatter-data paths into a
-    :class:`~zephyr.shuffle.ScatterReader`, which is not itself a ``Shard``.
-    """
-
-    def __iter__(self) -> Iterator: ...
 
 
 @dataclass
