@@ -9,21 +9,30 @@ corpus that already arrives as token ids plus its document embeddings, how many
 cores should a task hold, how many tasks fit on a node, and what saturates
 first. Tokenization is deliberately out of the loop.
 
-Four modes:
+Five modes:
 
 * ``prepare`` — tokenize a text sample once and write the pretokenized layout
   (``id`` string, ``ids`` int32[max_tokens], ``embedding`` int8[1024]) that the
   other modes read. Run once; the output is the fixture.
 * ``forward`` — one pinned configuration: restrict the process to ``--cores``
   CPUs and sweep ``--batches``, reporting steady-state docs/s, docs/s/core, XLA
-  compile time per shape, and peak RSS. ``--pin-when before`` pins *before* JAX
-  builds its CPU client, so the Eigen thread pool sizes itself to the pinned set
-  (``tsl::port::NumSchedulableCPUs`` reads the affinity mask); ``--pin-when
-  after`` reproduces the pessimistic prior measurement where the pool was still
-  sized for the whole node.
+  compile time per shape, and peak RSS. ``--pin-when`` decides when the affinity
+  mask is set, and the difference is not subtle: ``sched_setaffinity(0, ...)``
+  binds the *calling thread*, and threads inherit the mask of the thread that
+  created them. Pinning ``before`` JAX builds its CPU client therefore restricts
+  every XLA worker thread it later spawns; pinning ``after`` binds only the main
+  thread and leaves the already-running pool free on the whole node, which does
+  not measure a core count at all. The reported ``threads`` count shows the pool
+  stays node-sized either way — the pinned runs are restricted by the kernel,
+  not by a smaller pool, so they may understate what an explicitly sized pool
+  would reach.
 * ``sweep`` — driver: runs ``forward`` as a subprocess once per core count so
   every point on the scaling curve is measured on the same node, in a fresh
   process with its own correctly-sized thread pool.
+* ``pack`` — ``--tasks`` independent scorer processes on disjoint core sets,
+  timed against a shared start time. One forward scales poorly across cores, so
+  a node's real throughput comes from packing small tasks; this measures that
+  sum, and the memory bandwidth those processes contend over.
 * ``read`` — sustained read throughput over the pretokenized shards, optionally
   with ``--readers`` concurrent processes taking disjoint shard slices, which is
   how a node's LOTA cache and object-store bandwidth are made to contend.
@@ -170,13 +179,22 @@ def rss_bytes() -> int:
     raise ValueError("no VmRSS: line in /proc/self/status")
 
 
-def pin_to_cores(cores: int) -> dict:
+def pin_to_cores(cores: int, offset: int = 0) -> dict:
     """Restrict this process to ``cores`` CPUs and cap the BLAS/OpenMP pools to match.
 
     Iris's ``--cpu N`` is a Kubernetes *request* with no limit, so an unpinned task
     bursts across the whole node and any per-core number taken from it is fiction.
+    ``offset`` lets several processes on one node take disjoint core sets, which is
+    what packing many small tasks onto a node actually does.
+
+    Call this before the first JAX computation. The affinity mask is per-thread and
+    inherited at thread creation, so it reaches XLA's pool only if the pool does not
+    exist yet. The OMP/BLAS caps below are set for the same reason and are honoured
+    only by libraries that read them at import.
     """
-    allowed = sorted(os.sched_getaffinity(0))[:cores]
+    allowed = sorted(os.sched_getaffinity(0))[offset : offset + cores]
+    if len(allowed) < cores:
+        raise ValueError(f"need {cores} cpus at offset {offset}, node offers {len(os.sched_getaffinity(0))}")
     os.sched_setaffinity(0, set(allowed))
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
         os.environ[var] = str(cores)
@@ -577,9 +595,14 @@ def time_concurrent_forward(
 
 def forward(args) -> dict:
     """One pinned configuration: sweep batch sizes and report steady-state throughput."""
-    result: dict = {"cores": args.cores, "pin_when": args.pin_when, "fold_donor": args.fold_donor}
+    result: dict = {
+        "cores": args.cores,
+        "core_offset": args.core_offset,
+        "pin_when": args.pin_when,
+        "fold_donor": args.fold_donor,
+    }
     if args.pin_when == "before":
-        result.update(pin_to_cores(args.cores))
+        result.update(pin_to_cores(args.cores, args.core_offset))
 
     load_t0 = time.monotonic()
     scorer: PooledScorer = load_pooled_scorer(args.model_dir)
@@ -612,7 +635,7 @@ def forward(args) -> dict:
     result["flops_per_token"] = model.config.flops_per_token()
 
     if args.pin_when == "after":
-        result.update(pin_to_cores(args.cores))
+        result.update(pin_to_cores(args.cores, args.core_offset))
 
     rows = []
     for batch in args.batches:
@@ -622,6 +645,10 @@ def forward(args) -> dict:
         compile_t0 = time.monotonic()
         predict(model, block.ids[:batch], batch_size=batch, doc_embed=block.embedding[:batch])
         compile_seconds = time.monotonic() - compile_t0
+        # Packed runs measure an aggregate, so every process must be timing the same
+        # wall-clock window; model load and compile vary enough to smear it otherwise.
+        if args.start_at:
+            time.sleep(max(0.0, args.start_at - time.time()))
         passes = []
         for _ in range(args.passes):
             seconds, docs = time_concurrent_forward(model, block, batch, args.min_seconds, args.concurrent_shards)
@@ -691,6 +718,86 @@ def sweep(args) -> dict:
     return {"host": host_facts(), "fold_donor": args.fold_donor, "pin_when": args.pin_when, "runs": runs}
 
 
+def pack(args) -> dict:
+    """``--tasks`` independent scorer processes on disjoint core sets, timed together.
+
+    The core sweep measures how one forward scales *inside* one process. A labeling
+    run instead packs many small tasks onto a node, so what decides the node's
+    throughput is how those processes sum — including the memory bandwidth and the
+    embedding-table gathers they contend over. Every child is pinned to its own
+    cores and told the same start time, so the reported aggregate is one wall-clock
+    window rather than a sum of unrelated intervals.
+    """
+    start_at = time.time() + args.warmup_seconds
+    argv = [
+        "--model-dir",
+        args.model_dir,
+        "--pretokenized",
+        args.pretokenized,
+        "--cores",
+        str(args.cores_per_task),
+        "--batches",
+        str(args.batch),
+        "--pool-docs",
+        str(args.pool_docs),
+        "--passes",
+        str(args.passes),
+        "--min-seconds",
+        str(args.min_seconds),
+        "--start-at",
+        str(start_at),
+    ]
+    if args.fold_donor:
+        argv.append("--fold-donor")
+    procs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                MODULE,
+                "forward",
+                *argv,
+                "--core-offset",
+                str(i * args.cores_per_task),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for i in range(args.tasks)
+    ]
+    results = []
+    failures = 0
+    for proc in procs:
+        out, err = proc.communicate()
+        if proc.returncode != 0:
+            failures += 1
+            logger.error("packed task failed (%d):\n%s\n%s", proc.returncode, out[-2000:], err[-2000:])
+            continue
+        results.append(
+            next(
+                json.loads(line[len(BENCH_JSON_PREFIX) :])
+                for line in out.splitlines()
+                if line.startswith(BENCH_JSON_PREFIX)
+            )
+        )
+    per_task = [r["batches"][0]["docs_per_second"]["mean"] for r in results]
+    cores = args.tasks * args.cores_per_task
+    return {
+        "tasks": args.tasks,
+        "cores_per_task": args.cores_per_task,
+        "batch": args.batch,
+        "total_cores": cores,
+        "failures": failures,
+        "aggregate_docs_per_second": sum(per_task),
+        "docs_per_second_per_core": sum(per_task) / cores,
+        "per_task_docs_per_second": per_task,
+        "peak_rss_bytes_per_task": [r["peak_rss_bytes"] for r in results],
+        "peak_rss_bytes_total": sum(r["peak_rss_bytes"] for r in results),
+        "host": host_facts(),
+    }
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="mode", required=True)
@@ -714,6 +821,8 @@ def main() -> None:
     fwd.add_argument("--min-seconds", type=float, default=8.0)
     fwd.add_argument("--pin-when", choices=("before", "after"), default="before")
     fwd.add_argument("--fold-donor", action="store_true")
+    fwd.add_argument("--core-offset", type=int, default=0, help="first CPU of this process's pinned set")
+    fwd.add_argument("--start-at", type=float, default=0.0, help="unix time to begin timing, after compile")
     fwd.add_argument(
         "--concurrent-shards",
         type=int,
@@ -732,6 +841,18 @@ def main() -> None:
     swp.add_argument("--pin-when", choices=("before", "after"), default="before")
     swp.add_argument("--fold-donor", action="store_true")
     swp.add_argument("--concurrent-shards", type=int, default=1)
+
+    pk = sub.add_parser("pack", help="many independent scorer processes on disjoint cores")
+    pk.add_argument("--model-dir", required=True)
+    pk.add_argument("--pretokenized", required=True)
+    pk.add_argument("--tasks", type=int, required=True)
+    pk.add_argument("--cores-per-task", type=int, required=True)
+    pk.add_argument("--batch", type=int, default=512)
+    pk.add_argument("--pool-docs", type=int, default=16_384)
+    pk.add_argument("--passes", type=int, default=3)
+    pk.add_argument("--min-seconds", type=float, default=8.0)
+    pk.add_argument("--warmup-seconds", type=float, default=120.0, help="grace for load+compile before timing")
+    pk.add_argument("--fold-donor", action="store_true")
 
     rd = sub.add_parser("read", help="sustained read throughput over the pretokenized shards")
     rd.add_argument("--pretokenized", required=True)
@@ -752,6 +873,8 @@ def main() -> None:
         result = forward(args)
     elif args.mode == "sweep":
         result = sweep(args)
+    elif args.mode == "pack":
+        result = pack(args)
     elif args.readers > 1:
         result = read_fanout(args)
     else:
