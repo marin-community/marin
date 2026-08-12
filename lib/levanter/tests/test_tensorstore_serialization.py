@@ -340,7 +340,7 @@ def test_every_replica_writes_a_disjoint_slice_covering_the_array():
             arr = jax.device_put(
                 jnp.arange(64 * 16, dtype=jnp.float32).reshape(64, 16), NamedSharding(MESH, spec)
             )
-            plan = plan_array_write(arr, CONFIG)
+            plan = plan_array_write(name, arr, CONFIG)
             times_written = np.zeros((64, 16), dtype=int)
             writers = 0
             for shard in arr.addressable_shards:
@@ -408,16 +408,58 @@ def test_small_arrays_are_not_split_into_tiny_objects():
         """
         arr = jax.device_put(jnp.arange(64 * 16, dtype=jnp.float32).reshape(64, 16), NamedSharding(MESH, P(None, None)))
         # 4 KiB array, 8 replicas: a 1 MiB floor means splitting is not worth it.
-        plan = plan_array_write(arr, TensorStoreWriteConfig(min_replica_slice_bytes=1024**2))
+        plan = plan_array_write("w", arr, TensorStoreWriteConfig(min_replica_slice_bytes=1024**2))
         assert plan.split_axis is None, plan
         assert plan.write_replicas == 1, plan
         writers = sum(1 for shard in arr.addressable_shards if _shard_write_region(shard, plan) is not None)
         assert writers == 1, writers
 
         # max_write_replicas caps the fan-out without disabling the split.
-        capped = plan_array_write(arr, TensorStoreWriteConfig(min_replica_slice_bytes=1, max_write_replicas=2))
+        capped = plan_array_write("w", arr, TensorStoreWriteConfig(min_replica_slice_bytes=1, max_write_replicas=2))
         assert capped.write_replicas == 2, capped
         assert sum(1 for s in arr.addressable_shards if _shard_write_region(s, capped) is not None) == 2
+        print("OK")
+        """
+    )
+
+
+def test_a_replica_count_that_divides_nothing_still_splits():
+    """A rack count that is not a power of two must not drop an array to one writer."""
+    _run_eight_device_script(
+        """
+        # 8 replicas divide neither axis of a (12, 20) shard, and nor do 7; 6 divides the first.
+        arr = jax.device_put(
+            jnp.arange(12 * 20, dtype=jnp.float32).reshape(12, 20), NamedSharding(MESH, P(None, None))
+        )
+        plan = plan_array_write("w", arr, CONFIG)
+        assert plan.write_replicas == 6, plan
+        assert plan.split_axis == 0, plan
+
+        times_written = np.zeros((12, 20), dtype=int)
+        for shard in arr.addressable_shards:
+            region = _shard_write_region(shard, plan)
+            if region is not None:
+                times_written[region.index] += 1
+        assert (times_written == 1).all(), "every byte written exactly once"
+        print("OK")
+        """
+    )
+
+
+def test_arrays_no_split_applies_to_are_spread_over_replicas():
+    """Otherwise every such array lands on replica 0, which is one process for the whole run."""
+    _run_eight_device_script(
+        """
+        # 11 is prime and above the replica count, so no split applies at any width.
+        arr = jax.device_put(jnp.arange(11, dtype=jnp.float32), NamedSharding(MESH, P(None)))
+        writers = set()
+        for path in [f"w{i}" for i in range(20)]:
+            plan = plan_array_write(path, arr, CONFIG)
+            assert plan.write_replicas == 1, plan
+            written = [s.replica_id for s in arr.addressable_shards if _shard_write_region(s, plan) is not None]
+            assert len(written) == 1, (path, written)
+            writers.add(written[0])
+        assert len(writers) > 1, f"20 arrays all landed on replica {writers}"
         print("OK")
         """
     )

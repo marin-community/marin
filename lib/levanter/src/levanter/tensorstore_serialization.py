@@ -9,6 +9,7 @@ import logging
 import math
 import os
 import urllib.parse
+import zlib
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Optional, Sequence
@@ -203,7 +204,7 @@ class TensorStoreWriteConfig:
 class _WritePlan:
     """Which bytes of one global array each process writes, and the chunk grid they land on.
 
-    When ``split_axis`` is None, replica 0 of each shard writes the whole shard and the other
+    When ``split_axis`` is None, ``writer_replica`` writes each shard whole and the other
     replicas write nothing. Otherwise replica ``r`` writes block ``r`` of its shard along
     ``split_axis``, so an array replicated R ways is written by R processes.
     """
@@ -215,7 +216,9 @@ class _WritePlan:
     """Length of one replica's slice along ``split_axis``; unused when there is no split."""
     replicas: int = 1
     """How many processes hold each shard. Above ``write_replicas`` only when a split was
-    rejected, which is what concentrates an array on one writer."""
+    rejected, which is what concentrates an array on fewer writers."""
+    writer_replica: int = 0
+    """Which replica writes each shard whole; unused when there is a split."""
 
 
 @dataclass(frozen=True)
@@ -353,14 +356,21 @@ def _capped_chunk_shape(local_shape: tuple[int, ...], itemsize: int, max_chunk_b
     return tuple(chunk)
 
 
-def plan_array_write(array, config: TensorStoreWriteConfig) -> _WritePlan:
+def plan_array_write(path: str, array, config: TensorStoreWriteConfig) -> _WritePlan:
     """Decide how ``array`` is divided among the processes holding it.
 
     Every process computes this independently and must reach the same answer, so it depends
-    only on the global shape and sharding. The algorithm follows Orbax's replica-parallel
-    serialization (``orbax/checkpoint/_src/serialization/replica_slices.py``), which in turn
-    follows AXLearn's: split along the first shard axis that divides evenly by the replica
-    count, and fall back to a single writer when nothing divides.
+    only on ``path`` and on the global shape and sharding. The algorithm follows Orbax's
+    replica-parallel serialization (``orbax/checkpoint/_src/serialization/replica_slices.py``),
+    which in turn follows AXLearn's: split along the first shard axis that divides evenly by
+    the replica count, and fall back to a single writer when nothing divides.
+
+    Two departures from Orbax. A replica count that divides no axis takes the widest smaller
+    count that does, so a run whose rack count is not a power of two still splits its state
+    instead of dropping to one writer. And the single writer is chosen from ``path`` rather
+    than fixed at replica 0, which keeps arrays no split applies to from piling onto one
+    process: on the 546B EP hero that is 69 arrays and 2.35 GiB, enough on its own to put
+    rank 0 over a staging budget its peers fit under.
     """
     shape = tuple(array.shape)
     itemsize = array.dtype.itemsize
@@ -383,6 +393,8 @@ def plan_array_write(array, config: TensorStoreWriteConfig) -> _WritePlan:
         write_replicas=1,
         block=0,
         replicas=replica_count or 1,
+        # Every replica holds the whole shard, so any of them can write it.
+        writer_replica=zlib.crc32(path.encode()) % replica_count if replica_count else 0,
     )
 
     if not _is_safe_to_slice(sharding, shard_shape):
@@ -390,29 +402,32 @@ def plan_array_write(array, config: TensorStoreWriteConfig) -> _WritePlan:
 
     if replica_count is None:
         return single_writer
-    replicas = min(replica_count, config.max_write_replicas)
-    if replicas < 2:
-        return single_writer
 
-    split_axis = next((axis for axis, size in enumerate(shard_shape) if size % replicas == 0), None)
-    if split_axis is None or math.prod(shard_shape) * itemsize // replicas < config.min_replica_slice_bytes:
-        return single_writer
+    for replicas in range(min(replica_count, config.max_write_replicas), 1, -1):
+        split_axis = next((axis for axis, size in enumerate(shard_shape) if size % replicas == 0), None)
+        if split_axis is None:
+            continue
+        # Fewer writers give each a larger slice, so a slice under the floor is worth retrying.
+        if math.prod(shard_shape) * itemsize // replicas < config.min_replica_slice_bytes:
+            continue
 
-    block = shard_shape[split_axis] // replicas
-    local_shape = shard_shape[:split_axis] + (block,) + shard_shape[split_axis + 1 :]
-    return _WritePlan(
-        chunk_shape=_capped_chunk_shape(local_shape, itemsize, config.max_chunk_bytes),
-        split_axis=split_axis,
-        write_replicas=replicas,
-        block=block,
-        replicas=replica_count,
-    )
+        block = shard_shape[split_axis] // replicas
+        local_shape = shard_shape[:split_axis] + (block,) + shard_shape[split_axis + 1 :]
+        return _WritePlan(
+            chunk_shape=_capped_chunk_shape(local_shape, itemsize, config.max_chunk_bytes),
+            split_axis=split_axis,
+            write_replicas=replicas,
+            block=block,
+            replicas=replica_count,
+        )
+
+    return single_writer
 
 
 def _shard_write_region(shard, plan: _WritePlan) -> _ShardWrite | None:
     """What this device writes for this array, or None when it writes nothing."""
     if plan.split_axis is None:
-        if shard.replica_id != 0:
+        if shard.replica_id != plan.writer_replica:
             return None
         return _ShardWrite(index=shard.index, slice_axis=None, slice_start=0, slice_limit=0)
 
@@ -604,7 +619,7 @@ def tree_serialize_leaves_tensorstore(
         )
         flush_debug_output(logger)
 
-    plans = [plan_array_write(array, write_config) for array in arrays]
+    plans = [plan_array_write(path, array, write_config) for path, array in zip(paths, arrays)]
     _log_write_share(paths, arrays, plans, total_array_bytes)
     entries = [
         CheckpointArray(
