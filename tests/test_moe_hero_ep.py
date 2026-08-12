@@ -1100,6 +1100,30 @@ def test_mok_like_correctness_counts_nonpadding_macrobuffers(macrobatch_size: in
     )
 
 
+def test_mok_like_correctness_cli_shuts_down_distributed_runtime_after_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shutdown_calls = 0
+
+    def fail() -> None:
+        raise RuntimeError("gate failed")
+
+    def shutdown() -> None:
+        nonlocal shutdown_calls
+        shutdown_calls += 1
+        raise RuntimeError("shutdown failed")
+
+    monkeypatch.setattr(mok_like_correctness, "main", fail)
+    monkeypatch.setattr(jax.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(jax.distributed, "shutdown", shutdown)
+
+    with pytest.raises(RuntimeError, match="gate failed") as error:
+        mok_like_correctness._run_cli()
+
+    assert shutdown_calls == 1
+    assert error.value.__notes__ == ["JAX distributed shutdown also failed: shutdown failed"]
+
+
 def test_mok_like_stateful_parity_route_plan_alternates_imbalance_and_exact_capacity_boundary() -> None:
     plan = mok_like_stateful_parity._stateful_route_plan(8)
     config = MokLikeConfig(schedule_capacity_factor=3.75)

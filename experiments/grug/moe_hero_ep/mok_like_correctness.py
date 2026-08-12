@@ -1005,5 +1005,22 @@ def main(
         raise AssertionError(f"expected {expected_real_macrobuffers} real macrobuffers, got {real_macrobuffers}")
 
 
+def _run_cli() -> None:
+    primary_failure: BaseException | None = None
+    try:
+        main()
+    except BaseException as failure:
+        primary_failure = failure
+        raise
+    finally:
+        if jax.distributed.is_initialized():
+            try:
+                jax.distributed.shutdown()
+            except BaseException as shutdown_failure:
+                if primary_failure is None:
+                    raise
+                primary_failure.add_note(f"JAX distributed shutdown also failed: {shutdown_failure}")
+
+
 if __name__ == "__main__":
-    main()
+    _run_cli()

@@ -235,7 +235,10 @@ def backward_bf16_local(
     results = jax.ffi.ffi_call(
         BACKWARD_TARGET,
         result_shapes,
-        has_side_effect=True,
+        # Runtime workspaces, counters, and leases are private protocol state.
+        # Gradients and failure status fully describe the observable result, so
+        # the call does not need an ordered FFI-effect token.
+        has_side_effect=False,
         vmap_method="broadcast_all",
     )(
         jnp.asarray(grad_output, dtype=jnp.bfloat16),

@@ -324,18 +324,23 @@ def test_backward_peer_storage_reaches_typed_ffi_abi(storage: MokLikeBackwardPee
         backward_peer_storage=storage,
     )
 
-    def traced_backward(*values):
+    def traced_backward_with_id(collective_id: int, *values):
         return backward_bf16_local(
             *values,
             runtime=CompatibleRuntime(),
             config=config,
-            collective_id=7,
+            collective_id=collective_id,
         )
+
+    def traced_backward(*values):
+        return traced_backward_with_id(7, *values)
 
     jaxpr = jax.make_jaxpr(traced_backward)(*arguments).jaxpr
     ffi_equation = next(equation for equation in jaxpr.eqns if equation.primitive.name == "ffi_call")
     attributes = dict(ffi_equation.params["attributes"])
 
+    assert not jaxpr.effects
+    assert ffi_equation.params["has_side_effect"] is False
     assert attributes["backward_peer_storage"] == np.int32(expected_code)
     assert attributes["collective_id"] == np.int64(7)
 
@@ -349,6 +354,21 @@ def test_backward_peer_storage_reaches_typed_ffi_abi(storage: MokLikeBackwardPee
     assert ffi_equation.outvars[-1].aval.shape == (1,)
     assert ffi_equation.outvars[-1].aval.dtype == jnp.int32
     assert all(equation.primitive.name != "reduce_sum" for equation in jaxpr.eqns)
+
+    def failure_status_only(*values: jax.Array) -> jax.Array:
+        return traced_backward(*values)[1]
+
+    lowered = jax.jit(failure_status_only).lower(*arguments).as_text()
+    assert "@levanter_mok_backward_bf16_4" in lowered
+    assert "has_side_effect = true" not in lowered
+
+    def distinct_call_sites(*values: jax.Array) -> jax.Array:
+        first_status = traced_backward_with_id(10, *values)[1]
+        second_status = traced_backward_with_id(11, *values)[1]
+        return first_status + second_status
+
+    distinct_lowering = jax.jit(distinct_call_sites).lower(*arguments).as_text()
+    assert distinct_lowering.count("@levanter_mok_backward_bf16_4") == 2
 
 
 def _canonical_shapes(dtype: jnp.dtype = jnp.bfloat16) -> tuple[jax.ShapeDtypeStruct, ...]:
