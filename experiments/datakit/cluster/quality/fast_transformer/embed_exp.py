@@ -97,6 +97,8 @@ from experiments.datakit.cluster.quality.fast_transformer.train import (
     train_regressor,
 )
 from experiments.datakit.cluster.quality.fast_transformer.train_exp import (
+    DONOR_TOKENIZERS,
+    DONORS,
     EMBED_INIT_STD,
     EVAL_FRAC,
     TRAIN_SEED,
@@ -323,7 +325,7 @@ def main() -> None:
     p.add_argument("--out-dir", default=None, help="artifact dir (fusion/control arms)")
     p.add_argument("--name", default=None, help="artifact stem (fusion/control arms)")
     p.add_argument("--tokenizer", default=TOKENIZER)
-    p.add_argument("--init-embed", choices=["none", "e5", "gemma"], default="none")
+    p.add_argument("--init-embed", choices=["none", *DONORS], default="none")
     p.add_argument("--embed-treatment", choices=TREATMENTS, default="pca", help="donor treatment for --init-embed")
     p.add_argument("--gigatoken", action="store_true", help="tokenize with gigatoken (exact-parity gated)")
     p.add_argument("--domain-mlp", default=None, help="domain_mlp npz; adds per-type tables keyed by its predictions")
@@ -397,6 +399,15 @@ def main() -> None:
     tr_pack = pack(tr_raw, remap, target[tr_idx], MAX_TOKENS)
     ev_pack = pack(ev_raw, remap, target[ev_idx], MAX_TOKENS)
 
+    if args.init_embed != "none" and args.tokenizer != DONOR_TOKENIZERS[args.init_embed]:
+        # Donor row i is the embedding of *its own* tokenizer's token i, and the
+        # warm start routes rows through the vocab remap by raw id. Under any
+        # other tokenizer that mapping is silently wrong rather than merely
+        # suboptimal, so refuse instead of training on scrambled embeddings.
+        raise ValueError(
+            f"--init-embed {args.init_embed} must be paired with --tokenizer "
+            f"{DONOR_TOKENIZERS[args.init_embed]}, got {args.tokenizer}"
+        )
     donor = donor_embedding_table(args.init_embed) if args.init_embed != "none" else None
     if args.embed_treatment != "pca" and donor is None:
         raise ValueError(f"--embed-treatment {args.embed_treatment} requires --init-embed")

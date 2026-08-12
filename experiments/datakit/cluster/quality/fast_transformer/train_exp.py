@@ -68,11 +68,22 @@ EVAL_FRAC = 1 / 7
 DONOR_REPOS = {
     "e5": ["intfloat/multilingual-e5-small"],
     "gemma": ["google/gemma-3-270m", "unsloth/gemma-3-270m-it"],
+    "nemotron": ["nvidia/Nemotron-Flash-1B"],
 }
 DONOR_TENSOR_KEYS = {
     "e5": "embeddings.word_embeddings.weight",
     "gemma": "model.embed_tokens.weight",
+    "nemotron": "model.embed_tokens.weight",
 }
+# The tokenizer whose ids index each donor's rows. A donor warm start is only
+# meaningful through its own tokenizer: row i is the embedding of that
+# tokenizer's token i.
+DONOR_TOKENIZERS = {
+    "e5": "intfloat/multilingual-e5-small",
+    "gemma": "unsloth/gemma-3-270m-it",
+    "nemotron": "nvidia/Nemotron-Flash-1B",
+}
+DONORS = tuple(DONOR_REPOS)
 EMBED_INIT_STD = 0.02  # FastTransformer's cold-start embedding init scale
 
 
@@ -188,7 +199,7 @@ def main() -> None:
     p.add_argument("--name", required=True, help="artifact stem (one model per out-dir)")
     p.add_argument("--tokenizer", default=TOKENIZER)
     p.add_argument("--full-vocab", action="store_true", help="identity remap over the full tokenizer vocab")
-    p.add_argument("--init-embed", choices=["none", "e5", "gemma"], default="none")
+    p.add_argument("--init-embed", choices=["none", *DONORS], default="none")
     p.add_argument("--bigram-buckets", type=int, default=0, help="hashed-bigram side table buckets (0 = off)")
     p.add_argument("--bigram-seed", type=int, default=0)
     args = p.parse_args()
