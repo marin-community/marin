@@ -908,3 +908,14 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 healthy TEI services. RNO has 88 healthy TEI services. The remaining eight RNO services are still in the build state with zero failures and zero preemptions.
 - Issue update: None. These are routine source completions, and the partial RNO capacity recovery is already in the task record.
 - Next action: Check SWE-rebench OpenHands through completion and continue to watch the eight queued RNO TEI services.
+
+### 2026-08-12 21:27 UTC - Aggregate shard baseline
+
+- Root health: Both roots are running with zero failures and zero preemptions. Both active sources have 32 live workers and no dead workers.
+- Completed artifacts: East has 45 completed source artifacts. RNO has 18 completed source artifacts. The full run has 63 of 292 completed source artifacts.
+- Aggregate progress: The 292 normalized sources contain 166,775 input shards. A direct object count found 90,802 fuzzy-duplicate embedding Parquet shards, or 54.45%. There are 75,973 shards left. This count includes completed and active source outputs.
+- RNO results: `swe-rebench-openhands_8decfaa0` and `synthetic-1_9c07e65b` succeeded. `starcoder2-ir_cpp_f66a5c36` reached 64 of 97 output shards.
+- East progress: `nemotron_cc_v2-diverse_qa_016d1909` reached 3,420 of 4,416 output shards.
+- Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
+- Issue update: None. There is no major run-state change.
+- Next action: Use aggregate shard counts for future progress reports and continue the regular health-check cadence.
