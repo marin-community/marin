@@ -75,6 +75,14 @@ Map/Fold body. The verifier recomputes that linkage from operations, operands,
 results, regions, attributes, indexing maps, and numerical constraints before
 accepting the code-object digest.
 
+When the device module stores an external code-object digest instead of inline
+bytes, the runtime must resolve that digest to immutable bytes and recompute
+SHA-256 over the exact bytes returned. A mismatch fails before module load,
+entrypoint lookup, or enqueue. The runtime loads only those verified bytes and
+resolves each entrypoint from that loaded object; an entrypoint from another
+object cannot satisfy the binding. The exact bytes, loaded module, and
+executable remain retained until the invocation completion token resolves.
+
 An executable launch record needs:
 
 - a code-object digest and entrypoint owned by the selected code generator;
@@ -243,6 +251,9 @@ Mutation gates must reject:
 - changed launch grid, workgroup shape, scratch span, predication, dependency,
   visibility, entrypoint, instruction/body linkage, code-object digest, stream
   lifetime, completion ownership, or error propagation;
+- altered, truncated, or substituted external code-object bytes presented under
+  the claimed digest, including a resolver that returns the wrong object;
+- an entrypoint resolved from a different code object than the verified bytes;
 - a Fold algorithm that changes leaf order, omits a partial tile, overlaps a
   tile, lacks a required barrier, or merges serial chunks with an unverified
   order;
