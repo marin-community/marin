@@ -15,6 +15,7 @@ from typing import Literal, cast
 import search_config
 
 ManifestSource = Literal["observed", "feedback-only", "benchmark"]
+QUERY_IDENTIFIER_HEX_LENGTH = 12
 
 
 @dataclass(frozen=True)
@@ -103,7 +104,7 @@ def observed_cases(path: Path) -> list[ManifestCase]:
     for normalized, entries in sorted(groups.items()):
         domain_counts = Counter(checked_domains(entry["domains"], "observed query") for entry in entries)
         domains = domain_counts.most_common(1)[0][0]
-        identifier = hashlib.sha256(normalized.encode()).hexdigest()[:12]
+        identifier = hashlib.sha256(normalized.encode()).hexdigest()[:QUERY_IDENTIFIER_HEX_LENGTH]
         cases.append(
             ManifestCase(
                 id=f"observed-{identifier}",
@@ -141,7 +142,10 @@ def build_manifest(query_log: Path, benchmark: Path, extra_queries: list[str]) -
     cases = observed_cases(query_log)
     cases.extend(
         ManifestCase(
-            id=f"feedback-{hashlib.sha256(search_config.normalize_query(query).encode()).hexdigest()[:12]}",
+            id=(
+                "feedback-"
+                + hashlib.sha256(search_config.normalize_query(query).encode()).hexdigest()[:QUERY_IDENTIFIER_HEX_LENGTH]
+            ),
             query=query,
             domains=search_config.DEFAULT_SEARCH_DOMAINS,
             source="feedback-only",

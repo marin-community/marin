@@ -65,6 +65,7 @@ DOMAINS = search_config.SEARCH_DOMAINS
 DEFAULT_DOMAINS = search_config.DEFAULT_SEARCH_DOMAINS
 SEARCH_DETAIL_INSTRUCTION = "Detail: uv run infra/echo/cli.py get <domain:id>"
 MISSING_EMAIL_SCOPE_WARNING = "Not all requested scopes were granted by the authorization server, missing scopes email."
+DEFAULT_REQUEST_TIMEOUT = 30
 
 
 def cached_login_provider() -> TokenProvider | None:
@@ -104,7 +105,7 @@ def request_response(
     *,
     params: dict | None = None,
     body: object = None,
-    timeout: float = 30,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT,
 ) -> requests.Response:
     """Call echo-api and return a successful response with headers intact."""
     response = requests.request(
@@ -134,7 +135,7 @@ def request(
     *,
     params: dict | None = None,
     body: object = None,
-    timeout: float = 30,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT,
 ) -> object:
     """Call echo-api and return decoded JSON."""
     return request_response(method, path, params=params, body=body, timeout=timeout).json()

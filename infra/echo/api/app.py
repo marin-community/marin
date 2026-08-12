@@ -72,6 +72,7 @@ QUERY_LINE_STOP_WORDS = frozenset(
 FILE_REFERENCE_LIMIT = 3
 SEARCH_EXECUTION_HEADER = search_config.SEARCH_EXECUTION_HEADER
 SEARCH_HISTORY_PAGE_LIMIT = 500
+MILLISECONDS_PER_SECOND = 1_000
 POSTGRES_UNDEFINED_COLUMN = "42703"
 POSTGRES_UNDEFINED_TABLE = "42P01"
 
@@ -566,14 +567,7 @@ def database_error_code(error: sqlalchemy.exc.DBAPIError) -> str | None:
 
 
 def record_live_search(engine: sqlalchemy.Engine, record: search_history.SearchExecutionRecord) -> int | None:
-    """Persist a live search and return its execution ID when history storage is available.
-
-    Echo deploys additive migrations after Cloud Run resources because the migration grants
-    runtime database users created by those resources. A new revision may therefore receive
-    requests before its history table or newest columns exist. Only PostgreSQL's undefined
-    table and undefined column errors are tolerated during that rollout window; all other
-    persistence failures propagate.
-    """
+    """Persist a search, returning ``None`` only while its additive schema is unavailable."""
     try:
         with engine.begin() as conn:
             return search_history.insert_execution(conn, record)
@@ -961,7 +955,7 @@ def search(
             },
             requested_limit=limit,
             returned_count=len(results),
-            duration_ms=(time.perf_counter() - started_at) * 1_000,
+            duration_ms=(time.perf_counter() - started_at) * MILLISECONDS_PER_SECOND,
             service_revision=config.service_revision,
             results=tuple(recorded_hit(result) for result in results),
         ),
@@ -1025,7 +1019,7 @@ def federated_search_endpoint(
             filters={},
             requested_limit=limit,
             returned_count=len(results),
-            duration_ms=(time.perf_counter() - started_at) * 1_000,
+            duration_ms=(time.perf_counter() - started_at) * MILLISECONDS_PER_SECOND,
             repository_commit=result_repository_commit(results),
             service_revision=config.service_revision,
             results=tuple(recorded_search_result(result) for result in results),
@@ -1075,7 +1069,7 @@ def grep(
             filters={"source": source, "kind": kind},
             requested_limit=limit,
             returned_count=len(results),
-            duration_ms=(time.perf_counter() - started_at) * 1_000,
+            duration_ms=(time.perf_counter() - started_at) * MILLISECONDS_PER_SECOND,
             service_revision=config.service_revision,
             results=tuple(recorded_hit(result) for result in results),
         ),
