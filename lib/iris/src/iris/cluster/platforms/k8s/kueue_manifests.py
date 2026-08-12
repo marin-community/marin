@@ -137,7 +137,6 @@ class IrisWorkloadPriorityClass:
 
 
 def workload_priority_class_name(band: str, kind: WorkloadPriorityKind) -> str:
-    """Return the Kueue priority class name for a workload tier and Iris band."""
     return f"iris-{kind.value}-{band}"
 
 
