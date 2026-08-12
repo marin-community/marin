@@ -297,7 +297,7 @@ class SyncedDirectory:
         self._flush_lock = threading.Lock()
         self._known: set[str] = set()
         os.makedirs(local, exist_ok=True)
-        self._fetch_remote()
+        self._known.update(_fetch_remote(StoragePath(self._remote()), pathlib.Path(self._local)))
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="synced-dir-mirror", daemon=True)
         self._thread.start()
@@ -336,37 +336,6 @@ class SyncedDirectory:
         while not self._stop.wait(self._flush_interval):
             self.flush()
 
-    def _fetch_remote(self) -> None:
-        remote_root = StoragePath(self._remote())
-        try:
-            if not remote_root.exists():
-                return
-            with tempfile.TemporaryDirectory(prefix="synced-cache-fetch-") as staging_dir:
-                remote_root.download_to(
-                    staging_dir,
-                    recursive=True,
-                    batch_size=_SYNC_TRANSFER_BATCH_SIZE,
-                )
-                staged_root = pathlib.Path(staging_dir) / remote_root.name
-                archive_root = staged_root / _SYNC_ARCHIVE_SUBDIR
-                if archive_root.is_dir():
-                    for archive in sorted(archive_root.glob("*.zip")):
-                        try:
-                            self._known.update(_extract_archive(archive, pathlib.Path(self._local)))
-                        except (OSError, zipfile.BadZipFile, ValueError) as exc:
-                            logger.warning("synced cache archive fetch failed for %s: %s", archive.name, exc)
-
-                for staged_file in sorted(staged_root.rglob("*")):
-                    if not staged_file.is_file() or archive_root in staged_file.parents:
-                        continue
-                    relative = staged_file.relative_to(staged_root)
-                    local_file = pathlib.Path(self._local) / relative
-                    local_file.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(staged_file, local_file)
-                    self._known.add(relative.as_posix())
-        except OSError as exc:
-            logger.warning("synced cache fetch failed, starting cold: %s", exc)
-
 
 def _extract_archive(archive: pathlib.Path, destination: pathlib.Path) -> set[str]:
     """Extract regular files from one cache archive and return their relative paths."""
@@ -385,6 +354,55 @@ def _extract_archive(archive: pathlib.Path, destination: pathlib.Path) -> set[st
     return extracted
 
 
+def _fetch_remote(remote_root: StoragePath, local: pathlib.Path) -> set[str]:
+    fetched: set[str] = set()
+    try:
+        if not remote_root.exists():
+            return fetched
+        with tempfile.TemporaryDirectory(prefix="synced-cache-fetch-") as staging_dir:
+            remote_root.download_to(
+                staging_dir,
+                recursive=True,
+                batch_size=_SYNC_TRANSFER_BATCH_SIZE,
+            )
+            staged_root = pathlib.Path(staging_dir) / remote_root.name
+            archive_root = staged_root / _SYNC_ARCHIVE_SUBDIR
+            if archive_root.is_dir():
+                for archive in sorted(archive_root.glob("*.zip")):
+                    try:
+                        fetched.update(_extract_archive(archive, local))
+                    except (OSError, zipfile.BadZipFile, ValueError) as exc:
+                        logger.warning("synced cache archive fetch failed for %s: %s", archive.name, exc)
+
+            for staged_file in sorted(staged_root.rglob("*")):
+                if not staged_file.is_file() or archive_root in staged_file.parents:
+                    continue
+                relative = staged_file.relative_to(staged_root)
+                local_file = local / relative
+                local_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(staged_file, local_file)
+                fetched.add(relative.as_posix())
+    except OSError as exc:
+        logger.warning("synced cache fetch failed, starting cold: %s", exc)
+    return fetched
+
+
+def _kv_cache_remote(prefix: str) -> StoragePath | None:
+    tree_hash = launch_provenance().tree_hash
+    if not tree_hash:
+        return None
+    return StoragePath(prefix_join(marin_temp_bucket(_CACHE_TTL_DAYS, prefix), tree_hash))
+
+
+def fetch_kv_cache(prefix: str, local: str) -> None:
+    """Fetch a per-build object-store cache into ``local`` without uploading changes."""
+    remote = _kv_cache_remote(prefix)
+    if remote is None:
+        return
+    os.makedirs(local, exist_ok=True)
+    _fetch_remote(remote, pathlib.Path(local))
+
+
 def sync_kv_cache(prefix: str, local: str) -> SyncedDirectory | None:
     """Mirror ``local`` against a per-build object-store directory for ``prefix``.
 
@@ -393,7 +411,7 @@ def sync_kv_cache(prefix: str, local: str) -> SyncedDirectory | None:
     temp prefix. Returns ``None`` — leaving the directory node-local — when there is
     no tree hash to namespace by.
     """
-    tree_hash = launch_provenance().tree_hash
-    if not tree_hash:
+    remote = _kv_cache_remote(prefix)
+    if remote is None:
         return None
-    return SyncedDirectory(lambda: prefix_join(marin_temp_bucket(_CACHE_TTL_DAYS, prefix), tree_hash), local)
+    return SyncedDirectory(lambda: str(remote), local)

@@ -9,6 +9,7 @@ from rigging.cache import (
     SyncedDirectory,
     combined_content_hash,
     directory_content_hash,
+    fetch_kv_cache,
     file_content_hash,
     flush_background_writes,
     sync_kv_cache,
@@ -301,6 +302,20 @@ def test_sync_kv_cache_namespaces_the_object_store_by_tree_hash(tmp_path, monkey
     reader = sync_kv_cache("xla-autotune", str(reloaded))
     assert (reloaded / "k").read_bytes() == b"v"
     reader.close()
+
+
+def test_fetch_kv_cache_reads_without_starting_an_uploader(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache_module, "launch_provenance", lambda: _provenance("treehash"))
+    monkeypatch.setattr(cache_module, "marin_temp_bucket", lambda ttl_days, prefix: str(tmp_path / prefix))
+    remote = tmp_path / "xla-autotune" / "treehash"
+    (remote / "nested").mkdir(parents=True)
+    (remote / "nested" / "key").write_bytes(b"value")
+
+    local = tmp_path / "local"
+    fetch_kv_cache("xla-autotune", str(local))
+
+    assert (local / "nested" / "key").read_bytes() == b"value"
+    assert not list(remote.rglob("*.zip"))
 
 
 def test_sync_kv_cache_is_a_noop_without_a_tree_hash(tmp_path, monkeypatch):

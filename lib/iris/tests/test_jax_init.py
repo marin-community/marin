@@ -675,19 +675,65 @@ def test_remote_cache_keeps_an_explicit_xla_autotune_dir(tmp_path) -> None:
 
 
 def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path) -> None:
-    """A launched GPU task hands the node-local autotune dir to sync_kv_cache for mirroring."""
+    """Task 0 hands its node-local autotune directory to the remote uploader."""
     calls: list[tuple[str, str]] = []
 
     with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
         os.environ["MARIN_PROVENANCE"] = "{}"
         with (
             patch.object(jax_init_module, "sync_kv_cache", lambda prefix, local: calls.append((prefix, local))),
+            patch.object(jax_init_module, "get_job_info", return_value=_make_job_info(task_index=0, num_tasks=8)),
             patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
         ):
             configure_jax_compilation_cache()
 
     autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
     assert calls == [(jax_init_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
+
+
+def test_non_primary_task_fetches_without_uploading_autotune_cache(tmp_path) -> None:
+    """Each task warms its node-local cache, while only task 0 uploads changes."""
+    fetches: list[tuple[str, str]] = []
+    uploads: list[tuple[str, str]] = []
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
+        os.environ["MARIN_PROVENANCE"] = "{}"
+        with (
+            patch.object(jax_init_module, "fetch_kv_cache", lambda prefix, local: fetches.append((prefix, local))),
+            patch.object(jax_init_module, "sync_kv_cache", lambda prefix, local: uploads.append((prefix, local))),
+            patch.object(jax_init_module, "get_job_info", return_value=_make_job_info(task_index=3, num_tasks=8)),
+            patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
+        ):
+            configure_jax_compilation_cache()
+
+    autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
+    assert fetches == [(jax_init_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
+    assert uploads == []
+
+
+@pytest.mark.parametrize(
+    ("process_index", "expected_fetches"),
+    [(8, 1), (9, 0)],
+    ids=["local-leader", "other-local-rank"],
+)
+def test_multigpu_task_fetches_autotune_cache_once_per_node(tmp_path, process_index, expected_fetches) -> None:
+    fetches: list[tuple[str, str]] = []
+    uploads: list[tuple[str, str]] = []
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path):
+        os.environ["MARIN_PROVENANCE"] = "{}"
+        os.environ[jax_init_module.IRIS_MULTIGPU_PROCESS_COUNT_ENV] = "16"
+        os.environ[jax_init_module.IRIS_MULTIGPU_PROCESS_INDEX_ENV] = str(process_index)
+        with (
+            patch.object(jax_init_module, "fetch_kv_cache", lambda prefix, local: fetches.append((prefix, local))),
+            patch.object(jax_init_module, "sync_kv_cache", lambda prefix, local: uploads.append((prefix, local))),
+            patch.object(jax_init_module, "get_job_info", return_value=_make_job_info(task_index=1, num_tasks=2)),
+            patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
+        ):
+            configure_jax_compilation_cache()
+
+    assert len(fetches) == expected_fetches
+    assert uploads == []
 
 
 def test_autotune_cache_stays_node_local_without_a_launch_provenance(tmp_path) -> None:
