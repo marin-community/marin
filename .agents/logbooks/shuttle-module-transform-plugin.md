@@ -237,3 +237,36 @@ description: Target-1 workload-free JAX module-transform plugin and shared accep
   authorize a relaunch.
 - Artifact:
   `lib/shuttle/mlir/artifacts/native-preflight-20260810-lit-label/README.md`
+
+### 2026-08-11 - CPU ordinary-JAX acceptance
+
+- Hypothesis: the pinned XLA transform seam and always-linked Shuttle registry
+  adapter can build into jaxlib 0.10.1 and execute ordinary JAX forward and
+  JAX-owned VJP programs under both numerical policies.
+- Commit Hash: `6340706df454d699124fc7b676499f5db9cccd4a` for the
+  submitted source.
+- Command: `launch-command.txt` in
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-jaxacceptance6/`,
+  requesting 24 CPUs, 96 GiB memory, 250 GiB disk, a four-hour timeout, no
+  accelerator, and zero retries.
+- Config: JAX 0.10.1 at `619764c15117fbefc4ba13ab941871cb514c23f6`;
+  XLA `9b635916ecc6df6efee62d8e4b0c7ef87ef84d69`; release CPython
+  3.12 jaxlib wheel SHA-256
+  `7a47e8f2277516db57da0912a765877ec08fc4f8ad656bd0166888643281436a`.
+- Result (`replicated` across fresh processes): 55 focused Python tests, the
+  six-fixture native audit, four native tests, 17 lit tests, and four patched
+  XLA tests passed. Four cache-disabled ordinary `jax.jit` forward/VJP
+  invocations under `SOURCE_ORDERED` and `FAST` matched disabled baselines
+  bitwise. A populate process created four persistent-cache files; a fresh
+  reuse process reported four public hits, reused the same files, emitted no
+  Shuttle observer events, and matched the baselines bitwise. The sole Iris
+  task exited 0 after 40 minutes 28.74 seconds with no retry or preemption.
+- Interpretation: the bounded CPU ordinary-JAX vertical slice is accepted at
+  the pinned stack. The result does not establish dynamically loaded GPU PJRT
+  adapter linkage, GPU execution, performance, or arbitrary-JAX coverage.
+- Next action: prove the registry adapter is linked into the GPU PJRT plugin,
+  then run the same ordinary-JAX provenance and cache gates on H100. Until that
+  seam is complete, retain direct generic Contract/Map H100 measurements as
+  architecture-nonconforming backend evidence.
+- Artifact:
+  `lib/shuttle/mlir/artifacts/native-preflight-20260810-jaxacceptance6/README.md`

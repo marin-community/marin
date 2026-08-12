@@ -28,4 +28,9 @@ planning, and lowering components move here. This package must not depend on
 [`mlir/xla_patch`](mlir/xla_patch/README.md) contains a source-level patch for
 the proposed native transform seam at the pinned XLA revision. It is not part
 of the installed Python package and does not constitute a built
-Shuttle-enabled jaxlib.
+Shuttle-enabled jaxlib. The sealed
+[`jaxacceptance6`](mlir/artifacts/native-preflight-20260810-jaxacceptance6/README.md)
+artifact records one CPU-only release jaxlib build and ordinary-`jax.jit`
+acceptance run at the pinned JAX/XLA revisions. That wheel is an experiment
+artifact, not a distributed package, and it does not establish GPU PJRT
+linkage or GPU execution.

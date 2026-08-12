@@ -5,8 +5,11 @@ f32 Contract and scalar Map graphs. `shuttle-opt` partitions typed StableHLO,
 converts selected regions to Shuttle algebra, checks total source coverage,
 lowers from the authoritative algebra, and removes all Shuttle semantics before
 StableHLO-to-HLO conversion. The native compiler-option parser and pinned
-XLA/JAX registration overlays live here, but an ordinary-JAX build and the
-persistent-cache protocol remain separate acceptance work.
+XLA/JAX registration overlays live here. The sealed
+[`jaxacceptance6`](artifacts/native-preflight-20260810-jaxacceptance6/README.md)
+artifact records the pinned CPU ordinary-JAX build, observer contract, and
+persistent-cache populate/reuse protocol. GPU PJRT linkage, GPU execution, and
+performance remain separate acceptance work.
 
 The native code builds inside the dependency graph of the XLA revision pinned
 by JAX/JAXlib 0.10.1:
@@ -99,7 +102,9 @@ Current implemented behavior is deliberately narrow:
 - `ShuttleXlaRegistryAdapter` is an `alwayslink` translation unit that
   automatically registers the keyed `shuttle` callback in XLA's generic
   registry. The separate pinned JAX patch links it at final CPU `_jax`
-  composition; GPU PJRT plugin linkage remains a later checkpoint.
+  composition. The `jaxacceptance6` artifact proves that CPU composition path;
+  dynamically loaded GPU PJRT plugins still require their own linkage and
+  registration proof.
 
 The export verifier keys operation rejection on the operation-name namespace,
 so it also covers opaque `shuttle.*` operations in a context where the Shuttle

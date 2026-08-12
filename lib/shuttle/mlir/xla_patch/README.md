@@ -66,8 +66,11 @@ The internal `//third_party/py/lit:lit` string remains unchanged. In the exact
 OSS source path it is overwritten by the `lit_custom_*` target before any rule
 consumes it; it is not an XLA-owned runtime label in that execution mode.
 
-The artifact is source-level integration work. Marin does not vendor XLA, and
-the patch has not been compiled in this repository. End-to-end acceptance
-still requires a Shuttle-enabled jaxlib running ordinary
-`jax.jit(..., compiler_options=...)` forward and JAX-generated backward
-programs.
+Marin does not vendor XLA, so this directory remains source-level integration
+work rather than a shipped jaxlib. The sealed
+[`jaxacceptance6`](../artifacts/native-preflight-20260810-jaxacceptance6/README.md)
+artifact records one exact-pin CPU build and ordinary
+`jax.jit(..., compiler_options=...)` acceptance run for forward and
+JAX-generated backward programs under both numerical policies. It also records
+persistent-cache population and reuse. GPU PJRT linkage, GPU execution, and
+performance are not established by that result.
