@@ -66,6 +66,11 @@ _LIST_PAGE_LIMIT: int = 500
 # verdict without flooding logs.
 _ERROR_BODY_MAX_LEN: int = 500
 
+# GNU timeout's conventional exit status. K8s exec consumers already model
+# process completion as an integer exit code, so preserve that contract when
+# the websocket remains open past the caller's deadline.
+_COMMAND_TIMEOUT_EXIT_CODE: int = 124
+
 
 @runtime_checkable
 class K8sService(Protocol):
@@ -734,9 +739,23 @@ class CloudK8sService:
                 with self.create_api_client() as exec_api_client:
                     resp = kubernetes.stream.stream(
                         kubernetes.client.CoreV1Api(exec_api_client).connect_get_namespaced_pod_exec,
+                        _preload_content=False,
                         **kwargs,
                     )
-                return ExecResult(returncode=0, stdout=resp, stderr="")
+                    try:
+                        resp.run_forever(timeout=effective_timeout)
+                        stdout = resp.read_stdout() or ""
+                        stderr = resp.read_stderr() or ""
+                        if resp.is_open():
+                            timeout_error = f"Command timed out after {effective_timeout:g} seconds"
+                            return ExecResult(
+                                returncode=_COMMAND_TIMEOUT_EXIT_CODE,
+                                stdout=stdout,
+                                stderr="\n".join(part for part in (stderr, timeout_error) if part),
+                            )
+                        return ExecResult(returncode=resp.returncode, stdout=stdout, stderr=stderr)
+                    finally:
+                        resp.close()
             except ApiException as e:
                 return ExecResult(returncode=1, stdout="", stderr=str(e))
 

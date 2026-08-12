@@ -3,12 +3,52 @@
 
 """Tests for CloudK8sService helpers and K8sResource enum path construction."""
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
 from iris.cluster.platforms.k8s import service as k8s_service
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
+
+
+class _FakeExecStream:
+    def __init__(self, *, returncode: int, stdout: str = "", stderr: str = ""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.closed = False
+
+    def run_forever(self, timeout: float | None = None) -> None:
+        pass
+
+    def is_open(self) -> bool:
+        return False
+
+    def read_stdout(self) -> str:
+        return self.stdout
+
+    def read_stderr(self) -> str:
+        return self.stderr
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_exec_reports_command_exit_status(monkeypatch):
+    """A command error inside a reachable pod must not look successful."""
+    stream = _FakeExecStream(returncode=1, stderr="cat: profile.json: No such file")
+    monkeypatch.setattr(k8s_service.kubernetes.stream, "stream", lambda *_args, **_kwargs: stream)
+    core_api = SimpleNamespace(connect_get_namespaced_pod_exec=object())
+    monkeypatch.setattr(k8s_service.kubernetes.client, "CoreV1Api", lambda _client: core_api)
+    svc = CloudK8sService(namespace="iris")
+    monkeypatch.setattr(svc, "create_api_client", lambda: nullcontext(object()))
+
+    result = svc.exec("task-pod", ["cat", "profile.json"], container="task")
+
+    assert result.returncode == 1
+    assert result.stderr == "cat: profile.json: No such file"
+    assert stream.closed
 
 
 def test_construct_without_kubernetes_client(monkeypatch):
