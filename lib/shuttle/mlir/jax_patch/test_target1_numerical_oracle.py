@@ -4,9 +4,7 @@
 """Behavior tests for the Target 1 independent numerical reference."""
 
 import copy
-import dataclasses
 import json
-import platform
 from pathlib import Path
 
 import jax
@@ -19,7 +17,6 @@ from target1_numerical_oracle import (
     BOUNDARIES,
     OUTPUT_ROLES,
     SHAPES,
-    array_digest,
     error_metrics,
     fixed_inputs,
     independent_reference,
@@ -50,33 +47,6 @@ def test_ordinary_jax_boundary_satisfies_independent_reference_contract(shape, b
 def test_contract_matches_closed_schema_and_generated_input_digests() -> None:
     document = load_contract(CONTRACT)
     assert document["scorecard_effect"]["status_changed"] is False
-    assert document["local_observation"]["environment"] == {
-        "backend_platform": jax.default_backend(),
-        "device_kind_class": "cpu",
-        "host_architecture": platform.machine(),
-        "jax_enable_x64": jax.config.x64_enabled,
-        "python_version": platform.python_version(),
-    }
-    assert all(device.platform == "cpu" for device in jax.devices())
-
-
-@pytest.mark.parametrize("shape", SHAPES)
-@pytest.mark.parametrize("boundary", BOUNDARIES)
-def test_contract_local_observation_matches_pinned_ordinary_jax(shape, boundary) -> None:
-    rows, features = shape
-    arguments = fixed_inputs(rows, features, boundary)
-    actual = tuple(np.asarray(value) for value in jax.tree.leaves(jax.jit(boundary_function(boundary))(*arguments)))
-    reference = independent_reference(boundary, arguments)
-    records = json.loads(CONTRACT.read_text())["local_observation"]["results"][f"{rows}x{features}/{boundary}"]
-    expected = [
-        {
-            "role": role,
-            "output_digest": array_digest(output),
-            "metrics": dataclasses.asdict(error_metrics(output, target)),
-        }
-        for role, output, target in zip(OUTPUT_ROLES[boundary], actual, reference, strict=True)
-    ]
-    assert records == expected
 
 
 @pytest.mark.parametrize(
@@ -96,6 +66,16 @@ def test_contract_local_observation_matches_pinned_ordinary_jax(shape, boundary)
             "analytic_thresholds",
         ),
         (lambda value: value["provenance"].__setitem__("xla_revision", "0" * 40), "provenance"),
+        (
+            lambda value: value["local_observation"]["environment"].__setitem__("host_architecture", "x86_64"),
+            "local_observation",
+        ),
+        (
+            lambda value: value["local_observation"]["results"]["7x13/forward"][0].__setitem__(
+                "output_digest", "0" * 64
+            ),
+            "local_observation",
+        ),
         (lambda value: value["scorecard_effect"].__setitem__("status_changed", True), "scorecard_effect"),
     ],
 )

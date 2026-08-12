@@ -73,7 +73,7 @@
     "ml_dtypes_version": "0.5.4"
   },
   "local_observation": {
-    "claim": "local_cpu_reference_check_not_scorecard_evidence",
+    "claim": "non_scorecard_local_cpu_observation",
     "environment": {
       "backend_platform": "cpu",
       "device_kind_class": "cpu",

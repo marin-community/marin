@@ -52,6 +52,7 @@ PROVENANCE = {
     "numpy_version": "2.3.5",
     "ml_dtypes_version": "0.5.4",
 }
+LOCAL_OBSERVATION_SHA256 = "768e75cd067258c97622e905e1683d7ae1828de63fdfbed32c020bbce2dba677"
 
 
 @dataclass(frozen=True)
@@ -148,6 +149,10 @@ def array_digest(value: np.ndarray) -> str:
     return digest.hexdigest()
 
 
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def validate_contract(document: object) -> None:
     """Reject any drift in the closed, reviewable numerical contract."""
     root = _closed_mapping(
@@ -239,7 +244,7 @@ def validate_contract(document: object) -> None:
 
     _equal(root["provenance"], PROVENANCE, "provenance")
     observation = _closed_mapping(root["local_observation"], "local_observation", {"claim", "environment", "results"})
-    _equal(observation["claim"], "local_cpu_reference_check_not_scorecard_evidence", "local_observation.claim")
+    _equal(observation["claim"], "non_scorecard_local_cpu_observation", "local_observation.claim")
     _equal(
         observation["environment"],
         {
@@ -299,6 +304,7 @@ def validate_contract(document: object) -> None:
                     "source_ordered",
                     identity_roundtrip_bitwise=True,
                 )
+    _equal(_canonical_sha256(observation), LOCAL_OBSERVATION_SHA256, "local_observation")
     _equal(
         root["scorecard_effect"],
         {
