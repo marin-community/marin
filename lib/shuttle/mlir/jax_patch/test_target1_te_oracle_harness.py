@@ -453,7 +453,11 @@ def _sealed_matrix(tmp_path: Path) -> tuple[Path, Path, Path, list[dict]]:
     return plan_path, identity_path, results, plan["runs"]
 
 
-def _candidate_matrix(runs: list[dict]) -> dict:
+def _canonical_digest(value: object) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
+def _candidate_matrix(runs: list[dict], marin_revision: str) -> dict:
     records = []
     identities = {
         "ordinary_jax": [
@@ -481,7 +485,6 @@ def _candidate_matrix(runs: list[dict]) -> dict:
             "generated_executable_sha256",
             "invocation_abi_sha256",
             "persistent_cache_key",
-            "identity_lowering_proof",
         ],
     }
     subjects = {
@@ -489,6 +492,20 @@ def _candidate_matrix(runs: list[dict]) -> dict:
         "source_ordered": "ordinary_jax_through_shuttle_source_ordered",
         "fast_identity": "ordinary_jax_through_shuttle_fast",
     }
+    subject_identities = {}
+    for policy, fields in identities.items():
+        subject_identity = {}
+        for field in fields:
+            if field == "pipeline_abi_version":
+                subject_identity[field] = 5
+            elif field in ("marin_revision", "jax_revision", "xla_revision"):
+                subject_identity[field] = marin_revision if field == "marin_revision" else "a" * 40
+            elif field.endswith("_sha256"):
+                subject_identity[field] = "b" * 64
+            else:
+                subject_identity[field] = f"pinned-{field}"
+        subject_identities[policy] = subject_identity
+    subject_artifact_digests = {}
     seen_coordinates = set()
     for run in runs:
         coordinate = (tuple(run["shape"]), run["boundary"])
@@ -500,16 +517,34 @@ def _candidate_matrix(runs: list[dict]) -> dict:
         ]:
             digest = hashlib.sha256(f"{run['shape']}-{run['boundary']}-{role}".encode()).hexdigest()
             for policy, subject in subjects.items():
-                subject_identity = {}
-                for field in identities[policy]:
-                    if field == "pipeline_abi_version":
-                        subject_identity[field] = 5
-                    elif field in ("marin_revision", "jax_revision", "xla_revision"):
-                        subject_identity[field] = "a" * 40
-                    elif field.endswith("_sha256") or field == "identity_lowering_proof":
-                        subject_identity[field] = "b" * 64
-                    else:
-                        subject_identity[field] = f"pinned-{field}"
+                artifact = {
+                    "policy": policy,
+                    "subject_id": subject,
+                    "subject_identity": subject_identities[policy],
+                    "hardware_class": "h100",
+                    "shape": run["shape"],
+                    "boundary": run["boundary"],
+                    "output_role": role,
+                    "comparison_contract_sha256": COMPARISON_CONTRACT_SHA256,
+                    "input_digest_set": run["input_digest_set"],
+                    "output_digest": digest,
+                }
+                artifact_sha256 = _canonical_digest(artifact)
+                artifact_key = f"{policy}:{run['shape'][0]}x{run['shape'][1]}:{run['boundary']}:{role}"
+                subject_artifact_digests[artifact_key] = artifact_sha256
+                identity_lowering_proof = None
+                if policy == "fast_identity":
+                    identity_lowering_proof = _canonical_digest(
+                        {
+                            "schema": "target1_identity_lowering_proof_v1",
+                            "subject_artifact_sha256": artifact_sha256,
+                            "coordinate": {
+                                "shape": run["shape"],
+                                "boundary": run["boundary"],
+                                "output_role": role,
+                            },
+                        }
+                    )
                 records.append(
                     {
                         "policy": policy,
@@ -528,7 +563,8 @@ def _candidate_matrix(runs: list[dict]) -> dict:
                         },
                         "output_digest": digest,
                         "repeatability": {"post_timing_invocations": 3, "output_digests": [digest] * 3},
-                        "subject_identity": subject_identity,
+                        "subject_artifact_sha256": artifact_sha256,
+                        "identity_lowering_proof": identity_lowering_proof,
                     }
                 )
     return {
@@ -536,6 +572,8 @@ def _candidate_matrix(runs: list[dict]) -> dict:
         "status": "complete_pre_scorecard_matrix",
         "hardware_class": "h100",
         "comparison_contract_sha256": COMPARISON_CONTRACT_SHA256,
+        "subject_identities": subject_identities,
+        "subject_artifact_digests": subject_artifact_digests,
         "records": records,
         "scorecard_status_changed": False,
     }
@@ -544,7 +582,9 @@ def _candidate_matrix(runs: list[dict]) -> dict:
 def test_complete_matrix_uses_plan_coordinates_and_all_four_te_pairs(tmp_path: Path) -> None:
     plan_path, identity_path, results, runs = _sealed_matrix(tmp_path)
     candidates_path = tmp_path / "candidates.json"
-    candidates_path.write_text(json.dumps(_candidate_matrix(runs)))
+    candidates_path.write_text(
+        json.dumps(_candidate_matrix(runs, json.loads(identity_path.read_text())["marin_revision"]))
+    )
 
     validated = validate_hardware_matrix(plan_path, results, identity_path, candidates_path)
 
@@ -554,7 +594,7 @@ def test_complete_matrix_uses_plan_coordinates_and_all_four_te_pairs(tmp_path: P
 @pytest.mark.parametrize("mutation", ["missing_te", "extra_te", "missing_candidate", "duplicate_candidate"])
 def test_complete_matrix_rejects_incomplete_duplicate_or_extra_coordinates(tmp_path: Path, mutation: str) -> None:
     plan_path, identity_path, results, runs = _sealed_matrix(tmp_path)
-    candidates = _candidate_matrix(runs)
+    candidates = _candidate_matrix(runs, json.loads(identity_path.read_text())["marin_revision"])
     if mutation == "missing_te":
         (results / "result-23.json").unlink()
     elif mutation == "extra_te":
@@ -575,7 +615,7 @@ def test_complete_matrix_rejects_candidate_that_only_passes_one_backend_pair(tmp
     weak_te = json.loads((results / "result-08.json").read_text())
     weak_te["comparison"]["outputs"][1]["metrics"]["max_bfloat16_ulp_error"] = 2
     (results / "result-08.json").write_text(json.dumps(weak_te))
-    candidates = _candidate_matrix(runs)
+    candidates = _candidate_matrix(runs, json.loads(identity_path.read_text())["marin_revision"])
     target = next(
         record
         for record in candidates["records"]
@@ -677,11 +717,11 @@ def test_result_sealing_binds_raw_runtime_to_reviewed_identity(tmp_path: Path) -
 @pytest.mark.parametrize("mutation", ["candidate_role", "candidate_identity", "te_backend", "input_join"])
 def test_matrix_rejects_role_backend_input_and_subject_provenance_drift(tmp_path: Path, mutation: str) -> None:
     plan_path, identity_path, results, runs = _sealed_matrix(tmp_path)
-    candidates = _candidate_matrix(runs)
+    candidates = _candidate_matrix(runs, json.loads(identity_path.read_text())["marin_revision"])
     if mutation == "candidate_role":
         candidates["records"][0]["output_role"] = "dx"
     elif mutation == "candidate_identity":
-        candidates["records"][0]["subject_identity"].pop("jax_version")
+        candidates["subject_identities"]["ordinary_jax"]["jax_version"] = "changed"
     elif mutation == "input_join":
         candidates["records"][0]["input_digest_set"] = "0" * 64
     else:
@@ -691,5 +731,34 @@ def test_matrix_rejects_role_backend_input_and_subject_provenance_drift(tmp_path
     candidates_path = tmp_path / "candidates.json"
     candidates_path.write_text(json.dumps(candidates))
 
-    with pytest.raises(ValueError, match=r"coordinate|identity fields|input digest|backend identity"):
+    with pytest.raises(ValueError, match=r"coordinate|identity|input digest|backend identity"):
         validate_hardware_matrix(plan_path, results, identity_path, candidates_path)
+
+
+@pytest.mark.parametrize("mutation", ["revision", "artifact", "fast_proof"])
+def test_matrix_rejects_unjoined_candidate_subjects(tmp_path: Path, mutation: str) -> None:
+    plan_path, identity_path, results, runs = _sealed_matrix(tmp_path)
+    candidates = _candidate_matrix(runs, json.loads(identity_path.read_text())["marin_revision"])
+    if mutation == "revision":
+        candidates["subject_identities"]["source_ordered"]["marin_revision"] = "a" * 40
+    elif mutation == "artifact":
+        candidates["records"][0]["subject_artifact_sha256"] = "0" * 64
+    else:
+        fast = next(record for record in candidates["records"] if record["policy"] == "fast_identity")
+        fast["identity_lowering_proof"] = "0" * 64
+    candidates_path = tmp_path / "candidates.json"
+    candidates_path.write_text(json.dumps(candidates))
+
+    with pytest.raises(ValueError, match=r"revision|artifact|lowering proof"):
+        validate_hardware_matrix(plan_path, results, identity_path, candidates_path)
+
+
+def test_sealed_plan_rejects_noncanonical_case_directory_even_with_rewritten_plan(tmp_path: Path) -> None:
+    plan_path, _identity_path, _results, _runs = _sealed_matrix(tmp_path)
+    plan = json.loads(plan_path.read_text())
+    case_flag = plan["runs"][0]["argv"].index("--case-directory") + 1
+    plan["runs"][0]["argv"][case_flag] = "copied-cases/2048x4096"
+    plan_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
+
+    with pytest.raises(ValueError, match="planned argv"):
+        validate_result(_results / "result-00.json", plan_path, _identity_path)

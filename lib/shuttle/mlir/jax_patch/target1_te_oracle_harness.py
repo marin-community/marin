@@ -51,8 +51,8 @@ OUTPUT_ROLES = {
     "backward_recompute": ("dx", "dgamma"),
     "composed": ("y", "dx", "dgamma"),
 }
-EXPECTED_RUNNER_SHA256 = "81517d828dd40048898ac93c6c8b9703c8c843621edeeb92abeb1d5a9cc0d58a"
-EXPECTED_BUILD_MANIFEST_SHA256 = "567e3e436848b2cb54e798d49df25660b4f0390d0d52c24a4ff72b7f656e5da8"
+EXPECTED_RUNNER_SHA256 = "48f2ccabcbee63e04bae99ae2b0d693eb44cc963ff5a4686ac0d7a36f9208047"
+EXPECTED_BUILD_MANIFEST_SHA256 = "6d8f092dabf566e4d856a83dac61532566c50a6adb75f5ed7c803159d183423b"
 
 
 def _sha256(path: Path) -> str:
@@ -176,6 +176,32 @@ CANDIDATE_SUBJECTS = {
 }
 
 
+def _validate_candidate_identity(
+    policy: str, value: object, marin_revision: str, contract: Mapping[str, Any]
+) -> dict[str, Any]:
+    identity_key = {
+        "ordinary_jax": "ordinary_jax",
+        "source_ordered": "shuttle_source_ordered",
+        "fast_identity": "shuttle_fast",
+    }[policy]
+    required = set(contract["subjects"][identity_key]["required_identity"])
+    required.discard("identity_lowering_proof")
+    identity = _closed(value, required, f"{policy} subject identity")
+    for field, item in identity.items():
+        name = f"{policy} subject identity.{field}"
+        if field == "pipeline_abi_version":
+            _exact_int(item, 5, name)
+        elif field in ("marin_revision", "jax_revision", "xla_revision"):
+            _revision(item, name)
+        elif field.endswith("_sha256"):
+            _sha(item, name)
+        else:
+            _string(item, name)
+    if identity["marin_revision"] != marin_revision:
+        raise ValueError(f"{policy} subject Marin revision does not match sealed execution identity")
+    return identity
+
+
 def validate_hardware_matrix(
     plan_path: Path, results_directory: Path, identity_path: Path, candidates_path: Path
 ) -> dict[str, Any]:
@@ -213,6 +239,8 @@ def validate_hardware_matrix(
             "status",
             "hardware_class",
             "comparison_contract_sha256",
+            "subject_identities",
+            "subject_artifact_digests",
             "records",
             "scorecard_status_changed",
         },
@@ -232,6 +260,20 @@ def validate_hardware_matrix(
         for run in plan["runs"]
         for role in OUTPUT_ROLES[run["boundary"]]
     }
+    identities_value = candidates["subject_identities"]
+    if not isinstance(identities_value, dict) or set(identities_value) != set(CANDIDATE_SUBJECTS):
+        raise ValueError("candidate subject identities drifted")
+    subject_identities = {
+        policy: _validate_candidate_identity(policy, identities_value[policy], identity["marin_revision"], contract)
+        for policy in CANDIDATE_SUBJECTS
+    }
+    artifact_digests = candidates["subject_artifact_digests"]
+    if not isinstance(artifact_digests, dict) or set(artifact_digests) != {
+        f"{policy}:{shape[0]}x{shape[1]}:{boundary}:{role}" for policy, shape, boundary, role in expected_keys
+    }:
+        raise ValueError("candidate subject artifact coordinate set drifted")
+    for value in artifact_digests.values():
+        _sha(value, "candidate subject artifact digest")
     records = candidates["records"]
     if not isinstance(records, list) or len(records) != 36:
         raise ValueError("candidate matrix must contain exactly 36 records")
@@ -252,7 +294,8 @@ def validate_hardware_matrix(
                 "metrics",
                 "output_digest",
                 "repeatability",
-                "subject_identity",
+                "subject_artifact_sha256",
+                "identity_lowering_proof",
             },
             "candidate record",
         )
@@ -281,24 +324,43 @@ def validate_hardware_matrix(
         _exact_int(repeatability["post_timing_invocations"], 3, "candidate repeatability count")
         if repeatability["output_digests"] != [record["output_digest"]] * 3:
             raise ValueError("candidate repeatability digests drifted")
-        identity_key = {
-            "ordinary_jax": "ordinary_jax",
-            "source_ordered": "shuttle_source_ordered",
-            "fast_identity": "shuttle_fast",
-        }[record["policy"]]
-        required_identity = contract["subjects"][identity_key]["required_identity"]
-        if not isinstance(record["subject_identity"], dict) or set(record["subject_identity"]) != set(required_identity):
-            raise ValueError("candidate subject identity fields drifted")
-        for field, item in record["subject_identity"].items():
-            name = f"candidate subject identity.{field}"
-            if field == "pipeline_abi_version":
-                _exact_int(item, 5, name)
-            elif field == "marin_revision" or field in ("jax_revision", "xla_revision"):
-                _revision(item, name)
-            elif field.endswith("_sha256") or field == "identity_lowering_proof":
-                _sha(item, name)
-            else:
-                _string(item, name)
+        artifact = {
+            "policy": record["policy"],
+            "subject_id": record["subject_id"],
+            "subject_identity": subject_identities[record["policy"]],
+            "hardware_class": record["hardware_class"],
+            "shape": record["shape"],
+            "boundary": record["boundary"],
+            "output_role": record["output_role"],
+            "comparison_contract_sha256": record["comparison_contract_sha256"],
+            "input_digest_set": record["input_digest_set"],
+            "output_digest": record["output_digest"],
+        }
+        expected_artifact_sha = _canonical_sha256(artifact)
+        artifact_key = (
+            f"{record['policy']}:{record['shape'][0]}x{record['shape'][1]}:"
+            f"{record['boundary']}:{record['output_role']}"
+        )
+        if (
+            record["subject_artifact_sha256"] != expected_artifact_sha
+            or artifact_digests[artifact_key] != expected_artifact_sha
+        ):
+            raise ValueError("candidate subject artifact digest does not bind identity and coordinate")
+        expected_proof = None
+        if record["policy"] == "fast_identity":
+            expected_proof = _canonical_sha256(
+                {
+                    "schema": "target1_identity_lowering_proof_v1",
+                    "subject_artifact_sha256": expected_artifact_sha,
+                    "coordinate": {
+                        "shape": record["shape"],
+                        "boundary": record["boundary"],
+                        "output_role": record["output_role"],
+                    },
+                }
+            )
+        if record["identity_lowering_proof"] != expected_proof:
+            raise ValueError("candidate identity lowering proof does not bind artifact and coordinate")
         require_reference_qualified(
             record["metrics"],
             shape=f"{record['shape'][0]}x{record['shape'][1]}",
@@ -524,7 +586,7 @@ def validate_build_manifest(path: Path = BUILD_MANIFEST) -> dict[str, Any]:
         },
         "static_abi_gate": {
             "status": "passed_on_clean_official_checkout",
-            "scope": "c++20_syntax_and_exact_public_header_signatures_no_link",
+            "scope": "c++20_syntax_exact_public_headers_and_executable_sha256_input_probe_no_cuda_link",
             "host": "darwin_arm64",
             "compiler_family": "apple_clang",
             "cuda_declarations": "test_only_stub_no_runtime_implementation",
@@ -567,6 +629,49 @@ def _write_bfloat16(path: Path, value: Any) -> None:
     path.write_bytes(value.view("uint16").tobytes(order="C"))
 
 
+def _expected_run_argv(runner_binary: str, run: Mapping[str, Any]) -> list[str]:
+    rows, features = run["shape"]
+    return [
+        runner_binary,
+        "--boundary",
+        run["boundary"],
+        "--forward-backend",
+        run["forward_backend"],
+        "--backward-backend",
+        run["backward_backend"],
+        "--rows",
+        str(rows),
+        "--features",
+        str(features),
+        "--case-directory",
+        f"cases/{rows}x{features}",
+        "--output",
+        run["result"],
+        "--counterbalance-id",
+        PLAN_ID,
+        "--counterbalance-position",
+        str(run["position"]),
+        "--comparison-contract-id",
+        COMPARISON_CONTRACT_ID,
+        "--comparison-contract-sha256",
+        COMPARISON_CONTRACT_SHA256,
+        "--input-digest-set",
+        run["input_digest_set"],
+        "--input-x-sha256",
+        run["input_digests"]["x"],
+        "--input-gamma-sha256",
+        run["input_digests"]["gamma"],
+        "--input-dy-sha256",
+        run["input_digests"].get("dy", "none"),
+        "--reference-y-sha256",
+        run["reference_digests"].get("y", "none"),
+        "--reference-dx-sha256",
+        run["reference_digests"].get("dx", "none"),
+        "--reference-dgamma-sha256",
+        run["reference_digests"].get("dgamma", "none"),
+    ]
+
+
 def prepare_run_plan(output: Path, runner_binary: Path) -> dict[str, Any]:
     """Write pinned BF16 inputs/references and a deterministic 24-run plan."""
     validate_build_manifest()
@@ -601,58 +706,19 @@ def prepare_run_plan(output: Path, runner_binary: Path) -> dict[str, Any]:
             input_digests = {name: _sha256(case / f"{name}.bf16") for name in input_names}
             reference_digests = {role: _sha256(case / f"reference_{role}.bf16") for role in OUTPUT_ROLES[boundary]}
             input_digest_set = _canonical_sha256(input_digests)
-            arguments = [
-                "--boundary",
-                boundary,
-                "--forward-backend",
-                forward_backend,
-                "--backward-backend",
-                backward_backend,
-                "--rows",
-                str(rows),
-                "--features",
-                str(features),
-                "--case-directory",
-                f"cases/{rows}x{features}",
-                "--output",
-                result,
-                "--counterbalance-id",
-                PLAN_ID,
-                "--counterbalance-position",
-                str(position),
-                "--comparison-contract-id",
-                COMPARISON_CONTRACT_ID,
-                "--comparison-contract-sha256",
-                COMPARISON_CONTRACT_SHA256,
-                "--input-digest-set",
-                input_digest_set,
-                "--input-x-sha256",
-                input_digests["x"],
-                "--input-gamma-sha256",
-                input_digests["gamma"],
-                "--input-dy-sha256",
-                input_digests.get("dy", "none"),
-                "--reference-y-sha256",
-                reference_digests.get("y", "none"),
-                "--reference-dx-sha256",
-                reference_digests.get("dx", "none"),
-                "--reference-dgamma-sha256",
-                reference_digests.get("dgamma", "none"),
-            ]
-            runs.append(
-                {
-                    "position": position,
-                    "shape": [rows, features],
-                    "boundary": boundary,
-                    "forward_backend": forward_backend,
-                    "backward_backend": backward_backend,
-                    "input_digests": input_digests,
-                    "input_digest_set": input_digest_set,
-                    "reference_digests": reference_digests,
-                    "argv": [str(runner_binary), *arguments],
-                    "result": result,
-                }
-            )
+            run = {
+                "position": position,
+                "shape": [rows, features],
+                "boundary": boundary,
+                "forward_backend": forward_backend,
+                "backward_backend": backward_backend,
+                "input_digests": input_digests,
+                "input_digest_set": input_digest_set,
+                "reference_digests": reference_digests,
+                "result": result,
+            }
+            run["argv"] = _expected_run_argv(str(runner_binary), run)
+            runs.append(run)
             position += 1
     plan = {
         "schema_version": 1,
@@ -767,7 +833,7 @@ def _validate_plan(path: Path, *, require_sealed: bool) -> dict[str, Any]:
         for role, digest in record["reference_digests"].items():
             if file_digest(case / f"reference_{role}.bf16") != digest:
                 raise ValueError("planned reference bytes drifted")
-        if not isinstance(record["argv"], list) or any(not isinstance(item, str) for item in record["argv"]):
+        if record["argv"] != _expected_run_argv(plan["runner_binary"], record):
             raise ValueError("planned argv drifted")
     if require_sealed:
         if plan["status"] != "sealed_for_execution" or plan["hardware_class"] not in ("h100", "gb200_or_b200"):
@@ -823,7 +889,7 @@ def seal_run_plan(plan_path: Path, runner_binary: Path, identity_path: Path) -> 
     plan["runner_binary_sha256"] = runner_sha
     plan["execution_identity_sha256"] = _sha256(identity_path)
     for run in plan["runs"]:
-        run["argv"][0] = str(runner_binary)
+        run["argv"] = _expected_run_argv(str(runner_binary), run)
     plan_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
     return _validate_plan(plan_path, require_sealed=True)
 
@@ -1126,6 +1192,31 @@ def static_abi_check(te_source: Path, compiler: str) -> None:
             ],
             check=True,
         )
+        probe = stub / "target1-sha256-probe"
+        subprocess.run(
+            [
+                resolved_compiler,
+                "-std=c++20",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-DTARGET1_SHA256_PROBE",
+                f"-I{stub}",
+                "-isystem",
+                str(te_source / "transformer_engine/common/include"),
+                str(RUNNER),
+                "-o",
+                str(probe),
+            ],
+            check=True,
+        )
+        expected = _sha256(RUNNER)
+        observed = subprocess.run([probe, RUNNER, expected], check=True, capture_output=True, text=True).stdout.strip()
+        if observed != _sha256(RUNNER):
+            raise ValueError("runner executable SHA-256 input probe disagrees with Python SHA-256")
+        mismatch = subprocess.run([probe, RUNNER, "0" * 64], capture_output=True, text=True)
+        if mismatch.returncode == 0:
+            raise ValueError("runner executable SHA-256 input probe accepted mismatched bytes")
 
 
 def main() -> int:
@@ -1146,7 +1237,7 @@ def main() -> int:
         print(
             json.dumps(
                 {
-                    "status": "passed_syntax_only_no_link",
+                    "status": "passed_syntax_and_cpu_sha256_probe_no_cuda_link",
                     "host": f"{platform.system().lower()}_{platform.machine().lower()}",
                     "te_commit": SOURCE_COMMIT,
                 },

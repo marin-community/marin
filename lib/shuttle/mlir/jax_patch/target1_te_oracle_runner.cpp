@@ -16,17 +16,20 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <utility>
 #include <vector>
 
 namespace {
 
+#ifndef TARGET1_SHA256_PROBE
 constexpr float kEpsilon = 1.0e-5F;
 constexpr double kRelativeScaleFloor = 0.0078125;
 constexpr int kWarmupInvocations = 10;
@@ -35,7 +38,75 @@ constexpr int kPostTimingInvocations = 3;
 constexpr char kComparisonContractId[] = "target1_rowwise_bf16_prerun_comparison_v1";
 constexpr char kComparisonContractSha256[] =
     "af27e9c7d1e4f6fcdf3eacc9d950459d1f627e58d9c9f0d1133b0e3dae6b1504";
+#endif
 
+std::string sha256_bytes(std::vector<std::uint8_t> bytes) {
+  static constexpr std::uint32_t constants[64] = {
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+      0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+      0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+      0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+      0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+      0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+      0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+      0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+      0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  };
+  const std::uint64_t bit_count = static_cast<std::uint64_t>(bytes.size()) * 8;
+  bytes.push_back(0x80);
+  while (bytes.size() % 64 != 56) bytes.push_back(0);
+  for (int shift = 56; shift >= 0; shift -= 8) bytes.push_back((bit_count >> shift) & 0xff);
+  std::uint32_t state[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+  const auto rotate = [](std::uint32_t value, unsigned shift) {
+    return (value >> shift) | (value << (32 - shift));
+  };
+  for (std::size_t offset = 0; offset < bytes.size(); offset += 64) {
+    std::uint32_t words[64]{};
+    for (std::size_t index = 0; index < 16; ++index) {
+      const std::size_t at = offset + index * 4;
+      words[index] = (static_cast<std::uint32_t>(bytes[at]) << 24) |
+                     (static_cast<std::uint32_t>(bytes[at + 1]) << 16) |
+                     (static_cast<std::uint32_t>(bytes[at + 2]) << 8) | bytes[at + 3];
+    }
+    for (std::size_t index = 16; index < 64; ++index) {
+      const auto s0 = rotate(words[index - 15], 7) ^ rotate(words[index - 15], 18) ^
+                      (words[index - 15] >> 3);
+      const auto s1 = rotate(words[index - 2], 17) ^ rotate(words[index - 2], 19) ^
+                      (words[index - 2] >> 10);
+      words[index] = words[index - 16] + s0 + words[index - 7] + s1;
+    }
+    std::uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
+    std::uint32_t e = state[4], f = state[5], g = state[6], h = state[7];
+    for (std::size_t index = 0; index < 64; ++index) {
+      const auto s1 = rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25);
+      const auto choice = (e & f) ^ (~e & g);
+      const auto first = h + s1 + choice + constants[index] + words[index];
+      const auto s0 = rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22);
+      const auto majority = (a & b) ^ (a & c) ^ (b & c);
+      const auto second = s0 + majority;
+      h = g; g = f; f = e; e = d + first; d = c; c = b; b = a; a = first + second;
+    }
+    const std::uint32_t work[8] = {a, b, c, d, e, f, g, h};
+    for (std::size_t index = 0; index < 8; ++index) state[index] += work[index];
+  }
+  std::ostringstream result;
+  result << std::hex << std::setfill('0');
+  for (const auto word : state) result << std::setw(8) << word;
+  return result.str();
+}
+
+#ifdef TARGET1_SHA256_PROBE
+std::string sha256_file(const std::filesystem::path& path) {
+  std::ifstream stream(path, std::ios::binary);
+  if (!stream) throw std::runtime_error("failed to open " + path.string());
+  return sha256_bytes(std::vector<std::uint8_t>((std::istreambuf_iterator<char>(stream)), {}));
+}
+#endif
+
+#ifndef TARGET1_SHA256_PROBE
 void check_cuda(cudaError_t status, const char* operation) {
   if (status != cudaSuccess) {
     throw std::runtime_error(std::string(operation) + ": " + cudaGetErrorString(status));
@@ -198,6 +269,19 @@ Config parse_config(int argc, char** argv) {
       !valid_optional_digest(config.input_dy_sha256)) {
     throw std::invalid_argument("input digests must be lowercase SHA-256 or none");
   }
+  const bool has_dy = config.input_dy_sha256 != "none";
+  const bool has_y_reference = config.reference_y_sha256 != "none";
+  const bool has_dx_reference = config.reference_dx_sha256 != "none";
+  const bool has_dgamma_reference = config.reference_dgamma_sha256 != "none";
+  if (config.input_x_sha256 == "none" || config.input_gamma_sha256 == "none" ||
+      (config.boundary == Boundary::kForward &&
+       (has_dy || !has_y_reference || has_dx_reference || has_dgamma_reference)) ||
+      (config.boundary == Boundary::kBackwardRecompute &&
+       (!has_dy || has_y_reference || !has_dx_reference || !has_dgamma_reference)) ||
+      (config.boundary == Boundary::kComposed &&
+       (!has_dy || !has_y_reference || !has_dx_reference || !has_dgamma_reference))) {
+    throw std::invalid_argument("input and reference digest roles do not match boundary");
+  }
   return config;
 }
 
@@ -209,17 +293,23 @@ std::size_t checked_product(std::size_t left, std::size_t right) {
 }
 
 std::vector<std::uint16_t> read_bfloat16(const std::filesystem::path& path,
-                                         std::size_t elements) {
+                                         std::size_t elements,
+                                         const std::string& expected_sha256) {
   const std::size_t bytes = checked_product(elements, sizeof(std::uint16_t));
   if (std::filesystem::file_size(path) != bytes) {
     throw std::runtime_error(path.string() + " has the wrong byte size");
   }
-  std::vector<std::uint16_t> result(elements);
+  std::vector<std::uint8_t> serialized(bytes);
   std::ifstream stream(path, std::ios::binary);
-  stream.read(reinterpret_cast<char*>(result.data()), static_cast<std::streamsize>(bytes));
+  stream.read(reinterpret_cast<char*>(serialized.data()), static_cast<std::streamsize>(bytes));
   if (!stream) {
     throw std::runtime_error("failed to read " + path.string());
   }
+  if (sha256_bytes(serialized) != expected_sha256) {
+    throw std::runtime_error(path.string() + " SHA-256 does not match sealed plan");
+  }
+  std::vector<std::uint16_t> result(elements);
+  std::memcpy(result.data(), serialized.data(), bytes);
   return result;
 }
 
@@ -666,7 +756,10 @@ std::vector<OutputMetric> collect_comparisons(const Config& config,
         .metrics = compare(output.bits,
                            read_bfloat16(config.case_directory /
                                              ("reference_" + output.role + ".bf16"),
-                                         output.bits.size())),
+                                         output.bits.size(),
+                                         output.role == "y" ? config.reference_y_sha256
+                                                            : output.role == "dx" ? config.reference_dx_sha256
+                                                                                  : config.reference_dgamma_sha256)),
     });
   }
   return outputs;
@@ -698,11 +791,14 @@ std::vector<CapturedOutput> verify_post_timing_repeatability(
 
 int run(const Config& config) {
   const std::size_t matrix_elements = checked_product(config.rows, config.features);
-  const auto host_x = read_bfloat16(config.case_directory / "x.bf16", matrix_elements);
-  const auto host_gamma = read_bfloat16(config.case_directory / "gamma.bf16", config.features);
+  const auto host_x = read_bfloat16(config.case_directory / "x.bf16", matrix_elements,
+                                    config.input_x_sha256);
+  const auto host_gamma = read_bfloat16(config.case_directory / "gamma.bf16", config.features,
+                                        config.input_gamma_sha256);
   std::vector<std::uint16_t> host_dy;
   if (config.boundary != Boundary::kForward) {
-    host_dy = read_bfloat16(config.case_directory / "dy.bf16", matrix_elements);
+    host_dy = read_bfloat16(config.case_directory / "dy.bf16", matrix_elements,
+                            config.input_dy_sha256);
   }
 
   Stream stream;
@@ -749,14 +845,22 @@ int run(const Config& config) {
                outputs, driver_version, runtime_version);
   return 0;
 }
+#endif
 
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifdef TARGET1_SHA256_PROBE
+  if (argc != 3) return 2;
+  const auto observed = sha256_file(argv[1]);
+  std::cout << observed << '\n';
+  return observed == argv[2] ? 0 : 3;
+#else
   try {
     return run(parse_config(argc, argv));
   } catch (const std::exception& error) {
     std::cerr << "target1_te_oracle_runner: " << error.what() << '\n';
     return 2;
   }
+#endif
 }

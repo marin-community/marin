@@ -3,7 +3,7 @@
   "manifest_id": "target1_te_2_17_oracle_runner_build_v1",
   "runner": {
     "path": "lib/shuttle/mlir/jax_patch/target1_te_oracle_runner.cpp",
-    "sha256": "81517d828dd40048898ac93c6c8b9703c8c843621edeeb92abeb1d5a9cc0d58a",
+    "sha256": "48f2ccabcbee63e04bae99ae2b0d693eb44cc963ff5a4686ac0d7a36f9208047",
     "language": "c++20",
     "dispatch": "boundary_shape_and_independent_backend_flags_only"
   },
@@ -24,7 +24,7 @@
   },
   "static_abi_gate": {
     "status": "passed_on_clean_official_checkout",
-    "scope": "c++20_syntax_and_exact_public_header_signatures_no_link",
+    "scope": "c++20_syntax_exact_public_headers_and_executable_sha256_input_probe_no_cuda_link",
     "host": "darwin_arm64",
     "compiler_family": "apple_clang",
     "cuda_declarations": "test_only_stub_no_runtime_implementation"
