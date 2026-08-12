@@ -461,3 +461,14 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of root logs.
 - Next action: Continue the 15-minute check cadence and monitor the first large `biocollection-free_text_stream` shards.
+
+### 2026-08-12 10:24 UTC - East completes BioCollection and arXiv abstracts
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 23 completed source artifacts. RNO has six completed source artifacts. The full run has 29 of 292 completed source artifacts.
+- East result: `biocollection-free_text_stream_29c0f030` succeeded with all 59 output shards and 34,417,546 documents.
+- East result: `cp-arxiv_abstracts_3d8157c9` succeeded with all four output shards and 744,059 documents.
+- East progress: `cp-caselaw_8eb43b0b` started. It has 89 output shards, with 32 in flight, 32 live workers, and no dead workers.
+- RNO progress: `finetranslations_6ce00a47` got to 13,832 of 25,962 output shards with 32 live workers and no dead workers.
+- Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the last 15 minutes of root logs.
+- Next action: Continue the 15-minute check cadence and monitor both active sources.
