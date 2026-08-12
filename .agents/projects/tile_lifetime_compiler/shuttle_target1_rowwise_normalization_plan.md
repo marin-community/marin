@@ -54,8 +54,9 @@ Every row above still lacks the following hardware evidence:
   H100 and separately on GB200 or B200;
 - complete raw timing and repeatability records for Shuttle, ordinary JAX, and
   the matched expert boundary on each hardware class; and
-- a representative-shape decision. The two pinned shapes remain candidates,
-  not two scorecard coordinates.
+- a representative-shape decision. `2048x4096` remains the proposed
+  representative candidate; `7x13` is only the structural fixture and mutation
+  shape. Neither is a declared scorecard coordinate.
 
 The checked-in Transformer Engine run plan covers 24 oracle invocations: two
 shapes, three boundaries, and four independent forward/backward backend pairs.
