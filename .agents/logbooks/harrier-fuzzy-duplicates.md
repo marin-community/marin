@@ -805,3 +805,13 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 running TEI jobs. RNO has 82 running TEI jobs.
 - Issue update: None. There is no major run-state change.
 - Next action: Watch RNO HPLT through completion and continue the regular East health checks.
+
+### 2026-08-12 18:17 UTC - HPLT completed
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 45 completed source artifacts. RNO has nine completed source artifacts. The full run has 54 of 292 completed source artifacts.
+- RNO result: `hplt_v3_528b745e` completed all 6,330 output shards with 148,355,626 duplicate documents and 1,169,175,357,373 input text bytes. The source step and all 32 worker tasks succeeded.
+- RNO progress: `institutional_books_63f8aca7` started its 1,832-shard join and passed shard 300.
+- East progress: `nemotron_cc_v2-diverse_qa_016d1909` got to 416 of 4,416 embedding shards with 32 live workers and no dead workers.
+- Issue update: None. This is a routine source completion, not a major run-state change.
+- Next action: Check Institutional Books startup and continue the regular health-check cadence.
