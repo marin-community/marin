@@ -106,9 +106,13 @@ def load_pooled_scorer(model_dir: str) -> PooledScorer:
     return PooledScorer.load(local_eqx, f"{model_dir}/{remap_name}", f"{model_dir}/{meta_name}")
 
 
-def score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
-    """Mean-pool the FT score over begin/middle/end ~512-token windows of each doc.
-    Short docs (<= one chunk) reduce to a single scored window."""
+def bme_chunks(texts: list[str]) -> tuple[list[str], list[tuple[int, int]]]:
+    """The begin/middle/end windows of every document, flattened.
+
+    Returns the flat window list and, per input document, the ``[start, end)``
+    span of its windows in that list. Short docs (<= one chunk) contribute a
+    single window.
+    """
     flat: list[str] = []
     spans: list[tuple[int, int]] = []
     for t in texts:
@@ -119,5 +123,11 @@ def score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
             cs = [t[:CHUNK_CHARS], t[max(0, m - CHUNK_CHARS // 2) : m + CHUNK_CHARS // 2], t[-CHUNK_CHARS:]]
         spans.append((len(flat), len(flat) + len(cs)))
         flat.extend(cs)
+    return flat, spans
+
+
+def score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
+    """Mean-pool the FT score over begin/middle/end ~512-token windows of each doc."""
+    flat, spans = bme_chunks(texts)
     s = scorer.score(flat)
     return np.array([s[a:b].mean() for a, b in spans])
