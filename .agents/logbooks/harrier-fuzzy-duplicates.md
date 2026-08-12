@@ -241,3 +241,12 @@ author: Rafal Wojdyla
 - RNO progress: Two source jobs succeeded. `common_corpus-english_0e1cf2c4` reached 3,525 of 8,018 output shards with 32 live workers and no dead workers.
 - Retry check: East stayed at 24 one-time retries. RNO stayed at 174 one-time retries. No shard has retried twice.
 - Next action: Continue the 15-minute check cadence.
+
+### 2026-08-12 01:16 UTC - TEI worker utilization and RNO service loss
+
+- East service capacity: All 96 TEI workers are running. Three GPU samples across all workers show 93.4% mean utilization and 98.3% median utilization. No worker stayed idle across the sample window.
+- RNO service capacity: 82 of 96 TEI workers are running. Three GPU samples across the live workers show 96.7% mean utilization and 100% median utilization. No live worker stayed idle across the sample window.
+- Failure evidence: The other 14 RNO TEI jobs became terminal after four to six cluster preemptions. Their last attempts could not read the staged model archive because the object was missing.
+- Recovery: Restored the 1,208,135,680-byte model archive from a live East worker to its original East-region S3 path. This protects later TEI restarts from the missing-object failure.
+- Source health: Both source jobs continue to run. No Parquet merge has started.
+- Next action: Continue source monitoring and decide whether to replace the 14 terminal RNO services or keep the saturated 82-worker pool.
