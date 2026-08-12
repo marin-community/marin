@@ -9,7 +9,9 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -125,11 +127,14 @@ FailureOr<ParsedTask> parseTask(ArrayRef<int8_t> bytes) {
   }
   ParsedTask task;
   task.kind = *kind;
+  uint64_t elements = 1;
   for (uint8_t axis = 0; axis < *rank; ++axis) {
     std::optional<uint32_t> extent = reader.u32();
-    if (!extent || *extent == 0) {
+    if (!extent || *extent == 0 ||
+        elements > kMaximumCpuTaskElements / *extent) {
       return failure();
     }
+    elements *= *extent;
     task.domain.push_back(*extent);
   }
   std::optional<uint8_t> inputCount = reader.byte();
@@ -500,7 +505,6 @@ LogicalResult runtimeError(ModuleOp module, StringRef message) {
 constexpr uint8_t kTransportMagic[] = {'S', 'H', 'U', 'T', 'C', 'P', 'U', 0};
 constexpr uint32_t kTransportVersion = 1;
 constexpr uint64_t kMaximumTransportBytes = 16 * 1024 * 1024;
-constexpr uint64_t kMaximumTransportRecords = 4096;
 
 class BundleWriter {
 public:
@@ -603,7 +607,7 @@ public:
   }
   FailureOr<SmallVector<int64_t>> i64Array() {
     std::optional<uint64_t> size = u64();
-    if (!size || *size > kMaximumTransportRecords ||
+    if (!size || *size > kMaximumCpuExecutableRecords ||
         *size > (bytes.size() - position) / sizeof(int64_t)) {
       return failure();
     }
@@ -676,7 +680,7 @@ void writeEntry(BundleWriter &writer, DeviceEntryOp entry) {
 FailureOr<ArrayAttr> readAccessArray(BundleReader &reader,
                                      MLIRContext *context) {
   std::optional<uint64_t> size = reader.u64();
-  if (!size || *size > kMaximumTransportRecords) {
+  if (!size || *size > kMaximumCpuExecutableRecords) {
     return failure();
   }
   SmallVector<Attribute> accesses;
@@ -728,7 +732,7 @@ FailureOr<DecodedModule> decodeCpuExecutableBundle(ArrayRef<uint8_t> bytes) {
   std::optional<uint64_t> entryCount = reader.u64();
   if (!deviceSchema || failed(codeFormat) || failed(policy) ||
       !scheduleFingerprint || !codeBytes || !codeDigest || !deviceFingerprint ||
-      !entryCount || *entryCount > kMaximumTransportRecords) {
+      !entryCount || *entryCount > kMaximumCpuExecutableRecords) {
     return failure();
   }
   OperationState deviceState(builder.getUnknownLoc(),
@@ -821,7 +825,8 @@ FailureOr<DecodedModule> decodeCpuExecutableBundle(ArrayRef<uint8_t> bytes) {
   std::optional<StringRef> abiFingerprint = reader.string();
   std::optional<uint64_t> slotCount = reader.u64();
   if (!abiSchema || !planFingerprint || !abiScheduleFingerprint ||
-      !abiFingerprint || !slotCount || *slotCount > kMaximumTransportRecords) {
+      !abiFingerprint || !slotCount ||
+      *slotCount > kMaximumCpuExecutableRecords) {
     return failure();
   }
   OperationState abiState(builder.getUnknownLoc(),
@@ -972,32 +977,64 @@ CpuExecutable::CpuExecutable(std::shared_ptr<const Impl> implementation)
 
 absl::StatusOr<std::shared_ptr<const CpuExecutable>>
 CpuExecutable::Load(ArrayRef<uint8_t> bytes) {
-  FailureOr<DecodedModule> decoded = decodeCpuExecutableBundle(bytes);
-  if (failed(decoded)) {
-    return absl::InvalidArgumentError(
-        "invalid canonical Shuttle CPU executable transport");
-  }
-  FailureOr<SmallVector<uint8_t>> canonical =
-      serializeCpuExecutableBundle(*decoded->module);
-  if (failed(canonical) || ArrayRef<uint8_t>(*canonical) != bytes) {
-    return absl::InvalidArgumentError(
-        "non-canonical Shuttle CPU executable transport");
-  }
-  DeviceModuleOp device = *decoded->module->getOps<DeviceModuleOp>().begin();
-  SmallVector<ParsedTask, 0> tasks;
-  for (DeviceEntryOp entry : device.getBody().front().getOps<DeviceEntryOp>()) {
-    FailureOr<ParsedTask> task = parseTask(
-        device.getCode().slice(entry.getCodeOffset(), entry.getCodeLength()));
-    if (failed(task)) {
+  try {
+    FailureOr<DecodedModule> decoded = decodeCpuExecutableBundle(bytes);
+    if (failed(decoded)) {
       return absl::InvalidArgumentError(
-          "invalid Shuttle CPU bytecode body in executable transport");
+          "invalid canonical Shuttle CPU executable transport");
     }
-    tasks.push_back(std::move(*task));
+    FailureOr<SmallVector<uint8_t>> canonical =
+        serializeCpuExecutableBundle(*decoded->module);
+    if (failed(canonical) || ArrayRef<uint8_t>(*canonical) != bytes) {
+      return absl::InvalidArgumentError(
+          "non-canonical Shuttle CPU executable transport");
+    }
+    DeviceModuleOp device = *decoded->module->getOps<DeviceModuleOp>().begin();
+    SmallVector<ParsedTask, 0> tasks;
+    for (DeviceEntryOp entry :
+         device.getBody().front().getOps<DeviceEntryOp>()) {
+      FailureOr<ParsedTask> task = parseTask(
+          device.getCode().slice(entry.getCodeOffset(), entry.getCodeLength()));
+      if (failed(task)) {
+        return absl::InvalidArgumentError(
+            "invalid or oversized Shuttle CPU bytecode task");
+      }
+      tasks.push_back(std::move(*task));
+    }
+    InvocationAbiOp abi = *decoded->module->getOps<InvocationAbiOp>().begin();
+    uint64_t temporaryBytes = 0;
+    for (InvocationSlotOp slot :
+         abi.getBody().front().getOps<InvocationSlotOp>()) {
+      const int64_t requiredBytes = slot.getRequiredBytes();
+      if (requiredBytes <= 0 ||
+          static_cast<uint64_t>(requiredBytes) > kMaximumCpuSlotBytes) {
+        return absl::InvalidArgumentError(
+            "Shuttle CPU executable slot exceeds the closed byte limit");
+      }
+      if (slot.getStorage() != MaterializationStorage::Temporary) {
+        continue;
+      }
+      const uint64_t bytes = static_cast<uint64_t>(requiredBytes);
+      if (temporaryBytes > kMaximumCpuTemporaryBytes - bytes) {
+        return absl::InvalidArgumentError(
+            "Shuttle CPU executable exceeds the temporary byte limit");
+      }
+      temporaryBytes += bytes;
+    }
+    std::shared_ptr<const Impl> implementation =
+        std::make_shared<Impl>(std::move(*decoded), std::move(tasks));
+    return std::shared_ptr<const CpuExecutable>(
+        new CpuExecutable(std::move(implementation)));
+  } catch (const std::bad_alloc &) {
+    return absl::ResourceExhaustedError(
+        "insufficient memory to load Shuttle CPU executable");
+  } catch (const std::length_error &) {
+    return absl::InvalidArgumentError(
+        "invalid oversized Shuttle CPU executable transport");
+  } catch (...) {
+    return absl::InternalError(
+        "unexpected failure while loading Shuttle CPU executable");
   }
-  std::shared_ptr<const Impl> implementation =
-      std::make_shared<Impl>(std::move(*decoded), std::move(tasks));
-  return std::shared_ptr<const CpuExecutable>(
-      new CpuExecutable(std::move(implementation)));
 }
 
 ArrayRef<CpuExternalBinding> CpuExecutable::externalBindings() const {
@@ -1006,12 +1043,23 @@ ArrayRef<CpuExternalBinding> CpuExecutable::externalBindings() const {
 
 absl::Status
 CpuExecutable::Execute(ArrayRef<CpuExternalBuffer> externalBuffers) const {
-  if (failed(executeCpuExecutableBundleImpl(*implementation->decoded.module,
-                                            externalBuffers,
-                                            implementation->tasks))) {
-    return absl::InvalidArgumentError("Shuttle CPU executable failed");
+  try {
+    if (failed(executeCpuExecutableBundleImpl(*implementation->decoded.module,
+                                              externalBuffers,
+                                              implementation->tasks))) {
+      return absl::InvalidArgumentError("Shuttle CPU executable failed");
+    }
+    return absl::OkStatus();
+  } catch (const std::bad_alloc &) {
+    return absl::ResourceExhaustedError(
+        "insufficient memory to execute Shuttle CPU executable");
+  } catch (const std::length_error &) {
+    return absl::InvalidArgumentError(
+        "invalid oversized Shuttle CPU executable allocation");
+  } catch (...) {
+    return absl::InternalError(
+        "unexpected failure while executing Shuttle CPU executable");
   }
-  return absl::OkStatus();
 }
 
 uint16_t roundF32ToBf16Rne(uint32_t bits) {
@@ -1139,6 +1187,10 @@ executeCpuExecutableBundleImpl(ModuleOp module,
       abi.getBody().front().getOps<InvocationSlotOp>());
   SmallVector<DeviceEntryOp> entries(
       device.getBody().front().getOps<DeviceEntryOp>());
+  if (descriptors.size() > kMaximumCpuExecutableRecords ||
+      entries.size() > kMaximumCpuExecutableRecords) {
+    return runtimeError(module, "CPU executable exceeds the record limit");
+  }
 
   llvm::DenseMap<int64_t, MutableArrayRef<uint8_t>> supplied;
   for (const CpuExternalBuffer &buffer : externalBuffers) {
@@ -1151,7 +1203,12 @@ executeCpuExecutableBundleImpl(ModuleOp module,
   SmallVector<RuntimeSlot> slots;
   slots.reserve(descriptors.size());
   SmallVector<std::pair<uintptr_t, uintptr_t>> externalRanges;
+  uint64_t temporaryBytes = 0;
   for (InvocationSlotOp descriptor : descriptors) {
+    const uint64_t requiredBytes = descriptor.getRequiredBytes();
+    if (requiredBytes > kMaximumCpuSlotBytes) {
+      return runtimeError(module, "CPU executable slot exceeds the byte limit");
+    }
     MutableArrayRef<uint8_t> bytes;
     if (descriptor.getStorage() == MaterializationStorage::External) {
       auto found = supplied.find(descriptor.getOrdinal());
@@ -1161,20 +1218,34 @@ executeCpuExecutableBundleImpl(ModuleOp module,
       bytes = found->second;
       uintptr_t begin = reinterpret_cast<uintptr_t>(bytes.data());
       if (bytes.size() < static_cast<size_t>(descriptor.getRequiredBytes()) ||
-          begin % descriptor.getAlignment() != 0) {
+          begin % descriptor.getAlignment() != 0 ||
+          begin > std::numeric_limits<uintptr_t>::max() -
+                      descriptor.getRequiredBytes()) {
         return runtimeError(module,
                             "external buffer span or alignment mismatch");
       }
       externalRanges.push_back({begin, begin + descriptor.getRequiredBytes()});
     } else {
-      const size_t alignment = descriptor.getAlignment();
-      owned[descriptor.getOrdinal()].resize(descriptor.getRequiredBytes() +
-                                            alignment - 1);
+      const uint64_t alignment = descriptor.getAlignment();
+      if (temporaryBytes > kMaximumCpuTemporaryBytes - requiredBytes) {
+        return runtimeError(module,
+                            "CPU executable exceeds the temporary byte limit");
+      }
+      temporaryBytes += requiredBytes;
+      if (alignment == 0 || requiredBytes > std::numeric_limits<size_t>::max() -
+                                                (alignment - 1)) {
+        return runtimeError(module, "temporary buffer allocation is invalid");
+      }
+      owned[descriptor.getOrdinal()].resize(
+          static_cast<size_t>(requiredBytes + alignment - 1));
       uintptr_t begin =
           reinterpret_cast<uintptr_t>(owned[descriptor.getOrdinal()].data());
+      if (begin > std::numeric_limits<uintptr_t>::max() - (alignment - 1)) {
+        return runtimeError(module, "temporary buffer alignment overflows");
+      }
       begin = (begin + alignment - 1) / alignment * alignment;
       bytes = MutableArrayRef<uint8_t>(reinterpret_cast<uint8_t *>(begin),
-                                       descriptor.getRequiredBytes());
+                                       requiredBytes);
     }
     if (reinterpret_cast<uintptr_t>(bytes.data()) % descriptor.getAlignment() !=
         0) {

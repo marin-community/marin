@@ -407,6 +407,84 @@ TEST(CpuBytecodeRuntimeTest, CanonicalTransportLoadsAndExecutesImmutableBody) {
   EXPECT_FALSE(mlir::shuttle::CpuExecutable::Load(*invalidBytes).ok());
 }
 
+TEST(CpuBytecodeRuntimeTest, CanonicalTransportEnforcesClosedResourceLimits) {
+  auto expectLoadRejected = [](std::unique_ptr<BuiltBundle> bundle) {
+    ASSERT_TRUE(bundle);
+    auto bytes = mlir::shuttle::serializeCpuExecutableBundle(*bundle->module);
+    ASSERT_TRUE(mlir::succeeded(bytes));
+    EXPECT_FALSE(mlir::shuttle::CpuExecutable::Load(*bytes).ok());
+  };
+
+  auto oversizedTask = buildBundle();
+  ASSERT_TRUE(oversizedTask);
+  auto device =
+      *oversizedTask->module->getOps<mlir::shuttle::DeviceModuleOp>().begin();
+  llvm::SmallVector<int8_t> code(device.getCode());
+  bool mutatedDomain = false;
+  for (auto entry :
+       device.getBody().front().getOps<mlir::shuttle::DeviceEntryOp>()) {
+    const size_t offset = entry.getCodeOffset();
+    if (code[offset + 5] == 0) {
+      continue;
+    }
+    constexpr uint32_t kOversizedExtent =
+        mlir::shuttle::kMaximumCpuTaskElements + 1;
+    for (unsigned byte = 0; byte < 4; ++byte) {
+      code[offset + 6 + byte] =
+          static_cast<int8_t>(kOversizedExtent >> (byte * 8));
+    }
+    mutatedDomain = true;
+    break;
+  }
+  ASSERT_TRUE(mutatedDomain);
+  device.setCodeAttr(
+      mlir::DenseI8ArrayAttr::get(oversizedTask->context.get(), code));
+  refreshClosedFingerprints(*oversizedTask->module, true);
+  expectLoadRejected(std::move(oversizedTask));
+
+  auto oversizedSlot = buildBundle();
+  ASSERT_TRUE(oversizedSlot);
+  auto abi =
+      *oversizedSlot->module->getOps<mlir::shuttle::InvocationAbiOp>().begin();
+  auto slots = abi.getBody().front().getOps<mlir::shuttle::InvocationSlotOp>();
+  auto temporary = *std::next(slots.begin(), 2);
+  constexpr int64_t kOversizedElements =
+      mlir::shuttle::kMaximumCpuSlotBytes / sizeof(float) + 1;
+  temporary->setAttr(
+      "tensor_type",
+      mlir::TypeAttr::get(mlir::RankedTensorType::get(
+          {kOversizedElements},
+          mlir::Float32Type::get(oversizedSlot->context.get()))));
+  temporary.setRequiredBytes(kOversizedElements * sizeof(float));
+  temporary.setStridesAttr(
+      mlir::DenseI64ArrayAttr::get(oversizedSlot->context.get(), {4}));
+  refreshClosedFingerprints(*oversizedSlot->module, false);
+  expectLoadRejected(std::move(oversizedSlot));
+
+  auto excessiveAggregate = buildBundle();
+  ASSERT_TRUE(excessiveAggregate);
+  abi = *excessiveAggregate->module->getOps<mlir::shuttle::InvocationAbiOp>()
+             .begin();
+  constexpr int64_t kMaximumSlotElements =
+      mlir::shuttle::kMaximumCpuSlotBytes / sizeof(float);
+  for (auto slot :
+       abi.getBody().front().getOps<mlir::shuttle::InvocationSlotOp>()) {
+    if (slot.getStorage() != mlir::shuttle::MaterializationStorage::Temporary) {
+      continue;
+    }
+    slot->setAttr(
+        "tensor_type",
+        mlir::TypeAttr::get(mlir::RankedTensorType::get(
+            {kMaximumSlotElements},
+            mlir::Float32Type::get(excessiveAggregate->context.get()))));
+    slot.setRequiredBytes(mlir::shuttle::kMaximumCpuSlotBytes);
+    slot.setStridesAttr(
+        mlir::DenseI64ArrayAttr::get(excessiveAggregate->context.get(), {4}));
+  }
+  refreshClosedFingerprints(*excessiveAggregate->module, false);
+  expectLoadRejected(std::move(excessiveAggregate));
+}
+
 TEST(CpuBytecodeRuntimeTest, ExecutesGeneratedVjpBodiesWithRawAbiBuffers) {
   for (llvm::StringRef boundary :
        {llvm::StringRef("backward"), llvm::StringRef("composed")}) {

@@ -137,6 +137,14 @@ decoder rejects unknown codes or trailing bytes, duplicate or missing roots,
 noncanonical child order, and lengths above the checked implementation limit.
 Generic MLIR text or bytecode is not the canonical wire format.
 
+Transport version 1 admits at most 256 entries, slots, or elements in any
+repeated record, at most 256 elements in each decoded task domain, at most
+1 MiB for any invocation slot, and at most 16 MiB in aggregate temporary
+storage. The decoder checks products and sums before allocating; allocation
+failure is returned as status and never crosses the FFI boundary as an
+exception. These are closed runtime-version limits, not properties inferred
+from a workload name.
+
 The transport length and SHA-256 cover the full canonical byte string. The
 digest verifies transport integrity and cache identity. It never selects a
 handler or code path. Construction serializes twice and requires byte equality
