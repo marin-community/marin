@@ -63,8 +63,8 @@ from marin.processing.tokenize.attributes import TokenizedAttrData
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import ZephyrContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.writers import atomic_rename
 

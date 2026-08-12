@@ -13,8 +13,8 @@ import requests
 from fray.types import ResourceConfig
 from rigging.filesystem import prefix_join
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.download.zstd_jsonl import iter_jsonl_from_zstd_stream

@@ -16,8 +16,8 @@ from io import BytesIO
 import requests
 from rigging.filesystem import prefix_join
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.writers import write_parquet_file
 
 from marin.datakit.normalize import normalize_step

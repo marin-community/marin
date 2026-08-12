@@ -53,8 +53,8 @@ from iris.client import IrisClient
 from iris.cluster.constraints import Constraint, preemptible_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem import StoragePath
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from scripts.ops.storage.constants import MARIN_BUCKETS
 from scripts.ops.storage.render_report import (

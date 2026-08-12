@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Execution context for dedicated and shared Zephyr worker pools."""
+"""ZephyrContext lifecycle for dedicated and shared worker pools."""
 
 import enum
 import logging

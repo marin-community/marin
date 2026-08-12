@@ -22,8 +22,8 @@ from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
+from zephyr.context import ZephyrContext, _require_resolvable_worker_handles
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext, _require_resolvable_worker_handles
 from zephyr.memory_store import (
     DuplicateMemoryStoreKey,
     MemoryStore,

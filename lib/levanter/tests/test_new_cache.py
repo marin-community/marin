@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterator, Sequence
 
 import numpy as np
 import pytest
-from zephyr.execution import ZephyrWorkerError
+from zephyr.stage_io import ZephyrWorkerError
 
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.sharded_datasource import ShardedDataSource

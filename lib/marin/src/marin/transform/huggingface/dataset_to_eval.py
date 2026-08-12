@@ -21,8 +21,8 @@ from datasets import get_dataset_config_names, load_dataset
 from marin.core.data import QAExample, QAExampleMetadata
 from marin.utilities.dataclass_utils import asdict_without_nones
 from rigging.filesystem import filesystem as marin_filesystem
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 logger = logging.getLogger(__name__)
 

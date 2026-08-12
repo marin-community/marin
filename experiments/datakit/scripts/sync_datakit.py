@@ -85,8 +85,8 @@ from rigging.filesystem import atomic_rename, marin_prefix
 from rigging.filesystem import url_to_fs as _rigging_url_to_fs
 from rigging.log_setup import configure_logging
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.shard_keys import deterministic_hash
 
 logger = logging.getLogger(__name__)

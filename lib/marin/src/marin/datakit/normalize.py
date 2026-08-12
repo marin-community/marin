@@ -30,8 +30,8 @@ from fray.types import ResourceConfig
 from pydantic import BaseModel, ValidationInfo, model_validator
 from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import ZephyrContext
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
