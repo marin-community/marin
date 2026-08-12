@@ -213,6 +213,9 @@ class _WritePlan:
     write_replicas: int
     block: int
     """Length of one replica's slice along ``split_axis``; unused when there is no split."""
+    replicas: int = 1
+    """How many processes hold each shard. Above ``write_replicas`` only when a split was
+    rejected, which is what concentrates an array on one writer."""
 
 
 @dataclass(frozen=True)
@@ -373,20 +376,21 @@ def plan_array_write(array, config: TensorStoreWriteConfig) -> _WritePlan:
 
     sharding = array.sharding
     shard_shape = _shard_shape(sharding, shape)
+    replica_count = _uniform_replica_count(sharding, shape)
     single_writer = _WritePlan(
         chunk_shape=_capped_chunk_shape(shard_shape, itemsize, config.max_chunk_bytes),
         split_axis=None,
         write_replicas=1,
         block=0,
+        replicas=replica_count or 1,
     )
 
     if not _is_safe_to_slice(sharding, shard_shape):
         return single_writer
 
-    replicas = _uniform_replica_count(sharding, shape)
-    if replicas is None:
+    if replica_count is None:
         return single_writer
-    replicas = min(replicas, config.max_write_replicas)
+    replicas = min(replica_count, config.max_write_replicas)
     if replicas < 2:
         return single_writer
 
@@ -401,6 +405,7 @@ def plan_array_write(array, config: TensorStoreWriteConfig) -> _WritePlan:
         split_axis=split_axis,
         write_replicas=replicas,
         block=block,
+        replicas=replica_count,
     )
 
 
@@ -422,6 +427,17 @@ def _shard_write_region(shard, plan: _WritePlan) -> _ShardWrite | None:
         slice_axis=axis,
         slice_start=local_start,
         slice_limit=local_start + plan.block,
+    )
+
+
+def _process_staged_bytes(array, plan: _WritePlan) -> int:
+    """Bytes this process stages for ``array``, which is what the staging budget sees."""
+    if not isinstance(array, jax.Array):
+        return _estimate_array_nbytes(array) if jax.process_index() == 0 else 0
+    return sum(
+        _estimate_array_nbytes(shard.data) // plan.write_replicas
+        for shard in array.addressable_shards
+        if _shard_write_region(shard, plan) is not None
     )
 
 
@@ -510,6 +526,42 @@ def _flatten_serializable_leaves(pytree) -> tuple[list[str], list[Any]]:
     return [path for path, _ in keep], [array for _, array in keep]
 
 
+def _log_write_share(
+    paths: Sequence[str],
+    arrays: Sequence[Any],
+    plans: Sequence[_WritePlan],
+    total_array_bytes: int,
+) -> None:
+    """Report what this process writes, and how much of it more processes would not relieve.
+
+    A share that does not fall as the run grows is what sets the floor on a save's slowest
+    writer: an array written alone stays whole wherever it lands, and one split across
+    ``max_write_replicas`` keeps that share once the run passes that many processes.
+    """
+    staged = [_process_staged_bytes(array, plan) for array, plan in zip(arrays, plans)]
+    solo = sorted(
+        (
+            (nbytes, path)
+            for path, plan, nbytes in zip(paths, plans, staged)
+            if nbytes and plan.write_replicas == 1 and plan.replicas > 1
+        ),
+        reverse=True,
+    )
+    capped = sum(nbytes for plan, nbytes in zip(plans, staged) if nbytes and 1 < plan.write_replicas < plan.replicas)
+    logger.info(
+        "Checkpoint gives this process %s of %s across %d of %d arrays; %s of that is %d arrays "
+        "it writes alone and %s is split no further than the replica cap%s",
+        _format_gib(sum(staged)),
+        _format_gib(total_array_bytes),
+        sum(1 for nbytes in staged if nbytes),
+        len(arrays),
+        _format_gib(sum(nbytes for nbytes, _ in solo)),
+        len(solo),
+        _format_gib(capped),
+        "".join(f", {path} at {_format_gib(nbytes)}" for nbytes, path in solo[:3]),
+    )
+
+
 def tree_serialize_leaves_tensorstore(
     checkpoint_dir,
     pytree,
@@ -553,6 +605,7 @@ def tree_serialize_leaves_tensorstore(
         flush_debug_output(logger)
 
     plans = [plan_array_write(array, write_config) for array in arrays]
+    _log_write_share(paths, arrays, plans, total_array_bytes)
     entries = [
         CheckpointArray(
             path=path,
