@@ -742,3 +742,10 @@ author: Rafal Wojdyla
 - RNO progress: `hplt_v3_528b745e` got to 4,074 of 6,330 embedding shards with 32 live workers and no dead workers at 16:35 UTC.
 - Error check: No retry-two, rate-limit, memory, dead-worker, or missing-file error matched either active source log during the check window.
 - Next action: Watch the short FinePDFs Hungarian source through completion, then continue the regular check cadence.
+
+### 2026-08-12 16:43 UTC - FinePDFs Hungarian completed
+
+- Completed artifacts: East has 39 completed source artifacts. RNO has eight completed source artifacts. The full run has 47 of 292 completed source artifacts.
+- East result: `finepdfs-hun_latn_5e462038` completed all 191 output shards with 412,840 duplicate documents. The source step succeeded.
+- East progress: `finepdfs-ita_latn_224a9bc3` started with a running coordinator and worker group.
+- Next action: Check FinePDFs Italian startup and continue the regular health-check cadence.
