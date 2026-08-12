@@ -58,27 +58,82 @@ options. No custom VJP or hand-written adjoint is part of the reference.
 
 ### Independent oracle
 
-The proposed expert interface is NVIDIA Transformer Engine 2.17.0's C API:
-`nvte_rmsnorm_fwd` and `nvte_rmsnorm_bwd`, with
-`zero_centered_gamma=false`. The API accepts `[N,H]` input, `[H]` gamma, and
-produces `[N,H]` output plus the `[N]` reciprocal RMS needed by backward. The
-upstream interface is documented in
-[normalization.h](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/api/c/normalization.html).
+The proposed expert interface is NVIDIA Transformer Engine package 2.17.0's C
+API from source tag `v2.17` at commit
+`2e559f062497bef768dfbe9d7e45548fadeca80a`. NVIDIA names the package version
+`2.17.0` in its pinned
+[version file](https://github.com/NVIDIA/TransformerEngine/blob/2e559f062497bef768dfbe9d7e45548fadeca80a/build_tools/VERSION.txt);
+the corresponding source tag is `v2.17`, not `v2.17.0`. The adapter calls
+[`nvte_rmsnorm_fwd` and `nvte_rmsnorm_bwd`](https://github.com/NVIDIA/TransformerEngine/blob/2e559f062497bef768dfbe9d7e45548fadeca80a/transformer_engine/common/include/transformer_engine/normalization.h#L85-L141)
+with `zero_centered_gamma=false`.
+
+The proposed all-BF16 public boundary needs no dtype adapter. Backward requires
+`dx.dtype == x.dtype`, `dy.dtype == gamma.dtype`, and
+`dgamma.dtype == gamma.dtype`; `rsigma` is FP32. Transformer Engine registers
+H=4096 BF16 forward and backward kernels with FP32 compute. These constraints
+are enforced in the pinned
+[RMSNorm implementation](https://github.com/NVIDIA/TransformerEngine/blob/2e559f062497bef768dfbe9d7e45548fadeca80a/transformer_engine/common/normalization/rmsnorm/rmsnorm_api.cpp#L113-L173),
+and the BF16 kernel combination appears in the pinned
+[forward](https://github.com/NVIDIA/TransformerEngine/blob/2e559f062497bef768dfbe9d7e45548fadeca80a/transformer_engine/common/normalization/rmsnorm/rmsnorm_fwd_cuda_kernel.cu#L150-L155)
+and
+[backward](https://github.com/NVIDIA/TransformerEngine/blob/2e559f062497bef768dfbe9d7e45548fadeca80a/transformer_engine/common/normalization/rmsnorm/rmsnorm_bwd_semi_cuda_kernel.cu#L170-L172)
+registries.
 
 The oracle adapter uses the same BF16 public tensors and `epsilon=1e-5`:
 
-- forward calls `nvte_rmsnorm_fwd`; reciprocal RMS is internal scratch;
-- backward calls forward to recompute reciprocal RMS, then calls
-  `nvte_rmsnorm_bwd`; the forward kernel is inside the timed boundary;
-- composed calls forward once and reuses reciprocal RMS in backward.
+- forward writes public BF16 `y` and adapter-private FP32 `rsigma` of shape
+  `[2048]`;
+- backward calls forward to recompute `rsigma`, then calls
+  `nvte_rmsnorm_bwd`. The public forward API also requires an output `z`, so
+  this boundary computes and writes a full throwaway BF16 `z` inside timing;
+- composed calls forward once, returns its `z` as public `y`, and reuses the
+  same `rsigma` in backward.
 
-Workspace queries, allocation, compilation, and warmup occur before timing.
-Workspace reuse is allowed. Kernel launches, reciprocal-RMS writes, and all
-per-invocation adapters remain inside the boundary. An oracle artifact must pin
-the Transformer Engine source revision, shared-library SHA-256, CUDA/cuDNN
-versions, workspace shape and dtype, and whether the cuDNN normalization backend
-is enabled. Target 1 retains `oracle_not_pinned` until that artifact exists and
-the BF16 output and gradient dtypes are verified on both hardware classes.
+`rsigma` is saved forward state, not workspace. Calling either API with an
+empty workspace tensor performs a query without executing the operation. The
+query returns the exact one-dimensional workspace shape and byte dtype required
+by that backend and device. Adapter and library compilation, plan construction,
+workspace queries, allocation, and warmup occur before timing. Raw workspace
+storage may be shared between forward and backward when it is large enough, but
+the `NVTETensor` metadata for each call must expose that call's exact queried
+shape. The implementation checks shape equality rather than capacity. Kernel
+launches, `z` and `rsigma` writes, and per-invocation adapters remain inside the
+boundary. The pinned
+[workspace implementation](https://github.com/NVIDIA/TransformerEngine/blob/2e559f062497bef768dfbe9d7e45548fadeca80a/transformer_engine/common/normalization/rmsnorm/rmsnorm_api.cpp#L23-L173)
+defines this query protocol.
+
+Forward and backward select the cuDNN normalization backend independently via
+`NVTE_NORM_FWD_USE_CUDNN` and `NVTE_NORM_BWD_USE_CUDNN`, or
+`nvte_enable_cudnn_norm_fwd` and `nvte_enable_cudnn_norm_bwd`. An artifact must
+record both effective settings. The controls are defined in the pinned
+[normalization backend source](https://github.com/NVIDIA/TransformerEngine/blob/2e559f062497bef768dfbe9d7e45548fadeca80a/transformer_engine/common/normalization/common.cpp#L546-L576).
+
+The minimum oracle artifact identity is:
+
+- Marin evaluation-harness revision and oracle-adapter digest, plus the JAX,
+  JAXlib, CUDA plugin, PJRT, and XLA build identities used by the ordinary-JAX
+  reference;
+- Transformer Engine distribution and version, source tag and commit, recursive
+  submodule commits, wheel or source-build identity, build flags, compiler and
+  target architectures;
+- resolved `libtransformer_engine.so` path, SHA-256, ELF build ID and SONAME,
+  plus its resolved shared-library dependencies;
+- CUDA toolkit, NVCC, CUDA driver and runtime, cuDNN compile-time and runtime
+  versions, and the resolved cuDNN library identity;
+- GPU model, UUID, compute capability, physical SM count, and the exact
+  `multiprocessorCount` passed to each API;
+- all tensor layouts, scaling modes, shapes, and dtypes; `epsilon`,
+  `zero_centered_gamma`, stream policy, both backend controls, and the separately
+  queried forward and backward workspace shapes, dtypes, and byte counts;
+- warmup, synchronization and timing methods, including the complete launch and
+  adapter sequence for each public boundary.
+
+Transformer Engine requires CUDA 12.1 or newer and CUDA 12.8 or newer for
+Blackwell, but artifacts record exact installed versions rather than these
+minimums. NVIDIA documents these constraints in the pinned
+[installation guide](https://github.com/NVIDIA/TransformerEngine/blob/2e559f062497bef768dfbe9d7e45548fadeca80a/docs/installation.rst#L10-L18).
+Target 1 retains `oracle_not_pinned` until conforming artifacts exist on both
+hardware classes and their numerical and performance gates pass.
 
 ### The 12 required cells
 
