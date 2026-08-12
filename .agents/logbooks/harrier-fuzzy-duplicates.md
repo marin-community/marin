@@ -380,3 +380,14 @@ author: Rafal Wojdyla
 - Archive status: The model archive was last confirmed at the original v3 S3 path at 05:30 UTC.
 - Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the active coordinator logs.
 - Next action: Continue the 15-minute check cadence and validate replacement services when RNO capacity becomes available.
+
+### 2026-08-12 06:22 UTC - RNO completes functional regions
+
+- Root health: Both roots are running with zero failures and zero preemptions.
+- Completed artifacts: East has 11 completed source artifacts. RNO has five completed source artifacts. The full run has 16 of 292 completed source artifacts.
+- RNO result: `dna-functional-regions_d1bafea8` succeeded. It processed all 38 output shards and 56,432,718 documents.
+- RNO progress: `dolma_code_prose_013b53af` started. It has 224 output shards, with 32 in flight, 32 live workers, and no dead workers.
+- East progress: `nemotron_code_v1-content_085c2c96` got to 1,468 of 2,341 output shards with 32 live workers and no dead workers.
+- Service capacity: East has 96 running TEI pods. RNO has 82 running TEI pods. Fourteen replacement jobs still wait for interactive capacity.
+- Error check: No new transport, rate-limit, memory, dead-worker, or missing-file error matched the active coordinator logs.
+- Next action: Continue the 15-minute check cadence and validate replacement services when RNO capacity becomes available.
