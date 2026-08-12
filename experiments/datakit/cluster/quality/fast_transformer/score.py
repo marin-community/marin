@@ -64,6 +64,12 @@ BATCH_SIZE = 512
 # shard can spike transiently above that -- 4g OOM-killed workers on the 100B corpus.
 # 8g covers the spike with margin; packing is CPU-bound (cpu=2), so the extra RAM is free.
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
+# What one shard costs, which is not the same thing as how big a worker is. Zephyr
+# defaults a task's cost to the whole worker, so a fat worker would run exactly one
+# shard and leave the rest of the node idle; stating the cost lets many shards pack
+# onto one worker. They run as threads in a single process, which suits work that
+# spends its time blocked on object-store reads and shares one cached model.
+TASK_RESOURCES = ResourceConfig(cpu=2, ram="8g")
 MODEL_CALIB = "calib_bme.json"  # calibration json name in the model dir
 MODEL_TYPE_CLASSIFIER = "content_type.npz"  # required only by a per-type calibration
 SAMPLE_TEXT_CHARS = 4_000  # text kept per sampled doc for the report spot-check
@@ -177,6 +183,8 @@ def score_normalized(
     sample_pct: float = SAMPLE_PCT,
     max_workers: int | None = None,
     worker_resources: ResourceConfig = WORKER_RESOURCES,
+    task_resources: ResourceConfig = TASK_RESOURCES,
+    ctx: ZephyrContext | None = None,
 ) -> QualityScores:
     """Score one normalized source; one zephyr shard per input parquet file.
 
@@ -202,13 +210,26 @@ def score_normalized(
         )
         # InlineRunner keeps the per-process cached model alive across shards in a
         # worker. Iris job names reject '/', so the source is flattened.
-        ctx = ZephyrContext(
-            name=f"ft-quality-{source.replace('/', '-')}",
-            resources=worker_resources,
-            max_workers=max_workers,
-            stage_runner_factory=InlineRunner,
+        #
+        # A caller that scores many sources should pass one entered context rather
+        # than letting each source build its own: most sources are small (median one
+        # input file), so a per-source pool spends its time starting containers
+        # instead of scoring, and the cached model is thrown away with the pool.
+        owned = ctx is None
+        if owned:
+            ctx = ZephyrContext(
+                name=f"ft-quality-{source.replace('/', '-')}",
+                resources=worker_resources,
+                max_workers=max_workers,
+                stage_runner_factory=InlineRunner,
+            )
+        aggregated = dict(
+            ctx.execute(
+                pipeline,
+                map_task_resources=task_resources,
+                reduce_task_resources=task_resources,
+            ).counters
         )
-        aggregated = dict(ctx.execute(pipeline).counters)
 
     return QualityScores(
         main_output_dir=out_main,
