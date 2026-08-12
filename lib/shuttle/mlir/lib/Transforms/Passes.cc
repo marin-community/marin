@@ -55,6 +55,8 @@ namespace mlir::shuttle {
 #define GEN_PASS_DEF_SHUTTLELOWERALGEBRATOSTABLEHLOPASS
 #define GEN_PASS_DEF_SHUTTLESTRIPSOURCEPROVENANCEPASS
 #define GEN_PASS_DEF_SHUTTLEVERIFYNOSHUTTLEOPSPASS
+#define GEN_PASS_DEF_SHUTTLEPLANROWFOLDMATERIALIZATIONPASS
+#define GEN_PASS_DEF_SHUTTLEVERIFYMATERIALIZATIONPLANPASS
 #include "shuttle/Transforms/Passes.h.inc"
 
 namespace {
@@ -1083,8 +1085,7 @@ FailureOr<SmallVector<AffineMap>> mapIndexingMaps(Operation *operation) {
   AffineMap identity = AffineMap::getMultiDimIdentityMap(rank, context);
   if (operation->getName().getStringRef() ==
       stablehlo::ReshapeOp::getOperationName()) {
-    auto inputType =
-        cast<RankedTensorType>(operation->getOperand(0).getType());
+    auto inputType = cast<RankedTensorType>(operation->getOperand(0).getType());
     SmallVector<unsigned> resultNonSingleton;
     for (auto [position, extent] : llvm::enumerate(resultType.getShape())) {
       if (extent != 1) {
@@ -1122,8 +1123,7 @@ FailureOr<SmallVector<AffineMap>> mapIndexingMaps(Operation *operation) {
     }
     SmallVector<AffineExpr> inputExpressions;
     if (!hasValidBroadcastDimensions(operation, dimensions)) {
-      operation->emitOpError(
-          "requires unique in-range broadcast dimensions");
+      operation->emitOpError("requires unique in-range broadcast dimensions");
       return failure();
     }
     for (int64_t dimension : dimensions.asArrayRef()) {
@@ -1252,8 +1252,7 @@ LogicalResult convertMapOperation(Operation *operation) {
       llvm::StringSwitch<MapSemantics>(stablehloName)
           .Case(stablehlo::BroadcastInDimOp::getOperationName(),
                 MapSemantics::BroadcastInDim)
-          .Case(stablehlo::ReshapeOp::getOperationName(),
-                MapSemantics::Reshape)
+          .Case(stablehlo::ReshapeOp::getOperationName(), MapSemantics::Reshape)
           .Case(stablehlo::TransposeOp::getOperationName(),
                 MapSemantics::Transpose)
           .Default(MapSemantics::Pointwise);
@@ -1685,10 +1684,9 @@ bool zeroResultRecordsMatch(ArrayAttr current, ArrayAttr expected) {
       auto record = dyn_cast<DictionaryAttr>(attribute);
       return record && record.get("operation_ref") == operationRef;
     });
-    auto expectedRecord =
-        expectedPosition == expected.end()
-            ? DictionaryAttr{}
-            : dyn_cast<DictionaryAttr>(*expectedPosition);
+    auto expectedRecord = expectedPosition == expected.end()
+                              ? DictionaryAttr{}
+                              : dyn_cast<DictionaryAttr>(*expectedPosition);
     if (!currentRecord || !operationRef || !expectedRecord ||
         !matchedOperationRefs.insert(operationRef).second ||
         currentRecord.get("classification") !=
@@ -2097,9 +2095,8 @@ FailureOr<OperationState> lowerMapState(MapOp map, ValueRange operands) {
           auto divisor =
               dyn_cast_if_present<AffineConstantExpr>(divisorExpression);
           if (!dividend || !divisor || divisor.getValue() <= 1) {
-            map.emitOpError(
-                "expanded singleton broadcast dimensions require a "
-                "bounded-zero floordiv expression");
+            map.emitOpError("expanded singleton broadcast dimensions require a "
+                            "bounded-zero floordiv expression");
             return failure();
           }
           boundedZero = true;
@@ -2112,9 +2109,8 @@ FailureOr<OperationState> lowerMapState(MapOp map, ValueRange operands) {
         if (position < 0 || position >= resultType.getRank() ||
             !seenDimensions.insert(position).second ||
             (boundedZero && !expandingSingleton) ||
-            (!expandingSingleton &&
-             inputType.getDimSize(inputDimension) !=
-                 resultType.getDimSize(position))) {
+            (!expandingSingleton && inputType.getDimSize(inputDimension) !=
+                                        resultType.getDimSize(position))) {
           map.emitOpError(
               "broadcast input map dimensions must be unique, in range, and "
               "match direct or bounded singleton extents");
@@ -2763,6 +2759,572 @@ std::string normalizedModuleFingerprintImpl(ModuleOp module) {
   return sha256(normalized);
 }
 
+bool isMaterializationFingerprintProvenance(StringRef name) {
+  return name == kSourceRefsAttribute || name == kSelectedAttribute ||
+         name == kFunctionOrdinalAttribute || name == kOperationRefAttribute ||
+         name == kCoverageManifestAttribute ||
+         name == kRegionResultSourcesAttribute || name == "source";
+}
+
+std::string semanticTaskFingerprint(Operation *root) {
+  std::string normalized;
+  llvm::raw_string_ostream stream(normalized);
+  llvm::SmallDenseMap<Value, uint64_t> values;
+  uint64_t nextValue = 0;
+  for (Value operand : root->getOperands()) {
+    values.try_emplace(operand, nextValue++);
+  }
+  std::function<void(Operation &)> printOperation = [&](Operation &operation) {
+    stream << operation.getName() << '(';
+    for (Value operand : operation.getOperands()) {
+      auto position = values.find(operand);
+      stream << (position == values.end() ? UINT64_MAX : position->second)
+             << ',';
+    }
+    stream << ")->(";
+    for (Type type : operation.getResultTypes()) {
+      type.print(stream);
+      stream << ',';
+    }
+    stream << "){";
+    for (NamedAttribute attribute : operation.getAttrs()) {
+      if (isMaterializationFingerprintProvenance(
+              attribute.getName().strref())) {
+        continue;
+      }
+      stream << attribute.getName() << '=';
+      attribute.getValue().print(stream);
+      stream << ',';
+    }
+    stream << "}\n";
+    for (Value result : operation.getResults()) {
+      values.try_emplace(result, nextValue++);
+    }
+    for (Region &region : operation.getRegions()) {
+      for (Block &block : region) {
+        stream << "block(";
+        for (BlockArgument argument : block.getArguments()) {
+          argument.getType().print(stream);
+          stream << ':' << nextValue << ',';
+          values.try_emplace(argument, nextValue++);
+        }
+        stream << ")\n";
+        for (Operation &nested : block) {
+          printOperation(nested);
+        }
+      }
+    }
+  };
+  printOperation(*root);
+  stream.flush();
+  return sha256(normalized);
+}
+
+FailureOr<SmallVector<int64_t>> mapDomainShape(MapOp map) {
+  if (map.getNumResults() != 1) {
+    return failure();
+  }
+  auto resultType = dyn_cast<RankedTensorType>(map.getResult(0).getType());
+  if (!resultType || !resultType.hasStaticShape() ||
+      llvm::any_of(resultType.getShape(),
+                   [](int64_t extent) { return extent <= 0; })) {
+    return failure();
+  }
+  AffineMap resultMap =
+      cast<AffineMapAttr>(
+          map.getIndexingMaps()[map.getIndexingMaps().size() - 1])
+          .getValue();
+  SmallVector<int64_t> domain(resultMap.getNumDims(), ShapedType::kDynamic);
+  for (auto [resultPosition, expression] :
+       llvm::enumerate(resultMap.getResults())) {
+    auto dimension = dyn_cast<AffineDimExpr>(expression);
+    if (!dimension) {
+      return failure();
+    }
+    domain[dimension.getPosition()] = resultType.getDimSize(resultPosition);
+  }
+  if (llvm::is_contained(domain, ShapedType::kDynamic)) {
+    return failure();
+  }
+  return domain;
+}
+
+bool isClosedRowFold(FoldOp fold) {
+  auto inputType =
+      fold.getInputs().size() == 1
+          ? dyn_cast<RankedTensorType>(fold.getInputs()[0].getType())
+          : RankedTensorType{};
+  auto initType =
+      fold.getInitializers().size() == 1
+          ? dyn_cast<RankedTensorType>(fold.getInitializers()[0].getType())
+          : RankedTensorType{};
+  auto resultType =
+      fold.getNumResults() == 1
+          ? dyn_cast<RankedTensorType>(fold.getResult(0).getType())
+          : RankedTensorType{};
+  if (!inputType || !initType || !resultType || !inputType.hasStaticShape() ||
+      inputType.getRank() != 2 || inputType.getDimSize(0) <= 0 ||
+      inputType.getDimSize(1) <= 0 || !inputType.getElementType().isF32() ||
+      initType.getRank() != 0 || !initType.getElementType().isF32() ||
+      resultType.getShape() != ArrayRef<int64_t>{inputType.getDimSize(0)} ||
+      !resultType.getElementType().isF32() ||
+      fold.getReductionDimensions().size() != 1 ||
+      fold.getReductionDimensions().front() != 1 || !fold.getOrderFree() ||
+      fold.getAccumulatorTypes().size() != 1 ||
+      cast<TypeAttr>(fold.getAccumulatorTypes()[0]).getValue() !=
+          Float32Type::get(fold.getContext())) {
+    return false;
+  }
+  Block &body = fold.getCombiner().front();
+  if (body.getNumArguments() != 2 || body.getOperations().size() != 2) {
+    return false;
+  }
+  auto add = dyn_cast<arith::AddFOp>(body.front());
+  auto yield = dyn_cast<YieldOp>(body.back());
+  auto fastMath = add ? add->getAttrOfType<arith::FastMathFlagsAttr>("fastmath")
+                      : arith::FastMathFlagsAttr{};
+  if (!add || !yield || add.getLhs() != body.getArgument(0) ||
+      add.getRhs() != body.getArgument(1) || yield.getValues().size() != 1 ||
+      yield.getValues()[0] != add.getResult() ||
+      (fastMath && fastMath.getValue() != arith::FastMathFlags::none)) {
+    return false;
+  }
+  return true;
+}
+
+struct PlannedTask {
+  Operation *operation;
+  MaterializationTaskKind kind;
+  SmallVector<int64_t> domain;
+  SmallVector<int64_t> inputs;
+  SmallVector<int64_t> outputs;
+  SmallVector<int64_t> dependencies;
+};
+
+struct PlannedBuffer {
+  Value value;
+  std::optional<int64_t> producer;
+  SmallVector<int64_t> consumers;
+  bool liveOut = false;
+};
+
+struct DerivedPlan {
+  SmallVector<PlannedTask, 0> tasks;
+  SmallVector<PlannedBuffer, 0> buffers;
+};
+
+FailureOr<DerivedPlan> deriveRowFoldPlan(RegionOp region) {
+  SmallVector<Operation *> algebra;
+  for (Operation &operation : region.getBody().front().without_terminator()) {
+    if (!isa<MapOp, FoldOp>(operation)) {
+      return failure();
+    }
+    algebra.push_back(&operation);
+  }
+  if (algebra.empty()) {
+    return failure();
+  }
+  SmallVector<PlannedBuffer, 0> buffers;
+  llvm::SmallDenseMap<Value, int64_t> bufferForValue;
+  for (BlockArgument input : region.getBody().front().getArguments()) {
+    auto type = dyn_cast<RankedTensorType>(input.getType());
+    if (!type || !type.hasStaticShape() ||
+        llvm::any_of(type.getShape(),
+                     [](int64_t extent) { return extent <= 0; })) {
+      return failure();
+    }
+    bufferForValue.try_emplace(input, buffers.size());
+    buffers.push_back({input, std::nullopt, {}, false});
+  }
+
+  SmallVector<PlannedTask, 0> tasks;
+  unsigned foldCount = 0;
+  for (Operation *operation : algebra) {
+    PlannedTask task;
+    task.operation = operation;
+    task.kind = isa<FoldOp>(operation) ? MaterializationTaskKind::Fold
+                                       : MaterializationTaskKind::Map;
+    if (auto fold = dyn_cast<FoldOp>(operation)) {
+      if (!isClosedRowFold(fold)) {
+        return failure();
+      }
+      ++foldCount;
+      task.domain.assign(cast<RankedTensorType>(fold.getInputs()[0].getType())
+                             .getShape()
+                             .begin(),
+                         cast<RankedTensorType>(fold.getInputs()[0].getType())
+                             .getShape()
+                             .end());
+    } else {
+      FailureOr<SmallVector<int64_t>> domain =
+          mapDomainShape(cast<MapOp>(operation));
+      if (failed(domain)) {
+        return failure();
+      }
+      task.domain = std::move(*domain);
+    }
+    for (Value operand : operation->getOperands()) {
+      auto found = bufferForValue.find(operand);
+      if (found == bufferForValue.end()) {
+        return failure();
+      }
+      task.inputs.push_back(found->second);
+      if (buffers[found->second].consumers.empty() ||
+          buffers[found->second].consumers.back() !=
+              static_cast<int64_t>(tasks.size())) {
+        buffers[found->second].consumers.push_back(tasks.size());
+      }
+      if (buffers[found->second].producer &&
+          !llvm::is_contained(task.dependencies,
+                              *buffers[found->second].producer)) {
+        task.dependencies.push_back(*buffers[found->second].producer);
+      }
+    }
+    llvm::sort(task.dependencies);
+    for (Value result : operation->getResults()) {
+      auto type = dyn_cast<RankedTensorType>(result.getType());
+      if (!type || !type.hasStaticShape() ||
+          llvm::any_of(type.getShape(),
+                       [](int64_t extent) { return extent <= 0; })) {
+        return failure();
+      }
+      int64_t ordinal = buffers.size();
+      bufferForValue.try_emplace(result, ordinal);
+      buffers.push_back(
+          {result, static_cast<int64_t>(tasks.size()), {}, false});
+      task.outputs.push_back(ordinal);
+    }
+    tasks.push_back(std::move(task));
+  }
+  if (foldCount != 1) {
+    return failure();
+  }
+  auto regionYield = cast<YieldOp>(region.getBody().front().getTerminator());
+  for (Value value : regionYield.getValues()) {
+    auto found = bufferForValue.find(value);
+    if (found == bufferForValue.end()) {
+      return failure();
+    }
+    buffers[found->second].liveOut = true;
+  }
+  for (PlannedBuffer &buffer : buffers) {
+    if (!buffer.liveOut && buffer.consumers.empty()) {
+      return failure();
+    }
+  }
+
+  llvm::SmallDenseSet<Operation *> connected;
+  SmallVector<Operation *> worklist;
+  for (Operation *operation : algebra) {
+    if (isa<FoldOp>(operation)) {
+      connected.insert(operation);
+      worklist.push_back(operation);
+      break;
+    }
+  }
+  while (!worklist.empty()) {
+    Operation *operation = worklist.pop_back_val();
+    for (Operation *candidate : algebra) {
+      bool adjacent = llvm::any_of(candidate->getOperands(),
+                                   [&](Value value) {
+                                     return value.getDefiningOp() == operation;
+                                   }) ||
+                      llvm::any_of(operation->getOperands(), [&](Value value) {
+                        return value.getDefiningOp() == candidate;
+                      });
+      if (adjacent && connected.insert(candidate).second) {
+        worklist.push_back(candidate);
+      }
+    }
+  }
+  if (connected.size() != algebra.size()) {
+    return failure();
+  }
+  return DerivedPlan{std::move(tasks), std::move(buffers)};
+}
+
+Operation *createMaterializationRecord(OpBuilder &builder, Location location,
+                                       StringRef name,
+                                       ArrayRef<NamedAttribute> attrs) {
+  OperationState state(location, name);
+  state.addAttributes(attrs);
+  return builder.create(state);
+}
+
+class PlanRowFoldMaterializationPass
+    : public impl::ShuttlePlanRowFoldMaterializationPassBase<
+          PlanRowFoldMaterializationPass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    if (!module.getOps<MaterializationPlanOp>().empty()) {
+      module.emitError("already contains a materialization plan");
+      return signalPassFailure();
+    }
+    RegionOp selected;
+    DerivedPlan derived;
+    module.walk([&](RegionOp region) {
+      FailureOr<DerivedPlan> candidate = deriveRowFoldPlan(region);
+      if (succeeded(candidate)) {
+        if (selected) {
+          selected = RegionOp{};
+          return WalkResult::interrupt();
+        }
+        selected = region;
+        derived = std::move(*candidate);
+      }
+      return WalkResult::advance();
+    });
+    if (!selected) {
+      module.emitError(
+          "requires exactly one connected static row Fold and Map region");
+      return signalPassFailure();
+    }
+
+    OpBuilder builder(module.getContext());
+    builder.setInsertionPointToEnd(module.getBody());
+    OperationState planState(module.getLoc(),
+                             MaterializationPlanOp::getOperationName());
+    planState.addAttribute("schema_version", builder.getI64IntegerAttr(1));
+    planState.addAttribute("policy", selected.getPolicyAttr());
+    planState.addAttribute("fingerprint",
+                           builder.getStringAttr(std::string(64, '0')));
+    planState.addRegion();
+    auto plan = cast<MaterializationPlanOp>(builder.create(planState));
+    Block *body = new Block();
+    plan.getBody().push_back(body);
+    builder.setInsertionPointToEnd(body);
+
+    auto &tasks = derived.tasks;
+    auto &buffers = derived.buffers;
+    for (auto [ordinal, buffer] : llvm::enumerate(buffers)) {
+      int64_t end =
+          buffer.liveOut
+              ? tasks.size()
+              : (buffer.consumers.empty() ? 0 : buffer.consumers.back());
+      SmallVector<NamedAttribute> attrs{
+          builder.getNamedAttr("ordinal", builder.getI64IntegerAttr(ordinal)),
+          builder.getNamedAttr("tensor_type",
+                               TypeAttr::get(buffer.value.getType())),
+          builder.getNamedAttr("storage",
+                               MaterializationStorageAttr::get(
+                                   module.getContext(),
+                                   (!buffer.producer || buffer.liveOut)
+                                       ? MaterializationStorage::External
+                                       : MaterializationStorage::Temporary)),
+          builder.getNamedAttr("live_in",
+                               builder.getBoolAttr(!buffer.producer)),
+          builder.getNamedAttr("live_out", builder.getBoolAttr(buffer.liveOut)),
+          builder.getNamedAttr(
+              "consumers",
+              DenseI64ArrayAttr::get(module.getContext(), buffer.consumers)),
+          builder.getNamedAttr(
+              "lifetime_start",
+              builder.getI64IntegerAttr(buffer.producer.value_or(0))),
+          builder.getNamedAttr("lifetime_end", builder.getI64IntegerAttr(end))};
+      if (buffer.producer) {
+        attrs.push_back(builder.getNamedAttr(
+            "producer", builder.getI64IntegerAttr(*buffer.producer)));
+      }
+      createMaterializationRecord(builder, module.getLoc(),
+                                  MaterializationBufferOp::getOperationName(),
+                                  attrs);
+    }
+    for (auto [ordinal, task] : llvm::enumerate(tasks)) {
+      auto source = isa<MapOp>(task.operation)
+                        ? cast<MapOp>(task.operation).getSource()
+                        : cast<FoldOp>(task.operation).getSource();
+      SmallVector<NamedAttribute> attrs{
+          builder.getNamedAttr("ordinal", builder.getI64IntegerAttr(ordinal)),
+          builder.getNamedAttr("kind", MaterializationTaskKindAttr::get(
+                                           module.getContext(), task.kind)),
+          builder.getNamedAttr(
+              "domain_shape",
+              DenseI64ArrayAttr::get(module.getContext(), task.domain)),
+          builder.getNamedAttr(
+              "reduction_dimensions",
+              DenseI64ArrayAttr::get(module.getContext(),
+                                     task.kind == MaterializationTaskKind::Fold
+                                         ? ArrayRef<int64_t>{1}
+                                         : ArrayRef<int64_t>{})),
+          builder.getNamedAttr(
+              "input_buffers",
+              DenseI64ArrayAttr::get(module.getContext(), task.inputs)),
+          builder.getNamedAttr(
+              "output_buffers",
+              DenseI64ArrayAttr::get(module.getContext(), task.outputs)),
+          builder.getNamedAttr(
+              "dependencies",
+              DenseI64ArrayAttr::get(module.getContext(), task.dependencies)),
+          builder.getNamedAttr(
+              "semantic_fingerprint",
+              builder.getStringAttr(semanticTaskFingerprint(task.operation))),
+          builder.getNamedAttr("source", source)};
+      if (task.kind == MaterializationTaskKind::Fold) {
+        attrs.push_back(
+            builder.getNamedAttr("order_free", builder.getBoolAttr(true)));
+      }
+      createMaterializationRecord(builder, task.operation->getLoc(),
+                                  MaterializationTaskOp::getOperationName(),
+                                  attrs);
+    }
+    builder.create<MaterializationPlanYieldOp>(module.getLoc());
+    plan.setFingerprint(materializationPlanFingerprint(plan));
+    if (failed(plan.verifyRegions())) {
+      signalPassFailure();
+    }
+  }
+};
+
+class VerifyMaterializationPlanPass
+    : public impl::ShuttleVerifyMaterializationPlanPassBase<
+          VerifyMaterializationPlanPass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    SmallVector<MaterializationPlanOp> plans(
+        module.getOps<MaterializationPlanOp>());
+    if (plans.size() != 1 || failed(plans[0].verifyRegions())) {
+      module.emitError("requires one internally valid materialization plan");
+      return signalPassFailure();
+    }
+    MaterializationPlanOp plan = plans[0];
+    llvm::SmallDenseMap<Attribute, Operation *> sourceOperations;
+    llvm::SmallDenseSet<Attribute> duplicateSources;
+    module.walk([&](Operation *operation) {
+      if (auto map = dyn_cast<MapOp>(operation)) {
+        if (!sourceOperations.try_emplace(map.getSource(), operation).second) {
+          duplicateSources.insert(map.getSource());
+        }
+      } else if (auto fold = dyn_cast<FoldOp>(operation)) {
+        if (!sourceOperations.try_emplace(fold.getSource(), operation).second) {
+          duplicateSources.insert(fold.getSource());
+        }
+      }
+    });
+    SmallVector<MaterializationBufferOp> buffers;
+    SmallVector<MaterializationTaskOp> tasks;
+    for (Operation &operation : plan.getBody().front()) {
+      if (auto buffer = dyn_cast<MaterializationBufferOp>(operation)) {
+        buffers.push_back(buffer);
+      } else if (auto task = dyn_cast<MaterializationTaskOp>(operation)) {
+        tasks.push_back(task);
+      }
+    }
+    llvm::SmallDenseSet<Operation *> bound;
+    for (MaterializationTaskOp task : tasks) {
+      auto found = sourceOperations.find(task.getSource());
+      if (found == sourceOperations.end() ||
+          duplicateSources.contains(task.getSource()) ||
+          !bound.insert(found->second).second) {
+        task.emitOpError(
+            "source must uniquely bind one surviving algebra task");
+        return signalPassFailure();
+      }
+      Operation *source = found->second;
+      const bool kindMatches =
+          (task.getKind() == MaterializationTaskKind::Map &&
+           isa<MapOp>(source)) ||
+          (task.getKind() == MaterializationTaskKind::Fold &&
+           isa<FoldOp>(source));
+      if (!kindMatches ||
+          task.getSemanticFingerprint() != semanticTaskFingerprint(source) ||
+          task.getInputBuffers().size() != source->getNumOperands() ||
+          task.getOutputBuffers().size() != source->getNumResults()) {
+        task.emitOpError("does not match its bound algebra semantics");
+        return signalPassFailure();
+      }
+      for (auto [bufferOrdinal, value] :
+           llvm::zip_equal(task.getInputBuffers(), source->getOperands())) {
+        if (buffers[bufferOrdinal].getTensorType() != value.getType()) {
+          task.emitOpError("input buffer type does not match bound algebra");
+          return signalPassFailure();
+        }
+      }
+      for (auto [bufferOrdinal, value] :
+           llvm::zip_equal(task.getOutputBuffers(), source->getResults())) {
+        if (buffers[bufferOrdinal].getTensorType() != value.getType()) {
+          task.emitOpError("output buffer type does not match bound algebra");
+          return signalPassFailure();
+        }
+      }
+      SmallVector<int64_t> expectedDomain;
+      if (auto map = dyn_cast<MapOp>(source)) {
+        FailureOr<SmallVector<int64_t>> domain = mapDomainShape(map);
+        if (failed(domain)) {
+          task.emitOpError("bound Map has no closed static domain");
+          return signalPassFailure();
+        }
+        expectedDomain = std::move(*domain);
+      } else {
+        auto fold = cast<FoldOp>(source);
+        expectedDomain.assign(
+            cast<RankedTensorType>(fold.getInputs()[0].getType())
+                .getShape()
+                .begin(),
+            cast<RankedTensorType>(fold.getInputs()[0].getType())
+                .getShape()
+                .end());
+      }
+      if (task.getDomainShape() != ArrayRef<int64_t>(expectedDomain)) {
+        task.emitOpError("domain does not match bound algebra indexing");
+        return signalPassFailure();
+      }
+    }
+    RegionOp owner;
+    if (!bound.empty()) {
+      owner = (*bound.begin())->getParentOfType<RegionOp>();
+    }
+    if (!owner || owner.getPolicy() != plan.getPolicy() ||
+        bound.size() != owner.getBody().front().getOperations().size() - 1) {
+      plan.emitOpError("must cover exactly one connected algebra region");
+      return signalPassFailure();
+    }
+    for (Operation *operation : bound) {
+      if (operation->getParentOfType<RegionOp>() != owner) {
+        plan.emitOpError("tasks must bind one algebra region");
+        return signalPassFailure();
+      }
+    }
+    FailureOr<DerivedPlan> expected = deriveRowFoldPlan(owner);
+    if (failed(expected) || expected->tasks.size() != tasks.size() ||
+        expected->buffers.size() != buffers.size()) {
+      plan.emitOpError("does not equal the plan derived from bound algebra");
+      return signalPassFailure();
+    }
+    for (auto [ordinal, expectedTask] : llvm::enumerate(expected->tasks)) {
+      MaterializationTaskOp actual = tasks[ordinal];
+      if (expectedTask.operation !=
+              sourceOperations.lookup(actual.getSource()) ||
+          actual.getInputBuffers() != ArrayRef<int64_t>(expectedTask.inputs) ||
+          actual.getOutputBuffers() !=
+              ArrayRef<int64_t>(expectedTask.outputs) ||
+          actual.getDependencies() !=
+              ArrayRef<int64_t>(expectedTask.dependencies)) {
+        actual.emitOpError(
+            "task order and edges must equal bound algebra SSA dependencies");
+        return signalPassFailure();
+      }
+    }
+    for (auto [ordinal, expectedBuffer] : llvm::enumerate(expected->buffers)) {
+      MaterializationBufferOp actual = buffers[ordinal];
+      auto actualProducer = actual->getAttrOfType<IntegerAttr>("producer");
+      std::optional<int64_t> producer =
+          actualProducer ? std::optional<int64_t>(actualProducer.getInt())
+                         : std::nullopt;
+      if (actual.getTensorType() != expectedBuffer.value.getType() ||
+          producer != expectedBuffer.producer ||
+          actual.getConsumers() !=
+              ArrayRef<int64_t>(expectedBuffer.consumers) ||
+          actual.getLiveOut() != expectedBuffer.liveOut) {
+        actual.emitOpError(
+            "buffer ownership and uses must equal bound algebra SSA edges");
+        return signalPassFailure();
+      }
+    }
+  }
+};
+
 void emitObserverSnapshot(
     const std::shared_ptr<detail::ShuttleObserverInvocation> &invocation,
     ModuleOp module, ShuttlePipelinePhase phase,
@@ -2949,6 +3511,14 @@ std::unique_ptr<Pass> createStripSourceProvenancePass() {
 
 std::unique_ptr<Pass> createVerifyNoShuttleOpsPass() {
   return std::make_unique<VerifyNoShuttleOpsPass>();
+}
+
+std::unique_ptr<Pass> createPlanRowFoldMaterializationPass() {
+  return std::make_unique<PlanRowFoldMaterializationPass>();
+}
+
+std::unique_ptr<Pass> createVerifyMaterializationPlanPass() {
+  return std::make_unique<VerifyMaterializationPlanPass>();
 }
 
 void buildShuttleStablehloPipeline(

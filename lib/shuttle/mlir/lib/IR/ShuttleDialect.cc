@@ -4,6 +4,8 @@
 #include "shuttle/IR/ShuttleDialect.h"
 
 #include <cstddef>
+#include <optional>
+#include <string>
 #include <utility>
 
 #include "mlir/IR/AffineExpr.h"
@@ -18,8 +20,11 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/SHA256.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include "shuttle/IR/ShuttleEnums.cc.inc"
 
@@ -45,6 +50,25 @@ LogicalResult verifySingleBlockRegion(Operation *owner, Region &region) {
     return owner->emitOpError("body must terminate with shuttle.yield");
   }
   return success();
+}
+
+bool isLowerHexDigest(StringRef value) {
+  return value.size() == 64 && llvm::all_of(value, [](char character) {
+           return llvm::isDigit(character) ||
+                  (character >= 'a' && character <= 'f');
+         });
+}
+
+std::optional<int64_t> optionalIntegerAttribute(Operation *operation,
+                                                StringRef name) {
+  if (auto attribute = operation->getAttrOfType<IntegerAttr>(name)) {
+    return attribute.getInt();
+  }
+  return std::nullopt;
+}
+
+SmallVector<int64_t> integerArray(DenseI64ArrayAttr attribute) {
+  return SmallVector<int64_t>(attribute.asArrayRef());
 }
 
 LogicalResult verifyStringArray(Operation *owner, ArrayAttr values,
@@ -664,6 +688,254 @@ LogicalResult FoldOp::verifyRegions() {
     }
   }
   return verifyPureScalarComputation(*this, getCombiner());
+}
+
+std::string materializationPlanFingerprint(MaterializationPlanOp plan) {
+  std::string normalized;
+  llvm::raw_string_ostream stream(normalized);
+  stream << "schema=" << plan.getSchemaVersion() << ';';
+  Attribute(plan.getPolicyAttr()).print(stream);
+  stream << '\n';
+  for (Operation &operation : plan.getBody().front()) {
+    if (isa<MaterializationPlanYieldOp>(operation)) {
+      continue;
+    }
+    stream << operation.getName() << '{';
+    for (NamedAttribute attribute : operation.getAttrs()) {
+      stream << attribute.getName() << '=';
+      attribute.getValue().print(stream);
+      stream << ',';
+    }
+    stream << "}\n";
+  }
+  stream.flush();
+  llvm::SHA256 digest;
+  digest.update(normalized);
+  return llvm::toHex(digest.final(), true);
+}
+
+LogicalResult MaterializationPlanOp::verifyRegions() {
+  if (!getOperation()->getDiscardableAttrs().empty()) {
+    return emitOpError("does not permit discardable attributes");
+  }
+  Region &body = getBody();
+  if (body.empty() || !llvm::hasSingleElement(body)) {
+    return emitOpError("requires exactly one non-empty body block");
+  }
+  Block &block = body.front();
+  if (!isa<MaterializationPlanYieldOp>(block.getTerminator())) {
+    return emitOpError(
+        "body must terminate with shuttle.materialization_plan_yield");
+  }
+  if (getSchemaVersion() != 1) {
+    return emitOpError("requires materialization plan schema version 1");
+  }
+  if (!isLowerHexDigest(getFingerprint())) {
+    return emitOpError("fingerprint must be a lowercase SHA-256 digest");
+  }
+
+  SmallVector<MaterializationBufferOp> buffers;
+  SmallVector<MaterializationTaskOp> tasks;
+  bool sawTask = false;
+  for (Operation &operation : block.without_terminator()) {
+    if (auto buffer = dyn_cast<MaterializationBufferOp>(operation)) {
+      if (!buffer->getDiscardableAttrs().empty()) {
+        return buffer.emitOpError("does not permit discardable attributes");
+      }
+      if (sawTask) {
+        return emitOpError(
+            "materialization buffers must precede materialization tasks");
+      }
+      buffers.push_back(buffer);
+      continue;
+    }
+    if (auto task = dyn_cast<MaterializationTaskOp>(operation)) {
+      if (!task->getDiscardableAttrs().empty()) {
+        return task.emitOpError("does not permit discardable attributes");
+      }
+      sawTask = true;
+      tasks.push_back(task);
+      continue;
+    }
+    return emitOpError(
+        "body may contain only materialization buffers and tasks");
+  }
+  if (buffers.empty() || tasks.empty()) {
+    return emitOpError("requires at least one buffer and one task");
+  }
+  if (!block.getTerminator()->getDiscardableAttrs().empty()) {
+    return block.getTerminator()->emitOpError(
+        "does not permit discardable attributes");
+  }
+
+  unsigned foldCount = 0;
+  SmallVector<SmallVector<int64_t>> actualConsumers(buffers.size());
+  for (auto [position, buffer] : llvm::enumerate(buffers)) {
+    if (buffer.getOrdinal() != static_cast<int64_t>(position)) {
+      return buffer.emitOpError("buffer ordinals must be contiguous");
+    }
+    auto tensorType = dyn_cast<RankedTensorType>(buffer.getTensorType());
+    if (!tensorType || !tensorType.hasStaticShape() ||
+        llvm::any_of(tensorType.getShape(),
+                     [](int64_t extent) { return extent <= 0; }) ||
+        (!tensorType.getElementType().isF32() &&
+         !tensorType.getElementType().isBF16())) {
+      return buffer.emitOpError(
+          "requires a positive static bf16 or f32 ranked tensor type");
+    }
+    std::optional<int64_t> producer =
+        optionalIntegerAttribute(buffer, "producer");
+    if (buffer.getLiveIn() != !producer.has_value()) {
+      return buffer.emitOpError(
+          "live-in status must exactly identify producer-free buffers");
+    }
+    const bool external =
+        buffer.getStorage() == MaterializationStorage::External;
+    if (external != (buffer.getLiveIn() || buffer.getLiveOut())) {
+      return buffer.emitOpError(
+          "external storage must exactly identify live-in or live-out buffers");
+    }
+    if (producer && (*producer < 0 || *producer >= tasks.size())) {
+      return buffer.emitOpError("producer is outside the task range");
+    }
+    if (buffer.getLifetimeStart() != producer.value_or(0)) {
+      return buffer.emitOpError("lifetime start must equal producer or zero");
+    }
+    if (buffer.getLifetimeEnd() < buffer.getLifetimeStart() ||
+        buffer.getLifetimeEnd() > static_cast<int64_t>(tasks.size())) {
+      return buffer.emitOpError("has an invalid task lifetime interval");
+    }
+  }
+
+  for (auto [position, task] : llvm::enumerate(tasks)) {
+    const int64_t ordinal = static_cast<int64_t>(position);
+    if (task.getOrdinal() != ordinal) {
+      return task.emitOpError("task ordinals must be contiguous");
+    }
+    if (!isLowerHexDigest(task.getSemanticFingerprint())) {
+      return task.emitOpError(
+          "semantic fingerprint must be a lowercase SHA-256 digest");
+    }
+    if (llvm::any_of(task.getDomainShape(),
+                     [](int64_t extent) { return extent <= 0; })) {
+      return task.emitOpError("requires a positive static task domain");
+    }
+    llvm::SmallDenseSet<int64_t> outputSet;
+    llvm::SmallDenseSet<int64_t> dependencySet;
+    SmallVector<int64_t> expectedDependencies;
+    for (int64_t bufferOrdinal : task.getInputBuffers()) {
+      if (bufferOrdinal < 0 || bufferOrdinal >= buffers.size()) {
+        return task.emitOpError("input buffers must be in range");
+      }
+      if (actualConsumers[bufferOrdinal].empty() ||
+          actualConsumers[bufferOrdinal].back() != ordinal) {
+        actualConsumers[bufferOrdinal].push_back(ordinal);
+      }
+      std::optional<int64_t> producer =
+          optionalIntegerAttribute(buffers[bufferOrdinal], "producer");
+      if (producer && !llvm::is_contained(expectedDependencies, *producer)) {
+        expectedDependencies.push_back(*producer);
+      }
+    }
+    llvm::sort(expectedDependencies);
+    for (int64_t bufferOrdinal : task.getOutputBuffers()) {
+      if (bufferOrdinal < 0 || bufferOrdinal >= buffers.size() ||
+          !outputSet.insert(bufferOrdinal).second ||
+          optionalIntegerAttribute(buffers[bufferOrdinal], "producer") !=
+              ordinal) {
+        return task.emitOpError(
+            "output buffers must be unique, in range, and owned by the task");
+      }
+    }
+    SmallVector<int64_t> dependencies =
+        integerArray(task.getDependenciesAttr());
+    for (int64_t dependency : dependencies) {
+      if (dependency < 0 || dependency >= ordinal ||
+          !dependencySet.insert(dependency).second) {
+        return task.emitOpError(
+            "dependencies must be unique earlier task ordinals");
+      }
+    }
+    if (dependencies != expectedDependencies) {
+      return task.emitOpError(
+          "dependencies must equal input-buffer producer tasks");
+    }
+    if (task.getKind() == MaterializationTaskKind::Fold) {
+      ++foldCount;
+      if (task.getReductionDimensions().size() != 1 ||
+          task.getReductionDimensions().front() != 1 ||
+          !task.getOrderFree().value_or(false) ||
+          task.getDomainShape().size() != 2 ||
+          task.getInputBuffers().size() != 2 ||
+          task.getOutputBuffers().size() != 1) {
+        return task.emitOpError(
+            "row Fold tasks require rank-two domain, dimension 1, and "
+            "order_free=true");
+      }
+      auto inputType = cast<RankedTensorType>(
+          buffers[task.getInputBuffers()[0]].getTensorType());
+      auto initializerType = cast<RankedTensorType>(
+          buffers[task.getInputBuffers()[1]].getTensorType());
+      auto resultType = cast<RankedTensorType>(
+          buffers[task.getOutputBuffers()[0]].getTensorType());
+      if (inputType.getShape() != task.getDomainShape() ||
+          inputType.getRank() != 2 || !inputType.getElementType().isF32() ||
+          initializerType.getRank() != 0 ||
+          !initializerType.getElementType().isF32() ||
+          resultType.getShape() !=
+              ArrayRef<int64_t>{task.getDomainShape().front()} ||
+          !resultType.getElementType().isF32()) {
+        return task.emitOpError(
+            "row Fold buffer types must match its f32 domain and accumulator");
+      }
+    } else {
+      if (!task.getReductionDimensions().empty() || task.getOrderFree()) {
+        return task.emitOpError(
+            "Map tasks must not carry reduction or ordering metadata");
+      }
+      bool hasTensorResult = false;
+      for (int64_t bufferOrdinal : task.getOutputBuffers()) {
+        auto resultType =
+            cast<RankedTensorType>(buffers[bufferOrdinal].getTensorType());
+        hasTensorResult |= resultType.getRank() != 0;
+      }
+      if (task.getDomainShape().empty() == hasTensorResult) {
+        return task.emitOpError(
+            "empty Map domains must exactly identify scalar result tasks");
+      }
+    }
+  }
+  if (foldCount != 1) {
+    return emitOpError("requires exactly one Fold task");
+  }
+
+  for (auto [position, buffer] : llvm::enumerate(buffers)) {
+    SmallVector<int64_t> consumers = integerArray(buffer.getConsumersAttr());
+    if (consumers != actualConsumers[position]) {
+      return buffer.emitOpError(
+          "consumer list must equal the tasks that read the buffer");
+    }
+    int64_t expectedEnd = buffer.getLifetimeStart();
+    if (!consumers.empty()) {
+      expectedEnd = consumers.back();
+    }
+    if (buffer.getLiveOut()) {
+      expectedEnd = tasks.size();
+    } else if (consumers.empty() && !buffer.getLiveIn()) {
+      return buffer.emitOpError(
+          "produced buffers require a consumer or live-out use");
+    }
+    if (buffer.getLifetimeEnd() != expectedEnd) {
+      return buffer.emitOpError(
+          "lifetime end must equal the final consumer or plan exit");
+    }
+  }
+
+  if (getFingerprint() != materializationPlanFingerprint(*this)) {
+    return emitOpError(
+        "fingerprint does not match the closed materialization plan");
+  }
+  return success();
 }
 
 } // namespace mlir::shuttle

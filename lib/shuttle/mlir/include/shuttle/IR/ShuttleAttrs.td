@@ -55,6 +55,34 @@ def Shuttle_MapSemanticsAttr
   let assemblyFormat = "`<` $value `>`";
 }
 
+def Shuttle_MaterializationTaskKind
+    : I32EnumAttr<"MaterializationTaskKind", "Materialization task family kind",
+                  [I32EnumAttrCase<"Map", 0, "map">,
+                   I32EnumAttrCase<"Fold", 1, "fold">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_MaterializationTaskKindAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_MaterializationTaskKind,
+               "materialization_task_kind"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
+def Shuttle_MaterializationStorage
+    : I32EnumAttr<"MaterializationStorage", "Materialized buffer storage class",
+                  [I32EnumAttrCase<"External", 0, "external">,
+                   I32EnumAttrCase<"Temporary", 1, "temporary">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_MaterializationStorageAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_MaterializationStorage,
+               "materialization_storage"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
 def Shuttle_SourceRefAttr : Shuttle_Attr<"SourceRef"> {
   let mnemonic = "source_ref";
   let summary = "Rename-invariant structural reference to a source result";

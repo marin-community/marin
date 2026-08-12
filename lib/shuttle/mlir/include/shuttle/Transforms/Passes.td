@@ -64,4 +64,17 @@ def ShuttleVerifyNoShuttleOpsPass
   let constructor = "createVerifyNoShuttleOpsPass()";
 }
 
+def ShuttlePlanRowFoldMaterializationPass
+    : Pass<"shuttle-plan-row-fold-materialization", "::mlir::ModuleOp"> {
+  let summary = "Derive one row Fold and Map materialization plan";
+  let dependentDialects = ["::mlir::shuttle::ShuttleDialect"];
+  let constructor = "createPlanRowFoldMaterializationPass()";
+}
+
+def ShuttleVerifyMaterializationPlanPass
+    : Pass<"shuttle-verify-materialization-plan", "::mlir::ModuleOp"> {
+  let summary = "Verify materialization plans remain bound to Shuttle algebra";
+  let constructor = "createVerifyMaterializationPlanPass()";
+}
+
 #endif // SHUTTLE_TRANSFORMS_PASSES_TD_

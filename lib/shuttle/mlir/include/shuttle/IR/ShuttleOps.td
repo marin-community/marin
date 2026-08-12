@@ -83,4 +83,47 @@ def Shuttle_YieldOp
   let builders = [OpBuilder<(ins), [{ /* no operands */ }]>];
 }
 
+def Shuttle_MaterializationPlanOp
+    : Shuttle_Op<
+          "materialization_plan", [IsolatedFromAbove,
+                            SingleBlockImplicitTerminator<
+                                "::mlir::shuttle::MaterializationPlanYieldOp">]> {
+  let summary = "Non-executable task, buffer, and lifetime plan";
+  let arguments = (ins I64Attr:$schema_version, Shuttle_PolicyAttr:$policy,
+      StrAttr:$fingerprint);
+  let regions = (region SizedRegion<1>:$body);
+  let hasRegionVerifier = 1;
+}
+
+def Shuttle_MaterializationBufferOp
+    : Shuttle_Op<"materialization_buffer",
+                 [ParentOneOf<["::mlir::shuttle::MaterializationPlanOp"]>]> {
+  let summary = "One explicitly materialized logical tensor buffer";
+  let arguments = (ins I64Attr:$ordinal, TypeAttr:$tensor_type,
+      Shuttle_MaterializationStorageAttr:$storage, BoolAttr:$live_in,
+      BoolAttr:$live_out, OptionalAttr<I64Attr>:$producer,
+      DenseI64ArrayAttr:$consumers, I64Attr:$lifetime_start,
+      I64Attr:$lifetime_end);
+}
+
+def Shuttle_MaterializationTaskOp
+    : Shuttle_Op<"materialization_task",
+                 [ParentOneOf<["::mlir::shuttle::MaterializationPlanOp"]>]> {
+  let summary = "One generic Map or Fold task family";
+  let arguments = (ins I64Attr:$ordinal, Shuttle_MaterializationTaskKindAttr:$kind,
+      DenseI64ArrayAttr:$domain_shape,
+      DenseI64ArrayAttr:$reduction_dimensions,
+      DenseI64ArrayAttr:$input_buffers, DenseI64ArrayAttr:$output_buffers,
+      DenseI64ArrayAttr:$dependencies, OptionalAttr<BoolAttr>:$order_free,
+      StrAttr:$semantic_fingerprint, Shuttle_SourceRefAttr:$source);
+}
+
+def Shuttle_MaterializationPlanYieldOp
+    : Shuttle_Op<"materialization_plan_yield",
+                 [ParentOneOf<["::mlir::shuttle::MaterializationPlanOp"]>,
+                  Terminator]> {
+  let summary = "Terminate a non-executable materialization plan";
+  let builders = [OpBuilder<(ins), [{ /* no operands */ }]>];
+}
+
 #endif // SHUTTLE_IR_SHUTTLEOPS_TD_

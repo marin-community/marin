@@ -32,6 +32,8 @@ std::unique_ptr<Pass> createShuttleCanonicalizePass();
 std::unique_ptr<Pass> createLowerAlgebraToStablehloPass();
 std::unique_ptr<Pass> createStripSourceProvenancePass();
 std::unique_ptr<Pass> createVerifyNoShuttleOpsPass();
+std::unique_ptr<Pass> createPlanRowFoldMaterializationPass();
+std::unique_ptr<Pass> createVerifyMaterializationPlanPass();
 
 std::string normalizedStablehloFingerprint(ModuleOp module);
 

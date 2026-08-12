@@ -5,8 +5,8 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/IR/Builders.h"
 #include "mlir/IR/AffineMap.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
@@ -497,7 +497,8 @@ protected:
       }
     });
     if (!result) {
-      this->getOperation().emitError("test fixture has no matching shuttle.map");
+      this->getOperation().emitError(
+          "test fixture has no matching shuttle.map");
       this->signalPassFailure();
     }
     return result;
@@ -518,8 +519,10 @@ protected:
           candidate.getInputs().size() != 1) {
         return;
       }
-      auto input = dyn_cast<RankedTensorType>(candidate.getInputs()[0].getType());
-      auto output = dyn_cast<RankedTensorType>(candidate.getResult(0).getType());
+      auto input =
+          dyn_cast<RankedTensorType>(candidate.getInputs()[0].getType());
+      auto output =
+          dyn_cast<RankedTensorType>(candidate.getResult(0).getType());
       if (input && output && input.getRank() == 2 && output.getRank() == 2 &&
           input.getDimSize(0) == 7 && input.getDimSize(1) == 1 &&
           output.getDimSize(0) == 7 && output.getDimSize(1) == 13) {
@@ -548,12 +551,11 @@ public:
       return;
     }
     MLIRContext *context = operation.getContext();
-    replaceInputMap(
-        operation,
-        AffineMap::get(2, 0,
-                       {getAffineDimExpr(1, context),
-                        getAffineDimExpr(0, context).floorDiv(7)},
-                       context));
+    replaceInputMap(operation,
+                    AffineMap::get(2, 0,
+                                   {getAffineDimExpr(1, context),
+                                    getAffineDimExpr(0, context).floorDiv(7)},
+                                   context));
   }
 };
 
@@ -570,12 +572,11 @@ public:
       return;
     }
     MLIRContext *context = operation.getContext();
-    replaceInputMap(
-        operation,
-        AffineMap::get(2, 0,
-                       {getAffineDimExpr(0, context),
-                        getAffineDimExpr(0, context).floorDiv(7)},
-                       context));
+    replaceInputMap(operation,
+                    AffineMap::get(2, 0,
+                                   {getAffineDimExpr(0, context),
+                                    getAffineDimExpr(0, context).floorDiv(7)},
+                                   context));
   }
 };
 
@@ -592,12 +593,11 @@ public:
       return;
     }
     MLIRContext *context = operation.getContext();
-    replaceInputMap(
-        operation,
-        AffineMap::get(2, 0,
-                       {getAffineDimExpr(0, context),
-                        getAffineDimExpr(1, context).floorDiv(7)},
-                       context));
+    replaceInputMap(operation,
+                    AffineMap::get(2, 0,
+                                   {getAffineDimExpr(0, context),
+                                    getAffineDimExpr(1, context).floorDiv(7)},
+                                   context));
   }
 };
 
@@ -614,12 +614,11 @@ public:
       return;
     }
     MLIRContext *context = operation.getContext();
-    replaceInputMap(
-        operation,
-        AffineMap::get(2, 0,
-                       {getAffineDimExpr(0, context),
-                        getAffineConstantExpr(0, context)},
-                       context));
+    replaceInputMap(operation,
+                    AffineMap::get(2, 0,
+                                   {getAffineDimExpr(0, context),
+                                    getAffineConstantExpr(0, context)},
+                                   context));
   }
 };
 
@@ -638,12 +637,10 @@ public:
     MLIRContext *context = operation.getContext();
     AffineExpr shiftedDimension =
         getAffineDimExpr(1, context) + getAffineConstantExpr(1, context);
-    replaceInputMap(
-        operation,
-        AffineMap::get(2, 0,
-                       {getAffineDimExpr(0, context),
-                        shiftedDimension.floorDiv(13)},
-                       context));
+    replaceInputMap(operation, AffineMap::get(2, 0,
+                                              {getAffineDimExpr(0, context),
+                                               shiftedDimension.floorDiv(13)},
+                                              context));
   }
 };
 
@@ -656,9 +653,8 @@ public:
   }
   void runOnOperation() override {
     if (MapOp operation = rowSingletonBroadcast()) {
-      operation.getResult(0).setType(
-          RankedTensorType::get({7, 12},
-                                Float32Type::get(operation.getContext())));
+      operation.getResult(0).setType(RankedTensorType::get(
+          {7, 12}, Float32Type::get(operation.getContext())));
     }
   }
 };
@@ -693,12 +689,11 @@ public:
       return;
     }
     MLIRContext *context = operation.getContext();
-    replaceInputMap(
-        operation,
-        AffineMap::get(2, 0,
-                       {getAffineDimExpr(0, context).floorDiv(7),
-                        getAffineDimExpr(1, context).floorDiv(13)},
-                       context));
+    replaceInputMap(operation,
+                    AffineMap::get(2, 0,
+                                   {getAffineDimExpr(0, context).floorDiv(7),
+                                    getAffineDimExpr(1, context).floorDiv(13)},
+                                   context));
   }
 };
 
@@ -735,9 +730,9 @@ public:
   }
   void runOnOperation() override {
     if (MapOp operation = rowSingletonBroadcast()) {
-      operation->setAttr("semantics",
-                         MapSemanticsAttr::get(operation.getContext(),
-                                               MapSemantics::Reshape));
+      operation->setAttr(
+          "semantics",
+          MapSemanticsAttr::get(operation.getContext(), MapSemantics::Reshape));
     }
   }
 };
@@ -755,8 +750,10 @@ public:
       if (operation || candidate.getSemantics() != MapSemantics::Reshape) {
         return;
       }
-      auto input = dyn_cast<RankedTensorType>(candidate.getInputs()[0].getType());
-      auto result = dyn_cast<RankedTensorType>(candidate.getResult(0).getType());
+      auto input =
+          dyn_cast<RankedTensorType>(candidate.getInputs()[0].getType());
+      auto result =
+          dyn_cast<RankedTensorType>(candidate.getResult(0).getType());
       if (input && result && input.getRank() > result.getRank()) {
         operation = candidate;
       }
@@ -772,8 +769,7 @@ public:
   }
 };
 
-class BroadcastDuplicatePass
-    : public MapMutationPass<BroadcastDuplicatePass> {
+class BroadcastDuplicatePass : public MapMutationPass<BroadcastDuplicatePass> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BroadcastDuplicatePass)
   StringRef getArgument() const final {
@@ -785,11 +781,10 @@ public:
       return;
     }
     MLIRContext *context = operation.getContext();
-    replaceInputMap(operation,
-                    AffineMap::get(3, 0,
-                                   {getAffineDimExpr(0, context),
-                                    getAffineDimExpr(0, context)},
-                                   context));
+    replaceInputMap(operation, AffineMap::get(3, 0,
+                                              {getAffineDimExpr(0, context),
+                                               getAffineDimExpr(0, context)},
+                                              context));
   }
 };
 
@@ -802,8 +797,10 @@ public:
   void runOnOperation() override {
     MapOp operation;
     getOperation().walk([&](MapOp candidate) {
-      auto input = dyn_cast<RankedTensorType>(candidate.getInputs()[0].getType());
-      auto result = dyn_cast<RankedTensorType>(candidate.getResult(0).getType());
+      auto input =
+          dyn_cast<RankedTensorType>(candidate.getInputs()[0].getType());
+      auto result =
+          dyn_cast<RankedTensorType>(candidate.getResult(0).getType());
       if (!operation && candidate.getSemantics() == MapSemantics::Reshape &&
           input && result && input.getRank() == 2 && result.getRank() == 3) {
         operation = candidate;
@@ -815,11 +812,10 @@ public:
       return;
     }
     MLIRContext *context = operation.getContext();
-    replaceInputMap(operation,
-                    AffineMap::get(3, 0,
-                                   {getAffineDimExpr(2, context),
-                                    getAffineDimExpr(0, context)},
-                                   context));
+    replaceInputMap(operation, AffineMap::get(3, 0,
+                                              {getAffineDimExpr(2, context),
+                                               getAffineDimExpr(0, context)},
+                                              context));
   }
 };
 
@@ -831,10 +827,9 @@ public:
   }
   void runOnOperation() override {
     if (MapOp operation = map(MapSemantics::BroadcastInDim)) {
-      operation->setAttr("shuttle.test_semantic",
-                         IntegerAttr::get(IntegerType::get(
-                                              operation.getContext(), 64),
-                                          7));
+      operation->setAttr(
+          "shuttle.test_semantic",
+          IntegerAttr::get(IntegerType::get(operation.getContext(), 64), 7));
     }
   }
 };
@@ -863,9 +858,9 @@ public:
   }
   void runOnOperation() override {
     if (MapOp operation = map(MapSemantics::Pointwise)) {
-      operation->setAttr("semantics",
-                         MapSemanticsAttr::get(operation.getContext(),
-                                               MapSemantics::Reshape));
+      operation->setAttr(
+          "semantics",
+          MapSemanticsAttr::get(operation.getContext(), MapSemantics::Reshape));
     }
   }
 };
@@ -928,6 +923,364 @@ public:
   }
 };
 
+MaterializationPlanOp materializationPlan(ModuleOp module) {
+  auto plans = module.getOps<MaterializationPlanOp>();
+  return plans.empty() ? MaterializationPlanOp{} : *plans.begin();
+}
+
+void refreshMaterializationFingerprint(MaterializationPlanOp plan) {
+  plan.setFingerprint(materializationPlanFingerprint(plan));
+}
+
+void refreshMaterializationEdges(MaterializationPlanOp plan) {
+  SmallVector<MaterializationBufferOp> buffers;
+  SmallVector<MaterializationTaskOp> tasks;
+  llvm::append_range(buffers,
+                     plan.getBody().front().getOps<MaterializationBufferOp>());
+  llvm::append_range(tasks,
+                     plan.getBody().front().getOps<MaterializationTaskOp>());
+  SmallVector<SmallVector<int64_t>> consumers(buffers.size());
+  for (auto [taskOrdinal, task] : llvm::enumerate(tasks)) {
+    SmallVector<int64_t> dependencies;
+    for (int64_t bufferOrdinal : task.getInputBuffers()) {
+      if (consumers[bufferOrdinal].empty() ||
+          consumers[bufferOrdinal].back() !=
+              static_cast<int64_t>(taskOrdinal)) {
+        consumers[bufferOrdinal].push_back(taskOrdinal);
+      }
+      if (auto producer =
+              buffers[bufferOrdinal]->getAttrOfType<IntegerAttr>("producer")) {
+        if (!llvm::is_contained(dependencies, producer.getInt())) {
+          dependencies.push_back(producer.getInt());
+        }
+      }
+    }
+    llvm::sort(dependencies);
+    task->setAttr("dependencies",
+                  DenseI64ArrayAttr::get(task.getContext(), dependencies));
+  }
+  for (auto [ordinal, buffer] : llvm::enumerate(buffers)) {
+    buffer->setAttr("consumers", DenseI64ArrayAttr::get(buffer.getContext(),
+                                                        consumers[ordinal]));
+    int64_t lifetimeEnd =
+        buffer.getLiveOut()
+            ? static_cast<int64_t>(tasks.size())
+            : (consumers[ordinal].empty() ? buffer.getLifetimeStart()
+                                          : consumers[ordinal].back());
+    buffer.setLifetimeEnd(lifetimeEnd);
+  }
+  refreshMaterializationFingerprint(plan);
+}
+
+class ReportMaterializationFingerprintPass
+    : public MutationPass<ReportMaterializationFingerprintPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      ReportMaterializationFingerprintPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-report-materialization-fingerprint";
+  }
+  void runOnOperation() override {
+    MaterializationPlanOp plan = materializationPlan(getOperation());
+    if (!plan) {
+      getOperation().emitError("test fixture has no materialization plan");
+      return signalPassFailure();
+    }
+    llvm::outs() << plan.getFingerprint() << '\n';
+  }
+};
+
+class MaterializationDeleteTaskPass
+    : public MutationPass<MaterializationDeleteTaskPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MaterializationDeleteTaskPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-delete-materialization-task";
+  }
+  void runOnOperation() override {
+    MaterializationPlanOp plan = materializationPlan(getOperation());
+    MaterializationTaskOp task;
+    if (plan) {
+      for (MaterializationTaskOp candidate :
+           plan.getBody().front().getOps<MaterializationTaskOp>()) {
+        task = candidate;
+        break;
+      }
+    }
+    if (!task) {
+      getOperation().emitError("test fixture has no materialization task");
+      return signalPassFailure();
+    }
+    task.erase();
+    refreshMaterializationFingerprint(plan);
+  }
+};
+
+class MaterializationReorderTasksPass
+    : public MutationPass<MaterializationReorderTasksPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MaterializationReorderTasksPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-reorder-materialization-tasks";
+  }
+  void runOnOperation() override {
+    MaterializationPlanOp plan = materializationPlan(getOperation());
+    SmallVector<MaterializationTaskOp> tasks;
+    if (plan) {
+      llvm::append_range(
+          tasks, plan.getBody().front().getOps<MaterializationTaskOp>());
+    }
+    if (tasks.size() < 2) {
+      getOperation().emitError("test fixture has fewer than two tasks");
+      return signalPassFailure();
+    }
+    tasks[1]->moveBefore(tasks[0]);
+    refreshMaterializationFingerprint(plan);
+  }
+};
+
+class MaterializationSelfConsistentReorderPass
+    : public MutationPass<MaterializationSelfConsistentReorderPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      MaterializationSelfConsistentReorderPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-reorder-materialization-tasks-consistently";
+  }
+  void runOnOperation() override {
+    MaterializationPlanOp plan = materializationPlan(getOperation());
+    SmallVector<MaterializationTaskOp> tasks;
+    SmallVector<MaterializationBufferOp> buffers;
+    if (plan) {
+      llvm::append_range(
+          tasks, plan.getBody().front().getOps<MaterializationTaskOp>());
+      llvm::append_range(
+          buffers, plan.getBody().front().getOps<MaterializationBufferOp>());
+    }
+    size_t left = 0;
+    while (left < tasks.size() && !tasks[left].getDependencies().empty()) {
+      ++left;
+    }
+    size_t right = left + 1;
+    while (right < tasks.size() && !tasks[right].getDependencies().empty()) {
+      ++right;
+    }
+    if (right >= tasks.size()) {
+      getOperation().emitError("test fixture has no independent task pair");
+      return signalPassFailure();
+    }
+    SmallVector<int64_t> oldToNew(tasks.size());
+    for (auto [ordinal, ignored] : llvm::enumerate(tasks)) {
+      (void)ignored;
+      oldToNew[ordinal] = ordinal;
+    }
+    oldToNew[right] = left;
+    for (size_t ordinal = left; ordinal < right; ++ordinal) {
+      oldToNew[ordinal] = ordinal + 1;
+    }
+    tasks[right]->moveBefore(tasks[left]);
+    tasks.clear();
+    llvm::append_range(tasks,
+                       plan.getBody().front().getOps<MaterializationTaskOp>());
+    for (auto [ordinal, task] : llvm::enumerate(tasks)) {
+      task.setOrdinal(ordinal);
+      SmallVector<int64_t> dependencies;
+      for (int64_t dependency : task.getDependencies()) {
+        dependencies.push_back(oldToNew[dependency]);
+      }
+      llvm::sort(dependencies);
+      task->setAttr("dependencies",
+                    DenseI64ArrayAttr::get(task.getContext(), dependencies));
+    }
+    for (MaterializationBufferOp buffer : buffers) {
+      if (auto producer = buffer->getAttrOfType<IntegerAttr>("producer")) {
+        buffer->setAttr(
+            "producer",
+            IntegerAttr::get(producer.getType(), oldToNew[producer.getInt()]));
+        buffer.setLifetimeStart(oldToNew[producer.getInt()]);
+      }
+      SmallVector<int64_t> consumers;
+      for (int64_t consumer : buffer.getConsumers()) {
+        consumers.push_back(oldToNew[consumer]);
+      }
+      llvm::sort(consumers);
+      buffer->setAttr("consumers",
+                      DenseI64ArrayAttr::get(buffer.getContext(), consumers));
+      if (!buffer.getLiveOut() && !consumers.empty()) {
+        buffer.setLifetimeEnd(consumers.back());
+      }
+    }
+    refreshMaterializationFingerprint(plan);
+  }
+};
+
+class MaterializationReplaySourcePass
+    : public MutationPass<MaterializationReplaySourcePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MaterializationReplaySourcePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-replay-materialization-source";
+  }
+  void runOnOperation() override {
+    MaterializationPlanOp plan = materializationPlan(getOperation());
+    SmallVector<MaterializationTaskOp> tasks;
+    if (plan) {
+      llvm::append_range(
+          tasks, plan.getBody().front().getOps<MaterializationTaskOp>());
+    }
+    if (tasks.size() < 2) {
+      getOperation().emitError("test fixture has fewer than two tasks");
+      return signalPassFailure();
+    }
+    tasks[1]->setAttr("source", tasks[0].getSource());
+    refreshMaterializationFingerprint(plan);
+  }
+};
+
+class MaterializationDuplicateAlgebraSourcePass
+    : public MutationPass<MaterializationDuplicateAlgebraSourcePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      MaterializationDuplicateAlgebraSourcePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-duplicate-materialization-algebra-source";
+  }
+  void runOnOperation() override {
+    SmallVector<MapOp> maps;
+    getOperation().walk([&](MapOp map) { maps.push_back(map); });
+    if (maps.size() < 2) {
+      getOperation().emitError("test fixture has fewer than two Maps");
+      return signalPassFailure();
+    }
+    maps[1]->setAttr("source", maps[0].getSource());
+  }
+};
+
+class MaterializationSwapSameTypeEdgesPass
+    : public MutationPass<MaterializationSwapSameTypeEdgesPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      MaterializationSwapSameTypeEdgesPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-swap-materialization-edges";
+  }
+  void runOnOperation() override {
+    MaterializationPlanOp plan = materializationPlan(getOperation());
+    SmallVector<MaterializationBufferOp> buffers;
+    if (plan) {
+      llvm::append_range(
+          buffers, plan.getBody().front().getOps<MaterializationBufferOp>());
+    }
+    if (plan) {
+      for (MaterializationTaskOp task :
+           plan.getBody().front().getOps<MaterializationTaskOp>()) {
+        SmallVector<int64_t> inputs(task.getInputBuffers().begin(),
+                                    task.getInputBuffers().end());
+        for (size_t left = 0; left < inputs.size(); ++left) {
+          for (size_t right = left + 1; right < inputs.size(); ++right) {
+            if (inputs[left] == inputs[right] ||
+                buffers[inputs[left]].getTensorType() !=
+                    buffers[inputs[right]].getTensorType()) {
+              continue;
+            }
+            std::swap(inputs[left], inputs[right]);
+            task->setAttr("input_buffers",
+                          DenseI64ArrayAttr::get(task.getContext(), inputs));
+            refreshMaterializationEdges(plan);
+            return;
+          }
+        }
+      }
+    }
+    getOperation().emitError("test fixture has no same-type task edge pair");
+    signalPassFailure();
+  }
+};
+
+template <bool EmptyToScalar>
+class MaterializationDomainPass
+    : public MutationPass<MaterializationDomainPass<EmptyToScalar>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      MaterializationDomainPass<EmptyToScalar>)
+  StringRef getArgument() const final {
+    return EmptyToScalar ? "shuttle-test-add-scalar-materialization-domain"
+                         : "shuttle-test-empty-tensor-materialization-domain";
+  }
+  void runOnOperation() override {
+    ModuleOp module = this->getOperation();
+    MaterializationPlanOp plan = materializationPlan(module);
+    if (plan) {
+      for (MaterializationTaskOp task :
+           plan.getBody().front().getOps<MaterializationTaskOp>()) {
+        if (task.getKind() != MaterializationTaskKind::Map ||
+            task.getDomainShape().empty() != EmptyToScalar) {
+          continue;
+        }
+        task->setAttr("domain_shape", DenseI64ArrayAttr::get(
+                                          task.getContext(),
+                                          EmptyToScalar ? ArrayRef<int64_t>{1}
+                                                        : ArrayRef<int64_t>{}));
+        refreshMaterializationFingerprint(plan);
+        return;
+      }
+    }
+    module.emitError("test fixture has no matching Map domain");
+    this->signalPassFailure();
+  }
+};
+
+class MaterializationUnknownAttributePass
+    : public MutationPass<MaterializationUnknownAttributePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      MaterializationUnknownAttributePass)
+  StringRef getArgument() const final {
+    return "shuttle-test-add-materialization-attribute";
+  }
+  void runOnOperation() override {
+    MaterializationPlanOp plan = materializationPlan(getOperation());
+    if (!plan) {
+      getOperation().emitError("test fixture has no materialization plan");
+      return signalPassFailure();
+    }
+    plan->setAttr("shuttle.test_semantic", UnitAttr::get(plan.getContext()));
+  }
+};
+
+class RenameSymbolsPass : public MutationPass<RenameSymbolsPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RenameSymbolsPass)
+  StringRef getArgument() const final { return "shuttle-test-rename-symbols"; }
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    module.setSymName("renamed_module");
+    int64_t ordinal = 0;
+    for (func::FuncOp function : module.getOps<func::FuncOp>()) {
+      function.setSymName(("renamed_function_" + Twine(ordinal++)).str());
+    }
+  }
+};
+
+class SetFastRegionPolicyPass : public MutationPass<SetFastRegionPolicyPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(SetFastRegionPolicyPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-set-fast-region-policy";
+  }
+  void runOnOperation() override {
+    bool changed = false;
+    getOperation().walk([&](RegionOp region) {
+      region.setPolicy(NumericalPolicy::Fast);
+      changed = true;
+    });
+    if (!changed) {
+      getOperation().emitError("test fixture has no Shuttle region");
+      signalPassFailure();
+    }
+  }
+};
+
 } // namespace
 
 void registerMutationPasses() {
@@ -969,6 +1322,18 @@ void registerMutationPasses() {
   PassRegistration<ManifestVersionPass>();
   PassRegistration<ManifestVersionMissingPass>();
   PassRegistration<ReportNormalizedFingerprintPass>();
+  PassRegistration<ReportMaterializationFingerprintPass>();
+  PassRegistration<MaterializationDeleteTaskPass>();
+  PassRegistration<MaterializationReorderTasksPass>();
+  PassRegistration<MaterializationSelfConsistentReorderPass>();
+  PassRegistration<MaterializationReplaySourcePass>();
+  PassRegistration<MaterializationDuplicateAlgebraSourcePass>();
+  PassRegistration<MaterializationSwapSameTypeEdgesPass>();
+  PassRegistration<MaterializationDomainPass<true>>();
+  PassRegistration<MaterializationDomainPass<false>>();
+  PassRegistration<MaterializationUnknownAttributePass>();
+  PassRegistration<RenameSymbolsPass>();
+  PassRegistration<SetFastRegionPolicyPass>();
 }
 
 } // namespace mlir::shuttle::test

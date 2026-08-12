@@ -4,6 +4,8 @@
 #ifndef SHUTTLE_IR_SHUTTLEOPS_H_
 #define SHUTTLE_IR_SHUTTLEOPS_H_
 
+#include <string>
+
 #include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
@@ -15,5 +17,11 @@
 
 #define GET_OP_CLASSES
 #include "shuttle/IR/ShuttleOps.h.inc"
+
+namespace mlir::shuttle {
+
+std::string materializationPlanFingerprint(MaterializationPlanOp plan);
+
+} // namespace mlir::shuttle
 
 #endif // SHUTTLE_IR_SHUTTLEOPS_H_
