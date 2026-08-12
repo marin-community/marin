@@ -31,6 +31,14 @@ std::string materializationPlanFingerprint(MaterializationPlanOp plan);
 
 std::string schedulePlanFingerprint(SchedulePlanOp plan);
 
+std::string executableCodeDigest(ArrayRef<int8_t> code);
+
+std::string deviceModuleFingerprint(DeviceModuleOp module);
+
+std::string invocationAbiFingerprint(InvocationAbiOp abi);
+
+std::string executableBundleFingerprint(ExecutableBundleOp bundle);
+
 } // namespace mlir::shuttle
 
 #endif // SHUTTLE_IR_SHUTTLEOPS_H_

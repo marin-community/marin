@@ -3,6 +3,7 @@
 
 #include "TestPasses.h"
 
+#include <string>
 #include <type_traits>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -1671,6 +1672,125 @@ public:
   }
 };
 
+void refreshExecutableBundle(ModuleOp module, bool refreshCodeDigest) {
+  auto device = *module.getOps<DeviceModuleOp>().begin();
+  auto bundle = *module.getOps<ExecutableBundleOp>().begin();
+  if (refreshCodeDigest) {
+    std::string digest = executableCodeDigest(device.getCode());
+    device.setCodeDigest(digest);
+    for (DeviceEntryOp entry :
+         device.getBody().front().getOps<DeviceEntryOp>()) {
+      entry.setCodeDigest(digest);
+    }
+  }
+  device.setFingerprint(deviceModuleFingerprint(device));
+  bundle.setDeviceModuleFingerprint(device.getFingerprint());
+  auto abi = *module.getOps<InvocationAbiOp>().begin();
+  abi.setFingerprint(invocationAbiFingerprint(abi));
+  bundle.setInvocationAbiFingerprint(abi.getFingerprint());
+  bundle.setFingerprint(executableBundleFingerprint(bundle));
+}
+
+class ReportExecutableBundleFingerprintPass
+    : public MutationPass<ReportExecutableBundleFingerprintPass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      ReportExecutableBundleFingerprintPass)
+  StringRef getArgument() const final {
+    return "shuttle-test-report-executable-bundle-fingerprint";
+  }
+  void runOnOperation() override {
+    auto bundles = getOperation().getOps<ExecutableBundleOp>();
+    if (bundles.empty()) {
+      getOperation().emitError("test fixture has no executable bundle");
+      return signalPassFailure();
+    }
+    llvm::outs() << (*bundles.begin()).getFingerprint() << '\n';
+  }
+};
+
+class CorruptExecutablePass : public MutationPass<CorruptExecutablePass> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(CorruptExecutablePass)
+  CorruptExecutablePass() = default;
+  CorruptExecutablePass(const CorruptExecutablePass &other)
+      : MutationPass<CorruptExecutablePass>(other) {}
+  Option<std::string> kind{*this, "kind", llvm::cl::desc("Corruption kind"),
+                           llvm::cl::init("")};
+  StringRef getArgument() const final {
+    return "shuttle-test-corrupt-executable";
+  }
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    auto devices = module.getOps<DeviceModuleOp>();
+    auto abis = module.getOps<InvocationAbiOp>();
+    auto bundles = module.getOps<ExecutableBundleOp>();
+    if (devices.empty() || abis.empty() || bundles.empty()) {
+      module.emitError("test fixture has no executable bundle");
+      return signalPassFailure();
+    }
+    DeviceModuleOp device = *devices.begin();
+    InvocationAbiOp abi = *abis.begin();
+    ExecutableBundleOp bundle = *bundles.begin();
+    SmallVector<InvocationSlotOp> slots(
+        abi.getBody().front().getOps<InvocationSlotOp>());
+    SmallVector<DeviceEntryOp> entries(
+        device.getBody().front().getOps<DeviceEntryOp>());
+    StringRef mutation = kind;
+    if (mutation == "slot") {
+      slots.front().setSourceBuffer(1);
+    } else if (mutation == "stride") {
+      slots.front().setStridesAttr(
+          DenseI64ArrayAttr::get(module.getContext(), {2, 26}));
+    } else if (mutation == "offset") {
+      slots.front().setOffset(2);
+    } else if (mutation == "alignment") {
+      slots.front().setAlignment(1);
+    } else if (mutation == "address-space") {
+      slots.front().setAddressSpace(ExecutableAddressSpace::Device);
+    } else if (mutation == "access") {
+      slots.front().setAccess(ExecutableAccess::Write);
+    } else if (mutation == "alias") {
+      slots[1].setAliasGroup(0);
+    } else if (mutation == "dependency") {
+      entries[4].setDependenciesAttr(
+          DenseI64ArrayAttr::get(module.getContext(), {}));
+    } else if (mutation == "predication") {
+      entries.front().setPredication(ExecutablePredication::None);
+    } else if (mutation == "body") {
+      SmallVector<int8_t> code(device.getCode());
+      code[entries[1].getCodeOffset() + entries[1].getCodeLength() - 1] ^= 1;
+      device.setCodeAttr(DenseI8ArrayAttr::get(module.getContext(), code));
+      refreshExecutableBundle(module, true);
+      return;
+    } else if (mutation == "code-byte") {
+      SmallVector<int8_t> code(device.getCode());
+      code.back() ^= 1;
+      device.setCodeAttr(DenseI8ArrayAttr::get(module.getContext(), code));
+      return;
+    } else if (mutation == "code-digest") {
+      device.setCodeDigest(std::string(64, '0'));
+      return;
+    } else if (mutation == "cross-object") {
+      entries.front().setCodeDigest(std::string(64, '0'));
+      return;
+    } else if (mutation == "root") {
+      bundle.setDeviceModuleFingerprint(std::string(64, '0'));
+      bundle.setFingerprint(executableBundleFingerprint(bundle));
+      return;
+    } else if (mutation == "unknown-attr") {
+      bundle->setAttr(
+          "shuttle.test_semantic",
+          IntegerAttr::get(IntegerType::get(module.getContext(), 64), 7));
+      return;
+    } else {
+      module.emitError("unknown executable corruption kind");
+      return signalPassFailure();
+    }
+    refreshExecutableBundle(module, false);
+  }
+};
+
 } // namespace
 
 void registerMutationPasses() {
@@ -1741,6 +1861,8 @@ void registerMutationPasses() {
   PassRegistration<ScheduleLifetimePass>();
   PassRegistration<RenameSymbolsPass>();
   PassRegistration<SetFastRegionPolicyPass>();
+  PassRegistration<ReportExecutableBundleFingerprintPass>();
+  PassRegistration<CorruptExecutablePass>();
 }
 
 } // namespace mlir::shuttle::test

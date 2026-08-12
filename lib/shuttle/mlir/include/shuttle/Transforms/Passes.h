@@ -36,6 +36,8 @@ std::unique_ptr<Pass> createPlanRowFoldMaterializationPass();
 std::unique_ptr<Pass> createVerifyMaterializationPlanPass();
 std::unique_ptr<Pass> createPlanSimt32RowFoldSchedulePass();
 std::unique_ptr<Pass> createVerifySimt32RowFoldSchedulePass();
+std::unique_ptr<Pass> createBuildCpuExecutableBundlePass();
+std::unique_ptr<Pass> createVerifyCpuExecutableBundlePass();
 
 std::string normalizedStablehloFingerprint(ModuleOp module);
 

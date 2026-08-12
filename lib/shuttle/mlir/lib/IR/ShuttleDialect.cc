@@ -7,9 +7,11 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 #include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Operation.h"
@@ -18,6 +20,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "shuttle/IR/ShuttleAttrs.h"
 #include "shuttle/IR/ShuttleOps.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -1176,6 +1179,327 @@ LogicalResult SchedulePlanOp::verifyRegions() {
   }
   if (getFingerprint() != schedulePlanFingerprint(*this)) {
     return emitOpError("fingerprint does not match the closed schedule plan");
+  }
+  return success();
+}
+
+namespace {
+
+std::string digestText(StringRef text) {
+  llvm::SHA256 digest;
+  digest.update(text);
+  return llvm::toHex(digest.final(), true);
+}
+
+template <typename PlanOp, typename TerminatorOp>
+std::string executablePlanFingerprint(PlanOp plan, StringRef header) {
+  std::string normalized;
+  llvm::raw_string_ostream stream(normalized);
+  stream << header << '\n';
+  for (NamedAttribute attribute : plan->getAttrs()) {
+    if (attribute.getName().strref() == "fingerprint") {
+      continue;
+    }
+    stream << attribute.getName() << '=';
+    attribute.getValue().print(stream);
+    stream << '\n';
+  }
+  if constexpr (!std::is_same_v<PlanOp, ExecutableBundleOp>) {
+    for (Operation &operation : plan.getBody().front()) {
+      if (isa<TerminatorOp>(operation)) {
+        continue;
+      }
+      stream << operation.getName() << '{';
+      for (NamedAttribute attribute : operation.getAttrs()) {
+        stream << attribute.getName() << '=';
+        attribute.getValue().print(stream);
+        stream << ',';
+      }
+      stream << "}\n";
+    }
+  }
+  stream.flush();
+  return digestText(normalized);
+}
+
+LogicalResult verifyExecutableAccessArray(Operation *owner, ArrayAttr accesses,
+                                          size_t expectedSize,
+                                          ExecutableAccess expected) {
+  if (accesses.size() != expectedSize) {
+    return owner->emitOpError("access list must match buffer references");
+  }
+  for (Attribute access : accesses) {
+    auto typed = dyn_cast<ExecutableAccessAttr>(access);
+    if (!typed || typed.getValue() != expected) {
+      return owner->emitOpError("entrypoint access mode is invalid");
+    }
+  }
+  return success();
+}
+
+FailureOr<int64_t> executableElementBytes(Type elementType) {
+  if (elementType.isBF16()) {
+    return 2;
+  }
+  if (elementType.isF32()) {
+    return 4;
+  }
+  return failure();
+}
+
+} // namespace
+
+std::string executableCodeDigest(ArrayRef<int8_t> code) {
+  llvm::SHA256 digest;
+  digest.update(ArrayRef<uint8_t>(
+      reinterpret_cast<const uint8_t *>(code.data()), code.size()));
+  return llvm::toHex(digest.final(), true);
+}
+
+std::string deviceModuleFingerprint(DeviceModuleOp module) {
+  return executablePlanFingerprint<DeviceModuleOp, DeviceModuleYieldOp>(
+      module, "shuttle.device_module.v1");
+}
+
+std::string invocationAbiFingerprint(InvocationAbiOp abi) {
+  return executablePlanFingerprint<InvocationAbiOp, InvocationAbiYieldOp>(
+      abi, "shuttle.invocation_abi.v1");
+}
+
+std::string executableBundleFingerprint(ExecutableBundleOp bundle) {
+  return executablePlanFingerprint<ExecutableBundleOp, Operation>(
+      bundle, "shuttle.executable_bundle.v1");
+}
+
+LogicalResult DeviceModuleOp::verifyRegions() {
+  if (!getOperation()->getDiscardableAttrs().empty()) {
+    return emitOpError("does not permit discardable attributes");
+  }
+  if (getSchemaVersion() != 1 ||
+      getCodeFormat() != ExecutableCodeFormat::CpuBytecodeV1) {
+    return emitOpError(
+        "requires device-module schema 1 and CPU bytecode format 1");
+  }
+  if (!isLowerHexDigest(getSourceScheduleFingerprint()) ||
+      !isLowerHexDigest(getCodeDigest()) ||
+      !isLowerHexDigest(getFingerprint())) {
+    return emitOpError("fingerprints must be lowercase SHA-256 digests");
+  }
+  if (getCode().empty() || getCodeDigest() != executableCodeDigest(getCode())) {
+    return emitOpError("code SHA-256 does not match code bytes");
+  }
+  Region &body = getBody();
+  if (body.empty() || !llvm::hasSingleElement(body) ||
+      !isa<DeviceModuleYieldOp>(body.front().getTerminator())) {
+    return emitOpError(
+        "requires one block terminated by shuttle.device_module_yield");
+  }
+  int64_t expectedOffset = 0;
+  int64_t ordinal = 0;
+  llvm::DenseMap<int64_t, int64_t> producers;
+  for (Operation &operation : body.front().without_terminator()) {
+    auto entry = dyn_cast<DeviceEntryOp>(operation);
+    if (!entry) {
+      return emitOpError("body may contain only device entries");
+    }
+    if (!entry->getDiscardableAttrs().empty()) {
+      return entry.emitOpError("does not permit discardable attributes");
+    }
+    if (entry.getOrdinal() != ordinal || entry.getSourceTask() != ordinal++) {
+      return entry.emitOpError(
+          "entry and source task ordinals must be contiguous");
+    }
+    if (entry.getCodeOffset() != expectedOffset || entry.getCodeLength() <= 0 ||
+        entry.getCodeLength() >
+            static_cast<int64_t>(getCode().size()) - expectedOffset) {
+      return entry.emitOpError(
+          "entry byte range must partition the code object");
+    }
+    expectedOffset += entry.getCodeLength();
+    if (entry.getCodeDigest() != getCodeDigest()) {
+      return entry.emitOpError(
+          "entrypoint must bind the verified device-module code object");
+    }
+    if (failed(verifyExecutableAccessArray(entry, entry.getInputAccesses(),
+                                           entry.getInputBuffers().size(),
+                                           ExecutableAccess::Read)) ||
+        failed(verifyExecutableAccessArray(entry, entry.getOutputAccesses(),
+                                           entry.getOutputBuffers().size(),
+                                           ExecutableAccess::Write))) {
+      return failure();
+    }
+    llvm::SmallDenseSet<int64_t> dependencies;
+    SmallVector<int64_t> expectedDependencies;
+    for (int64_t buffer : entry.getInputBuffers()) {
+      if (buffer < 0) {
+        return entry.emitOpError("input buffer ordinal must be nonnegative");
+      }
+      auto producer = producers.find(buffer);
+      if (producer != producers.end() &&
+          !llvm::is_contained(expectedDependencies, producer->second)) {
+        expectedDependencies.push_back(producer->second);
+      }
+    }
+    llvm::sort(expectedDependencies);
+    for (int64_t dependency : entry.getDependencies()) {
+      if (dependency < 0 || dependency >= entry.getOrdinal() ||
+          !dependencies.insert(dependency).second) {
+        return entry.emitOpError(
+            "dependencies must be unique earlier entry ordinals");
+      }
+    }
+    if (entry.getDependencies() != ArrayRef<int64_t>(expectedDependencies)) {
+      return entry.emitOpError(
+          "dependencies must equal entrypoint buffer producers");
+    }
+    for (int64_t buffer : entry.getOutputBuffers()) {
+      if (buffer < 0 ||
+          !producers.try_emplace(buffer, entry.getOrdinal()).second) {
+        return entry.emitOpError(
+            "output buffers must be nonnegative and have one producer");
+      }
+    }
+    if (entry.getPredication() != ExecutablePredication::None &&
+        entry.getPredication() != ExecutablePredication::DomainBounds) {
+      return entry.emitOpError("uses an unsupported predication policy");
+    }
+  }
+  if (ordinal == 0 ||
+      expectedOffset != static_cast<int64_t>(getCode().size())) {
+    return emitOpError("device entries must exactly cover the code object");
+  }
+  if (!body.front().getTerminator()->getDiscardableAttrs().empty()) {
+    return body.front().getTerminator()->emitOpError(
+        "does not permit discardable attributes");
+  }
+  if (getFingerprint() != deviceModuleFingerprint(*this)) {
+    return emitOpError("fingerprint does not match the closed device module");
+  }
+  return success();
+}
+
+LogicalResult InvocationAbiOp::verifyRegions() {
+  if (!getOperation()->getDiscardableAttrs().empty()) {
+    return emitOpError("does not permit discardable attributes");
+  }
+  if (getSchemaVersion() != 1 ||
+      !isLowerHexDigest(getSourcePlanFingerprint()) ||
+      !isLowerHexDigest(getSourceScheduleFingerprint()) ||
+      !isLowerHexDigest(getFingerprint())) {
+    return emitOpError(
+        "requires ABI schema 1 and lowercase SHA-256 fingerprints");
+  }
+  Region &body = getBody();
+  if (body.empty() || !llvm::hasSingleElement(body) ||
+      !isa<InvocationAbiYieldOp>(body.front().getTerminator())) {
+    return emitOpError(
+        "requires one block terminated by shuttle.invocation_abi_yield");
+  }
+  int64_t ordinal = 0;
+  llvm::SmallDenseSet<int64_t> aliasGroups;
+  llvm::SmallDenseSet<int64_t> reuseGroups;
+  for (Operation &operation : body.front().without_terminator()) {
+    auto slot = dyn_cast<InvocationSlotOp>(operation);
+    if (!slot) {
+      return emitOpError("body may contain only invocation slots");
+    }
+    if (!slot->getDiscardableAttrs().empty()) {
+      return slot.emitOpError("does not permit discardable attributes");
+    }
+    if (slot.getOrdinal() != ordinal || slot.getSourceBuffer() != ordinal++) {
+      return slot.emitOpError(
+          "slot and source buffer ordinals must be contiguous");
+    }
+    auto type = dyn_cast<RankedTensorType>(slot.getTensorType());
+    FailureOr<int64_t> elementBytes =
+        type ? executableElementBytes(type.getElementType())
+             : FailureOr<int64_t>(failure());
+    FailureOr<int64_t> elements = type ? staticElementCount(type.getShape())
+                                       : FailureOr<int64_t>(failure());
+    if (!type || !type.hasStaticShape() || failed(elementBytes) ||
+        failed(elements) ||
+        *elements > std::numeric_limits<int64_t>::max() / *elementBytes) {
+      return slot.emitOpError("requires a bounded static bf16 or f32 tensor");
+    }
+    const int64_t requiredBytes = *elements * *elementBytes;
+    SmallVector<int64_t> strides(type.getRank());
+    int64_t stride = *elementBytes;
+    for (int64_t axis = type.getRank(); axis > 0; --axis) {
+      strides[axis - 1] = stride;
+      stride *= type.getDimSize(axis - 1);
+    }
+    if (slot.getRequiredBytes() != requiredBytes ||
+        slot.getStrides() != ArrayRef<int64_t>(strides)) {
+      return slot.emitOpError("required bytes and strides must encode "
+                              "contiguous row-major storage");
+    }
+    if (slot.getOffset() != 0 || slot.getAlignment() != *elementBytes ||
+        slot.getAddressSpace() != ExecutableAddressSpace::Host) {
+      return slot.emitOpError("closed CPU ABI requires host storage, zero "
+                              "offset, and natural alignment");
+    }
+    if (!aliasGroups.insert(slot.getAliasGroup()).second ||
+        slot.getAliasGroup() != slot.getOrdinal() ||
+        !reuseGroups.insert(slot.getReuseGroup()).second ||
+        slot.getReuseGroup() != slot.getOrdinal()) {
+      return slot.emitOpError("closed CPU ABI forbids aliasing and reuse");
+    }
+    if (slot.getStorage() == MaterializationStorage::External &&
+        slot.getAccess() == ExecutableAccess::ReadWrite) {
+      return slot.emitOpError("external slots must be read-only or write-only");
+    }
+    if (slot.getStorage() == MaterializationStorage::Temporary &&
+        slot.getAccess() != ExecutableAccess::ReadWrite) {
+      return slot.emitOpError("temporary slots must be read-write");
+    }
+  }
+  if (ordinal == 0) {
+    return emitOpError("requires at least one invocation slot");
+  }
+  if (!body.front().getTerminator()->getDiscardableAttrs().empty()) {
+    return body.front().getTerminator()->emitOpError(
+        "does not permit discardable attributes");
+  }
+  if (getFingerprint() != invocationAbiFingerprint(*this)) {
+    return emitOpError("fingerprint does not match the closed invocation ABI");
+  }
+  return success();
+}
+
+LogicalResult ExecutableBundleOp::verify() {
+  if (!getOperation()->getDiscardableAttrs().empty()) {
+    return emitOpError("does not permit discardable attributes");
+  }
+  if (getSchemaVersion() != 1 ||
+      getCompletion() != ExecutableCompletion::Synchronous ||
+      !isLowerHexDigest(getSourceScheduleFingerprint()) ||
+      !isLowerHexDigest(getDeviceModuleFingerprint()) ||
+      !isLowerHexDigest(getInvocationAbiFingerprint()) ||
+      !isLowerHexDigest(getFingerprint())) {
+    return emitOpError("requires bundle schema 1, synchronous completion, and "
+                       "SHA-256 bindings");
+  }
+  auto module = getOperation()->getParentOfType<ModuleOp>();
+  if (!module) {
+    return emitOpError("must be nested in a builtin module");
+  }
+  SmallVector<DeviceModuleOp> deviceModules(module.getOps<DeviceModuleOp>());
+  SmallVector<InvocationAbiOp> invocationAbis(module.getOps<InvocationAbiOp>());
+  SmallVector<ExecutableBundleOp> bundles(module.getOps<ExecutableBundleOp>());
+  if (deviceModules.size() != 1 || invocationAbis.size() != 1 ||
+      bundles.size() != 1) {
+    return emitOpError(
+        "requires exactly one device module, invocation ABI, and bundle root");
+  }
+  DeviceModuleOp deviceModule = deviceModules.front();
+  InvocationAbiOp abi = invocationAbis.front();
+  if (getSourceScheduleFingerprint() !=
+          deviceModule.getSourceScheduleFingerprint() ||
+      getSourceScheduleFingerprint() != abi.getSourceScheduleFingerprint() ||
+      getDeviceModuleFingerprint() != deviceModule.getFingerprint() ||
+      getInvocationAbiFingerprint() != abi.getFingerprint() ||
+      getFingerprint() != executableBundleFingerprint(*this)) {
+    return emitOpError("invalid closed CPU executable bundle");
   }
   return success();
 }

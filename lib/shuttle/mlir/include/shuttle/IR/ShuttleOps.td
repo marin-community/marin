@@ -172,4 +172,80 @@ def Shuttle_SchedulePlanYieldOp
   let builders = [OpBuilder<(ins), [{ /* no operands */ }]>];
 }
 
+def Shuttle_DeviceModuleOp
+    : Shuttle_Op<"device_module", [IsolatedFromAbove,
+                         SingleBlockImplicitTerminator<
+                             "::mlir::shuttle::DeviceModuleYieldOp">]> {
+  let summary = "Closed generated CPU bytecode and entrypoint bindings";
+  let arguments = (ins I64Attr:$schema_version,
+      Shuttle_ExecutableCodeFormatAttr:$code_format, Shuttle_PolicyAttr:$policy,
+      StrAttr:$source_schedule_fingerprint, DenseI8ArrayAttr:$code,
+      StrAttr:$code_digest, StrAttr:$fingerprint);
+  let regions = (region SizedRegion<1>:$body);
+  let hasRegionVerifier = 1;
+}
+
+def Shuttle_DeviceEntryOp
+    : Shuttle_Op<"device_entry",
+                 [ParentOneOf<["::mlir::shuttle::DeviceModuleOp"]>]> {
+  let summary = "One bytecode entry bound to a scheduled task";
+  let arguments = (ins I64Attr:$ordinal, I64Attr:$source_task,
+      I64Attr:$code_offset, I64Attr:$code_length,
+      DenseI64ArrayAttr:$input_buffers, DenseI64ArrayAttr:$output_buffers,
+      ArrayAttr:$input_accesses, ArrayAttr:$output_accesses,
+      DenseI64ArrayAttr:$dependencies,
+      Shuttle_ExecutablePredicationAttr:$predication,
+      OptionalAttr<Shuttle_ScheduleReductionOrderAttr>:$reduction_order,
+      StrAttr:$code_digest);
+}
+
+def Shuttle_DeviceModuleYieldOp
+    : Shuttle_Op<"device_module_yield",
+                 [ParentOneOf<["::mlir::shuttle::DeviceModuleOp"]>,
+                  Terminator]> {
+  let summary = "Terminate a generated device module";
+  let builders = [OpBuilder<(ins), [{ /* no operands */ }]>];
+}
+
+def Shuttle_InvocationAbiOp
+    : Shuttle_Op<"invocation_abi", [IsolatedFromAbove,
+                         SingleBlockImplicitTerminator<
+                             "::mlir::shuttle::InvocationAbiYieldOp">]> {
+  let summary = "Closed static buffer ABI for a local executable consumer";
+  let arguments = (ins I64Attr:$schema_version, StrAttr:$source_plan_fingerprint,
+      StrAttr:$source_schedule_fingerprint, StrAttr:$fingerprint);
+  let regions = (region SizedRegion<1>:$body);
+  let hasRegionVerifier = 1;
+}
+
+def Shuttle_InvocationSlotOp
+    : Shuttle_Op<"invocation_slot",
+                 [ParentOneOf<["::mlir::shuttle::InvocationAbiOp"]>]> {
+  let summary = "One statically bound runtime byte buffer";
+  let arguments = (ins I64Attr:$ordinal, I64Attr:$source_buffer,
+      TypeAttr:$tensor_type, I64Attr:$required_bytes,
+      DenseI64ArrayAttr:$strides, I64Attr:$offset, I64Attr:$alignment,
+      Shuttle_ExecutableAddressSpaceAttr:$address_space,
+      Shuttle_ExecutableAccessAttr:$access,
+      Shuttle_MaterializationStorageAttr:$storage, I64Attr:$alias_group,
+      I64Attr:$reuse_group);
+}
+
+def Shuttle_InvocationAbiYieldOp
+    : Shuttle_Op<"invocation_abi_yield",
+                 [ParentOneOf<["::mlir::shuttle::InvocationAbiOp"]>,
+                  Terminator]> {
+  let summary = "Terminate a static invocation ABI";
+  let builders = [OpBuilder<(ins), [{ /* no operands */ }]>];
+}
+
+def Shuttle_ExecutableBundleOp : Shuttle_Op<"executable_bundle"> {
+  let summary = "Closed root binding code, ABI, schedule, and completion";
+  let arguments = (ins I64Attr:$schema_version,
+      StrAttr:$source_schedule_fingerprint, StrAttr:$device_module_fingerprint,
+      StrAttr:$invocation_abi_fingerprint,
+      Shuttle_ExecutableCompletionAttr:$completion, StrAttr:$fingerprint);
+  let hasVerifier = 1;
+}
+
 #endif // SHUTTLE_IR_SHUTTLEOPS_TD_

@@ -90,4 +90,17 @@ def ShuttleVerifySimt32RowFoldSchedulePass
   let constructor = "createVerifySimt32RowFoldSchedulePass()";
 }
 
+def ShuttleBuildCpuExecutableBundlePass
+    : Pass<"shuttle-build-cpu-executable-bundle", "::mlir::ModuleOp"> {
+  let summary = "Generate a closed local CPU bytecode bundle from Shuttle IR";
+  let dependentDialects = ["::mlir::shuttle::ShuttleDialect"];
+  let constructor = "createBuildCpuExecutableBundlePass()";
+}
+
+def ShuttleVerifyCpuExecutableBundlePass
+    : Pass<"shuttle-verify-cpu-executable-bundle", "::mlir::ModuleOp"> {
+  let summary = "Rederive and verify a local CPU bytecode executable bundle";
+  let constructor = "createVerifyCpuExecutableBundlePass()";
+}
+
 #endif // SHUTTLE_TRANSFORMS_PASSES_TD_

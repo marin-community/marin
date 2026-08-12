@@ -139,6 +139,76 @@ def Shuttle_ScheduleTaskKindAttr
   let assemblyFormat = "`<` $value `>`";
 }
 
+def Shuttle_ExecutableCodeFormat
+    : I32EnumAttr<"ExecutableCodeFormat", "Closed local executable format",
+                  [I32EnumAttrCase<"CpuBytecodeV1", 0,
+                                   "cpu_bytecode_v1">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_ExecutableCodeFormatAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_ExecutableCodeFormat,
+               "executable_code_format"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
+def Shuttle_ExecutableAccess
+    : I32EnumAttr<"ExecutableAccess", "Executable buffer access mode",
+                  [I32EnumAttrCase<"Read", 0, "read">,
+                   I32EnumAttrCase<"Write", 1, "write">,
+                   I32EnumAttrCase<"ReadWrite", 2, "read_write">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_ExecutableAccessAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_ExecutableAccess,
+               "executable_access"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
+def Shuttle_ExecutableAddressSpace
+    : I32EnumAttr<"ExecutableAddressSpace", "Executable buffer address space",
+                  [I32EnumAttrCase<"Host", 0, "host">,
+                   I32EnumAttrCase<"Device", 1, "device">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_ExecutableAddressSpaceAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_ExecutableAddressSpace,
+               "executable_address_space"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
+def Shuttle_ExecutablePredication
+    : I32EnumAttr<"ExecutablePredication", "Executable bounds policy",
+                  [I32EnumAttrCase<"None", 0, "none">,
+                   I32EnumAttrCase<"DomainBounds", 1, "domain_bounds">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_ExecutablePredicationAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_ExecutablePredication,
+               "executable_predication"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
+def Shuttle_ExecutableCompletion
+    : I32EnumAttr<"ExecutableCompletion", "Local consumer completion policy",
+                  [I32EnumAttrCase<"Synchronous", 0, "synchronous">]> {
+  let genSpecializedAttr = 0;
+  let cppNamespace = "::mlir::shuttle";
+}
+
+def Shuttle_ExecutableCompletionAttr
+    : EnumAttr<Shuttle_Dialect, Shuttle_ExecutableCompletion,
+               "executable_completion"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
 def Shuttle_SourceRefAttr : Shuttle_Attr<"SourceRef"> {
   let mnemonic = "source_ref";
   let summary = "Rename-invariant structural reference to a source result";

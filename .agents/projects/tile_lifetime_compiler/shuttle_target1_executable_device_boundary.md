@@ -1,26 +1,72 @@
 # Target 1 executable-device boundary
 
-Status: design stop. No executable device IR is added by this slice.
+Status: bounded opt-in CPU consumer proof. No GPU, XLA runtime, or production
+execution path is added by this slice.
 
 ## Decision
 
-`shuttle.schedule_plan` is the last lossless typed boundary currently supported
-by the compiler. It fixes an abstract `simt32` task schedule, logical indexing,
-task dependencies, and a resource envelope. It does not contain enough
-information to emit or execute device code.
+The compiler now has a closed local boundary below `shuttle.schedule_plan` for
+one static `7x13` row-Fold graph. It generates typed CPU bytecode from the
+actual Shuttle Map/Fold bodies, binds that code to a static byte-buffer ABI,
+and executes the stripped bundle synchronously in a local interpreter. The
+consumer does not inspect StableHLO, Shuttle algebra, task semantic digests, or
+source names after bundle construction.
 
-Adding NVVM, a custom call, or a nominal executable-plan operation now would
-create an orphan backend. The XLA module-transform hook owns StableHLO-to-
-StableHLO rewriting only. It has no buffer-assignment result, executable build
-callback, runtime registration, or invocation-time buffer table. The core
-pipeline also removes all Shuttle operations before returning StableHLO.
-Opt-in materialization and schedule passes remain outside that pipeline and do
-not change pipeline ABI 5 or its cache identity.
+This is a CPU consumer proof, not accelerator code generation. Adding NVVM or a
+custom call would still create an orphan backend: the XLA module-transform hook
+owns StableHLO-to-StableHLO rewriting only and has no buffer-assignment result,
+executable build callback, runtime registration, or invocation-time buffer
+table. The core pipeline still removes all Shuttle operations before returning
+StableHLO. The new build, source-verification, and runtime entry points are
+opt-in and remain outside that pipeline, so pipeline ABI 5 and its cache
+identity are unchanged.
 
-The next implementation must begin with one explicit runtime owner and one
-code-object owner. Those choices are inputs to executable lowering; they cannot
-be inferred from tensor types, affine maps, reduction dimensions, numerical
-policy, or the abstract `simt32` profile.
+An accelerator implementation must still begin with an explicit XLA/runtime
+owner and a target code-object owner. Those choices cannot be inferred from
+tensor types, affine maps, reduction dimensions, numerical policy, the CPU
+proof, or the abstract `simt32` profile.
+
+## Implemented CPU boundary
+
+The static boundary has three closed operations:
+
+- `shuttle.device_module` contains inline `cpu_bytecode_v1` bytes, their
+  SHA-256 digest, one structural entry per task, exact byte ranges, ordered
+  buffer references, access declarations, dependencies, predication, reduction
+  order, policy, and a fingerprint over every semantic attribute and child;
+- `shuttle.invocation_abi` contains one slot per materialization buffer with
+  static tensor type, required span, contiguous byte strides, zero offset,
+  natural alignment, host address space, read/write access, external or
+  temporary ownership, and unique alias and reuse groups;
+- `shuttle.executable_bundle` is the closed root binding the exact device-module
+  and invocation-ABI fingerprints to their shared schedule and synchronous
+  completion policy.
+
+The generator consumes the complete scalar regions and affine indexing maps of
+each Map and the exact Fold combiner. Its instruction set is limited to f32
+constants, add, multiply, divide, rsqrt, exact BF16-to-f32 conversion, and
+round-to-nearest-even f32-to-BF16 conversion. The row Fold is an explicit
+left-to-right leaf traversal initialized from its rank-zero buffer. This is one
+legal realization of `tree_association_free_leaf_order_fixed`; the test-only
+post-conversion FAST policy does not grant another reduction order or
+instruction set.
+
+The local consumer receives raw mutable byte spans for external buffers,
+allocates distinct host byte spans for temporaries, validates size, alignment,
+access, no-alias, bytecode digest, root binding, and dependency completion, and
+uses only ABI offsets and strides for loads and stores. It executes exact
+domain loops with bounds predication and returns only after every entry and
+output write completes. Code and temporary storage therefore remain owned for
+the whole synchronous call.
+
+The slice deliberately accepts only static Map/Fold task domains no larger than
+256 elements, one single-tile row Fold, BF16/f32 values, host buffers, zero
+offsets, natural alignment, unique alias/reuse groups, and one output per task.
+This includes the frozen `7x13` forward graph and excludes the `2048x4096`
+graph, multi-tile Fold realization, backward/composed graphs, dynamic shapes,
+other types, reuse, donation, and asynchronous execution. These restrictions
+are structural; module, function, workload, fixture, and source-operation names
+never select code or runtime behavior.
 
 ## Missing contracts
 
@@ -43,9 +89,9 @@ buffer ordinal:
 - allocation lifetime and reuse group;
 - read, write, or read-write access.
 
-The first implementation should forbid reuse, donation, nonzero offsets, and
-overlapping alias groups. That is a safe candidate policy, not a fact derivable
-from StableHLO. A typed XLA FFI handler can observe each argument's dtype, data
+The CPU proof forbids reuse, donation, nonzero offsets, and overlapping alias
+groups. That is an explicit local policy, not a fact derivable from StableHLO.
+A typed XLA FFI handler can observe each argument's dtype, data
 pointer, rank, and dimensions. It can recompute a shape-derived required byte
 count and check pointer alignment, but that count is not an observable
 allocation extent and cannot prove the allocation is large enough. Contiguous,
@@ -93,10 +139,11 @@ An executable launch record needs:
 - dependency events and their release/acquire visibility scope;
 - failure and completion semantics visible to the runtime.
 
-The current schedule's task dependencies can order launches. They do not define
-intra-workgroup barriers or lane visibility. The `7x13` partial elementwise and
-Fold tiles require explicit bounds predication. The `2048x4096` Fold requires a
-defined merge of 16 serial feature chunks.
+The current schedule's task dependencies can order accelerator launches. They
+do not define intra-workgroup barriers or lane visibility. A device realization
+of the `7x13` partial elementwise and Fold tiles requires explicit bounds
+predication. The `2048x4096` Fold requires a defined merge of 16 serial feature
+chunks.
 
 ### Fold algorithm and numerical policy
 
@@ -110,8 +157,9 @@ The schedule's `scratch_bytes`, threads, and serial tile count are a resource
 envelope. They do not define lane loads, partial accumulators, the reduction
 tree, serial-chunk merge order, barriers, or final write ownership. A code
 generator must choose an algorithm and the verifier must prove that it preserves
-leaf order while using only permitted tree association. Until then, the row
-Fold launch is not executable.
+leaf order while using only permitted tree association. Until then, an
+accelerator row-Fold launch is not executable; the CPU proof uses a sequential
+left fold instead.
 
 ### Runtime and XLA ownership
 
@@ -177,30 +225,29 @@ progress from those prototype records.
 
 `spec.md` permits a standalone compiler before XLA integration. It does not
 assign buffer, stream, executable, or error ownership to the native MLIR path.
-Those ownership decisions remain required even for a standalone local runtime.
+The CPU proof supplies synchronous local owners for its inline code, external
+spans, and temporary spans. Accelerator ownership remains unassigned.
 
-## Proposed typed split
+## Typed split and accelerator extension
 
-Do not add one operation that mixes static code, dynamic pointers, and runtime
-state. The first executable implementation should use two closed child schemas
-and one closed static binding root.
+The CPU proof keeps static code and ABI descriptors separate from dynamic
+pointers and runtime state. Accelerator lowering should preserve that split.
 
-`shuttle.device_module` is static compiler output. It binds exactly one verified
-schedule and contains:
+`shuttle.device_module` is static compiler output. The CPU form binds exactly
+one verified schedule and contains:
 
-- schema, target-capability, numerical-policy, materialization-plan, and
-  schedule-plan fingerprints;
-- code-object bytes or an immutable code-object digest and format;
-- entrypoints with structural task ordinals, buffer access modes, launch
-  dimensions, predication, scratch requirements, and visibility edges;
+- schema, numerical policy, and schedule-plan fingerprint;
+- inline code-object bytes, their immutable digest, and format;
+- entrypoints with structural task ordinals, buffer access modes, byte ranges,
+  dependencies, predication, and reduction constraints;
 - a deterministic fingerprint covering every semantic field.
 
-`shuttle.invocation_abi` is a static descriptor consumed by the runtime. It
-contains buffer slots, types, required byte spans, strides, offsets, alignments,
-address spaces, ownership, alias and donation constraints, tuple-leaf
-destinations, and allocation/reuse groups. Actual base pointers, observable
-allocation extents supplied by a future ABI extension, and stream/event handles
-are dynamic invocation values and must not be serialized into MLIR.
+`shuttle.invocation_abi` is a static descriptor consumed by the runtime. The CPU
+form contains buffer slots, types, required byte spans, strides, offsets,
+alignments, host address space, ownership, access, and no-alias/no-reuse groups.
+Donation, tuple-leaf destinations, device address spaces, and reuse are not
+represented by schema 1 and therefore cannot be claimed. Actual base pointers
+are dynamic invocation values and are not serialized into MLIR.
 
 Both schemas must reject unknown attributes and recompute fingerprints. A
 static `shuttle.executable_bundle` root binds the canonical device-module digest
@@ -218,31 +265,39 @@ types or counts. Code-object verification must bind generated entrypoints to the
 complete typed Map/Fold bodies; workload, module, function, and source-operation
 names are excluded.
 
-The initial candidate may use one launch per schedule task, global buffers,
+The CPU proof uses one interpreter entry per schedule task, host buffers,
 natural element alignment, zero offsets, unique alias groups, no reuse, and
-release/acquire visibility between dependent launches. Each choice must be
-encoded as a target/runtime policy and independently checked. None should be
-described as inferred from RankedTensorType.
+sequential dependency completion. These are independently checked schema-1
+policies, not facts inferred from RankedTensorType. A device extension must add
+target launch shape, scratch, visibility, address space, stream, donation, and
+tuple-result contracts rather than reinterpret these CPU fields.
 
 ## Behavior-first implementation gates
 
-The executable slice starts only when one local runtime can consume both closed
-schemas. Its tests must observe the runtime boundary, not only printed IR.
+The checked CPU tests observe the runtime boundary, not only printed IR.
 
 Positive gates:
 
 - `7x13` source-ordered execution matches an independent finite CPU reference
-  exactly under the selected Fold algorithm;
+  exactly under the selected Fold algorithm after all source algebra and plans
+  are erased from the runtime input;
 - the post-conversion FAST-policy plan retains
-  `tree_association_free_leaf_order_fixed` and either produces the same result
-  or documents a separately verified numerical contract;
-- `2048x4096`, `7x13`, scalar Maps, and rank-zero buffers produce complete,
-  distinct slot and launch bindings;
+  `tree_association_free_leaf_order_fixed` and the same closed bytecode
+  instruction subset; only its policy-bound fingerprints differ;
+- `7x13`, scalar Maps, and rank-zero buffers produce complete, distinct slot
+  and entry bindings, while `2048x4096` fails the bounded consumer predicate;
 - symbol renaming preserves device-module and invocation-ABI fingerprints;
-- partial `13`, exact `256`, multi-chunk `4096`, and checked byte-span overflow
-  use the same public lowering and verifier paths.
+- partial `13` is executed; exact `256`, multi-chunk `4096`, and checked
+  byte-span overflow remain accelerator-extension gates.
 
-Mutation gates must reject:
+The checked CPU mutations reject changed slot/source ordinals, strides, offsets,
+alignments, host address space, access, aliasing, dependencies, predication,
+instruction bytes, code digest, cross-object entry binding, closed root binding,
+and unknown attributes. The runtime test applies those corruptions after bundle
+construction and independently checks that the stripped positive bundle
+executes the generated instructions.
+
+Future accelerator mutation gates must additionally reject:
 
 - missing, duplicated, reordered, or replayed task and buffer bindings;
 - changed base-pointer slot, byte span, stride, offset, alignment, address

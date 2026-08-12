@@ -4,6 +4,7 @@
 #include "shuttle/Transforms/Passes.h"
 
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <iterator>
 #include <limits>
@@ -60,6 +61,8 @@ namespace mlir::shuttle {
 #define GEN_PASS_DEF_SHUTTLEVERIFYMATERIALIZATIONPLANPASS
 #define GEN_PASS_DEF_SHUTTLEPLANSIMT32ROWFOLDSCHEDULEPASS
 #define GEN_PASS_DEF_SHUTTLEVERIFYSIMT32ROWFOLDSCHEDULEPASS
+#define GEN_PASS_DEF_SHUTTLEBUILDCPUEXECUTABLEBUNDLEPASS
+#define GEN_PASS_DEF_SHUTTLEVERIFYCPUEXECUTABLEBUNDLEPASS
 #include "shuttle/Transforms/Passes.h.inc"
 
 namespace {
@@ -3610,6 +3613,594 @@ public:
   }
 };
 
+enum class CpuOpcode : uint8_t {
+  ConstantF32 = 0,
+  AddF32 = 1,
+  MultiplyF32 = 2,
+  DivideF32 = 3,
+  RsqrtF32 = 4,
+  Bf16ToF32 = 5,
+  F32ToBf16Rne = 6,
+};
+
+enum class CpuTaskKind : uint8_t { Map = 0, RowFold = 1 };
+enum class CpuElementType : uint8_t { Bf16 = 0, F32 = 1 };
+
+void appendByte(SmallVectorImpl<int8_t> &bytes, uint8_t value) {
+  bytes.push_back(static_cast<int8_t>(value));
+}
+
+void appendU32(SmallVectorImpl<int8_t> &bytes, uint32_t value) {
+  for (unsigned shift = 0; shift < 32; shift += 8) {
+    appendByte(bytes, static_cast<uint8_t>(value >> shift));
+  }
+}
+
+FailureOr<CpuElementType> cpuElementType(Type type) {
+  if (type.isBF16()) {
+    return CpuElementType::Bf16;
+  }
+  if (type.isF32()) {
+    return CpuElementType::F32;
+  }
+  return failure();
+}
+
+FailureOr<uint8_t> byteRegister(llvm::DenseMap<Value, uint8_t> &registers,
+                                Value value) {
+  auto position = registers.find(value);
+  return position == registers.end() ? FailureOr<uint8_t>(failure())
+                                     : FailureOr<uint8_t>(position->second);
+}
+
+LogicalResult encodeScalarBody(Operation *owner, Block &block,
+                               SmallVectorImpl<int8_t> &bytes) {
+  if (block.getNumArguments() > UINT8_MAX ||
+      block.getOperations().size() - 1 > UINT8_MAX) {
+    return owner->emitOpError("CPU bytecode scalar body is too large");
+  }
+  llvm::DenseMap<Value, uint8_t> registers;
+  uint16_t nextRegister = 0;
+  appendByte(bytes, block.getNumArguments());
+  for (BlockArgument argument : block.getArguments()) {
+    FailureOr<CpuElementType> type = cpuElementType(argument.getType());
+    if (failed(type) || nextRegister > UINT8_MAX) {
+      return owner->emitOpError("CPU bytecode requires bf16 or f32 scalars");
+    }
+    appendByte(bytes, static_cast<uint8_t>(*type));
+    registers.try_emplace(argument, static_cast<uint8_t>(nextRegister++));
+  }
+  appendByte(bytes, block.getOperations().size() - 1);
+  for (Operation &operation : block.without_terminator()) {
+    if (nextRegister > UINT8_MAX || operation.getNumResults() != 1) {
+      return owner->emitOpError("CPU bytecode requires one-result scalar ops");
+    }
+    CpuOpcode opcode;
+    SmallVector<uint8_t> operands;
+    if (auto constant = dyn_cast<arith::ConstantOp>(operation)) {
+      auto value = dyn_cast<FloatAttr>(constant.getValue());
+      if (!value || !constant.getType().isF32()) {
+        return owner->emitOpError("CPU bytecode supports only f32 constants");
+      }
+      opcode = CpuOpcode::ConstantF32;
+      appendByte(bytes, static_cast<uint8_t>(opcode));
+      float scalar = value.getValueAsDouble();
+      uint32_t bits;
+      std::memcpy(&bits, &scalar, sizeof(bits));
+      appendU32(bytes, bits);
+    } else {
+      if (isa<arith::AddFOp>(operation)) {
+        opcode = CpuOpcode::AddF32;
+      } else if (isa<arith::MulFOp>(operation)) {
+        opcode = CpuOpcode::MultiplyF32;
+      } else if (isa<arith::DivFOp>(operation)) {
+        opcode = CpuOpcode::DivideF32;
+      } else if (isa<math::RsqrtOp>(operation)) {
+        opcode = CpuOpcode::RsqrtF32;
+      } else if (auto convert = dyn_cast<ScalarConvertOp>(operation)) {
+        opcode = convert.getSemantics() == ScalarConvertSemantics::Exact
+                     ? CpuOpcode::Bf16ToF32
+                     : CpuOpcode::F32ToBf16Rne;
+      } else {
+        return owner->emitOpError("contains an unsupported CPU bytecode op");
+      }
+      appendByte(bytes, static_cast<uint8_t>(opcode));
+      for (Value operand : operation.getOperands()) {
+        FailureOr<uint8_t> position = byteRegister(registers, operand);
+        if (failed(position)) {
+          return owner->emitOpError(
+              "CPU bytecode operand is not locally bound");
+        }
+        appendByte(bytes, *position);
+      }
+    }
+    FailureOr<CpuElementType> resultType =
+        cpuElementType(operation.getResult(0).getType());
+    if (failed(resultType)) {
+      return owner->emitOpError("CPU bytecode result must be bf16 or f32");
+    }
+    appendByte(bytes, static_cast<uint8_t>(*resultType));
+    registers.try_emplace(operation.getResult(0),
+                          static_cast<uint8_t>(nextRegister++));
+  }
+  auto yield = dyn_cast<YieldOp>(block.getTerminator());
+  if (!yield || yield.getValues().size() != 1) {
+    return owner->emitOpError("CPU bytecode requires one yielded scalar");
+  }
+  FailureOr<uint8_t> yielded = byteRegister(registers, yield.getValues()[0]);
+  if (failed(yielded)) {
+    return owner->emitOpError("CPU bytecode yield is not locally bound");
+  }
+  appendByte(bytes, *yielded);
+  return success();
+}
+
+LogicalResult encodeIndexMap(Operation *owner, AffineMap map,
+                             SmallVectorImpl<int8_t> &bytes) {
+  if (map.getNumResults() > UINT8_MAX) {
+    return owner->emitOpError("CPU bytecode indexing rank is too large");
+  }
+  appendByte(bytes, map.getNumResults());
+  for (AffineExpr expression : map.getResults()) {
+    uint64_t divisor = 1;
+    std::optional<AffineDimExpr> dimension;
+    if (auto direct = dyn_cast<AffineDimExpr>(expression)) {
+      dimension = direct;
+    } else if (auto binary = dyn_cast<AffineBinaryOpExpr>(expression);
+               binary && binary.getKind() == AffineExprKind::FloorDiv) {
+      if (auto dividedDimension = dyn_cast<AffineDimExpr>(binary.getLHS())) {
+        dimension = dividedDimension;
+      }
+      auto constant = dyn_cast<AffineConstantExpr>(binary.getRHS());
+      if (!dimension || !constant || constant.getValue() <= 1) {
+        return owner->emitOpError("CPU bytecode indexing map is not bounded");
+      }
+      divisor = constant.getValue();
+    } else {
+      return owner->emitOpError("CPU bytecode indexing map is unsupported");
+    }
+    if (dimension->getPosition() >= UINT8_MAX || divisor > UINT32_MAX) {
+      return owner->emitOpError("CPU bytecode indexing value is too large");
+    }
+    appendByte(bytes, dimension->getPosition());
+    appendU32(bytes, divisor);
+  }
+  return success();
+}
+
+struct CpuEntrySpec {
+  int64_t ordinal;
+  int64_t codeOffset;
+  int64_t codeLength;
+  SmallVector<int64_t> inputs;
+  SmallVector<int64_t> outputs;
+  SmallVector<int64_t> dependencies;
+  ExecutablePredication predication;
+  std::optional<ScheduleReductionOrder> reductionOrder;
+};
+
+struct CpuSlotSpec {
+  Type tensorType;
+  int64_t requiredBytes;
+  SmallVector<int64_t> strides;
+  int64_t alignment;
+  ExecutableAccess access;
+  MaterializationStorage storage;
+};
+
+struct CpuExecutableSpec {
+  SmallVector<int8_t> code;
+  SmallVector<CpuEntrySpec> entries;
+  SmallVector<CpuSlotSpec> slots;
+};
+
+LogicalResult appendTaskHeader(Operation *owner, CpuTaskKind kind,
+                               ArrayRef<int64_t> domain,
+                               SmallVectorImpl<int8_t> &bytes) {
+  for (uint8_t byte : ArrayRef<uint8_t>{'S', 'B', 'C', 1}) {
+    appendByte(bytes, byte);
+  }
+  appendByte(bytes, static_cast<uint8_t>(kind));
+  if (domain.size() > UINT8_MAX) {
+    return owner->emitOpError("CPU bytecode domain rank is too large");
+  }
+  appendByte(bytes, domain.size());
+  for (int64_t extent : domain) {
+    if (extent <= 0 || extent > UINT32_MAX) {
+      return owner->emitOpError("CPU bytecode domain extent is unsupported");
+    }
+    appendU32(bytes, extent);
+  }
+  return success();
+}
+
+FailureOr<SmallVector<int8_t>> encodeCpuTask(Operation *operation,
+                                             ScheduleTaskOp scheduleTask) {
+  SmallVector<int8_t> bytes;
+  if (auto map = dyn_cast<MapOp>(operation)) {
+    if (failed(appendTaskHeader(map, CpuTaskKind::Map,
+                                scheduleTask.getDomainShape(), bytes)) ||
+        map.getInputs().size() > UINT8_MAX || map.getNumResults() != 1) {
+      return failure();
+    }
+    appendByte(bytes, map.getInputs().size());
+    for (auto [input, attribute] : llvm::zip_equal(
+             map.getInputs(), map.getIndexingMaps().getValue().drop_back())) {
+      FailureOr<CpuElementType> type = cpuElementType(
+          cast<RankedTensorType>(input.getType()).getElementType());
+      if (failed(type)) {
+        return failure();
+      }
+      appendByte(bytes, static_cast<uint8_t>(*type));
+      if (failed(encodeIndexMap(map, cast<AffineMapAttr>(attribute).getValue(),
+                                bytes))) {
+        return failure();
+      }
+    }
+    FailureOr<CpuElementType> outputType = cpuElementType(
+        cast<RankedTensorType>(map.getResult(0).getType()).getElementType());
+    if (failed(outputType)) {
+      return failure();
+    }
+    appendByte(bytes, static_cast<uint8_t>(*outputType));
+    if (failed(encodeScalarBody(map, map.getBody().front(), bytes))) {
+      return failure();
+    }
+    return bytes;
+  }
+  auto fold = dyn_cast<FoldOp>(operation);
+  if (!fold || failed(appendTaskHeader(fold, CpuTaskKind::RowFold,
+                                       scheduleTask.getDomainShape(), bytes))) {
+    return failure();
+  }
+  appendByte(bytes, 2);
+  appendByte(bytes, static_cast<uint8_t>(CpuElementType::F32));
+  appendByte(bytes, 2);
+  appendByte(bytes, 0);
+  appendU32(bytes, 1);
+  appendByte(bytes, 1);
+  appendU32(bytes, 1);
+  appendByte(bytes, static_cast<uint8_t>(CpuElementType::F32));
+  appendByte(bytes, 0);
+  appendByte(bytes, static_cast<uint8_t>(CpuElementType::F32));
+  appendByte(bytes, 1);
+  appendByte(bytes,
+             static_cast<uint8_t>(
+                 ScheduleReductionOrder::TreeAssociationFreeLeafOrderFixed));
+  if (failed(encodeScalarBody(fold, fold.getCombiner().front(), bytes))) {
+    return failure();
+  }
+  return bytes;
+}
+
+FailureOr<CpuExecutableSpec>
+deriveCpuExecutable(ModuleOp module, MaterializationPlanOp materialization,
+                    SchedulePlanOp schedule) {
+  SmallVector<RegionOp> regions;
+  module.walk([&](RegionOp region) { regions.push_back(region); });
+  if (regions.size() != 1 ||
+      schedule.getPolicy() != regions.front().getPolicy()) {
+    return failure();
+  }
+  SmallVector<Operation *> algebra;
+  for (Operation &operation :
+       regions.front().getBody().front().without_terminator()) {
+    if (!isa<MapOp, FoldOp>(operation)) {
+      return failure();
+    }
+    algebra.push_back(&operation);
+  }
+  SmallVector<MaterializationBufferOp> materializationBuffers(
+      materialization.getBody().front().getOps<MaterializationBufferOp>());
+  SmallVector<ScheduleTaskOp> scheduleTasks(
+      schedule.getBody().front().getOps<ScheduleTaskOp>());
+  if (algebra.size() != scheduleTasks.size()) {
+    return failure();
+  }
+  for (ScheduleTaskOp task : scheduleTasks) {
+    FailureOr<int64_t> elements = scheduleElementCount(task.getDomainShape());
+    if ((!task.getDomainShape().empty() &&
+         (failed(elements) || *elements > 256)) ||
+        task.getSerialTiles() != 1) {
+      return failure();
+    }
+  }
+
+  CpuExecutableSpec spec;
+  for (auto [ordinal, operation, scheduleTask] :
+       llvm::enumerate(algebra, scheduleTasks)) {
+    FailureOr<SmallVector<int8_t>> encoded =
+        encodeCpuTask(operation, scheduleTask);
+    if (failed(encoded)) {
+      return failure();
+    }
+    const int64_t offset = spec.code.size();
+    spec.code.append(*encoded);
+    spec.entries.push_back(
+        CpuEntrySpec{static_cast<int64_t>(ordinal), offset,
+                     static_cast<int64_t>(encoded->size()),
+                     SmallVector<int64_t>(scheduleTask.getInputBuffers()),
+                     SmallVector<int64_t>(scheduleTask.getOutputBuffers()),
+                     SmallVector<int64_t>(scheduleTask.getDependencies()),
+                     scheduleTask.getKind() == ScheduleTaskKind::Scalar
+                         ? ExecutablePredication::None
+                         : ExecutablePredication::DomainBounds,
+                     scheduleTask.getReductionOrder()});
+  }
+  for (MaterializationBufferOp buffer : materializationBuffers) {
+    auto type = cast<RankedTensorType>(buffer.getTensorType());
+    const int64_t elementBytes = type.getElementType().isBF16() ? 2 : 4;
+    FailureOr<int64_t> elements = scheduleElementCount(type.getShape());
+    if (failed(elements) ||
+        *elements > std::numeric_limits<int64_t>::max() / elementBytes) {
+      return failure();
+    }
+    SmallVector<int64_t> strides(type.getRank());
+    int64_t stride = elementBytes;
+    for (int64_t axis = type.getRank(); axis > 0; --axis) {
+      strides[axis - 1] = stride;
+      stride *= type.getDimSize(axis - 1);
+    }
+    ExecutableAccess access = ExecutableAccess::ReadWrite;
+    if (buffer.getLiveIn()) {
+      access = ExecutableAccess::Read;
+    } else if (buffer.getLiveOut()) {
+      access = ExecutableAccess::Write;
+    }
+    spec.slots.push_back(CpuSlotSpec{type, *elements * elementBytes,
+                                     std::move(strides), elementBytes, access,
+                                     buffer.getStorage()});
+  }
+  return spec;
+}
+
+ArrayAttr accessArray(MLIRContext *context, ExecutableAccess access,
+                      size_t count) {
+  SmallVector<Attribute> values(count,
+                                ExecutableAccessAttr::get(context, access));
+  return ArrayAttr::get(context, values);
+}
+
+class BuildCpuExecutableBundlePass
+    : public impl::ShuttleBuildCpuExecutableBundlePassBase<
+          BuildCpuExecutableBundlePass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    SmallVector<MaterializationPlanOp> materializations(
+        module.getOps<MaterializationPlanOp>());
+    SmallVector<SchedulePlanOp> schedules(module.getOps<SchedulePlanOp>());
+    if (materializations.size() != 1 || schedules.size() != 1 ||
+        !module.getOps<DeviceModuleOp>().empty() ||
+        !module.getOps<InvocationAbiOp>().empty() ||
+        !module.getOps<ExecutableBundleOp>().empty() ||
+        failed(verifyMaterializationPlanAgainstSource(
+            module, materializations.front())) ||
+        failed(schedules.front().verifyRegions())) {
+      module.emitError(
+          "requires one source-bound plan and no executable bundle");
+      return signalPassFailure();
+    }
+    FailureOr<CpuExecutableSpec> spec = deriveCpuExecutable(
+        module, materializations.front(), schedules.front());
+    if (failed(spec)) {
+      module.emitError(
+          "requires a bounded generated Map/Fold CPU bytecode subset");
+      return signalPassFailure();
+    }
+    OpBuilder builder(module.getContext());
+    builder.setInsertionPointToEnd(module.getBody());
+    const std::string codeDigest = executableCodeDigest(spec->code);
+
+    OperationState deviceState(module.getLoc(),
+                               DeviceModuleOp::getOperationName());
+    deviceState.addAttribute("schema_version", builder.getI64IntegerAttr(1));
+    deviceState.addAttribute(
+        "code_format",
+        ExecutableCodeFormatAttr::get(module.getContext(),
+                                      ExecutableCodeFormat::CpuBytecodeV1));
+    deviceState.addAttribute("policy", schedules.front().getPolicyAttr());
+    deviceState.addAttribute("source_schedule_fingerprint",
+                             schedules.front().getFingerprintAttr());
+    deviceState.addAttribute(
+        "code", DenseI8ArrayAttr::get(module.getContext(), spec->code));
+    deviceState.addAttribute("code_digest", builder.getStringAttr(codeDigest));
+    deviceState.addAttribute("fingerprint",
+                             builder.getStringAttr(std::string(64, '0')));
+    deviceState.addRegion();
+    auto device = cast<DeviceModuleOp>(builder.create(deviceState));
+    Block *deviceBody = new Block();
+    device.getBody().push_back(deviceBody);
+    builder.setInsertionPointToEnd(deviceBody);
+    for (const CpuEntrySpec &entry : spec->entries) {
+      SmallVector<NamedAttribute> attributes{
+          builder.getNamedAttr("ordinal",
+                               builder.getI64IntegerAttr(entry.ordinal)),
+          builder.getNamedAttr("source_task",
+                               builder.getI64IntegerAttr(entry.ordinal)),
+          builder.getNamedAttr("code_offset",
+                               builder.getI64IntegerAttr(entry.codeOffset)),
+          builder.getNamedAttr("code_length",
+                               builder.getI64IntegerAttr(entry.codeLength)),
+          builder.getNamedAttr(
+              "input_buffers",
+              DenseI64ArrayAttr::get(module.getContext(), entry.inputs)),
+          builder.getNamedAttr(
+              "output_buffers",
+              DenseI64ArrayAttr::get(module.getContext(), entry.outputs)),
+          builder.getNamedAttr("input_accesses",
+                               accessArray(module.getContext(),
+                                           ExecutableAccess::Read,
+                                           entry.inputs.size())),
+          builder.getNamedAttr("output_accesses",
+                               accessArray(module.getContext(),
+                                           ExecutableAccess::Write,
+                                           entry.outputs.size())),
+          builder.getNamedAttr(
+              "dependencies",
+              DenseI64ArrayAttr::get(module.getContext(), entry.dependencies)),
+          builder.getNamedAttr(
+              "predication", ExecutablePredicationAttr::get(module.getContext(),
+                                                            entry.predication)),
+          builder.getNamedAttr("code_digest",
+                               builder.getStringAttr(codeDigest))};
+      if (entry.reductionOrder) {
+        attributes.push_back(builder.getNamedAttr(
+            "reduction_order",
+            ScheduleReductionOrderAttr::get(module.getContext(),
+                                            *entry.reductionOrder)));
+      }
+      createScheduleRecord(builder, module.getLoc(),
+                           DeviceEntryOp::getOperationName(), attributes);
+    }
+    builder.create<DeviceModuleYieldOp>(module.getLoc());
+    device.setFingerprint(deviceModuleFingerprint(device));
+
+    builder.setInsertionPointToEnd(module.getBody());
+    OperationState abiState(module.getLoc(),
+                            InvocationAbiOp::getOperationName());
+    abiState.addAttribute("schema_version", builder.getI64IntegerAttr(1));
+    abiState.addAttribute("source_plan_fingerprint",
+                          materializations.front().getFingerprintAttr());
+    abiState.addAttribute("source_schedule_fingerprint",
+                          schedules.front().getFingerprintAttr());
+    abiState.addAttribute("fingerprint",
+                          builder.getStringAttr(std::string(64, '0')));
+    abiState.addRegion();
+    auto abi = cast<InvocationAbiOp>(builder.create(abiState));
+    Block *abiBody = new Block();
+    abi.getBody().push_back(abiBody);
+    builder.setInsertionPointToEnd(abiBody);
+    for (auto [ordinal, slot] : llvm::enumerate(spec->slots)) {
+      createScheduleRecord(
+          builder, module.getLoc(), InvocationSlotOp::getOperationName(),
+          {builder.getNamedAttr("ordinal", builder.getI64IntegerAttr(ordinal)),
+           builder.getNamedAttr("source_buffer",
+                                builder.getI64IntegerAttr(ordinal)),
+           builder.getNamedAttr("tensor_type", TypeAttr::get(slot.tensorType)),
+           builder.getNamedAttr("required_bytes",
+                                builder.getI64IntegerAttr(slot.requiredBytes)),
+           builder.getNamedAttr(
+               "strides",
+               DenseI64ArrayAttr::get(module.getContext(), slot.strides)),
+           builder.getNamedAttr("offset", builder.getI64IntegerAttr(0)),
+           builder.getNamedAttr("alignment",
+                                builder.getI64IntegerAttr(slot.alignment)),
+           builder.getNamedAttr(
+               "address_space",
+               ExecutableAddressSpaceAttr::get(module.getContext(),
+                                               ExecutableAddressSpace::Host)),
+           builder.getNamedAttr(
+               "access",
+               ExecutableAccessAttr::get(module.getContext(), slot.access)),
+           builder.getNamedAttr(
+               "storage", MaterializationStorageAttr::get(module.getContext(),
+                                                          slot.storage)),
+           builder.getNamedAttr("alias_group",
+                                builder.getI64IntegerAttr(ordinal)),
+           builder.getNamedAttr("reuse_group",
+                                builder.getI64IntegerAttr(ordinal))});
+    }
+    builder.create<InvocationAbiYieldOp>(module.getLoc());
+    abi.setFingerprint(invocationAbiFingerprint(abi));
+
+    builder.setInsertionPointToEnd(module.getBody());
+    OperationState bundleState(module.getLoc(),
+                               ExecutableBundleOp::getOperationName());
+    bundleState.addAttribute("schema_version", builder.getI64IntegerAttr(1));
+    bundleState.addAttribute("source_schedule_fingerprint",
+                             schedules.front().getFingerprintAttr());
+    bundleState.addAttribute("device_module_fingerprint",
+                             device.getFingerprintAttr());
+    bundleState.addAttribute("invocation_abi_fingerprint",
+                             abi.getFingerprintAttr());
+    bundleState.addAttribute(
+        "completion",
+        ExecutableCompletionAttr::get(module.getContext(),
+                                      ExecutableCompletion::Synchronous));
+    bundleState.addAttribute("fingerprint",
+                             builder.getStringAttr(std::string(64, '0')));
+    auto bundle = cast<ExecutableBundleOp>(builder.create(bundleState));
+    bundle.setFingerprint(executableBundleFingerprint(bundle));
+  }
+};
+
+LogicalResult verifyCpuExecutableAgainstSource(ModuleOp module) {
+  SmallVector<MaterializationPlanOp> materializations(
+      module.getOps<MaterializationPlanOp>());
+  SmallVector<SchedulePlanOp> schedules(module.getOps<SchedulePlanOp>());
+  SmallVector<DeviceModuleOp> devices(module.getOps<DeviceModuleOp>());
+  SmallVector<InvocationAbiOp> abis(module.getOps<InvocationAbiOp>());
+  SmallVector<ExecutableBundleOp> bundles(module.getOps<ExecutableBundleOp>());
+  if (materializations.size() != 1 || schedules.size() != 1 ||
+      devices.size() != 1 || abis.size() != 1 || bundles.size() != 1 ||
+      failed(verifyMaterializationPlanAgainstSource(
+          module, materializations.front())) ||
+      failed(schedules.front().verifyRegions()) ||
+      failed(devices.front().verifyRegions()) ||
+      failed(abis.front().verifyRegions()) ||
+      failed(bundles.front().verify())) {
+    return failure();
+  }
+  FailureOr<CpuExecutableSpec> expected =
+      deriveCpuExecutable(module, materializations.front(), schedules.front());
+  if (failed(expected) ||
+      devices.front().getPolicy() != schedules.front().getPolicy() ||
+      devices.front().getSourceScheduleFingerprint() !=
+          schedules.front().getFingerprint() ||
+      abis.front().getSourcePlanFingerprint() !=
+          materializations.front().getFingerprint() ||
+      devices.front().getCode() != ArrayRef<int8_t>(expected->code)) {
+    return failure();
+  }
+  SmallVector<DeviceEntryOp> entries(
+      devices.front().getBody().front().getOps<DeviceEntryOp>());
+  SmallVector<InvocationSlotOp> slots(
+      abis.front().getBody().front().getOps<InvocationSlotOp>());
+  if (entries.size() != expected->entries.size() ||
+      slots.size() != expected->slots.size()) {
+    return failure();
+  }
+  for (auto [actual, spec] : llvm::zip_equal(entries, expected->entries)) {
+    if (actual.getCodeOffset() != spec.codeOffset ||
+        actual.getCodeLength() != spec.codeLength ||
+        actual.getInputBuffers() != ArrayRef<int64_t>(spec.inputs) ||
+        actual.getOutputBuffers() != ArrayRef<int64_t>(spec.outputs) ||
+        actual.getDependencies() != ArrayRef<int64_t>(spec.dependencies) ||
+        actual.getPredication() != spec.predication ||
+        actual.getReductionOrder() != spec.reductionOrder) {
+      return failure();
+    }
+  }
+  for (auto [actual, spec] : llvm::zip_equal(slots, expected->slots)) {
+    if (actual.getTensorType() != spec.tensorType ||
+        actual.getRequiredBytes() != spec.requiredBytes ||
+        actual.getStrides() != ArrayRef<int64_t>(spec.strides) ||
+        actual.getOffset() != 0 || actual.getAlignment() != spec.alignment ||
+        actual.getAddressSpace() != ExecutableAddressSpace::Host ||
+        actual.getAccess() != spec.access ||
+        actual.getStorage() != spec.storage ||
+        actual.getAliasGroup() != actual.getOrdinal() ||
+        actual.getReuseGroup() != actual.getOrdinal()) {
+      return failure();
+    }
+  }
+  return success();
+}
+
+class VerifyCpuExecutableBundlePass
+    : public impl::ShuttleVerifyCpuExecutableBundlePassBase<
+          VerifyCpuExecutableBundlePass> {
+public:
+  void runOnOperation() override {
+    if (failed(verifyCpuExecutableAgainstSource(getOperation()))) {
+      getOperation().emitError(
+          "executable bundle no longer matches Shuttle algebra and schedule");
+      signalPassFailure();
+    }
+  }
+};
+
 void emitObserverSnapshot(
     const std::shared_ptr<detail::ShuttleObserverInvocation> &invocation,
     ModuleOp module, ShuttlePipelinePhase phase,
@@ -3812,6 +4403,14 @@ std::unique_ptr<Pass> createPlanSimt32RowFoldSchedulePass() {
 
 std::unique_ptr<Pass> createVerifySimt32RowFoldSchedulePass() {
   return std::make_unique<VerifySimt32RowFoldSchedulePass>();
+}
+
+std::unique_ptr<Pass> createBuildCpuExecutableBundlePass() {
+  return std::make_unique<BuildCpuExecutableBundlePass>();
+}
+
+std::unique_ptr<Pass> createVerifyCpuExecutableBundlePass() {
+  return std::make_unique<VerifyCpuExecutableBundlePass>();
 }
 
 void buildShuttleStablehloPipeline(
