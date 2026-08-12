@@ -888,3 +888,12 @@ author: Rafal Wojdyla
 - East progress: `nemotron_cc_v2-diverse_qa_016d1909` got to 2,742 of 4,416 embedding shards with 32 live workers and no dead workers. East still has 96 live TEI services.
 - Issue update: None. The major recovery update is already on issue #8162.
 - Next action: Continue the regular health-check cadence and watch Stack v3 through completion.
+
+### 2026-08-12 20:57 UTC - More RNO TEI capacity recovered
+
+- Root health: Both roots remain running with zero failures and zero preemptions. Both active sources have 32 live workers and no dead workers.
+- RNO service event: Another `RemoteDisconnected` burst appeared at 20:49 UTC. All affected shards were requeued at retry one of three, and no shard reached retry two.
+- Recovery: The remaining 14 terminal TEI jobs were resubmitted with their original callable data and deterministic port pairs. Six passed local health checks, which increased healthy RNO TEI capacity from 82 to 88. Eight remain in the build state while they wait for H100 capacity.
+- RNO progress: `stack-v3_6ac1a286` got to 11,758 of 12,818 embedding shards with 32 live workers and no dead workers. Its current rate gives a rough 21:05 UTC completion estimate.
+- Issue update: None. Wait for full TEI recovery, a source-state change, or a new error level before another issue update.
+- Next action: Watch Stack v3 through completion and check the eight queued TEI jobs as H100 capacity changes.
