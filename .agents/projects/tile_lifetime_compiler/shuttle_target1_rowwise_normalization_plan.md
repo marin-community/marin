@@ -1,8 +1,8 @@
 # Shuttle Target 1 rowwise normalization plan
 
-Status: design audit only. This note does not change the evaluation scorecard,
-declare a representative shape, pin an accepted oracle artifact, or promote any
-Target 1 cell.
+Status: local evidence matrix audit. This note does not change the evaluation
+scorecard, declare a representative shape, pin an accepted oracle artifact, or
+promote any Target 1 cell.
 
 ## Decision
 
@@ -16,6 +16,68 @@ The current scorecard remains accurate: Target 1 is blocked by the missing
 ordinary-JAX GPU path, undeclared representative shape, and unpinned oracle
 artifact. Historical `tile_lifetime` row-normalization results inform the
 shape and physical decomposition, but cannot accept a Shuttle cell.
+
+## Local evidence checkpoint at `12608ff8de`
+
+The implementation inventory later in this document describes the original ABI
+4 design audit. It is historical. Pipeline ABI 5 now losslessly covers both
+shapes and all three JAX-owned boundaries under both policies. The current local
+evidence is:
+
+| Shape | Boundary | Policy | Strongest local evidence | Remaining local executable gap |
+| --- | --- | --- | --- | --- |
+| `2048x4096` | forward | `source_ordered` | ABI 5 source coverage, analytic reference, local ordinary-JAX observation, materialization, and abstract schedule | The bounded CPU bundle rejects this shape; no XLA/runtime or accelerator consumer exists |
+| `2048x4096` | forward | `fast` | Same identity-round-trip evidence and abstract schedule; FAST still has source-equivalent semantics | No executed FAST consumer; no reviewed non-identity FAST numerical policy |
+| `2048x4096` | backward | `source_ordered` | ABI 5 source coverage plus analytic and local ordinary-JAX reference records | No reverse materialization, schedule, or executable consumer |
+| `2048x4096` | backward | `fast` | Same identity-round-trip evidence | No reverse executable consumer or reviewed non-identity FAST numerical policy |
+| `2048x4096` | composed | `source_ordered` | ABI 5 source coverage plus analytic and local ordinary-JAX reference records | No composed materialization, schedule, or executable consumer |
+| `2048x4096` | composed | `fast` | Same identity-round-trip evidence | No composed executable consumer or reviewed non-identity FAST numerical policy |
+| `7x13` | forward | `source_ordered` | The stripped synchronous CPU bytecode bundle executes and matches its independent finite reference; ABI 5 and analytic records also exist | The consumer is opt-in and outside ordinary JAX/XLA; it supplies no accelerator evidence |
+| `7x13` | forward | `fast` | ABI 5 identity round trip plus a structurally verified FAST bundle with a distinct policy fingerprint | No executed FAST consumer or reviewed non-identity FAST numerical policy |
+| `7x13` | backward | `source_ordered` | ABI 5 source coverage plus analytic and local ordinary-JAX reference records | No reverse materialization, schedule, or executable consumer |
+| `7x13` | backward | `fast` | Same identity-round-trip evidence | No reverse executable consumer or reviewed non-identity FAST numerical policy |
+| `7x13` | composed | `source_ordered` | ABI 5 source coverage plus analytic and local ordinary-JAX reference records | No composed materialization, schedule, or executable consumer |
+| `7x13` | composed | `fast` | Same identity-round-trip evidence | No composed executable consumer or reviewed non-identity FAST numerical policy |
+
+The independent binary64 reference has pinned inputs, output roles, digests,
+metrics, and local CPU ordinary-JAX observations for every shape and boundary.
+Those records are policy-independent reference data. Both current policies
+still require bitwise parity with disabled ordinary JAX because FAST has not
+introduced a non-identity rewrite. They are not GPU or performance evidence.
+
+Every row above still lacks the following hardware evidence:
+
+- an ordinary-JAX GPU path that proves the Shuttle registry, transformed
+  executable, generated device code, invocation ABI, and cache identity are the
+  architecture under test;
+- matched Shuttle, ordinary-JAX, and Transformer Engine numerical records on
+  H100 and separately on GB200 or B200;
+- complete raw timing and repeatability records for Shuttle, ordinary JAX, and
+  the matched expert boundary on each hardware class; and
+- a representative-shape decision. The two pinned shapes remain candidates,
+  not two scorecard coordinates.
+
+The checked-in Transformer Engine run plan covers 24 oracle invocations: two
+shapes, three boundaries, and four independent forward/backward backend pairs.
+Its result schema can validate output roles and raw errors against the pinned
+independent reference. It cannot accept a result or compare Shuttle performance
+to the oracle: the plan contains no Shuttle or ordinary-JAX subject runs, its
+scorecard-grade build and hardware provenance remains unresolved, and the
+validator requires `oracle_relative_thresholds` to be null.
+
+This fail-closed state prevents a threshold from being smuggled into an
+observation, but it does not supply a threshold. Before any performance timing,
+a new versioned contract must freeze the per-output numerical floors,
+oracle-relative performance and repeatability rules, complete provenance, and
+the shared identity joining TE, Shuttle, and ordinary-JAX runs. The run plan
+must reference that reviewed contract before execution. A threshold inferred
+from the resulting 24 runs is post hoc and cannot accept them.
+
+The smallest honest scorecard action is therefore no manifest change. Keep all
+12 pending representative-shape cells blocked with architecture, shape, and
+oracle blockers. Record this local inventory in the plan and logbook; add a new
+manifest revision only after the representative coordinate and content-addressed
+H100 and GB200/B200 evidence exist.
 
 ## Proposed evaluation contract
 

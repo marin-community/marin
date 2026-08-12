@@ -4349,3 +4349,30 @@ author: dlwh
 - Next action: bind the closed executable bundle to a real XLA/runtime consumer
   without weakening the local CPU contract, then resolve the remaining Linux
   and deployment identities before requesting upload authorization.
+
+### 2026-08-12 - TLTC-MLIR-008 Target 1 evidence matrix audit
+
+- Canonical commit `12608ff8de` retains an accurate blocked Target 1
+  scorecard. The two pinned shapes are still candidates rather than declared
+  scorecard coordinates, and no H100 or GB200/B200 cell has architecture,
+  numerical, or performance evidence.
+- ABI 5 locally covers both shapes, forward, JAX-owned backward, and composed
+  boundaries under SOURCE_ORDERED and identity FAST. The independent binary64
+  reference and local ordinary-JAX observations cover the same shape/boundary
+  grid. These are local architecture and numerical inputs, not hardware or
+  performance evidence.
+- The executable subset remains narrower. Only `7x13` SOURCE_ORDERED forward
+  has an executed stripped CPU bundle. The `7x13` FAST bundle is structurally
+  verified but unexecuted; `2048x4096` is rejected by the bounded CPU consumer;
+  neither shape has backward or composed materialization and execution.
+- The 24-run Transformer Engine plan can record raw output errors for two
+  shapes, three boundaries, and four backend pairs. It cannot accept those
+  runs or compare Shuttle performance: scorecard-grade provenance is unresolved,
+  Shuttle and ordinary-JAX subject runs are absent, and the result validator
+  forbids non-null oracle-relative thresholds.
+- No evaluation-manifest or scorecard field changes. Before performance timing,
+  a new reviewed contract must predeclare numerical floors, oracle-relative
+  performance and repeatability rules, complete provenance, and a shared run
+  identity. Bounds derived after observing the 24 runs are post hoc.
+- Next action: select the representative shape and version the pre-run matched
+  comparison contract before any H100 or GB200/B200 execution.
