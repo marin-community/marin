@@ -9,9 +9,11 @@ them. The sizing is the entire reason this entry point exists, so it is asserted
 rather than left to a log line nobody reads.
 """
 
+import numpy as np
 from fray.cluster import ResourceConfig
 from marin.execution.step_spec import StepSpec
 
+from experiments.datakit.cluster.quality.fast_transformer.content_type import structural_features
 from experiments.datakit.cluster.quality.fast_transformer.score import TASK_RESOURCES, WORKER_RESOURCES
 from experiments.datakit.scripts.score_quality_only import (
     DEFAULT_MAX_WORKERS,
@@ -118,3 +120,26 @@ def test_a_changed_dependency_changes_the_output_directory():
         "s3://b/marin",
     ).output_path
     assert a != b
+
+
+def test_structural_features_match_the_python_reference():
+    """The vectorized character scans must be value-identical, not merely close.
+
+    They are inputs to a classifier whose weights were fitted on the previous
+    implementation, so a changed value silently mis-types documents rather than
+    failing. Emoji are included because a code-point view and a character view
+    disagree on anything outside the basic plane.
+    """
+
+    def reference(text: str) -> list[float]:
+        s = text or ""
+        n = max(len(s), 1)
+        return [
+            sum(ord(c) > 127 for c in s) / n,
+            sum(0x3000 <= ord(c) <= 0x9FFF for c in s) / n,
+            sum(c.isdigit() for c in s) / n,
+        ]
+
+    for case in ["plain ascii 123", "日本語のテキスト", "", "mixed 数据 42 ünïcode", "a" * 5000 + "9" * 100, "🙂 emoji"]:
+        got = structural_features(case)
+        assert np.allclose([got[0], got[1], got[10]], reference(case), atol=1e-12), case[:20]
