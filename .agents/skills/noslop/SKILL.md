@@ -23,7 +23,8 @@ Review the merge-base diff. Do not substitute commit history or the latest
 commit.
 
 ```bash
-BASE=$(git merge-base HEAD origin/main)
+UPSTREAM=$(git rev-parse --verify origin/main 2>/dev/null || git rev-parse --verify main)
+BASE=$(git merge-base HEAD "$UPSTREAM")
 git status --short
 git diff --stat "$BASE"
 git diff --check "$BASE"

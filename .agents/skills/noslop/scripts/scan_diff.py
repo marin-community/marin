@@ -113,8 +113,20 @@ def is_pattern_catalog(path: str) -> bool:
     return any(path == candidate or path.startswith(candidate) for candidate in PATTERN_CATALOGS)
 
 
+def default_base() -> str:
+    for candidate in ("origin/main", "main"):
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", candidate],
+            check=False,
+            stdout=subprocess.DEVNULL,
+        )
+        if result.returncode == 0:
+            return candidate
+    raise SystemExit("cannot find origin/main or main; pass a base revision")
+
+
 def main() -> int:
-    base = sys.argv[1] if len(sys.argv) == 2 else "origin/main"
+    base = sys.argv[1] if len(sys.argv) == 2 else default_base()
     findings: list[tuple[AddedLine, str]] = []
     for line in [*added_lines(base), *untracked_lines()]:
         if suffix(line.path) in PROSE_SUFFIXES and not is_pattern_catalog(line.path):
