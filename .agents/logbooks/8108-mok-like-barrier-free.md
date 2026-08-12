@@ -688,3 +688,30 @@ W&B: https://wandb.ai/marin-community/marin_moe/runs/mok-like-ab-mok-like-100-20
   ```
 
 - Acceptance: all 32 tasks and coordinator terminal-successful; 25 finite exact-zero-drop rows; 4,800 forward/backward handlers per process; forward staging zero and staged-backward copies exact; slot one unused, maximum active slots one, and zero protocol/generation/reuse/trim anomalies. Score steps 10-24 against the 661,262.097504-token/s ideal; require at least 80% weak-scale efficiency before the 100-update seal.
+
+### 2026-08-12 10:55 PT - Two-rack 25-update gate passes
+
+- Result: `/dlwh/mok-scale-008-v12-dropless-2rack-ram900-25-20260812-1040-coord` and all 32 training tasks succeeded with no failure, preemption, or retry. Placement was exactly two hard NVLink domains with 16 task nodes each. W&B finished with 25 finite rows through final loss 6.07718 and exact zero drops on every row. [W&B](https://wandb.ai/marin-community/marin_moe/runs/mok-scale-008-v12-dropless-2rack-ram900-25-20260812-1040); [XProf](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fmok-scale-008-v12-dropless-2rack-ram900-25-20260812-1040).
+- Performance: steps 10-24 averaged 578,736.805369 tokens/s total, 4,521.381292 tokens/s/GPU, 14.502328 seconds, and 21.151823% MFU. This is 87.520033% weak-scale efficiency against the 661,262.097504-token/s ideal and passes the 80% promotion gate.
+- Runtime audit: every process reported exactly 4,800 forward and 4,800 backward handlers. Forward staging was zero. Backward staged copies were exactly 19,200 calls and 7,741,007,462,400 bytes per process. Slot one was unused, maximum active slots was one, and protocol, generation, reuse, trim, and slot anomalies were zero across all 32 processes.
+- Memory: process-zero compile RSS peaked at 888,605 MiB (867.778 GiB) and system memory reached 100%. Peak allocated HBM was 181,995,372,544 bytes on GPU zero and 181,972,303,872 bytes on GPUs one through three. The 900 GiB contract passed with limited margin.
+- Decision: run the final 100-update two-rack seal from the unchanged source and resource contract. Score profile-free steps 60-79 and 40-79; profile process zero at steps 80-84; require 100 finite zero-drop rows and exact 19,200-handler-per-phase audits across every process.
+
+### 2026-08-12 11:00 PT - Two-rack 100-update seal prepared
+
+- Output identity: artifact `grug/moe-backend-comparison/mok_like/mok-scale-009-v12-dropless-2rack-ram900-100-20260812-1100/2026.08.12`; W&B id/name `mok-scale-009-v12-dropless-2rack-ram900-100-20260812-1100`, project `marin-community/marin_moe`, group `moe-backend-comparison-2rack`, resume `allow`. This metrics run has no final model checkpoint and `initialize_from` is unset.
+- Exact submission, with the secret value scrubbed:
+
+  ```bash
+  .venv/bin/python -c 'import iris.cluster.platforms.k8s.service as service; from iris.cluster.platforms.types import find_free_port; service.find_free_port = lambda start=10000: find_free_port(); from iris.cli.main import main; main()' \
+    --config lib/iris/config/cw-us-east-08a.yaml job run --no-wait --enable-extra-resources \
+    --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 \
+    --job-name mok-scale-009-v12-dropless-2rack-ram900-100-20260812-1100-coord \
+    -e WANDB_API_KEY '<redacted>' -e WANDB_PROJECT marin_moe -- \
+    .venv/bin/python -m experiments.grug.moe_hero_ep.launch_mok_like \
+      --run-id mok-scale-009-v12-dropless-2rack-ram900-100-20260812-1100 \
+      --backend mok_like --num-steps 100 --num-nodes 32 \
+      --mok-like-preset promoted_dropless_v12 --version 2026.08.12 --run
+  ```
+
+- Acceptance: all 32 tasks and coordinator terminal-successful; 100 finite exact-zero-drop rows; exact 19,200 forward/backward handlers per process; forward staging zero and staged-backward copies exact; slot one unused, maximum active slots one, and zero protocol/generation/reuse/trim anomalies. Report steps 60-79 and 40-79 total/per-GPU throughput, step time, MFU, weak-scale efficiency, and the process-zero XProf upload.
