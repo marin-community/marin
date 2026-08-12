@@ -118,6 +118,10 @@ TIMING = {
 }
 
 COMPARISON = {
+    "contract": {
+        "id": "target1_rowwise_bf16_prerun_comparison_v1",
+        "path": "lib/shuttle/mlir/jax_patch/target1-rowwise-bf16-prerun-comparison-v1.json",
+    },
     "input_contract": "target1_rowwise_bf16_numerical_oracle_v1",
     "input_identity": "same_pinned_bfloat16_input_digests",
     "reference": "independent_numpy_binary64_closed_form_then_bfloat16_outputs",
@@ -134,7 +138,7 @@ COMPARISON = {
     ],
     "subjects": ["transformer_engine", "shuttle_source_ordered", "shuttle_fast"],
     "acceptance_rule": "shuttle_error_le_max_matched_oracle_error_or_predeclared_dtype_floor",
-    "threshold_status": "blocked_until_hardware_artifact_freezes_oracle_relative_bounds",
+    "threshold_status": "predeclared_source_ordered_and_identity_fast_nonidentity_fast_unresolved",
 }
 
 
@@ -308,7 +312,6 @@ HARDWARE_RESULTS = {
         "queried_workspace_records",
         "numerical_results",
         "latency_results",
-        "oracle_relative_thresholds",
     ],
 }
 

@@ -3,7 +3,7 @@
   "manifest_id": "target1_te_2_17_oracle_runner_build_v1",
   "runner": {
     "path": "lib/shuttle/mlir/jax_patch/target1_te_oracle_runner.cpp",
-    "sha256": "6bbec708db6b9a70a9702ef1a70ed632c5ccc297beb1c2afab073c9ca0734e62",
+    "sha256": "c0b1f96546ddad9d6fc7de0dfb7dee00fc7c8eccf99fcb29878a7c4d4995d536",
     "language": "c++20",
     "dispatch": "boundary_shape_and_independent_backend_flags_only"
   },
@@ -16,6 +16,11 @@
       "transformer_engine/common/include/transformer_engine/transformer_engine.h",
       "transformer_engine/common/include/transformer_engine/normalization.h"
     ]
+  },
+  "comparison_contract": {
+    "id": "target1_rowwise_bf16_prerun_comparison_v1",
+    "path": "lib/shuttle/mlir/jax_patch/target1-rowwise-bf16-prerun-comparison-v1.json",
+    "sha256": "3886fe875da9b6445a45d1e03eb32dec242bb59d0ec58a28854e319bbdb31845"
   },
   "static_abi_gate": {
     "status": "passed_on_clean_official_checkout",

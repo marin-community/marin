@@ -30,6 +30,10 @@ constexpr float kEpsilon = 1.0e-5F;
 constexpr double kRelativeScaleFloor = 0.0078125;
 constexpr int kWarmupInvocations = 10;
 constexpr int kMeasuredInvocations = 50;
+constexpr int kPostTimingInvocations = 3;
+constexpr char kComparisonContractId[] = "target1_rowwise_bf16_prerun_comparison_v1";
+constexpr char kComparisonContractSha256[] =
+    "3886fe875da9b6445a45d1e03eb32dec242bb59d0ec58a28854e319bbdb31845";
 
 void check_cuda(cudaError_t status, const char* operation) {
   if (status != cudaSuccess) {
@@ -50,6 +54,8 @@ struct Config {
   std::filesystem::path output;
   std::string counterbalance_id;
   std::size_t counterbalance_position;
+  std::string comparison_contract_id;
+  std::string comparison_contract_sha256;
 };
 
 std::string boundary_name(Boundary boundary) {
@@ -138,6 +144,8 @@ Config parse_config(int argc, char** argv) {
       .counterbalance_position =
           parse_dimension(take_flag(&flags, "counterbalance-position"),
                           "counterbalance-position"),
+      .comparison_contract_id = take_flag(&flags, "comparison-contract-id"),
+      .comparison_contract_sha256 = take_flag(&flags, "comparison-contract-sha256"),
   };
   if (!flags.empty()) {
     throw std::invalid_argument("unknown argument: --" + flags.begin()->first);
@@ -149,6 +157,10 @@ Config parse_config(int argc, char** argv) {
   if (config.counterbalance_id != "shape_boundary_backend_alternating_v1" ||
       config.counterbalance_position >= 24) {
     throw std::invalid_argument("counterbalance metadata is outside the closed 24-run plan");
+  }
+  if (config.comparison_contract_id != kComparisonContractId ||
+      config.comparison_contract_sha256 != kComparisonContractSha256) {
+    throw std::invalid_argument("comparison contract identity drifted");
   }
   return config;
 }
@@ -349,6 +361,11 @@ struct OutputMetric {
   ErrorMetrics metrics;
 };
 
+struct CapturedOutput {
+  std::string role;
+  std::vector<std::uint16_t> bits;
+};
+
 struct Tensors {
   DeviceAllocation x_data;
   DeviceAllocation gamma_data;
@@ -528,12 +545,19 @@ void write_result(const Config& config, int device, int multiprocessor_count,
     stream << samples[index];
   }
   stream << "],\"median_cuda_event_milliseconds\":" << median(samples) << "},\n"
-         << "  \"comparison\": {\"reference\":"
+         << "  \"repeatability\": {\"post_timing_invocations\":"
+         << kPostTimingInvocations
+         << ",\"comparison\":\"bitwise_all_public_outputs\","
+            "\"placement\":\"outside_cuda_event_intervals_after_50_measured_invocations\","
+            "\"all_outputs_bitwise_equal\":true},\n"
+         << "  \"comparison\": {\"contract\":{\"id\":\""
+         << kComparisonContractId << "\",\"sha256\":\"" << kComparisonContractSha256
+         << "\"},\"subject_id\":\"transformer_engine_2_17_exact_c_api\",\"reference\":"
             "\"independent_numpy_binary64_closed_form_then_bfloat16_outputs\","
             "\"relative_scale_floor\":0.0078125,\"outputs\":";
   write_metrics(stream, outputs);
-  stream << ",\"oracle_relative_thresholds\":null,"
-            "\"acceptance_status\":\"blocked_until_reviewed_hardware_artifact\"},\n"
+  stream << ",\"qualification_status\":"
+            "\"unsealed_runner_metrics_require_contract_validator\"},\n"
          << "  \"provenance\": {"
             "\"marin_revision\":null,\"adapter_sha256\":null,"
             "\"transformer_engine\":{\"version\":\"2.17.0\","
@@ -551,33 +575,67 @@ void write_result(const Config& config, int device, int multiprocessor_count,
          << multiprocessor_count << "}}\n}\n";
 }
 
-std::vector<OutputMetric> collect_comparisons(const Config& config, Tensors* tensors,
-                                              cudaStream_t stream) {
+std::vector<CapturedOutput> capture_outputs(const Config& config, Tensors* tensors,
+                                            cudaStream_t stream) {
   const std::size_t matrix_elements = checked_product(config.rows, config.features);
-  std::vector<OutputMetric> outputs;
+  std::vector<CapturedOutput> outputs;
   if (config.boundary != Boundary::kBackwardRecompute) {
-    outputs.push_back(OutputMetric{
+    outputs.push_back(CapturedOutput{
         .role = "y",
-        .metrics = compare(copy_from_device(tensors->y_data, matrix_elements, stream),
-                           read_bfloat16(config.case_directory / "reference_y.bf16",
-                                         matrix_elements)),
+        .bits = copy_from_device(tensors->y_data, matrix_elements, stream),
     });
   }
   if (config.boundary != Boundary::kForward) {
-    outputs.push_back(OutputMetric{
+    outputs.push_back(CapturedOutput{
         .role = "dx",
-        .metrics = compare(copy_from_device(tensors->dx_data, matrix_elements, stream),
-                           read_bfloat16(config.case_directory / "reference_dx.bf16",
-                                         matrix_elements)),
+        .bits = copy_from_device(tensors->dx_data, matrix_elements, stream),
     });
-    outputs.push_back(OutputMetric{
+    outputs.push_back(CapturedOutput{
         .role = "dgamma",
-        .metrics = compare(copy_from_device(tensors->dgamma_data, config.features, stream),
-                           read_bfloat16(config.case_directory / "reference_dgamma.bf16",
-                                         config.features)),
+        .bits = copy_from_device(tensors->dgamma_data, config.features, stream),
     });
   }
   return outputs;
+}
+
+std::vector<OutputMetric> collect_comparisons(const Config& config,
+                                              const std::vector<CapturedOutput>& captured) {
+  std::vector<OutputMetric> outputs;
+  outputs.reserve(captured.size());
+  for (const auto& output : captured) {
+    outputs.push_back(OutputMetric{
+        .role = output.role,
+        .metrics = compare(output.bits,
+                           read_bfloat16(config.case_directory /
+                                             ("reference_" + output.role + ".bf16"),
+                                         output.bits.size())),
+    });
+  }
+  return outputs;
+}
+
+std::vector<CapturedOutput> verify_post_timing_repeatability(
+    const Config& config, Tensors* tensors, Workspace* forward_workspace,
+    Workspace* backward_workspace, int multiprocessor_count, cudaStream_t stream) {
+  std::vector<CapturedOutput> baseline;
+  for (int iteration = 0; iteration < kPostTimingInvocations; ++iteration) {
+    invoke_boundary(config.boundary, tensors, forward_workspace, backward_workspace,
+                    multiprocessor_count, stream);
+    auto captured = capture_outputs(config, tensors, stream);
+    if (iteration == 0) {
+      baseline = std::move(captured);
+    } else if (captured.size() != baseline.size()) {
+      throw std::runtime_error("post-timing output role count drifted");
+    } else {
+      for (std::size_t index = 0; index < baseline.size(); ++index) {
+        if (captured[index].role != baseline[index].role ||
+            captured[index].bits != baseline[index].bits) {
+          throw std::runtime_error("post-timing public outputs are not bitwise repeatable");
+        }
+      }
+    }
+  }
+  return baseline;
 }
 
 int run(const Config& config) {
@@ -620,7 +678,10 @@ int run(const Config& config) {
 
   const auto samples = measure(config.boundary, &tensors, &forward_workspace,
                                backward_workspace.get(), multiprocessor_count, stream.get());
-  const auto outputs = collect_comparisons(config, &tensors, stream.get());
+  const auto captured = verify_post_timing_repeatability(
+      config, &tensors, &forward_workspace, backward_workspace.get(), multiprocessor_count,
+      stream.get());
+  const auto outputs = collect_comparisons(config, captured);
   int driver_version = 0;
   int runtime_version = 0;
   check_cuda(cudaDriverGetVersion(&driver_version), "cudaDriverGetVersion");

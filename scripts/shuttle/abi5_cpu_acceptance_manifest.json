@@ -7,8 +7,8 @@
   "sealed_artifact_prohibition": "lib/shuttle/mlir/artifacts/native-preflight-20260810-jaxacceptance6",
   "capsule_allowlist": {
     "root": "lib/shuttle",
-    "tracked_path_count": 152,
-    "tracked_path_set_sha256": "fa71598fd71294133e6212a2df28bf3a44482530d9388165d679d31856f22c48"
+    "tracked_path_count": 155,
+    "tracked_path_set_sha256": "1987a31a0190cffcf64566c9ece85723c809867625130446c924efe2883e8467"
   },
   "destination": "s3://marin-us-east-02a/iris/cw-us-east-02a/state/bundles",
   "resource_request": {

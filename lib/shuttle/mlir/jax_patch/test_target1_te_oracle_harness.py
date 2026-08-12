@@ -11,6 +11,8 @@ import pytest
 from target1_te_oracle_harness import (
     BACKEND_PAIRS,
     BOUNDARIES,
+    COMPARISON_CONTRACT_ID,
+    COMPARISON_CONTRACT_SHA256,
     PLAN_ID,
     SHAPES,
     prepare_run_plan,
@@ -33,7 +35,9 @@ def test_build_manifest_keeps_link_execution_and_thresholds_blocked() -> None:
     }
 
 
-def test_prepared_plan_covers_shapes_boundaries_and_independent_backends(tmp_path: Path) -> None:
+def test_prepared_plan_covers_shapes_boundaries_and_independent_backends(
+    tmp_path: Path,
+) -> None:
     plan = prepare_run_plan(tmp_path / "plan", Path("./target1_te_oracle_runner"))
     runs = plan["runs"]
 
@@ -55,9 +59,24 @@ def test_prepared_plan_covers_shapes_boundaries_and_independent_backends(tmp_pat
     ]
     assert all("workload" not in " ".join(run["argv"]) for run in runs)
     assert all(
-        run["argv"][-4:] == ["--counterbalance-id", PLAN_ID, "--counterbalance-position", str(run["position"])]
+        run["argv"][-8:]
+        == [
+            "--counterbalance-id",
+            PLAN_ID,
+            "--counterbalance-position",
+            str(run["position"]),
+            "--comparison-contract-id",
+            COMPARISON_CONTRACT_ID,
+            "--comparison-contract-sha256",
+            COMPARISON_CONTRACT_SHA256,
+        ]
         for run in runs
     )
+    assert plan["comparison_contract"] == {
+        "id": COMPARISON_CONTRACT_ID,
+        "path": "target1-rowwise-bf16-prerun-comparison-v1.json",
+        "sha256": COMPARISON_CONTRACT_SHA256,
+    }
     large_case = tmp_path / "plan/cases/2048x4096"
     assert (large_case / "x.bf16").stat().st_size == 2048 * 4096 * 2
     assert (large_case / "gamma.bf16").stat().st_size == 4096 * 2
@@ -112,12 +131,22 @@ def _valid_result(run: dict) -> dict:
             "raw_cuda_event_milliseconds": [float(index + 1) for index in range(50)],
             "median_cuda_event_milliseconds": 25.5,
         },
+        "repeatability": {
+            "post_timing_invocations": 3,
+            "comparison": "bitwise_all_public_outputs",
+            "placement": "outside_cuda_event_intervals_after_50_measured_invocations",
+            "all_outputs_bitwise_equal": True,
+        },
         "comparison": {
+            "contract": {
+                "id": COMPARISON_CONTRACT_ID,
+                "sha256": COMPARISON_CONTRACT_SHA256,
+            },
+            "subject_id": "transformer_engine_2_17_exact_c_api",
             "reference": "independent_numpy_binary64_closed_form_then_bfloat16_outputs",
             "relative_scale_floor": 0.0078125,
             "outputs": [{"role": role, "metrics": metrics} for role in roles],
-            "oracle_relative_thresholds": None,
-            "acceptance_status": "blocked_until_reviewed_hardware_artifact",
+            "qualification_status": "unsealed_runner_metrics_require_contract_validator",
         },
         "provenance": {
             "marin_revision": None,
@@ -131,7 +160,11 @@ def _valid_result(run: dict) -> dict:
                 "elf_build_id": None,
                 "resolved_shared_library_dependencies": None,
             },
-            "toolchain": {"compiler": None, "build_flags": None, "target_architectures": None},
+            "toolchain": {
+                "compiler": None,
+                "build_flags": None,
+                "target_architectures": None,
+            },
             "cuda": {
                 "toolkit_version": None,
                 "nvcc_version": None,
@@ -176,21 +209,55 @@ def _replace(document: dict, path: tuple[str | int, ...], value: object) -> dict
         (("tensor_contract", "dtype"), "float32", "tensor contract"),
         (("backends", "backward"), "transformer_engine", "backend identity"),
         (("counterbalance", "position"), 1, "counterbalance identity"),
-        (("workspace_queries", "forward", "dtype"), "float32", "workspace_queries.forward.dtype"),
+        (
+            ("workspace_queries", "forward", "dtype"),
+            "float32",
+            "workspace_queries.forward.dtype",
+        ),
         (("timing", "warmup_invocations"), 9, "warmup_invocations"),
         (("timing", "raw_cuda_event_milliseconds"), [1.0] * 49, "raw sample count"),
         (("timing", "raw_cuda_event_milliseconds", 0), -1.0, "finite nonnegative"),
         (("timing", "median_cuda_event_milliseconds"), 25.0, "median drifted"),
+        (("repeatability", "post_timing_invocations"), 2, "repeatability evidence"),
+        (("repeatability", "comparison"), "numeric", "repeatability evidence"),
+        (
+            ("repeatability", "all_outputs_bitwise_equal"),
+            False,
+            "repeatability evidence",
+        ),
+        (("comparison", "contract", "id"), "other", "contract identity"),
+        (("comparison", "contract", "sha256"), "0" * 64, "contract identity"),
+        (
+            ("comparison", "subject_id"),
+            "ordinary_jax_disabled_shuttle",
+            "subject identity",
+        ),
         (("comparison", "outputs", 0, "role"), "dx", "output roles"),
-        (("comparison", "outputs", 0, "metrics", "max_absolute_error"), False, "finite nonnegative"),
+        (
+            ("comparison", "outputs", 0, "metrics", "max_absolute_error"),
+            False,
+            "finite nonnegative",
+        ),
         (
             ("comparison", "outputs", 0, "metrics", "mean_absolute_error"),
             1.0,
             "mean_absolute_error exceeds max_absolute_error",
         ),
-        (("comparison", "outputs", 0, "metrics", "max_bfloat16_ulp_error"), 1.0, "ulp_error"),
-        (("comparison", "oracle_relative_thresholds"), {}, "thresholds are forbidden"),
-        (("provenance", "transformer_engine", "source_commit"), "0" * 40, "source identity"),
+        (
+            ("comparison", "outputs", 0, "metrics", "max_bfloat16_ulp_error"),
+            1.0,
+            "ulp_error",
+        ),
+        (
+            ("comparison", "outputs", 0, "metrics", "max_bfloat16_ulp_error"),
+            8,
+            "predeclared reference limit",
+        ),
+        (
+            ("provenance", "transformer_engine", "source_commit"),
+            "0" * 40,
+            "source identity",
+        ),
         (("provenance", "toolchain", "compiler"), "nvcc", "toolchain provenance"),
         (("provenance", "device", "model"), "H100", "device.model"),
         (("provenance", "device", "physical_sm_count"), True, "physical_sm_count"),
@@ -216,7 +283,7 @@ def test_result_schema_accepts_blocked_unsealed_observation(tmp_path: Path) -> N
     validated = validate_result(result, run)
 
     assert validated["status"] == "unsealed_hardware_observation"
-    assert validated["comparison"]["oracle_relative_thresholds"] is None
+    assert validated["comparison"]["qualification_status"] == "unsealed_runner_metrics_require_contract_validator"
 
 
 @pytest.mark.parametrize(
@@ -249,12 +316,14 @@ def test_result_schema_rejects_invalid_byte_workspace_metadata(
         validate_result(result, run)
 
 
-def test_result_schema_accepts_equal_mean_and_max_absolute_error(tmp_path: Path) -> None:
+def test_result_schema_accepts_equal_mean_and_max_absolute_error(
+    tmp_path: Path,
+) -> None:
     run = _run()
     result_document = _valid_result(run)
     for output in result_document["comparison"]["outputs"]:
-        output["metrics"]["max_absolute_error"] = 0.5
-        output["metrics"]["mean_absolute_error"] = 0.5
+        output["metrics"]["max_absolute_error"] = 0.001
+        output["metrics"]["mean_absolute_error"] = 0.001
     result = tmp_path / "result.json"
     result.write_text(json.dumps(result_document))
 

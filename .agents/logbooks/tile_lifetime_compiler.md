@@ -4399,3 +4399,35 @@ author: dlwh
   oracle evidence.
 - Next action: version the pre-run matched comparison contract before any H100
   or GB200/B200 execution.
+
+### 2026-08-12 - TLTC-MLIR-010 Target 1 pre-run numerical comparison
+
+- A versioned contract now closes the Target 1 numerical comparison before any
+  hardware observation. It binds the independent binary64 reference, exact
+  Transformer Engine 2.17 contract, evaluation manifest, both shapes, three
+  boundaries, public output roles, and four independent TE backend pairs.
+- Per-output reference limits are the metricwise maximum of an adjacent-finite-
+  BF16 spacing envelope and the pinned shape-specific local ordinary-JAX
+  observation. The latter remains non-scorecard CPU evidence. Only the
+  `2048x4096` `dx` ULP limit exceeds the one-ULP envelope, at seven ULPs.
+- Each hardware class requires 24 TE runs. Every TE output must pass its frozen
+  independent-reference limit before use as a matched expert. Three additional
+  post-timing invocations must produce bitwise-identical public outputs; they
+  occur after the 50 CUDA-event samples and outside the event intervals.
+- SOURCE_ORDERED remains subject to an independent bitwise ordinary-JAX
+  architecture gate, the frozen reference limit, and the metricwise
+  `max(matched TE error, dtype allowance)` rule against each of the four
+  matching backend pairs, with no post-hoc selector. Identity FAST may use the
+  same rules only with an identity-lowering proof. Non-identity FAST remains blocked
+  because no independent error bound exists.
+- The runner and run plan now bind the comparison contract digest, subject
+  identity, output qualification, and repeatability record. Local C++20 syntax
+  checking against the exact official TE headers passes without CUDA linking
+  or execution.
+- Performance remains blocked. One 50-sample observation per backend pair does
+  not establish cross-run timing repeatability, and no scorecard-grade
+  provenance or H100/GB200 result exists. Every Target 1 cell remains blocked,
+  every gate remains `not_started`, and `launch_ready` remains false.
+- Next action: independently review this contract, then complete the missing
+  provenance and cross-run performance protocol before requesting any hardware
+  execution authorization.

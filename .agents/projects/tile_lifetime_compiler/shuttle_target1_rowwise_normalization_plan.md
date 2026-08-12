@@ -76,19 +76,20 @@ evidence.
 
 The checked-in Transformer Engine run plan covers 24 oracle invocations: two
 shapes, three boundaries, and four independent forward/backward backend pairs.
-Its result schema can validate output roles and raw errors against the pinned
-independent reference. It cannot accept a result or compare Shuttle performance
-to the oracle: the plan contains no Shuttle or ordinary-JAX subject runs, its
-scorecard-grade build and hardware provenance remains unresolved, and the
-validator requires `oracle_relative_thresholds` to be null.
+The versioned pre-run comparison contract binds every invocation to its exact
+shape, boundary, output role, backend pair, inputs, independent reference, and
+contract digest. The same plan is required on each hardware class, for 48 TE
+invocations across H100 and GB200/B200. Each TE result must pass the frozen
+per-output independent-reference limits before it can serve as the matched
+expert observation.
 
-This fail-closed state prevents a threshold from being smuggled into an
-observation, but it does not supply a threshold. Before any performance timing,
-a new versioned contract must freeze the per-output numerical floors,
-oracle-relative performance and repeatability rules, complete provenance, and
-the shared identity joining TE, Shuttle, and ordinary-JAX runs. The run plan
-must reference that reviewed contract before execution. A threshold inferred
-from the resulting 24 runs is post hoc and cannot accept them.
+The runner performs three additional boundary invocations after the 50 measured
+invocations and outside the CUDA event intervals. Every public output byte must
+be identical across those three invocations. This numerical repeatability gate
+does not establish timing repeatability. Scorecard-grade build and hardware
+provenance, ordinary-JAX and Shuttle subject results, and a separate predeclared
+cross-run performance protocol remain unresolved. No result can promote a cell
+without those records.
 
 The versioned manifest replaces the pending Target 1 coordinate with
 `rmsnorm_bf16_2048x4096` across all 12 boundary, policy, and hardware cells and
@@ -237,11 +238,37 @@ only if the pinned oracle artifact and numerical policy declare comparable
 freedom. It may not move the final BF16 cast, call the oracle, or select a named
 normalization kernel.
 
-Before timing, the harness must declare per-output maximum and mean absolute,
-relative, and BF16 ULP limits, plus repeatability limits. The limits are not
-specified here because no accepted oracle artifact exists. They must follow the
-scorecard rule `Shuttle error <= max(oracle error, declared dtype floor)` and
-must be frozen before the first performance run.
+The pre-run comparison contract freezes four metrics for each public output:
+maximum absolute error, mean absolute error, relative L-infinity error with a
+`2^-7` denominator floor, and ordered finite-BF16 ULP error. For each pinned
+independent-reference element, it measures the larger spacing to the adjacent
+finite BF16 value. The per-output dtype allowance is the corresponding maximum,
+mean, relative, and one-ULP envelope. The independent-reference limit is the
+metricwise maximum of that envelope and the pinned local ordinary-JAX analytic
+observation. The local observation is shape- and input-specific non-scorecard
+evidence, not a general BF16 tolerance.
+
+| Shape | Output | Max abs | Mean abs | Relative L-inf | Max BF16 ULP |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `2048x4096` | `y` | 0.0078125 | 0.0023046755673821195 | 0.007751937984496124 | 1 |
+| `2048x4096` | `dx` | 0.5 | 0.00524643778018441 | 0.00641025641025641 | 7 |
+| `2048x4096` | `dgamma` | 4.0 | 4.0 | 0.0045662100456621 | 1 |
+| `7x13` | `y` | 0.0078125 | 0.002555427970467033 | 0.004201680672268907 | 1 |
+| `7x13` | `dx` | 0.0078125 | 0.00257848383306147 | 0.005988023952095809 | 1 |
+| `7x13` | `dgamma` | 0.03125 | 0.016826923076923076 | 0.007462686567164179 | 1 |
+
+TE must satisfy those limits before matching. `SOURCE_ORDERED` must separately
+remain bitwise equal to ordinary JAX, satisfy the same independent-reference
+limit, and obey the scorecard rule
+`Shuttle metric <= max(matched TE metric, declared dtype allowance)` for every
+metric. Exact bitwise equality is an architecture round-trip gate against the
+same ordinary-JAX computation, not a claim that the independent analytic
+reference is bitwise identical. Each candidate output must pass separately
+against all four qualified matching TE backend-pair outputs; the contract does
+not permit a pair to be selected after observing errors. `FAST` may use these
+rules only when its lowering is proved identical and it remains bitwise equal to ordinary JAX. A
+non-identity `FAST` execution or timing run remains blocked until a new reviewed
+contract supplies an independently justified bound.
 
 ## StableHLO inventory at the canonical audit revision
 

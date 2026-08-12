@@ -50,7 +50,6 @@ def test_contract_closes_oracle_calls_without_claiming_hardware_results():
             "queried_workspace_records",
             "numerical_results",
             "latency_results",
-            "oracle_relative_thresholds",
         ],
     }
     assert contract["scorecard_effect"]["status_changed"] is False
@@ -85,6 +84,7 @@ def test_contract_closes_oracle_calls_without_claiming_hardware_results():
         (("api", "signatures", "nvte_rmsnorm_fwd", "sha256"), "0" * 64),
         (("artifact_provenance", "device"), ["model"]),
         (("comparison", "outputs", "backward_recompute"), ["dgamma", "dx"]),
+        (("comparison", "contract", "id"), "post_hoc_contract"),
         (("comparison", "threshold_status"), "accepted"),
         (("hardware_results", "runs"), [{"latency_ms": 0.1}]),
         (("hardware_results", "status"), "accepted"),
@@ -117,6 +117,7 @@ def test_contract_closes_oracle_calls_without_claiming_hardware_results():
         "api-signature-hash",
         "artifact-provenance",
         "output-roles",
+        "comparison-contract",
         "unresolved-thresholds",
         "fabricated-run",
         "hardware-status",

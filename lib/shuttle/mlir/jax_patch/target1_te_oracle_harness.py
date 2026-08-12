@@ -17,10 +17,21 @@ from typing import Any
 
 from target1_expert_oracle import SOURCE_COMMIT, load_contract, verify_source_checkout
 from target1_numerical_oracle import fixed_inputs, independent_reference
+from target1_prerun_comparison import (
+    CONTRACT_ID as COMPARISON_CONTRACT_ID,
+)
+from target1_prerun_comparison import (
+    load_contract as load_comparison_contract,
+)
+from target1_prerun_comparison import (
+    require_reference_qualified,
+)
 
 RUNNER = Path(__file__).with_name("target1_te_oracle_runner.cpp")
 BUILD_MANIFEST = Path(__file__).with_name("target1-te-oracle-runner-build-v1.json")
 EXPERT_CONTRACT = Path(__file__).with_name("target1-rowwise-bf16-te-2.17-expert-oracle-v1.json")
+COMPARISON_CONTRACT = Path(__file__).with_name("target1-rowwise-bf16-prerun-comparison-v1.json")
+COMPARISON_CONTRACT_SHA256 = "3886fe875da9b6445a45d1e03eb32dec242bb59d0ec58a28854e319bbdb31845"
 PLAN_ID = "shape_boundary_backend_alternating_v1"
 SHAPES = ((2048, 4096), (7, 13))
 BOUNDARIES = ("forward", "backward_recompute", "composed")
@@ -35,8 +46,8 @@ OUTPUT_ROLES = {
     "backward_recompute": ("dx", "dgamma"),
     "composed": ("y", "dx", "dgamma"),
 }
-EXPECTED_RUNNER_SHA256 = "6bbec708db6b9a70a9702ef1a70ed632c5ccc297beb1c2afab073c9ca0734e62"
-EXPECTED_BUILD_MANIFEST_SHA256 = "865fd84735dc623c16859999869dd5f6a6e7f391ca45482a9904a421a522527a"
+EXPECTED_RUNNER_SHA256 = "c0b1f96546ddad9d6fc7de0dfb7dee00fc7c8eccf99fcb29878a7c4d4995d536"
+EXPECTED_BUILD_MANIFEST_SHA256 = "47ec616ed9d261999f9665fba9e970a2eea7943dd9dfc3ec9e3341d29d0f26ad"
 
 
 def _sha256(path: Path) -> str:
@@ -81,7 +92,16 @@ def validate_build_manifest(path: Path = BUILD_MANIFEST) -> dict[str, Any]:
         raise ValueError("runner build manifest digest drifted")
     document = _closed(
         _load_json(path),
-        {"schema_version", "manifest_id", "runner", "provider", "static_abi_gate", "build", "execution"},
+        {
+            "schema_version",
+            "manifest_id",
+            "runner",
+            "provider",
+            "comparison_contract",
+            "static_abi_gate",
+            "build",
+            "execution",
+        },
         "build manifest",
     )
     _exact_int(document["schema_version"], 1, "schema_version")
@@ -103,6 +123,11 @@ def validate_build_manifest(path: Path = BUILD_MANIFEST) -> dict[str, Any]:
                 "transformer_engine/common/include/transformer_engine/transformer_engine.h",
                 "transformer_engine/common/include/transformer_engine/normalization.h",
             ],
+        },
+        "comparison_contract": {
+            "id": COMPARISON_CONTRACT_ID,
+            "path": "lib/shuttle/mlir/jax_patch/target1-rowwise-bf16-prerun-comparison-v1.json",
+            "sha256": COMPARISON_CONTRACT_SHA256,
         },
         "static_abi_gate": {
             "status": "passed_on_clean_official_checkout",
@@ -140,6 +165,7 @@ def prepare_run_plan(output: Path, runner_binary: Path) -> dict[str, Any]:
     """Write pinned BF16 inputs/references and a deterministic 24-run plan."""
     validate_build_manifest()
     load_contract(EXPERT_CONTRACT)
+    load_comparison_contract(COMPARISON_CONTRACT)
     if output.exists():
         raise ValueError("run-plan output must not exist")
     output.mkdir(parents=True)
@@ -183,6 +209,10 @@ def prepare_run_plan(output: Path, runner_binary: Path) -> dict[str, Any]:
                 PLAN_ID,
                 "--counterbalance-position",
                 str(position),
+                "--comparison-contract-id",
+                COMPARISON_CONTRACT_ID,
+                "--comparison-contract-sha256",
+                COMPARISON_CONTRACT_SHA256,
             ]
             runs.append(
                 {
@@ -202,6 +232,11 @@ def prepare_run_plan(output: Path, runner_binary: Path) -> dict[str, Any]:
         "counterbalance_plan_id": PLAN_ID,
         "runner_binary": str(runner_binary),
         "runner_binary_sha256": None,
+        "comparison_contract": {
+            "id": COMPARISON_CONTRACT_ID,
+            "path": COMPARISON_CONTRACT.name,
+            "sha256": COMPARISON_CONTRACT_SHA256,
+        },
         "runs": runs,
         "scorecard_status_changed": False,
     }
@@ -224,6 +259,7 @@ def _validate_workspace(value: object, name: str) -> None:
 
 def validate_result(path: Path, expected_run: dict[str, Any]) -> dict[str, Any]:
     """Validate one unsealed hardware observation against its planned invocation."""
+    comparison_contract = load_comparison_contract(COMPARISON_CONTRACT)
     result = _closed(
         _load_json(path),
         {
@@ -236,6 +272,7 @@ def validate_result(path: Path, expected_run: dict[str, Any]) -> dict[str, Any]:
             "counterbalance",
             "workspace_queries",
             "timing",
+            "repeatability",
             "comparison",
             "provenance",
         },
@@ -295,25 +332,38 @@ def validate_result(path: Path, expected_run: dict[str, Any]) -> dict[str, Any]:
     recorded_median = _nonnegative_finite(timing["median_cuda_event_milliseconds"], "timing median")
     if recorded_median != statistics.median(checked_samples):
         raise ValueError("timing median drifted")
+    if result["repeatability"] != {
+        "post_timing_invocations": 3,
+        "comparison": "bitwise_all_public_outputs",
+        "placement": "outside_cuda_event_intervals_after_50_measured_invocations",
+        "all_outputs_bitwise_equal": True,
+    }:
+        raise ValueError("result repeatability evidence drifted")
     comparison = _closed(
         result["comparison"],
         {
+            "contract",
+            "subject_id",
             "reference",
             "relative_scale_floor",
             "outputs",
-            "oracle_relative_thresholds",
-            "acceptance_status",
+            "qualification_status",
         },
         "comparison",
     )
+    if comparison["contract"] != {
+        "id": COMPARISON_CONTRACT_ID,
+        "sha256": COMPARISON_CONTRACT_SHA256,
+    }:
+        raise ValueError("comparison contract identity drifted")
+    if comparison["subject_id"] != "transformer_engine_2_17_exact_c_api":
+        raise ValueError("comparison subject identity drifted")
     if comparison["reference"] != "independent_numpy_binary64_closed_form_then_bfloat16_outputs":
         raise ValueError("comparison reference drifted")
     if comparison["relative_scale_floor"] != 0.0078125:
         raise ValueError("comparison relative scale floor drifted")
-    if comparison["oracle_relative_thresholds"] is not None:
-        raise ValueError("unreviewed oracle-relative thresholds are forbidden")
-    if comparison["acceptance_status"] != "blocked_until_reviewed_hardware_artifact":
-        raise ValueError("comparison acceptance status drifted")
+    if comparison["qualification_status"] != "unsealed_runner_metrics_require_contract_validator":
+        raise ValueError("comparison qualification status drifted")
     outputs = comparison["outputs"]
     if not isinstance(outputs, list) or [output.get("role") for output in outputs] != list(
         OUTPUT_ROLES[expected_run["boundary"]]
@@ -333,15 +383,35 @@ def validate_result(path: Path, expected_run: dict[str, Any]) -> dict[str, Any]:
         )
         checked_metrics = {
             name: _nonnegative_finite(metrics[name], f"comparison metrics.{name}")
-            for name in ("max_absolute_error", "mean_absolute_error", "relative_linf_error")
+            for name in (
+                "max_absolute_error",
+                "mean_absolute_error",
+                "relative_linf_error",
+            )
         }
         if checked_metrics["mean_absolute_error"] > checked_metrics["max_absolute_error"]:
             raise ValueError("comparison metrics.mean_absolute_error exceeds max_absolute_error")
         if type(metrics["max_bfloat16_ulp_error"]) is not int or metrics["max_bfloat16_ulp_error"] < 0:
             raise ValueError("comparison metrics.max_bfloat16_ulp_error drifted")
+        try:
+            require_reference_qualified(
+                metrics,
+                shape=f"{expected_run['shape'][0]}x{expected_run['shape'][1]}",
+                role=record["role"],
+                contract=comparison_contract,
+            )
+        except AssertionError as error:
+            raise ValueError("comparison metric exceeds predeclared reference limit") from error
     provenance = _closed(
         result["provenance"],
-        {"marin_revision", "adapter_sha256", "transformer_engine", "toolchain", "cuda", "device"},
+        {
+            "marin_revision",
+            "adapter_sha256",
+            "transformer_engine",
+            "toolchain",
+            "cuda",
+            "device",
+        },
         "provenance",
     )
     provider = _closed(
