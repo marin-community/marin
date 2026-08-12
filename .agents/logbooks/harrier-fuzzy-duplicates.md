@@ -933,3 +933,14 @@ author: Rafal Wojdyla
 - Service capacity: East has 96 healthy TEI services. RNO has 88 healthy TEI services. The remaining eight RNO services are still in the build state with zero failures and zero preemptions.
 - Issue update: None. There is no major run-state change.
 - Next action: Watch the large BioCollection shards for their first completion and continue the regular East health checks.
+
+### 2026-08-12 22:08 UTC - Aggregate shard progress reached 54.91%
+
+- Root health: Both roots are running with zero source failures.
+- Completed artifacts: East has 45 completed source artifacts. RNO has 25 completed source artifacts. The full run has 70 of 292 completed source artifacts.
+- Aggregate progress: A direct object count found 91,569 of 166,775 output shards, or 54.91%. There are 75,206 shards left. East has written 33,452 shards, and RNO has written 58,117 shards.
+- RNO results: `biocollection-instruction_stream_003a7575` completed 36 shards, `cp/arxiv_papers_bcf7caef` completed 22 shards, `cp/data_provenance_6de533c9` completed four shards, and `cp/foodista_dfde536c` completed one shard. All four source steps succeeded.
+- RNO progress: `cp/library_of_congress_8e80a121` is running.
+- East progress: `nemotron_cc_v2-diverse_qa_016d1909` reached 4,031 of 4,416 output shards with 32 live workers and no dead workers at 22:05 UTC.
+- Issue update: None. These are routine source completions, not a major run-state change.
+- Next action: Continue the regular health checks and count all output objects for each aggregate progress request.
