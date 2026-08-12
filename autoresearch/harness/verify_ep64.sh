@@ -5,7 +5,7 @@
 # or drop fraction over the last DROP_WINDOW steps exceeds DROP_BUDGET.
 set -euo pipefail
 
-REPO=/home/marin/projects/marin
+REPO="${AR_REPO:-/home/marin/projects/marin}"
 cd "$REPO"
 
 SIZE="${AR_SIZE:-d1024}"                 # 1-rack rungs only: d768|d1024|d1536 (d2048 needs 4 racks — excluded)

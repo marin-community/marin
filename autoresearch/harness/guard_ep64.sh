@@ -4,7 +4,7 @@
 # the 2-rack quota even while a verify rack is winding down.
 set -euo pipefail
 
-REPO=/home/marin/projects/marin
+REPO="${AR_REPO:-/home/marin/projects/marin}"
 cd "$REPO"
 IRIS=(uv run iris --config lib/iris/config/marin.yaml)
 SHA="$(git rev-parse --short HEAD)"

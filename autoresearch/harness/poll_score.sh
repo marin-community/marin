@@ -3,7 +3,7 @@
 # Usage: poll_score.sh <run-id> [num-steps]
 set -euo pipefail
 
-REPO=/home/marin/projects/marin
+REPO="${AR_REPO:-/home/marin/projects/marin}"
 cd "$REPO"
 RUN_ID="$1"
 NUM_STEPS="${2:-1000}"
