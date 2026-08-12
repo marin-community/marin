@@ -9,12 +9,12 @@
 //! trigram prune only removes *more* row groups, never fewer.
 //!
 //! Safety: we prune only on a substring predicate that appears as a **top-level
-//! conjunct** — either `contains(col, <literal>)` or `col LIKE '%<literal>%'`. A
-//! predicate under an `OR` could drop rows that match the other branch, so those
-//! are ignored. The pushdown stays `Inexact`, so DataFusion keeps a `FilterExec`
-//! that re-checks the predicate exactly — a kept row group that doesn't actually
-//! match (Bloom false positive, or trigrams split across rows) is filtered there,
-//! not returned.
+//! conjunct** — `contains(col, <literal>)`, `col LIKE '%<literal>%'`, or
+//! `regexp_matches(col, <literal-pattern>)`. A predicate under an `OR` could drop
+//! rows that match the other branch, so those are ignored. The pushdown stays
+//! `Inexact`, so DataFusion keeps a `FilterExec` that re-checks the predicate
+//! exactly — a kept row group that doesn't actually match (Bloom false positive,
+//! or trigrams split across rows) is filtered there, not returned.
 //!
 //! A `LIKE` pattern contributes every literal run between its wildcards, since
 //! `%` and `_` only insert characters *between* those runs: `%a%b%` requires
@@ -31,6 +31,8 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 use datafusion_datasource_parquet::ParquetAccessPlan;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+use regex_syntax::hir::{Hir, HirKind};
+use regex_syntax::Parser;
 
 use crate::query::index_cache::IndexCache;
 use crate::store::trigram::{needle_trigrams, MIN_TRIGRAM_LEN};
@@ -171,8 +173,9 @@ fn substring_needles(filters: &[Expr], column: &str) -> Vec<String> {
 }
 
 /// Substring needles grouped by the column each constrains, from every top-level
-/// `contains(col, lit)` / `col LIKE '%lit%'` conjunct, keeping the literals long
-/// enough to decompose into at least one trigram (`>= MIN_TRIGRAM_LEN`).
+/// `contains(col, lit)` / `col LIKE '%lit%'` / `regexp_matches(col, pattern)`
+/// conjunct, keeping the literals long enough to decompose into at least one
+/// trigram (`>= MIN_TRIGRAM_LEN`).
 ///
 /// A column's needles are required together, so dropping a too-short one only
 /// loosens the constraint.
@@ -201,30 +204,72 @@ pub fn substring_needles_by_column(filters: &[Expr]) -> HashMap<String, Vec<Stri
 
 /// `Some((column, needles))` if `expr` constrains some column to contain literal
 /// substrings — all of them, since they are ANDed: `contains(<col>, <utf8
-/// literal>)`, or the literal runs of a `<col> LIKE` pattern (see
-/// [`like_column_needles`]).
+/// literal>)`, the literal runs of a `<col> LIKE` pattern (see
+/// [`like_column_needles`]), or the literals required by a regex match.
 fn substring_column_needles(expr: &Expr) -> Option<(String, Vec<String>)> {
     match expr {
-        Expr::ScalarFunction(sf) => {
-            contains_column_literal(sf).map(|(col, needle)| (col, vec![needle]))
-        }
+        Expr::ScalarFunction(sf) => scalar_function_needles(sf),
         Expr::Like(like) => like_column_needles(like),
         _ => None,
     }
 }
 
-/// `Some((column, needle))` if `sf` is exactly `contains(<column>, <utf8 literal>)`.
-fn contains_column_literal(
+fn scalar_function_needles(
     sf: &datafusion::logical_expr::expr::ScalarFunction,
-) -> Option<(String, String)> {
-    if sf.func.name() != "contains" || sf.args.len() != 2 {
+) -> Option<(String, Vec<String>)> {
+    if sf.args.len() != 2 {
         return None;
     }
     let Expr::Column(col) = &sf.args[0] else {
         return None;
     };
-    let needle = utf8_literal(&sf.args[1])?;
-    Some((col.name.clone(), needle))
+    let value = utf8_literal(&sf.args[1])?;
+    match sf.func.name() {
+        "contains" => Some((col.name.clone(), vec![value])),
+        "regexp_matches" => Some((col.name.clone(), regex_required_literals(&value))),
+        _ => None,
+    }
+}
+
+/// Literal byte strings that every match of `pattern` must contain.
+///
+/// The HIR has already resolved escapes and flags. Literals beneath optional
+/// repetition are discarded, while alternation keeps only literals required by
+/// every branch. Returning too few literals only loses an optimization;
+/// returning one that is not required could incorrectly prune matching rows.
+fn regex_required_literals(pattern: &str) -> Vec<String> {
+    let Ok(hir) = Parser::new().parse(pattern) else {
+        return Vec::new();
+    };
+    required_hir_literals(&hir)
+        .into_iter()
+        .filter_map(|literal| String::from_utf8(literal).ok())
+        .collect()
+}
+
+fn required_hir_literals(hir: &Hir) -> Vec<Vec<u8>> {
+    match hir.kind() {
+        HirKind::Literal(literal) => vec![literal.0.to_vec()],
+        HirKind::Capture(capture) => required_hir_literals(&capture.sub),
+        HirKind::Repetition(repetition) if repetition.min > 0 => {
+            required_hir_literals(&repetition.sub)
+        }
+        HirKind::Concat(parts) => parts.iter().flat_map(required_hir_literals).collect(),
+        HirKind::Alternation(branches) => {
+            let Some((first, rest)) = branches.split_first() else {
+                return Vec::new();
+            };
+            let mut required = required_hir_literals(first);
+            for branch in rest {
+                let branch_required = required_hir_literals(branch);
+                required.retain(|literal| branch_required.contains(literal));
+            }
+            required
+        }
+        HirKind::Empty | HirKind::Class(_) | HirKind::Look(_) | HirKind::Repetition(_) => {
+            Vec::new()
+        }
+    }
 }
 
 /// `Some((column, needles))` if `like` is `<column> LIKE '<pattern>'`, where
@@ -503,16 +548,24 @@ mod tests {
 
     use super::*;
 
-    /// `contains(data, 'x')` built as a logical expr, mirroring how the planner
-    /// represents the UDF call.
-    fn contains_expr(column: &str, needle: &str) -> Expr {
+    fn scalar_predicate_expr(name: &str, column: &str, value: &str) -> Expr {
         use datafusion::execution::FunctionRegistry;
         use datafusion::logical_expr::expr::ScalarFunction;
         use datafusion::prelude::SessionContext;
         let ctx = SessionContext::new();
         crate::query::udf::register_scalar_udfs(&ctx);
-        let udf = ctx.udf("contains").unwrap();
-        Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![col(column), lit(needle)]))
+        let udf = ctx.udf(name).unwrap();
+        Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![col(column), lit(value)]))
+    }
+
+    /// `contains(data, 'x')` built as a logical expr, mirroring how the planner
+    /// represents the UDF call.
+    fn contains_expr(column: &str, needle: &str) -> Expr {
+        scalar_predicate_expr("contains", column, needle)
+    }
+
+    fn regex_expr(column: &str, pattern: &str) -> Expr {
+        scalar_predicate_expr("regexp_matches", column, pattern)
     }
 
     /// `<column> LIKE '<pattern>'` (or `NOT LIKE` / `ILIKE` via the flags).
@@ -545,6 +598,32 @@ mod tests {
         // conjuncts (the elements of `filters`) are inspected.
         let buried = contains_expr("data", "x").or(col("seq").gt(lit(1_i64)));
         assert!(substring_needles(&[buried], "data").is_empty());
+    }
+
+    #[test]
+    fn regex_extracts_only_literals_required_by_every_match() {
+        assert_eq!(
+            substring_needles(&[regex_expr("data", r"rank0.*train/loss")], "data"),
+            vec!["rank0", "train/loss"]
+        );
+        assert_eq!(
+            substring_needles(&[regex_expr("data", r"start(?:middle)+end")], "data"),
+            vec!["start", "middle", "end"]
+        );
+
+        // Optional text and branch-specific text are not guaranteed. The common
+        // suffix remains usable, while a case-insensitive literal becomes an HIR
+        // class and therefore cannot be checked against case-sensitive trigrams.
+        assert_eq!(
+            substring_needles(
+                &[regex_expr("data", r"(?:foo|bar)(?:optional)?tail")],
+                "data"
+            ),
+            vec!["tail"]
+        );
+        assert!(substring_needles(&[regex_expr("data", r"(?i)needle")], "data").is_empty());
+        assert!(substring_needles(&[regex_expr("data", r"foo|bar")], "data").is_empty());
+        assert!(substring_needles(&[regex_expr("data", r"[")], "data").is_empty());
     }
 
     #[test]
@@ -862,6 +941,73 @@ mod tests {
                     assert!(
                         value.contains(run.as_str()),
                         "pattern {pattern:?} matched {value:?}, which lacks the run {run:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn regex_literals_are_implied_by_the_engines_own_match() {
+        use datafusion::arrow::array::{Array, RecordBatch, StringArray};
+        use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+
+        let values = [
+            "rank0 step train/loss=1.2",
+            "error: task 123 failed",
+            "warning: task 7 failed",
+            "footail",
+            "foooptionaltail",
+            "abcabc",
+            "path/to.file",
+            "unrelated",
+        ];
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "v",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(values.to_vec()))])
+                .unwrap();
+        let ctx = crate::query::make_ctx();
+        ctx.register_batch("t", batch).unwrap();
+
+        for pattern in [
+            r"rank0.*train/loss",
+            r"^(?:error|warning): task [0-9]+ failed$",
+            r"foo(?:optional)?tail",
+            r"(?:abc){2,}",
+            r"path/to\.file",
+        ] {
+            let literals = regex_required_literals(pattern);
+            let batches = ctx
+                .sql(&format!(
+                    "SELECT v FROM t WHERE regexp_matches(v, '{pattern}')"
+                ))
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap();
+            let matched: Vec<String> = batches
+                .iter()
+                .flat_map(|batch| {
+                    let column = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .unwrap()
+                        .clone();
+                    (0..column.len()).map(move |i| column.value(i).to_string())
+                })
+                .collect();
+            assert!(!matched.is_empty(), "pattern {pattern:?} matched nothing");
+            for value in &matched {
+                for literal in &literals {
+                    assert!(
+                        value.contains(literal),
+                        "pattern {pattern:?} matched {value:?}, which lacks {literal:?}"
                     );
                 }
             }
