@@ -4151,3 +4151,46 @@ author: dlwh
   pass. No compiler implementation or execution result is claimed.
 - Next action: obtain independent re-review, then use the corrected partition,
   coverage, observer, and fixture contracts for implementation.
+
+### 2026-08-11 - TLTC-MLIR-004 Target 1 lossless algebra and logical materialization
+
+- Canonical commit `0ac70a0a21` completes the ordinary-JAX Target 1 source
+  boundary under pipeline ABI 5. Both rowwise fixture shapes and all forward,
+  JAX-owned VJP backward, and composed graphs convert to generic Shuttle
+  Map/Fold algebra with zero source-result exclusions. The bounded-zero affine
+  encoding preserves mapped-singleton broadcast dimensions, including legal
+  unordered mappings.
+- Canonical commit `32de76fd9a` adds a fail-closed installed-wheel CPU
+  acceptance contract. It separates disabled-JAX baselines, ABI 5 cache
+  population, and second-process cache reuse for 12 shape, boundary, and policy
+  identities. The preparation produces deterministic reviewed ZIP bytes, but
+  the runner contains no build, upload, launch, or external mutation path.
+- Canonical commit `6ecaefc417` adds an opt-in
+  `shuttle.materialization_plan` for one static FP32 row Fold and its connected
+  Maps. Both shapes derive 19 tasks and 21 logical buffers, including three
+  rank-zero scalar Maps. Verification independently re-derives exact task
+  order, SSA edges, types, dependencies, lifetimes, policy, and semantic
+  fingerprints from the bound Shuttle Region.
+- The materialization plan is non-executable. It chooses no layout, offset,
+  alignment, address space, target, worker assignment, parallel schedule,
+  EventTensor coordinates, device lowering, or runtime ABI. Its passes are not
+  part of the production StableHLO export pipeline and do not change ABI 5 or
+  cache identity.
+- Canonical commit `84b915713a` refreshes the capsule's closed tracked-source
+  inventory after the planner tests. The deterministic capsule has 134 members
+  and SHA-256 `83bcecec487f1490d2f6fda2a472fdca0a59d5765f684e8e79e1f4b00ae214a8`.
+  The full integrated gates pass: 35 native targets, 123 Python tests, CPU
+  parity, and changed-files pre-commit.
+- External execution remains blocked. Iris currently recreates a workspace ZIP
+  at submission, its Kubernetes bundle-fetch init container uses the provider
+  default image rather than a per-job immutable digest, and the Linux Python
+  dependency lock, task/init image digests, Iris revision/config, exact bundle
+  identity, and closed submitted environment are unresolved. No private source
+  upload or CoreWeave submission is authorized.
+- Target 1 remains scorecard-blocked. The `2048x4096` BF16 boundary is still a
+  proposed shape, Transformer Engine 2.17.0 remains an unpinned oracle, and no
+  conforming H100 or GB200/B200 numerical or performance artifact exists.
+- Next action: pin the numerical oracle contract, add an opt-in target
+  schedule/layout consumer of the logical materialization plan, and implement
+  an immutable exact-bundle/init-image Iris contract locally. Request upload
+  authorization only after those identities and reviews are closed.
