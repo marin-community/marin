@@ -465,9 +465,11 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
     )
 
     # The regex filter re-queries the server and drops non-matching lines entirely. It
-    # applies on Enter, not on every keystroke.
+    # applies on Enter, not on every keystroke. Keep this pattern literal-compatible
+    # because CI runs Iris smoke tests against the latest published Finelog server;
+    # the Rust test covers regex metacharacters against this branch's server source.
     filter_input = "input[placeholder^='Filter regex']"
-    smoke_page.fill(filter_input, "validation.*failed")
+    smoke_page.fill(filter_input, "validation failed")
     smoke_page.press(filter_input, "Enter")
     smoke_page.wait_for_function(
         "() => document.body.textContent.includes('validation failed') && "
