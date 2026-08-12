@@ -99,14 +99,17 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    DEFAULT_CC_MAX_ITERATIONS,
     FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
+    compute_fuzzy_dups_attrs_step,
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import (
     MINHASH_ATTR_DATA_VERSION,
     MinHashAttrData,
     compute_minhash_attrs,
+    compute_minhash_attrs_step,
 )
 from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
@@ -333,6 +336,69 @@ def select_sources(names: list[str] | None = None) -> dict[str, StepSpec]:
 def default_sources() -> dict[str, StepSpec]:
     """Every ``all_sources()`` entry, mapped to its normalize StepSpec."""
     return select_sources(None)
+
+
+@dataclass(frozen=True)
+class FuzzyDedupSteps:
+    minhash: dict[str, StepSpec]
+    dedup: StepSpec
+
+
+def build_fuzzy_dedup_steps(
+    sources: dict[str, StepSpec],
+    *,
+    scale: PipelineScale = DEFAULT_SCALE,
+    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS,
+    coordinator_resources: ResourceConfig | None = None,
+    minhash_max_workers: int | None = None,
+    dedup_max_workers: int | None = None,
+    dedup_num_reduce_shards: int | None = None,
+    dedup_worker_resources: ResourceConfig | None = None,
+    dedup_map_task_resources: ResourceConfig | None = None,
+    dedup_reduce_task_resources: ResourceConfig | None = None,
+    dedup_output_path: str | None = None,
+    zephyr_context: ZephyrContext | None = None,
+) -> FuzzyDedupSteps:
+    """Build only the MinHash and global fuzzy-dedup parts of the Datakit DAG.
+
+    ``dedup_output_path`` pins the dedup step's output tree instead of deriving
+    it from the step hash. Use it to continue an existing run: connected
+    components then resumes from the completed ``it_N`` directories under that
+    tree, which a raised ``cc_max_iterations`` would otherwise re-key away from.
+    """
+    mh = scale.minhash
+    minhash = {
+        name: compute_minhash_attrs_step(
+            name=f"datakit/minhash/{name}",
+            normalize=normalize_step,
+            num_perms=mh.num_perms,
+            num_bands=mh.num_bands,
+            ngram_size=mh.ngram_size,
+            text_cap_chars=mh.text_cap_chars,
+            seed=mh.seed,
+            worker_resources=scale.pool.worker,
+            coordinator_resources=coordinator_resources,
+            max_workers=minhash_max_workers,
+            zephyr_context=zephyr_context,
+        )
+        for name, normalize_step in sources.items()
+    }
+    dedup = compute_fuzzy_dups_attrs_step(
+        name="datakit/dedup",
+        minhash_steps=list(minhash.values()),
+        cc_max_iterations=cc_max_iterations,
+        cc_resume=True,
+        max_parallelism=scale.dedup_max_parallelism,
+        num_reduce_shards=dedup_num_reduce_shards,
+        max_workers=dedup_max_workers,
+        worker_resources=dedup_worker_resources or scale.pool.worker,
+        coordinator_resources=coordinator_resources,
+        map_task_resources=dedup_map_task_resources,
+        reduce_task_resources=dedup_reduce_task_resources,
+        override_output_path=dedup_output_path,
+        zephyr_context=zephyr_context,
+    )
+    return FuzzyDedupSteps(minhash=minhash, dedup=dedup)
 
 
 def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale) -> StepSpec:

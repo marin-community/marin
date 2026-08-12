@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
+from zephyr.stage_checkpoint import ZephyrStageCheckpoint
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -227,6 +228,8 @@ def compute_fuzzy_dups_attrs(
     cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS,
     cc_resume: bool = False,
     max_parallelism: int = MAX_IRIS_WORKER_REPLICAS,
+    num_reduce_shards: int | None = None,
+    max_workers: int | None = None,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
@@ -253,7 +256,10 @@ def compute_fuzzy_dups_attrs(
         output_path: Output root. Per-source attr trees land under
             ``<output_path>/outputs/source_NNN/``.
         cc_max_iterations: Max iterations for connected components.
-        max_parallelism: Worker count for the ZephyrContext.
+        max_parallelism: Maximum number of input map shards.
+        num_reduce_shards: Number of output shards for each group-by stage.
+            The default is one shard for each Zephyr worker.
+        max_workers: Maximum Zephyr workers. Defaults to ``max_parallelism``.
         worker_resources: Per-worker resource request. Required when
             ``map_task_resources`` is set.
         coordinator_resources: Coordinator resource request.
@@ -295,13 +301,29 @@ def compute_fuzzy_dups_attrs(
     resources = worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g")
     ctx_kwargs: dict = {
         "name": "fuzzy-dups",
-        "max_workers": max_parallelism,
+        "max_workers": max_workers if max_workers is not None else max_parallelism,
         "resources": resources,
+        "chunk_storage_prefix": f"{output_path}/metadata/zephyr-checkpoints",
     }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
+
+    # A stage checkpoint references the intermediate chunk data, so it survives
+    # a failure only while that data does. An owned context puts the data under
+    # this step's output tree. A shared context keeps its own prefix, which the
+    # caller may point at temporary storage, thus checkpoints stay off there.
     ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    checkpoints_enabled = zephyr_context is None
+    if not checkpoints_enabled:
+        logger.info(
+            "Stage checkpoints are off: the supplied Zephyr context stores chunks at %s, "
+            "which this step does not own.",
+            ctx.chunk_storage_prefix,
+        )
     map_resources = map_task_resources or resources
+    reduce_shards = num_reduce_shards if num_reduce_shards is not None else ctx.max_workers
+    if reduce_shards is None or reduce_shards < 1:
+        raise ValueError("num_reduce_shards must be at least 1")
 
     # Cap shard count at max_parallelism. Each group reads its attr files
     # sequentially and emits bucket records; file_idx is preserved on the entry
@@ -316,11 +338,12 @@ def compute_fuzzy_dups_attrs(
         bucket_ds,
         ctx,
         output_dir=f"{output_path}/metadata/cc",
+        num_reduce_shards=reduce_shards,
         max_iterations=cc_max_iterations,
         resume=cc_resume,
-        num_reduce_shards=max_parallelism,
         map_task_resources=map_resources,
         reduce_task_resources=reduce_task_resources,
+        checkpoint_key_prefix=f"{output_path}:connected-components" if checkpoints_enabled else None,
     )
     if not converged:
         # A non-converged CC is still deterministic and reproducible across
@@ -360,6 +383,7 @@ def compute_fuzzy_dups_attrs(
             lambda r: r["file_idx"],
             sort_by=lambda r: r["id"],
             reducer=aggregator,
+            num_output_shards=reduce_shards,
         )
     )
 
@@ -368,6 +392,7 @@ def compute_fuzzy_dups_attrs(
         verbose=True,
         map_task_resources=map_resources,
         reduce_task_resources=reduce_task_resources,
+        checkpoint=ZephyrStageCheckpoint(key=f"{output_path}:final-attributes") if checkpoints_enabled else None,
     )
     shard_results = outcome.results
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)
@@ -395,10 +420,16 @@ def compute_fuzzy_dups_attrs_step(
     *,
     name: str,
     minhash_steps: list[StepSpec],
-    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS,
     max_parallelism: int,
+    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS,
+    cc_resume: bool = False,
+    num_reduce_shards: int | None = None,
+    max_workers: int | None = None,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
+    map_task_resources: ResourceConfig | None = None,
+    reduce_task_resources: ResourceConfig | None = None,
+    zephyr_context: ZephyrContext | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that computes fuzzy duplicate attrs from ``MinHashAttrData`` step outputs."""
@@ -409,9 +440,15 @@ def compute_fuzzy_dups_attrs_step(
             inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=output_path,
             cc_max_iterations=cc_max_iterations,
+            cc_resume=cc_resume,
             max_parallelism=max_parallelism,
+            num_reduce_shards=num_reduce_shards,
+            max_workers=max_workers,
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
+            map_task_resources=map_task_resources,
+            reduce_task_resources=reduce_task_resources,
+            zephyr_context=zephyr_context,
         ),
         # Match the identity the Datakit DAG builds, so a step created here
         # resolves to the artifacts that graph already produced. The MinHash

@@ -51,6 +51,7 @@ from zephyr.memory_store import (
 )
 from zephyr.plan import PhysicalPlan, compute_plan
 from zephyr.runners import InlineRunner, SubprocessRunner
+from zephyr.stage_checkpoint import ZephyrStageCheckpoint, checkpoint_execution_id, plan_fingerprint
 from zephyr.stage_io import (
     StageRunner,
     ZephyrTaskResources,
@@ -558,6 +559,7 @@ class ZephyrContext:
         execution_id: str,
         map_task_resources: ResourceConfig,
         reduce_task_resources: ResourceConfig,
+        checkpoint_fingerprint: str | None = None,
     ) -> ZephyrExecutionResult:
         """Run one plan on an existing coordinator and read its stored result."""
         result_path = _execution_result_path(self.chunk_storage_prefix, execution_id)
@@ -567,6 +569,7 @@ class ZephyrContext:
                 execution_id,
                 ZephyrTaskResources.from_resource_config(map_task_resources),
                 ZephyrTaskResources.from_resource_config(reduce_task_resources),
+                checkpoint_fingerprint,
             ).result()
         except Exception:
             payload = _try_read_coordinator_result(result_path)
@@ -587,8 +590,15 @@ class ZephyrContext:
         *,
         map_task_resources: ResourceConfig | None = None,
         reduce_task_resources: ResourceConfig | None = None,
+        checkpoint: ZephyrStageCheckpoint | None = None,
     ) -> ZephyrExecutionResult:
-        """Execute one dataset on a dedicated or supplied shared pool."""
+        """Execute one dataset on a dedicated or supplied shared pool.
+
+        When ``checkpoint`` is present, Zephyr keeps intermediate data after a
+        failure and saves one manifest after each completed stage. A later call
+        with the same checkpoint key resumes after the newest valid stage.
+        Zephyr deletes the intermediate data after a successful execution.
+        """
         plan = compute_plan(dataset)
         if verbose or dry_run:
             _print_plan(dataset.operations, plan)
@@ -611,9 +621,11 @@ class ZephyrContext:
             state = self._state
             coordinator = self._coordinator
 
+        checkpoint_fingerprint = plan_fingerprint(plan) if checkpoint is not None else None
+
         if state in {_ContextState.OWNER, _ContextState.BORROWED}:
             assert coordinator is not None
-            execution_id = _generate_execution_id()
+            execution_id = checkpoint_execution_id(checkpoint) if checkpoint is not None else _generate_execution_id()
             logger.info("Starting shared Zephyr pipeline %s", execution_id)
             self._upload_shared_data(execution_id)
             try:
@@ -623,6 +635,7 @@ class ZephyrContext:
                     execution_id,
                     resolved_map,
                     resolved_reduce,
+                    checkpoint_fingerprint,
                 )
             finally:
                 with suppress(Exception):
@@ -636,8 +649,9 @@ class ZephyrContext:
         last_exception: Exception | None = None
         backoff = ExponentialBackoff(initial=2.0, maximum=60.0, factor=2.0, jitter=0.1)
         for attempt in range(self.max_execution_retries + 1):
-            execution_id = _generate_execution_id()
+            execution_id = checkpoint_execution_id(checkpoint) if checkpoint is not None else _generate_execution_id()
             pool: _OwnedPool | None = None
+            succeeded = False
             try:
                 self._upload_shared_data(execution_id)
                 needed_workers = math.ceil(plan.num_shards / tasks_per_worker)
@@ -646,13 +660,16 @@ class ZephyrContext:
                     _IdleWorkerPolicy.DRAIN,
                 )
                 backoff.reset()
-                return self._run_on_coordinator(
+                outcome = self._run_on_coordinator(
                     pool.coordinator,
                     plan,
                     execution_id,
                     resolved_map,
                     resolved_reduce,
+                    checkpoint_fingerprint,
                 )
+                succeeded = True
+                return outcome
             except _NON_RETRYABLE_ERRORS:
                 raise
             except Exception as error:
@@ -675,7 +692,10 @@ class ZephyrContext:
                 if pool is not None:
                     assert self.client is not None
                     pool.shutdown()
-                _cleanup_execution(self.chunk_storage_prefix, execution_id)
+                if checkpoint is None or succeeded:
+                    _cleanup_execution(self.chunk_storage_prefix, execution_id)
+                else:
+                    logger.info("Retaining failed execution directory for stage resume: %s", execution_id)
 
         raise last_exception  # type: ignore[misc]
 

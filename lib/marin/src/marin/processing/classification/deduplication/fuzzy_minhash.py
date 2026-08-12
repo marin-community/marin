@@ -148,6 +148,7 @@ def compute_minhash_attrs(
     text_cap_chars: int | None = 500_000,
     seed: int = 42,
     worker_resources: ResourceConfig | None = None,
+    coordinator_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
@@ -226,6 +227,8 @@ def compute_minhash_attrs(
         "name": "minhash-attrs",
         "resources": resources,
     }
+    if coordinator_resources is not None:
+        ctx_kwargs["coordinator_resources"] = coordinator_resources
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
     ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
@@ -267,7 +270,9 @@ def compute_minhash_attrs_step(
     text_cap_chars: int | None = 500_000,
     seed: int = 42,
     worker_resources: ResourceConfig | None = None,
+    coordinator_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that computes MinHash attrs from a normalize step."""
@@ -283,7 +288,9 @@ def compute_minhash_attrs_step(
             text_cap_chars=text_cap_chars,
             seed=seed,
             worker_resources=worker_resources,
+            coordinator_resources=coordinator_resources,
             max_workers=max_workers,
+            zephyr_context=zephyr_context,
         ),
         hash_attrs={
             "v": MINHASH_ATTR_DATA_VERSION,
