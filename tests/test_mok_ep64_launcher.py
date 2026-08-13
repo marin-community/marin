@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from click.testing import CliRunner
 from levanter.kernels.mixture_of_kittens import (
     MokLikeBackwardPeerStorage,
     MokLikeForwardXStorage,
@@ -14,6 +15,7 @@ from experiments.grug.moe_hero_ep.launch_mok_ep64 import (
     GLOBAL_BATCH_SIZE,
     PROCESSES_PER_TASK,
     build_mok_ep64_run,
+    main,
 )
 
 
@@ -58,3 +60,13 @@ def test_ep64_launcher_names_strict_capacity_contract():
 
     assert "strict-dropless-ep64" in tags
     assert "mok-like-schedule-capacity-64" in tags
+
+
+def test_ep64_cli_accepts_shared_version_option():
+    result = CliRunner().invoke(
+        main,
+        ["--run-id", "mok-ep64-cli", "--num-steps", "2", "--num-layers", "2", "--version", "dev"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "grug/mok-ep64/mok-ep64-cli" in result.output

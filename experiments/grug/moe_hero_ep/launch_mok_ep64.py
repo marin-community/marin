@@ -228,14 +228,12 @@ def main(
     num_steps: int,
     num_layers: int | None,
     schedule_capacity_factor: float,
-    version: str | None,
 ) -> ArtifactStep[MokEp64Result]:
     return build_mok_ep64_run(
         run_id=run_id,
         num_steps=num_steps,
         num_layers=num_layers,
         schedule_capacity_factor=schedule_capacity_factor,
-        version=version,
     )
 
 
