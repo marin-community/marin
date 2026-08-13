@@ -1143,3 +1143,18 @@ author: Rafal Wojdyla
 - Large-shard check: The scientific-coding source has two active workers on two large shards. A five-second process sample showed increasing CPU time and I/O. The source is active, although its completed-shard counter remains at zero.
 - Issue update: None. This is routine progress after the batch restart.
 - Next action: Continue the root, source, service, Zephyr, and output checks. Recover only a terminal in-scope job failure.
+
+### 2026-08-13 12:34 UTC - Reduced RNO source concurrency after endpoint-list stall
+
+- RNO symptom: All eight active source counters stayed unchanged from 12:12 through 12:31 UTC. Many Zephyr workers reported `Operation list_endpoints failed ... Request timed out`. The source jobs and all 512 TEI service jobs stayed live.
+- Retry state: Some endpoint-list operations reached client retry attempt two. No output shard reached Zephyr retry attempt two, and no source job failed.
+- Controller evidence: Direct endpoint listing succeeded. Direct controller logs showed large bursts of `ListEndpoints` calls that completed in about 1.0 to 2.0 seconds. A ten-second CPU profile sampled most controller CPU time in Kubernetes reconciliation serialization and deserialization. This supports a control-plane load diagnosis, but it does not prove the root cause.
+- Decision: Eight source jobs can start as many as 256 Zephyr workers, and each worker can start 16 TEI requests. Stop only the RNO root and reduce source concurrency before reducing the requested GPU capacity. Do not restart the Iris controller.
+- Stopped root: `/rav/harrier-fuzzy-dups-rno-p1-20260813-batch-max-v2`.
+- Replacement root: `/rav/harrier-fuzzy-dups-rno-p1-20260813-batch-max-v3`.
+- Replacement command: `uv run iris --cluster marin job run --no-wait --target-cluster cw-rno2a --job-name harrier-fuzzy-dups-rno-p1-20260813-batch-max-v3 --priority batch --cpu 2 --memory 8GB --disk 16GB --enable-extra-resources --extra datakit -e MARIN_PREFIX s3://marin-us-east-02a/marin -- python -m experiments.datakit.embeddings.harrier.run --document-set fuzzy_duplicates --partition-index 1 --partition-count 2 --tei-instances 512 --max-concurrent 4`.
+- Output safety: The replacement uses the same output paths and `skip_existing=True`. Completed Parquet shards remain in place.
+- East state: `/rav/harrier-fuzzy-dups-east-p0-20260813-batch-max-v2` continues without a restart.
+- Incident record: https://echo.oa.dev/wiki/141.
+- Issue update: https://github.com/marin-community/marin/issues/8162#issuecomment-5280478157.
+- Next action: Confirm all 512 RNO service jobs become active, then confirm four source jobs resume shard progress without a new endpoint-list timeout storm.
