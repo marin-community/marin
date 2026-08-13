@@ -6,6 +6,10 @@
 import os
 import sys
 
+# Pulumi Automation starts gRPC threads before invoking subprocesses. Its fork
+# hook is unnecessary because each child immediately execs pulumi or gcloud.
+os.environ.setdefault("GRPC_ENABLE_FORK_SUPPORT", "0")
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from iac.import_command import main
