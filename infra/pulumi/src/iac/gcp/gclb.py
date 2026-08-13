@@ -10,7 +10,6 @@ import pulumi_gcp as gcp
 from iris.cluster.controller.native_proxy import PROXY_RELAY_TIMEOUT_SECONDS
 from iris.cluster.platforms.vm_lifecycle import DEFAULT_CONTROLLER_PORT
 
-from iac.gcp.cloud_run import resource_slug
 from iac.gcp.firewall import FirewallPort, GcpFirewallRuleArgs, create_firewall_rule
 from iac.imports import NO_IMPORTS, ImportRegistrar
 
@@ -23,7 +22,6 @@ FIREWALL_ALLOW_PRIORITY = 900
 FIREWALL_DENY_PRIORITY = 1000
 ARMOR_ALLOW_PRIORITY = 1000
 ARMOR_DEFAULT_PRIORITY = 2147483647
-IAP_ACCESSOR_ROLE = "roles/iap.httpsResourceAccessor"
 LOAD_BALANCING_SCHEME = "EXTERNAL_MANAGED"
 BACKEND_BALANCING_MODE = "RATE"
 BACKEND_MAX_RATE_PER_ENDPOINT = 1000
@@ -42,7 +40,6 @@ class ControllerIngress:
     port: int = DEFAULT_CONTROLLER_PORT
     token_proxy: bool = True
     deny_public: bool = False
-    iap_members: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -303,19 +300,6 @@ def _controller_backend(
         ),
     )
     context.register(settings, f"{settings_import_name}/iapSettings")
-    for member in controller.iap_members:
-        access = gcp.iap.WebBackendServiceIamMember(
-            f"{controller.cluster}-iap-access-{resource_slug(member)}",
-            project=args.project,
-            web_backend_service=backend.service.name,
-            role=IAP_ACCESSOR_ROLE,
-            member=member,
-            opts=context.options(depends_on=(backend.service,)),
-        )
-        context.register(
-            access,
-            f"projects/{args.project}/iap_web/compute/services/{physical_prefix}-be " f"{IAP_ACCESSOR_ROLE} {member}",
-        )
 
     path_rules: tuple[gcp.compute.URLMapPathMatcherPathRuleArgs, ...] = ()
     if controller.token_proxy:

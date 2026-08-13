@@ -103,10 +103,8 @@ IAP authentication and authorization are separate checks:
 - The caller identity must hold `roles/iap.httpsResourceAccessor` on that
   backend service. Failure is normally `403`.
 
-Add service-specific exceptions to a controller's `iap_members` list in
-`provisioning.gcp.gclb.controllers`. Broader human and automation access remains
-in the shared IAM declaration when appropriate. For example, the production
-controller explicitly grants the infra-probes service account.
+Backend IAM access policies remain externally managed and are not part of the
+GCLB import.
 
 The three common caller paths are:
 

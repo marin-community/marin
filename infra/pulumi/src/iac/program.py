@@ -264,7 +264,6 @@ def _build_gclb(
                 port=controller_config.port or DEFAULT_CONTROLLER_PORT,
                 token_proxy=controller_spec.token_proxy,
                 deny_public=controller_spec.deny_public,
-                iap_members=tuple(controller_spec.iap_members),
             )
         )
 

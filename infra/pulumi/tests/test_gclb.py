@@ -34,7 +34,6 @@ def _args() -> GcpGclbIapArgs:
                 backend_service_id="111",
                 network_tag="iris-marin-controller",
                 programmatic_clients=("desktop-client.apps.googleusercontent.com",),
-                iap_members=("serviceAccount:infra-probes@example.iam.gserviceaccount.com",),
             ),
             ControllerIngress(
                 cluster="marin-dev",
@@ -100,7 +99,6 @@ def _record_gclb(monkeypatch) -> RecordedGclb:
         (gcp.compute, "TargetHttpsProxy", "gcp:compute/targetHttpsProxy:TargetHttpsProxy"),
         (gcp.compute, "GlobalForwardingRule", "gcp:compute/globalForwardingRule:GlobalForwardingRule"),
         (gcp.iap, "Settings", "gcp:iap/settings:Settings"),
-        (gcp.iap, "WebBackendServiceIamMember", "gcp:iap/webBackendServiceIamMember:WebBackendServiceIamMember"),
     )
     for namespace, name, resource_type in constructors:
         monkeypatch.setattr(namespace, name, resource_recorder(resource_type))

@@ -222,7 +222,6 @@ class GcpControllerIngressSpec(BaseModel):
     cluster: str
     token_proxy: bool = True
     deny_public: bool = False
-    iap_members: list[str] = Field(default_factory=list)
 
 
 class GcpFinelogIngressSpec(BaseModel):

@@ -53,8 +53,6 @@ provisioning:
       frontend_name: marin
       controllers:
         - cluster: marin
-          iap_members:
-            - serviceAccount:infra-probes@hai-gcp-models.iam.gserviceaccount.com
         - cluster: marin-dev
       finelogs:
         - cluster: marin
