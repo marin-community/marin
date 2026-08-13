@@ -7,15 +7,15 @@
 # descriptor).
 #
 # Migrating a pin rebases our commits onto a newer upstream base on a `<branch>-next` staging branch,
-# validates with the fork's e2e against that branch, then hard-swaps `<branch>-next` onto the pin's
-# stable `branch` and re-pins Marin at it (see the refresh-fork skill's Promote step). Some forks have
-# drifted too far for a mechanical rebase (see their nuances); a refresh files a blocker for those until
-# a one-time manual catch-up brings them close to upstream again.
+# validates with the fork's e2e against that branch, re-pins Marin at the exact staged tip, and opens
+# a draft PR. The refresh creates rollback and date tags; an admin promotes the protected stable
+# `branch` before merging the Marin PR. Some forks have drifted too far for a mechanical rebase (see
+# their nuances); a refresh files a blocker for those until a one-time manual catch-up brings them
+# close to upstream again.
 #
-# The `refresh-fork` skill reads a section to drive one pin's refresh. A weekly coordinator that walks
-# the descriptor in `depends_on` order is planned but not yet built. Keep every section consistent with
-# its pin source and with EXTERNAL_PROJECTS in config/update-external.py;
-# tests/inference/test_migration_descriptors.py checks that against the on-disk fork layout.
+# The `refresh-fork` skill reads a section to drive one pin's refresh. `ops-fork-ferry.yaml` asks
+# Weaver to run that skill weekly for each supported pin or group. Keep every section consistent with
+# its pin source and with EXTERNAL_PROJECTS in config/update-external.py.
 #
 # A section's name is the pin; its pin source holds the fork's repository URL and pinned revision. A
 # fork with more than one pin has one section per pin (the vllm fork has `vllm` and `vllm-gpu`).
@@ -33,7 +33,8 @@
 #   branch           The fork branch this pin tracks. A single-pin fork tracks "main". A fork with more
 #                    than one pin (vllm: a GPU wheel and a TPU source pin) cannot share one main, so it
 #                    blanks main (a README pointing at the pin branches) and gives each pin its own
-#                    branch. The refresh stages on "<branch>-next" and promotes onto "<branch>".
+#                    branch. The refresh stages on "<branch>-next"; an admin promotes it onto
+#                    "<branch>" after reviewing the draft Marin PR.
 #   base_select      Which upstream base to rebase onto: "upstream_main" (upstream default branch),
 #                    "latest_release" (newest stable GitHub release), or "derived" (a SHA read from
 #                    another fork, with `derived_from`).

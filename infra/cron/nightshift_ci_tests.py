@@ -17,12 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
 
-from scripts.ci.claude_runner import (
-    NO_SELF_CREDIT_SETTINGS,
-    ClaudeRunStatus,
-    report_rate_limit,
-    run_claude,
-)
+from scripts.ci.claude_runner import ClaudeRunStatus, report_rate_limit, run_claude
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +35,12 @@ MIN_SLOW_SECONDS = 60.0
 # slow hits are dominated by JIT warm-up cost and cold imports; they are not
 # evidence of a real perf regression.
 MIN_SLOW_RUNS = 2
+
+# Suppress Claude Code's default "Co-Authored-By: Claude" / "Generated with
+# Claude Code" trailers on the commits and PRs the agent creates. AGENTS.md
+# forbids self-credit, and a prose instruction alone does not reliably override
+# the harness default — this setting does.
+NO_SELF_CREDIT_SETTINGS = ("--settings", '{"attribution":{"commit":"","pr":""}}')
 
 DURATION_RE = re.compile(r"(?P<seconds>\d+(?:\.\d+)?)s\s+(?:setup|call|teardown)\s+(?P<test>\S+::.+)$")
 FAILURE_RE = re.compile(r"(?:FAILED|ERROR)\s+(?P<test>\S+::.+?)(?:\s+-\s|$)")

@@ -1,10 +1,7 @@
 name: "Ops - Fork Ferry"
 
-# Weekly agentic fork migration. One unit per matrix leg: the refresh-fork skill selects the base
-# from config/external/migration.toml, stages the overlay on <branch>-next, pins Marin at that tip,
-# runs the fork's declared e2e on the marin hub, creates the durable backup + date tags, and opens
-# a draft Marin PR. v1 stops at the PR; an admin completes the protected-branch promotion.
-# This is additive to ops-external-dependencies.yaml, which keeps the daily patch-free pin bump.
+# Ask Weaver to refresh each supported fork unit weekly. The refresh-fork skill owns the migration;
+# this workflow only names the forks to update.
 
 on:
   schedule:
@@ -23,55 +20,29 @@ concurrency:
 jobs:
   ferry:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 5
     strategy:
       fail-fast: false
-      max-parallel: 1
       matrix:
-        unit: [tpu-vllm, evalchemy, harbor]
+        include:
+          - unit: tpu-vllm
+            forks: tpu-inference and vllm together
+          - unit: evalchemy
+            forks: evalchemy
+          - unit: harbor
+            forks: harbor
     permissions:
-      contents: write
-      pull-requests: write
       issues: write
-      id-token: write
     steps:
-      - name: Generate app token
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.NIGHTSHIFT_APP_ID }}
-          private-key: ${{ secrets.NIGHTSHIFT_APP_PRIVATE_KEY }}
-
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v3
-        with:
-          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
-
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3
-
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
-
-      - name: Refresh ${{ matrix.unit }}
+      # Loom ignores weaverbot's own comments. This token belongs to a Loom-approved CI account.
+      - name: Request refresh of ${{ matrix.unit }}
         if: ${{ github.event.inputs.unit == '' || github.event.inputs.unit == matrix.unit }}
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-        run: python -m infra.cron.fork_ferry --unit "${{ matrix.unit }}"
+          GH_TOKEN: ${{ secrets.WEAVERBOT_GH_TOKEN }}
+          FORKS: ${{ matrix.forks }}
+          UNIT: ${{ matrix.unit }}
+        run: >-
+          gh issue create --repo "$GITHUB_REPOSITORY"
+          --title "[fork-ferry] Refresh $UNIT (run $GITHUB_RUN_ID)"
+          --label agent-generated
+          --body "@weaverbot Use the refresh-fork skill to update $FORKS."
