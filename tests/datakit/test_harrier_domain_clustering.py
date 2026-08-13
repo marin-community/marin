@@ -5,12 +5,8 @@ import numpy as np
 import pytest
 
 from experiments.datakit.cluster.domain.v1.coarsen import CoarseningConfig, coarsen_centroids
-from experiments.datakit.cluster.domain.v1.harrier_all_sources import (
-    _part_quotas,
-    _stratified_indices,
-    proportional_quotas,
-    training_quotas,
-)
+from experiments.datakit.cluster.domain.v1.sample import proportional_quotas
+from experiments.datakit.cluster.domain.v1.train import stratified_indices, training_quotas
 
 
 def _separated_centroids() -> tuple[np.ndarray, np.ndarray]:
@@ -42,13 +38,9 @@ def _weighted_cosine_loss(centroids: np.ndarray, weights: np.ndarray, assignment
 def test_proportional_quotas_give_small_sources_one_document_and_hit_target():
     counts = {"tiny": 3, "small": 1_000, "medium": 1_011, "large": 10_000}
 
-    quotas = proportional_quotas(counts, 5_000)
+    quotas = proportional_quotas(counts, 5_000, small_source_max_rows=1_000, small_source_quota=1)
 
     assert quotas == {"tiny": 1, "small": 1, "medium": 459, "large": 4_539}
-
-
-def test_part_quotas_are_proportional_and_hit_source_quota():
-    assert _part_quotas((10, 20, 30), 17) == (3, 6, 8)
 
 
 def test_training_quotas_preserve_every_source_and_hit_target():
@@ -63,8 +55,8 @@ def test_stratified_indices_realize_source_quotas_deterministically():
     source_codes = np.repeat(np.arange(4), [1, 3, 100, 900])
     source_names = ("one", "tiny", "medium", "large")
 
-    selected, quotas = _stratified_indices(source_codes, source_names, 100, seed=42)
-    repeated, _ = _stratified_indices(source_codes, source_names, 100, seed=42)
+    selected, quotas = stratified_indices(source_codes, source_names, 100, seed=42)
+    repeated, _ = stratified_indices(source_codes, source_names, 100, seed=42)
 
     assert np.bincount(source_codes[selected], minlength=4).tolist() == [1, 1, 11, 87]
     assert quotas == {"one": 1, "tiny": 1, "medium": 11, "large": 87}
