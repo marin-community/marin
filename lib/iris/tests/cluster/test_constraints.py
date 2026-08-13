@@ -27,8 +27,7 @@ from iris.cluster.constraints import (
     split_hard_soft,
 )
 from iris.rpc import job_pb2
-
-from .conftest import eq_constraint, in_constraint
+from iris.testing.cluster import eq_constraint, in_constraint
 
 # --- is_cpu_device_type_constraint ---
 

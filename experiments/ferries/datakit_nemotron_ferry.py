@@ -3,8 +3,8 @@
 
 """Datakit nemotron ferry: weekly full-pipeline run on the Nemotron-CC high split.
 
-Pipeline: verify raw dump → normalize → minhash → fuzzy_dups → consolidate →
-tokenize. The first step is verification-only: it confirms the ``quality=high``
+Pipeline: verify raw dump → normalize → minhash → fuzzy_dups → full-text
+verification → consolidate → tokenize. The first step confirms the ``quality=high``
 subtree of the Nemotron-CC dump is already staged at ``NEMOTRON_RAW_PATH`` and
 refuses to initiate a Common Crawl download.
 
@@ -34,11 +34,20 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    FuzzyVerificationStoreConfig,
+    VerifiedFuzzyDupsAttrData,
+    verify_fuzzy_dups,
+)
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from rigging.filesystem import (
     StoragePath,
     check_path_in_region,
     marin_temp_bucket,
+    prefix_join,
     region_from_metadata,
     url_to_fs,
 )
@@ -53,6 +62,11 @@ logger = logging.getLogger(__name__)
 NEMOTRON_RAW_PATH = "gs://marin-eu-west4/raw/nemotro-cc-eeb783"
 NEMOTRON_DATA_SUBDIR = "contrib/Nemotron/Nemotron-CC/data-jsonl"
 NEMOTRON_QUALITY_DIR = "quality=high"
+FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
+    recovery_timeout=1_800,
+    ready_timeout=1_800,
+    lookup_batch_size=128,
+)
 
 
 def _verify_nemotron_quality_present(output_path: str) -> None:
@@ -115,7 +129,7 @@ def build_steps(base: str) -> list[StepSpec]:
         override_output_path=str(base_path / "minhash"),
     )  # ~1,380 output shards
 
-    deduped = StepSpec(
+    candidates = StepSpec(
         name="datakit-nemotron-smoke/fuzzy_dups",
         deps=[minhash],
         hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": 3},
@@ -130,20 +144,44 @@ def build_steps(base: str) -> list[StepSpec]:
         override_output_path=str(base_path / "fuzzy_dups"),
     )  # ~1,380 output shards
 
+    verification_params = FuzzyVerificationParams()
+    verified = StepSpec(
+        name="datakit-nemotron-smoke/verify_fuzzy_dups",
+        deps=[normalized, minhash, candidates],
+        hash_attrs={
+            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+            "verification": verification_params.model_dump(mode="json"),
+            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+        },
+        fn=lambda output_path: verify_fuzzy_dups(
+            normalized_sources={"source": read_artifact(normalized.output_path, NormalizedData)},
+            minhash_sources={"source": read_artifact(minhash.output_path, MinHashAttrData)},
+            candidates=read_artifact(candidates.output_path, FuzzyDupsAttrData),
+            output_path=output_path,
+            verification_params=verification_params,
+            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+            store_config=FUZZY_VERIFICATION_STORE_CONFIG,
+            worker_resources=(resources := ResourceConfig(cpu=16, ram="160g", disk="32g")),
+            map_task_resources=resources.scale(1 / 16),
+            reduce_task_resources=resources.scale(3 / 16),
+        ),
+        override_output_path=prefix_join(base, "verify_fuzzy_dups"),
+    )
+
     consolidated = StepSpec(
         name="datakit-nemotron-smoke/consolidate",
-        deps=[normalized, deduped],
+        deps=[normalized, verified],
         fn=lambda output_path: consolidate(
             input_path=read_artifact(normalized.output_path, NormalizedData).main_output_dir,
             output_path=output_path,
             filetype="parquet",
             filters=[
                 FilterConfig(
-                    type=FilterType.KEEP_DOC,
-                    attribute_path=read_artifact(deduped.output_path, FuzzyDupsAttrData).attr_dir_for_source(
+                    type=FilterType.REMOVE_DOC,
+                    attribute_path=read_artifact(verified.output_path, VerifiedFuzzyDupsAttrData).attr_dir_for_source(
                         read_artifact(normalized.output_path, NormalizedData).main_output_dir
                     ),
-                    name="is_cluster_canonical",
+                    name="dup_doc",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
                 ),
@@ -171,7 +209,7 @@ def build_steps(base: str) -> list[StepSpec]:
         override_output_path=str(base_path / "tokens"),
     )  # ~1,380 output shards
 
-    return [download, normalized, minhash, deduped, consolidated, tokenized]
+    return [download, normalized, minhash, candidates, verified, consolidated, tokenized]
 
 
 def _write_status(status: str, marin_prefix: str) -> None:

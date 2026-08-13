@@ -14,6 +14,7 @@ from iac.github.credentials import (
     CredentialScope,
     Disposition,
     EnvironmentCredential,
+    Management,
     OrganizationCredential,
     OrganizationLiveSecret,
     OrganizationVisibility,
@@ -68,12 +69,16 @@ def test_committed_stack_covers_workflow_references_and_isolates_removal_candida
     }
 
 
-def test_committed_stack_models_every_present_secret_as_a_read_only_resource() -> None:
+def test_committed_stack_models_every_present_external_secret_as_a_read_only_resource() -> None:
     manifest = load_stack_manifest(STACK_CONFIG)
 
     plans = credential_resource_plans(manifest)
 
-    expected = {credential.key for credential in manifest.credentials if credential.presence is Presence.PRESENT}
+    expected = {
+        credential.key
+        for credential in manifest.credentials
+        if credential.presence is Presence.PRESENT and credential.management is Management.EXTERNAL
+    }
     assert {plan.credential.key for plan in plans} == expected
     discord = next(plan for plan in plans if plan.credential.name == "DISCORD_WEBHOOK_INTERNAL_DISCUSS")
     assert discord.resource_id == "marin:DISCORD_WEBHOOK_INTERNAL_DISCUSS"
@@ -102,7 +107,11 @@ def test_registers_each_present_secret_and_selected_repository_access(monkeypatc
 
     registered = register_credentials(manifest)
 
-    present = [credential for credential in manifest.credentials if credential.presence is Presence.PRESENT]
+    present = [
+        credential
+        for credential in manifest.credentials
+        if credential.presence is Presence.PRESENT and credential.management is Management.EXTERNAL
+    ]
     scope_counts = Counter(credential.scope for credential in present)
     selected_organization_credentials = [
         credential
@@ -182,6 +191,31 @@ def test_environment_secret_does_not_resolve_as_a_repository_secret() -> None:
     assert [(finding.code, finding.credential) for finding in report.errors] == [
         ("undeclared-reference", "DEPLOY_TOKEN")
     ]
+
+
+def test_environment_secret_resolves_inside_its_workflow_job() -> None:
+    manifest = CredentialManifest(
+        organization="example",
+        repositories=(EXAMPLE_REPOSITORY,),
+        credentials=(
+            EnvironmentCredential(
+                name="DEPLOY_TOKEN",
+                presence=Presence.PRESENT,
+                source=ValueSource(kind=SourceKind.MANUAL, ref="owner-recovery:deploy-token"),
+                disposition=Disposition.KEEP,
+                repository=EXAMPLE_REPOSITORY,
+                environment="production",
+            ),
+        ),
+    )
+    references = {
+        "DEPLOY_TOKEN": (SecretReference(path=".github/workflows/deploy.yaml", line=12, environment="production"),),
+    }
+
+    report = audit_credentials(manifest, references)
+
+    assert report.errors == ()
+    assert report.unreferenced == ()
 
 
 def test_manifest_rejects_unpinned_gcp_secret_version() -> None:

@@ -46,27 +46,39 @@ Verify that all generated state is current without contacting the repositories:
 uv run config/update-external.py --check
 ```
 
-`Ops - External Dependency Update` runs the all-project command at 09:00 UTC
-each day and can also be started with `workflow_dispatch`. It opens or refreshes
-one `automation/external-dependencies` pull request containing every changed
-lock and generated pin, then enables squash auto-merge. The workflow log and
-pull request body list each resolved package version and commit, followed by
-the upstream commit subjects in every changed range. Generate the same Markdown
-summary locally with `--summary-file <path>`; commit metadata is read through
-the authenticated GitHub CLI.
+`Ops - External Dependency Update` runs the all-project command every six hours
+and can also be started with `workflow_dispatch`. It opens or refreshes one
+`automation/external-dependencies` pull request containing every changed lock
+and generated pin. The dedicated updater app merges after the required checks
+pass. A failed check or one-hour timeout leaves the pull request open and fails
+the scheduled run. The workflow log and pull request body list each resolved
+package version and commit, followed by the upstream commit subjects in every
+changed range. Generate the same Markdown summary locally with `--summary-file
+<path>`; commit metadata is read through the authenticated GitHub CLI.
+
+The six-hour schedule is the update-discovery interval. Under normal GitHub
+Actions scheduling, a green update lands in the same run; a blocked update is
+visible within the workflow's 90-minute deadline. Launches continue to consume
+only commits already landed on Marin's default branch.
 
 The external configurations intentionally model only what Marin needs:
 
 - `evalchemy` resolves the endpoint client core. Benchmark extras are selected
   by each evaluation at runtime.
 - `harbor` resolves the Git checkout and pinned Daytona SDK used only by the
-  isolated evaluation driver. Harbor is absent from Marin's workspace lock.
+  isolated evaluation driver. The `harbor_config` modules are installed from
+  that same checkout rather than a second package source, so runtime and error
+  taxonomy advance atomically. Harbor is absent from Marin's workspace lock.
 - `MarinSkyRL` tracks the repository-root `marinskyrl` distribution. The
   external lock resolves its CPU-safe base for the isolated launcher. The
   launcher synchronizes the selected `fsdp` or `megatron` profile from that
   revision's frozen root lock inside the cluster's standard Iris task image.
 - `vllm` records the promoted GPU wheels (`gpu-release.toml`) and the TPU source
   fork pins (`tpu-forks.toml`). Neither is a workspace dependency.
+
+Evaluation provenance stores the generated commit-pinned runtime requirement.
+For Evalchemy it identifies the exact Evalchemy checkout; for Harbor the one
+Harbor commit identifies both the runtime and its `harbor_config` modules.
 
 `migration.toml` describes how to migrate each fork toward upstream — the base to
 select, the Marin e2e that validates it, and the constraints to respect. It holds

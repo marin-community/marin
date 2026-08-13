@@ -21,7 +21,7 @@ import humanfriendly
 from fray.types import ResourceConfig
 from rigging.filesystem import open_url, unique_temp_path
 
-from zephyr.plan import PhysicalOp, Scatter, Shard
+from zephyr.plan import PhysicalOp, Scatter
 from zephyr.shuffle import ListShard, _write_scatter
 from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY, per_second
 from zephyr.worker_context import CounterEntry
@@ -284,11 +284,11 @@ class ShardTask:
 
     shard_idx: int
     total_shards: int
-    shard: Shard
+    shard: ListShard
     operations: list[PhysicalOp]
     cost: ZephyrTaskResources
     stage_name: str = "output"
-    aux_shards: dict[int, Shard] | None = None
+    aux_shards: dict[int, ListShard] | None = None
 
 
 class StageRunner(Protocol):

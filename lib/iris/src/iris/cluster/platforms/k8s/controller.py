@@ -34,6 +34,10 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
 from iris.cluster.node_agent import SERVICE_NAME as _NODE_AGENT_NAME
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.platforms.k8s.kueue_manifests import (
+    IRIS_WORKLOAD_PRIORITY_CLASSES,
+    build_workload_priority_class,
+)
 from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_name
 from iris.cluster.platforms.k8s.rbac_manifests import cluster_role_name
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
@@ -434,10 +438,6 @@ class K8sControllerProvider:
     def iris_labels(self) -> Labels:
         return self._iris_labels
 
-    @property
-    def s3_enabled(self) -> bool:
-        return self._s3_enabled
-
     # -- ControllerProvider protocol methods -----------------------------------
 
     def discover_controller(self, controller_config: ControllerVmConfig) -> str:
@@ -717,11 +717,12 @@ class K8sControllerProvider:
     def verify_prerequisites(self, config: IrisClusterConfig) -> None:
         """Assert IaC-provisioned prerequisites exist before starting the controller.
 
-        Presence-only (not exact spec): the Namespace, iris-controller ServiceAccount,
-        namespace-qualified ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
+        Checks the Namespace, iris-controller ServiceAccount, namespace-qualified
+        ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
         scale group, the Kueue ClusterQueue and its referenced ResourceFlavors, and
-        (best-effort) the IngressClass. All of these are provisioned by `infra/pulumi`'s
-        Pulumi program (spec.md §4) — this method creates nothing. Raises
+        (best-effort) the IngressClass. All of these are
+        provisioned by `infra/pulumi`'s Pulumi program (spec.md §4) — this method creates
+        nothing. Raises
         PrerequisitesNotProvisionedError enumerating every missing object if any are absent.
         """
         missing: list[str] = []
@@ -800,7 +801,7 @@ class K8sControllerProvider:
         logger.info("LocalQueue %s applied (clusterQueue=%s)", name, cluster_queue)
 
     def ensure_priority_classes(self) -> None:
-        """Create or update the iris-{system,production,interactive,batch} PriorityClass objects.
+        """Create or update the Iris Pod and Kueue Workload priority classes.
 
         PriorityClass is cluster-scoped. Iris owns these names; any cluster
         running Iris gets them so pods are stamped without manual admin setup.
@@ -821,9 +822,12 @@ class K8sControllerProvider:
                 logger.info("Replacing immutable PriorityClass %s", name)
                 self._kubectl.delete(K8sResource.PRIORITY_CLASSES, name)
             self._kubectl.apply_json(manifest)
+        for priority_class in IRIS_WORKLOAD_PRIORITY_CLASSES:
+            self._kubectl.apply_json(build_workload_priority_class(priority_class.name, priority_class.value))
         logger.info(
-            "PriorityClasses applied: %s",
-            ", ".join(n for n, _, _ in IRIS_PRIORITY_CLASSES),
+            "PriorityClasses applied: %s; WorkloadPriorityClasses applied: %s",
+            ", ".join(name for name, _, _ in IRIS_PRIORITY_CLASSES),
+            ", ".join(priority_class.name for priority_class in IRIS_WORKLOAD_PRIORITY_CLASSES),
         )
 
     # -- Storage Detection ----------------------------------------------------

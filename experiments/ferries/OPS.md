@@ -1,8 +1,9 @@
 # Datakit Ferry Operations
 
 Ad-hoc run/stop/validate for `experiments/ferries/datakit_ferry.py`.
-The ferry runs download → normalize → minhash → fuzzy dedup → consolidate →
-tokenize on FineWeb-Edu `sample/10BT`. It normally runs daily from the
+The ferry runs download → normalize → MinHash candidate search → full-text
+verification → consolidate → tokenize on FineWeb-Edu `sample/10BT`. It
+normally runs daily from the
 `Marin - Canary - Datakit - Tier 1` GitHub Actions workflow
 (`.github/workflows/marin-canary-datakit-tier1.yaml`). The commands below are
 for manual runs.

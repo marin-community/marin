@@ -26,7 +26,7 @@ import ast
 import json
 import subprocess
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 
 # Ordered list of workspace member short names.
@@ -57,21 +57,19 @@ class SourceRoot:
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES),
     SourceRoot("experiments", "."),
+    SourceRoot("infra/ci", "."),
     SourceRoot("infra/evaldash/src", "."),
 )
 
-# Files whose change triggers running every package's full test suite. The Rust
-# source-build machinery is included so a change to it re-runs the full matrix
-# and exercises a source build somewhere.
-BROAD_TRIGGERS: frozenset[str] = frozenset(
-    {
-        "uv.lock",
-        "pyproject.toml",
-        "infra/ci/select_tests.py",
-        "scripts/rust_mode.py",
-        ".github/workflows/unified-unit.yaml",
-    }
-)
+# Dependency and native-build changes can affect every local test environment.
+LOCAL_BROAD_TRIGGERS: frozenset[str] = frozenset({"uv.lock", "pyproject.toml", "scripts/rust_mode.py"})
+
+# Selector and workflow changes run the complete CI matrix to validate the
+# orchestration itself. Locally, their import-dependent tests are sufficient;
+# the exhaustive matrix still runs after the branch is pushed.
+CI_BROAD_TRIGGERS: frozenset[str] = frozenset({"infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"})
+
+BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 
 # uv package names and pytest paths for each workspace scope.
 UV_PACKAGE: dict[str, str] = {
@@ -90,6 +88,19 @@ UV_PACKAGE: dict[str, str] = {
 UV_EXTRAS: dict[str, list[str]] = {
     "marin": ["cpu", "dedup"],
 }
+
+PYTHON_VERSION = "3.12"
+PYTEST_ARGS: tuple[str, ...] = (
+    "--durations=5",
+    "-n",
+    "auto",
+    "--dist=worksteal",
+    "--tb=short",
+)
+
+RUN_ALL_REASON = "run-all-tests"
+BROAD_TRIGGER_REASON = "broad-trigger"
+DIFF_DRIVEN_REASON = "diff-driven"
 
 TEST_DIR: dict[str, str] = {
     **{scope: f"lib/{scope}/tests" for scope in UV_PACKAGE if scope != "marin"},
@@ -303,19 +314,18 @@ def has_static_test_items(path: Path) -> bool:
 
 
 def _test_tree(scope: str, repo_root: Path) -> dict[str, Path]:
-    """Every .py under a scope's test directory, keyed by the name it imports itself as.
+    """Every .py under a scope's test directory, keyed by its repo-root module name.
 
-    Test trees are imported as the ``tests`` package rooted at the test directory's parent,
-    which is what both relative (``from .conftest import x``) and absolute
-    (``from tests.cluster.conftest import x``) intra-tree imports resolve against.
+    Package test trees need distinct internal names so dependency analysis does
+    not conflate same-named helpers in different packages. Relative imports
+    resolve against the same canonical name.
     """
     test_dir = repo_root / TEST_DIR[scope]
     if not test_dir.exists():
         return {}
-    import_root = repo_root / PurePosixPath(TEST_DIR[scope]).parent
     tree: dict[str, Path] = {}
     for py in test_dir.rglob("*.py"):
-        module = path_to_module(py, import_root)
+        module = path_to_module(py, repo_root)
         if module:
             tree[module] = py
     return tree
@@ -394,7 +404,11 @@ class ClassifyResult:
     """Scopes whose native crate (lib/<scope>/rust) changed — need a source build."""
 
 
-def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
+def classify(
+    changed_files: list[str],
+    repo_root: Path,
+    broad_triggers: frozenset[str] = BROAD_TRIGGERS,
+) -> ClassifyResult:
     """Classify repo-root-relative changed file paths."""
     broad = False
     src_modules: set[str] = set()
@@ -403,7 +417,7 @@ def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
     native_changed: set[str] = set()
 
     for filepath in changed_files:
-        if filepath in BROAD_TRIGGERS:
+        if filepath in broad_triggers:
             broad = True
             continue
 
@@ -528,13 +542,27 @@ def torch_membership_for_test_file(path: Path) -> tuple[bool, bool]:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class MatrixLeg:
+    """Configuration for one unified-unit pytest job."""
+
+    label: str
+    package: str
+    python: str
+    extras: str
+    pytest_args: str
+    test_paths: str
+    setup: str
+    timeout: int
+
+
 def matrix_leg(
     scope: str,
     tests: list[str],
     shard: tuple[int, int] | None = None,
     *,
     source_build: bool = False,
-) -> dict[str, str | int]:
+) -> MatrixLeg:
     """Build one unified-unit matrix leg with uv/pytest arguments.
 
     ``shard`` is a ``(index, total)`` pair when the scope's suite is split across several
@@ -543,14 +571,16 @@ def matrix_leg(
     workflow reads the ``setup`` tag).
     """
     label = scope if shard is None else f"{scope} {shard[0]}/{shard[1]}"
-    return {
-        "label": label,
-        "package": UV_PACKAGE[scope],
-        "extras": " ".join(f"--extra {extra}" for extra in UV_EXTRAS.get(scope, [])),
-        "test_paths": " ".join(tests) if tests else TEST_DIR[scope],
-        "setup": RUST_SETUP_TAG if source_build else "",
-        "timeout": SOURCE_BUILD_TIMEOUT if source_build else DEFAULT_LEG_TIMEOUT,
-    }
+    return MatrixLeg(
+        label=label,
+        package=UV_PACKAGE[scope],
+        python=PYTHON_VERSION,
+        extras=" ".join(f"--extra {extra}" for extra in UV_EXTRAS.get(scope, [])),
+        pytest_args=" ".join(PYTEST_ARGS),
+        test_paths=" ".join(tests) if tests else TEST_DIR[scope],
+        setup=RUST_SETUP_TAG if source_build else "",
+        timeout=SOURCE_BUILD_TIMEOUT if source_build else DEFAULT_LEG_TIMEOUT,
+    )
 
 
 def all_test_files(scope: str, repo_root: Path) -> list[str]:
@@ -578,7 +608,7 @@ def scope_legs(
     repo_root: Path,
     *,
     source_build: bool = False,
-) -> list[dict[str, str | int]]:
+) -> list[MatrixLeg]:
     """Matrix legs for one scope: one leg, or several when the scope is sharded.
 
     ``tests is None`` runs the full suite. A sharded scope expands that to its file list so
@@ -610,12 +640,13 @@ def compute_matrix(
     forced_scopes: set[str],
     source_build_scopes: set[str],
     repo_root: Path,
-) -> list[dict[str, str | int]]:
+) -> list[MatrixLeg]:
     """Compute the test matrix.
 
-    Returns a list of matrix legs. Each leg has a label, package (uv name), extras,
-    test_paths, and a source-build ``setup``/``timeout``. An empty tests list means run the
-    full suite directory; a scope may fan out into several sharded legs.
+    Returns a list of matrix legs. Each leg has a label, package (uv name), Python
+    version, uv extras, pytest arguments, test paths, and a source-build
+    ``setup``/``timeout``. An empty tests list means run the full suite directory;
+    a scope may fan out into several sharded legs.
     ``source_build_scopes`` are the scopes whose legs must build the native extension from
     source.
     """
@@ -626,7 +657,7 @@ def compute_matrix(
     known = set(modules)
     affected = affected_modules(src_modules, build_importers(modules)) if src_modules else set()
 
-    matrix: list[dict[str, str | int]] = []
+    matrix: list[MatrixLeg] = []
     for scope in SCOPES:
         source_build = scope in source_build_scopes
         if scope in forced_scopes:
@@ -645,23 +676,23 @@ def compute_matrix(
     return matrix
 
 
-def full_matrix(repo_root: Path, source_build_scopes: set[str]) -> list[dict[str, str | int]]:
+def full_matrix(repo_root: Path, source_build_scopes: set[str]) -> list[MatrixLeg]:
     """Every scope, each running its full suite (sharded where configured)."""
-    legs: list[dict[str, str | int]] = []
+    legs: list[MatrixLeg] = []
     for scope in SCOPES:
         legs.extend(scope_legs(scope, None, repo_root, source_build=scope in source_build_scopes))
     return legs
 
 
-def selected_scope_test_paths(matrix: list[dict[str, str | int]], scope: str) -> list[str]:
+def selected_scope_test_paths(matrix: list[MatrixLeg], scope: str) -> list[str]:
     """Return the unique pytest paths selected for one scope across all matrix shards."""
     package = UV_PACKAGE[scope]
-    return sorted({path for leg in matrix if leg["package"] == package for path in str(leg["test_paths"]).split()})
+    return sorted({path for leg in matrix if leg.package == package for path in leg.test_paths.split()})
 
 
 def accelerator_suite_test_paths(
     changed_files: list[str],
-    matrix: list[dict[str, str | int]],
+    matrix: list[MatrixLeg],
     repo_root: Path,
     *,
     force: bool = False,
@@ -700,6 +731,90 @@ def accelerator_suite_test_paths(
     return suites
 
 
+@dataclass(frozen=True)
+class SelectionResult:
+    """Selected CI matrix legs and out-of-band suites for a set of changed files."""
+
+    reason: str
+    matrix: list[MatrixLeg]
+    suites: list[str]
+    suite_test_paths: dict[str, list[str]]
+
+
+def _select_changed_tests(
+    changed_files: list[str],
+    repo_root: Path,
+    broad_triggers: frozenset[str],
+    *,
+    run_all_tests: bool = False,
+) -> SelectionResult:
+    classification = classify(changed_files, repo_root, broad_triggers)
+    source_build_scopes = set(classification.native_changed)
+
+    if run_all_tests:
+        reason, matrix = RUN_ALL_REASON, full_matrix(repo_root, source_build_scopes)
+    elif classification.broad:
+        reason, matrix = BROAD_TRIGGER_REASON, full_matrix(repo_root, source_build_scopes)
+    else:
+        reason = DIFF_DRIVEN_REASON
+        matrix = compute_matrix(
+            classification.src_modules,
+            classification.direct_tests,
+            classification.forced,
+            source_build_scopes,
+            repo_root,
+        )
+
+    suite_test_paths = accelerator_suite_test_paths(changed_files, matrix, repo_root)
+    suites = sorted((*extra_suites(changed_files), *suite_test_paths))
+    return SelectionResult(
+        reason=reason,
+        matrix=matrix,
+        suites=suites,
+        suite_test_paths=suite_test_paths,
+    )
+
+
+def select_changed_tests(
+    changed_files: list[str],
+    repo_root: Path,
+    *,
+    run_all_tests: bool = False,
+) -> SelectionResult:
+    """Return the CI test plan for repo-relative changed paths."""
+    return _select_changed_tests(
+        changed_files,
+        repo_root,
+        BROAD_TRIGGERS,
+        run_all_tests=run_all_tests,
+    )
+
+
+def select_local_tests(
+    changed_files: list[str],
+    repo_root: Path,
+    *,
+    run_all_tests: bool = False,
+) -> SelectionResult:
+    """Return affected local tests without expanding CI-only orchestration changes."""
+    return _select_changed_tests(
+        changed_files,
+        repo_root,
+        LOCAL_BROAD_TRIGGERS,
+        run_all_tests=run_all_tests,
+    )
+
+
+def selection_payload(selection: SelectionResult) -> dict[str, object]:
+    """Return a JSON-serializable GitHub Actions matrix payload."""
+    return {
+        "reason": selection.reason,
+        "matrix": [asdict(leg) for leg in selection.matrix],
+        "suites": selection.suites,
+        "suite_test_paths": selection.suite_test_paths,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -724,51 +839,18 @@ def main() -> None:
     if args.base_ref is None:
         matrix = full_matrix(repo_root, set(NATIVE_CRATE_DIR))
         suite_test_paths = accelerator_suite_test_paths([], matrix, repo_root, force=True)
-        result = {
-            "reason": "run-all-tests",
-            "matrix": matrix,
-            "suites": sorted((*EXTRA_SUITE_TRIGGERS, *suite_test_paths)),
-            "suite_test_paths": suite_test_paths,
-        }
-        print(json.dumps(result, indent=2))
+        selection = SelectionResult(
+            reason=RUN_ALL_REASON,
+            matrix=matrix,
+            suites=sorted((*EXTRA_SUITE_TRIGGERS, *suite_test_paths)),
+            suite_test_paths=suite_test_paths,
+        )
+        print(json.dumps(selection_payload(selection), indent=2))
         return
 
     changed = git_changed_files(args.base_ref, repo_root)
-    classification = classify(changed, repo_root)
-
-    # The scopes whose native extension's Rust changed build it from source; every other
-    # leg installs the prebuilt wheel. This is independent of full vs. diff-driven runs: a
-    # broad trigger (e.g. a uv.lock bump) runs the whole matrix but keeps every leg on the
-    # fast prebuilt-wheel path.
-    source_build_scopes = set(classification.native_changed)
-
-    if args.run_all_tests:
-        reason, matrix = "run-all-tests", full_matrix(repo_root, source_build_scopes)
-    elif classification.broad:
-        reason, matrix = "broad-trigger", full_matrix(repo_root, source_build_scopes)
-    else:
-        reason = "diff-driven"
-        matrix = compute_matrix(
-            classification.src_modules,
-            classification.direct_tests,
-            classification.forced,
-            source_build_scopes,
-            repo_root,
-        )
-
-    suite_test_paths = accelerator_suite_test_paths(changed, matrix, repo_root)
-    suites = sorted((*extra_suites(changed), *suite_test_paths))
-    print(
-        json.dumps(
-            {
-                "reason": reason,
-                "matrix": matrix,
-                "suites": suites,
-                "suite_test_paths": suite_test_paths,
-            },
-            indent=2,
-        )
-    )
+    selection = select_changed_tests(changed, repo_root, run_all_tests=args.run_all_tests)
+    print(json.dumps(selection_payload(selection), indent=2))
 
 
 if __name__ == "__main__":

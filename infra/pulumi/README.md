@@ -140,6 +140,24 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   path (typically `~/.kube/coreweave-iris`). The provider keeps this execution credential out
   of Pulumi configuration and state.
 
+### Pulumi cannot import its Python SDK
+
+These stacks use `runtime: python` without Pulumi's `virtualenv` option. Pulumi resolves
+its interpreter from `PULUMI_PYTHON_CMD` or `python3` on `PATH`; `uv sync` alone does not
+put the workspace virtualenv first on `PATH`.
+
+From the repository root, install the deployment dependencies and select that interpreter:
+
+```bash
+uv sync --all-packages --extra deploy
+export PULUMI_PYTHON_CMD="$PWD/.venv/bin/python"
+pulumi -C infra/pulumi preview
+```
+
+If the language executor reports `ModuleNotFoundError: No module named 'pulumi'`, inspect
+`PULUMI_PYTHON_CMD` before changing stack code. The Pulumi preview action uses the same
+workspace interpreter.
+
 ### Making a change
 
 ```bash

@@ -31,12 +31,26 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    FuzzyVerificationStoreConfig,
+    VerifiedFuzzyDupsAttrData,
+    verify_fuzzy_dups,
+)
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
-from rigging.filesystem import StoragePath, marin_temp_bucket
+from rigging.filesystem import StoragePath, marin_temp_bucket, prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import log_time
 
 logger = logging.getLogger(__name__)
+
+FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
+    recovery_timeout=1_800,
+    ready_timeout=1_800,
+    lookup_batch_size=128,
+)
 
 
 def build_steps(base: str) -> list[StepSpec]:
@@ -77,7 +91,7 @@ def build_steps(base: str) -> list[StepSpec]:
 
     # Fuzzy dups: connected components over the MinHash bucket graph.
     # max_parallelism=128 mirrors the old dedup tuning for 10BT (~106 shards).
-    deduped = StepSpec(
+    candidates = StepSpec(
         name="datakit-smoke/fuzzy_dups",
         deps=[minhash],
         hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": 3},
@@ -91,23 +105,42 @@ def build_steps(base: str) -> list[StepSpec]:
         override_output_path=str(base_path / "fuzzy_dups"),
     )
 
+    verification_params = FuzzyVerificationParams()
+    verified = StepSpec(
+        name="datakit-smoke/verify_fuzzy_dups",
+        deps=[normalized, minhash, candidates],
+        hash_attrs={
+            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+            "verification": verification_params.model_dump(mode="json"),
+            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+        },
+        fn=lambda output_path: verify_fuzzy_dups(
+            normalized_sources={"source": read_artifact(normalized.output_path, NormalizedData)},
+            minhash_sources={"source": read_artifact(minhash.output_path, MinHashAttrData)},
+            candidates=read_artifact(candidates.output_path, FuzzyDupsAttrData),
+            output_path=output_path,
+            verification_params=verification_params,
+            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+            store_config=FUZZY_VERIFICATION_STORE_CONFIG,
+            worker_resources=ResourceConfig(cpu=2, ram="16g", disk="30g"),
+        ),
+        override_output_path=prefix_join(base, "verify_fuzzy_dups"),
+    )
+
     consolidated = StepSpec(
         name="datakit-smoke/consolidate",
-        deps=[normalized, deduped],
+        deps=[normalized, verified],
         fn=lambda output_path: consolidate(
             input_path=read_artifact(normalized.output_path, NormalizedData).main_output_dir,
             output_path=output_path,
             filetype="parquet",
             filters=[
-                # Default fuzzy-dedup policy: keep the CC-picked canonical of each
-                # cluster, drop the rest. Singletons have no attr row, so
-                # keep_if_missing=True passes them through.
                 FilterConfig(
-                    type=FilterType.KEEP_DOC,
-                    attribute_path=read_artifact(deduped.output_path, FuzzyDupsAttrData).attr_dir_for_source(
+                    type=FilterType.REMOVE_DOC,
+                    attribute_path=read_artifact(verified.output_path, VerifiedFuzzyDupsAttrData).attr_dir_for_source(
                         read_artifact(normalized.output_path, NormalizedData).main_output_dir
                     ),
-                    name="is_cluster_canonical",
+                    name="dup_doc",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
                 ),
@@ -132,7 +165,7 @@ def build_steps(base: str) -> list[StepSpec]:
         override_output_path=str(base_path / "tokens"),
     )
 
-    return [downloaded, normalized, minhash, deduped, consolidated, tokenized]
+    return [downloaded, normalized, minhash, candidates, verified, consolidated, tokenized]
 
 
 def _write_status(status: str, marin_prefix: str) -> None:

@@ -16,7 +16,7 @@ import pytest
 
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.llama import LlamaConfig
-from test_utils import use_test_mesh
+from levanter.testing.helpers import use_test_mesh
 
 
 # Small models for fast tests
