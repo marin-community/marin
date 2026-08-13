@@ -45,6 +45,21 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
     ) == (6144, 48, 192, 6144, 4, 3072, 1.33, 1024, 4096)
 
 
+def test_hero_run_threads_the_fused_reverse_chunk_size():
+    step = launch.build_hero_run(
+        run_id="chunked-reverse",
+        dp_racks=1,
+        num_steps=1,
+        rms_gated_norm_implementation="quack_coda_backward",
+        rms_gated_norm_backward_chunk_rows=16_384,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.rms_gated_norm_implementation == "quack_coda_backward"
+    assert config.model.rms_gated_norm_backward_chunk_rows == 16_384
+
+
 def test_full_bank_top_k_is_rejected_before_launch():
     # QB routing reads the (k+1)-th logit as its threshold, so a full-bank top-k asks `top_k` for
     # more entries than there are experts. Without this the job dies in the router, which is after
@@ -744,10 +759,15 @@ def test_rms_gated_norm_matches_the_stock_modules(dtype):
 
 
 @pytest.mark.parametrize(
-    ("dtype", "tolerance"),
-    [(jnp.float32, 2e-6), (jnp.bfloat16, 3e-2)],
+    ("dtype", "backward_chunk_rows", "tolerance"),
+    [
+        (jnp.float32, None, 2e-6),
+        (jnp.float32, 2, 2e-6),
+        (jnp.bfloat16, None, 3e-2),
+        (jnp.bfloat16, 2, 3e-2),
+    ],
 )
-def test_fused_reverse_matches_stock_autodiff(monkeypatch, dtype, tolerance):
+def test_fused_reverse_matches_stock_autodiff(monkeypatch, dtype, backward_chunk_rows, tolerance):
     """Pin the EP wiring of the fused custom VJP against differentiating the stock path.
 
     The SM100 kernels are swapped for their pure-JAX references so the composition and the
@@ -777,6 +797,7 @@ def test_fused_reverse_matches_stock_autodiff(monkeypatch, dtype, tolerance):
                 model.RMSNorm(weight=norm_weight, eps=_RMS_GATED_NORM_EPS),
                 model.GatedNorm(w_down=w_down, w_up=w_up),
                 "quack_coda_backward",
+                backward_chunk_rows,
             )
 
         primals = (x, rms.weight, gated.w_down, gated.w_up)
