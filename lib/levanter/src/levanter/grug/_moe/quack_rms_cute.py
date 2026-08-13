@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import triton as plgpu
+from jax.sharding import ManualAxisType
 
 import cutlass
 import cutlass.cute as cute
@@ -357,6 +358,8 @@ def quack_coda_rms_backward_consumer(
     x: jax.Array,
     norm_weight: jax.Array,
     inverse_rms: jax.Array,
+    *,
+    manual_axis_type: ManualAxisType | None = None,
 ) -> jax.Array:
     """Overwrite ``unweighted_cotangent`` with the final RMS input cotangent.
 
@@ -377,10 +380,8 @@ def quack_coda_rms_backward_consumer(
             f"rows and hidden_dim must be multiples of {_CONSUMER_BLOCK_M} and {_CONSUMER_BLOCK_N}, "
             f"got {rows} and {hidden_dim}"
         )
-    # CuTe custom calls erase the manual-axis annotation on their outputs. The original input
-    # retains the enclosing shard_map annotation and the RMS input cotangent must match it for
-    # the custom VJP contract.
-    manual_axis_type = jax.typeof(x).manual_axis_type
+    if manual_axis_type is None:
+        manual_axis_type = jax.typeof(x).manual_axis_type
     call = _rms_backward_consumer_call(rows, hidden_dim, x.dtype, norm_weight.dtype, manual_axis_type)
     row_mean = row_dot / hidden_dim
     return call(unweighted_cotangent, row_mean, x, norm_weight, inverse_rms)

@@ -15,7 +15,7 @@ from typing import Literal, NamedTuple
 import jax
 import jax.numpy as jnp
 from jax import shard_map
-from jax.sharding import PartitionSpec as P, get_abstract_mesh, reshard
+from jax.sharding import ManualAxisType, PartitionSpec as P, get_abstract_mesh, reshard
 
 from levanter.grug.sharding import _batch_axes
 
@@ -100,8 +100,11 @@ def exact_rms_backward_consumer(
     x: jax.Array,
     norm_weight: jax.Array,
     inverse_rms: jax.Array,
+    *,
+    manual_axis_type: ManualAxisType | None = None,
 ) -> jax.Array:
     """Apply the norm gain and reduced row scalar while emitting ``dx``."""
+    del manual_axis_type
     normalized_x = x.astype(jnp.float32) * inverse_rms[:, None]
     weighted_cotangent = unweighted_cotangent.astype(jnp.float32) * norm_weight
     row_mean = row_dot / x.shape[-1]
@@ -199,7 +202,12 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         residuals.norm_weight.dtype
     )
     x_cotangent = rms_backward_consumer(
-        unweighted_cotangent, row_dot, x_flat, residuals.norm_weight, residuals.inverse_rms
+        unweighted_cotangent,
+        row_dot,
+        x_flat,
+        residuals.norm_weight,
+        residuals.inverse_rms,
+        manual_axis_type=ManualAxisType(varying=frozenset(batch_axes)),
     ).reshape(x.shape)
     # The parameters enter replicated, so their cotangents must be reduced over the axes the
     # tokens are sharded across. shard_map defaults to check_vma=True, which suppresses the
