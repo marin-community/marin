@@ -59,7 +59,7 @@ RELEASE_TITLE = "Dev native wheels"
 RELEASE_NOTES = (
     "Auto-managed bucket of development native (Rust) wheels published by "
     "`infra/deploy_wheel.py`. Assets are prereleases pinned by exact version; "
-    "they are not real releases. See the `deploy-native-wheel` Echo wiki entry."
+    "they are not real releases. Guide: https://echo.oa.dev/wiki/146"
 )
 
 
@@ -116,13 +116,11 @@ def resolve_version(package: str, build: pr.NativeBuild) -> str:
 
 
 def build_wheels(build: pr.NativeBuild, version: str, arches: list[str], dist_dir: Path) -> list[Path]:
-    """Build manylinux wheels for the requested arches, restoring stamped files.
-
-    ``package_release._stamp_versions`` rewrites the crate's pyproject/Cargo
-    version in place; cargo then rewrites the crate ``Cargo.lock``, and stamping
-    the pure package's pyproject makes uv rewrite the root ``uv.lock`` editable
-    entry. Snapshot and restore all of them so the working tree is left clean.
-    """
+    """Build manylinux wheels for the requested arches, restoring stamped files."""
+    # Stamping the version dirties several tracked files: the crate pyproject and
+    # Cargo.toml, the crate Cargo.lock (cargo rewrites it during the build), and
+    # the root uv.lock (uv rewrites the pure package's editable entry). Snapshot
+    # and restore all of them so a build leaves the working tree clean.
     restore = [REPO_ROOT / path for path in build.version_paths]
     restore.append(REPO_ROOT / build.native_path / "Cargo.lock")
     restore.append(REPO_ROOT / "uv.lock")
@@ -212,7 +210,7 @@ def render_index(repo: str, tag: str, wheel_names: list[str]) -> str:
     return f"<!DOCTYPE html>\n<html>\n  <body>\n{links}\n  </body>\n</html>\n"
 
 
-def print_recipe(package: str, build: pr.NativeBuild, version: str, url: str) -> None:
+def print_recipe(build: pr.NativeBuild, version: str, url: str) -> None:
     distribution = build.requirement_distribution
     pin = f"{distribution}=={version}"
     print("\n" + "=" * 78)
@@ -270,7 +268,7 @@ def main() -> None:
         if args.dry_run:
             print("\n[dry-run] Skipping GitHub release. Would publish:")
             print("  ", "\n   ".join(names))
-            print_recipe(args.package, build, version, url)
+            print_recipe(build, version, url)
             return
 
         ensure_release(args.repo, args.tag)
@@ -278,7 +276,7 @@ def main() -> None:
         index_path = dist_dir / index_name(names)
         index_path.write_text(render_index(args.repo, args.tag, names))
         upload_assets(args.repo, args.tag, [index_path])
-        print_recipe(args.package, build, version, url)
+        print_recipe(build, version, url)
 
 
 if __name__ == "__main__":
