@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -30,6 +31,8 @@ from levanter.kernels.mixture_of_kittens.symmetric_memory import (
     MokLikeSymmetricWorkspace,
     initialize_mok_like_symmetric_workspace,
 )
+
+logger = logging.getLogger(__name__)
 
 _INIT_SYMBOL = "levanter_mok_init_runtime"
 _INIT_EP64_SYMBOL = "levanter_mok_init_runtime_ep64"
@@ -601,6 +604,7 @@ def initialize_mok_like_runtime(
     signature = runtime_signature(num_tokens, hidden_dim, top_k, workspace_slots, topology=topology)
     symmetric_workspace = None
     if topology is MokLikeTopology.NVLINK_EP64:
+        logger.info("Initializing the MoK EP64 symmetric workspace")
         symmetric_workspace = initialize_mok_like_symmetric_workspace(
             num_tokens=num_tokens,
             hidden_dim=hidden_dim,
@@ -610,6 +614,7 @@ def initialize_mok_like_runtime(
         native_error: Exception | None = None
         try:
             initialize_native_runtime_ep64(library, symmetric_workspace)
+            logger.info("MoK EP64 native runtime initialized on rank %d", symmetric_workspace.rank)
         except Exception as error:
             native_error = error
         initialization_errors = symmetric_workspace.gather_initialization_errors(native_error)

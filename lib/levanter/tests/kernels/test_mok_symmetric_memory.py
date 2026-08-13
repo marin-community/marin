@@ -52,14 +52,6 @@ def test_symmetric_arena_layout_covers_ep64_staging_and_stamp_regions() -> None:
     )
 
 
-class _FakeHandle:
-    def __init__(self, events: list[tuple[object, ...]]):
-        self.events = events
-
-    def barrier(self, *, channel: int, timeout_ms: int) -> None:
-        self.events.append(("symmetric_barrier", channel, timeout_ms))
-
-
 class _FakeDistributed:
     def __init__(self, events: list[tuple[object, ...]]):
         self.events = events
@@ -89,7 +81,7 @@ def _fake_workspace(events: list[tuple[object, ...]]) -> MokLikeSymmetricWorkspa
         _device="cuda:0",
         _group="ep64-group",
         _arena=object(),
-        _handle=_FakeHandle(events),
+        _handle=object(),
         _timeout=7.5,
     )
 
@@ -119,12 +111,8 @@ def test_symmetric_workspace_close_uses_collective_reverse_order_once() -> None:
     assert events == [
         ("cuda_sync", "cuda:0"),
         ("gloo_barrier", "ep64-group"),
-        ("symmetric_barrier", 0, 7500),
-        ("cuda_sync", "cuda:0"),
         ("cuda_sync", "cuda:0"),
         ("gloo_barrier", "ep64-group"),
-        ("symmetric_barrier", 1, 7500),
-        ("cuda_sync", "cuda:0"),
         ("gloo_barrier", "ep64-group"),
         ("destroy_group", "ep64-group"),
     ]

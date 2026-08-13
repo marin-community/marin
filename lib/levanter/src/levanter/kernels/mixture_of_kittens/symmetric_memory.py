@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import gc
+import logging
 import os
 import socket
 from dataclasses import dataclass, field
@@ -15,6 +16,8 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 import jax
+
+logger = logging.getLogger(__name__)
 
 MOK_LIKE_EP64_ARENA_SCHEMA_VERSION = 1
 MOK_LIKE_EP64_ARENA_ALIGNMENT = 256
@@ -176,13 +179,11 @@ class MokLikeSymmetricWorkspace:
     def is_closed(self) -> bool:
         return self._closed
 
-    def _device_phase_barrier(self, channel: int) -> None:
-        """Host-align ranks around one bounded device-side fabric barrier."""
+    def _collective_cuda_barrier(self) -> None:
+        """Finish local CUDA work, then align every workspace owner on the host."""
 
         self._torch.cuda.synchronize(self._device)
         self._distributed.barrier(group=self._group)
-        self._handle.barrier(channel=channel, timeout_ms=int(self._timeout * 1000))
-        self._torch.cuda.synchronize(self._device)
 
     def quiesce(self) -> None:
         """Synchronize CUDA and rendezvous all ranks before native shutdown."""
@@ -191,7 +192,7 @@ class MokLikeSymmetricWorkspace:
             raise RuntimeError("MoK-like symmetric workspace is closed")
         if self._quiesced:
             return
-        self._device_phase_barrier(channel=0)
+        self._collective_cuda_barrier()
         self._quiesced = True
 
     def gather_initialization_errors(self, error: BaseException | None) -> tuple[str | None, ...]:
@@ -210,7 +211,9 @@ class MokLikeSymmetricWorkspace:
         if self._closed:
             return
         self.quiesce()
-        self._device_phase_barrier(channel=1)
+        # RuntimeHandle calls this after native shutdown. Align again before any
+        # owner drops mappings that may still be referenced by another rank.
+        self._collective_cuda_barrier()
         self._handle = None
         self._arena = None
         gc.collect()
@@ -365,6 +368,7 @@ def initialize_mok_like_symmetric_workspace(
         expected_contracts = tuple((peer, *local_contract[1:]) for peer in range(world_size))
         if tuple(contracts) != expected_contracts:
             raise MokLikeTopologyError(f"EP64 ranks disagree on symmetric workspace contract: {contracts}")
+        logger.info("MoK EP64 rank %d validated the 64-rank symmetric workspace contract", rank)
         symm_mem.set_signal_pad_size(_SIGNAL_PAD_BYTES)
         backend = str(symm_mem.get_backend(device))
         if backend.upper() != "CUDA":
@@ -386,8 +390,12 @@ def initialize_mok_like_symmetric_workspace(
         arena.zero_()
         torch.cuda.synchronize(device)
         dist.barrier(group=group)
-        handle.barrier(channel=0, timeout_ms=int(timeout * 1000))
-        torch.cuda.synchronize(device)
+        logger.info(
+            "MoK EP64 rank %d mapped %d peer arenas (%d bytes each)",
+            rank,
+            len(peer_pointers),
+            layout.total_bytes,
+        )
         return MokLikeSymmetricWorkspace(
             rank=rank,
             world_size=world_size,
