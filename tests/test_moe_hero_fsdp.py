@@ -17,7 +17,6 @@ from levanter.grug._moe.rms_gated_norm import (
     exact_gated_norm_up_reverse,
     exact_rms_backward_consumer,
     exact_rms_backward_producer_reference,
-    exact_silu_backward_reference,
     rms_gated_norm,
 )
 
@@ -215,7 +214,7 @@ def test_fused_reverse_matches_stock_autodiff_end_to_end(cpu_mesh, monkeypatch, 
         rgn,
         "_backward_kernels",
         lambda: (
-            exact_silu_backward_reference,
+            rgn.exact_gate_silu_reverse_reference,
             rgn.exact_rms_backward_partials_reference,
             rgn.exact_rms_backward_recompute_consumer_reference,
         ),

@@ -72,6 +72,22 @@ def exact_silu_backward_reference(
     return preactivation_cotangent, postactivation
 
 
+def exact_gate_silu_reverse_reference(
+    output_cotangent: jax.Array,
+    normalized: jax.Array,
+    gate: jax.Array,
+    gate_hidden: jax.Array,
+    w_up: jax.Array,
+    preactivation: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Reverse the output gate and SiLU projection without exposing their full-width edge."""
+    gate_cotangent = output_cotangent * normalized
+    gate_accumulator = gate_cotangent * (gate * (1 - gate))
+    w_up_cotangent = jnp.einsum("tr,td->rd", gate_hidden, gate_accumulator)
+    preactivation_cotangent, _ = exact_silu_backward_reference(gate_accumulator, w_up, preactivation)
+    return preactivation_cotangent, w_up_cotangent
+
+
 def exact_rms_backward_producer_reference(
     gate_preactivation_cotangent: jax.Array,
     w_down: jax.Array,
@@ -186,7 +202,7 @@ def _exact_forward(x, norm_weight, w_down, w_up, eps):
 
 
 def _backward_kernels():
-    """Return the ``(silu_backward, rms_backward_producer)`` pair driving the fused reverse.
+    """Return the three device-local kernels driving the fused reverse.
 
     Imported lazily so the default XLA path never pulls in the optional SM100 dependency, and
     indirected through one function so CPU tests can substitute the pure-JAX references.
@@ -194,11 +210,11 @@ def _backward_kernels():
     from levanter.grug._moe.quack_rms_cute import (  # noqa: PLC0415
         quack_coda_rms_backward_consumer,
         quack_coda_rms_backward_producer,
-        quack_silu_backward_gemm,
+        quack_gate_silu_reverse,
     )
 
     return (
-        quack_silu_backward_gemm,
+        quack_gate_silu_reverse,
         quack_coda_rms_backward_producer,
         quack_coda_rms_backward_consumer,
     )
@@ -216,16 +232,20 @@ def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
 
 
 def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
-    silu_backward, rms_backward_producer, rms_backward_consumer = _backward_kernels()
+    gate_silu_reverse, rms_backward_producer, rms_backward_consumer = _backward_kernels()
 
     del eps
     x = residuals.x
     x_flat = x.reshape((-1, x.shape[-1]))
     output_cotangent = output_cotangent.reshape(residuals.normalized.shape)
-    gate_cotangent = output_cotangent * residuals.normalized
-    gate_accumulator = gate_cotangent * (residuals.gate * (1 - residuals.gate))
-    w_up_cotangent = jnp.einsum("tr,td->rd", residuals.gate_hidden, gate_accumulator)
-    gate_preactivation_cotangent, _ = silu_backward(gate_accumulator, residuals.w_up, residuals.gate_preactivation)
+    gate_preactivation_cotangent, w_up_cotangent = gate_silu_reverse(
+        output_cotangent,
+        residuals.normalized,
+        residuals.gate,
+        residuals.gate_hidden,
+        residuals.w_up,
+        residuals.gate_preactivation,
+    )
     w_down_cotangent = jnp.einsum("td,tr->dr", residuals.normalized, gate_preactivation_cotangent)
     row_dot_partial, norm_weight_partial = rms_backward_producer(
         gate_preactivation_cotangent,
