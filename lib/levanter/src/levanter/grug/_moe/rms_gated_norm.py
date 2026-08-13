@@ -36,6 +36,16 @@ class RmsGatedNormResiduals(NamedTuple):
     gate: jax.Array
 
 
+class RmsGatedNormRecomputeResiduals(NamedTuple):
+    """Minimal values retained when the reverse recomputes the stock BF16 gate path."""
+
+    x: jax.Array
+    norm_weight: jax.Array
+    w_down: jax.Array
+    w_up: jax.Array
+    inverse_rms: jax.Array
+
+
 class GatedNormUpCotangents(NamedTuple):
     """Cotangents emitted by the output-gate reverse."""
 
@@ -202,6 +212,31 @@ def exact_rms_gated_norm_reverse_reference(
     return x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent
 
 
+def exact_rms_gated_norm_recompute_reverse_reference(
+    output_cotangent: jax.Array,
+    x: jax.Array,
+    norm_weight: jax.Array,
+    w_down: jax.Array,
+    w_up: jax.Array,
+    inverse_rms: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Recompute the exact BF16 forward values before applying the single-boundary reference."""
+    normalized = (x.astype(jnp.float32) * inverse_rms[:, None] * norm_weight).astype(x.dtype)
+    _, gate_preactivation, gate_hidden, gate = gated_norm_with_residuals(normalized, w_down, w_up)
+    return exact_rms_gated_norm_reverse_reference(
+        output_cotangent,
+        normalized,
+        gate,
+        gate_hidden,
+        w_up,
+        gate_preactivation,
+        w_down,
+        x,
+        norm_weight,
+        inverse_rms,
+    )
+
+
 def rms_norm_with_inverse(x: jax.Array, weight: jax.Array, eps: float) -> tuple[jax.Array, jax.Array]:
     """Apply RMSNorm and return the per-row inverse RMS its reverse needs."""
     dtype = x.dtype
@@ -261,7 +296,14 @@ def _fused(x, norm_weight, w_down, w_up, eps, batch_axes):
 
 def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
     del batch_axes
-    return _exact_forward(x, norm_weight, w_down, w_up, eps)
+    output, residuals = _exact_forward(x, norm_weight, w_down, w_up, eps)
+    return output, RmsGatedNormRecomputeResiduals(
+        x=x,
+        norm_weight=norm_weight,
+        w_down=w_down,
+        w_up=w_up,
+        inverse_rms=residuals.inverse_rms,
+    )
 
 
 def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
@@ -270,17 +312,13 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     del eps
     x = residuals.x
     x_flat = x.reshape((-1, x.shape[-1]))
-    output_cotangent = output_cotangent.reshape(residuals.normalized.shape)
+    output_cotangent = output_cotangent.reshape(x_flat.shape)
     x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent = reverse(
         output_cotangent,
-        residuals.normalized,
-        residuals.gate,
-        residuals.gate_hidden,
-        residuals.w_up,
-        residuals.gate_preactivation,
-        residuals.w_down,
         x_flat,
         residuals.norm_weight,
+        residuals.w_down,
+        residuals.w_up,
         residuals.inverse_rms,
     )
     x_cotangent = x_cotangent.reshape(x.shape)

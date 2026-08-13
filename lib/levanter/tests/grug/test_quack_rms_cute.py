@@ -9,7 +9,7 @@ import pytest
 from levanter.grug._moe.rms_gated_norm import (
     exact_rms_backward_partials_reference,
     exact_rms_backward_recompute_consumer_reference,
-    exact_rms_gated_norm_reverse_reference,
+    exact_rms_gated_norm_recompute_reverse_reference,
     exact_silu_backward_reference,
 )
 
@@ -129,10 +129,6 @@ def test_rms_gated_norm_reverse_matches_reference():
 
     keys = jax.random.split(jax.random.key(31), 6)
     output_cotangent = jax.random.normal(keys[0], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
-    normalized = jax.random.normal(keys[1], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
-    gate = jax.nn.sigmoid(jax.random.normal(keys[2], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16))
-    preactivation = jax.random.normal(keys[3], (_ROWS, _RANK), dtype=jnp.bfloat16)
-    gate_hidden = jax.nn.silu(preactivation)
     w_up = (0.1 * jax.random.normal(keys[4], (_RANK, _HIDDEN_DIM), dtype=jnp.float32)).astype(jnp.bfloat16)
 
     w_down = (0.1 * jax.random.normal(keys[5], (_HIDDEN_DIM, _RANK), dtype=jnp.float32)).astype(jnp.bfloat16)
@@ -142,26 +138,18 @@ def test_rms_gated_norm_reverse_matches_reference():
 
     actual = quack_rms_cute.quack_rms_gated_norm_reverse(
         output_cotangent,
-        normalized,
-        gate,
-        gate_hidden,
-        w_up,
-        preactivation,
-        w_down,
         x,
         norm_weight,
+        w_down,
+        w_up,
         inverse_rms,
     )
-    expected = exact_rms_gated_norm_reverse_reference(
+    expected = exact_rms_gated_norm_recompute_reverse_reference(
         output_cotangent,
-        normalized,
-        gate,
-        gate_hidden,
-        w_up,
-        preactivation,
-        w_down,
         x,
         norm_weight,
+        w_down,
+        w_up,
         inverse_rms,
     )
 
