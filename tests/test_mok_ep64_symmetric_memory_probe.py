@@ -87,6 +87,19 @@ def test_fabric_xml_reads_only_gpu_fabric_fields():
     assert _fabric_xml_text(root, "status") == ("Success",)
     assert _fabric_xml_text(root, "cluster_uuid") == ("cluster-a",)
 
+    legacy_root = ET.fromstring(
+        """
+        <nvidia_smi_log>
+          <gpu><fabric><state>Completed</state><status>NVML_SUCCESS</status>
+            <cliqueid>9</cliqueid><clusteruuid>cluster-b</clusteruuid></fabric></gpu>
+        </nvidia_smi_log>
+        """
+    )
+    assert _fabric_xml_text(legacy_root, "state") == ("Completed",)
+    assert _fabric_xml_text(legacy_root, "status") == ("NVML_SUCCESS",)
+    assert _fabric_xml_text(legacy_root, "clique_id") == ("9",)
+    assert _fabric_xml_text(legacy_root, "cluster_uuid") == ("cluster-b",)
+
 
 @pytest.mark.parametrize("num_nodes", [2, 16])
 def test_probe_request_uses_one_process_per_gpu_and_no_retries(num_nodes: int):

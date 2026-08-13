@@ -111,10 +111,16 @@ def sample_offsets(arena_bytes: int) -> tuple[int, ...]:
 
 def _fabric_xml_text(root: ET.Element, field: str) -> tuple[str, ...]:
     values: set[str] = set()
-    for fabric in root.iter("gpu_fabric"):
-        element = fabric.find(field)
-        if element is not None and (element.text or "").strip():
-            values.add((element.text or "").strip())
+    normalized_field = field.lower().replace("_", "")
+    for fabric in root.iter():
+        normalized_tag = fabric.tag.lower().replace("_", "")
+        if normalized_tag not in {"fabric", "gpufabric"}:
+            continue
+        for element in fabric.iter():
+            if element.tag.lower().replace("_", "") != normalized_field:
+                continue
+            if (element.text or "").strip():
+                values.add((element.text or "").strip())
     return tuple(sorted(values))
 
 
