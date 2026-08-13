@@ -4,13 +4,16 @@
 """Lower evaluation model policy into remote-inference configuration."""
 
 import json
+import logging
+import math
 from collections.abc import Mapping
-from pathlib import Path
+from functools import cache
+from pathlib import Path, PurePosixPath
 
 from fray.types import ResourceConfig, create_environment
-from huggingface_hub import hf_hub_download
+from huggingface_hub import HfApi, hf_hub_download
 from iris.cluster.setup_scripts import default_setup_script
-from rigging.filesystem import StoragePath
+from rigging.filesystem import StoragePath, filesystem_for
 
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
@@ -25,15 +28,28 @@ from marin.inference.config import (
     VllmSource,
 )
 
+logger = logging.getLogger(__name__)
+
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
 EVAL_SERVE_MAX_NUM_BATCHED_TOKENS = 512
 DEFAULT_SERVE_CPU = 8.0
 _HF_CONFIG_FILENAME = "config.json"
 _MAX_POSITION_EMBEDDINGS_KEY = "max_position_embeddings"
 _QWEN_NEXT_MODEL_MARKERS = ("qwen3.5", "qwen3-next")
-DEFAULT_SERVE_MEMORY = "64g"
 DEFAULT_SERVE_DISK = "100g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
+
+# vLLM loads a checkpoint through host memory: the weight files land in the page cache and the
+# loader stages shard buffers on the way to device memory. Both are charged to the serve child's
+# cgroup, so its host-memory request has to cover the checkpoint plus per-rank runtime.
+_WEIGHT_FILE_SUFFIXES = (".safetensors", ".bin")
+_BYTES_PER_GIB = 1024**3
+# Loader buffers and not-yet-reclaimed page cache on top of the checkpoint's own bytes.
+_CHECKPOINT_MEMORY_FACTOR = 1.5
+# CUDA context, torch runtime, and compile workers for one model-parallel rank on the host.
+_HOST_MEMORY_PER_RANK_GB = 12
+# Small models are dominated by the runtime rather than the weights; do not request less than this.
+_MIN_SERVE_MEMORY_GB = 32
 
 
 def _auto_serve_overrides_from_config(
@@ -94,6 +110,63 @@ def auto_serve_overrides(
     return _auto_serve_overrides_from_config(model, config, max_model_len, existing_extra_args)
 
 
+def _is_weight_file(name: str) -> bool:
+    """Whether a checkpoint entry, named relative to its root, is a weight file the server loads.
+
+    Only top-level entries count. A Hugging Face repo often ships a second copy of the same weights
+    in a subdirectory (``original/`` on the Llama repos) that vLLM never reads; counting it would
+    roughly double the measured size of the checkpoint.
+    """
+    return "/" not in name and name.endswith(_WEIGHT_FILE_SUFFIXES)
+
+
+@cache
+def _checkpoint_file_sizes(location: str, revision: str | None) -> dict[str, int]:
+    """Byte size of every file at ``location``, keyed by name relative to the checkpoint root.
+
+    ``location`` is an object-store export directory, a local directory, or a Hugging Face repo id,
+    matching :func:`auto_serve_overrides`. Reads metadata only: a directory listing or the Hub's
+    file-metadata API, never the weights themselves. The two directory listings are shallow; the Hub
+    reports a repo's whole tree, so its names can carry a subdirectory prefix.
+    """
+    if "://" in location:
+        fs, path = filesystem_for(location)
+        return {PurePosixPath(entry["name"]).name: entry.get("size") or 0 for entry in fs.ls(path, detail=True)}
+    directory = Path(location)
+    if directory.is_dir():
+        return {child.name: child.stat().st_size for child in directory.iterdir() if child.is_file()}
+    info = HfApi().model_info(location, revision=revision, files_metadata=True)
+    return {sibling.rfilename: sibling.size or 0 for sibling in info.siblings or ()}
+
+
+def _serve_host_memory(files: Mapping[str, int], ranks: int) -> str:
+    """Host memory an inference worker needs to load the checkpoint described by ``files``.
+
+    The weights count once per host, not once per rank: page cache is charged to the cgroup once no
+    matter how many ranks map the same shards.
+    """
+    weight_bytes = sum(size for name, size in files.items() if _is_weight_file(name))
+    if not weight_bytes:
+        raise ValueError(
+            f"no {' or '.join(_WEIGHT_FILE_SUFFIXES)} weight files among {sorted(files)}, so the serve child's "
+            "host memory cannot be sized from the checkpoint; set resource_hint.memory for this model"
+        )
+    weight_gb = weight_bytes / _BYTES_PER_GIB
+    required_gb = _CHECKPOINT_MEMORY_FACTOR * weight_gb + _HOST_MEMORY_PER_RANK_GB * ranks
+    return f"{max(_MIN_SERVE_MEMORY_GB, math.ceil(required_gb))}g"
+
+
+def _serve_memory(model: ModelConfig, accelerator: AcceleratorChoice) -> str:
+    """The inference worker's host-memory request, from the model's own hint or its checkpoint."""
+    if model.resource_hint.memory is not None:
+        return model.resource_hint.memory
+    # A TPU slice serves one host process for the whole slice; a GPU slice runs one rank per device.
+    ranks = accelerator.gpu_count if accelerator.platform is Platform.GPU else 1
+    memory = _serve_host_memory(_checkpoint_file_sizes(model.location, model.revision), ranks)
+    logger.info("Sized %s serve host memory at %s from its checkpoint (%d ranks)", model.name, memory, ranks)
+    return memory
+
+
 def _vllm_engine_config(
     serve: ServeConfig,
     platform: Platform,
@@ -141,7 +214,7 @@ def inference_config_for_model(
 
     hint = model.resource_hint
     cpu = hint.cpu or DEFAULT_SERVE_CPU
-    memory = hint.memory or DEFAULT_SERVE_MEMORY
+    memory = _serve_memory(model, accelerator)
     disk = hint.disk or DEFAULT_SERVE_DISK
     regions = [accelerator.region] if accelerator.region else None
 

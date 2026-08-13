@@ -355,7 +355,6 @@ def _build_adamh_config(
         beta2=beta2,
         epsilon=epsilon,
         max_grad_norm=max_grad_norm,
-        nesterov=False,
     )
 
 

@@ -23,7 +23,7 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from levanter.optim.config import AdamConfig
 from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner

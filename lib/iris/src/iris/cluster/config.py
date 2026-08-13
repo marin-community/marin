@@ -253,6 +253,7 @@ class GcpVmConfig(_Config):
     machine_type: str = ""  # default: "n2-standard-4"
     boot_disk_size_gb: int = 0  # default: 50
     service_account: str = ""
+    network_tags: tuple[str, ...] = ()
 
 
 class ManualVmConfig(_Config):
@@ -618,7 +619,6 @@ class KueueTopology(_Config):
 
 class KueueConfig(_Config):
     cluster_queue: str = ""  # setting this ENABLES Kueue gang admission
-    priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> class
     topologies: dict[str, KueueTopology] = Field(default_factory=dict)  # group_by -> topo
 
 

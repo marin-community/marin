@@ -1,13 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Search Echo activity and wiki notes, and read or append the shared work log.
+"""Search Echo context, collect result feedback, and read or append the shared work log.
 
 See ``infra/echo/README.md`` for endpoints and access requirements.
 """
 
+import logging
 import os
 import re
+import time
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -21,8 +23,10 @@ import hybrid_search
 import reranking
 import schema
 import search_config
+import search_feedback
+import search_history
 import sqlalchemy
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastembed import TextEmbedding
 from fastembed.rerank.cross_encoder import TextCrossEncoder
 from google.cloud.sql.connector import Connector
@@ -66,6 +70,13 @@ QUERY_LINE_STOP_WORDS = frozenset(
     }
 )
 FILE_REFERENCE_LIMIT = 3
+SEARCH_EXECUTION_HEADER = search_config.SEARCH_EXECUTION_HEADER
+SEARCH_HISTORY_PAGE_LIMIT = 500
+MILLISECONDS_PER_SECOND = 1_000
+POSTGRES_UNDEFINED_COLUMN = "42703"
+POSTGRES_UNDEFINED_TABLE = "42P01"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -73,6 +84,7 @@ class EchoConfig:
     public_url: str
     github_repository: str
     github_branch: str
+    service_revision: str | None = None
 
 
 DEFAULT_CONFIG = EchoConfig(
@@ -87,6 +99,7 @@ def environment_config() -> EchoConfig:
         public_url=os.environ.get("ECHO_PUBLIC_URL", DEFAULT_CONFIG.public_url).rstrip("/"),
         github_repository=os.environ.get("GITHUB_REPOSITORY", DEFAULT_CONFIG.github_repository),
         github_branch=os.environ.get("GITHUB_BRANCH", DEFAULT_CONFIG.github_branch),
+        service_revision=os.environ.get("K_REVISION"),
     )
 
 
@@ -111,7 +124,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="echo",
-    description="Search Marin activity and wiki notes, and read/append the shared agent work log.",
+    description="Search Marin context, record result feedback, and read or append the shared agent work log.",
     lifespan=lifespan,
 )
 app.state.config = DEFAULT_CONFIG
@@ -203,6 +216,82 @@ class SearchConfiguration(BaseModel):
     domains: list[SearchDomainOption]
     default_domains: list[search_config.SearchDomain]
     display_sha_characters: int
+
+
+class SearchFeedbackGrade(BaseModel):
+    result_id: str = Field(min_length=1, max_length=search_feedback.MAX_RESULT_ID_CHARACTERS)
+    grade: int = Field(ge=search_feedback.MIN_GRADE, le=search_feedback.MAX_GRADE)
+
+    @field_validator("result_id")
+    @classmethod
+    def validate_result_id(cls, result_id: str) -> str:
+        return search_feedback.checked_result_id(result_id)
+
+
+class SearchFeedbackCreate(BaseModel):
+    query: str = Field(min_length=1, max_length=search_feedback.MAX_QUERY_CHARACTERS)
+    grades: list[SearchFeedbackGrade] = Field(default_factory=list, max_length=search_feedback.MAX_GRADES)
+    note: str = Field(min_length=1, max_length=search_feedback.MAX_NOTE_CHARACTERS)
+    execution_id: int | None = Field(None, gt=0)
+
+    @field_validator("query")
+    @classmethod
+    def normalize_query(cls, query: str) -> str:
+        query = query.strip()
+        if not query:
+            raise ValueError("query must not be blank")
+        return query
+
+    @field_validator("grades")
+    @classmethod
+    def reject_duplicate_results(cls, grades: list[SearchFeedbackGrade]) -> list[SearchFeedbackGrade]:
+        result_ids = [grade.result_id for grade in grades]
+        if len(result_ids) != len(set(result_ids)):
+            raise ValueError("each result may be graded once per feedback submission")
+        return grades
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, note: str) -> str:
+        note = note.strip()
+        if not note:
+            raise ValueError("note must not be blank")
+        return note
+
+
+class SearchFeedbackEntry(SearchFeedbackCreate):
+    id: int
+    created_at: datetime
+    author: str
+
+
+class SearchExecutionResultEntry(BaseModel):
+    rank: int
+    result_id: str
+    domain: search_config.SearchDomain
+    title: str | None
+    url: str
+    snippet: str
+    score: float
+    distance: float | None
+    lexical_score: float | None
+
+
+class SearchExecutionEntry(BaseModel):
+    id: int
+    created_at: datetime
+    author: str | None
+    query: str
+    normalized_query: str
+    mode: search_history.SearchMode
+    domains: list[str]
+    filters: dict[str, Any]
+    requested_limit: int
+    returned_count: int
+    duration_ms: float
+    repository_commit: str | None
+    service_revision: str | None
+    results: list[SearchExecutionResultEntry]
 
 
 class RepositoryIndexStatus(BaseModel):
@@ -400,16 +489,16 @@ def activity_domain_clause(domains: Iterable[str]) -> str:
     return f"({' OR '.join(clauses)})"
 
 
-def activity_domain(row: sqlalchemy.Row) -> Literal["discord", "pr", "issue"]:
-    if row.source == "discord":
+def activity_domain(source: str, kind: str, url: str) -> Literal["discord", "pr", "issue"]:
+    if source == "discord":
         return "discord"
-    if row.kind == "pr" or "/pull/" in row.url:
+    if kind == "pr" or "/pull/" in url:
         return "pr"
     return "issue"
 
 
 def activity_search_result(row: sqlalchemy.Row) -> SearchResult:
-    domain = activity_domain(row)
+    domain = activity_domain(row.source, row.kind, row.url)
     title = row.title or snippet(row) or row.url
     details = [domain]
     if row.author:
@@ -427,6 +516,76 @@ def activity_search_result(row: sqlalchemy.Row) -> SearchResult:
         distance=row.distance,
         lexical_score=row.lexical_score,
     )
+
+
+def recorded_search_result(result: SearchResult) -> search_history.SearchResultRecord:
+    return search_history.SearchResultRecord(
+        result_id=result.id,
+        domain=result.domain,
+        title=result.title,
+        url=result.url,
+        snippet=result.snippet,
+        score=result.score,
+        distance=result.distance,
+        lexical_score=result.lexical_score,
+    )
+
+
+def recorded_hit(result: Hit) -> search_history.SearchResultRecord:
+    domain = activity_domain(result.source, result.kind, result.url)
+    return search_history.SearchResultRecord(
+        result_id=f"{domain}:{result.id}",
+        domain=domain,
+        title=result.title,
+        url=result.url,
+        snippet=result.snippet,
+        score=result.score,
+        distance=result.distance,
+        lexical_score=result.lexical_score,
+    )
+
+
+def result_repository_commit(results: Iterable[SearchResult]) -> str | None:
+    for result in results:
+        if result.domain != "file":
+            continue
+        match = re.search(r"/blob/([^/]+)/", result.url)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def database_error_code(error: sqlalchemy.exc.DBAPIError) -> str | None:
+    code = getattr(error.orig, "sqlstate", None) or getattr(error.orig, "pgcode", None)
+    if isinstance(code, str):
+        return code
+    args = getattr(error.orig, "args", ())
+    if isinstance(args, tuple) and args and isinstance(args[0], dict):
+        value = args[0].get("C")
+        return value if isinstance(value, str) else None
+    return None
+
+
+def record_live_search(engine: sqlalchemy.Engine, record: search_history.SearchExecutionRecord) -> int | None:
+    """Persist a search, returning ``None`` only while its additive schema is unavailable."""
+    try:
+        with engine.begin() as conn:
+            return search_history.insert_execution(conn, record)
+    except sqlalchemy.exc.DBAPIError as error:
+        if database_error_code(error) not in {POSTGRES_UNDEFINED_COLUMN, POSTGRES_UNDEFINED_TABLE}:
+            raise
+        logger.warning("Search history schema is not available; apply pending Echo migrations", exc_info=True)
+        return None
+
+
+def attach_search_execution(
+    response: Response,
+    engine: sqlalchemy.Engine,
+    record: search_history.SearchExecutionRecord,
+) -> None:
+    execution_id = record_live_search(engine, record)
+    if execution_id is not None:
+        response.headers[SEARCH_EXECUTION_HEADER] = str(execution_id)
 
 
 def wiki_search_result(row: sqlalchemy.Row, config: EchoConfig) -> SearchResult:
@@ -757,16 +916,20 @@ def repository_index_status(engine: Engine, config: Config) -> RepositoryIndexSt
 def search(
     engine: Engine,
     model: Model,
+    config: Config,
+    response: Response,
     q: str = Query(description="Natural-language query."),
     source: str | None = Query(None, enum=list(SOURCES)),
     kind: str | None = Query(None, enum=list(KINDS)),
     since: datetime | None = Query(None, description="ISO date lower bound on chunk date."),
     limit: int = Query(search_config.DEFAULT_SEARCH_LIMIT, ge=1, le=search_config.MAX_SEARCH_LIMIT),
+    x_goog_authenticated_user_email: str | None = Header(None),
 ) -> list[Hit]:
     """Hybrid full-text and semantic search over GitHub and Discord activity."""
     query = q.strip()
     if not query:
         raise HTTPException(422, "q must not be blank")
+    started_at = time.perf_counter()
     params = {
         **hybrid_search_params(model, query, limit),
         "source": source,
@@ -776,26 +939,40 @@ def search(
     statement = hybrid_search.chunk_search_statement(chunk_filter_clauses(source, kind, since))
     with engine.connect() as conn:
         conn.execute(hybrid_search.HNSW_ITERATIVE_SCAN)
-        return [hit(row) for row in conn.execute(statement, params)]
+        results = [hit(row) for row in conn.execute(statement, params)]
+    attach_search_execution(
+        response,
+        engine,
+        search_history.SearchExecutionRecord(
+            author=iap_caller(x_goog_authenticated_user_email),
+            query=query,
+            mode="activity",
+            domains=(),
+            filters={
+                "source": source,
+                "kind": kind,
+                "since": since.isoformat() if since is not None else None,
+            },
+            requested_limit=limit,
+            returned_count=len(results),
+            duration_ms=(time.perf_counter() - started_at) * MILLISECONDS_PER_SECOND,
+            service_revision=config.service_revision,
+            results=tuple(recorded_hit(result) for result in results),
+        ),
+    )
+    return results
 
 
-@api.get("/federated-search", response_model=list[SearchResult])
 def federated_search(
-    engine: Engine,
-    model: Model,
-    reranker: Reranker,
-    config: Config,
-    q: str = Query(description="Natural-language query."),
-    domain: list[search_config.SearchDomain] | None = Query(
-        None, description="Search this domain; repeat to select several."
-    ),
-    limit: int = Query(search_config.DEFAULT_SEARCH_LIMIT, ge=1, le=search_config.MAX_SEARCH_LIMIT),
+    engine: sqlalchemy.Engine,
+    model: TextEmbedding,
+    reranker: RerankerModel,
+    config: EchoConfig,
+    query: str,
+    domains: list[search_config.SearchDomain],
+    limit: int,
 ) -> list[SearchResult]:
     """Search wiki, repository file, and activity domains and merge their hybrid ranks."""
-    query = q.strip()
-    if not query:
-        raise HTTPException(422, "q must not be blank")
-    domains = list(dict.fromkeys(domain or search_config.DEFAULT_SEARCH_DOMAINS))
     retrieval_limit = max(limit, search_config.RERANK_MIN_RESULTS_PER_DOMAIN)
     params = hybrid_search_params(model, query, retrieval_limit)
     candidates: list[SearchCandidate] = []
@@ -811,15 +988,62 @@ def federated_search(
     return rerank_candidates(candidates, query, reranker, limit)
 
 
+@api.get("/federated-search", response_model=list[SearchResult])
+def federated_search_endpoint(
+    engine: Engine,
+    model: Model,
+    reranker: Reranker,
+    config: Config,
+    response: Response,
+    q: str = Query(description="Natural-language query."),
+    domain: list[search_config.SearchDomain] | None = Query(
+        None, description="Search this domain; repeat to select several."
+    ),
+    limit: int = Query(search_config.DEFAULT_SEARCH_LIMIT, ge=1, le=search_config.MAX_SEARCH_LIMIT),
+    x_goog_authenticated_user_email: str | None = Header(None),
+) -> list[SearchResult]:
+    query = q.strip()
+    if not query:
+        raise HTTPException(422, "q must not be blank")
+    domains = list(dict.fromkeys(domain or search_config.DEFAULT_SEARCH_DOMAINS))
+    started_at = time.perf_counter()
+    results = federated_search(engine, model, reranker, config, query, domains, limit)
+    attach_search_execution(
+        response,
+        engine,
+        search_history.SearchExecutionRecord(
+            author=iap_caller(x_goog_authenticated_user_email),
+            query=query,
+            mode="federated",
+            domains=tuple(domains),
+            filters={},
+            requested_limit=limit,
+            returned_count=len(results),
+            duration_ms=(time.perf_counter() - started_at) * MILLISECONDS_PER_SECOND,
+            repository_commit=result_repository_commit(results),
+            service_revision=config.service_revision,
+            results=tuple(recorded_search_result(result) for result in results),
+        ),
+    )
+    return results
+
+
 @api.get("/grep", response_model=list[Hit])
 def grep(
     engine: Engine,
+    config: Config,
+    response: Response,
     pattern: str = Query(description="Exact substring (SQL wildcards are escaped)."),
     source: str | None = Query(None, enum=list(SOURCES)),
     kind: str | None = Query(None, enum=list(KINDS)),
     limit: int = Query(20, ge=1, le=search_config.MAX_SEARCH_LIMIT),
+    x_goog_authenticated_user_email: str | None = Header(None),
 ) -> list[Hit]:
     """Case-insensitive substring scan, newest first — for identifiers and exact strings."""
+    query_text = pattern.strip()
+    if not query_text:
+        raise HTTPException(422, "pattern must not be blank")
+    started_at = time.perf_counter()
     query = sqlalchemy.select(
         schema.chunks,
         sqlalchemy.literal(0.0).label("score"),
@@ -830,10 +1054,27 @@ def grep(
         query = query.where(schema.chunks.c.source == source)
     if kind:
         query = query.where(schema.chunks.c.kind == kind)
-    query = query.where(schema.chunks.c.text.ilike(f"%{escape_like(pattern)}%"))
+    query = query.where(schema.chunks.c.text.ilike(f"%{escape_like(query_text)}%"))
     query = query.order_by(schema.chunks.c.date.desc()).limit(limit)
     with engine.connect() as conn:
-        return [hit(r) for r in conn.execute(query)]
+        results = [hit(r) for r in conn.execute(query)]
+    attach_search_execution(
+        response,
+        engine,
+        search_history.SearchExecutionRecord(
+            author=iap_caller(x_goog_authenticated_user_email),
+            query=query_text,
+            mode="grep",
+            domains=(),
+            filters={"source": source, "kind": kind},
+            requested_limit=limit,
+            returned_count=len(results),
+            duration_ms=(time.perf_counter() - started_at) * MILLISECONDS_PER_SECOND,
+            service_revision=config.service_revision,
+            results=tuple(recorded_hit(result) for result in results),
+        ),
+    )
+    return results
 
 
 @api.get("/chunks/{chunk_id}", response_model=Chunk)
@@ -924,6 +1165,114 @@ def add_work_log(
     with engine.begin() as conn:
         row = conn.execute(statement).first()
     return LogEntry(**{c: getattr(row, c) for c in LogEntry.model_fields})
+
+
+@api.get("/search-executions", response_model=list[SearchExecutionEntry])
+def search_executions(
+    engine: Engine,
+    after_id: int = Query(0, ge=0),
+    mode: search_history.SearchMode | None = None,
+    limit: int = Query(SEARCH_HISTORY_PAGE_LIMIT, ge=1, le=SEARCH_HISTORY_PAGE_LIMIT),
+) -> list[SearchExecutionEntry]:
+    """Return durable search executions in stable ID order for evaluation exports."""
+    statement = sqlalchemy.select(schema.search_executions).where(schema.search_executions.c.id > after_id)
+    if mode is not None:
+        statement = statement.where(schema.search_executions.c.mode == mode)
+    statement = statement.order_by(schema.search_executions.c.id).limit(limit)
+    with engine.connect() as conn:
+        execution_rows = list(conn.execute(statement))
+        execution_ids = [row.id for row in execution_rows]
+        result_rows = (
+            list(
+                conn.execute(
+                    sqlalchemy.select(schema.search_execution_results)
+                    .where(schema.search_execution_results.c.execution_id.in_(execution_ids))
+                    .order_by(schema.search_execution_results.c.execution_id, schema.search_execution_results.c.rank)
+                )
+            )
+            if execution_ids
+            else []
+        )
+    results_by_execution: dict[int, list[SearchExecutionResultEntry]] = {}
+    for row in result_rows:
+        results_by_execution.setdefault(row.execution_id, []).append(
+            SearchExecutionResultEntry(
+                **{field: getattr(row, field) for field in SearchExecutionResultEntry.model_fields}
+            )
+        )
+    return [
+        SearchExecutionEntry(
+            **{field: getattr(row, field) for field in SearchExecutionEntry.model_fields if field != "results"},
+            results=results_by_execution.get(row.id, []),
+        )
+        for row in execution_rows
+    ]
+
+
+@api.post("/feedback", response_model=SearchFeedbackEntry, status_code=201)
+def add_search_feedback(
+    feedback: SearchFeedbackCreate,
+    engine: Engine,
+    x_goog_authenticated_user_email: str | None = Header(None),
+) -> SearchFeedbackEntry:
+    """Store one query's optional note and per-result relevance grades."""
+    author = iap_caller(x_goog_authenticated_user_email)
+    statement = (
+        schema.search_feedback.insert()
+        .values(
+            author=author,
+            query=feedback.query,
+            note=feedback.note,
+            execution_id=feedback.execution_id,
+        )
+        .returning(schema.search_feedback)
+    )
+    with engine.begin() as conn:
+        if feedback.execution_id is not None:
+            execution = conn.execute(
+                sqlalchemy.select(schema.search_executions.c.author, schema.search_executions.c.query).where(
+                    schema.search_executions.c.id == feedback.execution_id
+                )
+            ).first()
+            if execution is None:
+                raise HTTPException(422, f"no search execution {feedback.execution_id}")
+            if execution.author != author or execution.query != feedback.query:
+                raise HTTPException(422, "execution_id must identify this caller's exact query")
+            if feedback.grades:
+                recorded_result_ids = set(
+                    conn.execute(
+                        sqlalchemy.select(schema.search_execution_results.c.result_id).where(
+                            schema.search_execution_results.c.execution_id == feedback.execution_id
+                        )
+                    ).scalars()
+                )
+                unrecorded_result_ids = {grade.result_id for grade in feedback.grades} - recorded_result_ids
+                if unrecorded_result_ids:
+                    raise HTTPException(
+                        422,
+                        "graded results were not returned by the linked search execution: "
+                        + ", ".join(sorted(unrecorded_result_ids)),
+                    )
+        row = conn.execute(statement).first()
+        assert row is not None
+        if feedback.grades:
+            conn.execute(
+                schema.search_feedback_grades.insert().values(
+                    [
+                        {"feedback_id": row.id, "result_id": grade.result_id, "grade": grade.grade}
+                        for grade in feedback.grades
+                    ]
+                )
+            )
+    return SearchFeedbackEntry(
+        id=row.id,
+        created_at=row.created_at,
+        author=row.author,
+        query=feedback.query,
+        grades=feedback.grades,
+        note=feedback.note,
+        execution_id=feedback.execution_id,
+    )
 
 
 @api.get("/wiki/search", response_model=list[WikiSummary])

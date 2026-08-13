@@ -13,6 +13,7 @@ from iac.github.credentials import (
     Credential,
     CredentialManifest,
     EnvironmentCredential,
+    Management,
     OrganizationCredential,
     OrganizationVisibility,
     Presence,
@@ -27,7 +28,7 @@ class CredentialResourcePlan:
     resource_id: str
 
 
-def _repository_name(organization: str, repository: str) -> str:
+def repository_name(organization: str, repository: str) -> str:
     prefix = f"{organization}/"
     if not repository.startswith(prefix):
         raise ValueError(f"repository {repository!r} is not owned by {organization!r}")
@@ -39,19 +40,19 @@ def _logical_name(credential: Credential) -> str:
 
 
 def credential_resource_plans(manifest: CredentialManifest) -> tuple[CredentialResourcePlan, ...]:
-    """Compute lookup IDs for the present credential declarations."""
+    """Compute lookup IDs for present credentials managed outside Pulumi."""
     plans: list[CredentialResourcePlan] = []
     for credential in manifest.credentials:
-        if credential.presence is not Presence.PRESENT:
+        if credential.presence is not Presence.PRESENT or credential.management is Management.PULUMI:
             continue
         if isinstance(credential, OrganizationCredential):
             resource_id = credential.name
         elif isinstance(credential, RepositoryCredential):
-            repository = _repository_name(manifest.organization, credential.repository)
+            repository = repository_name(manifest.organization, credential.repository)
             resource_id = f"{repository}:{credential.name}"
         else:
             assert isinstance(credential, EnvironmentCredential)
-            repository = _repository_name(manifest.organization, credential.repository)
+            repository = repository_name(manifest.organization, credential.repository)
             resource_id = f"{repository}:{quote(credential.environment, safe='')}:{credential.name}"
         plans.append(
             CredentialResourcePlan(

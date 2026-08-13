@@ -297,6 +297,30 @@ def test_start_controller_creates_controller_resources():
     # is provisioned so the reference resolves at admission.
     assert deploy_spec["template"]["spec"]["priorityClassName"] == "iris-system"
     assert k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-system") is not None
+    assert {
+        name: k8s.get_json(K8sResource.WORKLOAD_PRIORITY_CLASSES, name)["value"]
+        for name in (
+            "iris-cpu-batch",
+            "iris-accelerator-batch",
+            "iris-coscheduled-batch",
+            "iris-cpu-interactive",
+            "iris-accelerator-interactive",
+            "iris-coscheduled-interactive",
+            "iris-cpu-production",
+            "iris-accelerator-production",
+            "iris-coscheduled-production",
+        )
+    } == {
+        "iris-cpu-batch": 0,
+        "iris-accelerator-batch": 1,
+        "iris-coscheduled-batch": 2,
+        "iris-cpu-interactive": 10,
+        "iris-accelerator-interactive": 11,
+        "iris-coscheduled-interactive": 12,
+        "iris-cpu-production": 1000,
+        "iris-accelerator-production": 1001,
+        "iris-coscheduled-production": 1002,
+    }
 
     agent_spec = node_agent["spec"]["template"]["spec"]
     assert agent_spec["hostNetwork"] is True

@@ -43,7 +43,8 @@ from rigging.filesystem import StoragePath, open_url
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
-from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, load_file
+from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN
+from zephyr.readers import load_file
 from zephyr.runners import InlineRunner
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 

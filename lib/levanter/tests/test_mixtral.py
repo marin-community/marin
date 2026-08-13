@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import transformers
 from jax import random
-from test_utils import (  # , check_model_works_with_seqlen
+from levanter.testing.helpers import (  # , check_model_works_with_seqlen
     check_load_config,
     moe_gate_grad_row_norms,
     parameterize_with_configs,

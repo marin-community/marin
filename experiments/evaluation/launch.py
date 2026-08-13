@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.config import load_config
 from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor

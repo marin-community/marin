@@ -50,7 +50,7 @@ def _write_vllm_package(root: Path) -> None:
     cli.mkdir(parents=True)
     for init_file in (package / "__init__.py", package / "entrypoints" / "__init__.py", cli / "__init__.py"):
         init_file.write_text("")
-    (package / "_C.py").write_text("EXTENSION_SENTINEL = True\n")
+    (package / "_C_stable_libtorch.py").write_text("EXTENSION_SENTINEL = True\n")
     (cli / "main.py").write_text(
         "import json\n"
         "import os\n"
@@ -75,7 +75,7 @@ def _write_installed_wheel(
     (metadata / "METADATA").write_text(f"Metadata-Version: 2.4\nName: vllm\nVersion: {VERSION}\n")
     (metadata / "direct_url.json").write_text(json.dumps(direct_url))
     (root / "torch.py").write_text(
-        "class cuda:\n" "    @staticmethod\n" f"    def get_device_capability(): return {compute_capability!r}\n"
+        f"class cuda:\n    @staticmethod\n    def get_device_capability(): return {compute_capability!r}\n"
     )
 
 
@@ -207,7 +207,7 @@ def test_wheel_entrypoint_verifies_extension_and_records_provenance(tmp_path, wh
     assert records["MARIN_VLLM_WHEEL_VERIFIED"] == {
         **_provenance(wheel),
         "compute_capability": f"{compute_capability[0]}.{compute_capability[1]}",
-        "extension_path": str(tmp_path / "install" / "vllm" / "_C.py"),
+        "extension_path": str(tmp_path / "install" / "vllm" / "_C_stable_libtorch.py"),
     }
     assert json.loads(marker.read_text()) == ["serve", "test/model"]
 
@@ -244,4 +244,7 @@ def test_wheel_entrypoint_rejects_an_extension_shadowing_the_verified_wheel(tmp_
     result, marker = _run_entrypoint(tmp_path, python_path=(shadow_root,))
 
     _assert_refused_before_cli(result, marker)
-    assert f"vllm._C loaded outside the verified distribution: {shadow_root / 'vllm' / '_C.py'}" in result.stderr
+    assert (
+        f"vllm._C_stable_libtorch loaded outside the verified distribution: "
+        f"{shadow_root / 'vllm' / '_C_stable_libtorch.py'}" in result.stderr
+    )

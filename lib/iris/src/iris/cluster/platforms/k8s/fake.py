@@ -26,7 +26,6 @@ from iris.cluster.platforms.k8s.types import (
     KubectlError,
     KubectlLogLine,
     KubectlLogResult,
-    PodResourceUsage,
     parse_k8s_quantity,
 )
 from iris.cluster.service_mode import ServiceMode
@@ -105,18 +104,6 @@ class FakeNode:
         else:
             result["spec"] = {}
         return result
-
-
-@dataclass
-class NodePoolConfig:
-    """Configuration for a pool of identical nodes."""
-
-    name: str
-    instance_type: str
-    node_count: int
-    labels: dict[str, str] = field(default_factory=dict)
-    taints: list[dict[str, str]] = field(default_factory=list)
-    per_node_resources: FakeNodeResources = field(default_factory=FakeNodeResources)
 
 
 # ---------------------------------------------------------------------------
@@ -273,13 +260,12 @@ class InMemoryK8sService:
         )
         self._resources: dict[tuple[str, str], dict] = {}  # (kind, name) -> manifest
         self._injected_failures: dict[str, Exception] = {}
-        self._persistent_failures: dict[str, Exception] = {}
         self._logs: dict[str, str] = {}  # pod_name -> log text
         self._events: list[dict] = []
         self._exec_responses: dict[str, list[ExecResult]] = {}
         self._file_contents: dict[tuple[str, str], bytes] = {}  # (pod_name, path) -> data
         self._rm_files_calls: list[tuple[str, list[str]]] = []
-        self._top_pod_overrides: dict[str, PodResourceUsage | None] = {}
+        self._node_resource_metrics: dict[str, str] = {}
         self._log_watermarks: dict[str, int] = {}  # pod_name -> bytes consumed
 
         # Pods living outside the service's own namespace, keyed by
@@ -292,7 +278,6 @@ class InMemoryK8sService:
 
         # Node model
         self._nodes: dict[str, FakeNode] = {}
-        self._node_pools: dict[str, NodePoolConfig] = {}
         # Track which node each pod was scheduled on + its resource requests
         self._pod_node_assignments: dict[str, str] = {}  # pod_name -> node_name
         self._pod_resource_requests: dict[str, dict[str, int]] = {}  # pod_name -> requests
@@ -475,30 +460,7 @@ class InMemoryK8sService:
         """Inject a one-shot failure consumed by the next call to *operation*."""
         self._injected_failures[operation] = error
 
-    def inject_persistent_failure(self, operation: str, error: Exception) -> None:
-        """Fail every call to *operation* until cleared.
-
-        Needed for operations a background loop retries on its own cadence,
-        where a one-shot failure would be consumed by the first poll.
-        """
-        self._persistent_failures[operation] = error
-
-    def clear_failure(self, operation: str) -> None:
-        self._injected_failures.pop(operation, None)
-        self._persistent_failures.pop(operation, None)
-
     # -- Node pool management --
-
-    def remove_node_pool(self, pool_name: str) -> None:
-        """Remove a node pool and all its nodes."""
-        if self._available_node_pools is not None:
-            self._available_node_pools.discard(pool_name)
-        # Remove nodes belonging to this pool
-        if pool_name in self._node_pools:
-            pool = self._node_pools.pop(pool_name)
-            for i in range(pool.node_count):
-                node_name = f"{pool_name}-{i}"
-                self._nodes.pop(node_name, None)
 
     def add_node_pool(
         self,
@@ -508,7 +470,6 @@ class InMemoryK8sService:
         labels: dict[str, str] | None = None,
         taints: list[dict[str, str]] | None = None,
         resources: FakeNodeResources | None = None,
-        instance_type: str = "n1-standard-4",
     ) -> None:
         """Add a node pool with actual FakeNode objects.
 
@@ -524,16 +485,6 @@ class InMemoryK8sService:
         pool_taints = list(taints or [])
         per_node = resources or FakeNodeResources()
 
-        config = NodePoolConfig(
-            name=pool_name,
-            instance_type=instance_type,
-            node_count=node_count,
-            labels=pool_labels,
-            taints=pool_taints,
-            per_node_resources=per_node,
-        )
-        self._node_pools[pool_name] = config
-
         for i in range(node_count):
             node_name = f"{pool_name}-{i}"
             self._nodes[node_name] = FakeNode(
@@ -547,35 +498,6 @@ class InMemoryK8sService:
                     ephemeral_storage_bytes=per_node.ephemeral_storage_bytes,
                 ),
             )
-
-    def set_node_count(self, pool_name: str, count: int) -> None:
-        """Adjust node count for an existing pool."""
-        if pool_name not in self._node_pools:
-            raise KubectlError(f"Node pool {pool_name!r} not found")
-
-        config = self._node_pools[pool_name]
-        current = config.node_count
-
-        if count > current:
-            for i in range(current, count):
-                node_name = f"{pool_name}-{i}"
-                self._nodes[node_name] = FakeNode(
-                    name=node_name,
-                    labels=dict(config.labels),
-                    taints=list(config.taints),
-                    allocatable=FakeNodeResources(
-                        cpu_millicores=config.per_node_resources.cpu_millicores,
-                        memory_bytes=config.per_node_resources.memory_bytes,
-                        gpu_count=config.per_node_resources.gpu_count,
-                        ephemeral_storage_bytes=config.per_node_resources.ephemeral_storage_bytes,
-                    ),
-                )
-        elif count < current:
-            for i in range(count, current):
-                node_name = f"{pool_name}-{i}"
-                self._nodes.pop(node_name, None)
-
-        config.node_count = count
 
     # -- Pod lifecycle helpers --
 
@@ -617,9 +539,8 @@ class InMemoryK8sService:
         """Pre-populate file content readable via read_file."""
         self._file_contents[(pod_name, path)] = data
 
-    def set_top_pod(self, pod_name: str, result: PodResourceUsage | None) -> None:
-        """Configure a pod's reported resource usage (None = metrics absent)."""
-        self._top_pod_overrides[pod_name] = result
+    def set_node_resource_metrics(self, node_name: str, text: str) -> None:
+        self._node_resource_metrics[node_name] = text
 
     def seed_resource(self, resource: K8sResource, name: str, manifest: dict) -> None:
         """Directly insert a resource into the in-memory store for test setup.
@@ -636,8 +557,6 @@ class InMemoryK8sService:
     # -- Protocol methods --
 
     def _check_failure(self, operation: str) -> None:
-        if err := self._persistent_failures.get(operation):
-            raise err
         if err := self._injected_failures.pop(operation, None):
             raise err
 
@@ -875,26 +794,9 @@ class InMemoryK8sService:
                 results.append(event)
         return results
 
-    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]:
-        self._check_failure("top_pods")
-        plural = K8sResource.PODS.plural
-        usage: dict[str, PodResourceUsage] = {}
-        for (stored_plural, name), manifest in self._resources.items():
-            if stored_plural != plural:
-                continue
-            if labels:
-                res_labels = manifest.get("metadata", {}).get("labels", {})
-                if not all(res_labels.get(k) == v for k, v in labels.items()):
-                    continue
-            usage[name] = PodResourceUsage(cpu_millicores=100, memory_bytes=256 * 1024 * 1024)
-        # Per-pod overrides win regardless of the label scope; a None override
-        # means "metrics absent" and drops the pod from the result.
-        for name, override in self._top_pod_overrides.items():
-            if override is None:
-                usage.pop(name, None)
-            else:
-                usage[name] = override
-        return usage
+    def node_resource_metrics(self, node_name: str) -> str:
+        self._check_failure("node_resource_metrics")
+        return self._node_resource_metrics.get(node_name, "")
 
     def read_file(
         self,

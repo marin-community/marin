@@ -80,7 +80,7 @@ from typing import NamedTuple
 
 import click
 from connectrpc.errors import ConnectError
-from iris.client import IrisClient, Job
+from iris.client.client import IrisClient, Job
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2

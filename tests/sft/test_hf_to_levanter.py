@@ -14,7 +14,6 @@ from __future__ import annotations
 import dataclasses
 
 import draccus
-import pytest
 from fray.types import ResourceConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim.config import AdamConfig
@@ -22,8 +21,6 @@ from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.experiment.checkpoints import (
     HfToLevanterCheckpoint,
     HfToLevanterConfig,
-    hf_to_levanter,
-    resolve_lm_config,
 )
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
@@ -159,28 +156,3 @@ def test_lm_config_draccus_round_trip_selects_subclass_by_model_type():
     )
     decoded = draccus.decode(LmConfig.get_choice_class(config.model_type), config.model_config_json)
     assert decoded == arch
-
-
-@pytest.mark.slow
-def test_hf_to_levanter_resolves_real_arch_and_is_identity_stable():
-    """Against a real small model: the arch is read from the HF config (not the class default) and the
-    conversion step's identity tracks the pinned inputs but not where it runs."""
-    conv = hf_to_levanter("Qwen/Qwen3-0.6B", model_type="qwen3", hf_revision="main", version="2026.07.17")
-    # 0.6B differs from the Qwen3Config class default, so a real resolution must have happened.
-    assert conv.model != LmConfig.get_choice_class("qwen3")()
-    assert conv.model == resolve_lm_config("qwen3", "Qwen/Qwen3-0.6B", "main")
-
-    config = materialized_config(conv.step, _PREFIX)
-    assert isinstance(config, HfToLevanterConfig)
-    assert config.hf_id == "Qwen/Qwen3-0.6B"
-    assert config.output_path == conv.step.path(_PREFIX)
-
-    base = conv.step.fingerprint()
-    big = hf_to_levanter(
-        "Qwen/Qwen3-0.6B",
-        model_type="qwen3",
-        hf_revision="main",
-        version="2026.07.17",
-        resources=ResourceConfig.with_cpu(cpu=32, ram="256g"),
-    )
-    assert big.step.fingerprint() == base  # resources are a runtime choice

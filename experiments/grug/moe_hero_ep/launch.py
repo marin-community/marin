@@ -36,7 +36,13 @@ HERO_EP_BATCH_SIZE = 1024
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
-HERO_PROCESSES_PER_TASK = 1
+# One JAX process per GPU. The old one-process-per-node layout has two reproducible
+# failure modes on this stack, both from auto-PGLE (which only engages per-node):
+# a profiling-session collision that kills the gang during early dispatch
+# (ALREADY_EXISTS: Another profiling session active), and a silent wedge at the
+# FDO-recompile clique re-initialization (#7344). Per-GPU also matches the FSDP
+# hero (#8040) and is required by the ragged EP backend (#8081).
+HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 # The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
 # of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
@@ -106,6 +112,7 @@ def build_hero_run(
     eval_every: int = 0,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
+    checkpoint_path: str | None = None,
     watch_interval: int = HERO_WATCH_INTERVAL,
     watch_mode: WatchMode = WatchMode.INLINE,
     profile_steps: int = 0,
@@ -245,11 +252,10 @@ def build_hero_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
-            # Write under the step's output path. Levanter's default base path is pod-local, so a
-            # preempted run would find nothing to resume from and --save-checkpoints would buy
-            # nothing.
+            # Levanter's default base path is pod-local, so a preempted run would have nothing to
+            # resume from. `checkpoint_path` overrides this for runs targeting disposable storage.
             checkpointer=CheckpointerConfig(
-                base_path=prefix_join(ctx.output_path, "checkpoints"),
+                base_path=checkpoint_path or prefix_join(ctx.output_path, "checkpoints"),
                 temporary_base_path=None,
                 save_interval=checkpoint_interval,
                 keep=None,
@@ -367,6 +373,11 @@ def build_hero_run(
     help="Wall-clock minutes between checkpoint writes.",
 )
 @click.option(
+    "--checkpoint-path",
+    default=None,
+    help="Checkpoint output path, e.g. a marin_temp_bucket() path. Defaults to the step output path.",
+)
+@click.option(
     "--eval-every",
     type=click.IntRange(min=0),
     default=0,
@@ -423,6 +434,7 @@ def main(
     flavor: str,
     save_checkpoints: bool,
     checkpoint_minutes: float,
+    checkpoint_path: str | None,
     eval_every: int,
     watch_interval: int,
     watch_mode: str,
@@ -444,6 +456,7 @@ def main(
         flavor=flavor,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
+        checkpoint_path=checkpoint_path,
         eval_every=eval_every,
         watch_interval=watch_interval,
         watch_mode=WatchMode(watch_mode),

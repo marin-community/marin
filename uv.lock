@@ -124,6 +124,8 @@ members = [
     "marin-zephyr",
 ]
 constraints = [
+    { name = "opentelemetry-instrumentation", specifier = ">=0.41b0" },
+    { name = "opentelemetry-instrumentation-grpc", specifier = ">=0.41b0" },
     { name = "opentelemetry-semantic-conventions", specifier = ">=0.1b0" },
     { name = "tfp-nightly", specifier = ">=0.1.dev0" },
 ]
@@ -372,10 +374,8 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py" },
     { name = "flax" },
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "jaxlib", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jaxlib", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
+    { name = "jaxlib" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/85/b2/028d15474268205dc2a7382759a51eb8903bd3a218a9d261874e2ec772a4/aqtp-0.9.0.tar.gz", hash = "sha256:a42f03f0de5ed54d0d0d9437741a44f6408eaed48103a3434f0ad405ff86874a", size = 885899, upload-time = "2025-08-01T17:54:59.738Z" }
 wheels = [
@@ -893,10 +893,8 @@ version = "0.1.91"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py" },
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "jaxlib", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jaxlib", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
+    { name = "jaxlib" },
     { name = "numpy" },
     { name = "toolz" },
     { name = "typing-extensions" },
@@ -1437,8 +1435,7 @@ name = "equinox"
 version = "0.13.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
     { name = "jaxtyping" },
     { name = "typing-extensions" },
     { name = "wadler-lindig" },
@@ -1623,8 +1620,7 @@ name = "flax"
 version = "0.12.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
     { name = "msgpack" },
     { name = "numpy" },
     { name = "optax" },
@@ -1831,7 +1827,7 @@ wheels = [
 
 [[package]]
 name = "google-api-core"
-version = "2.29.0"
+version = "2.34.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "google-auth" },
@@ -1840,9 +1836,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0d/10/05572d33273292bac49c2d1785925f7bc3ff2fe50e3044cf1062c1dde32e/google_api_core-2.29.0.tar.gz", hash = "sha256:84181be0f8e6b04006df75ddfe728f24489f0af57c96a529ff7cf45bc28797f7", size = 177828, upload-time = "2026-01-08T22:21:39.269Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7b/7c/9be3903e3d45415e8ca493c75f8990a0f6f579d168015d44c379350d0ab0/google_api_core-2.34.0.tar.gz", hash = "sha256:98a779fe72de956eb1c9c2f47ff4c4432a668ece1a002ec38bed07ec2698ae59", size = 187953, upload-time = "2026-08-06T06:23:58.128Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/77/b6/85c4d21067220b9a78cfb81f516f9725ea6befc1544ec9bd2c1acd97c324/google_api_core-2.29.0-py3-none-any.whl", hash = "sha256:d30bc60980daa36e314b5d5a3e5958b0200cb44ca8fa1be2b614e932b75a3ea9", size = 173906, upload-time = "2026-01-08T22:21:36.093Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/c1/a8a92ae1bc4b1a8f804c776d7d3f0c771b78a62c3ad4df1be41b3fd8c767/google_api_core-2.34.0-py3-none-any.whl", hash = "sha256:cdf9c67e7ca2402d86ccbfde5f2503fc83e3cc3f58cc78456ae96cad24a6d2de", size = 180545, upload-time = "2026-08-06T06:22:47.502Z" },
 ]
 
 [package.optional-dependencies]
@@ -2085,10 +2081,8 @@ jax = [
     { name = "chex" },
     { name = "equinox" },
     { name = "flax" },
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "jaxlib", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jaxlib", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
+    { name = "jaxlib" },
     { name = "jaxopt" },
     { name = "jaxtyping" },
     { name = "optax" },
@@ -2641,108 +2635,14 @@ wheels = [
 
 [[package]]
 name = "jax"
-version = "0.10.1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu')",
-    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu')",
-    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu')",
-    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu')",
-    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu')",
-    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu')",
-    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu')",
-    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu')",
-    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu')",
-    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu')",
-    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu')",
-    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu')",
-    "python_full_version < '3.13' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-]
-dependencies = [
-    { name = "jaxlib", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "ml-dtypes", marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "numpy", marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "opt-einsum", marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "scipy", marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/24/49/b082387119c4a6bc7596296bbdc6bce034628cdd2845ebb27304cbca3624/jax-0.10.1.tar.gz", hash = "sha256:11672410faf8752429eb9a131de203dc488a2a3a012d509baa2b39878008810d", size = 2718178, upload-time = "2026-05-20T14:54:09.441Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/6e/5087e0347188f6970aba1ffbd0018754d23c3f3461e9f21785f2f27a02c2/jax-0.10.1-py3-none-any.whl", hash = "sha256:47f3192c76e9e3358de1b106a8af5e943fccb10510903f25d96ea53652729134", size = 3150973, upload-time = "2026-05-20T14:51:30.066Z" },
-]
-
-[[package]]
-name = "jax"
 version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version < '3.13' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version >= '3.13' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version < '3.13' and sys_platform != 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version >= '3.13' and sys_platform != 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version < '3.13' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version >= '3.13' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version < '3.13' and sys_platform != 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version >= '3.13' and sys_platform != 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version < '3.13' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version >= '3.13' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-]
 dependencies = [
-    { name = "jaxlib", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "ml-dtypes", marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "numpy", marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "opt-einsum", marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "scipy", marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jaxlib" },
+    { name = "ml-dtypes" },
+    { name = "numpy" },
+    { name = "opt-einsum" },
+    { name = "scipy" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/81/20/90a137c178de8f2b9170bd4dfb934e261213fdaac67e5c5183b132be85e7/jax-0.11.0.tar.gz", hash = "sha256:a2feb7cfa48bb35d36b8ecec16a4ec24044dec01935f779b28b017213697b195", size = 2813185, upload-time = "2026-07-16T19:00:14.519Z" }
 wheels = [
@@ -2752,7 +2652,7 @@ wheels = [
 [package.optional-dependencies]
 cuda13 = [
     { name = "jax-cuda13-plugin", extra = ["with-cuda"], marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "jaxlib", version = "0.11.0", source = { registry = "https://pypi.org/simple" } },
+    { name = "jaxlib" },
 ]
 
 [[package]]
@@ -2801,7 +2701,7 @@ version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py", marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu')" },
+    { name = "jax", marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu')" },
     { name = "triton", marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1f/04/9a54927ffa73c2cce3751391dd7d2f33aa8663c00febcc2a69325c708ba6/jax_triton-0.3.1.tar.gz", hash = "sha256:8ee1e53dfb199f5bebedbe743854f351fc30d931eede82b953c1bbeb9c22e590", size = 16283, upload-time = "2026-02-27T22:49:46.318Z" }
@@ -2811,113 +2711,12 @@ wheels = [
 
 [[package]]
 name = "jaxlib"
-version = "0.10.1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu')",
-    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu')",
-    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu')",
-    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu')",
-    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu')",
-    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu')",
-    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu')",
-    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu')",
-    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu')",
-    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu')",
-    "python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu')",
-    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and platform_machine != 'AMD64' and sys_platform == 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu')",
-    "python_full_version < '3.13' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu'",
-    "python_full_version < '3.13' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-    "python_full_version >= '3.13' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu'",
-]
-dependencies = [
-    { name = "ml-dtypes", marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "numpy", marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "scipy", marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/53/b4/fdb6e989b142d8a8d2093f342cbc5323fe0d4a7217fd899c8ddf9e108a5a/jaxlib-0.10.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:7a4399c7429c87ee6f7ab1e5712c5548ecfabde974ee9f4a12957fea4e35efb8", size = 60816137, upload-time = "2026-05-20T14:52:53.028Z" },
-    { url = "https://files.pythonhosted.org/packages/a7/29/0b4eaaca005708751ff301903a2ca760dcc34175dadb7536498c57a7de85/jaxlib-0.10.1-cp312-cp312-manylinux_2_27_aarch64.whl", hash = "sha256:12126603ba472300c62480f86d20972d563143041039d9dea349ad510aa6123c", size = 80294034, upload-time = "2026-05-20T14:52:56.941Z" },
-    { url = "https://files.pythonhosted.org/packages/38/69/2912ab63036e21c72748019e1d8e09e8a1fc3368b3e83fc27898a1858575/jaxlib-0.10.1-cp312-cp312-manylinux_2_27_x86_64.whl", hash = "sha256:f3cdf5b7f48470ab5455ab79aab746419694ccb6b52651cc2ce5fb27def03588", size = 85828774, upload-time = "2026-05-20T14:53:01.749Z" },
-    { url = "https://files.pythonhosted.org/packages/ec/8f/993ea419eca6f34fe12613e22a03b93f40e5b1e8e0df18d4060e1313a1fc/jaxlib-0.10.1-cp312-cp312-win_amd64.whl", hash = "sha256:0acf3f8e7dca9074c0327f0f61502845792ca9f82fab23b841b00daa78e85488", size = 64830187, upload-time = "2026-05-20T14:53:05.932Z" },
-    { url = "https://files.pythonhosted.org/packages/cf/76/3b637d4def229015a3035a7b44fac0dcf2536ae337540cdbffc651334d4e/jaxlib-0.10.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:4167213aa00f14bb0d8fbd90f9ded75e976f71ce8baf8c3c44e04c8fb80ea0c1", size = 60815855, upload-time = "2026-05-20T14:53:11.718Z" },
-    { url = "https://files.pythonhosted.org/packages/5b/76/9a1971bc9edb8728a7ba86d2693127ee46add9811230b8452321415fd4e9/jaxlib-0.10.1-cp313-cp313-manylinux_2_27_aarch64.whl", hash = "sha256:e53223d8f6861d33c02dd02343fa464700401ff5363784d37c33407218e328b8", size = 80293947, upload-time = "2026-05-20T14:53:15.408Z" },
-    { url = "https://files.pythonhosted.org/packages/20/1d/69a0ba52fb546261e71a7209378ee6059950e9c088a2a18355e01509f474/jaxlib-0.10.1-cp313-cp313-manylinux_2_27_x86_64.whl", hash = "sha256:bb073a1224e659e01e8d32d47c000edb52ec2aa8ba97ec22b2228b3a46e5c167", size = 85829861, upload-time = "2026-05-20T14:53:19.773Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/df/48659e2ee57705c63a51525f810fe3e0c87af4ca9f89d4738281a872d58e/jaxlib-0.10.1-cp313-cp313-win_amd64.whl", hash = "sha256:6449f1d4a22324f5f02c843360475783f9fd1d353fe711806cbf4e927d1360ae", size = 64828863, upload-time = "2026-05-20T14:53:24.562Z" },
-    { url = "https://files.pythonhosted.org/packages/c7/34/3f7c95ee1b2555d611f836988a49b522c04b8d186e0528f91d45118089bf/jaxlib-0.10.1-cp313-cp313t-macosx_11_0_arm64.whl", hash = "sha256:72a7db1242d6b7773340e430c244e73a8d13f82ce83933c0529a8b4b1520dcf3", size = 60934063, upload-time = "2026-05-20T14:53:28.549Z" },
-    { url = "https://files.pythonhosted.org/packages/3a/84/855a2395d299e00e1d9ffd0aecd516b52b81780f3e4ef537527be6d8c1fc/jaxlib-0.10.1-cp313-cp313t-manylinux_2_27_aarch64.whl", hash = "sha256:649c26ca92e9bbffb3c35226b37893916f20e6b89fb3911ce79b39e5cfb27b46", size = 80402500, upload-time = "2026-05-20T14:53:32.444Z" },
-    { url = "https://files.pythonhosted.org/packages/be/35/153e91a9c770a981d525d845b3f4cdb71a1e119681594a33908e9536bdff/jaxlib-0.10.1-cp313-cp313t-manylinux_2_27_x86_64.whl", hash = "sha256:cfe75d8a17e0d33a7bed27f32d7a5344a66e8d4af7073973f396e14ff4a9c503", size = 85941210, upload-time = "2026-05-20T14:53:36.982Z" },
-]
-
-[[package]]
-name = "jaxlib"
 version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version < '3.13' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version >= '3.13' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version < '3.13' and sys_platform != 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version >= '3.13' and sys_platform != 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version < '3.13' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version >= '3.13' and sys_platform == 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version < '3.13' and sys_platform != 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version >= '3.13' and sys_platform != 'linux' and extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version < '3.13' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-    "python_full_version >= '3.13' and extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-gpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test'",
-]
 dependencies = [
-    { name = "ml-dtypes", marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "numpy", marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "scipy", marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "ml-dtypes" },
+    { name = "numpy" },
+    { name = "scipy" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/13/629fd9f50e15424358b7c53b6ec729e2d7163d64942817bee9adeee04ed1/jaxlib-0.11.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:f5bf0b3bfc2ef4778580047389dacb51ae000e50c6b3b6f98d10788927066c97", size = 62546563, upload-time = "2026-07-16T18:59:16.788Z" },
@@ -2935,10 +2734,8 @@ name = "jaxopt"
 version = "0.8.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "jaxlib", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jaxlib", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
+    { name = "jaxlib" },
     { name = "numpy" },
     { name = "scipy" },
 ]
@@ -3479,12 +3276,11 @@ wheels = [
 
 [[package]]
 name = "libtpu"
-version = "0.0.41"
+version = "0.0.44.1"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/27/bb/70a97644f2114fe5dff0fb7ac58922e2188b6355a0439ea6ae14358a61d0/libtpu-0.0.41-cp312-cp312-manylinux_2_31_x86_64.whl", hash = "sha256:47feeac3cd4cd88c58342c20f3cb3635d1f2d53f8689aa24bbe9690e664629de", size = 211768760, upload-time = "2026-05-13T22:40:22.982Z" },
-    { url = "https://files.pythonhosted.org/packages/3c/6e/16eee4b4c3a642cef091f8aafea7797edc3d20f224ea265ae05dceba31b0/libtpu-0.0.41-cp313-cp313-manylinux_2_31_x86_64.whl", hash = "sha256:5dd67e594cefb67f4272efb5a3fa38cf9206b7dd1ab5fbd559001809f8b9dddb", size = 211768672, upload-time = "2026-05-13T22:41:07.061Z" },
-    { url = "https://files.pythonhosted.org/packages/f6/16/d5faa773888b6abb6575ad8ee347cf35e6cbfc8879340fcd7e8f3ba6fbaf/libtpu-0.0.41-cp313-cp313t-manylinux_2_31_x86_64.whl", hash = "sha256:ca9dd60976c035b071b2d5d61acdd78598f717bba4f277b3708269d05b5c32fb", size = 211769221, upload-time = "2026-05-13T22:40:56.767Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/66/e57cdbcfaeb1c232b685ee78c15e37a5a7cb3889e3f604db6ca80c0717a5/libtpu-0.0.44.1-cp312-cp312-manylinux_2_31_x86_64.whl", hash = "sha256:4a96b7c320f63267e6ce82f323c2d8fca68395170ac98db4eb29d8e3cca2edf9", size = 215596766, upload-time = "2026-07-27T23:48:43.042Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/27/42e544ac8d4a072f03b8335395060559d70db6b6cc995fa0fe5df66ce0cb/libtpu-0.0.44.1-cp313-cp313-manylinux_2_31_x86_64.whl", hash = "sha256:a9ddf82730f44e9a61b6a2e3ebbfc7a9881583f6d74f7805e84fa9610c9a0ac0", size = 215596867, upload-time = "2026-07-27T23:48:52.844Z" },
 ]
 
 [[package]]
@@ -3621,8 +3417,7 @@ dependencies = [
     { name = "google-api-python-client" },
     { name = "google-cloud-storage" },
     { name = "huggingface-hub" },
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
     { name = "jaxopt" },
     { name = "marin-finestore" },
     { name = "marin-fray" },
@@ -3651,7 +3446,7 @@ dependencies = [
 
 [package.optional-dependencies]
 cpu = [
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "jax" },
     { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (platform_machine != 'arm64' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (platform_machine != 'arm64' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'darwin' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'darwin' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'arm64' and extra == 'extra-10-marin-core-cpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-cpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "torchvision", version = "0.26.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (platform_machine != 'arm64' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (platform_machine != 'arm64' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'darwin' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'darwin' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
@@ -3670,7 +3465,7 @@ dedup = [
 ]
 gpu = [
     { name = "flash-attn-4", extra = ["cu13"], marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, extra = ["cuda13"], marker = "extra == 'extra-10-marin-core-gpu' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
+    { name = "jax", extra = ["cuda13"], marker = "extra == 'extra-10-marin-core-gpu' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "jax-triton", marker = "sys_platform == 'linux'" },
     { name = "nvidia-cublas", version = "13.4.1.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
     { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
@@ -3682,8 +3477,8 @@ gpu = [
     { name = "triton", marker = "sys_platform == 'linux'" },
 ]
 tpu = [
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "jaxlib", version = "0.10.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "jax" },
+    { name = "jaxlib" },
     { name = "libtpu" },
     { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-10-marin-core-tpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (platform_machine != 'arm64' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (platform_machine != 'arm64' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'darwin' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'darwin' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'arm64' and extra == 'extra-10-marin-core-tpu') or (platform_machine != 'arm64' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (platform_machine != 'arm64' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (platform_machine != 'arm64' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-tpu') or (sys_platform != 'darwin' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'darwin' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (sys_platform == 'darwin' and extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'darwin' and extra == 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
@@ -3765,13 +3560,13 @@ requires-dist = [
     { name = "huggingface-hub" },
     { name = "huggingface-hub", marker = "extra == 'datakit'" },
     { name = "jax", specifier = ">=0.9.2,<0.12" },
-    { name = "jax", marker = "extra == 'cpu'", specifier = "==0.10.1" },
-    { name = "jax", marker = "extra == 'tpu'", specifier = "==0.10.1" },
+    { name = "jax", marker = "extra == 'cpu'", specifier = "==0.11.0" },
+    { name = "jax", marker = "extra == 'tpu'", specifier = "==0.11.0" },
     { name = "jax", extras = ["cuda13"], marker = "extra == 'gpu'", specifier = "==0.11.0" },
     { name = "jax-triton", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==0.3.1" },
-    { name = "jaxlib", marker = "extra == 'tpu'", specifier = "==0.10.1" },
+    { name = "jaxlib", marker = "extra == 'tpu'", specifier = "==0.11.0" },
     { name = "jaxopt", specifier = ">=0.8.3" },
-    { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.41" },
+    { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.44.*" },
     { name = "luxical", marker = "extra == 'datakit'" },
     { name = "marin-dupekit", marker = "extra == 'dedup'", editable = "lib/dupekit" },
     { name = "marin-finestore", editable = "lib/finestore" },
@@ -3888,6 +3683,7 @@ dependencies = [
 test = [
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [package.metadata]
@@ -3905,6 +3701,7 @@ requires-dist = [
 test = [
     { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]
@@ -3939,7 +3736,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "marin-dupekit-native", specifier = ">=0.1.5.dev30957455498" },
+    { name = "marin-dupekit-native", specifier = ">=0.1.6.dev31131847556" },
     { name = "pytest-benchmark", marker = "extra == 'benchmark'", specifier = ">=5.2.3" },
     { name = "pytest-memray", marker = "extra == 'benchmark'", specifier = ">=1.8.0" },
 ]
@@ -3963,17 +3760,17 @@ test = [
 
 [[package]]
 name = "marin-dupekit-native"
-version = "0.1.5.dev30957455498"
+version = "0.1.6.dev31131847556"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyarrow" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/50/0c/d18c67033acc09b3e46a04ed8f834c45681e2eb92d2009e6fbe06b1539d1/marin_dupekit_native-0.1.5.dev30957455498.tar.gz", hash = "sha256:769f855af0ad92d5712afd48086641e47a6eca0cfefcbb745902d89532ecc4fd", size = 22359, upload-time = "2026-08-04T22:49:25.439Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b9/21/135a244e3e38dca7d7c3ee0de49a81fa55ab1075463cc29306c7c8e52ad5/marin_dupekit_native-0.1.6.dev31131847556.tar.gz", hash = "sha256:f83dd70bc95e85870c67132432246adcc7d4810b5517277cbc12a4d134dc02ec", size = 22361, upload-time = "2026-08-07T00:12:17.139Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/23/a9/02b6a12c66f4365eab7d10e6daa68f2593465793a609922a0871db5df286/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:34e0e4892d95cb9c576838f7a92fe02315f793d8ef8bbe09b1d69be424d1f14c", size = 3964882, upload-time = "2026-08-04T22:49:17.823Z" },
-    { url = "https://files.pythonhosted.org/packages/3a/fe/0414b2d4994887c0f46cbf5933d9b48cdec447d3f8a2b667e7ea597a9a9b/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:bfc43e9decaaa7635740ef018c04802921178941f2aff8ddc105542ea3f4f3cb", size = 3654072, upload-time = "2026-08-04T22:49:19.992Z" },
-    { url = "https://files.pythonhosted.org/packages/1b/89/070afd632907acf0d1416f6dcb36f86a847c42e57a4094714c598d76db6e/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:cb49390e74a5bca1e843b5d05213b7e31891dc2d6657884de225b23773d5cd92", size = 3833758, upload-time = "2026-08-04T22:49:21.569Z" },
-    { url = "https://files.pythonhosted.org/packages/2e/99/43cf7ab011f22d047c0bd9978984dc3530ac92a29aa6f53fccbbf7632213/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:e466e25c33cb2618b4d168ac4c9e77aab32e5406e8f845dca94e4cf55e91952d", size = 4116806, upload-time = "2026-08-04T22:49:23.013Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/9c/df280af2df57e95418b74ec4d96243488293bddeff09e102cde4f3be74d7/marin_dupekit_native-0.1.6.dev31131847556-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:bcd6745aeb703e87f33ec8f0537a04a157133e07f9738d407a97e451e1b1b5cb", size = 3964994, upload-time = "2026-08-07T00:12:10.129Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/1d/3513e75a35704c7f28e0f4fe235545fd0094aeeea2991c899691db263482/marin_dupekit_native-0.1.6.dev31131847556-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:e0c3f52e240724a610161862819f2f4c92370841540d4ec98a8cd13c327cb9da", size = 3654080, upload-time = "2026-08-07T00:12:11.774Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/c3/1bf7af2fe072590d350871f6efc1c76614329ad37c70bcc83f26880b3c22/marin_dupekit_native-0.1.6.dev31131847556-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:f0fceadc72803f0512c955ce5568197fce2d804e4a64452a8471f6197276adad", size = 3833622, upload-time = "2026-08-07T00:12:13.275Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/1a/26cbda61e163eda6e247b5b56b5a781e1699e9cc0c17f7d5534cd28a7173/marin_dupekit_native-0.1.6.dev31131847556-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:62ab6a3bc5d4b1f5f794e378117ae7236de067ac44629a15a9b93e475273bd15", size = 4117115, upload-time = "2026-08-07T00:12:14.645Z" },
 ]
 
 [[package]]
@@ -4041,14 +3838,14 @@ test = [
 
 [[package]]
 name = "marin-finelog-server"
-version = "0.2.17.dev30664483151"
+version = "0.2.28.dev31271949117"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f9/97/59f89c87605fc87f23a8e56fcda504f6df4df18be44cf52017291b9003c2/marin_finelog_server-0.2.17.dev30664483151.tar.gz", hash = "sha256:4d58339d5a9035b310f76519fe39455023103dc881d682159bb498f9d6a5c0a1", size = 285532, upload-time = "2026-07-31T21:26:10.048Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/9b/d5c6becc54bc9ce6e72a11802c308bda851a7fe4f86baf4508b5dc3c2dc3/marin_finelog_server-0.2.28.dev31271949117.tar.gz", hash = "sha256:003e5a6b0c18cc92db88fb75c573987c2232d93f895f02af8478fd54307b473f", size = 368596, upload-time = "2026-08-08T18:59:45.536Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/34/1ee3814a07f28bf5217371c1aaf4aea031d75235be7856f68fc8555ca67f/marin_finelog_server-0.2.17.dev30664483151-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:bd07d8615faf6cb841d45fe0a49777fb0a88a2a4c0081322d82667564de09bcd", size = 39785049, upload-time = "2026-07-31T21:25:54.711Z" },
-    { url = "https://files.pythonhosted.org/packages/24/be/e1db089f9de44bf9add131d5cf88b120ab75007c290d06d277837ededcac/marin_finelog_server-0.2.17.dev30664483151-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:0c91877a4333783af58499b440a199db2954e43e57a1fed3bc58729d98004014", size = 37679620, upload-time = "2026-07-31T21:25:58.549Z" },
-    { url = "https://files.pythonhosted.org/packages/05/7d/486ce032917c28e17665724ed196a642212753d6d195c0f45ab4a24b3a31/marin_finelog_server-0.2.17.dev30664483151-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e9c9ca5d94fedbd1aedee97af33d3d6d322ec9391495a45e863e8376f205cd9c", size = 39219562, upload-time = "2026-07-31T21:26:02.503Z" },
-    { url = "https://files.pythonhosted.org/packages/1c/b4/78fabed88472dc340b212f67f93adcb519597aa60991231f6713db20d75b/marin_finelog_server-0.2.17.dev30664483151-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:1ebc3b332749f51b59581a8687089af43a078815f6f5e7c72c4435cf38adebcf", size = 41641507, upload-time = "2026-07-31T21:26:06.235Z" },
+    { url = "https://files.pythonhosted.org/packages/67/bc/2ae76d392fce8462cac62a38cfc9656b7672616ffcac97da5eb32810c177/marin_finelog_server-0.2.28.dev31271949117-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:9eccaefb62233c6b2647947af7866058ea821582105348fac72d622cfdebd6d3", size = 41056093, upload-time = "2026-08-08T18:59:27.942Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/4b/d0731ad1d2169f6063d190496d8f5cc5b10a0de7d66af9ac5eb8a4b12ede/marin_finelog_server-0.2.28.dev31271949117-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:e79242cc1ed8e2ce6d096a9f4453e46873427ce504853b8f5bfb830560b2ac43", size = 38874492, upload-time = "2026-08-08T18:59:32.342Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/af/cfe41d20517eedbf0cd87d291d6ae99ddad460ed28a285ec7633a54b5c4f/marin_finelog_server-0.2.28.dev31271949117-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:b297c63782ed08644d0b573db3160fb75527f2562e579846e213a86bf9297ddd", size = 40470543, upload-time = "2026-08-08T18:59:37.006Z" },
+    { url = "https://files.pythonhosted.org/packages/60/1d/da5142a5c8e447d167f02ddd3bf6113a336699153ffc34cfc11bcb568335/marin_finelog_server-0.2.28.dev31271949117-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:09242c474b5dcc4bae076ee96c1e858755bffd8754c3065373e27443f8dc20b5", size = 43019653, upload-time = "2026-08-08T18:59:41.898Z" },
 ]
 
 [[package]]
@@ -4099,25 +3896,32 @@ source = { editable = "lib/fray" }
 dependencies = [
     { name = "cloudpickle" },
     { name = "humanfriendly" },
-    { name = "marin-iris" },
     { name = "marin-rigging" },
+]
+
+[package.optional-dependencies]
+iris = [
+    { name = "marin-iris" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "marin-iris" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 fray-tpu-test = [
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "jaxlib", version = "0.10.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "jax" },
+    { name = "jaxlib" },
     { name = "libtpu" },
+    { name = "marin-iris" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "marin-iris" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
@@ -4127,25 +3931,29 @@ test = [
 requires-dist = [
     { name = "cloudpickle", specifier = ">=3.1.2" },
     { name = "humanfriendly", specifier = ">=10.0" },
-    { name = "marin-iris", editable = "lib/iris" },
+    { name = "marin-iris", marker = "extra == 'iris'", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
 ]
+provides-extras = ["iris"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "marin-iris", editable = "lib/iris" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 fray-tpu-test = [
-    { name = "jax", specifier = "==0.10.1" },
-    { name = "jaxlib", specifier = "==0.10.1" },
-    { name = "libtpu", specifier = "==0.0.41" },
+    { name = "jax", specifier = "==0.11.0" },
+    { name = "jaxlib", specifier = "==0.11.0" },
+    { name = "libtpu", specifier = "==0.0.44.*" },
+    { name = "marin-iris", editable = "lib/iris" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "marin-iris", editable = "lib/iris" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
@@ -4157,8 +3965,7 @@ source = { editable = "lib/haliax" }
 dependencies = [
     { name = "aqtp" },
     { name = "equinox" },
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
     { name = "jaxtyping" },
     { name = "jmp" },
     { name = "safetensors" },
@@ -4227,6 +4034,7 @@ name = "marin-iac"
 version = "0.0.0"
 source = { editable = "infra/pulumi" }
 dependencies = [
+    { name = "marin-finelog" },
     { name = "marin-iris", extra = ["controller"] },
     { name = "marin-rigging" },
     { name = "pyyaml" },
@@ -4244,12 +4052,21 @@ deploy = [
     { name = "pulumi-kubernetes" },
 ]
 
+[package.dev-dependencies]
+test = [
+    { name = "marin-core" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "google-cloud-kms", marker = "extra == 'deploy'", specifier = ">=2.24.0" },
+    { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
-    { name = "pulumi", marker = "extra == 'deploy'", specifier = ">=3.140,<4" },
+    { name = "pulumi", marker = "extra == 'deploy'", specifier = ">=3.226,<4" },
     { name = "pulumi-cloudflare", marker = "extra == 'deploy'", specifier = ">=6,<7" },
     { name = "pulumi-command", marker = "extra == 'deploy'", specifier = ">=1,<2" },
     { name = "pulumi-docker-build", marker = "extra == 'deploy'", specifier = ">=0.0.8,<1" },
@@ -4259,6 +4076,14 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
 ]
 provides-extras = ["deploy"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "marin-core", editable = "lib/marin" },
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
 
 [[package]]
 name = "marin-iris"
@@ -4304,8 +4129,10 @@ iap = [
 [package.dev-dependencies]
 dev = [
     { name = "ipykernel" },
+    { name = "jax" },
     { name = "jupyter" },
     { name = "kubernetes" },
+    { name = "memray" },
     { name = "nbconvert" },
     { name = "nbformat" },
     { name = "playwright" },
@@ -4323,7 +4150,9 @@ examples = [
     { name = "nbformat" },
 ]
 test = [
+    { name = "jax" },
     { name = "kubernetes" },
+    { name = "memray" },
     { name = "playwright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -4347,8 +4176,8 @@ requires-dist = [
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "kubernetes", marker = "extra == 'controller'", specifier = ">=31.0.0,<36" },
     { name = "marin-finelog", editable = "lib/finelog" },
-    { name = "marin-finelog-server", specifier = ">=0.2.17.dev30664483151" },
-    { name = "marin-iris-native", specifier = ">=0.1.5.dev30223685542" },
+    { name = "marin-finelog-server", specifier = ">=0.2.28.dev31271949117" },
+    { name = "marin-iris-native", specifier = ">=0.1.6.dev31131847556" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["secrets"], marker = "extra == 'controller'", editable = "lib/rigging" },
@@ -4369,8 +4198,10 @@ provides-extras = ["controller", "worker", "iap"]
 [package.metadata.requires-dev]
 dev = [
     { name = "ipykernel", specifier = ">=7.1.0" },
+    { name = "jax", specifier = "==0.11.0" },
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "kubernetes", specifier = ">=31.0.0,<36" },
+    { name = "memray", specifier = ">=1.19.3" },
     { name = "nbconvert", specifier = ">=7.16.6" },
     { name = "nbformat", specifier = ">=5.10.4" },
     { name = "playwright", specifier = ">=1.49.0" },
@@ -4388,7 +4219,9 @@ examples = [
     { name = "nbformat", specifier = ">=5.10.4" },
 ]
 test = [
+    { name = "jax", specifier = "==0.11.0" },
     { name = "kubernetes", specifier = ">=31.0.0,<36" },
+    { name = "memray", specifier = ">=1.19.3" },
     { name = "playwright", specifier = ">=1.49.0" },
     { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-asyncio" },
@@ -4400,14 +4233,14 @@ test = [
 
 [[package]]
 name = "marin-iris-native"
-version = "0.1.5.dev30223685542"
+version = "0.1.6.dev31131847556"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e8/d6/4a01c73b0428bb5c967593cb05222bb0c546305486cce1171c0c7a7b7eb3/marin_iris_native-0.1.5.dev30223685542.tar.gz", hash = "sha256:8928edf09177971bdf175fdfc2efdb3c354e286616c27824d1908e232c38d941", size = 39050, upload-time = "2026-07-26T23:25:20.271Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/18/6f/56a218fb6e50eda550ee63cb6d29002f435b705b98cb174e8f0235f3a792/marin_iris_native-0.1.6.dev31131847556.tar.gz", hash = "sha256:a1293b6e39b2b45a856e1f422bd4f00cd27485f205c030e6dcfa8d539a889568", size = 39046, upload-time = "2026-08-07T00:12:12.973Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/0e/2ffa0d7941a3eb8bf4b5003bff5c8798ce63f99e3af8bd5e24e4b190a321/marin_iris_native-0.1.5.dev30223685542-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:786d39a0a49625a531b3e3255275cdd15f01148aa96a1222a08f3f1a846fb666", size = 3551177, upload-time = "2026-07-26T23:25:13.398Z" },
-    { url = "https://files.pythonhosted.org/packages/d9/33/7a2fee0f825363a3493f24bdf6d17226840a23bb4e84358ecd0dab1dc69f/marin_iris_native-0.1.5.dev30223685542-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:bdbf964ff76a7066e035071bc9b5ae565a739387e95ce2cc4fdba0a3f82bd11c", size = 3348678, upload-time = "2026-07-26T23:25:14.95Z" },
-    { url = "https://files.pythonhosted.org/packages/6e/32/798194040a5d0bcbbb10c10cec9ca63c48326eb6becd100021882f4622bc/marin_iris_native-0.1.5.dev30223685542-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:2ef528df80e0605b144022a4506333ffc2e1ee2539c9381d64095c132dad084f", size = 3489655, upload-time = "2026-07-26T23:25:17.147Z" },
-    { url = "https://files.pythonhosted.org/packages/a6/77/c2f2994163fdd60e3007aa364800ac972a22c7bbed48e807892538808add/marin_iris_native-0.1.5.dev30223685542-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:b383d8aca62955de8cb064dc9a0294d8e5fc8fe01266ec573052f6f2dba69499", size = 3682223, upload-time = "2026-07-26T23:25:19.044Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/f9/eb005d6fba97e8e16fdb793dad10ef188a3c0a7fce288a7f7b39bb06511e/marin_iris_native-0.1.6.dev31131847556-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:8cdb5298301d2538b8ca24882f74ec6836b9022c8ead0343978d049dd450a47e", size = 3551136, upload-time = "2026-08-07T00:12:06.839Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/39/efc31afa16a341b3950fe6bf311d5ece9ef680939f4f599f87322e838958/marin_iris_native-0.1.6.dev31131847556-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:e07e4ebb3252751ee3029b07a7b8c3eca6e6c94f9c6fa3248e3f9d24b29f0925", size = 3348691, upload-time = "2026-08-07T00:12:08.475Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/0d/ffa8b4c0b420eb7cd3863d684e8ec6612d0f0cfe2f72116c73d4bf2b0ba5/marin_iris_native-0.1.6.dev31131847556-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e6dfd2cf6df70254a1259c9656b6ad381a481d8c0aff491629d334d018f9be1c", size = 3489782, upload-time = "2026-08-07T00:12:09.95Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/bd/d39e7be34c825ddbb4a7c798349e5062b47ebc50e2a67455c6b960146aca/marin_iris_native-0.1.6.dev31131847556-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:3a36ff1eea43e97c290df9a6ed4ec5deba78cadd962a138264b4fe1f7b4bf18a", size = 3682246, upload-time = "2026-08-07T00:12:11.498Z" },
 ]
 
 [[package]]
@@ -4430,8 +4263,7 @@ dependencies = [
     { name = "gitpython" },
     { name = "humanfriendly" },
     { name = "immutabledict" },
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
     { name = "jaxtyping" },
     { name = "jinja2" },
     { name = "jmp" },
@@ -4465,7 +4297,7 @@ gcp = [
 ]
 gpu = [
     { name = "flash-attn-4", extra = ["cu13"], marker = "(sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, extra = ["cuda13"], marker = "(extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
+    { name = "jax", extra = ["cuda13"], marker = "(extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra != 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "jax-triton", marker = "sys_platform == 'linux'" },
     { name = "nvidia-cublas", version = "13.4.1.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
     { name = "nvidia-cutlass-dsl", extra = ["cu13"], marker = "(sys_platform == 'linux' and extra == 'extra-14-marin-levanter-gpu') or (sys_platform != 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (sys_platform != 'linux' and extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra != 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
@@ -4498,8 +4330,8 @@ torch-test = [
     { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
 ]
 tpu = [
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "jaxlib", version = "0.10.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "jax" },
+    { name = "jaxlib" },
     { name = "libtpu" },
 ]
 
@@ -4561,15 +4393,15 @@ requires-dist = [
     { name = "humanfriendly", specifier = "==10.0" },
     { name = "immutabledict" },
     { name = "jax", specifier = ">=0.9.2,<0.12" },
-    { name = "jax", marker = "extra == 'tpu'", specifier = "==0.10.1" },
+    { name = "jax", marker = "extra == 'tpu'", specifier = "==0.11.0" },
     { name = "jax", extras = ["cuda13"], marker = "extra == 'gpu'", specifier = "==0.11.0" },
     { name = "jax-triton", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==0.3.1" },
-    { name = "jaxlib", marker = "extra == 'tpu'", specifier = "==0.10.1" },
+    { name = "jaxlib", marker = "extra == 'tpu'", specifier = "==0.11.0" },
     { name = "jaxtyping", specifier = ">=0.2.34" },
     { name = "jinja2" },
     { name = "jmp", specifier = ">=0.0.3" },
     { name = "lenses" },
-    { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.41" },
+    { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.44.*" },
     { name = "lm-eval", marker = "extra == 'lm-eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness.git?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
@@ -6285,6 +6117,105 @@ wheels = [
 ]
 
 [[package]]
+name = "opentelemetry-exporter-otlp-proto-common"
+version = "1.39.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-proto" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e9/9d/22d241b66f7bbde88a3bfa6847a351d2c46b84de23e71222c6aae25c7050/opentelemetry_exporter_otlp_proto_common-1.39.1.tar.gz", hash = "sha256:763370d4737a59741c89a67b50f9e39271639ee4afc999dadfe768541c027464", size = 20409, upload-time = "2025-12-11T13:32:40.885Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8c/02/ffc3e143d89a27ac21fd557365b98bd0653b98de8a101151d5805b5d4c33/opentelemetry_exporter_otlp_proto_common-1.39.1-py3-none-any.whl", hash = "sha256:08f8a5862d64cc3435105686d0216c1365dc5701f86844a8cd56597d0c764fde", size = 18366, upload-time = "2025-12-11T13:32:20.2Z" },
+]
+
+[[package]]
+name = "opentelemetry-exporter-otlp-proto-grpc"
+version = "1.39.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "googleapis-common-protos" },
+    { name = "grpcio" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-common" },
+    { name = "opentelemetry-proto" },
+    { name = "opentelemetry-sdk" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/53/48/b329fed2c610c2c32c9366d9dc597202c9d1e58e631c137ba15248d8850f/opentelemetry_exporter_otlp_proto_grpc-1.39.1.tar.gz", hash = "sha256:772eb1c9287485d625e4dbe9c879898e5253fea111d9181140f51291b5fec3ad", size = 24650, upload-time = "2025-12-11T13:32:41.429Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/81/a3/cc9b66575bd6597b98b886a2067eea2693408d2d5f39dad9ab7fc264f5f3/opentelemetry_exporter_otlp_proto_grpc-1.39.1-py3-none-any.whl", hash = "sha256:fa1c136a05c7e9b4c09f739469cbdb927ea20b34088ab1d959a849b5cc589c18", size = 19766, upload-time = "2025-12-11T13:32:21.027Z" },
+]
+
+[[package]]
+name = "opentelemetry-instrumentation"
+version = "0.60b1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "packaging" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/41/0f/7e6b713ac117c1f5e4e3300748af699b9902a2e5e34c9cf443dde25a01fa/opentelemetry_instrumentation-0.60b1.tar.gz", hash = "sha256:57ddc7974c6eb35865af0426d1a17132b88b2ed8586897fee187fd5b8944bd6a", size = 31706, upload-time = "2025-12-11T13:36:42.515Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/d2/6788e83c5c86a2690101681aeef27eeb2a6bf22df52d3f263a22cee20915/opentelemetry_instrumentation-0.60b1-py3-none-any.whl", hash = "sha256:04480db952b48fb1ed0073f822f0ee26012b7be7c3eac1a3793122737c78632d", size = 33096, upload-time = "2025-12-11T13:35:33.067Z" },
+]
+
+[[package]]
+name = "opentelemetry-instrumentation-grpc"
+version = "0.60b1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e6/00/f59a3a99709f340a5564c200b79ce48d3bb9d1ac9596208d3c4cdb00f82f/opentelemetry_instrumentation_grpc-0.60b1.tar.gz", hash = "sha256:049573ddfe4c32af151348d2dbeddaaca788a57c320e70770ec216b7e35ccfd4", size = 31426, upload-time = "2025-12-11T13:37:00.64Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4c/e7/75ed12f331f4fdca3a81c4dfd32c21255d981d1fcc883b476b4c14360efd/opentelemetry_instrumentation_grpc-0.60b1-py3-none-any.whl", hash = "sha256:f7a81a87b2a26842fc62cba0743a475f151e77eb21d5b93902fbfd0518a7cca7", size = 27234, upload-time = "2025-12-11T13:36:03.267Z" },
+]
+
+[[package]]
+name = "opentelemetry-proto"
+version = "1.39.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/49/1d/f25d76d8260c156c40c97c9ed4511ec0f9ce353f8108ca6e7561f82a06b2/opentelemetry_proto-1.39.1.tar.gz", hash = "sha256:6c8e05144fc0d3ed4d22c2289c6b126e03bcd0e6a7da0f16cedd2e1c2772e2c8", size = 46152, upload-time = "2025-12-11T13:32:48.681Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/95/b40c96a7b5203005a0b03d8ce8cd212ff23f1793d5ba289c87a097571b18/opentelemetry_proto-1.39.1-py3-none-any.whl", hash = "sha256:22cdc78efd3b3765d09e68bfbd010d4fc254c9818afd0b6b423387d9dee46007", size = 72535, upload-time = "2025-12-11T13:32:33.866Z" },
+]
+
+[[package]]
+name = "opentelemetry-sdk"
+version = "1.39.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/eb/fb/c76080c9ba07e1e8235d24cdcc4d125ef7aa3edf23eb4e497c2e50889adc/opentelemetry_sdk-1.39.1.tar.gz", hash = "sha256:cf4d4563caf7bff906c9f7967e2be22d0d6b349b908be0d90fb21c8e9c995cc6", size = 171460, upload-time = "2025-12-11T13:32:49.369Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/98/e91cf858f203d86f4eccdf763dcf01cf03f1dae80c3750f7e635bfa206b6/opentelemetry_sdk-1.39.1-py3-none-any.whl", hash = "sha256:4d5482c478513ecb0a5d938dcc61394e647066e0cc2676bee9f3af3f3f45f01c", size = 132565, upload-time = "2025-12-11T13:32:35.069Z" },
+]
+
+[[package]]
+name = "opentelemetry-semantic-conventions"
+version = "0.60b1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/91/df/553f93ed38bf22f4b999d9be9c185adb558982214f33eae539d3b5cd0858/opentelemetry_semantic_conventions-0.60b1.tar.gz", hash = "sha256:87c228b5a0669b748c76d76df6c364c369c28f1c465e50f661e39737e84bc953", size = 137935, upload-time = "2025-12-11T13:32:50.487Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7a/5e/5958555e09635d09b75de3c4f8b9cae7335ca545d77392ffe7331534c402/opentelemetry_semantic_conventions-0.60b1-py3-none-any.whl", hash = "sha256:9fa8c8b0c110da289809292b0591220d3a7b53c1526a23021e977d68597893fb", size = 219982, upload-time = "2025-12-11T13:32:36.955Z" },
+]
+
+[[package]]
 name = "opt-einsum"
 version = "3.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6300,10 +6231,8 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py" },
     { name = "chex" },
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "jaxlib", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jaxlib", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
+    { name = "jaxlib" },
     { name = "numpy" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6d/3b/90c11f740a3538200b61cd2b7d9346959cb9e31e0bdea3d2f886b7262203/optax-0.2.6.tar.gz", hash = "sha256:ba8d1e12678eba2657484d6feeca4fb281b8066bdfd5efbfc0f41b87663109c0", size = 269660, upload-time = "2025-09-15T22:41:24.76Z" }
@@ -6368,8 +6297,7 @@ dependencies = [
     { name = "aiofiles" },
     { name = "etils", extra = ["epath", "epy"] },
     { name = "humanize" },
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
     { name = "msgpack" },
     { name = "nest-asyncio" },
     { name = "numpy" },
@@ -6393,10 +6321,8 @@ dependencies = [
     { name = "absl-py" },
     { name = "dataclasses-json" },
     { name = "etils" },
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "jaxlib", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jaxlib", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
+    { name = "jaxlib" },
     { name = "jaxtyping" },
     { name = "numpy" },
     { name = "orbax-checkpoint" },
@@ -6602,15 +6528,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c9/f9/066794cca041b969964f779ee5fa66a9498bbf34248ac39c5d7954e4198f/pillow-12.3.0-cp313-cp313-win32.whl", hash = "sha256:a876864214e136f0eb367788dbd7df045f4806801518e2cfe9e13229cfe06d8f", size = 6473287, upload-time = "2026-07-01T11:54:44.9Z" },
     { url = "https://files.pythonhosted.org/packages/a6/9b/7a58e61d62be561da3a356fe2384d4059a6345fc130e23ef1c36a5b81d24/pillow-12.3.0-cp313-cp313-win_amd64.whl", hash = "sha256:1cca606cd25738df4ed873d5ad46bbdb3d83b5cbca291f6b4ff13a4df6b0bbe8", size = 7239691, upload-time = "2026-07-01T11:54:47.141Z" },
     { url = "https://files.pythonhosted.org/packages/aa/b0/c4ed4f0ef8f8fa5ee8351537db6650bb8189f7e118842978dd6589065692/pillow-12.3.0-cp313-cp313-win_arm64.whl", hash = "sha256:b629de27fda84b42cde7edef0d85f13b958b47f6e9bbcbba9b673c562a89bd8b", size = 2568185, upload-time = "2026-07-01T11:54:49.137Z" },
-]
-
-[[package]]
-name = "pip"
-version = "26.1.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/01/91/47e7d486260f618783899587af63ccf7980fb60245c3e63dd4571c6b57ad/pip-26.1.2.tar.gz", hash = "sha256:f49cd134c61cf2fd75e0ce2676db03e4054504a5a4986d00f8299ae632dc4605", size = 1840799, upload-time = "2026-05-31T17:33:58.56Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/95/6b5cb3461ea5673ba0995989746db58eb18b91b54dbf331e72f569540946/pip-26.1.2-py3-none-any.whl", hash = "sha256:382ff9f685ee3bc25864f820aa50505825f10f5458ffff07e30a6d96e5715cab", size = 1813144, upload-time = "2026-05-31T17:33:56.772Z" },
 ]
 
 [[package]]
@@ -6880,20 +6797,23 @@ wheels = [
 
 [[package]]
 name = "pulumi"
-version = "3.224.0"
+version = "3.256.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "debugpy" },
     { name = "dill" },
     { name = "grpcio" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc" },
+    { name = "opentelemetry-instrumentation-grpc" },
+    { name = "opentelemetry-sdk" },
     { name = "packaging" },
-    { name = "pip" },
     { name = "protobuf" },
     { name = "pyyaml" },
     { name = "semver" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ed/5f/94b4af305a4aa34842bb65282269bc9804125d0d22442d099fec07dd78b3/pulumi-3.224.0-py3-none-any.whl", hash = "sha256:2045987052c39740dcdb13d8845868106aebdc91792aa25ef82b06797ebf0a8e", size = 390575, upload-time = "2026-02-26T16:28:59.795Z" },
+    { url = "https://files.pythonhosted.org/packages/22/26/21763ca2838569a6e40638dd9677fd34f36a15f89a8ab763cb2468205fb9/pulumi-3.256.0-py3-none-any.whl", hash = "sha256:ee6f018a628b9cc2b5e70b69e05a51965966a6c6d9e7429d698fc665525aaa58", size = 417217, upload-time = "2026-08-04T19:35:52.75Z" },
 ]
 
 [[package]]
@@ -7660,10 +7580,8 @@ version = "0.1.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "flax" },
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "jaxlib", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jaxlib", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
+    { name = "jaxlib" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9a/6d/119d353c5a2597f8122c992466aaa69e102e6d8f59587a55e65517f34edb/qwix-0.1.5.tar.gz", hash = "sha256:935fefd41f2b26d0fe545e433bff658b1ee476c83b7c6e467e31f769d67a74e2", size = 74227, upload-time = "2025-12-12T01:12:03.809Z" }
 wheels = [
@@ -8585,10 +8503,8 @@ wheels = [
 
 [package.optional-dependencies]
 jax = [
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "jaxlib", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jaxlib", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
+    { name = "jaxlib" },
 ]
 
 [[package]]
@@ -8619,10 +8535,8 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py" },
     { name = "einshape" },
-    { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
-    { name = "jaxlib", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra != 'extra-10-marin-core-gpu' and extra != 'extra-14-marin-levanter-gpu')" },
-    { name = "jaxlib", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu'" },
+    { name = "jax" },
+    { name = "jaxlib" },
     { name = "jaxtyping" },
     { name = "pydantic" },
     { name = "qwix" },

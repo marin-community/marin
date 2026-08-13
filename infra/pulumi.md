@@ -22,8 +22,12 @@ the `marin` stack and its `Pulumi.marin.yaml` configuration. Do not create
 another infrastructure stack or permissions project for shared GCP resources.
 
 Resources often exist before a cluster or GCP resource is brought under Pulumi.
-For a one-time adoption, set `marin-iac:import=true`; the program imports the
-live resources instead of recreating them.
+Use the Program-first import command in `infra/pulumi/README.md` for a one-time
+adoption. It generates a mode-`0600` transaction file outside the repository
+from the program's create preview, then validates and imports only the reviewed
+subset. The normal program never attaches import options. Provider IDs live
+beside their declarations, including all GCP `*IAMMember` grants, so a new grant
+can be imported without putting already-tracked grants into import mode.
 
 `infra/pulumi/src/iac` contains reusable components imported by other projects.
 For example, application projects use `iac.gcp.cloud_run.CloudRunService`
@@ -45,10 +49,10 @@ activation step.
 ### 3. SaaS resource declarations
 
 SaaS projects record resources outside GCP. For example,
-`infra/pulumi/github` declares GitHub Actions secret metadata as external
-resources and audits the live state without owning secret values. Use
-lookup/external resources when Pulumi should review the declaration but another
-system owns the resource contents.
+`infra/pulumi/github` declares repository policy, manages GitHub-encrypted
+Actions secret ciphertext, and records other Actions secret metadata as
+external resources. Use lookup/external resources when Pulumi should review the
+declaration but another system owns the resource contents.
 
 ## Shared conventions
 
@@ -74,7 +78,9 @@ All projects share these conventions:
   version named by `SecretEnv` (use an explicit numeric version when a deploy
   must remain pinned across rotations), Cloud SQL creates empty secret
   containers whose values are added out of band, and the GitHub project records
-  recovery metadata without dereferencing it.
+  recovery metadata without dereferencing it. The GitHub project may manage an
+  environment-sealed Actions ciphertext together with its public-key ID; the
+  plaintext must never enter Pulumi config, arguments, or state.
 
 ## Picking a pattern for new work
 
