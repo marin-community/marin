@@ -458,8 +458,12 @@ def main() -> None:
     summarize(rows)
 
     output = f"{OUTPUT_PREFIX}/{platform.machine()}.parquet"
+    # Every row carries the columns its own outcome produced, so a failure class that first appears
+    # late in the run would be dropped entirely under Polars' default 100-row schema inference --
+    # silently losing exactly the rare rows this probe exists to find.
+    frame = pl.DataFrame(rows, strict=False, infer_schema_length=None)
     with fs.open(output, "wb") as stream:
-        pl.DataFrame(rows, strict=False).write_parquet(stream, compression="zstd", compression_level=1)
+        frame.write_parquet(stream, compression="zstd", compression_level=1)
     logger.info("probe: wrote %d rows -> %s", len(rows), output)
 
 
