@@ -23,6 +23,7 @@
 #include <cuda_bf16.h>
 #include <cuda_runtime_api.h>
 
+#include "fabric_workspace.cuh"
 #include "mok_megakernel.cuh"
 #include "xla/ffi/api/ffi.h"
 
@@ -30,9 +31,23 @@ namespace ffi = xla::ffi;
 
 namespace {
 
-constexpr int kNumDevices = 4;
+// Rank count of one expert-parallel group. Upstream instantiates the megakernel
+// for 4, 8, 16, 32 and 64 devices, so this is a build-time knob rather than a
+// property of the kernel. Override with -DMOK_NUM_DEVICES=<n> at compile time.
+#ifndef MOK_NUM_DEVICES
+#define MOK_NUM_DEVICES 4
+#endif
+constexpr int kNumDevices = MOK_NUM_DEVICES;
+static_assert(kNumDevices == 4 || kNumDevices == 8 || kNumDevices == 16 || kNumDevices == 32 ||
+                  kNumDevices == 64,
+              "MOK_NUM_DEVICES must match an upstream dispatch_mlp_swiglu_combiner instantiation");
 constexpr int kMaxWorkspaceSlots = 2;
-constexpr uint8_t kAllRanksMask = static_cast<uint8_t>((1U << kNumDevices) - 1U);
+// Rank bitmask. Must hold one bit per rank, so it is 64-bit wide to cover EP64;
+// it was uint8_t while kNumDevices was pinned to 4.
+using RankMask = uint64_t;
+constexpr RankMask kAllRanksMask =
+    kNumDevices == 64 ? ~static_cast<RankMask>(0)
+                      : static_cast<RankMask>((static_cast<RankMask>(1) << kNumDevices) - 1);
 static_assert((kMaxWorkspaceSlots & (kMaxWorkspaceSlots - 1)) == 0);
 constexpr int kPeerWaitPhaseCount = 4;
 constexpr int kPeerWaitCellCount = kPeerWaitPhaseCount * kNumDevices;
@@ -64,11 +79,13 @@ enum DebugCounterOffset : int {
   kBackwardStagingCopyBytes,
   kDebugCounterCount,
 };
+// Offsets are relative to kNumDevices; the literals below hold at kNumDevices == 4
+// (23/39/55/59) and scale with the rank count.
 static_assert(kPeerWaitEvents == 7);
-static_assert(kPeerWaitCycles == 23);
-static_assert(kPeerWaitMaxCycles == 39);
-static_assert(kForwardStagingCopyCalls == 55);
-static_assert(kDebugCounterCount == 59);
+static_assert(kPeerWaitCycles == kPeerWaitEvents + kPeerWaitCellCount);
+static_assert(kPeerWaitMaxCycles == kPeerWaitEvents + 2 * kPeerWaitCellCount);
+static_assert(kForwardStagingCopyCalls == kPeerWaitEvents + 3 * kPeerWaitCellCount);
+static_assert(kDebugCounterCount == kForwardStagingCopyCalls + 4);
 
 struct DebugCounters {
   uint64_t values[kDebugCounterCount];
@@ -137,6 +154,10 @@ struct DeviceRuntime {
   std::array<uint64_t*, kNumDevices> backward_completion_ptrs{};
   std::array<uint64_t*, kNumDevices> cancellation_ptrs{};
   std::array<uint64_t*, kMaxWorkspaceSlots> local_slot_forward_completion_ptrs{};
+  // True when the peer-visible buffers are offsets into a symmetric arena rather
+  // than individual cudaMalloc allocations. The arena owns that memory, so the
+  // destructor must not free the sub-buffers.
+  bool arena_backed = false;
 
   DeviceRuntime() = default;
   DeviceRuntime(const DeviceRuntime&) = delete;
@@ -150,23 +171,86 @@ struct DeviceRuntime {
     (void)cudaGetDevice(&original_device);
     (void)cudaSetDevice(device);
     (void)cudaStreamDestroy(cancellation_stream);
+    // Debug counters and the local-only completion cursor are always private
+    // allocations, arena or not.
     (void)cudaFree(debug_counters);
-    (void)cudaFree(cancellation);
     (void)cudaFree(last_forward_completion);
-    (void)cudaFree(backward_completions);
-    (void)cudaFree(forward_completions);
-    (void)cudaFree(backward_input_ready);
-    (void)cudaFree(forward_input_ready);
-    (void)cudaFree(generation);
-    (void)cudaFree(d_router_weights);
-    (void)cudaFree(router_weights);
-    (void)cudaFree(d_x_routed);
-    (void)cudaFree(d_y);
-    (void)cudaFree(combine);
-    (void)cudaFree(x);
+    if (!arena_backed) {
+      (void)cudaFree(cancellation);
+      (void)cudaFree(backward_completions);
+      (void)cudaFree(forward_completions);
+      (void)cudaFree(backward_input_ready);
+      (void)cudaFree(forward_input_ready);
+      (void)cudaFree(generation);
+      (void)cudaFree(d_router_weights);
+      (void)cudaFree(router_weights);
+      (void)cudaFree(d_x_routed);
+      (void)cudaFree(d_y);
+      (void)cudaFree(combine);
+      (void)cudaFree(x);
+    }
     (void)cudaSetDevice(original_device);
   }
 };
+
+// Point one DeviceRuntime at a symmetric arena instead of per-buffer cudaMalloc.
+//
+// This is the cross-process replacement for the in-process pointer table. In the
+// sealed v15 path a single process allocates every rank's buffers and fills the
+// peer arrays with pointers it already holds. Here each process allocates only
+// its own rank's arena and maps its peers' arenas by fabric handle, so a peer
+// pointer is that peer's mapped base plus the offset both ranks computed from the
+// same shape parameters.
+//
+// `workspace` must already have imported every peer.
+void BindRuntimeToArena(DeviceRuntime* runtime,
+                        const mok_fabric::SymmetricWorkspace& workspace,
+                        const mok_fabric::ArenaLayout& layout) {
+  if (!workspace.ready()) {
+    throw std::runtime_error("symmetric workspace must import peers before binding a runtime");
+  }
+  if (workspace.num_ranks() != runtime->num_devices) {
+    throw std::runtime_error("symmetric workspace rank count does not match the runtime");
+  }
+
+  auto at = [](CUdeviceptr base, size_t offset) -> void* {
+    return reinterpret_cast<void*>(static_cast<uintptr_t>(base) + offset);
+  };
+
+  const CUdeviceptr local = workspace.peer_base(workspace.rank());
+  runtime->x = at(local, layout.x);
+  runtime->combine = at(local, layout.combine);
+  runtime->d_y = at(local, layout.d_y);
+  runtime->d_x_routed = at(local, layout.d_x_routed);
+  runtime->router_weights = at(local, layout.router_weights);
+  runtime->d_router_weights = at(local, layout.d_router_weights);
+  runtime->generation = static_cast<uint64_t*>(at(local, layout.generation));
+  runtime->forward_input_ready = static_cast<uint64_t*>(at(local, layout.forward_input_ready));
+  runtime->backward_input_ready = static_cast<uint64_t*>(at(local, layout.backward_input_ready));
+  runtime->forward_completions = static_cast<uint64_t*>(at(local, layout.forward_completions));
+  runtime->backward_completions = static_cast<uint64_t*>(at(local, layout.backward_completions));
+  runtime->cancellation = static_cast<uint64_t*>(at(local, layout.cancellation));
+
+  for (int peer = 0; peer < runtime->num_devices; ++peer) {
+    const CUdeviceptr base = workspace.peer_base(peer);
+    runtime->x_ptrs[peer] = at(base, layout.x);
+    runtime->combine_ptrs[peer] = at(base, layout.combine);
+    runtime->d_y_ptrs[peer] = at(base, layout.d_y);
+    runtime->d_x_routed_ptrs[peer] = at(base, layout.d_x_routed);
+    runtime->router_weight_ptrs[peer] = at(base, layout.router_weights);
+    runtime->d_router_weight_ptrs[peer] = at(base, layout.d_router_weights);
+    runtime->forward_input_ready_ptrs[peer] =
+        static_cast<uint64_t*>(at(base, layout.forward_input_ready));
+    runtime->backward_input_ready_ptrs[peer] =
+        static_cast<uint64_t*>(at(base, layout.backward_input_ready));
+    runtime->forward_completion_ptrs[peer] =
+        static_cast<uint64_t*>(at(base, layout.forward_completions));
+    runtime->backward_completion_ptrs[peer] =
+        static_cast<uint64_t*>(at(base, layout.backward_completions));
+    runtime->cancellation_ptrs[peer] = static_cast<uint64_t*>(at(base, layout.cancellation));
+  }
+  runtime->arena_backed = true;
+}
 
 enum class InvocationPhase : uint8_t {
   kForward = 0,
@@ -249,15 +333,15 @@ struct RunPhaseKeyHash {
 struct InvocationState {
   int slot = -1;
   uint64_t generation = 0;
-  uint8_t arrival_mask = 0;
-  uint8_t leased_mask = 0;
-  uint8_t completion_mask = 0;
+  RankMask arrival_mask = 0;
+  RankMask leased_mask = 0;
+  RankMask completion_mask = 0;
   bool cancelled = false;
   bool slot_released = false;
   std::array<const void*, kNumDevices> forward_x_ptrs{};
   size_t forward_x_size_bytes = 0;
   ForwardXStorage forward_x_storage = ForwardXStorage::kRuntimeStaged;
-  uint8_t forward_x_mask = 0;
+  RankMask forward_x_mask = 0;
   std::array<const void*, kNumDevices> backward_d_y_ptrs{};
   std::array<const void*, kNumDevices> backward_x_ptrs{};
   std::array<const void*, kNumDevices> backward_router_weight_ptrs{};
@@ -265,7 +349,7 @@ struct InvocationState {
   size_t backward_activation_size_bytes = 0;
   size_t backward_router_size_bytes = 0;
   BackwardPeerStorage backward_peer_storage = BackwardPeerStorage::kRuntimeStaged;
-  uint8_t backward_peer_mask = 0;
+  RankMask backward_peer_mask = 0;
   std::string error;
 };
 
@@ -291,6 +375,116 @@ class RuntimeManager {
   static RuntimeManager& Instance() {
     static RuntimeManager manager;
     return manager;
+  }
+
+  // Phase one of the fabric transport: allocate this process's own rank and
+  // export one handle per workspace slot.
+  //
+  // Unlike `Init`, this allocates a single rank rather than every rank, because
+  // under fabric transport the other ranks belong to other processes -- possibly
+  // on other hosts. `out_handles` receives `workspace_slots` blobs of
+  // `kFabricHandleBytes`, which the caller gathers across the expert axis.
+  void InitLocalArena(int rank, int num_devices, int num_tokens, int hidden_dim, int top_k,
+                      int workspace_slots, unsigned char* out_handles) {
+    std::unique_lock<std::mutex> lock(mu_);
+    const bool maintenance_finished =
+        cv_.wait_for(lock, kWorkspaceAcquireTimeout, [&] { return !maintenance_; });
+    if (!maintenance_finished) {
+      throw std::runtime_error("Mixture-of-Kittens runtime maintenance did not finish within five minutes");
+    }
+    if (initialized_) {
+      throw std::runtime_error(
+          "Mixture-of-Kittens runtime must be shut down before initializing a different signature");
+    }
+    if (num_devices != kNumDevices) {
+      throw std::runtime_error(
+          "Mixture-of-Kittens expert group size does not match the compiled MOK_NUM_DEVICES");
+    }
+    if (rank < 0 || rank >= num_devices) {
+      throw std::runtime_error("Mixture-of-Kittens local rank must be in [0, num_devices)");
+    }
+    if (num_tokens <= 0 || hidden_dim <= 0 || top_k <= 0) {
+      throw std::runtime_error("Mixture-of-Kittens runtime dimensions must be positive");
+    }
+    if (workspace_slots <= 0 || workspace_slots > kMaxWorkspaceSlots) {
+      throw std::runtime_error("Mixture-of-Kittens workspace slots must be one or two");
+    }
+    // Every process must see exactly one device: the peer pointer table is built
+    // from imported fabric mappings, not from local device switching.
+    int visible_devices = 0;
+    ThrowOnCuda(cudaGetDeviceCount(&visible_devices), "cudaGetDeviceCount");
+    if (visible_devices != 1) {
+      throw std::runtime_error(
+          "Mixture-of-Kittens fabric transport requires one visible GPU per process");
+    }
+    int device = 0;
+    ThrowOnCuda(cudaGetDevice(&device), "cudaGetDevice(arena)");
+    if (!mok_fabric::FabricHandlesSupported(device)) {
+      throw std::runtime_error(
+          "Mixture-of-Kittens fabric transport is unavailable on this device; the driver "
+          "advertises fabric handles but exporting one failed, which usually means no IMEX "
+          "channel is configured");
+    }
+
+    DestroyLocked();
+    arena_mode_ = true;
+    local_rank_ = rank;
+    num_devices_ = num_devices;
+    num_tokens_ = num_tokens;
+    hidden_dim_ = hidden_dim;
+    top_k_ = top_k;
+    workspace_slots_ = workspace_slots;
+    arena_layout_ = mok_fabric::ComputeArenaLayout(num_tokens, hidden_dim, top_k, num_devices);
+
+    for (int slot = 0; slot < workspace_slots; ++slot) {
+      arenas_[slot].CreateLocal(rank, num_devices, device, arena_layout_.total,
+                                out_handles + static_cast<size_t>(slot) * mok_fabric::kFabricHandleBytes);
+    }
+  }
+
+  // Phase two: import the gathered handles and bind this rank's runtimes.
+  //
+  // `handles` is `workspace_slots * num_devices` blobs ordered slot-major then by
+  // rank, matching what phase one produced once gathered over the expert axis.
+  void ImportArenaPeers(const unsigned char* handles) {
+    std::unique_lock<std::mutex> lock(mu_);
+    if (!arena_mode_ || local_rank_ < 0) {
+      throw std::runtime_error("ImportArenaPeers requires a prior InitLocalArena");
+    }
+    if (initialized_) {
+      throw std::runtime_error("Mixture-of-Kittens runtime is already initialized");
+    }
+
+    int device = 0;
+    ThrowOnCuda(cudaGetDevice(&device), "cudaGetDevice(import)");
+    runtimes_.resize(1);
+
+    for (int slot = 0; slot < workspace_slots_; ++slot) {
+      const unsigned char* slot_handles =
+          handles + static_cast<size_t>(slot) * num_devices_ * mok_fabric::kFabricHandleBytes;
+      arenas_[slot].ImportPeers(slot_handles);
+
+      auto runtime = std::make_unique<DeviceRuntime>();
+      runtime->device = device;
+      runtime->rank = local_rank_;
+      runtime->slot = slot;
+      runtime->num_devices = num_devices_;
+      runtime->workspace_slots = workspace_slots_;
+      BindRuntimeToArena(runtime.get(), arenas_[slot], arena_layout_);
+      // Debug counters stay private per rank; they are never read by a peer.
+      ThrowOnCuda(cudaMalloc(&runtime->debug_counters, sizeof(DebugCounters)),
+                  "cudaMalloc(debug counters)");
+      ThrowOnCuda(cudaMemset(runtime->debug_counters, 0, sizeof(DebugCounters)),
+                  "cudaMemset(debug counters)");
+      ThrowOnCuda(cudaMalloc(&runtime->last_forward_completion, sizeof(uint64_t)),
+                  "cudaMalloc(last forward completion)");
+      ThrowOnCuda(cudaMemset(runtime->last_forward_completion, 0, sizeof(uint64_t)),
+                  "cudaMemset(last forward completion)");
+      ThrowOnCuda(cudaStreamCreateWithFlags(&runtime->cancellation_stream, cudaStreamNonBlocking),
+                  "cudaStreamCreateWithFlags(cancellation)");
+      runtimes_[0][slot] = std::move(runtime);
+    }
+    initialized_ = true;
   }
 
   void Init(int num_devices, int num_tokens, int hidden_dim, int top_k, int workspace_slots) {
@@ -803,7 +997,7 @@ class RuntimeManager {
       state->generation = (++next_generation_ << 1) | static_cast<uint64_t>(state->slot);
       cv_.notify_all();
     }
-    const uint8_t rank_bit = static_cast<uint8_t>(1U << rank);
+    const RankMask rank_bit = static_cast<RankMask>(1) << rank;
     if ((state->arrival_mask & rank_bit) != 0) {
       ++host_slot_reuse_failures_[rank];
       CancelReservationLocked(key, state, "Mixture-of-Kittens workspace reservation received a duplicate rank");
@@ -1026,7 +1220,7 @@ class RuntimeManager {
   }
 
   void FinishRankLocked(const InvocationKey& key, const std::shared_ptr<InvocationState>& state, int rank) {
-    const uint8_t rank_bit = static_cast<uint8_t>(1U << rank);
+    const RankMask rank_bit = static_cast<RankMask>(1) << rank;
     if ((state->completion_mask & rank_bit) != 0) {
       ++host_slot_reuse_failures_[rank];
       return;
@@ -1052,7 +1246,7 @@ class RuntimeManager {
       return;
     }
     const std::shared_ptr<InvocationState> state = invocation->second;
-    const uint8_t rank_bit = static_cast<uint8_t>(1U << rank);
+    const RankMask rank_bit = static_cast<RankMask>(1) << rank;
     if ((state->leased_mask & rank_bit) == 0 || (state->completion_mask & rank_bit) != 0) {
       ++host_slot_reuse_failures_[rank];
       if (!state->cancelled) {
@@ -1069,7 +1263,16 @@ class RuntimeManager {
   }
 
   void DestroyLocked() {
+    // Runtimes must go first: under fabric transport their buffers are offsets
+    // into the arenas, so releasing the arenas first would leave dangling peer
+    // pointers in a DeviceRuntime that has not yet been torn down.
     runtimes_.clear();
+    for (auto& arena : arenas_) {
+      arena.Destroy();
+    }
+    arena_mode_ = false;
+    local_rank_ = -1;
+    arena_layout_ = mok_fabric::ArenaLayout{};
     initialized_ = false;
     num_devices_ = 0;
     num_tokens_ = 0;
@@ -1124,6 +1327,18 @@ class RuntimeManager {
   std::optional<InvocationKey> test_failure_first_key_;
   std::unordered_map<InvocationKey, std::shared_ptr<InvocationState>, InvocationKeyHash> invocations_;
   std::unordered_map<RunPhaseKey, std::array<uint64_t, kNumDevices>, RunPhaseKeyHash> run_ordinals_;
+
+  // Cross-process arena state, used only by the fabric-symmetric transport.
+  //
+  // In the in-process path this manager owns every rank's DeviceRuntime and
+  // publishes peer pointers it already holds. Under fabric transport each process
+  // owns exactly one rank: `local_rank_` is that rank, `arenas_[slot]` holds this
+  // rank's symmetric segment plus mapped views of its peers, and the peer tables
+  // are derived from those bases. The in-process path leaves all of this unset.
+  bool arena_mode_ = false;
+  int local_rank_ = -1;
+  mok_fabric::ArenaLayout arena_layout_{};
+  std::array<mok_fabric::SymmetricWorkspace, kMaxWorkspaceSlots> arenas_{};
 };
 
 struct GenerationArgs {
@@ -2295,6 +2510,51 @@ extern "C" int levanter_mok_init_runtime(
   }
 }
 
+// Phase one of the fabric transport. `out_handles` must have room for
+// `workspace_slots * levanter_mok_fabric_handle_bytes()` bytes; the caller
+// gathers them across the expert axis and passes the result to
+// `levanter_mok_import_arena_peers`.
+extern "C" int levanter_mok_init_local_arena(
+    int rank,
+    int num_devices,
+    int num_tokens,
+    int hidden_dim,
+    int top_k,
+    int workspace_slots,
+    unsigned char* out_handles) {
+  try {
+    if (out_handles == nullptr) {
+      throw std::runtime_error("out_handles must not be null");
+    }
+    RuntimeManager::Instance().InitLocalArena(rank, num_devices, num_tokens, hidden_dim, top_k,
+                                              workspace_slots, out_handles);
+    SetLastError("");
+    return 0;
+  } catch (const std::exception& exc) {
+    SetLastError(exc.what());
+    return 1;
+  }
+}
+
+// Phase two. `handles` holds `workspace_slots * num_devices` blobs ordered
+// slot-major then by rank.
+extern "C" int levanter_mok_import_arena_peers(const unsigned char* handles) {
+  try {
+    if (handles == nullptr) {
+      throw std::runtime_error("handles must not be null");
+    }
+    RuntimeManager::Instance().ImportArenaPeers(handles);
+    SetLastError("");
+    return 0;
+  } catch (const std::exception& exc) {
+    SetLastError(exc.what());
+    return 1;
+  }
+}
+
+// Size of one exported handle, so the Python side never hardcodes it.
+extern "C" int levanter_mok_fabric_handle_bytes() { return mok_fabric::kFabricHandleBytes; }
+
 extern "C" int levanter_mok_shutdown_runtime() {
   try {
     RuntimeManager::Instance().Shutdown();
@@ -2381,13 +2641,21 @@ extern "C" int levanter_mok_trim_default_memory_pools(uint64_t* output, int64_t 
   }
 }
 
+// Handler symbols carry the compiled rank count so a mismatched object cannot be
+// loaded silently: MOK_NUM_DEVICES=64 exports `levanter_mok_forward_bf16_64`.
+// At the default of 4 these expand to the original names.
+#define MOK_CONCAT_INNER(a, b) a##b
+#define MOK_CONCAT(a, b) MOK_CONCAT_INNER(a, b)
+#define MOK_FORWARD_SYMBOL MOK_CONCAT(levanter_mok_forward_bf16_, MOK_NUM_DEVICES)
+#define MOK_BACKWARD_SYMBOL MOK_CONCAT(levanter_mok_backward_bf16_, MOK_NUM_DEVICES)
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    levanter_mok_forward_bf16_4,
+    MOK_FORWARD_SYMBOL,
     ForwardBf16,
     ForwardBinding());
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    levanter_mok_backward_bf16_4,
+    MOK_BACKWARD_SYMBOL,
     BackwardBf16,
     BackwardBinding());
 

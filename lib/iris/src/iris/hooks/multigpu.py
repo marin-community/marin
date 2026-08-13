@@ -47,9 +47,6 @@ class MultiGpuHook:
 
     def wrap(self, command: Sequence[str]) -> list[str]:
         argv = [
-            "python",
-            "-m",
-            _MULTIGPU_MAIN_MODULE,
             "--nproc",
             str(self.nproc),
             "--devices-per-proc",
@@ -58,7 +55,21 @@ class MultiGpuHook:
         if self.wrap_child:
             argv += ["--wrap", self.wrap_child]
         argv.append("--")
-        return [*argv, *command]
+        # Iris provisions the job environment's interpreter in IRIS_PYTHON. A bare
+        # "python" can resolve to an interpreter without the job's dependencies --
+        # notably jax-cuda13-plugin, whose absence leaves JAX seeing only a CPU
+        # device and the gang unable to bootstrap. The entrypoint runs as argv with
+        # no shell expansion, so a literal "$IRIS_PYTHON" would not expand; go
+        # through bash and pass the supervisor arguments as "$@" so their exact
+        # boundaries survive. The fallback keeps this usable in local tests.
+        return [
+            "bash",
+            "-c",
+            f'exec "${{IRIS_PYTHON:-python}}" -m {_MULTIGPU_MAIN_MODULE} "$@"',
+            "iris-multigpu",
+            *argv,
+            *command,
+        ]
 
 
 def build_multigpu_hook(resources: ResourceSpec, processes_per_task: int) -> MultiGpuHook:

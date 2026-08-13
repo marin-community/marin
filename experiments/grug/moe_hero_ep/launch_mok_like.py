@@ -18,7 +18,9 @@ from levanter.kernels.mixture_of_kittens import (
     MokLikeBuildConfig,
     MokLikeConfig,
     MokLikeForwardXStorage,
+    MokLikeWorkspaceTransport,
 )
+from levanter.kernels.mixture_of_kittens.source import SUPPORTED_NUM_DEVICES
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import Artifact
@@ -178,6 +180,8 @@ def build_backend_comparison_run(
     num_layers: int | None = None,
     watch_interval: int = 0,
     mok_like_preset: MokLikeExperimentPreset | None = None,
+    mok_like_num_devices: int = 4,
+    mok_like_workspace_transport: str = MokLikeWorkspaceTransport.IN_PROCESS_PEER.value,
     mok_like_schedule_capacity_factor: float | None = None,
     mok_like_workspace_slots: int | None = None,
     forward_x_storage: MokLikeForwardXStorage | None = None,
@@ -287,6 +291,8 @@ def build_backend_comparison_run(
                 workspace_slots=mok_like_workspace_slots,
                 forward_x_storage=forward_x_storage,
                 backward_peer_storage=backward_peer_storage,
+                num_devices=mok_like_num_devices,
+                workspace_transport=MokLikeWorkspaceTransport(mok_like_workspace_transport),
             ),
             expert_chunks=1,
             remat_mode="offload_moe",
@@ -477,7 +483,16 @@ def build_backend_comparison_run(
             xla_autotune_cache_mode=xla_autotune_cache_mode,
             gpu_device_memory_fraction=device_memory_fraction,
             xla_flag_overrides=RAGGED_EP_XLA_FLAGS if backend is MoeBackend.EP else (),
-            processes_per_task=1,
+            # Fabric transport builds its peer table from imported handles rather
+            # than by switching devices inside one process, so each rank must be its
+            # own process with a single visible GPU. The in-process path keeps the
+            # sealed one-process-per-node layout.
+            processes_per_task=(
+                GPUS_PER_NODE
+                if MokLikeWorkspaceTransport(mok_like_workspace_transport)
+                is MokLikeWorkspaceTransport.FABRIC_SYMMETRIC
+                else 1
+            ),
             pip_packages=MOK_LIKE_BUILD_PACKAGES if backend is MoeBackend.MOK_LIKE else (),
             max_retries_failure=preset.max_retries_failure,
             max_retries_preemption=preset.max_retries_preemption,
@@ -521,6 +536,8 @@ def build_mok_like_run(
         num_steps=num_steps,
         backend=MoeBackend.MOK_LIKE,
         mok_like_preset=mok_like_preset,
+        mok_like_num_devices=mok_like_num_devices,
+        mok_like_workspace_transport=mok_like_workspace_transport,
         num_nodes=num_nodes,
         num_layers=num_layers,
         watch_interval=watch_interval,
@@ -593,6 +610,24 @@ def build_mok_like_run(
     ),
 )
 @click.option(
+    "--mok-like-num-devices",
+    type=click.Choice([str(value) for value in SUPPORTED_NUM_DEVICES]),
+    default="4",
+    show_default=True,
+    callback=lambda ctx, param, value: int(value),
+    help="Expert-group size. Above four ranks the group spans processes and requires fabric transport.",
+)
+@click.option(
+    "--mok-like-workspace-transport",
+    type=click.Choice([transport.value for transport in MokLikeWorkspaceTransport]),
+    default=MokLikeWorkspaceTransport.IN_PROCESS_PEER.value,
+    show_default=True,
+    help=(
+        "How the peer workspace is made visible. in_process_peer is the sealed EP4 path; "
+        "fabric_symmetric exchanges CUDA VMM fabric handles and is required above four ranks."
+    ),
+)
+@click.option(
     "--mok-like-workspace-slots",
     type=click.IntRange(min=1, max=2),
     default=None,
@@ -658,6 +693,8 @@ def main(
     num_layers: int | None,
     watch_interval: int,
     mok_like_preset: MokLikeExperimentPreset | None,
+    mok_like_num_devices: int,
+    mok_like_workspace_transport: str,
     mok_like_schedule_capacity_factor: float | None,
     mok_like_workspace_slots: int | None,
     forward_x_storage: MokLikeForwardXStorage | None,
@@ -674,6 +711,8 @@ def main(
         num_steps=num_steps,
         backend=MoeBackend(backend),
         mok_like_preset=mok_like_preset,
+        mok_like_num_devices=mok_like_num_devices,
+        mok_like_workspace_transport=mok_like_workspace_transport,
         num_nodes=num_nodes,
         num_layers=num_layers,
         watch_interval=watch_interval,

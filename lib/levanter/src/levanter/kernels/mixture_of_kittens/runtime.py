@@ -16,10 +16,14 @@ import numpy as np
 
 from levanter.kernels.mixture_of_kittens.availability import require_mok_like_available
 from levanter.kernels.mixture_of_kittens.build import build_native_library
-from levanter.kernels.mixture_of_kittens.ffi import BACKWARD_TARGET, FAILURE_FENCE_TARGET, FORWARD_TARGET
+from levanter.kernels.mixture_of_kittens.config import _DEVICES_PER_NODE, MokLikeWorkspaceTransport
+from levanter.kernels.mixture_of_kittens.ffi import FAILURE_FENCE_TARGET, backward_target, forward_target
 from levanter.kernels.mixture_of_kittens.source import MokLikeBuildConfig, mok_source_root
 
 _INIT_SYMBOL = "levanter_mok_init_runtime"
+_INIT_LOCAL_ARENA_SYMBOL = "levanter_mok_init_local_arena"
+_IMPORT_ARENA_PEERS_SYMBOL = "levanter_mok_import_arena_peers"
+_FABRIC_HANDLE_BYTES_SYMBOL = "levanter_mok_fabric_handle_bytes"
 _SHUTDOWN_SYMBOL = "levanter_mok_shutdown_runtime"
 _LAST_ERROR_SYMBOL = "levanter_mok_last_error"
 _ARM_TEST_FAILURE_SYMBOL = "levanter_mok_arm_test_failure"
@@ -113,10 +117,16 @@ def _native_last_error(library: ctypes.CDLL, default: str) -> str:
     return message.decode() if message else default
 
 
-def register_ffi_targets(library: ctypes.CDLL) -> None:
-    """Register the loaded forward/backward handlers with JAX."""
+def register_ffi_targets(library: ctypes.CDLL, num_devices: int = _NUM_DEVICES) -> None:
+    """Register the loaded forward/backward handlers with JAX.
 
-    for target in (FORWARD_TARGET, BACKWARD_TARGET, FAILURE_FENCE_TARGET):
+    ``num_devices`` must match the rank count the library was compiled for; the
+    handler symbols are rank-suffixed, so a mismatch raises here rather than
+    resolving to the wrong object.
+    """
+
+    targets = (forward_target(num_devices), backward_target(num_devices), FAILURE_FENCE_TARGET)
+    for target in targets:
         handler = getattr(library, target)
         handler.restype = ctypes.c_void_p
         jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(handler), platform="CUDA", api_version=1)
@@ -137,6 +147,71 @@ def initialize_native_runtime(library: ctypes.CDLL, signature: tuple[int, int, i
     function.restype = ctypes.c_int
     if function(*signature) != 0:
         raise RuntimeError(_native_last_error(library, "MoK-like runtime initialization failed"))
+
+
+def fabric_handle_bytes(library: ctypes.CDLL) -> int:
+    """Size of one exported fabric handle, read from the native adapter."""
+
+    function = getattr(library, _FABRIC_HANDLE_BYTES_SYMBOL)
+    function.argtypes = []
+    function.restype = ctypes.c_int
+    return int(function())
+
+
+def initialize_local_arena(
+    library: ctypes.CDLL,
+    *,
+    rank: int,
+    num_devices: int,
+    num_tokens: int,
+    hidden_dim: int,
+    top_k: int,
+    workspace_slots: int,
+) -> np.ndarray:
+    """Allocate this process's symmetric arena and return its exported handles.
+
+    Returns a ``[workspace_slots, handle_bytes]`` uint8 array. The caller must
+    gather these across the expert axis and pass the result to
+    :func:`import_arena_peers`; until then the runtime has no peer mappings and
+    is not usable.
+    """
+
+    handle_bytes = fabric_handle_bytes(library)
+    out = np.zeros((workspace_slots, handle_bytes), dtype=np.uint8)
+    function = getattr(library, _INIT_LOCAL_ARENA_SYMBOL)
+    function.argtypes = [
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_ubyte),
+    ]
+    function.restype = ctypes.c_int
+    buffer = out.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
+    status = function(rank, num_devices, num_tokens, hidden_dim, top_k, workspace_slots, buffer)
+    if status != 0:
+        raise RuntimeError(_native_last_error(library, "MoK-like local arena allocation failed"))
+    return out
+
+
+def import_arena_peers(library: ctypes.CDLL, handles: np.ndarray) -> None:
+    """Import every rank's exported arena and bind this rank's runtimes.
+
+    ``handles`` must be ``[workspace_slots, num_devices, handle_bytes]`` uint8 and
+    C-contiguous: the native side reads it slot-major, then by rank.
+    """
+
+    if handles.dtype != np.uint8 or handles.ndim != 3:
+        raise ValueError(f"handles must be a rank-three uint8 array, got {handles.dtype} {handles.shape}")
+    contiguous = np.ascontiguousarray(handles)
+    function = getattr(library, _IMPORT_ARENA_PEERS_SYMBOL)
+    function.argtypes = [ctypes.POINTER(ctypes.c_ubyte)]
+    function.restype = ctypes.c_int
+    buffer = contiguous.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
+    if function(buffer) != 0:
+        raise RuntimeError(_native_last_error(library, "MoK-like peer arena import failed"))
 
 
 def shutdown_native_runtime(library: ctypes.CDLL) -> None:
@@ -385,14 +460,80 @@ def validate_mok_like_mesh_topology(mesh: jax.sharding.Mesh) -> None:
         )
 
 
-def _validate_topology(mesh: jax.sharding.Mesh) -> None:
+def _validate_topology(mesh: jax.sharding.Mesh, num_devices: int = _NUM_DEVICES) -> None:
+    """Check local devices against the expert-group size the adapter was built for.
+
+    A group at or below one node's device count must be owned entirely by this
+    process, so its size and the local device count have to agree. A wider group
+    spans hosts, where each process contributes only its own GPUs, so only the
+    per-process device count is checked and the process-local mesh layout rule
+    does not apply.
+    """
+
     devices = jax.local_devices()
-    if len(devices) != _NUM_DEVICES:
-        raise RuntimeError(f"mok_like requires exactly four visible local GPUs, found {len(devices)} devices")
+    expected_local = min(num_devices, _DEVICES_PER_NODE)
+    if len(devices) != expected_local:
+        raise RuntimeError(
+            f"mok_like at {num_devices} ranks requires exactly {expected_local} "
+            f"visible local GPUs, found {len(devices)} devices"
+        )
     non_cuda = tuple(device.platform for device in devices if device.platform != "gpu")
     if non_cuda:
-        raise RuntimeError(f"mok_like requires four CUDA devices, found platforms={non_cuda}")
-    validate_mok_like_mesh_topology(mesh)
+        raise RuntimeError(f"mok_like requires CUDA devices, found platforms={non_cuda}")
+    if num_devices <= _DEVICES_PER_NODE:
+        validate_mok_like_mesh_topology(mesh)
+
+
+def _initialize_fabric_arena(
+    library: ctypes.CDLL,
+    *,
+    num_devices: int,
+    num_tokens: int,
+    hidden_dim: int,
+    top_k: int,
+    workspace_slots: int,
+) -> None:
+    """Run the two-phase fabric rendezvous across the expert group.
+
+    Each process allocates its own arena, the exported handles are gathered across
+    processes, and every process imports the full set. The gather is the only step
+    that needs a collective, and it moves 64 bytes per rank per slot.
+
+    This uses a whole-job gather, so it is correct when the expert group spans
+    every process in the job -- one rack at EP64 with one process per GPU. A job
+    that also replicates across racks needs a per-group gather instead; that case
+    is rejected below rather than silently mixing handles from different groups.
+    """
+
+    from jax.experimental import multihost_utils
+
+    process_count = jax.process_count()
+    if process_count != num_devices:
+        raise RuntimeError(
+            f"fabric transport currently requires one process per expert-group rank with the "
+            f"group spanning the whole job: num_devices={num_devices} but process_count={process_count}"
+        )
+
+    rank = jax.process_index()
+    local_handles = initialize_local_arena(
+        library,
+        rank=rank,
+        num_devices=num_devices,
+        num_tokens=num_tokens,
+        hidden_dim=hidden_dim,
+        top_k=top_k,
+        workspace_slots=workspace_slots,
+    )
+
+    # process_allgather stacks along a new leading axis ordered by process index,
+    # giving [num_devices, workspace_slots, handle_bytes]. The native side reads
+    # slot-major, so swap the first two axes before handing the buffer over.
+    gathered = np.asarray(multihost_utils.process_allgather(local_handles, tiled=False))
+    expected = (num_devices, workspace_slots, local_handles.shape[-1])
+    if gathered.shape != expected:
+        raise RuntimeError(f"gathered fabric handles have shape {gathered.shape}, expected {expected}")
+    slot_major = np.ascontiguousarray(np.swapaxes(gathered, 0, 1))
+    import_arena_peers(library, slot_major)
 
 
 def initialize_mok_like_runtime(
@@ -403,6 +544,7 @@ def initialize_mok_like_runtime(
     top_k: int,
     workspace_slots: int = 2,
     mesh: jax.sharding.Mesh,
+    workspace_transport: MokLikeWorkspaceTransport = MokLikeWorkspaceTransport.IN_PROCESS_PEER,
 ) -> MokLikeRuntimeHandle:
     """Build/register the adapter and allocate one caller-owned workspace."""
 
@@ -415,8 +557,7 @@ def initialize_mok_like_runtime(
         raise ValueError("workspace_slots must be an integer from 1 through 2")
     if num_tokens % 256 != 0 or hidden_dim % 256 != 0:
         raise ValueError("num_tokens and hidden_dim must be divisible by 256")
-
-    _validate_topology(mesh)
+    _validate_topology(mesh, build_config.num_devices)
     mok_source_root(build_config)
     require_mok_like_available(build_config)
     cuda_driver, library, library_path = load_native_library(build_config)
@@ -429,7 +570,17 @@ def initialize_mok_like_runtime(
         )
 
     signature = runtime_signature(num_tokens, hidden_dim, top_k, workspace_slots)
-    initialize_native_runtime(library, signature)
+    if workspace_transport is MokLikeWorkspaceTransport.FABRIC_SYMMETRIC:
+        _initialize_fabric_arena(
+            library,
+            num_devices=build_config.num_devices,
+            num_tokens=num_tokens,
+            hidden_dim=hidden_dim,
+            top_k=top_k,
+            workspace_slots=workspace_slots,
+        )
+    else:
+        initialize_native_runtime(library, signature)
     handle = MokLikeRuntimeHandle(
         build_config=build_config,
         signature=signature,

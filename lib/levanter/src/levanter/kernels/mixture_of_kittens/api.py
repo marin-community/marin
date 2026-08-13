@@ -13,7 +13,8 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug._moe.common import _CHECKPOINT_MOE_OUTPUT, MoeImplementation
 from levanter.grug.grug_moe import moe_mlp
 from levanter.grug.sharding import _batch_spec_from_x, _reshard_for_shard_map
-from levanter.kernels.mixture_of_kittens.config import MokLikeConfig
+from levanter.kernels.mixture_of_kittens.config import _DEVICES_PER_NODE, MokLikeConfig
+from levanter.kernels.mixture_of_kittens.source import SUPPORTED_NUM_DEVICES
 from levanter.kernels.mixture_of_kittens.ffi import (
     MokLikeForwardContext,
     backward_bf16_local,
@@ -83,13 +84,31 @@ def validate_mok_like_inputs(
         raise ValueError("tokens must be positive and hidden/intermediate dimensions must be divisible by 256")
 
 
-def _validate_topology(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> None:
-    if mesh.empty or int(mesh.shape.get(_EXPERT_AXIS, 1)) != _NUM_DEVICES:
-        raise ValueError("Mixture-of-Kittens requires an expert axis of size four")
-    if jax.local_device_count() != _NUM_DEVICES:
-        raise ValueError("Mixture-of-Kittens requires four visible local GPUs per JAX process")
-    if isinstance(mesh, jax.sharding.Mesh):
-        validate_mok_like_mesh_topology(mesh)
+def _validate_topology(
+    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
+    num_devices: int = _NUM_DEVICES,
+) -> None:
+    """Check the mesh against the expert-group size the adapter was built for.
+
+    Groups at or below one node's device count must be process-local, because the
+    space-0 peer paths only reach devices the calling process owns. Larger groups
+    necessarily span processes and rely on collective memory instead, so the
+    process-local check is skipped and `MokLikeConfig` enforces the storage mode.
+    """
+
+    if num_devices not in SUPPORTED_NUM_DEVICES:
+        supported = ", ".join(str(value) for value in SUPPORTED_NUM_DEVICES)
+        raise ValueError(f"num_devices must be one of {supported}, got {num_devices!r}")
+    if mesh.empty or int(mesh.shape.get(_EXPERT_AXIS, 1)) != num_devices:
+        raise ValueError(f"Mixture-of-Kittens requires an expert axis of size {num_devices}")
+    if num_devices <= _DEVICES_PER_NODE:
+        if jax.local_device_count() != num_devices:
+            raise ValueError(
+                f"Mixture-of-Kittens at {num_devices} ranks requires {num_devices} "
+                "visible local GPUs per JAX process"
+            )
+        if isinstance(mesh, jax.sharding.Mesh):
+            validate_mok_like_mesh_topology(mesh)
 
 
 def _fused_forward_with_context(
@@ -108,7 +127,7 @@ def _fused_forward_with_context(
     config: MokLikeConfig,
     collective_id: int,
 ) -> tuple[jax.Array, jax.Array, MokLikeForwardContext]:
-    _validate_topology(mesh)
+    _validate_topology(mesh, config.num_devices)
     batch_spec = _batch_spec_from_x(x, mesh)
     expert_weight_spec = P(_EXPERT_AXIS, None, None)
     shared_weight_spec = P(None, None)
@@ -269,7 +288,7 @@ def _fused_backward(
     config: MokLikeConfig,
     collective_id: int,
 ) -> tuple[jax.Array, ...]:
-    _validate_topology(mesh)
+    _validate_topology(mesh, config.num_devices)
     batch_spec = _batch_spec_from_x(x, mesh)
     expert_weight_spec = P(_EXPERT_AXIS, None, None)
     shared_weight_spec = P(None, None)

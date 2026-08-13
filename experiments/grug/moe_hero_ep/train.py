@@ -219,6 +219,7 @@ def _initialize_mok_like_for_config(
         top_k=config.model.num_experts_per_token,
         workspace_slots=config.model.mok_like.workspace_slots,
         mesh=mesh,
+        workspace_transport=config.model.mok_like.workspace_transport,
     )
 
 

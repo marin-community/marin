@@ -23,6 +23,10 @@ _REQUIRED_FILES = (
 )
 _SUPPORTED_ARCHES = ("sm_100a", "sm_103a")
 
+# Rank counts upstream instantiates `dispatch_mlp_swiglu_combiner` for. The native
+# adapter is compiled per rank count, so this is the set of legal expert-axis sizes.
+SUPPORTED_NUM_DEVICES = (4, 8, 16, 32, 64)
+
 
 @dataclass(frozen=True)
 class MokLikeBuildConfig:
@@ -32,6 +36,7 @@ class MokLikeBuildConfig:
     cache_root: str
     cuda_arch: str
     clone_if_missing: bool = False
+    num_devices: int = 4
 
     def __post_init__(self) -> None:
         if not self.source_root:
@@ -41,6 +46,9 @@ class MokLikeBuildConfig:
         if self.cuda_arch not in _SUPPORTED_ARCHES:
             supported = ", ".join(_SUPPORTED_ARCHES)
             raise ValueError(f"cuda_arch must be one of {supported}, got {self.cuda_arch!r}")
+        if self.num_devices not in SUPPORTED_NUM_DEVICES:
+            supported = ", ".join(str(value) for value in SUPPORTED_NUM_DEVICES)
+            raise ValueError(f"num_devices must be one of {supported}, got {self.num_devices!r}")
 
     @property
     def resolved_source_root(self) -> Path:

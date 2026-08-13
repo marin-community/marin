@@ -30,7 +30,10 @@ PRODUCTION_PRIORITY = priority_band_value("production")
 # not leak onto accelerator tasks.
 _FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
-_FORWARDED_ENV_KEYS = (XLA_AUTOTUNE_CACHE_MODE_ENV,)
+# PYTHONUNBUFFERED/PYTHONFAULTHANDLER are listed by name rather than by a "PYTHON"
+# prefix: PYTHONPATH and PYTHONHOME describe the dispatcher's own interpreter and
+# would corrupt the train task's environment if they leaked across.
+_FORWARDED_ENV_KEYS = (XLA_AUTOTUNE_CACHE_MODE_ENV, "PYTHONUNBUFFERED", "PYTHONFAULTHANDLER")
 
 
 def _forwarded_env_vars() -> dict[str, str]:

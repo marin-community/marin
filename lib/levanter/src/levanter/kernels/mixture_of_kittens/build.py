@@ -536,6 +536,9 @@ def _build_path(build_config: MokLikeBuildConfig) -> tuple[Path, Path]:
         ).encode()
     )
     key.update(mok_cuda_arch_flag(build_config).encode())
+    # The rank count is compiled in, so a 4-rank object must never be reused for
+    # a 64-rank build.
+    key.update(f"num_devices={build_config.num_devices}".encode())
     for include_dir in _cuda_include_dirs():
         key.update(str(include_dir).encode())
     digest = key.hexdigest()[:16]
@@ -584,6 +587,7 @@ def build_native_library(build_config: MokLikeBuildConfig) -> Path:
             "--use_fast_math",
             "-lineinfo",
             "-DNDEBUG",
+            f"-DMOK_NUM_DEVICES={build_config.num_devices}",
             f"-DKITTENS_{build_config.cuda_arch.replace('sm_', 'SM', 1).replace('a', '')}",
             "-D__CUDA_NO_HALF_OPERATORS__",
             "-D__CUDA_NO_HALF_CONVERSIONS__",
@@ -602,7 +606,18 @@ def build_native_library(build_config: MokLikeBuildConfig) -> Path:
         for include_dir in _cuda_include_dirs():
             command.extend(("-I", str(include_dir)))
         try:
-            subprocess.run(command, check=True)
+            # Capture the compiler's diagnostics and re-raise them in the exception
+            # message. Without this a build failure surfaces only as the nvcc
+            # command line, and the actual error is reachable only through the log
+            # service, which is a poor failure mode when that service is degraded.
+            completed = subprocess.run(command, check=False, capture_output=True, text=True)
+            if completed.returncode != 0:
+                detail = (completed.stderr or completed.stdout or "").strip()
+                tail = "\n".join(detail.splitlines()[-40:])
+                raise RuntimeError(
+                    f"nvcc failed with exit status {completed.returncode} building "
+                    f"{_ffi_source().name}:\n{tail}"
+                )
             os.replace(temporary_library, library_path)
         finally:
             temporary_library.unlink(missing_ok=True)

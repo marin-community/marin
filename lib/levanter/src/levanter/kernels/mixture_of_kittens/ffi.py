@@ -15,9 +15,26 @@ import numpy as np
 from levanter.kernels.mixture_of_kittens.config import MokLikeConfig, MokLikeRuntime
 
 
-FORWARD_TARGET = "levanter_mok_forward_bf16_4"
-BACKWARD_TARGET = "levanter_mok_backward_bf16_4"
 FAILURE_FENCE_TARGET = "levanter_mok_failure_fence"
+
+
+def forward_target(num_devices: int) -> str:
+    """Native forward handler symbol for one expert-group size.
+
+    The adapter is compiled per rank count and exports a rank-suffixed symbol,
+    so an object built for a different group size fails to resolve rather than
+    being loaded silently.
+    """
+
+    return f"levanter_mok_forward_bf16_{num_devices}"
+
+
+def backward_target(num_devices: int) -> str:
+    """Native backward handler symbol for one expert-group size."""
+
+    return f"levanter_mok_backward_bf16_{num_devices}"
+
+
 _TILE_ROWS = 256
 _SWIGLU_TILE_COLUMNS = 128
 _CLUSTER_SIZE = 2
@@ -110,7 +127,7 @@ def forward_bf16_local(
         jax.ShapeDtypeStruct((1,), jnp.int32),
     )
     results = jax.ffi.ffi_call(
-        FORWARD_TARGET,
+        forward_target(config.num_devices),
         result_shapes,
         # Scratch-buffer mutation is not observable through the array result. This
         # lets the saved custom-VJP context eliminate rematerialized communication.
@@ -233,7 +250,7 @@ def backward_bf16_local(
         jax.ShapeDtypeStruct((1,), jnp.int32),
     )
     results = jax.ffi.ffi_call(
-        BACKWARD_TARGET,
+        backward_target(config.num_devices),
         result_shapes,
         # Runtime workspaces, counters, and leases are private protocol state.
         # Gradients and failure status fully describe the observable result, so

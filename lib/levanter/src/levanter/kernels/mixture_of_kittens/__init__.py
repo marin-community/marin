@@ -23,6 +23,7 @@ from levanter.kernels.mixture_of_kittens.config import (
     MokLikeBackwardPeerStorage as MokLikeBackwardPeerStorage,
     MokLikeConfig as MokLikeConfig,
     MokLikeForwardXStorage as MokLikeForwardXStorage,
+    MokLikeWorkspaceTransport as MokLikeWorkspaceTransport,
 )
 from levanter.kernels.mixture_of_kittens.runtime import (
     MokLikeDebugCounters as MokLikeDebugCounters,
