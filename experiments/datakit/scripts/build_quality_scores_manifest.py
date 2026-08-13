@@ -62,7 +62,13 @@ VALIDATION_URL = f"{OUT_ROOT}/validation.json"
 SUCCESS_URL = f"{OUT_ROOT}/_SUCCESS"
 
 NEMOTRON = "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16"
-EXPECTED_LEAVES = 142
+# Every registered Datakit source has both a Nemotron tokenization and a harrier
+# embedding, so discovery must pair all of them. The first scoring run expected 142
+# because its enumeration reached two path levels and source names go three deep.
+EXPECTED_LEAVES = 292
+# A leaf never nests this far. The walk is bounded only to turn a listing bug into a
+# failure instead of a walk over the ~1M shard files under the stage roots.
+MAX_LEAF_DEPTH = 6
 
 PART_RE = re.compile(r"part-(\d+)-of-(\d+)\.parquet$")
 
@@ -102,14 +108,44 @@ def _leaf_rel(output_dir: str, root_marker: str) -> str:
 
 
 def _sidecars(root: str) -> list[str]:
-    """Glob leaf ``.artifact.json`` at both nesting depths.
+    """Every leaf ``.artifact.json`` under a stage root, at whatever depth it sits.
 
-    Most sources nest as ``<source>/<subset>_<hash>``, but a source with no subsets sits
-    flat at ``<source>_<hash>``. Globbing only the nested depth silently drops the flat
-    leaves, which is a whole slice of the corpus rather than an edge case.
+    A leaf is ``<source name>_<hash>`` and a source name may itself carry slashes, so leaf
+    depth is not fixed: 28 registered sources sit flat, 114 one level down, and 150 two.
+    A fixed ``{*,*/*}`` glob reaches the first two and silently drops the third -- which is
+    how the first corpus scoring run missed 150 sources while reporting success.
+
+    The walk descends level by level and stops at any directory that carries a sidecar,
+    rather than globbing recursively: the stage roots hold on the order of a million
+    parquet shards and a ``**`` pattern makes s3fs walk all of them.
     """
     fs = _fs()
-    return sorted(set(fs.glob(f"{root}/*/.artifact.json")) | set(fs.glob(f"{root}/*/*/.artifact.json")))
+
+    def subdirs(directory: str) -> list[str]:
+        return [entry["name"].rstrip("/") for entry in fs.ls(directory, detail=True) if entry.get("type") == "directory"]
+
+    found: list[str] = []
+    frontier = subdirs(root)
+    with ThreadPoolExecutor(max_workers=DISCOVERY_THREADS) as pool:
+        for _ in range(MAX_LEAF_DEPTH):
+            if not frontier:
+                break
+            # A stage leaf is any directory the executor wrote to. Test for the
+            # executor marker as well as the artifact sidecar: a leaf whose stage
+            # produced no artifact still terminates the walk, and descending into
+            # one would list its whole shard tree (up to 25,962 files) for nothing.
+            artifacts = [f"{d}/.artifact.json" for d in frontier]
+            has_artifact = list(pool.map(fs.exists, artifacts))
+            has_marker = list(pool.map(lambda d: fs.exists(f"{d}/.executor_info"), frontier))
+            found += [a for a, ok in zip(artifacts, has_artifact, strict=True) if ok]
+            interior = [
+                d for d, art, marker in zip(frontier, has_artifact, has_marker, strict=True) if not art and not marker
+            ]
+            frontier = [child for children in pool.map(subdirs, interior) for child in children]
+        else:
+            if frontier:
+                raise RuntimeError(f"{root}: no leaf sidecar within {MAX_LEAF_DEPTH} levels, e.g. {frontier[:3]}")
+    return sorted(set(found))
 
 
 def _read_artifact(path: str) -> tuple[str, dict | None]:
@@ -177,9 +213,10 @@ def discover() -> tuple[list[dict], dict]:
         embed_dir = harrier[key]["embed_dir"]
         tok_rel = _leaf_rel(tokens_dir, "datakit/tokenize/")
         emb_rel = _leaf_rel(embed_dir, "datakit/embed/harrier/")
-        # Nested leaf: <source>/<subset>_<hash>. Flat leaf: <source>_<hash>, no subset.
+        # Nested leaf: <source>/<subset>_<hash>, where <source> may itself hold slashes.
+        # Flat leaf: <source>_<hash>, no subset. Split on the last separator either way.
         if "/" in tok_rel:
-            source, tok_leaf = tok_rel.split("/", 1)
+            source, tok_leaf = tok_rel.rsplit("/", 1)
             subset = tok_leaf.rsplit("_", 1)[0]
         else:
             source, subset = tok_rel.rsplit("_", 1)[0], ""
@@ -245,7 +282,7 @@ def _id_column(url: str) -> list[str]:
         return pq.read_table(fh, columns=["id"]).column("id").to_pylist()
 
 
-def validate_containment(pairs: list[dict], num_pairs: int) -> dict:
+def validate_containment(pairs: list[dict], num_pairs: int, validation_url: str = VALIDATION_URL) -> dict:
     """Confirm embed ``part-k`` ids are a subset of token ``part-k`` ids on real shards.
 
     The map-only join plan is only valid if shard k on each side covers the same key set.
@@ -328,7 +365,7 @@ def validate_containment(pairs: list[dict], num_pairs: int) -> dict:
         "all_sorted": all(c["token_ids_sorted"] and c["embed_ids_sorted"] for c in checks if c["embed_exists"]),
         "checks": checks,
     }
-    fs.pipe_file(VALIDATION_URL.removeprefix("s3://"), json.dumps(result, indent=2).encode())
+    fs.pipe_file(validation_url.removeprefix("s3://"), json.dumps(result, indent=2).encode())
     return result
 
 
@@ -341,7 +378,7 @@ def sweep_leaf(pair: dict) -> dict:
     skipped on retry, so a redelivered task costs a read instead of a full re-listing.
     """
     fs = _fs()
-    staged = f"{STAGE_ROOT}/{pair['source_key'].replace('/', '__')}.parquet"
+    staged = f"{pair.get('stage_root') or STAGE_ROOT}/{pair['source_key'].replace('/', '__')}.parquet"
     if fs.exists(_shard_dir(staged)):
         with fs.open(_shard_dir(staged), "rb") as fh:
             return _leaf_summary(pair, pl.read_parquet(fh), staged, 0.0, 0.0, resumed=True)
@@ -436,7 +473,21 @@ def main() -> None:
     ap.add_argument("--validate-pairs", type=int, default=5)
     ap.add_argument("--max-workers", type=int, default=MAX_WORKERS)
     ap.add_argument("--skip-validation", action="store_true")
+    ap.add_argument("--out-root", default=OUT_ROOT, help="manifest prefix; use a distinct one for a repair run")
+    ap.add_argument("--stage-root", default=STAGE_ROOT)
+    ap.add_argument(
+        "--only-unscored",
+        action="store_true",
+        help="keep only leaves with no score shards written yet",
+    )
     args = ap.parse_args()
+
+    out_root = args.out_root.rstrip("/")
+    manifest_url = f"{out_root}/manifest.parquet"
+    summary_url = f"{out_root}/summary.json"
+    validation_url = f"{out_root}/validation.json"
+    success_url = f"{out_root}/_SUCCESS"
+    stage_root = args.stage_root.rstrip("/")
 
     fs = _fs()
     t_start = time.monotonic()
@@ -448,17 +499,32 @@ def main() -> None:
     if len(pairs) != EXPECTED_LEAVES:
         logger.warning("expected %d paired leaves, found %d", EXPECTED_LEAVES, len(pairs))
 
+    if args.only_unscored:
+
+        def has_scores(pair: dict) -> bool:
+            return bool(fs.glob(f"{_shard_dir(SCORES_ROOT)}/{pair['tokens_rel']}/part-*"))
+
+        with ThreadPoolExecutor(max_workers=DISCOVERY_THREADS) as pool:
+            scored = list(pool.map(has_scores, pairs))
+        disc["already_scored_leaves"] = sum(scored)
+        pairs = [p for p, done in zip(pairs, scored, strict=True) if not done]
+        logger.info("only-unscored: %d of %d leaves have no scores yet", len(pairs), len(scored))
+        if not pairs:
+            raise RuntimeError("every discovered leaf already carries score shards")
+
     validation = {"skipped": True}
     if not args.skip_validation:
-        validation = validate_containment(pairs, args.validate_pairs)
+        validation = validate_containment(pairs, args.validate_pairs, validation_url)
         logger.info("validation: %s", json.dumps({k: v for k, v in validation.items() if k != "checks"}))
         if not validation["all_contained"]:
             bad = [c for c in validation["checks"] if c.get("contained") is False]
             raise RuntimeError(f"SHARD-K CONTAINMENT FAILED on {len(bad)} shard(s): {bad[:2]}")
         if not validation["all_sorted"]:
-            raise RuntimeError("id columns are not ascending within a shard; merge join invalid")
+            # No longer fatal: the scorer's join argsorts the embed side rather than
+            # reading stored row order, precisely because one source does not deliver it.
+            logger.warning("some id columns are not ascending within a shard; the join sorts them itself")
 
-    ds = Dataset.from_list(pairs).map(sweep_leaf)
+    ds = Dataset.from_list([{**p, "stage_root": stage_root} for p in pairs]).map(sweep_leaf)
     ctx = ZephyrContext(
         resources=WORKER_RESOURCES,
         max_workers=args.max_workers,
@@ -481,13 +547,13 @@ def main() -> None:
     buf = BytesIO()
     df.write_parquet(buf)
     payload = buf.getvalue()
-    fs.pipe_file(MANIFEST_URL.removeprefix("s3://"), payload)
+    fs.pipe_file(manifest_url.removeprefix("s3://"), payload)
 
     missing_embed = int((~df["embed_exists"]).sum())
     zero_row = int(((df["embed_rows"] == 0) & df["embed_exists"]).sum())
     failed_footers = int((df["embed_rows"] < 0).sum())
     summary = {
-        "manifest_path": MANIFEST_URL,
+        "manifest_path": manifest_url,
         "manifest_bytes": len(payload),
         "total_source_keys": len(leaves),
         "total_tasks": int(df.height),
@@ -510,7 +576,7 @@ def main() -> None:
         "min_shards_in_leaf": int(df["num_shards"].min()),
         "discovery": disc,
         "validation_summary": {k: v for k, v in validation.items() if k != "checks"},
-        "validation_path": VALIDATION_URL,
+        "validation_path": validation_url,
         "sweep_wall": sweep_wall,
         "total_wall": time.monotonic() - t_start,
         "counters": {k: v for k, v in sorted(outcome.counters.items())},
@@ -530,8 +596,8 @@ def main() -> None:
             for leaf in leaves
         ],
     }
-    fs.pipe_file(SUMMARY_URL.removeprefix("s3://"), json.dumps(summary, indent=2).encode())
-    fs.pipe_file(SUCCESS_URL.removeprefix("s3://"), b"")
+    fs.pipe_file(summary_url.removeprefix("s3://"), json.dumps(summary, indent=2).encode())
+    fs.pipe_file(success_url.removeprefix("s3://"), b"")
     logger.info(
         "manifest written: %s",
         json.dumps({k: v for k, v in summary.items() if k not in ("per_source_key", "discovery", "counters")}, indent=2),
