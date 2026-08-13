@@ -44,10 +44,12 @@ import dataclasses
 import json
 import logging
 import os
+import queue
 import subprocess
 import sys
+import threading
 import time
-from collections import deque
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import cast
@@ -102,6 +104,12 @@ DEFAULT_BATCH = 32_768
 # convoys on the GIL instead of overlapping, which is the same knee the CPU
 # study found. The way to more node throughput is more processes.
 DEFAULT_PREFETCH_SHARDS = 2
+# Documents per joined block. Shard sizes are extremely skewed -- mean 86,698
+# documents but a maximum of 2,682,446, whose dense token and embedding arrays
+# come to 16.5 GB -- so a worker that materialized whole shards would size its
+# memory to the largest one. Blocking caps a worker's resident join at roughly
+# `(prefetch + 1) * block_docs * 6 KB` whatever the shard holds.
+DEFAULT_BLOCK_DOCS = 32_768
 # The fold is exact in principle; assert it on real rows rather than trust it.
 FOLD_PARITY_ROWS = 256
 FOLD_PARITY_TOLERANCE = 1e-5
@@ -378,14 +386,21 @@ class ShardTask:
 
 
 @dataclass(frozen=True)
-class Joined:
-    """One shard pair's matched documents, ready for the forward."""
+class Block:
+    """A bounded run of matched documents, ready for one or more forwards."""
 
     doc_ids: np.ndarray  # [n] object, the 32-char hex ids
     ids: np.ndarray  # [n, max_tokens] int32 compact ids, PAD-padded
     embedding: np.ndarray  # [n, EMBED_DIM] float32, L2-normalized
+
+
+@dataclass(frozen=True)
+class ShardStats:
+    """What one shard pair cost and whether its join was complete."""
+
     token_rows: int  # rows read on the token side, before the chunk filter
     embed_rows: int  # rows on the embed side
+    matched: int  # documents that joined
     read_seconds: float
 
     @property
@@ -399,7 +414,7 @@ class Joined:
         unsampled. Surfacing it as a number is what keeps a violation from
         looking like a silently smaller output.
         """
-        return self.embed_rows - len(self.doc_ids)
+        return self.embed_rows - self.matched
 
 
 def _ragged_to_padded(column: pa.ChunkedArray | pa.Array, max_tokens: int, vocab_size: int) -> np.ndarray:
@@ -436,7 +451,18 @@ def _ragged_to_padded(column: pa.ChunkedArray | pa.Array, max_tokens: int, vocab
     return np.where(mask, compact, PAD_ID).astype(np.int32)
 
 
-def _normalize_embeddings(column: pa.ChunkedArray | pa.Array, rows: int) -> np.ndarray:
+def _embedding_int8(column: pa.ChunkedArray | pa.Array, rows: int) -> np.ndarray:
+    """The stored int8[1024] embedding rows, undecoded.
+
+    Kept int8 for the life of the shard and widened only per block: the whole
+    embed side is resident while its token side streams, and float32 would make
+    that 11 GB on the largest shard instead of 2.7 GB.
+    """
+    array = column.combine_chunks() if isinstance(column, pa.ChunkedArray) else column
+    return array.flatten().to_numpy(zero_copy_only=False).reshape(rows, EMBED_DIM)
+
+
+def normalize_embeddings(rows: np.ndarray) -> np.ndarray:
     """int8[1024] rows -> float32, L2-normalized, exactly as training fed them.
 
     ``joined_labels.embedding_matrix`` normalizes the raw int8 without applying the
@@ -444,14 +470,19 @@ def _normalize_embeddings(column: pa.ChunkedArray | pa.Array, rows: int) -> np.n
     L2 normalization, so dequantizing first is a no-op. This reproduces the
     training path rather than a variant of it.
     """
-    array = column.combine_chunks() if isinstance(column, pa.ChunkedArray) else column
-    flat = array.flatten().to_numpy(zero_copy_only=False)
-    x = flat.reshape(rows, EMBED_DIM).astype(np.float32)
+    x = rows.astype(np.float32)
     return x / np.maximum(np.linalg.norm(x, axis=1, keepdims=True), 1e-6)
 
 
-def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, fs) -> Joined:
-    """Stream a shard pair's inner join on ``id``.
+def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: int, fs) -> Iterator[Block | ShardStats]:
+    """Stream a shard pair's inner join on ``id`` as bounded blocks.
+
+    Yields :class:`Block` values of about ``block_docs`` documents and a final
+    :class:`ShardStats`. Blocks rather than one array per shard because shard
+    sizes are extremely skewed: the largest holds 2.68M documents, whose dense
+    token and embedding arrays come to 16.5 GB, and a worker pool holding even a
+    few of those at once exceeds the container's memory cap. Peak memory here is
+    set by ``block_docs``, not by the shard.
 
     Both sides are ascending by ``id`` within a shard: the embed side is a
     dedup-filtered subset, the token side a chunk-expanded superset. Neither is
@@ -465,13 +496,26 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, fs) -> Joined:
         embed_table = pq.ParquetFile(raw).read(columns=["id", "embedding"])
     embed_rows = embed_table.num_rows
     embed_ids = embed_table.column("id").to_numpy(zero_copy_only=False)
-    embeddings = _normalize_embeddings(embed_table.column("embedding"), embed_rows)
+    embeddings = _embedding_int8(embed_table.column("embedding"), embed_rows)
     del embed_table
 
     id_blocks: list[np.ndarray] = []
     token_blocks: list[np.ndarray] = []
     embed_blocks: list[np.ndarray] = []
+    pending = 0
+    matched_total = 0
     token_rows = 0
+
+    def flush() -> Block:
+        nonlocal id_blocks, token_blocks, embed_blocks, pending
+        block = Block(
+            doc_ids=np.concatenate(id_blocks),
+            ids=np.concatenate(token_blocks),
+            embedding=normalize_embeddings(np.concatenate(embed_blocks)),
+        )
+        id_blocks, token_blocks, embed_blocks, pending = [], [], [], 0
+        return block
+
     with fs.open(task.tokens_path, "rb", cache_type="none") as raw:
         parquet = pq.ParquetFile(raw)
         for batch in parquet.iter_batches(batch_size=READ_BATCH, columns=["id", "chunk_index", "input_ids"]):
@@ -495,19 +539,14 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, fs) -> Joined:
             matched = batch.column("input_ids").take(pa.array(first[keep]))
             token_blocks.append(_ragged_to_padded(matched, max_tokens, vocab_size))
             embed_blocks.append(embeddings[position[keep]])
-
-    read_seconds = time.monotonic() - t0
-    if not id_blocks:
-        empty_ids = np.empty((0, max_tokens), dtype=np.int32)
-        empty_emb = np.empty((0, EMBED_DIM), dtype=np.float32)
-        return Joined(np.empty(0, dtype=object), empty_ids, empty_emb, token_rows, embed_rows, read_seconds)
-    return Joined(
-        doc_ids=np.concatenate(id_blocks),
-        ids=np.concatenate(token_blocks),
-        embedding=np.concatenate(embed_blocks),
-        token_rows=token_rows,
-        embed_rows=embed_rows,
-        read_seconds=read_seconds,
+            pending += len(keep)
+            matched_total += len(keep)
+            if pending >= block_docs:
+                yield flush()
+    if pending:
+        yield flush()
+    yield ShardStats(
+        token_rows=token_rows, embed_rows=embed_rows, matched=matched_total, read_seconds=time.monotonic() - t0
     )
 
 
@@ -606,60 +645,84 @@ def score_mode(args) -> dict:
     write_seconds = 0.0
     started = time.monotonic()
 
-    def read(task: ShardTask) -> tuple[ShardTask, Joined]:
-        return task, join_shard(task, scorer.max_tokens, vocab_size, fs)
+    # One reader thread over the whole slice, feeding a bounded queue. The reader
+    # runs ahead of the forward so S3 and the GPU overlap, but the queue bound
+    # plus the block bound cap resident memory at a few hundred MB per worker
+    # regardless of how large a shard is.
+    work: queue.Queue = queue.Queue(maxsize=args.prefetch)
 
-    with ThreadPoolExecutor(max_workers=args.prefetch) as pool:
-        # Bounded prefetch. `pool.map` would submit every shard at once and hold
-        # the whole slice's joined arrays in memory; this keeps at most
-        # `prefetch` reads in flight ahead of the forward.
-        pending: deque = deque()
-        upcoming = iter(mine)
-        for task in upcoming:
-            pending.append(pool.submit(read, task))
-            if len(pending) >= args.prefetch:
-                break
-        while pending:
-            task, joined = pending.popleft().result()
-            nxt = next(upcoming, None)
-            if nxt is not None:
-                pending.append(pool.submit(read, nxt))
-            read_seconds += joined.read_seconds
-            token_rows += joined.token_rows
-            if joined.unmatched_embed:
-                unmatched_embed += joined.unmatched_embed
-                logger.warning(
-                    "%s shard %d: %d embed rows absent from the token side; containment does not hold here",
-                    task.source_key,
-                    task.shard_index,
-                    joined.unmatched_embed,
-                )
-            if not len(joined.doc_ids):
-                logger.warning("%s shard %d: no joined rows", task.source_key, task.shard_index)
-                continue
+    def produce() -> None:
+        try:
+            for task in mine:
+                for item in join_shard(task, scorer.max_tokens, vocab_size, args.block_docs, fs):
+                    work.put((task, item))
+        except Exception as exc:  # surfaced on the consumer thread
+            work.put((None, exc))
+        finally:
+            work.put((None, None))
+
+    reader = threading.Thread(target=produce, name="reader", daemon=True)
+    reader.start()
+
+    shard_ids: list[np.ndarray] = []
+    shard_scores: list[np.ndarray] = []
+    while True:
+        task, item = work.get()
+        if task is None:
+            if isinstance(item, BaseException):
+                raise item
+            break
+        if isinstance(item, Block):
             t0 = time.monotonic()
-            scores = predict(scorer.model, joined.ids, batch_size=args.batch_size, doc_embed=joined.embedding)
+            shard_scores.append(
+                predict(scorer.model, item.ids, batch_size=args.batch_size, doc_embed=item.embedding)
+            )
             score_seconds += time.monotonic() - t0
+            shard_ids.append(item.doc_ids)
+            continue
+
+        # ShardStats: the shard is fully read and scored, so write it out. Only
+        # ids and scores were retained across its blocks, which is ~36 bytes a
+        # document even for the largest shard.
+        read_seconds += item.read_seconds
+        token_rows += item.token_rows
+        if item.unmatched_embed:
+            unmatched_embed += item.unmatched_embed
+            logger.warning(
+                "%s shard %d: %d embed rows absent from the token side; containment does not hold here",
+                task.source_key,
+                task.shard_index,
+                item.unmatched_embed,
+            )
+        if shard_ids:
             t1 = time.monotonic()
-            rows = write_scores(task.output_path, joined.doc_ids, scores, args.model_tag, fs)
+            rows = write_scores(
+                task.output_path,
+                np.concatenate(shard_ids),
+                np.concatenate(shard_scores),
+                args.model_tag,
+                fs,
+            )
             write_seconds += time.monotonic() - t1
             docs += rows
-            done += 1
-            if done % 25 == 0 or done == len(mine):
-                elapsed = time.monotonic() - started
-                logger.info(
-                    "worker %d: %d/%d shards, %d docs, %.0f docs/s "
-                    "(read %.0fs score %.0fs write %.0fs of %.0fs)",
-                    args.worker,
-                    done,
-                    len(mine),
-                    docs,
-                    docs / max(elapsed, 1e-9),
-                    read_seconds,
-                    score_seconds,
-                    write_seconds,
-                    elapsed,
-                )
+        else:
+            logger.warning("%s shard %d: no joined rows", task.source_key, task.shard_index)
+        shard_ids, shard_scores = [], []
+        done += 1
+        if done % 25 == 0 or done == len(mine):
+            elapsed = time.monotonic() - started
+            logger.info(
+                "worker %d: %d/%d shards, %d docs, %.0f docs/s (read %.0fs score %.0fs write %.0fs of %.0fs)",
+                args.worker,
+                done,
+                len(mine),
+                docs,
+                docs / max(elapsed, 1e-9),
+                read_seconds,
+                score_seconds,
+                write_seconds,
+                elapsed,
+            )
 
     elapsed = time.monotonic() - started
     result = {
@@ -734,6 +797,8 @@ def node_mode(args) -> dict:
             str(args.batch_size),
             "--prefetch",
             str(args.prefetch),
+            "--block-docs",
+            str(args.block_docs),
             "--model-tag",
             args.model_tag,
         ]
@@ -768,7 +833,8 @@ def main() -> None:
     s.add_argument("--worker", type=int, required=True)
     s.add_argument("--num-workers", type=int, required=True)
     s.add_argument("--batch-size", type=int, default=DEFAULT_BATCH)
-    s.add_argument("--prefetch", type=int, default=DEFAULT_PREFETCH_SHARDS)
+    s.add_argument("--prefetch", type=int, default=DEFAULT_PREFETCH_SHARDS, help="blocks queued ahead of the forward")
+    s.add_argument("--block-docs", type=int, default=DEFAULT_BLOCK_DOCS)
     s.add_argument("--model-tag", default="nemotron88k_v1")
     s.add_argument("--limit", type=int, default=0, help="cap shards per worker (smoke runs)")
 
@@ -783,6 +849,7 @@ def main() -> None:
     )
     n.add_argument("--batch-size", type=int, default=DEFAULT_BATCH)
     n.add_argument("--prefetch", type=int, default=DEFAULT_PREFETCH_SHARDS)
+    n.add_argument("--block-docs", type=int, default=DEFAULT_BLOCK_DOCS)
     n.add_argument("--model-tag", default="nemotron88k_v1")
     n.add_argument("--limit", type=int, default=0)
 
