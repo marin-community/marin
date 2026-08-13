@@ -12,6 +12,7 @@ import yaml
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
+    ROOT,
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
@@ -79,6 +80,7 @@ def deployment_config() -> DeploymentConfig:
                     "class": "automation",
                     "strict": True,
                     "envClear": True,
+                    "instructionsFile": "profiles/ops/AGENTS.md",
                     "env": {"KUBECONFIG": {"secretRef": "projects/example/secrets/ops-kubeconfig/versions/latest"}},
                 },
             ),
@@ -173,6 +175,20 @@ def test_profile_manifest_accepts_secret_references_but_rejects_values() -> None
     assert references == [("example", "ops-token")]
     with pytest.raises(ValueError, match="full secretRef"):
         ProfileConfig.parse("ops", {"agent": "codex", "env": {"OPS_TOKEN": "plaintext"}})
+
+
+def test_profile_instructions_reject_ambiguous_or_external_sources() -> None:
+    with pytest.raises(ValueError, match="only one"):
+        ProfileConfig.parse(
+            "slack",
+            {
+                "agent": "codex",
+                "instructions": "inline",
+                "instructionsFile": "profiles/slack/AGENTS.md",
+            },
+        )
+    with pytest.raises(ValueError, match="under"):
+        ProfileConfig.parse("slack", {"agent": "codex", "instructionsFile": "../../AGENTS.md"})
 
 
 @pytest.mark.parametrize(
@@ -295,13 +311,19 @@ def test_release_rollout_pins_metadata_to_the_built_image_digest():
 
 @pulumi.runtime.test
 def test_profiles_and_workloads_render_to_vm_metadata():
-    infrastructure, mocks = infrastructure_and_mocks()
+    mocks = RecordingMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
+    infrastructure = create_infrastructure(replace(deployment_config(), settings=(("slack.profile", "ops"),)))
 
     def check(_: object) -> None:
         assert by_name(mocks, "loom-workload-marin-ops").typ == "gcp:serviceaccount/account:Account"
         manifest = json.loads(by_name(mocks, "loom").inputs["metadata"]["loom-deployment"])
         assert manifest["prune"] is True
+        assert manifest["settings"] == {"slack.profile": "ops"}
         assert manifest["profiles"][0]["profile"]["name"] == "ops"
+        assert manifest["profiles"][0]["profile"]["instructions"] == (
+            (ROOT / "profiles/ops/AGENTS.md").read_text().strip()
+        )
         assert manifest["federations"][0]["subject"] == "11223344556677889900"
 
     return infrastructure.instance.id.apply(check)
