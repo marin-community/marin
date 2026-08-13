@@ -6,7 +6,6 @@ import os
 
 import numpy as np
 
-from levanter.data.audio import AudioIODatasetConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.store.cache import SerialCacheWriter, TreeCache
 
@@ -35,16 +34,6 @@ def tiny_corpus_config(path):
         cache_dir=f"{path}/cache",
     )
     return LmDataConfig(components={"tiny": component})
-
-
-def tiny_asr_corpus_config(path):
-    return AudioIODatasetConfig(
-        id="WillHeld/test_librispeech_parquet",
-        text_key="text",
-        train_split="validation",
-        validation_split="validation",
-        cache_dir=f"{path}/cache_asr",
-    )
 
 
 def construct_small_data_cache(

@@ -22,8 +22,12 @@ the `marin` stack and its `Pulumi.marin.yaml` configuration. Do not create
 another infrastructure stack or permissions project for shared GCP resources.
 
 Resources often exist before a cluster or GCP resource is brought under Pulumi.
-For a one-time adoption, set `marin-iac:import=true`; the program imports the
-live resources instead of recreating them.
+Use the Program-first import command in `infra/pulumi/README.md` for a one-time
+adoption. It generates a mode-`0600` transaction file outside the repository
+from the program's create preview, then validates and imports only the reviewed
+subset. The normal program never attaches import options. Provider IDs live
+beside their declarations, including all GCP `*IAMMember` grants, so a new grant
+can be imported without putting already-tracked grants into import mode.
 
 `infra/pulumi/src/iac` contains reusable components imported by other projects.
 For example, application projects use `iac.gcp.cloud_run.CloudRunService`

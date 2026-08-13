@@ -57,6 +57,9 @@ watch:
   - docs/
   - lib/marin/src/
 
+hooks:
+  - infra/mkdocs_hooks.py
+
 nav:
   - Home: index.md
   - Tutorials:
