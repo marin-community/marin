@@ -272,6 +272,19 @@ uv run iris --config lib/iris/config/marin.yaml job run \
   "from dataclasses import replace; from fray.types import ResourceConfig; from marin.execution.lazy import lower; from marin.execution.step_runner import StepRunner; from experiments.evals.lm_eval_suite import lm_eval_suite; from experiments.evals.served_qwen3 import QWEN3_TPU_INFERENCE; inference = replace(QWEN3_TPU_INFERENCE, iris=replace(QWEN3_TPU_INFERENCE.iris, worker_resources=ResourceConfig.with_tpu('v6e-4', ram='96g', regions=['europe-west4']))); StepRunner().run([lower(lm_eval_suite(inference, model_name='qwen3-0.6b-refresh-smoke', version='<run-id>-dev', limit=8))])"
 ```
 
+- **`tests/cluster/vllm/test_snowball_backend_parity.py`** (`vllm-gpu`) — the
+  Snowball-67B next-token logprob parity gate on H100s. It is `-m cluster` marked, so
+  run it with `-o addopts= --import-mode=importlib`; the H100s live on CoreWeave and are
+  reached through the marin federation hub (`target_cluster`), not a direct controller.
+  Confirm the Levanter reference and `vllm-gpu-pp1` (single-node 8×H100) match the
+  goldens within `max_probability_error` (`pp2` is a 16×H100 multi-node variant). Pair
+  it with a bounded qwen3-0.6B GPU serve+eval to exercise the brokered serving path:
+
+```sh
+uv run pytest tests/cluster/vllm/test_snowball_backend_parity.py \
+  -m cluster -o addopts= --import-mode=importlib -vv -s
+```
+
 - **`experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml`** (`evalchemy`) and
   **`experiments/evaluation/configs/harbor/aime-smoke.yaml`** (`harbor`) — one eval
   runner drives both; only the config source differs. Submit a bounded run and

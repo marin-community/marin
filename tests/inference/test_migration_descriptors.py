@@ -53,7 +53,10 @@ def _descriptors(root: Path) -> dict:
     return _load(_external_root(root) / "migration.toml")
 
 
-def test_every_fork_has_exactly_one_descriptor():
+def test_every_pin_has_exactly_one_descriptor():
+    # One section per pin, not per fork: a multi-pin fork (vllm) has one section per pin
+    # (vllm, vllm-gpu). Expected pins are the isolated projects, the tpu-forks sections, and the
+    # gpu-release wheel pin.
     root = _root()
     expected = _isolated_projects(root) | _tpu_fork_sections(root) | _release_pin_forks(root)
     assert set(_descriptors(root)) == expected
