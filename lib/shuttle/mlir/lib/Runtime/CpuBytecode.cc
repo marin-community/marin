@@ -1039,6 +1039,10 @@ executeCpuExecutableBundleImpl(ModuleOp module,
 FailureOr<SmallVector<ParsedTask, 0>>
 validateCpuExecutableResources(ModuleOp module) {
   DeviceModuleOp device = *module.getOps<DeviceModuleOp>().begin();
+  if (device.getCodeFormat() == ExecutableCodeFormat::CpuBytecodeV2 &&
+      device.getPolicy() != NumericalPolicy::SourceOrdered) {
+    return failure();
+  }
   InvocationAbiOp abi = *module.getOps<InvocationAbiOp>().begin();
   SmallVector<DeviceEntryOp> entries(
       device.getBody().front().getOps<DeviceEntryOp>());

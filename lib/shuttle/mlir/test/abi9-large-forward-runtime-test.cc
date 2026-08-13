@@ -271,9 +271,18 @@ TEST(Abi9LargeForwardRuntimeTest,
 
 TEST(Abi9LargeForwardRuntimeTest,
      RejectsCrossedDeviceFormatAndUnknownFoldRealization) {
+  auto fastV2 = buildLargeForward();
+  ASSERT_TRUE(fastV2);
+  auto device =
+      *fastV2->module->getOps<mlir::shuttle::DeviceModuleOp>().begin();
+  device.setPolicy(mlir::shuttle::NumericalPolicy::Fast);
+  refreshFingerprints(*fastV2->module, false);
+  EXPECT_TRUE(mlir::failed(
+      mlir::shuttle::serializeCpuExecutableBundle(*fastV2->module)));
+
   auto schemaOneV2 = buildLargeForward();
   ASSERT_TRUE(schemaOneV2);
-  auto device =
+  device =
       *schemaOneV2->module->getOps<mlir::shuttle::DeviceModuleOp>().begin();
   device.setSchemaVersion(1);
   refreshFingerprints(*schemaOneV2->module, false);

@@ -1304,6 +1304,10 @@ LogicalResult DeviceModuleOp::verifyRegions() {
     return emitOpError(
         "requires matching device-module and CPU bytecode versions");
   }
+  if (getCodeFormat() == ExecutableCodeFormat::CpuBytecodeV2 &&
+      getPolicy() != NumericalPolicy::SourceOrdered) {
+    return emitOpError("requires source_ordered policy for CPU bytecode v2");
+  }
   if (!isLowerHexDigest(getSourceScheduleFingerprint()) ||
       !isLowerHexDigest(getCodeDigest()) ||
       !isLowerHexDigest(getFingerprint())) {
