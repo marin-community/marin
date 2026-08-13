@@ -1267,3 +1267,15 @@ author: Rafal Wojdyla
 - Retry state: RNO still reports 38 shards at retry attempt one. No shard entered retry attempt two.
 - Issue update: None. This is a routine checkpoint after the 90-percent issue update.
 - Next action: Continue root, source, service, Zephyr, and output checks. Recover only a terminal in-scope job failure.
+
+### 2026-08-13 19:15 UTC - Output passed 95 percent
+
+- Root health: The East and RNO roots remain running with zero root failures. No current source job has failed.
+- Completed artifacts: The medium-quality Nemotron source succeeded at 18:44 UTC. East now has 145 of 146 sealed source artifacts. RNO has 57 of 146. The full run has 202 of 292 sealed source artifacts.
+- Aggregate progress: A direct object count found 158,749 of 166,775 output shards, or 95.19%. There are 8,026 shards left. East has written 75,006 shards, and RNO has written 83,743 shards. Two hundred eight sources have output, and no Parquet path is unknown.
+- Output rate: The jobs wrote 916 shards from 18:46 UTC to 19:15 UTC. A constant-rate estimate gives about 4.2 hours for the remaining shards, or about 23:30 UTC. Batch preemption and source size can change this estimate.
+- Active stages: The final East source reached 12,055 of 14,285 shards. The RNO source reached 3,757 of 4,136 shards. Each stage has 32 live workers and zero dead workers.
+- Service admission: East has 184 running TEI tasks and 72 building tasks. RNO capacity fell from 184 running tasks to 80 running tasks, with 432 building tasks. All service jobs remain non-terminal.
+- Retry state: RNO still reports 38 shards at retry attempt one. No shard entered retry attempt two.
+- Issue update: None. One East source completion and a recoverable batch capacity reduction are not partition-level events.
+- Next action: Continue root, source, service, Zephyr, and output checks. Watch RNO capacity and recover only a terminal in-scope job failure.
