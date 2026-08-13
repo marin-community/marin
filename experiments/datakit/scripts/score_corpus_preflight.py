@@ -60,6 +60,15 @@ def digest_dir(model_dir: str) -> dict:
     paths = sorted(p for p in fs.find(model_dir.removeprefix("s3://")) if not p.endswith("/"))
     payloads = {p.rsplit("/", 1)[-1]: fs.cat(p) for p in paths}
     per_file = {name: hashlib.sha256(body).hexdigest() for name, body in payloads.items()}
+    # The pinning convention: fold each file's *raw* 32-byte digest into one hash,
+    # keyed by its NUL-terminated path relative to the model root, over the
+    # bytewise-sorted relative paths. Path-keyed, so a rename changes the digest.
+    root = model_dir.removeprefix("s3://").rstrip("/")
+    rels = sorted(p.removeprefix(root).lstrip("/") for p in paths)
+    rel_payload = {p.removeprefix(root).lstrip("/"): fs.cat(p) for p in paths}
+    folded = hashlib.sha256()
+    for rel in rels:
+        folded.update(rel.encode() + b"\0" + hashlib.sha256(rel_payload[rel]).digest())
     by_name = sorted(payloads)
     by_size = sorted(payloads, key=lambda n: (len(payloads[n]), n))
     concat_name = hashlib.sha256(b"".join(payloads[n] for n in by_name)).hexdigest()
@@ -70,8 +79,10 @@ def digest_dir(model_dir: str) -> dict:
         "files": {n: len(b) for n, b in payloads.items()},
         "total_bytes": sum(len(b) for b in payloads.values()),
         "per_file_sha256": per_file,
-        "sha256": concat_name,
+        "relative_paths": rels,
+        "sha256": folded.hexdigest(),
         "candidates": {
+            "relpath_nul_rawdigest": folded.hexdigest(),
             "concat_by_name": concat_name,
             "concat_by_size": concat_size,
             "name_and_digest_lines": tree,
@@ -84,12 +95,17 @@ def digest_dir(model_dir: str) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model-dir", default=DEFAULT_FOLDED_DIR)
+    ap.add_argument(
+        "--digest-only",
+        action="store_true",
+        help="report the staged digests and skip the device check and forward (runs on CPU)",
+    )
     args = ap.parse_args()
     configure_logging(logging.INFO)
     configure_coreweave_s3()
 
-    backend = jax.default_backend()
-    devices = jax.devices()
+    backend = jax.default_backend() if not args.digest_only else "skipped"
+    devices = [] if args.digest_only else jax.devices()
     logger.info("PREFLIGHT jax %s backend=%s devices=%s", jax.__version__, backend, devices)
     logger.info("PREFLIGHT device_kinds=%s", sorted({d.device_kind for d in devices}))
 
@@ -100,14 +116,16 @@ def main() -> None:
     bytes_ok = staged["total_bytes"] == EXPECTED_BYTES
     logger.info("PREFLIGHT digest conventions matching the expected value: %s", matched or "none")
 
-    scorer = load_folded_scorer(args.model_dir)
-    rng = np.random.default_rng(0)
-    ids = rng.integers(0, scorer.model.config.vocab_size, size=(PROBE_ROWS, scorer.max_tokens), dtype=np.int32)
-    embed = rng.normal(size=(PROBE_ROWS, EMBED_DIM)).astype(np.float32)
-    embed /= np.maximum(np.linalg.norm(embed, axis=1, keepdims=True), 1e-6)
-    t0 = time.monotonic()
-    scores = predict(scorer.model, ids, batch_size=PROBE_ROWS, doc_embed=embed)
-    forward_seconds = time.monotonic() - t0
+    forward_seconds, scores = 0.0, np.zeros(0, dtype=np.float32)
+    if not args.digest_only:
+        scorer = load_folded_scorer(args.model_dir)
+        rng = np.random.default_rng(0)
+        ids = rng.integers(0, scorer.model.config.vocab_size, size=(PROBE_ROWS, scorer.max_tokens), dtype=np.int32)
+        embed = rng.normal(size=(PROBE_ROWS, EMBED_DIM)).astype(np.float32)
+        embed /= np.maximum(np.linalg.norm(embed, axis=1, keepdims=True), 1e-6)
+        t0 = time.monotonic()
+        scores = predict(scorer.model, ids, batch_size=PROBE_ROWS, doc_embed=embed)
+        forward_seconds = time.monotonic() - t0
 
     result = {
         "jax_version": jax.__version__,
@@ -122,13 +140,14 @@ def main() -> None:
         "digest_conventions_matched": matched,
         "digest_candidates": staged["candidates"],
         "per_file_sha256": staged["per_file_sha256"],
+        "relative_paths": staged["relative_paths"],
         "byte_count_matches": bytes_ok,
         "probe_forward_seconds": forward_seconds,
-        "probe_score_mean": float(scores.mean()),
-        "probe_score_std": float(scores.std()),
+        "probe_score_mean": float(scores.mean()) if len(scores) else None,
+        "probe_score_std": float(scores.std()) if len(scores) else None,
     }
     logger.info("PREFLIGHT result %s", json.dumps(result, indent=2))
-    if backend == "cpu":
+    if backend == "cpu" and not args.digest_only:
         raise RuntimeError(f"jax backend is CPU-only ({devices}); the forward would run on cores")
     if not digest_ok:
         raise RuntimeError(f"model digest {staged['sha256']} != expected {EXPECTED_SHA256}")
