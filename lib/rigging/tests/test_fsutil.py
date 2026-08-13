@@ -8,8 +8,10 @@ import bz2
 import gzip
 import json
 import lzma
+import threading
 
 import pytest
+import rigging.fsutil.cli as cli_module
 from click.testing import CliRunner
 from rigging.fsutil import listing
 from rigging.fsutil.cli import cli
@@ -53,6 +55,76 @@ def test_cp_handles_the_awkward_destination_shapes(tree, tmp_path, monkeypatch):
     result = run(cli, ["cp", str(tree / "b.txt"), "bare.txt"])
     assert result.exit_code == 0, result.output
     assert (tmp_path / "bare.txt").read_text() == "hello"
+
+
+def test_rm_requires_recursive_for_directories(tree):
+    run = CliRunner().invoke
+
+    result = run(cli, ["rm", str(tree / "sub")])
+    assert result.exit_code != 0
+    assert (tree / "sub" / "c.txt").exists()
+
+    result = run(cli, ["rm", "-R", str(tree / "sub")])
+    assert result.exit_code == 0, result.output
+    assert not (tree / "sub").exists()
+
+    result = run(cli, ["rm", str(tree / "b.txt")])
+    assert result.exit_code == 0, result.output
+    assert not (tree / "b.txt").exists()
+
+
+def test_rm_recursive_unlinks_local_directory_symlink_without_deleting_target(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "keep.txt").write_text("keep")
+    link = tmp_path / "link"
+    link.symlink_to(target, target_is_directory=True)
+
+    result = CliRunner().invoke(cli, ["rm", "-R", str(link)])
+
+    assert result.exit_code == 0, result.output
+    assert not link.is_symlink()
+    assert (target / "keep.txt").read_text() == "keep"
+
+
+def test_rm_uses_s3_bulk_delete_batches(monkeypatch):
+    class RecordingS3FileSystem:
+        def __init__(self):
+            self.requests = []
+
+        def isdir(self, _path):
+            return True
+
+        def find(self, path, *, detail):
+            assert path == "bucket/prefix"
+            assert detail is True
+            return {
+                f"bucket/prefix/{index}": {"name": f"bucket/prefix/{index}", "size": 1, "type": "file"}
+                for index in range(1001)
+            }
+
+        def split_path(self, path):
+            bucket, key = path.split("/", 1)
+            return bucket, key, None
+
+        def call_s3(self, method, **kwargs):
+            assert method == "delete_objects"
+            self.requests.append(kwargs)
+            return {}
+
+        def invalidate_cache(self):
+            pass
+
+    fs = RecordingS3FileSystem()
+    monkeypatch.setattr(cli_module, "S3FileSystem", RecordingS3FileSystem)
+    monkeypatch.setattr(cli_module, "filesystem_for", lambda _url: (fs, "bucket/prefix"))
+
+    result = CliRunner().invoke(cli, ["rm", "-R", "s3://bucket/prefix"])
+
+    assert result.exit_code == 0, result.output
+    batches = [request["Delete"]["Objects"] for request in fs.requests]
+    assert sorted(map(len, batches)) == [1, 1000]
+    assert {item["Key"] for batch in batches for item in batch} == {f"prefix/{index}" for index in range(1001)}
 
 
 def test_json_previews_render_as_tables_and_degrade_safely():
@@ -138,3 +210,53 @@ def test_ls_long_renders_local_directory(tree):
     assert lines[0].split() == ["size", "modified", "name"]
     assert any(line.endswith("b.txt") for line in lines)
     assert any(line.endswith("sub/") for line in lines)
+
+
+def test_ls_glob_renders_matches_with_listing_metadata(monkeypatch):
+    class GlobFileSystem:
+        def glob(self, path, *, detail):
+            assert path == "bucket/*/foo"
+            assert detail is True
+            return {
+                "bucket/first/foo": {"name": "bucket/first/foo", "size": 3, "type": "file"},
+                "bucket/second/foo": {"name": "bucket/second/foo", "size": 5, "type": "file"},
+            }
+
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (GlobFileSystem(), "bucket/*/foo"))
+
+    result = CliRunner().invoke(cli, ["ls", "s3://bucket/*/foo"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines() == ["first/foo", "second/foo"]
+
+
+def test_du_scans_directories_in_parallel_using_listing_metadata(monkeypatch):
+    class ParallelListingFileSystem:
+        def __init__(self):
+            self.child_listings_started = threading.Barrier(2)
+
+        def ls(self, path, *, detail):
+            assert detail is True
+            if path == "bucket/root":
+                return [
+                    {"name": "bucket/root/recon", "size": 0, "type": "directory"},
+                    {"name": "bucket/root/top", "size": 5, "type": "file"},
+                ]
+            if path in ("bucket/root/recon/a", "bucket/root/recon/b"):
+                self.child_listings_started.wait(timeout=2)
+            return {
+                "bucket/root/recon": [
+                    {"name": "bucket/root/recon/a", "size": 0, "type": "directory"},
+                    {"name": "bucket/root/recon/b", "size": 0, "type": "directory"},
+                ],
+                "bucket/root/recon/a": [
+                    {"name": "bucket/root/recon/a/nested", "size": 0, "type": "directory"},
+                    {"name": "bucket/root/recon/a/one", "size": 7, "type": "file"},
+                ],
+                "bucket/root/recon/b": [{"name": "bucket/root/recon/b/two", "size": 11, "type": "file"}],
+                "bucket/root/recon/a/nested": [{"name": "bucket/root/recon/a/nested/three", "size": 13, "type": "file"}],
+            }[path]
+
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (ParallelListingFileSystem(), "bucket/root"))
+
+    assert listing.total_size("s3://bucket/root") == (36, 4)

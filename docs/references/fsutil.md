@@ -1,6 +1,6 @@
 # fsutil: browsing Marin's buckets
 
-`fsutil` lists, reads, sizes, and copies objects across every bucket declared in
+`fsutil` lists, reads, sizes, copies, and removes objects across every bucket declared in
 `config/*.yaml` — GCS, CoreWeave AI Object Storage, and R2 — from one command, and opens
 an interactive browser over all of them.
 
@@ -8,9 +8,11 @@ an interactive browser over all of them.
 uv run fsutil                        # interactive browser, starting at the bucket list
 uv run fsutil buckets                # what is declared, and whether credentials are set
 uv run fsutil ls -l gs://marin-us-central2/scratch
+uv run fsutil ls 's3://marin-us-east-02a/*/config.json'
 uv run fsutil cat s3://marin-us-east-02a/iris/my-job/config.json
 uv run fsutil du s3://marin-us-east-02a/iris/my-job
 uv run fsutil cp -r s3://marin-us-east-02a/iris/my-job/logs /tmp/logs
+uv run fsutil rm -R s3://marin-us-east-02a/tmp/expired-prefix
 ```
 
 Paths are always full URLs — `gs://bucket/key`, `s3://bucket/key`, or a local path.
@@ -45,14 +47,19 @@ that touch its buckets; the rest keep working.
 
 | Command | What it does |
 |---------|--------------|
-| `ls [URL] [-l]` | Immediate children; with no URL, the declared buckets. `-l` adds size and modification time |
+| `ls [URL] [-l]` | Immediate children or glob matches; with no URL, the declared buckets. `-l` adds size and modification time |
 | `cat URL [--raw]` | Print a file. Tabular JSON, JSONL, and parquet render as a table, and `--raw` writes stored bytes to stdout |
 | `head URL [-n N]` | Print the first N lines, or the first N rows of a parquet file |
 | `stat URL` | The object's metadata as the backend reports it |
 | `du URL` | Total bytes and object count beneath a prefix |
 | `find PATTERN` | Paths matching a glob, e.g. `gs://marin-us-central2/x/**/*.json` |
 | `cp SRC DST [-r]` | Copy between any two locations, including across backends |
+| `rm URL [-r]` | Remove an object. `-r` or `-R` recursively removes a prefix; remote prefixes show object-count progress |
 | `browse [URL]` | The interactive browser |
+
+`du` scans prefixes with up to 32 concurrent metadata-bearing listings. Recursive `rm`
+uses S3's 1,000-key bulk delete and GCS's 20-key batch delete, with up to eight batches
+in flight.
 
 `cat`, `head`, and the browser decompress `.gz`, `.bz2`, `.xz`, and `.lzma` files by
 suffix. A `data.json.gz` preview uses the JSON table view. `cat --raw` writes the compressed
