@@ -1060,3 +1060,15 @@ author: Rafal Wojdyla
 - Error check: No retry, rate-limit, connection, memory, dead-worker, or missing-file error matched either active source log.
 - Issue update: None. There is no major run-state change.
 - Next action: Continue the regular root, source, service, and error checks.
+
+### 2026-08-13 06:30 UTC - RNO TEI pool returned to full capacity
+
+- Root health: Both roots remain running with zero failures and zero preemptions.
+- Service fault: Service 092 stayed in the build state after nine preemptions. Its attempt-nine pod was scheduled at 04:24 UTC, but the init containers did not start. A Kubernetes event showed that the pod could not mount its `workdir-files` volume because the Iris-managed ConfigMap did not exist. The assigned node and GPU were healthy.
+- Service recovery: The Iris controller moved only task `tei-harrier-2d9c6923-092/0` to a preempted state with a recovery reason. Attempt 10 started with a new ConfigMap and became ready without a direct Kubernetes change.
+- Recovery check: Service 092 stayed running for more than ten minutes. Its TEI process uses fixed ports 12376 and 12377, and the local health check on port 12376 succeeded.
+- Service capacity: East and RNO each have 96 running TEI services, zero building services, and zero failed services.
+- Aggregate progress: A direct object count at 06:32 UTC found 115,124 of 166,775 output shards, or 69.03%. There are 51,651 shards left. East has written 46,720 shards, and RNO has written 68,404 shards. Ninety-three sources have output, and no Parquet path is unknown.
+- Active progress: East Nemotron medium-quality reached 4,094 of 14,843 shards. RNO Dolma4PDFs reached 4,696 of 8,683 shards. Both sources have 32 live workers and no dead workers.
+- Issue update: Post one major update for the full-capacity recovery.
+- Next action: Continue the regular root, source, service, and error checks.
