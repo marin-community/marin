@@ -169,6 +169,7 @@ aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
 | Path | What it is |
 | --- | --- |
 | `reference_pipeline.py` | The DAG builder + CLI (`--mode full\|sample`, `--pool-*`, `--sources`, `--quality-model`) |
+| `fuzzy_validation.py` | Production fuzzy-validation target with cached normalize, MinHash, and fuzzy-dedup dependencies |
 | `global_exact_dedup.py` | Sparse co-partitioned exact-duplicate attributes by normalized record ID |
 | `cluster/quality/fast_transformer/` | Quality classifier: per-source scoring step + training/calibration |
 | `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |
@@ -183,3 +184,16 @@ aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
 
 Submission commands (full and sample mode) live in the `reference_pipeline.py`
 module docstring.
+
+Run only fuzzy validation with `fuzzy_validation.py`. The entry point does not
+select the store or report steps. Do a read-only cache check before submission:
+
+```bash
+MARIN_PREFIX=s3://marin-us-east-02a/marin \
+  uv run python -m experiments.datakit.fuzzy_validation --dry-run
+```
+
+The module docstring contains an Iris submission command for 64 large workers.
+Each worker can run 1-CPU, 2-GB validation tasks that share its document store.
+The command uses a 1,800-second recovery timeout and a 28,800-second ready
+timeout. The CoreWeave cluster supplies the S3 credentials.

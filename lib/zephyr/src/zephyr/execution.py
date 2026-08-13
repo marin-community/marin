@@ -342,6 +342,7 @@ class ZephyrContext:
         hash_key: Callable[[K], int],
         recovery_timeout: float,
         ready_timeout: float = 900.0,
+        load_concurrency: int = 1,
     ) -> MemoryStore[K, V]:
         """Load an existing partitioned Dataset into the shared worker pool.
 
@@ -361,6 +362,7 @@ class ZephyrContext:
             recovery_timeout: Overall deadline for a lookup, stats, or destroy
                 operation, including ordinary responses and worker recovery.
             ready_timeout: Seconds to wait for every worker to validate and load the table.
+            load_concurrency: Maximum source partitions that each worker loads at once.
 
         Tables share each worker's process memory. Size the worker resource
         request for the tables and pipeline tasks it will host.
@@ -371,6 +373,8 @@ class ZephyrContext:
             raise ValueError(f"recovery_timeout must be positive, got {recovery_timeout}")
         if ready_timeout <= 0:
             raise ValueError(f"ready_timeout must be positive, got {ready_timeout}")
+        if load_concurrency < 1:
+            raise ValueError(f"load_concurrency must be at least 1, got {load_concurrency}")
         with self._state_lock:
             if self._state is not _ContextState.OWNER:
                 raise RuntimeError("load_memory_store requires an entered ZephyrContext that owns its worker pool")
@@ -388,6 +392,7 @@ class ZephyrContext:
             plan=memory_store_plan(dataset),
             hash_key=hash_key,
             worker_count=pool.worker_count,
+            load_concurrency=load_concurrency,
         )
 
         _require_resolvable_worker_handles(self.client)

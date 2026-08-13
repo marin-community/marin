@@ -5,9 +5,11 @@
 
 import logging
 import os
+import threading
 from collections import defaultdict
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
 from itertools import batched, chain, groupby
@@ -15,6 +17,7 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import zstandard as zstd
 from fray.types import ResourceConfig
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem import StoragePath, prefix_join
@@ -60,6 +63,20 @@ _LOCAL_LINE_COUNT_REJECTION = "local_line_count_ratio_below_threshold"
 # effectively every cluster while a pathological one stays bounded.
 ANCHOR_SCAN_RECORDS = 64
 ANCHOR_SCAN_CHARS = 2_000_000
+DOCUMENT_TEXT_COMPRESSION_LEVEL = 1
+PARQUET_READ_BATCH_SIZE = 4_096
+_DOCUMENT_TEXT_CODECS = threading.local()
+
+
+@dataclass
+class _SharedArrowMemoryPool:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    active_users: int = 0
+    memory_pool: pa.MemoryPool | None = None
+    previous_pool: pa.MemoryPool | None = None
+
+
+_SHARED_ARROW_MEMORY_POOL = _SharedArrowMemoryPool()
 
 
 class RepresentativeKind(StrEnum):
@@ -150,6 +167,7 @@ class FuzzyVerificationStoreConfig:
     recovery_timeout: float
     ready_timeout: float
     lookup_batch_size: int
+    load_concurrency: int = 1
 
     def __post_init__(self) -> None:
         if self.recovery_timeout <= 0:
@@ -158,6 +176,8 @@ class FuzzyVerificationStoreConfig:
             raise ValueError("ready_timeout must be positive")
         if self.lookup_batch_size < 1:
             raise ValueError("lookup_batch_size must be at least 1")
+        if self.load_concurrency < 1:
+            raise ValueError("load_concurrency must be at least 1")
 
 
 _VERIFIED_DUPLICATE_SCHEMA = pa.schema(
@@ -179,6 +199,26 @@ _VERIFIED_DUPLICATE_SCHEMA = pa.schema(
 )
 
 
+def _parquet_rows(path: str, columns: list[str]) -> Iterator[dict[str, Any]]:
+    """Read selected Parquet columns without a row-order requirement."""
+    with StoragePath(path).open("rb") as stream:
+        parquet = pq.ParquetFile(stream)
+        if parquet.metadata.num_rows == 0:
+            return
+        missing = set(columns) - set(parquet.schema_arrow.names)
+        if missing:
+            raise ValueError(f"{path} does not contain columns {sorted(missing)}")
+
+        for batch in parquet.iter_batches(
+            batch_size=PARQUET_READ_BATCH_SIZE,
+            columns=columns,
+            use_threads=False,
+        ):
+            arrays = [batch.column(index) for index in range(batch.num_columns)]
+            for row_index in range(batch.num_rows):
+                yield {name: array[row_index].as_py() for name, array in zip(columns, arrays, strict=True)}
+
+
 def _rows(path: str, columns: list[str], *, repeated_ids: bool = False) -> Iterator[dict[str, Any]]:
     """Read selected Parquet columns and validate ascending IDs.
 
@@ -188,53 +228,113 @@ def _rows(path: str, columns: list[str], *, repeated_ids: bool = False) -> Itera
     either row answers the join. Descending IDs stay an error: the join walks
     both sides forward once and cannot recover from them.
     """
-    with StoragePath(path).open("rb") as stream:
-        parquet = pq.ParquetFile(stream)
-        if parquet.metadata.num_rows == 0:
-            return
-        missing = set(columns) - set(parquet.schema_arrow.names)
-        if missing:
-            raise ValueError(f"{path} does not contain columns {sorted(missing)}")
+    previous_id = None
+    for row in _parquet_rows(path, columns):
+        row_id = row["id"]
+        if previous_id is not None and row_id < previous_id:
+            raise ValueError(f"{path} IDs are not sorted at {row_id!r}")
+        if previous_id is not None and row_id == previous_id:
+            if not repeated_ids:
+                raise ValueError(f"{path} IDs are not unique at {row_id!r}")
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/repeated_source_ids", 1)
+            continue
+        previous_id = row_id
+        yield row
 
-        previous_id = None
-        for batch in parquet.iter_batches(columns=columns):
-            for row in batch.to_pylist():
-                row_id = row["id"]
-                if previous_id is not None and row_id < previous_id:
-                    raise ValueError(f"{path} IDs are not sorted at {row_id!r}")
-                if previous_id is not None and row_id == previous_id:
-                    if not repeated_ids:
-                        raise ValueError(f"{path} IDs are not unique at {row_id!r}")
+
+@contextmanager
+def _system_arrow_memory_pool() -> Iterator[pa.MemoryPool]:
+    """Share an Arrow decoder pool safely across concurrent shard readers."""
+    state = _SHARED_ARROW_MEMORY_POOL
+    with state.lock:
+        if state.active_users == 0:
+            state.previous_pool = pa.default_memory_pool()
+            state.memory_pool = pa.system_memory_pool()
+            pa.set_memory_pool(state.memory_pool)
+        state.active_users += 1
+        memory_pool = state.memory_pool
+    assert memory_pool is not None
+    try:
+        yield memory_pool
+    finally:
+        with state.lock:
+            state.active_users -= 1
+            if state.active_users == 0:
+                memory_pool.release_unused()
+                previous_pool = state.previous_pool
+                assert previous_pool is not None
+                pa.set_memory_pool(previous_pool)
+                state.memory_pool = None
+                state.previous_pool = None
+
+
+def _copy_to_arrow_buffer(data: bytes, memory_pool: pa.MemoryPool) -> pa.Buffer:
+    buffer = pa.allocate_buffer(len(data), memory_pool=memory_pool)
+    memoryview(buffer).cast("B")[:] = data
+    return buffer
+
+
+def _candidate_documents(shards: list[VerificationShard]) -> Iterator[tuple[tuple[int, str], pa.Buffer]]:
+    """Join candidate IDs to compressed text without a normalized row-order requirement."""
+    value_memory_pool = pa.mimalloc_memory_pool()
+    with _system_arrow_memory_pool() as memory_pool:
+        for shard in shards:
+            if not StoragePath(shard.candidate_path).exists():
+                continue
+
+            candidate_ids: dict[str, str | None] = {
+                row["id"]: row["id"]
+                for row in _rows(shard.candidate_path, ["id", "dup_cluster_id", "is_cluster_canonical"])
+            }
+            if not candidate_ids:
+                continue
+
+            compressor = zstd.ZstdCompressor(level=DOCUMENT_TEXT_COMPRESSION_LEVEL)
+            loaded = 0
+            text_bytes = 0
+            stored_bytes = 0
+            for source in _parquet_rows(shard.normalized_path, ["id", "text"]):
+                source_id = source["id"]
+                if source_id not in candidate_ids:
+                    continue
+                candidate_id = candidate_ids[source_id]
+                if candidate_id is None:
                     counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/repeated_source_ids", 1)
                     continue
-                previous_id = row_id
-                yield row
+                candidate_ids[source_id] = None
+                text = (source["text"] or "").encode()
+                compressed_bytes = compressor.compress(text)
+                compressed_text = _copy_to_arrow_buffer(compressed_bytes, value_memory_pool)
+                loaded += 1
+                text_bytes += len(text)
+                stored_bytes += len(compressed_bytes)
+                del text, compressed_bytes
+                yield (shard.file_idx, candidate_id), compressed_text
 
-
-def _candidate_documents(shards: list[VerificationShard]) -> Iterator[tuple[tuple[int, str], str]]:
-    """Join candidate IDs to normalized text without changing file partitions."""
-    for shard in shards:
-        if not StoragePath(shard.candidate_path).exists():
-            continue
-
-        candidates = iter(_rows(shard.candidate_path, ["id", "dup_cluster_id", "is_cluster_canonical"]))
-        candidate = next(candidates, None)
-        if candidate is None:
-            continue
-
-        normalized = iter(_rows(shard.normalized_path, ["id", "text"], repeated_ids=True))
-        source = next(normalized, None)
-        while candidate is not None:
-            while source is not None and source["id"] < candidate["id"]:
-                source = next(normalized, None)
-            if source is None or source["id"] != candidate["id"]:
+            missing_id = next(
+                (candidate_id for candidate_id in candidate_ids.values() if candidate_id is not None),
+                None,
+            )
+            if missing_id is not None:
                 raise ValueError(
-                    f"{shard.candidate_path} contains ID {candidate['id']!r} "
-                    f"that is absent from {shard.normalized_path}"
+                    f"{shard.candidate_path} contains ID {missing_id!r} " f"that is absent from {shard.normalized_path}"
                 )
-            yield (shard.file_idx, candidate["id"]), source["text"] or ""
-            candidate = next(candidates, None)
-            source = next(normalized, None)
+            memory_pool.release_unused()
+            logger.info(
+                "Prepared memory-store shard %d with %d candidate texts: %d bytes compressed to %d bytes",
+                shard.file_idx,
+                loaded,
+                text_bytes,
+                stored_bytes,
+            )
+
+
+def _decompress_document_text(value: pa.Buffer) -> str:
+    decompressor = getattr(_DOCUMENT_TEXT_CODECS, "decompressor", None)
+    if decompressor is None:
+        decompressor = zstd.ZstdDecompressor()
+        _DOCUMENT_TEXT_CODECS.decompressor = decompressor
+    return decompressor.decompress(value).decode()
 
 
 def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[str, Any]]:
@@ -288,13 +388,14 @@ def _document_partition(positions: Mapping[int, int], key: tuple[int, str]) -> i
 
 def _attach_document_text(
     records: Iterator[dict[str, Any]],
-    document_store: MemoryStore[tuple[int, str], str],
+    document_store: MemoryStore[tuple[int, str], pa.Buffer],
     lookup_batch_size: int,
 ) -> Iterator[dict[str, Any]]:
     """Fetch bounded text batches while preserving reducer record order."""
     for record_batch in batched(records, lookup_batch_size):
-        texts = document_store.get_many([(record["file_idx"], record["id"]) for record in record_batch])
-        for record, text in zip(record_batch, texts, strict=True):
+        compressed_texts = document_store.get_many([(record["file_idx"], record["id"]) for record in record_batch])
+        for record, compressed_text in zip(record_batch, compressed_texts, strict=True):
+            text = _decompress_document_text(compressed_text)
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_text_chars", len(text))
             yield {**record, "text": text}
 
@@ -478,7 +579,7 @@ def _split_record_group(records: Iterator[dict[str, Any]]) -> _SplitRecordGroup:
 def _make_cluster_verifier(
     verification_params: FuzzyVerificationParams,
     local_params: LocalRepresentativeParams,
-    document_store: MemoryStore[tuple[int, str], str],
+    document_store: MemoryStore[tuple[int, str], pa.Buffer],
     lookup_batch_size: int,
 ):
     """Build a reducer that uses bounded, retained local representatives."""
@@ -832,6 +933,7 @@ def verify_fuzzy_dups(
             hash_key=partial(_document_partition, document_partitions),
             recovery_timeout=store_config.recovery_timeout,
             ready_timeout=store_config.ready_timeout,
+            load_concurrency=store_config.load_concurrency,
         )
         pipeline = (
             Dataset.from_list(shard_groups)

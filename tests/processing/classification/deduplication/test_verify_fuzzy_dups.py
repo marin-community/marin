@@ -1,10 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 from random import Random
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
@@ -17,6 +20,11 @@ from marin.processing.classification.deduplication.fuzzy_verification import Fuz
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     FuzzyVerificationStoreConfig,
     LocalRepresentativeParams,
+    VerificationShard,
+    _candidate_documents,
+    _decompress_document_text,
+    _parquet_rows,
+    _system_arrow_memory_pool,
 )
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     verify_fuzzy_dups as _verify_fuzzy_dups,
@@ -44,6 +52,71 @@ TEST_STORE_CONFIG = FuzzyVerificationStoreConfig(
     lookup_batch_size=2,
 )
 verify_fuzzy_dups = partial(_verify_fuzzy_dups, store_config=TEST_STORE_CONFIG)
+
+
+def test_parquet_rows_converts_only_the_row_it_yields(tmp_path, monkeypatch):
+    converted: list[tuple[int, int]] = []
+    batch_options = {}
+
+    class Scalar:
+        def __init__(self, column_index: int, row_index: int):
+            self.column_index = column_index
+            self.row_index = row_index
+
+        def as_py(self):
+            converted.append((self.column_index, self.row_index))
+            return [["id-0", "id-1"], ["text-0", "text-1"]][self.column_index][self.row_index]
+
+    class Column:
+        def __init__(self, column_index: int):
+            self.column_index = column_index
+
+        def __getitem__(self, row_index: int):
+            return Scalar(self.column_index, row_index)
+
+    class Batch:
+        num_columns = 2
+        num_rows = 2
+
+        def column(self, column_index: int):
+            return Column(column_index)
+
+        def to_pylist(self):
+            return [
+                {"id": Column(0)[row_index].as_py(), "text": Column(1)[row_index].as_py()}
+                for row_index in range(self.num_rows)
+            ]
+
+    class Metadata:
+        num_rows = 2
+
+    class Schema:
+        names = ("id", "text")
+
+    class ParquetFile:
+        metadata = Metadata()
+        schema_arrow = Schema()
+
+        def __init__(self, _stream):
+            pass
+
+        def iter_batches(self, **kwargs):
+            batch_options.update(kwargs)
+            yield Batch()
+
+    input_path = tmp_path / "input.parquet"
+    input_path.touch()
+    monkeypatch.setattr(pq, "ParquetFile", ParquetFile)
+
+    rows = _parquet_rows(str(input_path), ["id", "text"])
+
+    assert next(rows) == {"id": "id-0", "text": "text-0"}
+    assert converted == [(0, 0), (1, 0)]
+    assert batch_options == {
+        "batch_size": 4_096,
+        "columns": ["id", "text"],
+        "use_threads": False,
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -1058,3 +1131,166 @@ def test_verifier_accepts_repeated_source_ids(tmp_path, monkeypatch):
     assert rows[0]["dup_doc"] is True
     assert rows[0]["dup_representative_id"] == "aaa"
     assert verified.counters["dedup/fuzzy/verification/repeated_source_ids"] >= 1
+
+
+def test_verifier_reads_candidate_text_from_unordered_source_shard(tmp_path, monkeypatch):
+    """Candidate text lookup must not depend on normalized row order."""
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    source_key, source = _write_source(
+        root=tmp_path,
+        name="source",
+        shards={
+            "part-00000.parquet": [
+                {"id": "aaa", "text": "alpha beta gamma delta epsilon zeta"},
+                {"id": "bbb", "text": "alpha beta gamma delta"},
+            ]
+        },
+    )
+    minhash = _write_minhash(root=tmp_path, name="source", source=source)
+    write_parquet_file(
+        [
+            {"id": "bbb", "text": "alpha beta gamma delta"},
+            {"id": "aaa", "text": "alpha beta gamma delta epsilon zeta"},
+        ],
+        str(Path(source.main_output_dir) / "part-00000.parquet"),
+    )
+    candidates = _write_candidates(
+        root=tmp_path,
+        rows_by_source={
+            source_key: {
+                "part-00000.parquet": [
+                    {"id": "aaa", "dup_cluster_id": "cluster-a", "is_cluster_canonical": True},
+                    {"id": "bbb", "dup_cluster_id": "cluster-a", "is_cluster_canonical": False},
+                ]
+            }
+        },
+    )
+
+    verified = verify_fuzzy_dups(
+        normalized_sources={"source": source},
+        minhash_sources={"source": minhash},
+        candidates=candidates,
+        output_path=str(tmp_path / "verified"),
+        verification_params=FuzzyVerificationParams(),
+        local_representative_params=TEST_LOCAL_PARAMS,
+    )
+
+    rows = _output_rows(verified, source_key)
+    assert [row["id"] for row in rows] == ["bbb"]
+    assert rows[0]["dup_representative_id"] == "aaa"
+
+
+def test_candidate_text_load_streams_unordered_source_shard(tmp_path, monkeypatch):
+    """The first match is available before the normalized scan completes."""
+    candidate_path = tmp_path / "candidates.parquet"
+    candidate_path.touch()
+    shard = VerificationShard(
+        file_idx=7,
+        normalized_path=str(tmp_path / "normalized.parquet"),
+        candidate_path=str(candidate_path),
+        minhash_path=str(tmp_path / "minhash.parquet"),
+        output_path=str(tmp_path / "output.parquet"),
+        source_key="source",
+        source_tag="source_000",
+    )
+
+    def candidate_rows(path, columns, *, repeated_ids=False):
+        del path, columns, repeated_ids
+        yield {"id": "aaa"}
+        yield {"id": "bbb"}
+
+    def normalized_rows(path, columns):
+        del path, columns
+        yield {"id": "bbb", "text": "beta"}
+        raise AssertionError("candidate loading read past the first match")
+
+    monkeypatch.setattr(
+        "marin.processing.classification.deduplication.verify_fuzzy_dups._rows",
+        candidate_rows,
+    )
+    monkeypatch.setattr(
+        "marin.processing.classification.deduplication.verify_fuzzy_dups._parquet_rows",
+        normalized_rows,
+    )
+
+    key, text = next(_candidate_documents([shard]))
+    assert key == (7, "bbb")
+    assert isinstance(text, pa.Buffer)
+    assert _decompress_document_text(text) == "beta"
+
+
+def test_candidate_text_load_releases_arrow_pages_after_each_shard(tmp_path, monkeypatch):
+    candidate_path = tmp_path / "candidates.parquet"
+    candidate_path.touch()
+    shard = VerificationShard(
+        file_idx=7,
+        normalized_path=str(tmp_path / "normalized.parquet"),
+        candidate_path=str(candidate_path),
+        minhash_path=str(tmp_path / "minhash.parquet"),
+        output_path=str(tmp_path / "output.parquet"),
+        source_key="source",
+        source_tag="source_000",
+    )
+
+    def candidate_rows(path, columns, *, repeated_ids=False):
+        del path, columns, repeated_ids
+        yield {"id": "aaa"}
+
+    def normalized_rows(path, columns):
+        del path, columns
+        yield {"id": "aaa", "text": "alpha"}
+
+    class MemoryPool:
+        def __init__(self):
+            self.release_count = 0
+
+        def release_unused(self):
+            self.release_count += 1
+
+    previous_pool = MemoryPool()
+    memory_pool = MemoryPool()
+    monkeypatch.setattr(
+        "marin.processing.classification.deduplication.verify_fuzzy_dups._rows",
+        candidate_rows,
+    )
+    monkeypatch.setattr(
+        "marin.processing.classification.deduplication.verify_fuzzy_dups._parquet_rows",
+        normalized_rows,
+    )
+    selected_pools = []
+    monkeypatch.setattr(pa, "default_memory_pool", lambda: previous_pool)
+    monkeypatch.setattr(pa, "system_memory_pool", lambda: memory_pool)
+    monkeypatch.setattr(pa, "set_memory_pool", selected_pools.append)
+
+    assert len(list(_candidate_documents([shard]))) == 1
+    assert memory_pool.release_count == 2
+    assert selected_pools == [memory_pool, previous_pool]
+
+
+def test_candidate_text_load_shares_arrow_pool_across_threads(monkeypatch):
+    class MemoryPool:
+        def __init__(self):
+            self.release_count = 0
+
+        def release_unused(self):
+            self.release_count += 1
+
+    previous_pool = MemoryPool()
+    memory_pool = MemoryPool()
+    selected_pools = []
+    monkeypatch.setattr(pa, "default_memory_pool", lambda: previous_pool)
+    monkeypatch.setattr(pa, "system_memory_pool", lambda: memory_pool)
+    monkeypatch.setattr(pa, "set_memory_pool", selected_pools.append)
+    load_barrier = threading.Barrier(2)
+
+    def use_memory_pool():
+        with _system_arrow_memory_pool() as selected_pool:
+            load_barrier.wait(timeout=5)
+            return selected_pool
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        pools = list(executor.map(lambda _: use_memory_pool(), range(2)))
+
+    assert pools == [memory_pool, memory_pool]
+    assert memory_pool.release_count == 1
+    assert selected_pools == [memory_pool, previous_pool]
