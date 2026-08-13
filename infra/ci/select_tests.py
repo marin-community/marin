@@ -469,7 +469,8 @@ def classify(
                     forced.add(scope)
                 break
 
-            if filepath in (f"lib/{scope}/conftest.py", f"lib/{scope}/pyproject.toml"):
+            package_root = "infra/pulumi" if scope == "iac" else f"lib/{scope}"
+            if filepath in (f"{package_root}/conftest.py", f"{package_root}/pyproject.toml"):
                 forced.add(scope)
                 break
 
