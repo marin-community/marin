@@ -9,12 +9,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
-from .reference import (
-    _logit_state_dtype,
-    _logits,
-    linear_softmax_cross_entropy_loss_reference,
-    linear_softmax_cross_entropy_loss_streaming,
-)
+from .reference import linear_softmax_cross_entropy_loss_reference, linear_softmax_cross_entropy_loss_streaming
 from .tuned_block_sizes import (
     _largest_divisor_at_most,
     infer_block_sizes_with_tuned_match,
@@ -138,7 +133,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd(
             ),
         )
 
-    out_dtype = _logit_state_dtype(dtype)
+    out_dtype = jnp.dtype(dtype) if dtype is not None else jnp.float32
     loss_init = jnp.zeros((b_dim,), dtype=out_dtype)
     lse_init = jnp.zeros((b_dim,), dtype=out_dtype)
     num_b_blocks = b_dim // batch_block_size
@@ -204,7 +199,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
             ),
         )
 
-    out_dtype = _logit_state_dtype(dtype)
+    out_dtype = jnp.dtype(dtype) if dtype is not None else jnp.float32
     loss_init = jnp.zeros((b_dim,), dtype=out_dtype)
     lse_init = jnp.zeros((b_dim,), dtype=out_dtype)
     argmax_init = jnp.zeros((b_dim,), dtype=jnp.int32)
@@ -296,9 +291,15 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
             dout_loss_block = jax.lax.dynamic_slice(dout_loss, (batch_start,), (batch_block_size,))
             dout_lse_block = jax.lax.dynamic_slice(dout_lse, (batch_start,), (batch_block_size,))
 
-            # Same helper as the forward: `probs` below divides by the forward's lse, so the two
-            # logit computations have to stay identical.
-            logits = _logits(x_block, w_block, dtype=dtype, precision=precision)
+            logits = jax.lax.dot_general(
+                x_block,
+                w_block,
+                (((1,), (0,)), ((), ())),
+                precision=precision,
+                preferred_element_type=jnp.float32,
+            )
+            if dtype is not None:
+                logits = logits.astype(dtype)
 
             cap_deriv = jnp.asarray(1.0, dtype=logits.dtype)
             if logit_soft_cap is not None:

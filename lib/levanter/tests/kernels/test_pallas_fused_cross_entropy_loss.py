@@ -246,7 +246,14 @@ def test_xla_streaming_custom_vjp_grad_matches_reference_in_bfloat16(activation_
     exponential turns that disagreement into an unbounded gradient error: at bf16 logits of
     magnitude ~4000 the peak probability came out ~2.5e3 times too large. Float32 inputs cannot
     see this, because there both sides accumulate in float32.
+
+    XLA:CPU folds the bfloat16 narrowing away, so the mismatch is unobservable there and this
+    test passes with or without the fix. `test_streaming_lse_is_float32_for_bfloat16_inputs`
+    is the backend-independent guard.
     """
+    if jax.default_backend() == "cpu":
+        pytest.skip("XLA:CPU folds the bfloat16 logit narrowing; the mismatch cannot be observed")
+
     key = jax.random.PRNGKey(11)
     key_x, key_w, key_y, key_c = jax.random.split(key, 4)
 
@@ -285,6 +292,24 @@ def test_xla_streaming_custom_vjp_grad_matches_reference_in_bfloat16(activation_
             f"{name} at activation_scale={activation_scale}: "
             f"max|delta|={np.abs(actual - expected).max():.4g} vs 5% of max|expected|={scale:.4g}"
         )
+
+
+def test_streaming_lse_is_float32_for_bfloat16_inputs():
+    """The streaming forward holds logits and the logsumexp carry in float32, not the input dtype.
+
+    The backward recomputes logits in float32, so a bfloat16 carry desynchronizes the two. This
+    checks the dtype contract rather than the numerics because XLA:CPU folds the narrowing away.
+    """
+    b_dim, h_dim, v_dim = 8, 16, 256
+    key_x, key_w, key_y = jax.random.split(jax.random.PRNGKey(3), 3)
+    x = jax.random.normal(key_x, (b_dim, h_dim), dtype=jnp.float32).astype(jnp.bfloat16)
+    w = jax.random.normal(key_w, (h_dim, v_dim), dtype=jnp.float32).astype(jnp.bfloat16)
+    y = jax.random.randint(key_y, (b_dim,), 0, v_dim, dtype=jnp.int32)
+
+    loss, lse = linear_softmax_cross_entropy_loss_streaming(x, y, w, block_size=64, dtype=None)
+
+    assert loss.dtype == jnp.float32
+    assert lse.dtype == jnp.float32
 
 
 def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff_with_batch_blocking(
