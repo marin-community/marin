@@ -5,13 +5,12 @@
 
 import argparse
 
-from scripts.ci.claude_runner import ClaudeRunStatus, report_rate_limit, run_claude
-
-# Suppress Claude Code's default "Co-Authored-By: Claude" / "Generated with
-# Claude Code" trailers on the commits and PRs the agent creates. AGENTS.md
-# forbids self-credit, and a prose instruction alone does not reliably override
-# the harness default — this setting does.
-NO_SELF_CREDIT_SETTINGS = ("--settings", '{"attribution":{"commit":"","pr":""}}')
+from scripts.ci.claude_runner import (
+    NO_SELF_CREDIT_SETTINGS,
+    ClaudeRunStatus,
+    report_rate_limit,
+    run_claude,
+)
 
 DOC_DRIFT_PROMPT = """\
 You are the Nightshift Doc Drift detector.

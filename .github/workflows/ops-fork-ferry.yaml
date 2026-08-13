@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       unit:
-        description: "single unit to refresh (tpu-stack|evalchemy|harbor); empty runs all"
+        description: "single unit to refresh (tpu-vllm|evalchemy|harbor); empty runs all"
         required: false
         default: ""
 
@@ -28,14 +28,12 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        unit: [tpu-stack, evalchemy, harbor]
+        unit: [tpu-vllm, evalchemy, harbor]
     permissions:
       contents: write
       pull-requests: write
       issues: write
       id-token: write
-    env:
-      IRIS_CONFIG: lib/iris/config/marin.yaml
     steps:
       - name: Generate app token
         id: app-token

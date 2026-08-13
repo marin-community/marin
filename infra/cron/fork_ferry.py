@@ -3,12 +3,12 @@
 
 """Weekly fork-ferry: refresh one unit of forks toward upstream under headless Claude.
 
-The coordinator runs the ``refresh-fork`` skill for one unit per invocation. A unit is one or
-more forks that must refresh together: ``tpu-inference`` and the TPU ``vllm`` pin derive from a
-single base, so they stage, validate, and land in one Marin PR; the patch-free forks are each
-their own unit. The skill selects the base from ``config/external/migration.toml``, stages the
-overlay on ``<branch>-next``, pins Marin at that tip, runs the fork's declared e2e on the marin
-hub, and opens a draft Marin PR.
+The coordinator runs the ``refresh-fork`` skill for one unit per invocation. A unit is the set of
+forks that must refresh together, read from the descriptor's ``group`` field: ``tpu-inference``
+and the TPU ``vllm`` pin derive from a single base, so they stage, validate, and land in one Marin
+PR; an ungrouped fork is its own unit. The skill selects the base from
+``config/external/migration.toml``, stages the overlay on ``<branch>-next``, pins Marin at that
+tip, runs the fork's declared e2e on the marin hub, and opens a draft Marin PR.
 
 v1 is stop-at-PR: the run creates every durable ref it can with an ordinary token — the
 ``<branch>-next`` staging branch, a backup tag of the current stable tip, and a date tag on the
@@ -25,25 +25,21 @@ import logging
 import tomllib
 from pathlib import Path
 
-from scripts.ci.claude_runner import ClaudeRunStatus, report_rate_limit, run_claude
+from scripts.ci.claude_runner import (
+    NO_SELF_CREDIT_SETTINGS,
+    ClaudeRunStatus,
+    report_rate_limit,
+    run_claude,
+)
 
 logger = logging.getLogger(__name__)
 
-DESCRIPTOR = Path("config/external/migration.toml")
+DESCRIPTOR_PATH = Path("config/external/migration.toml")
 
-# One entry per unit. Forks that derive from a shared base refresh together in one entry so a
-# split run cannot pin them against different revisions of that base.
-UNITS: dict[str, tuple[str, ...]] = {
-    "tpu-stack": ("tpu-inference", "vllm"),
-    "evalchemy": ("evalchemy",),
-    "harbor": ("harbor",),
-}
-
-# Descriptor sections the ferry does not drive yet, tracked so a newly added fork cannot slip
-# through without a conscious wiring decision (enforced by tests/infra/test_fork_ferry.py).
-#   vllm-gpu    Phase B: its wheel is built by the fork's own release CI, so the ferry must
-#               dispatch that build cross-repo and wait for the wheel rather than resolve inline.
-#   MarinSkyRL  Needs a one-time re-fork (#7920) before an automated refresh is meaningful.
+# Forks the ferry does not drive. vllm-gpu's wheel is built by the fork's own release CI, so a
+# refresh must dispatch that build cross-repo and wait for the wheel rather than resolve it inline;
+# MarinSkyRL needs a one-time re-fork (#7920) before an automated refresh means anything. Tracked
+# so a newly added descriptor section cannot slip through unwired (tests/infra/test_fork_ferry.py).
 EXCLUDED: frozenset[str] = frozenset({"vllm-gpu", "MarinSkyRL"})
 
 # Scoped so a headless run can rebase overlays, run the e2e through Iris, and open the PR, but
@@ -54,14 +50,24 @@ ALLOWED_TOOLS = (
     "Bash(git:*),Bash(gh:*),Bash(uv:*),Bash(python:*),Bash(iris:*),Bash(./infra/pre-commit.py:*)",
 )
 
-# Suppress Claude Code's default self-credit trailers; AGENTS.md forbids them and a prose
-# instruction alone does not reliably override the harness default.
-NO_SELF_CREDIT_SETTINGS = ("--settings", '{"attribution":{"commit":"","pr":""}}')
-
 
 def load_descriptor() -> dict:
-    """Read the fork migration descriptor."""
-    return tomllib.loads(DESCRIPTOR.read_text())
+    return tomllib.loads(DESCRIPTOR_PATH.read_text())
+
+
+def drivable_units(descriptor: dict) -> dict[str, tuple[str, ...]]:
+    """Group the drivable forks into units keyed by the descriptor's ``group`` field.
+
+    Forks sharing a ``group`` refresh together under that group name, so a split run cannot pin
+    them against different revisions of their shared base; an ungrouped fork is its own unit.
+    Excluded forks are omitted.
+    """
+    members: dict[str, list[str]] = {}
+    for name, section in descriptor.items():
+        if name in EXCLUDED:
+            continue
+        members.setdefault(section.get("group", name), []).append(name)
+    return {unit: tuple(forks) for unit, forks in members.items()}
 
 
 def build_prompt(forks: tuple[str, ...]) -> str:
@@ -93,13 +99,11 @@ def build_prompt(forks: tuple[str, ...]) -> str:
 
 def refresh(unit: str) -> ClaudeRunStatus:
     """Run the refresh-fork skill for one unit, returning the agent's run status."""
-    forks = UNITS[unit]
-    descriptor = load_descriptor()
-    missing = [fork for fork in forks if fork not in descriptor]
-    if missing:
-        raise SystemExit(f"{unit}: no {DESCRIPTOR} section for {missing}")
+    units = drivable_units(load_descriptor())
+    if unit not in units:
+        raise SystemExit(f"{unit}: not a drivable unit; choices are {sorted(units)}")
     result = run_claude(
-        build_prompt(forks),
+        build_prompt(units[unit]),
         ["--model=opus", *ALLOWED_TOOLS, *NO_SELF_CREDIT_SETTINGS, "--max-turns", "600"],
     )
     logger.info("%s", result.output)
@@ -109,7 +113,7 @@ def refresh(unit: str) -> ClaudeRunStatus:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--unit", required=True, choices=sorted(UNITS), help="fork unit to refresh")
+    parser.add_argument("--unit", required=True, help="descriptor group or ungrouped fork name to refresh")
     status = refresh(parser.parse_args().unit)
     if status == ClaudeRunStatus.RATE_LIMITED:
         report_rate_limit()
