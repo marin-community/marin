@@ -8,8 +8,7 @@ verification → consolidate → tokenize. The first step confirms the ``quality
 subtree of the Nemotron-CC dump is already staged at ``NEMOTRON_RAW_PATH`` and
 refuses to initiate a Common Crawl download.
 
-Pipeline outputs land under ``$MARIN_PREFIX/datakit-nemotron-smoke/$SMOKE_RUN_ID/...``;
-``MARIN_PREFIX`` defaults to a region-local temp bucket with 1-day TTL.
+Pipeline outputs land under a region-local one-day temp prefix.
 """
 
 import json
@@ -90,8 +89,8 @@ def _verify_nemotron_quality_present(output_path: str) -> None:
     logger.info("Nemotron-CC %s confirmed at %s (e.g. %s)", NEMOTRON_QUALITY_DIR, quality_dir, sample[0])
 
 
-def build_steps(run_id: str) -> list[StepSpec]:
-    base = f"datakit-nemotron-smoke/{run_id}"
+def build_steps(base: str) -> list[StepSpec]:
+    base_path = StoragePath(base)
 
     # Verify-only raw step. Uses an absolute override so it points at the
     # pre-staged dump regardless of MARIN_PREFIX.
@@ -114,7 +113,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         relative_input_path=f"{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_QUALITY_DIR}",
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="5g"),
         max_workers=512,
-        override_output_path=f"{base}/normalize",
+        override_output_path=str(base_path / "normalize"),
     )  # ~1,380 output shards
 
     minhash = StepSpec(
@@ -127,7 +126,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             map_task_resources=resources.scale(1 / 16),
             reduce_task_resources=resources.scale(3 / 16),
         ),
-        override_output_path=f"{base}/minhash",
+        override_output_path=str(base_path / "minhash"),
     )  # ~1,380 output shards
 
     candidates = StepSpec(
@@ -142,7 +141,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             map_task_resources=resources.scale(1 / 16),
             reduce_task_resources=resources.scale(3 / 16),
         ),
-        override_output_path=f"{base}/fuzzy_dups",
+        override_output_path=str(base_path / "fuzzy_dups"),
     )  # ~1,380 output shards
 
     verification_params = FuzzyVerificationParams()
@@ -190,7 +189,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             worker_resources=(resources := ResourceConfig(cpu=16, ram="32g", disk="16g")),
             map_task_resources=resources.scale(1 / 16),
         ),
-        override_output_path=f"{base}/consolidate",
+        override_output_path=str(base_path / "consolidate"),
     )  # ~1,380 output shards
 
     tokenized = StepSpec(
@@ -207,7 +206,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
                 map_task_resources=resources.scale(1 / 16),
             )
         ),
-        override_output_path=f"{base}/tokens",
+        override_output_path=str(base_path / "tokens"),
     )  # ~1,380 output shards
 
     return [download, normalized, minhash, candidates, verified, consolidated, tokenized]
@@ -225,22 +224,19 @@ def _write_status(status: str, marin_prefix: str) -> None:
 
 def main() -> None:
     configure_logging()
-    if not os.environ.get("MARIN_PREFIX"):
-        os.environ["MARIN_PREFIX"] = marin_temp_bucket(ttl_days=1)
-
-    marin_prefix = os.environ["MARIN_PREFIX"]
-    logger.info("MARIN_PREFIX defaulted to %s", marin_prefix)
     run_id = os.environ["SMOKE_RUN_ID"]
+    output_prefix = marin_temp_bucket(ttl_days=1, prefix=f"datakit-nemotron-smoke/{run_id}")
+    logger.info("Output prefix: %s", output_prefix)
 
     # Guard against accidental cross-region reads of the multi-TB raw dump.
     region = region_from_metadata()
     if region:
         check_path_in_region("nemotron_raw", NEMOTRON_RAW_PATH, region)
 
-    _write_status("running", marin_prefix)
+    _write_status("running", output_prefix)
     with log_time("Datakit nemotron ferry total wall time"):
-        StepRunner().run(build_steps(run_id))
-    _write_status("succeeded", marin_prefix)
+        StepRunner().run(build_steps(output_prefix))
+    _write_status("succeeded", output_prefix)
 
 
 if __name__ == "__main__":

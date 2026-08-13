@@ -45,7 +45,6 @@ from experiments.grug.moe_hero_ep.launch import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MIXED_PRECISION,
-    HERO_PROCESSES_PER_TASK,
     HeroThroughputResult,
 )
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
@@ -442,7 +441,9 @@ def build_small_run(
                 # expert-collapsed mesh); a no-op for the FSDP flavors, which already run dropless.
                 dropless_eval=True,
             ),
-            processes_per_task=HERO_PROCESSES_PER_TASK,
+            # One process per GPU on every target: the H100 nodes hold 8 GPUs, not the
+            # GB200 hero's 4, so the count follows the fleet rather than the hero constant.
+            processes_per_task=fleet.gpus_per_node,
         )
 
     return ArtifactStep(

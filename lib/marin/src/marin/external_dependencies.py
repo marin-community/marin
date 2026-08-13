@@ -66,7 +66,7 @@ HARBOR = ExternalDependency(
     distribution="harbor",
     repository="https://github.com/marin-community/harbor.git",
     version="0.8.1",
-    commit="24e5e67ac93d21c1a2202d6906f6093e0a57b86c",
+    commit="7f2fea3e856bbbf1d20d4314b21248670748dcbd",
     runtime_requirements=("daytona==0.200.2", "gcsfs==2026.7.0", "pydantic-settings==2.14.2", "s3fs==2026.7.0"),
 )
 
@@ -75,7 +75,7 @@ MARIN_SKYRL = ExternalDependency(
     distribution="marinskyrl",
     repository="https://github.com/marin-community/MarinSkyRL.git",
     version="0.1.0",
-    commit="fbcf507bb64ee9c70a338bafcab98db14271bea3",
+    commit="769eca68ef843496e52a6d82e10c0e23c6fdcc69",
     runtime_requirements=(),
 )
 
@@ -108,9 +108,9 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
     ),
 )
 
-VLLM_FORK_REQUIREMENT = "vllm @ git+https://github.com/marin-community/vllm.git@244808e7863d53ac319a22beb548afd854d48d57"
+VLLM_FORK_REQUIREMENT = "vllm @ git+https://github.com/marin-community/vllm.git@3d26773be1d7aa7361a542943e3ef14f023d6f3a"
 TPU_INFERENCE_FORK_REQUIREMENT = (
-    "tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@e8809d492d5d6c7008369919a00384eb1c4de969"
+    "tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@c63712cb74eb8183999b9bec1a75a810edb4abab"
 )
 
 EXTERNAL_DEPENDENCIES = (

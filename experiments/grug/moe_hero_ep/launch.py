@@ -36,7 +36,13 @@ HERO_EP_BATCH_SIZE = 1024
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
-HERO_PROCESSES_PER_TASK = 1
+# One JAX process per GPU. The old one-process-per-node layout has two reproducible
+# failure modes on this stack, both from auto-PGLE (which only engages per-node):
+# a profiling-session collision that kills the gang during early dispatch
+# (ALREADY_EXISTS: Another profiling session active), and a silent wedge at the
+# FDO-recompile clique re-initialization (#7344). Per-GPU also matches the FSDP
+# hero (#8040) and is required by the ragged EP backend (#8081).
+HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 # The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
 # of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.

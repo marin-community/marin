@@ -4,8 +4,8 @@
 """Tests for the split tokenize pipeline (Stage A: attribute parquet, Stage B: store builder).
 
 Unit tests cover the pure helpers (``attach_id``, ``IdPreservingPreprocessor``).
-The slow integration test exercises the A→B pipeline end-to-end against the
-legacy ``tokenize()`` path on a tiny local parquet fixture.
+The integration test exercises the A→B pipeline end-to-end against the legacy
+``tokenize()`` path on a tiny local parquet fixture.
 """
 import json
 import os
@@ -14,9 +14,10 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.data.text.formats import PrebuiltLmDatasetFormat, TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, TreeCache
 from marin.datakit.normalize import NormalizedData, generate_id
+from marin.processing.tokenize import _core as tokenize_core
 from marin.processing.tokenize._core import IdPreservingPreprocessor, attach_id, split_oversized_token_record
 from marin.processing.tokenize.attributes import (
     TokenizeAttributesConfig,
@@ -42,6 +43,11 @@ class _FakeProcessor:
         if self._returns is not None:
             return self._returns
         return [{"input_ids": [i, i + 1]} for i, _ in enumerate(batch)]
+
+
+class _FakeWorkerContext:
+    def get_shared(self, name: str) -> str:
+        return {"tokenizer_name": "unused", "tokenizer_backend": "huggingface"}[name]
 
 
 def test_attach_id_preserves_existing_id():
@@ -110,6 +116,20 @@ def test_id_preserving_preprocessor_raises_on_non_1_to_1():
     wrapped = IdPreservingPreprocessor(inner)
     with pytest.raises(RuntimeError, match="1:1"):
         wrapped([{"id": "a"}, {"id": "b"}])
+
+
+def test_tokenize_batches_uses_format_token_key(monkeypatch):
+    monkeypatch.setattr(tokenize_core, "zephyr_worker_ctx", _FakeWorkerContext)
+    monkeypatch.setattr(tokenize_core, "load_tokenizer", lambda *args, **kwargs: object())
+    data_format = PrebuiltLmDatasetFormat(input_ids_key="tokens")
+    batches = iter([[{"id": "empty", "tokens": []}, {"id": "kept", "tokens": [1, 2]}]])
+
+    rows = list(tokenize_core.tokenize_batches_with_id(data_format=data_format, batches=batches))
+
+    assert len(rows) == 1
+    assert rows[0]["id"] == "kept"
+    assert rows[0]["tokens"].tolist() == [1, 2]
+    assert rows[0]["chunk_index"] == 0
 
 
 def test_oversized_token_record_round_trips_as_ordered_chunks(tmp_path):
@@ -183,7 +203,6 @@ def _write_normalized_fixture(tmp_path, texts: list[str]) -> NormalizedData:
     )
 
 
-@pytest.mark.slow
 def test_split_pipeline_matches_legacy_tokenize(tmp_path, monkeypatch):
     """Stage A → Stage B should produce a Levanter cache with the same token count
     as the legacy raw-input ``tokenize()`` path on the same texts."""

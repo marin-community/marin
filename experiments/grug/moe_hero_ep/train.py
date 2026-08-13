@@ -74,8 +74,14 @@ class WatchMode(StrEnum):
     DIAGNOSTIC = "diagnostic"
 
 
-def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool) -> None:
-    for name, value in HERO_EP_RUNTIME_ENV.items():
+def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per_task: int = 1) -> None:
+    env_defaults = dict(HERO_EP_RUNTIME_ENV)
+    if processes_per_task > 1:
+        # With one process per GPU, the per-process CUPTI sessions collide with each
+        # other and with CoreWeave's DCGM, so PGLE cannot profile and its recompile
+        # machinery only adds failure modes. Default it off; an explicit env wins.
+        env_defaults["JAX_ENABLE_PGLE"] = "false"
+    for name, value in env_defaults.items():
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
     overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
@@ -852,7 +858,9 @@ def run_grug(config: GrugRunConfig) -> None:
 
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
     inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
-    _apply_hero_ep_runtime_defaults(inline_watch_enabled=inline_watch_enabled)
+    _apply_hero_ep_runtime_defaults(
+        inline_watch_enabled=inline_watch_enabled, processes_per_task=config.processes_per_task
+    )
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,

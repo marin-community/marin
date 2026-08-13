@@ -132,7 +132,6 @@ def test_snowball_matches_grug_experiment_per_layer_and_logits():
     assert np.array_equal(np.argmax(exp_logits, axis=-1), np.argmax(snow_logits, axis=-1))
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("seq_len", [1, 4, 5, 16])
 def test_snowball_matches_grug_across_lengths(seq_len):
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):

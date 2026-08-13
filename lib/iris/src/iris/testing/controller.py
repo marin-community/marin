@@ -208,6 +208,9 @@ class FakeProvider:
     def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
 
+    def runtime_image(self, requested_image: str) -> str:
+        return requested_image
+
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return run_worker_daemon_schedule(self._scheduler, self._store, request)
 
@@ -300,6 +303,7 @@ class MockController:
         # A bare Mock would auto-create a truthy .autoscaler; the per-backend
         # feasibility/pending-hint paths read it, so pin it to "no autoscaler".
         self.provider.autoscaler = None
+        self.provider.runtime_image.return_value = ""
         # The backend owns its liveness tracker; the service registers workers into
         # it and the controller's union reads back through it. Tests that inspect a
         # specific ``state._health`` point this at that tracker.

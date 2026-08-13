@@ -443,6 +443,22 @@ def test_group_by_with_none_and_filter(zephyr_ctx):
     assert sorted(results) == ["a", "foo"]
 
 
+def test_group_by_shard_starting_with_none_item(zephyr_ctx):
+    """A shard whose first item is ``None`` must still be scattered.
+
+    A peek that cannot distinguish a ``None`` item from an exhausted stream
+    reports the shard as empty and drops its contents without error.
+    """
+    ds = Dataset.from_list([None, None, 1]).group_by(
+        key=lambda item: item is None,
+        reducer=lambda key, items: {"key": key, "count": sum(1 for _ in items)},
+    )
+
+    results = sorted(zephyr_ctx.execute(ds).results, key=lambda r: r["key"])
+
+    assert results == [{"key": False, "count": 1}, {"key": True, "count": 2}]
+
+
 def test_group_by_non_vortex_serializable(zephyr_ctx):
     """Shuffle with items that Vortex/Arrow cannot serialize uses pickle-in-parquet.
 

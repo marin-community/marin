@@ -62,7 +62,6 @@ def make_task_backend(
     config: IrisClusterConfig,
     *,
     unreachable_grace: Duration,
-    task_stats_table: Table | None = None,
     task_event_table: Table | None = None,
     profile_table: Table | None = None,
     autoscaler: Autoscaler | None = None,
@@ -71,10 +70,10 @@ def make_task_backend(
     """Create a TaskBackend from cluster configuration.
 
     Returns a ``K8sTaskProvider`` when ``kubernetes_provider`` is configured,
-    or an ``RpcTaskBackend`` when ``worker_provider`` is configured. The finelog
-    tables are passed to the K8s backend (which writes per-pod resource/profile
-    samples directly); the RPC backend ignores them — its worker daemons write
-    their own rows. ``unreachable_grace`` sizes the liveness tracker the
+    or an ``RpcTaskBackend`` when ``worker_provider`` is configured. Event and
+    profile tables are passed to the K8s backend; node agents write per-pod
+    resource samples, while RPC worker daemons write their own rows.
+    ``unreachable_grace`` sizes the liveness tracker the
     worker-daemon backend constructs and owns. ``transition_reader`` is the K8s
     backend's controller-DB read surface; ``autoscaler`` provisions capacity for
     the worker-daemon backend (None for clusters with no scale groups).
@@ -137,7 +136,6 @@ def make_task_backend(
                 priority_class_names=pod_priority_classes,
             ),
             preempt_namespaces=list(kp.preempt_namespaces),
-            task_stats_table=task_stats_table,
             task_event_table=task_event_table,
             profile_table=profile_table,
             transition_reader=transition_reader,
@@ -215,7 +213,6 @@ def make_backend(
         provider = make_task_backend(
             config,
             unreachable_grace=unreachable_grace,
-            task_stats_table=log_stack.task_stats_table,
             task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
             transition_reader=DbTransitionReader(db),
@@ -228,7 +225,6 @@ def make_backend(
         return make_task_backend(
             config,
             unreachable_grace=unreachable_grace,
-            task_stats_table=log_stack.task_stats_table,
             task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
         )
@@ -269,7 +265,6 @@ def make_backend(
     provider = make_task_backend(
         config,
         unreachable_grace=unreachable_grace,
-        task_stats_table=log_stack.task_stats_table,
         task_event_table=log_stack.task_event_table,
         profile_table=log_stack.profile_table,
         autoscaler=autoscaler,

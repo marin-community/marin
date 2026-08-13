@@ -68,6 +68,7 @@ runs:
         OUT_DIR: ${{ github.workspace }}/iac-preview-out
       run: |
         set -uo pipefail
+        set +e
         mkdir -p "$OUT_DIR"
 
         # The inner `set -e` subshell aborts on the first failing command (login, select,
