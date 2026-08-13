@@ -1015,3 +1015,15 @@ author: Rafal Wojdyla
 - Aggregate progress: A direct object count found 104,318 of 166,775 output shards, or 62.55%. There are 62,457 shards left. East has written 42,582 shards, and RNO has written 61,736 shards.
 - Issue update: Posted the stable full-capacity recovery at https://github.com/marin-community/marin/issues/8162#issuecomment-5275096234.
 - Next action: Continue the regular root, source, service, and error checks.
+
+### 2026-08-13 02:30 UTC - Routine health check
+
+- Root health: Both roots remain running with zero failures and zero preemptions.
+- Completed artifacts: East has 47 completed source artifacts. RNO has 42. The full run has 89 of 292 completed source artifacts.
+- Aggregate progress: A direct object count found 105,188 of 166,775 output shards, or 63.07%. There are 61,587 shards left. East has written 42,836 shards, and RNO has written 62,352 shards. Ninety-one sources have output, and no Parquet path is unknown.
+- East progress: `nemotron_cc_v2-medium_quality_edb2d9ae` reached 219 of 14,843 output shards with 32 live workers and no dead workers.
+- RNO results: `finepdfs-ron_latn_a135b740` completed. `finepdfs-spa_latn_6fe75099` reached 167 of 1,409 output shards with 32 live workers and no dead workers.
+- Service capacity: East and RNO each have 96 running TEI services. Neither pool has a building or failed service. East has seven total service preemptions, and RNO has 161.
+- Error check: No retry, rate-limit, connection, memory, dead-worker, or missing-file error matched either active source log.
+- Issue update: None. There is no major run-state change.
+- Next action: Continue the regular root, source, service, and error checks.
