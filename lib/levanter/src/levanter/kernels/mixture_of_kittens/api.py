@@ -13,7 +13,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug._moe.common import _CHECKPOINT_MOE_OUTPUT, MoeImplementation
 from levanter.grug.grug_moe import moe_mlp
 from levanter.grug.sharding import _batch_spec_from_x, _reshard_for_shard_map
-from levanter.kernels.mixture_of_kittens.config import MokLikeConfig
+from levanter.kernels.mixture_of_kittens.config import MokLikeConfig, MokLikeTopology
 from levanter.kernels.mixture_of_kittens.ffi import (
     MokLikeForwardContext,
     backward_bf16_local,
@@ -25,11 +25,15 @@ from levanter.kernels.mixture_of_kittens.schedule import build_schedule, schedul
 from levanter.utils.activation import ActivationFunctionEnum
 
 _EXPERT_AXIS = "expert"
-_NUM_DEVICES = 4
 MOK_CONTEXT_CHECKPOINT_NAME = "mixture_of_kittens_context"
 
 
-def _failure_agreement_axes(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> tuple[str, ...]:
+def _failure_agreement_axes(
+    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
+    topology: MokLikeTopology,
+) -> tuple[str, ...]:
+    if topology is MokLikeTopology.NVLINK_EP64:
+        return tuple(mesh.axis_names)
     return tuple(axis_name for axis_name in mesh.axis_names if axis_name != _EXPERT_AXIS)
 
 
@@ -83,13 +87,20 @@ def validate_mok_like_inputs(
         raise ValueError("tokens must be positive and hidden/intermediate dimensions must be divisible by 256")
 
 
-def _validate_topology(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> None:
-    if mesh.empty or int(mesh.shape.get(_EXPERT_AXIS, 1)) != _NUM_DEVICES:
-        raise ValueError("Mixture-of-Kittens requires an expert axis of size four")
-    if jax.local_device_count() != _NUM_DEVICES:
-        raise ValueError("Mixture-of-Kittens requires four visible local GPUs per JAX process")
+def _validate_topology(
+    mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
+    topology: MokLikeTopology,
+) -> None:
+    expected_expert_axis = topology.expert_axis_size
+    if mesh.empty or int(mesh.shape.get(_EXPERT_AXIS, 1)) != expected_expert_axis:
+        raise ValueError(f"Mixture-of-Kittens {topology.value} requires an expert axis of size {expected_expert_axis}")
+    expected_local_devices = 1 if topology is MokLikeTopology.NVLINK_EP64 else 4
+    if jax.local_device_count() != expected_local_devices:
+        raise ValueError(
+            f"Mixture-of-Kittens {topology.value} requires {expected_local_devices} visible local GPU(s) per JAX process"
+        )
     if isinstance(mesh, jax.sharding.Mesh):
-        validate_mok_like_mesh_topology(mesh)
+        validate_mok_like_mesh_topology(mesh, topology=topology)
 
 
 def _fused_forward_with_context(
@@ -108,7 +119,7 @@ def _fused_forward_with_context(
     config: MokLikeConfig,
     collective_id: int,
 ) -> tuple[jax.Array, jax.Array, MokLikeForwardContext]:
-    _validate_topology(mesh)
+    _validate_topology(mesh, config.topology)
     batch_spec = _batch_spec_from_x(x, mesh)
     expert_weight_spec = P(_EXPERT_AXIS, None, None)
     shared_weight_spec = P(None, None)
@@ -166,10 +177,9 @@ def _fused_forward_with_context(
             config=config,
             collective_id=collective_id,
         )
-        # Native cancellation already makes the process-local four-device expert
-        # island uniform. Reduce one scalar per expert lane across every remaining
-        # (process-spanning) mesh axis instead of forming an all-device group.
-        global_failure = jax.lax.pmax(local_failure, _failure_agreement_axes(mesh))
+        # EP4 cancellation already makes the process-local expert island uniform,
+        # while EP64 needs agreement across the whole process-spanning expert group.
+        global_failure = jax.lax.pmax(local_failure, _failure_agreement_axes(mesh, config.topology))
 
         def success(_: None) -> tuple[jax.Array, jax.Array, MokLikeForwardContext]:
             return output, jax.lax.psum(schedule.dropped_assignments, _EXPERT_AXIS), context
@@ -269,7 +279,7 @@ def _fused_backward(
     config: MokLikeConfig,
     collective_id: int,
 ) -> tuple[jax.Array, ...]:
-    _validate_topology(mesh)
+    _validate_topology(mesh, config.topology)
     batch_spec = _batch_spec_from_x(x, mesh)
     expert_weight_spec = P(_EXPERT_AXIS, None, None)
     shared_weight_spec = P(None, None)
@@ -372,7 +382,7 @@ def _fused_backward(
             d_shared_up,
             d_shared_down,
         ) = gradients
-        global_failure = jax.lax.pmax(local_failure, _failure_agreement_axes(mesh))
+        global_failure = jax.lax.pmax(local_failure, _failure_agreement_axes(mesh, config.topology))
 
         def success(_: None) -> tuple[jax.Array, ...]:
             return (

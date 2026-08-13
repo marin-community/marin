@@ -16,6 +16,7 @@ from levanter.kernels.mixture_of_kittens import (
     MokLikeBuildConfig,
     MokLikeConfig,
     MokLikeForwardXStorage,
+    MokLikeTopology,
     initialize_mok_like_runtime,
     mok_like_reference,
     mok_like_preflight_status,
@@ -679,13 +680,39 @@ system_generation_wait(peer_ready, cancellation, target);
     assert mok_build._validate_and_count_cancellable_generation_waits(source) == 2
 
 
+def test_generated_ep64_peer_masks_preserve_rank_31_32_63_boundaries() -> None:
+    source = """
+    mask |= 1ULL << peer_rank[31];
+    mask |= 1ULL << peer_rank[32];
+    mask |= 1ULL << peer_rank[63];
+    """
+
+    assert mok_build._validate_ep64_safe_peer_masks(source) == 3
+
+
+@pytest.mark.parametrize("rank", [31, 32, 63])
+def test_generated_ep64_peer_masks_reject_32_bit_shifts(rank: int) -> None:
+    source = f"mask |= 1U << peer_rank[{rank}];"
+
+    with pytest.raises(RuntimeError, match="32-bit peer masks"):
+        mok_build._validate_ep64_safe_peer_masks(source)
+
+
+def test_native_ep64_forward_stamp_supports_scanned_reverse_backward() -> None:
+    source = mok_build._ffi_source().read_text()
+
+    assert "(latest_forward_completion >> 32) >= saved_sequence" in source
+    assert "static_assert(Ep64ForwardStampValid(kStampTestSaved, kStampTestNewer, 42, 3, 3))" in source
+    assert "static_assert(!Ep64ForwardStampValid(kStampTestSaved ^ uint64_t{2}" in source
+
+
 def test_failure_agreement_excludes_only_the_process_local_expert_axis() -> None:
     mesh = jax.sharding.AbstractMesh(
         (8, 4, 4, 2),
         ("replica_dcn", "data", "expert", "model"),
     )
 
-    agreement_axes = _failure_agreement_axes(mesh)
+    agreement_axes = _failure_agreement_axes(mesh, MokLikeTopology.LOCAL_EP4)
     jaxpr = jax.make_jaxpr(
         lambda status: jax.lax.pmax(status, agreement_axes),
         axis_env=tuple(zip(mesh.axis_names, mesh.axis_sizes, strict=True)),

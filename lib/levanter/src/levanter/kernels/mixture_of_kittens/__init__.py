@@ -23,6 +23,7 @@ from levanter.kernels.mixture_of_kittens.config import (
     MokLikeBackwardPeerStorage as MokLikeBackwardPeerStorage,
     MokLikeConfig as MokLikeConfig,
     MokLikeForwardXStorage as MokLikeForwardXStorage,
+    MokLikeTopology as MokLikeTopology,
 )
 from levanter.kernels.mixture_of_kittens.runtime import (
     MokLikeDebugCounters as MokLikeDebugCounters,
@@ -35,3 +36,14 @@ from levanter.kernels.mixture_of_kittens.runtime import (
     validate_mok_like_mesh_topology as validate_mok_like_mesh_topology,
 )
 from levanter.kernels.mixture_of_kittens.source import MokLikeBuildConfig as MokLikeBuildConfig
+from levanter.kernels.mixture_of_kittens.symmetric_memory import (
+    MOK_LIKE_EP64_ARENA_OFFSET_FIELDS as MOK_LIKE_EP64_ARENA_OFFSET_FIELDS,
+    MOK_LIKE_EP64_ARENA_SCHEMA_VERSION as MOK_LIKE_EP64_ARENA_SCHEMA_VERSION,
+    MokLikeSymmetricArenaLayout as MokLikeSymmetricArenaLayout,
+    MokLikeSymmetricMemoryUnavailable as MokLikeSymmetricMemoryUnavailable,
+    MokLikeSymmetricNativeArguments as MokLikeSymmetricNativeArguments,
+    MokLikeSymmetricWorkspace as MokLikeSymmetricWorkspace,
+    MokLikeTopologyError as MokLikeTopologyError,
+    initialize_mok_like_symmetric_workspace as initialize_mok_like_symmetric_workspace,
+    mok_like_symmetric_arena_layout as mok_like_symmetric_arena_layout,
+)

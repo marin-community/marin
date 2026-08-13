@@ -45,6 +45,7 @@ from levanter.kernels.mixture_of_kittens import (
     MokLikeForwardXStorage,
     MokLikeMemoryPoolTrimTelemetry,
     MokLikeRuntimeHandle,
+    MokLikeTopology,
     initialize_mok_like_runtime,
 )
 from levanter.models.lm_model import LmExample
@@ -219,6 +220,7 @@ def _initialize_mok_like_for_config(
         top_k=config.model.num_experts_per_token,
         workspace_slots=config.model.mok_like.workspace_slots,
         mesh=mesh,
+        topology=config.model.mok_like.topology,
     )
 
 
@@ -520,6 +522,12 @@ def _mok_like_process_metrics(
         hidden_dim=hidden_dim,
         top_k=top_k,
     )
+    expected_forward_staging_calls, expected_forward_staging_bytes = _expected_mok_like_forward_staging(
+        forward_x_storage,
+        expected_handler_calls=expected_handler_calls,
+        num_tokens=num_tokens,
+        hidden_dim=hidden_dim,
+    )
     slot1_acquisitions = sum(rank[1] for rank in counters.slot_acquisitions)
     max_active_slots = max(counters.max_active_slots, default=0)
     local_summary = _pack_mok_like_process_summary(
@@ -560,6 +568,8 @@ def _mok_like_process_metrics(
         "mok_like/runtime/processes_with_forward_staging": int(
             np.count_nonzero((gathered[:, 5] != 0) | (gathered[:, 6] != 0))
         ),
+        "mok_like/runtime/expected_forward_staging_calls_per_process": expected_forward_staging_calls,
+        "mok_like/runtime/expected_forward_staging_bytes_per_process": expected_forward_staging_bytes,
         "mok_like/runtime/total_forward_staging_calls": int(gathered[:, 5].sum()),
         "mok_like/runtime/total_forward_staging_bytes": int(gathered[:, 6].sum()),
         "mok_like/runtime/processes_with_backward_staging": int(
@@ -619,11 +629,9 @@ def _mok_like_process_metrics(
 
     bad_call_counts = gathered[(gathered[:, 1] != expected_handler_calls) | (gathered[:, 2] != expected_handler_calls)]
     protocol_errors = gathered[(gathered[:, 3] != 0) | (gathered[:, 4] != 0)]
-    unexpected_forward_staging = (
-        gathered[(gathered[:, 5] != 0) | (gathered[:, 6] != 0)]
-        if forward_x_storage is MokLikeForwardXStorage.XLA_PEER_EXPERIMENTAL
-        else np.empty((0, gathered.shape[1]), dtype=gathered.dtype)
-    )
+    bad_forward_staging = gathered[
+        (gathered[:, 5] != expected_forward_staging_calls) | (gathered[:, 6] != expected_forward_staging_bytes)
+    ]
     bad_backward_staging = gathered[
         (gathered[:, 7] != expected_backward_staging_calls) | (gathered[:, 8] != expected_backward_staging_bytes)
     ]
@@ -637,7 +645,7 @@ def _mok_like_process_metrics(
     if (
         bad_call_counts.size
         or protocol_errors.size
-        or unexpected_forward_staging.size
+        or bad_forward_staging.size
         or bad_backward_staging.size
         or invalid_slot_usage.size
         or bad_trim_counts.size
@@ -647,11 +655,27 @@ def _mok_like_process_metrics(
             "mok_like distributed runtime contract failed: "
             f"expected_handler_calls={expected_handler_calls}, expected_trim_count={expected_trim_count}, "
             f"forward_x_storage={forward_x_storage.value}, backward_peer_storage={backward_peer_storage.value}, "
+            f"expected_forward_staging=({expected_forward_staging_calls}, {expected_forward_staging_bytes}), "
             f"expected_backward_staging=({expected_backward_staging_calls}, {expected_backward_staging_bytes}), "
             f"workspace_slots={workspace_slots}, "
             f"summaries={gathered.tolist()}"
         )
     return metrics
+
+
+def _expected_mok_like_forward_staging(
+    storage: MokLikeForwardXStorage,
+    *,
+    expected_handler_calls: int,
+    num_tokens: int,
+    hidden_dim: int,
+) -> tuple[int, int]:
+    if storage is MokLikeForwardXStorage.RUNTIME_STAGED:
+        activation_bytes = num_tokens * hidden_dim * _BF16_BYTES
+        return expected_handler_calls, expected_handler_calls * activation_bytes
+    if storage is MokLikeForwardXStorage.XLA_PEER_EXPERIMENTAL:
+        return 0, 0
+    raise AssertionError(f"unhandled forward x storage {storage}")
 
 
 def _expected_mok_like_backward_staging(
@@ -1043,7 +1067,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             batch_size=initial_batch_size,
         )
         if mok_like_runtime is not None:
-            runtime_stack.callback(mok_like_runtime.close)
+            runtime_stack.enter_context(mok_like_runtime)
 
         @jax.jit
         def _init_state(model_rng):
@@ -1210,7 +1234,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if mok_like_runtime is not None:
                 counters = mok_like_runtime.debug_counters()
                 debug_metrics = _mok_like_debug_metrics(counters)
-                expected_handler_calls = (trainer.num_train_steps - training_start_step) * config.model.num_layers * 4
+                handlers_per_layer = 1 if config.model.mok_like.topology is MokLikeTopology.NVLINK_EP64 else 4
+                expected_handler_calls = (
+                    (trainer.num_train_steps - training_start_step) * config.model.num_layers * handlers_per_layer
+                )
                 trim_interval_updates = config.gpu_default_pool_trim_interval_updates
                 expected_trim_count = (
                     trainer.num_train_steps // trim_interval_updates - training_start_step // trim_interval_updates

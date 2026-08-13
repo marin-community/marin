@@ -30,15 +30,21 @@ namespace ffi = xla::ffi;
 
 namespace {
 
-constexpr int kNumDevices = 4;
+#ifndef LEVANTER_MOK_EP_SIZE
+#define LEVANTER_MOK_EP_SIZE 4
+#endif
+
+constexpr int kNumDevices = LEVANTER_MOK_EP_SIZE;
+constexpr bool kEp64 = kNumDevices == 64;
+constexpr int kLocalDeviceCount = kEp64 ? 1 : kNumDevices;
 constexpr int kMaxWorkspaceSlots = 2;
-constexpr uint8_t kAllRanksMask = static_cast<uint8_t>((1U << kNumDevices) - 1U);
+constexpr uint64_t kAllRanksMask = ~uint64_t{0} >> (64 - kNumDevices);
 static_assert((kMaxWorkspaceSlots & (kMaxWorkspaceSlots - 1)) == 0);
 constexpr int kPeerWaitPhaseCount = 4;
 constexpr int kPeerWaitCellCount = kPeerWaitPhaseCount * kNumDevices;
 constexpr auto kWorkspaceAcquireTimeout = std::chrono::minutes(5);
 constexpr int kMemoryPoolStatsPerRank = 10;
-constexpr int kMemoryPoolTrimOutputCount = kNumDevices * kMemoryPoolStatsPerRank + 3;
+constexpr int kMemoryPoolTrimOutputCount = kLocalDeviceCount * kMemoryPoolStatsPerRank + 3;
 
 enum class PeerWaitPhase : int {
   kForwardPre = 0,
@@ -65,10 +71,10 @@ enum DebugCounterOffset : int {
   kDebugCounterCount,
 };
 static_assert(kPeerWaitEvents == 7);
-static_assert(kPeerWaitCycles == 23);
-static_assert(kPeerWaitMaxCycles == 39);
-static_assert(kForwardStagingCopyCalls == 55);
-static_assert(kDebugCounterCount == 59);
+static_assert(kPeerWaitCycles == 7 + 4 * kNumDevices);
+static_assert(kPeerWaitMaxCycles == 7 + 8 * kNumDevices);
+static_assert(kForwardStagingCopyCalls == 7 + 12 * kNumDevices);
+static_assert(kDebugCounterCount == 11 + 12 * kNumDevices);
 
 struct DebugCounters {
   uint64_t values[kDebugCounterCount];
@@ -125,6 +131,7 @@ struct DeviceRuntime {
   uint64_t* cancellation = nullptr;
   DebugCounters* debug_counters = nullptr;
   cudaStream_t cancellation_stream = nullptr;
+  bool owns_allocations = true;
   std::array<void*, kNumDevices> x_ptrs{};
   std::array<void*, kNumDevices> combine_ptrs{};
   std::array<void*, kNumDevices> d_y_ptrs{};
@@ -150,6 +157,10 @@ struct DeviceRuntime {
     (void)cudaGetDevice(&original_device);
     (void)cudaSetDevice(device);
     (void)cudaStreamDestroy(cancellation_stream);
+    if (!owns_allocations) {
+      (void)cudaSetDevice(original_device);
+      return;
+    }
     (void)cudaFree(debug_counters);
     (void)cudaFree(cancellation);
     (void)cudaFree(last_forward_completion);
@@ -227,6 +238,48 @@ struct InvocationKeyHash {
   }
 };
 
+__host__ __device__ constexpr uint64_t MixOperationChecksum(uint64_t value, uint64_t component) {
+  return value ^ (component + 0x9e3779b97f4a7c15ULL + (value << 6) + (value >> 2));
+}
+
+__host__ __device__ constexpr uint32_t OperationChecksum(
+    int64_t collective_id,
+    uint64_t ordinal,
+    InvocationPhase phase,
+    uint32_t runtime_epoch) {
+  // XLA RunId is process-local. The wire stamp uses only SPMD-stable inputs;
+  // disagreement in call order, collective identity, or phase is therefore a
+  // peer-visible exact-stamp mismatch instead of a silent buffer reuse.
+  uint64_t value = MixOperationChecksum(static_cast<uint64_t>(collective_id), ordinal);
+  value = MixOperationChecksum(value, static_cast<uint8_t>(phase));
+  value = MixOperationChecksum(value, runtime_epoch);
+  value ^= value >> 33;
+  value *= 0xff51afd7ed558ccdULL;
+  value ^= value >> 33;
+  return static_cast<uint32_t>(value) | uint32_t{1};
+}
+
+__host__ __device__ constexpr bool Ep64ForwardStampValid(
+    uint64_t saved_generation,
+    uint64_t latest_forward_completion,
+    int64_t collective_id,
+    uint32_t saved_runtime_epoch,
+    uint32_t expected_runtime_epoch) {
+  const uint64_t saved_sequence = saved_generation >> 32;
+  const uint32_t saved_checksum = static_cast<uint32_t>(saved_generation);
+  return saved_runtime_epoch == expected_runtime_epoch && saved_sequence != 0 &&
+         saved_checksum ==
+             OperationChecksum(collective_id, saved_sequence, InvocationPhase::kForward, expected_runtime_epoch) &&
+         (latest_forward_completion >> 32) >= saved_sequence;
+}
+
+constexpr uint64_t kStampTestSaved =
+    (uint64_t{7} << 32) | OperationChecksum(42, 7, InvocationPhase::kForward, 3);
+constexpr uint64_t kStampTestNewer =
+    (uint64_t{48} << 32) | OperationChecksum(99, 48, InvocationPhase::kForward, 3);
+static_assert(Ep64ForwardStampValid(kStampTestSaved, kStampTestNewer, 42, 3, 3));
+static_assert(!Ep64ForwardStampValid(kStampTestSaved ^ uint64_t{2}, kStampTestNewer, 42, 3, 3));
+
 struct RunPhaseKey {
   int64_t run_id;
   int64_t collective_id;
@@ -249,15 +302,15 @@ struct RunPhaseKeyHash {
 struct InvocationState {
   int slot = -1;
   uint64_t generation = 0;
-  uint8_t arrival_mask = 0;
-  uint8_t leased_mask = 0;
-  uint8_t completion_mask = 0;
+  uint64_t arrival_mask = 0;
+  uint64_t leased_mask = 0;
+  uint64_t completion_mask = 0;
   bool cancelled = false;
   bool slot_released = false;
   std::array<const void*, kNumDevices> forward_x_ptrs{};
   size_t forward_x_size_bytes = 0;
   ForwardXStorage forward_x_storage = ForwardXStorage::kRuntimeStaged;
-  uint8_t forward_x_mask = 0;
+  uint64_t forward_x_mask = 0;
   std::array<const void*, kNumDevices> backward_d_y_ptrs{};
   std::array<const void*, kNumDevices> backward_x_ptrs{};
   std::array<const void*, kNumDevices> backward_router_weight_ptrs{};
@@ -265,7 +318,7 @@ struct InvocationState {
   size_t backward_activation_size_bytes = 0;
   size_t backward_router_size_bytes = 0;
   BackwardPeerStorage backward_peer_storage = BackwardPeerStorage::kRuntimeStaged;
-  uint8_t backward_peer_mask = 0;
+  uint64_t backward_peer_mask = 0;
   std::string error;
 };
 
@@ -447,6 +500,188 @@ class RuntimeManager {
     initialized_ = true;
   }
 
+  void InitEp64(
+      int ep_rank,
+      int ep_size,
+      int num_tokens,
+      int hidden_dim,
+      int top_k,
+      int workspace_slots,
+      const uint64_t* peer_arena_pointers,
+      int64_t peer_pointer_count,
+      const uint64_t* arena_offsets,
+      int64_t arena_offset_count) {
+    if constexpr (!kEp64) {
+      throw std::runtime_error("EP64 runtime initialization requires the EP64 native library");
+    }
+    constexpr int kArenaSchemaVersion = 1;
+    constexpr int kArenaOffsetCount = 16;
+    enum ArenaOffset : int {
+      kSchemaVersion = 0,
+      kTotalBytes,
+      kX,
+      kCombine,
+      kDY,
+      kDXRouted,
+      kRouterWeights,
+      kDRouterWeights,
+      kGeneration,
+      kForwardInputReady,
+      kBackwardInputReady,
+      kForwardCompletions,
+      kBackwardCompletions,
+      kLastForwardCompletion,
+      kCancellation,
+      kDebugCounters,
+    };
+
+    std::unique_lock<std::mutex> lock(mu_);
+    const bool maintenance_finished = cv_.wait_for(lock, kWorkspaceAcquireTimeout, [&] { return !maintenance_; });
+    if (!maintenance_finished) {
+      throw std::runtime_error("Mixture-of-Kittens runtime maintenance did not finish within five minutes");
+    }
+    if (initialized_ && ep_rank_ == ep_rank && num_devices_ == ep_size && num_tokens_ == num_tokens &&
+        hidden_dim_ == hidden_dim && top_k_ == top_k && workspace_slots_ == workspace_slots) {
+      if (!failure_message_.empty()) {
+        throw std::runtime_error(failure_message_);
+      }
+      return;
+    }
+    if (initialized_) {
+      throw std::runtime_error(
+          "Mixture-of-Kittens runtime must be shut down before initializing a different signature");
+    }
+    DestroyLocked();
+    if (ep_size != 64 || ep_rank < 0 || ep_rank >= ep_size) {
+      throw std::runtime_error("Mixture-of-Kittens EP64 rank ordering is invalid");
+    }
+    if (workspace_slots != 1) {
+      throw std::runtime_error("Mixture-of-Kittens EP64 requires exactly one workspace slot");
+    }
+    if (num_tokens <= 0 || hidden_dim <= 0 || top_k <= 0) {
+      throw std::runtime_error("Mixture-of-Kittens runtime dimensions must be positive");
+    }
+    if (peer_arena_pointers == nullptr || peer_pointer_count != ep_size) {
+      throw std::runtime_error("Mixture-of-Kittens EP64 requires one peer arena pointer per rank");
+    }
+    if (arena_offsets == nullptr || arena_offset_count != kArenaOffsetCount ||
+        arena_offsets[kSchemaVersion] != kArenaSchemaVersion || arena_offsets[kTotalBytes] == 0) {
+      throw std::runtime_error("Mixture-of-Kittens EP64 arena schema is invalid");
+    }
+    for (int peer = 0; peer < ep_size; ++peer) {
+      if (peer_arena_pointers[peer] == 0) {
+        throw std::runtime_error("Mixture-of-Kittens EP64 peer arena pointer is null");
+      }
+    }
+    for (int offset = kX; offset < kArenaOffsetCount; ++offset) {
+      if (arena_offsets[offset] % 256 != 0 || arena_offsets[offset] >= arena_offsets[kTotalBytes]) {
+        throw std::runtime_error("Mixture-of-Kittens EP64 arena offsets must be aligned and in bounds");
+      }
+    }
+    auto align_256 = [](uint64_t value) { return (value + 255) & ~uint64_t{255}; };
+    std::array<uint64_t, kArenaOffsetCount> expected_offsets{};
+    expected_offsets[kSchemaVersion] = kArenaSchemaVersion;
+    uint64_t cursor = 0;
+    auto place = [&](ArenaOffset field, uint64_t size) {
+      cursor = align_256(cursor);
+      expected_offsets[field] = cursor;
+      cursor += size;
+    };
+    const uint64_t activation_bytes = static_cast<uint64_t>(num_tokens) * hidden_dim * sizeof(uint16_t);
+    const uint64_t routed_activation_bytes = activation_bytes * top_k;
+    const uint64_t router_bytes = static_cast<uint64_t>(num_tokens) * top_k * sizeof(float);
+    const uint64_t rank_cells_bytes = static_cast<uint64_t>(ep_size) * sizeof(uint64_t);
+    place(kX, activation_bytes);
+    place(kCombine, routed_activation_bytes);
+    place(kDY, activation_bytes);
+    place(kDXRouted, routed_activation_bytes);
+    place(kRouterWeights, router_bytes);
+    place(kDRouterWeights, router_bytes);
+    place(kGeneration, rank_cells_bytes);
+    place(kForwardInputReady, rank_cells_bytes);
+    place(kBackwardInputReady, rank_cells_bytes);
+    place(kForwardCompletions, rank_cells_bytes);
+    place(kBackwardCompletions, rank_cells_bytes);
+    place(kLastForwardCompletion, rank_cells_bytes);
+    place(kCancellation, rank_cells_bytes);
+    place(kDebugCounters, sizeof(DebugCounters));
+    expected_offsets[kTotalBytes] = align_256(cursor);
+    if (!std::equal(expected_offsets.begin(), expected_offsets.end(), arena_offsets)) {
+      throw std::runtime_error("Mixture-of-Kittens EP64 arena layout does not match schema version 1");
+    }
+    int visible_devices = 0;
+    ThrowOnCuda(cudaGetDeviceCount(&visible_devices), "cudaGetDeviceCount");
+    int local_device = -1;
+    ThrowOnCuda(cudaGetDevice(&local_device), "cudaGetDevice(EP64 init)");
+    if (visible_devices <= 0 || local_device < 0 || local_device >= visible_devices) {
+      throw std::runtime_error("Mixture-of-Kittens EP64 current CUDA device is invalid");
+    }
+
+    num_devices_ = ep_size;
+    num_tokens_ = num_tokens;
+    hidden_dim_ = hidden_dim;
+    top_k_ = top_k;
+    workspace_slots_ = workspace_slots;
+    ep_rank_ = ep_rank;
+    runtimes_.resize(1);
+    auto runtime = std::make_unique<DeviceRuntime>();
+    runtime->device = local_device;
+    runtime->rank = ep_rank;
+    runtime->slot = 0;
+    runtime->num_devices = ep_size;
+    runtime->workspace_slots = 1;
+    runtime->owns_allocations = false;
+    const auto local_base = peer_arena_pointers[ep_rank];
+    auto local_pointer = [&](int offset) { return reinterpret_cast<void*>(local_base + arena_offsets[offset]); };
+    runtime->x = local_pointer(kX);
+    runtime->combine = local_pointer(kCombine);
+    runtime->d_y = local_pointer(kDY);
+    runtime->d_x_routed = local_pointer(kDXRouted);
+    runtime->router_weights = local_pointer(kRouterWeights);
+    runtime->d_router_weights = local_pointer(kDRouterWeights);
+    runtime->generation = static_cast<uint64_t*>(local_pointer(kGeneration));
+    runtime->forward_input_ready = static_cast<uint64_t*>(local_pointer(kForwardInputReady));
+    runtime->backward_input_ready = static_cast<uint64_t*>(local_pointer(kBackwardInputReady));
+    runtime->forward_completions = static_cast<uint64_t*>(local_pointer(kForwardCompletions));
+    runtime->backward_completions = static_cast<uint64_t*>(local_pointer(kBackwardCompletions));
+    runtime->last_forward_completion = static_cast<uint64_t*>(local_pointer(kLastForwardCompletion));
+    runtime->cancellation = static_cast<uint64_t*>(local_pointer(kCancellation));
+    runtime->debug_counters = static_cast<DebugCounters*>(local_pointer(kDebugCounters));
+    for (int peer = 0; peer < ep_size; ++peer) {
+      const auto base = peer_arena_pointers[peer];
+      auto peer_pointer = [&](int offset) { return reinterpret_cast<void*>(base + arena_offsets[offset]); };
+      runtime->x_ptrs[peer] = peer_pointer(kX);
+      runtime->combine_ptrs[peer] = peer_pointer(kCombine);
+      runtime->d_y_ptrs[peer] = peer_pointer(kDY);
+      runtime->d_x_routed_ptrs[peer] = peer_pointer(kDXRouted);
+      runtime->router_weight_ptrs[peer] = peer_pointer(kRouterWeights);
+      runtime->d_router_weight_ptrs[peer] = peer_pointer(kDRouterWeights);
+      runtime->forward_input_ready_ptrs[peer] = static_cast<uint64_t*>(peer_pointer(kForwardInputReady));
+      runtime->backward_input_ready_ptrs[peer] = static_cast<uint64_t*>(peer_pointer(kBackwardInputReady));
+      runtime->forward_completion_ptrs[peer] = static_cast<uint64_t*>(peer_pointer(kForwardCompletions));
+      runtime->backward_completion_ptrs[peer] = static_cast<uint64_t*>(peer_pointer(kBackwardCompletions));
+      runtime->cancellation_ptrs[peer] = static_cast<uint64_t*>(peer_pointer(kCancellation));
+    }
+    runtime->local_slot_forward_completion_ptrs[0] = runtime->last_forward_completion;
+    ThrowOnCuda(
+        cudaStreamCreateWithFlags(&runtime->cancellation_stream, cudaStreamNonBlocking),
+        "cudaStreamCreateWithFlags(cancellation)");
+    ThrowOnCuda(cudaMemset(runtime->generation, 0, sizeof(uint64_t)), "cudaMemset(generation)");
+    ThrowOnCuda(cudaMemset(runtime->forward_input_ready, 0, ep_size * sizeof(uint64_t)), "cudaMemset(forward input ready)");
+    ThrowOnCuda(cudaMemset(runtime->backward_input_ready, 0, ep_size * sizeof(uint64_t)), "cudaMemset(backward input ready)");
+    ThrowOnCuda(cudaMemset(runtime->forward_completions, 0, ep_size * sizeof(uint64_t)), "cudaMemset(forward completions)");
+    ThrowOnCuda(cudaMemset(runtime->backward_completions, 0, ep_size * sizeof(uint64_t)), "cudaMemset(backward completions)");
+    ThrowOnCuda(cudaMemset(runtime->last_forward_completion, 0, sizeof(uint64_t)), "cudaMemset(last forward completion)");
+    ThrowOnCuda(cudaMemset(runtime->cancellation, 0, sizeof(uint64_t)), "cudaMemset(cancellation)");
+    ThrowOnCuda(cudaMemset(runtime->debug_counters, 0, sizeof(DebugCounters)), "cudaMemset(debug counters)");
+    ThrowOnCuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize(init EP64)");
+    runtimes_[0][0] = std::move(runtime);
+    if (++runtime_epoch_ == 0) {
+      ++runtime_epoch_;
+    }
+    initialized_ = true;
+  }
+
   void Shutdown() {
     std::unique_lock<std::mutex> lock(mu_);
     const bool maintenance_finished = cv_.wait_for(lock, kWorkspaceAcquireTimeout, [&] { return !maintenance_; });
@@ -566,7 +801,7 @@ class RuntimeManager {
     if (!initialized_) {
       throw std::runtime_error("Mixture-of-Kittens runtime is not initialized");
     }
-    const int64_t expected = static_cast<int64_t>(kNumDevices) * kDebugCounterCount;
+    const int64_t expected = static_cast<int64_t>(kLocalDeviceCount) * kDebugCounterCount;
     if (output == nullptr || count != expected) {
       throw std::runtime_error("Mixture-of-Kittens debug counter output has the wrong size");
     }
@@ -583,11 +818,12 @@ class RuntimeManager {
     try {
       int original_device = 0;
       ThrowOnCuda(cudaGetDevice(&original_device), "cudaGetDevice(read debug counters)");
-      for (int rank = 0; rank < kNumDevices; ++rank) {
-        const auto& rank_runtimes = runtimes_[rank];
-        ThrowOnCuda(cudaSetDevice(rank), "cudaSetDevice(read debug counters)");
+      for (int local_device = 0; local_device < kLocalDeviceCount; ++local_device) {
+        const auto& rank_runtimes = runtimes_[local_device];
+        const int cuda_device = rank_runtimes[0]->device;
+        ThrowOnCuda(cudaSetDevice(cuda_device), "cudaSetDevice(read debug counters)");
         ThrowOnCuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize(read debug counters)");
-        auto* rank_output = output + static_cast<int64_t>(rank) * kDebugCounterCount;
+        auto* rank_output = output + static_cast<int64_t>(local_device) * kDebugCounterCount;
         std::fill(rank_output, rank_output + kDebugCounterCount, 0ULL);
         for (const auto& runtime : rank_runtimes) {
           if (runtime == nullptr) {
@@ -605,14 +841,15 @@ class RuntimeManager {
             rank_output[counter] += slot_counters.values[counter];
           }
         }
-        rank_output[kSlotReuseFailures] += host_slot_reuse_failures[rank];
-        rank_output[kSlotZeroAcquisitions] += host_slot_acquisitions[rank][0];
-        rank_output[kSlotOneAcquisitions] += host_slot_acquisitions[rank][1];
-        rank_output[kMaxActiveSlots] += host_max_active_slots[rank];
-        rank_output[kForwardStagingCopyCalls] += host_staging_copy_calls[rank][0];
-        rank_output[kForwardStagingCopyBytes] += host_staging_copy_bytes[rank][0];
-        rank_output[kBackwardStagingCopyCalls] += host_staging_copy_calls[rank][1];
-        rank_output[kBackwardStagingCopyBytes] += host_staging_copy_bytes[rank][1];
+        const int ep_rank = kEp64 ? ep_rank_ : local_device;
+        rank_output[kSlotReuseFailures] += host_slot_reuse_failures[ep_rank];
+        rank_output[kSlotZeroAcquisitions] += host_slot_acquisitions[ep_rank][0];
+        rank_output[kSlotOneAcquisitions] += host_slot_acquisitions[ep_rank][1];
+        rank_output[kMaxActiveSlots] += host_max_active_slots[ep_rank];
+        rank_output[kForwardStagingCopyCalls] += host_staging_copy_calls[ep_rank][0];
+        rank_output[kForwardStagingCopyBytes] += host_staging_copy_bytes[ep_rank][0];
+        rank_output[kBackwardStagingCopyCalls] += host_staging_copy_calls[ep_rank][1];
+        rank_output[kBackwardStagingCopyBytes] += host_staging_copy_bytes[ep_rank][1];
       }
       ThrowOnCuda(cudaSetDevice(original_device), "cudaSetDevice(restore debug counters)");
     } catch (...) {
@@ -636,6 +873,10 @@ class RuntimeManager {
     }
 
     const auto start = std::chrono::steady_clock::now();
+    std::array<int, kLocalDeviceCount> cuda_devices{};
+    for (int local_device = 0; local_device < kLocalDeviceCount; ++local_device) {
+      cuda_devices[local_device] = runtimes_[local_device][0]->device;
+    }
     // Maintenance prevents a new FFI invocation from acquiring a workspace while the
     // process-local device workers drain and trim independent CUDA pools.
     maintenance_ = true;
@@ -644,12 +885,14 @@ class RuntimeManager {
       int original_device = 0;
       ThrowOnCuda(cudaGetDevice(&original_device), "cudaGetDevice(trim default memory pools)");
 
-      std::array<std::exception_ptr, kNumDevices> synchronize_errors{};
-      std::array<std::jthread, kNumDevices> synchronize_workers;
-      for (int rank = 0; rank < kNumDevices; ++rank) {
-        synchronize_workers[rank] = std::jthread([rank, &synchronize_errors] {
+      std::array<std::exception_ptr, kLocalDeviceCount> synchronize_errors{};
+      std::array<std::jthread, kLocalDeviceCount> synchronize_workers;
+      for (int rank = 0; rank < kLocalDeviceCount; ++rank) {
+        synchronize_workers[rank] = std::jthread([rank, &cuda_devices, &synchronize_errors] {
           try {
-            ThrowOnCuda(cudaSetDevice(rank), "cudaSetDevice(synchronize before default memory-pool trim)");
+            ThrowOnCuda(
+                cudaSetDevice(cuda_devices[rank]),
+                "cudaSetDevice(synchronize before default memory-pool trim)");
             ThrowOnCuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize(default memory-pool trim)");
           } catch (...) {
             synchronize_errors[rank] = std::current_exception();
@@ -659,7 +902,7 @@ class RuntimeManager {
       for (auto& worker : synchronize_workers) {
         worker.join();
       }
-      for (int rank = 0; rank < kNumDevices; ++rank) {
+      for (int rank = 0; rank < kLocalDeviceCount; ++rank) {
         if (synchronize_errors[rank] != nullptr) {
           ThrowOnCuda(
               cudaSetDevice(original_device),
@@ -682,14 +925,15 @@ class RuntimeManager {
       }
       lock.unlock();
 
-      std::array<std::exception_ptr, kNumDevices> trim_errors{};
-      std::array<std::jthread, kNumDevices> trim_workers;
-      for (int rank = 0; rank < kNumDevices; ++rank) {
-        trim_workers[rank] = std::jthread([rank, output, &trim_errors] {
+      std::array<std::exception_ptr, kLocalDeviceCount> trim_errors{};
+      std::array<std::jthread, kLocalDeviceCount> trim_workers;
+      for (int rank = 0; rank < kLocalDeviceCount; ++rank) {
+        trim_workers[rank] = std::jthread([rank, output, &cuda_devices, &trim_errors] {
           try {
-            ThrowOnCuda(cudaSetDevice(rank), "cudaSetDevice(default memory-pool trim)");
+            const int cuda_device = cuda_devices[rank];
+            ThrowOnCuda(cudaSetDevice(cuda_device), "cudaSetDevice(default memory-pool trim)");
             cudaMemPool_t pool = nullptr;
-            ThrowOnCuda(cudaDeviceGetDefaultMemPool(&pool, rank), "cudaDeviceGetDefaultMemPool");
+            ThrowOnCuda(cudaDeviceGetDefaultMemPool(&pool, cuda_device), "cudaDeviceGetDefaultMemPool");
             auto* rank_output = output + rank * kMemoryPoolStatsPerRank;
             ThrowOnCuda(
                 cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, rank_output + 0),
@@ -719,10 +963,10 @@ class RuntimeManager {
             rank_output[6] = static_cast<uint64_t>(device_free_bytes_after);
             rank_output[7] = static_cast<uint64_t>(device_total_bytes_after);
             ThrowOnCuda(
-                cudaDeviceGetGraphMemAttribute(rank, cudaGraphMemAttrReservedMemCurrent, rank_output + 8),
+                cudaDeviceGetGraphMemAttribute(cuda_device, cudaGraphMemAttrReservedMemCurrent, rank_output + 8),
                 "cudaDeviceGetGraphMemAttribute(reserved after trim)");
             ThrowOnCuda(
-                cudaDeviceGetGraphMemAttribute(rank, cudaGraphMemAttrUsedMemCurrent, rank_output + 9),
+                cudaDeviceGetGraphMemAttribute(cuda_device, cudaGraphMemAttrUsedMemCurrent, rank_output + 9),
                 "cudaDeviceGetGraphMemAttribute(used after trim)");
           } catch (...) {
             trim_errors[rank] = std::current_exception();
@@ -732,21 +976,21 @@ class RuntimeManager {
       for (auto& worker : trim_workers) {
         worker.join();
       }
-      for (int rank = 0; rank < kNumDevices; ++rank) {
+      for (int rank = 0; rank < kLocalDeviceCount; ++rank) {
         if (trim_errors[rank] != nullptr) {
           ThrowOnCuda(cudaSetDevice(original_device), "cudaSetDevice(restore after failed default memory-pool trim)");
           std::rethrow_exception(trim_errors[rank]);
         }
       }
       ThrowOnCuda(cudaSetDevice(original_device), "cudaSetDevice(restore after default memory-pool trim)");
-      output[kNumDevices * kMemoryPoolStatsPerRank] = active_reservations;
-      output[kNumDevices * kMemoryPoolStatsPerRank + 1] = active_workspace_slots;
+      output[kLocalDeviceCount * kMemoryPoolStatsPerRank] = active_reservations;
+      output[kLocalDeviceCount * kMemoryPoolStatsPerRank + 1] = active_workspace_slots;
     } catch (...) {
       EndMaintenance();
       throw;
     }
     EndMaintenance();
-    output[kNumDevices * kMemoryPoolStatsPerRank + 2] = static_cast<uint64_t>(
+    output[kLocalDeviceCount * kMemoryPoolStatsPerRank + 2] = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
   }
 
@@ -756,8 +1000,10 @@ class RuntimeManager {
       InvocationPhase phase,
       std::optional<ForwardXRegistration> forward_x = std::nullopt,
       std::optional<BackwardPeerRegistration> backward_peer = std::nullopt) {
-    int rank = -1;
-    ThrowOnCuda(cudaGetDevice(&rank), "cudaGetDevice(acquire workspace)");
+    int rank = ep_rank_;
+    if constexpr (!kEp64) {
+      ThrowOnCuda(cudaGetDevice(&rank), "cudaGetDevice(acquire workspace)");
+    }
     if (rank < 0 || rank >= kNumDevices) {
       throw std::runtime_error("No Mixture-of-Kittens runtime exists for the current GPU");
     }
@@ -800,10 +1046,75 @@ class RuntimeManager {
       state->slot = static_cast<int>(
           std::find(slot_active_.begin(), active_slots_end, false) - slot_active_.begin());
       slot_active_[state->slot] = true;
-      state->generation = (++next_generation_ << 1) | static_cast<uint64_t>(state->slot);
+      const uint64_t sequence = ++next_generation_;
+      if constexpr (kEp64) {
+        if (sequence > 0xffffffffULL) {
+          CancelReservationLocked(key, state, "Mixture-of-Kittens EP64 operation sequence overflowed");
+          throw std::runtime_error(state->error);
+        }
+        state->generation =
+            (sequence << 32) | OperationChecksum(collective_id, sequence, phase, runtime_epoch_);
+      } else {
+        state->generation = (sequence << 1) | static_cast<uint64_t>(state->slot);
+      }
       cv_.notify_all();
     }
-    const uint8_t rank_bit = static_cast<uint8_t>(1U << rank);
+    const uint64_t rank_bit = uint64_t{1} << rank;
+    if constexpr (kEp64) {
+      // EP64 has one handler and one workspace slot per process. The local slot
+      // serializes calls, while all 64 processes must issue the same SPMD call
+      // order. Exact wire stamps detect and cancel disagreement; they do not
+      // provide a scheduler for independently ordered concurrent collectives.
+      if (phase == InvocationPhase::kForward) {
+        if (!forward_x.has_value() || forward_x->pointer == nullptr || forward_x->size_bytes == 0 ||
+            forward_x->storage != ForwardXStorage::kRuntimeStaged) {
+          CancelReservationLocked(key, state, "Mixture-of-Kittens EP64 forward requires runtime-staged x");
+          throw std::runtime_error(state->error);
+        }
+        state->forward_x_size_bytes = forward_x->size_bytes;
+        state->forward_x_storage = forward_x->storage;
+      } else {
+        if (!backward_peer.has_value() || backward_peer->d_y_pointer == nullptr ||
+            backward_peer->x_pointer == nullptr || backward_peer->router_weight_pointer == nullptr ||
+            backward_peer->d_router_weight_pointer == nullptr || backward_peer->activation_size_bytes == 0 ||
+            backward_peer->router_size_bytes == 0 ||
+            backward_peer->storage != BackwardPeerStorage::kRuntimeStaged) {
+          CancelReservationLocked(key, state, "Mixture-of-Kittens EP64 backward requires runtime-staged peer buffers");
+          throw std::runtime_error(state->error);
+        }
+        state->backward_activation_size_bytes = backward_peer->activation_size_bytes;
+        state->backward_router_size_bytes = backward_peer->router_size_bytes;
+        state->backward_peer_storage = backward_peer->storage;
+      }
+      state->arrival_mask = rank_bit;
+      state->leased_mask = rank_bit;
+      ++host_slot_acquisitions_[rank][state->slot];
+      host_max_active_slots_[rank] = 1;
+      if (phase == InvocationPhase::kForward) {
+        host_staging_copy_calls_[rank][0] += 1;
+        host_staging_copy_bytes_[rank][0] += state->forward_x_size_bytes;
+      } else {
+        host_staging_copy_calls_[rank][1] += 4;
+        host_staging_copy_bytes_[rank][1] +=
+            2 * state->backward_activation_size_bytes + 2 * state->backward_router_size_bytes;
+      }
+      return RuntimeLease{
+          .key = key,
+          .rank = rank,
+          .slot = state->slot,
+          .generation = state->generation,
+          .forward_x_ptrs = {},
+          .forward_x_size_bytes = state->forward_x_size_bytes,
+          .forward_x_storage = state->forward_x_storage,
+          .backward_d_y_ptrs = {},
+          .backward_x_ptrs = {},
+          .backward_router_weight_ptrs = {},
+          .backward_d_router_weight_ptrs = {},
+          .backward_activation_size_bytes = state->backward_activation_size_bytes,
+          .backward_router_size_bytes = state->backward_router_size_bytes,
+          .backward_peer_storage = state->backward_peer_storage,
+      };
+    }
     if ((state->arrival_mask & rank_bit) != 0) {
       ++host_slot_reuse_failures_[rank];
       CancelReservationLocked(key, state, "Mixture-of-Kittens workspace reservation received a duplicate rank");
@@ -953,8 +1264,10 @@ class RuntimeManager {
     if (!initialized_) {
       throw std::runtime_error("Mixture-of-Kittens runtime is not initialized");
     }
-    int device = -1;
-    ThrowOnCuda(cudaGetDevice(&device), "cudaGetDevice(current)");
+    int device = 0;
+    if constexpr (!kEp64) {
+      ThrowOnCuda(cudaGetDevice(&device), "cudaGetDevice(current)");
+    }
     if (device < 0 || device >= static_cast<int>(runtimes_.size()) || slot < 0 || slot >= workspace_slots_ ||
         runtimes_[device][slot] == nullptr) {
       throw std::runtime_error("No Mixture-of-Kittens runtime exists for the current GPU");
@@ -1026,13 +1339,13 @@ class RuntimeManager {
   }
 
   void FinishRankLocked(const InvocationKey& key, const std::shared_ptr<InvocationState>& state, int rank) {
-    const uint8_t rank_bit = static_cast<uint8_t>(1U << rank);
+    const uint64_t rank_bit = uint64_t{1} << rank;
     if ((state->completion_mask & rank_bit) != 0) {
       ++host_slot_reuse_failures_[rank];
       return;
     }
     state->completion_mask |= rank_bit;
-    if (state->completion_mask != kAllRanksMask) {
+    if (!kEp64 && state->completion_mask != kAllRanksMask) {
       return;
     }
     ReleaseSlotLocked(state);
@@ -1052,7 +1365,7 @@ class RuntimeManager {
       return;
     }
     const std::shared_ptr<InvocationState> state = invocation->second;
-    const uint8_t rank_bit = static_cast<uint8_t>(1U << rank);
+    const uint64_t rank_bit = uint64_t{1} << rank;
     if ((state->leased_mask & rank_bit) == 0 || (state->completion_mask & rank_bit) != 0) {
       ++host_slot_reuse_failures_[rank];
       if (!state->cancelled) {
@@ -1076,6 +1389,7 @@ class RuntimeManager {
     hidden_dim_ = 0;
     top_k_ = 0;
     workspace_slots_ = 0;
+    ep_rank_ = -1;
     slot_active_.fill(false);
     next_generation_ = 0;
     host_slot_reuse_failures_.fill(0);
@@ -1106,6 +1420,7 @@ class RuntimeManager {
   int hidden_dim_ = 0;
   int top_k_ = 0;
   int workspace_slots_ = 0;
+  int ep_rank_ = -1;
   std::vector<std::array<std::unique_ptr<DeviceRuntime>, kMaxWorkspaceSlots>> runtimes_;
   std::array<bool, kMaxWorkspaceSlots> slot_active_{};
   uint64_t next_generation_ = 0;
@@ -1145,6 +1460,27 @@ struct CancellationArgs {
   uint64_t target;
   int rank;
 };
+
+__device__ bool GenerationEarlier(unsigned long long observed, unsigned long long target) {
+  if constexpr (kEp64) {
+    return (observed >> 32) < (target >> 32);
+  }
+  return observed < target;
+}
+
+__device__ bool GenerationCancelled(unsigned long long observed, unsigned long long target) {
+  if constexpr (kEp64) {
+    return (observed >> 32) >= (target >> 32);
+  }
+  return observed >= target;
+}
+
+__device__ bool GenerationMismatch(unsigned long long observed, unsigned long long target) {
+  if constexpr (kEp64) {
+    return observed != target;
+  }
+  return observed > target;
+}
 
 __global__ void PublishCancellationKernel(CancellationArgs args) {
   if (threadIdx.x != 0 || blockIdx.x != 0) {
@@ -1240,7 +1576,7 @@ __global__ void WaitCompletionKernel(GenerationArgs args) {
   }
   const unsigned long long target = args.target;
   auto* cancellation = reinterpret_cast<unsigned long long*>(args.cancellation);
-  if (atomicAdd_system(cancellation, 0ULL) >= target) {
+  if (GenerationCancelled(atomicAdd_system(cancellation, 0ULL), target)) {
     __threadfence_system();
     return;
   }
@@ -1250,11 +1586,11 @@ __global__ void WaitCompletionKernel(GenerationArgs args) {
   for (int peer = 0; peer < kNumDevices; ++peer) {
     auto* completion = reinterpret_cast<unsigned long long*>(args.local_completions + peer);
     unsigned long long observed = atomicAdd_system(completion, 0ULL);
-    if (observed < target) {
+    if (GenerationEarlier(observed, target)) {
       ++wait_events;
       const unsigned long long wait_start = clock64();
-      while (observed < target) {
-        if (atomicAdd_system(cancellation, 0ULL) >= target) {
+      while (GenerationEarlier(observed, target)) {
+        if (GenerationCancelled(atomicAdd_system(cancellation, 0ULL), target)) {
           cancelled = true;
           break;
         }
@@ -1273,7 +1609,7 @@ __global__ void WaitCompletionKernel(GenerationArgs args) {
           reinterpret_cast<unsigned long long*>(args.debug_counters->values + kPeerWaitMaxCycles + cell),
           wait_cycles);
     }
-    if (observed > target) {
+    if (GenerationMismatch(observed, target)) {
       ++future_generations;
     }
     if (cancelled) {
@@ -1284,6 +1620,7 @@ __global__ void WaitCompletionKernel(GenerationArgs args) {
       reinterpret_cast<unsigned long long*>(args.debug_counters->values + kCompletionWaits),
       wait_events);
   if (future_generations != 0) {
+    atomicMax_system(cancellation, target);
     atomicAdd(
         reinterpret_cast<unsigned long long*>(args.debug_counters->values + kGenerationMismatches),
         future_generations);
@@ -1299,7 +1636,7 @@ __global__ void WriteFailureStatusKernel(
     return;
   }
   auto* value = reinterpret_cast<unsigned long long*>(const_cast<uint64_t*>(cancellation));
-  failure_status[0] = atomicAdd_system(value, 0ULL) >= generation ? 1 : 0;
+  failure_status[0] = GenerationCancelled(atomicAdd_system(value, 0ULL), generation) ? 1 : 0;
 }
 
 void LaunchFailureStatus(
@@ -1433,6 +1770,7 @@ struct ValidateForwardStampArgs {
   const int32_t* generation_low;
   const int32_t* runtime_epoch;
   DebugCounters* debug_counters;
+  int64_t collective_id;
   uint32_t expected_runtime_epoch;
   int workspace_slots;
 };
@@ -1447,12 +1785,20 @@ __global__ void ValidateForwardStampKernel(ValidateForwardStampArgs args) {
       static_cast<uint32_t>(args.generation_low[0]);
   const uint32_t runtime_epoch = static_cast<uint32_t>(args.runtime_epoch[0]);
   bool mismatch = slot < 0 || slot >= args.workspace_slots || runtime_epoch != args.expected_runtime_epoch;
-  if (!mismatch) {
+  if (!mismatch && !kEp64) {
     mismatch = static_cast<int>(generation & static_cast<uint64_t>(kMaxWorkspaceSlots - 1)) != slot;
   }
   if (!mismatch) {
     const auto* completed = reinterpret_cast<const unsigned long long*>(args.last_forward_completions[slot]);
-    mismatch = atomicAdd_system(const_cast<unsigned long long*>(completed), 0ULL) < generation;
+    const uint64_t observed = atomicAdd_system(const_cast<unsigned long long*>(completed), 0ULL);
+    mismatch = kEp64
+                   ? !Ep64ForwardStampValid(
+                         generation,
+                         observed,
+                         args.collective_id,
+                         runtime_epoch,
+                         args.expected_runtime_epoch)
+                   : observed < generation;
   }
   if (mismatch) {
     atomicAdd(
@@ -1469,6 +1815,7 @@ void LaunchForwardStampValidation(
     DeviceRuntime& runtime,
     cudaStream_t stream,
     uint32_t runtime_epoch,
+    int64_t collective_id,
     const int32_t* slot,
     const int32_t* generation_high,
     const int32_t* generation_low,
@@ -1480,6 +1827,7 @@ void LaunchForwardStampValidation(
       .generation_low = generation_low,
       .runtime_epoch = saved_runtime_epoch,
       .debug_counters = runtime.debug_counters,
+      .collective_id = collective_id,
       .expected_runtime_epoch = runtime_epoch,
       .workspace_slots = runtime.workspace_slots,
   };
@@ -1641,6 +1989,9 @@ ffi::Error ForwardBf16(
     if (forward_x_storage != static_cast<int32_t>(ForwardXStorage::kRuntimeStaged) &&
         forward_x_storage != static_cast<int32_t>(ForwardXStorage::kXlaPeerExperimental)) {
       return ffi::Error::InvalidArgument("unsupported Mixture-of-Kittens forward x storage mode");
+    }
+    if (kEp64 && forward_x_storage != static_cast<int32_t>(ForwardXStorage::kRuntimeStaged)) {
+      return ffi::Error::InvalidArgument("Mixture-of-Kittens EP64 requires runtime-staged forward x storage");
     }
     const auto x_storage = static_cast<ForwardXStorage>(forward_x_storage);
 
@@ -1913,6 +2264,9 @@ ffi::Error BackwardBf16(
         backward_peer_storage != static_cast<int32_t>(BackwardPeerStorage::kXlaPeerInputsExperimental)) {
       return ffi::Error::InvalidArgument("unsupported Mixture-of-Kittens backward peer storage mode");
     }
+    if (kEp64 && backward_peer_storage != static_cast<int32_t>(BackwardPeerStorage::kRuntimeStaged)) {
+      return ffi::Error::InvalidArgument("Mixture-of-Kittens EP64 requires runtime-staged backward peer storage");
+    }
     const auto peer_storage = static_cast<BackwardPeerStorage>(backward_peer_storage);
 
     const size_t x_bytes = static_cast<size_t>(local_tokens) * hidden_dim * sizeof(uint16_t);
@@ -1944,6 +2298,7 @@ ffi::Error BackwardBf16(
         runtime,
         stream,
         RuntimeManager::Instance().RuntimeEpoch(),
+        collective_id,
         stamp_slot.typed_data(),
         stamp_generation_high.typed_data(),
         stamp_generation_low.typed_data(),
@@ -2295,6 +2650,37 @@ extern "C" int levanter_mok_init_runtime(
   }
 }
 
+extern "C" int levanter_mok_init_runtime_ep64(
+    int ep_rank,
+    int ep_size,
+    int num_tokens,
+    int hidden_dim,
+    int top_k,
+    int workspace_slots,
+    const uint64_t* peer_arena_pointers,
+    int64_t peer_pointer_count,
+    const uint64_t* arena_offsets,
+    int64_t arena_offset_count) {
+  try {
+    RuntimeManager::Instance().InitEp64(
+        ep_rank,
+        ep_size,
+        num_tokens,
+        hidden_dim,
+        top_k,
+        workspace_slots,
+        peer_arena_pointers,
+        peer_pointer_count,
+        arena_offsets,
+        arena_offset_count);
+    SetLastError("");
+    return 0;
+  } catch (const std::exception& exc) {
+    SetLastError(exc.what());
+    return 1;
+  }
+}
+
 extern "C" int levanter_mok_shutdown_runtime() {
   try {
     RuntimeManager::Instance().Shutdown();
@@ -2345,7 +2731,7 @@ extern "C" int64_t levanter_mok_backward_call_count() {
 }
 
 extern "C" int64_t levanter_mok_debug_counter_count() {
-  return static_cast<int64_t>(kNumDevices) * kDebugCounterCount;
+  return static_cast<int64_t>(kLocalDeviceCount) * kDebugCounterCount;
 }
 
 extern "C" int levanter_mok_reset_debug_counters() {
@@ -2381,6 +2767,17 @@ extern "C" int levanter_mok_trim_default_memory_pools(uint64_t* output, int64_t 
   }
 }
 
+#if LEVANTER_MOK_EP_SIZE == 64
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    levanter_mok_forward_bf16_64,
+    ForwardBf16,
+    ForwardBinding());
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    levanter_mok_backward_bf16_64,
+    BackwardBf16,
+    BackwardBinding());
+#else
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     levanter_mok_forward_bf16_4,
     ForwardBf16,
@@ -2390,6 +2787,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     levanter_mok_backward_bf16_4,
     BackwardBf16,
     BackwardBinding());
+#endif
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     levanter_mok_failure_fence,

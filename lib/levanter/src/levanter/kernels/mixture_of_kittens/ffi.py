@@ -17,6 +17,8 @@ from levanter.kernels.mixture_of_kittens.config import MokLikeConfig, MokLikeRun
 
 FORWARD_TARGET = "levanter_mok_forward_bf16_4"
 BACKWARD_TARGET = "levanter_mok_backward_bf16_4"
+FORWARD_TARGET_EP64 = "levanter_mok_forward_bf16_64"
+BACKWARD_TARGET_EP64 = "levanter_mok_backward_bf16_64"
 FAILURE_FENCE_TARGET = "levanter_mok_failure_fence"
 _TILE_ROWS = 256
 _SWIGLU_TILE_COLUMNS = 128
@@ -37,6 +39,15 @@ class MokLikeForwardContext(NamedTuple):
     stamp_generation_high: jax.Array
     stamp_generation_low: jax.Array
     stamp_runtime_epoch: jax.Array
+
+
+def _native_target(runtime: MokLikeRuntime, ep4_target: str, ep64_target: str) -> str:
+    expert_parallel_size = getattr(runtime, "expert_parallel_size", 4)
+    if expert_parallel_size == 4:
+        return ep4_target
+    if expert_parallel_size == 64:
+        return ep64_target
+    raise ValueError(f"unsupported Mixture-of-Kittens expert-parallel size {expert_parallel_size}")
 
 
 def forward_bf16_local(
@@ -110,7 +121,7 @@ def forward_bf16_local(
         jax.ShapeDtypeStruct((1,), jnp.int32),
     )
     results = jax.ffi.ffi_call(
-        FORWARD_TARGET,
+        _native_target(runtime, FORWARD_TARGET, FORWARD_TARGET_EP64),
         result_shapes,
         # Scratch-buffer mutation is not observable through the array result. This
         # lets the saved custom-VJP context eliminate rematerialized communication.
@@ -233,7 +244,7 @@ def backward_bf16_local(
         jax.ShapeDtypeStruct((1,), jnp.int32),
     )
     results = jax.ffi.ffi_call(
-        BACKWARD_TARGET,
+        _native_target(runtime, BACKWARD_TARGET, BACKWARD_TARGET_EP64),
         result_shapes,
         # Runtime workspaces, counters, and leases are private protocol state.
         # Gradients and failure status fully describe the observable result, so

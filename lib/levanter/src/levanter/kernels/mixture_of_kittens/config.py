@@ -16,6 +16,23 @@ _TILE_ROWS = 256
 _MAX_WORKSPACE_SLOTS = 2
 
 
+class MokLikeTopology(StrEnum):
+    """Expert-group topology owned by one native MoK runtime."""
+
+    LOCAL_EP4 = "local_ep4"
+    NVLINK_EP64 = "nvlink_ep64"
+
+    @property
+    def expert_axis_size(self) -> int:
+        """Return the required expert mesh-axis size."""
+
+        if self is MokLikeTopology.LOCAL_EP4:
+            return 4
+        if self is MokLikeTopology.NVLINK_EP64:
+            return 64
+        raise AssertionError(f"unhandled mok_like topology {self}")
+
+
 class MokLikeForwardXStorage(StrEnum):
     """Storage used for the peer-read forward activation input.
 
@@ -61,6 +78,7 @@ class MokLikeBackwardPeerStorage(StrEnum):
 class MokLikeConfig:
     """Static controls for one native MoK-like forward/backward call."""
 
+    topology: MokLikeTopology = MokLikeTopology.LOCAL_EP4
     num_comm_sms: int = 40
     bwd_num_comm_sms: int = 28
     minibatch_size: int = 4096
@@ -71,6 +89,8 @@ class MokLikeConfig:
     backward_peer_storage: MokLikeBackwardPeerStorage = MokLikeBackwardPeerStorage.RUNTIME_STAGED
 
     def __post_init__(self) -> None:
+        if not isinstance(self.topology, MokLikeTopology):
+            raise TypeError("topology must be a MokLikeTopology")
         if self.num_comm_sms < _CLUSTER_SIZE or self.num_comm_sms % _CLUSTER_SIZE != 0:
             raise ValueError("num_comm_sms must be a positive multiple of the cluster size")
         if self.bwd_num_comm_sms < _CLUSTER_SIZE or self.bwd_num_comm_sms % _CLUSTER_SIZE != 0:
@@ -87,6 +107,13 @@ class MokLikeConfig:
             raise TypeError("forward_x_storage must be a MokLikeForwardXStorage")
         if not isinstance(self.backward_peer_storage, MokLikeBackwardPeerStorage):
             raise TypeError("backward_peer_storage must be a MokLikeBackwardPeerStorage")
+        if self.topology is MokLikeTopology.NVLINK_EP64:
+            if self.workspace_slots != 1:
+                raise ValueError("NVLink EP64 requires exactly one workspace slot")
+            if self.forward_x_storage is not MokLikeForwardXStorage.RUNTIME_STAGED:
+                raise ValueError("NVLink EP64 requires runtime-staged forward inputs")
+            if self.backward_peer_storage is not MokLikeBackwardPeerStorage.RUNTIME_STAGED:
+                raise ValueError("NVLink EP64 requires runtime-staged backward buffers")
 
 
 class MokLikeRuntime(Protocol):

@@ -28,7 +28,7 @@ from levanter.kernels.mixture_of_kittens.source import (
 )
 
 
-_BUILD_SCHEMA = "mok_forward_backward_ffi_v15"
+_BUILD_SCHEMA = "mok_forward_backward_ffi_v16_ep64"
 _CUDA_DISTRIBUTIONS = (
     "nvidia-cuda-runtime",
     "nvidia-cuda-nvcc",
@@ -141,18 +141,54 @@ static __device__ __forceinline__ unsigned long long system_generation_load(cons
     return value;
 }
 
+static __device__ __forceinline__ bool system_generation_cancelled(
+    const uint64_t *cancellation,
+    unsigned long long target
+) {
+    const unsigned long long observed = system_generation_load(cancellation);
+#if LEVANTER_MOK_EP_SIZE == 64
+    return (observed >> 32) >= (target >> 32);
+#else
+    return observed >= target;
+#endif
+}
+
 static __device__ __forceinline__ unsigned long long system_generation_wait(
     const uint64_t *counter,
     const uint64_t *cancellation,
     unsigned long long target
 ) {
     unsigned long long observed = system_generation_load(counter);
+#if LEVANTER_MOK_EP_SIZE == 64
+    while ((observed >> 32) < (target >> 32)) {
+#else
     while (observed < target) {
-        if (system_generation_load(cancellation) >= target) return target;
+#endif
+        if (system_generation_cancelled(cancellation, target)) return target;
         __nanosleep(64);
         observed = system_generation_load(counter);
     }
     return observed;
+}
+
+static __device__ __forceinline__ void system_generation_cancel(
+    const uint64_t *cancellation,
+    unsigned long long target
+) {
+    atomicMax_system(
+        reinterpret_cast<unsigned long long *>(const_cast<uint64_t *>(cancellation)),
+        target);
+}
+
+static __device__ __forceinline__ bool system_generation_mismatch(
+    unsigned long long observed,
+    unsigned long long target
+) {
+#if LEVANTER_MOK_EP_SIZE == 64
+    return observed != target;
+#else
+    return observed > target;
+#endif
 }""",
         ),
         (
@@ -230,15 +266,15 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
     #pragma unroll
     for (int stage = 0; stage < config::COMBINE_PIPE_DEPTH; ++stage) {""",
             """    // Remote destinations must finish clearing their peer-written buffers before this CTA stores.
-    __shared__ uint32_t destination_ready_mask;
+    __shared__ unsigned long long destination_ready_mask;
     if (peer_input_ready != nullptr) {
         if (tid == 0) destination_ready_mask = 0;
         __syncthreads();
         #pragma unroll
         for (int stage = 0; stage < config::COMBINE_PIPE_DEPTH; ++stage)
-            if (peer_rank[stage] >= 0) atomicOr(&destination_ready_mask, 1U << peer_rank[stage]);
+            if (peer_rank[stage] >= 0) atomicOr(&destination_ready_mask, 1ULL << peer_rank[stage]);
         __syncthreads();
-        if (tid < NUM_DEVICES && (destination_ready_mask & (1U << tid)) != 0) {
+        if (tid < NUM_DEVICES && (destination_ready_mask & (1ULL << tid)) != 0) {
             const unsigned long long target = system_generation_load(input_generation);
             const unsigned long long initial = system_generation_load(peer_input_ready + tid);
             unsigned long long observed = initial;
@@ -255,8 +291,11 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
                 if (peer_wait_max_cycles != nullptr)
                     atomicMax(reinterpret_cast<unsigned long long *>(peer_wait_max_cycles + tid), wait_cycles);
             }
-            if (observed > target && generation_mismatch_counter != nullptr)
-                atomicAdd(reinterpret_cast<unsigned long long *>(generation_mismatch_counter), 1ULL);
+            if (system_generation_mismatch(observed, target)) {
+                system_generation_cancel(cancellation, target);
+                if (generation_mismatch_counter != nullptr)
+                    atomicAdd(reinterpret_cast<unsigned long long *>(generation_mismatch_counter), 1ULL);
+            }
         }
         __syncthreads();
     }
@@ -288,8 +327,11 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
                 if (peer_wait_max_cycles != nullptr)
                     atomicMax(reinterpret_cast<unsigned long long *>(peer_wait_max_cycles + peer_rank), wait_cycles);
             }
-            if (observed > target && generation_mismatch_counter != nullptr)
-                atomicAdd(reinterpret_cast<unsigned long long *>(generation_mismatch_counter), 1ULL);
+            if (system_generation_mismatch(observed, target)) {
+                system_generation_cancel(cancellation, target);
+                if (generation_mismatch_counter != nullptr)
+                    atomicAdd(reinterpret_cast<unsigned long long *>(generation_mismatch_counter), 1ULL);
+            }
         }
         router_weights.raw_ptr[row] = peer_rank >= 0 ? peer_buf[peer_rank][peer_token_idx] : 0.0f;""",
         ),
@@ -321,13 +363,13 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
     const int peer_token_idx = is_worker ? schedule_peer_token_idx[{macrobatch_offset + row_idx + tid}] : -1;
     const int num_valid = __syncthreads_count(peer_rank >= 0);
 
-    __shared__ uint32_t peer_ready_mask;
+    __shared__ unsigned long long peer_ready_mask;
     if (peer_input_ready != nullptr) {
         if (tid == 0) peer_ready_mask = 0;
         __syncthreads();
-        if (peer_rank >= 0) atomicOr(&peer_ready_mask, 1U << peer_rank);
+        if (peer_rank >= 0) atomicOr(&peer_ready_mask, 1ULL << peer_rank);
         __syncthreads();
-        if (tid < NUM_DEVICES && (peer_ready_mask & (1U << tid)) != 0) {
+        if (tid < NUM_DEVICES && (peer_ready_mask & (1ULL << tid)) != 0) {
             const unsigned long long target = system_generation_load(input_generation);
             const unsigned long long initial = system_generation_load(peer_input_ready + tid);
             unsigned long long observed = initial;
@@ -344,8 +386,11 @@ static __device__ __forceinline__ unsigned long long system_generation_wait(
                 if (peer_wait_max_cycles != nullptr)
                     atomicMax(reinterpret_cast<unsigned long long *>(peer_wait_max_cycles + tid), wait_cycles);
             }
-            if (observed > target && generation_mismatch_counter != nullptr)
-                atomicAdd(reinterpret_cast<unsigned long long *>(generation_mismatch_counter), 1ULL);
+            if (system_generation_mismatch(observed, target)) {
+                system_generation_cancel(cancellation, target);
+                if (generation_mismatch_counter != nullptr)
+                    atomicAdd(reinterpret_cast<unsigned long long *>(generation_mismatch_counter), 1ULL);
+            }
         }
         __syncthreads();
     }
@@ -484,6 +529,7 @@ using d_routed_weight_f32_gl = gl<float, 1, -1, -1, -1, mlp_f32_d_tile>;""",
         mok_text = mok_text.replace(old, new)
     mok_text += "\n};  // struct dispatch_mlp_swiglu_combiner\n"
     _validate_and_count_cancellable_generation_waits(mok_text)
+    _validate_ep64_safe_peer_masks(mok_text)
 
     mxfp8_lines = (source_root / "csrc" / "mxfp8.cuh").read_text().splitlines(keepends=True)
     first_mxfp8_host = next(index for index, line in enumerate(mxfp8_lines) if "static __host__" in line)
@@ -513,7 +559,19 @@ def _validate_and_count_cancellable_generation_waits(source: str) -> int:
     return len(runtime_calls)
 
 
-def _build_path(build_config: MokLikeBuildConfig) -> tuple[Path, Path]:
+def _validate_ep64_safe_peer_masks(source: str) -> int:
+    """Reject 32-bit peer masks that lose ranks 32 through 63."""
+
+    peer_shift = r"(?:peer_rank(?:\[[^]]+\])?|tid)"
+    unsafe_shifts = re.findall(rf"\b1U\s*<<\s*{peer_shift}", source)
+    if unsafe_shifts:
+        raise RuntimeError(f"generated MoK source contains 32-bit peer masks: {unsafe_shifts}")
+    return len(re.findall(rf"\b1ULL\s*<<\s*{peer_shift}", source))
+
+
+def _build_path(build_config: MokLikeBuildConfig, expert_parallel_size: int = 4) -> tuple[Path, Path]:
+    if expert_parallel_size not in (4, 64):
+        raise ValueError("Mixture-of-Kittens native build supports EP4 or EP64")
     source_root = mok_source_root(build_config)
     prepared = _prepared_source_bytes(source_root)
     key = hashlib.sha256()
@@ -532,6 +590,7 @@ def _build_path(build_config: MokLikeBuildConfig) -> tuple[Path, Path]:
                 jax.__version__,
                 jaxlib.__version__,
                 toolchain_versions,
+                expert_parallel_size,
             )
         ).encode()
     )
@@ -539,7 +598,7 @@ def _build_path(build_config: MokLikeBuildConfig) -> tuple[Path, Path]:
     for include_dir in _cuda_include_dirs():
         key.update(str(include_dir).encode())
     digest = key.hexdigest()[:16]
-    build_dir = mok_cache_root(build_config, "mok_forward_ffi") / digest
+    build_dir = mok_cache_root(build_config, f"mok_forward_ffi_ep{expert_parallel_size}") / digest
     return build_dir, build_dir / "libmok_forward_ffi.so"
 
 
@@ -553,10 +612,10 @@ def _write_prepared_sources(build_dir: Path, build_config: MokLikeBuildConfig) -
     (generated / "utils.cuh").write_bytes(utils_text)
 
 
-def build_native_library(build_config: MokLikeBuildConfig) -> Path:
+def build_native_library(build_config: MokLikeBuildConfig, *, expert_parallel_size: int = 4) -> Path:
     """Build the pinned adapter and return its cached shared-library path."""
 
-    build_dir, library_path = _build_path(build_config)
+    build_dir, library_path = _build_path(build_config, expert_parallel_size)
     build_dir.mkdir(parents=True, exist_ok=True)
     with (build_dir / ".build.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -584,6 +643,7 @@ def build_native_library(build_config: MokLikeBuildConfig) -> Path:
             "--use_fast_math",
             "-lineinfo",
             "-DNDEBUG",
+            f"-DLEVANTER_MOK_EP_SIZE={expert_parallel_size}",
             f"-DKITTENS_{build_config.cuda_arch.replace('sm_', 'SM', 1).replace('a', '')}",
             "-D__CUDA_NO_HALF_OPERATORS__",
             "-D__CUDA_NO_HALF_CONVERSIONS__",

@@ -92,8 +92,8 @@ def test_mok_like_process_metrics_validate_every_process(monkeypatch: pytest.Mon
         tuple(
             train._pack_mok_like_process_summary(summary)
             for summary in (
-                (0, 100, 100, 0, 0, 4, 400, 400, 1200, 0, 1, 4, 0, 0, 4000, 3200, 800),
-                (1, 100, 100, 0, 0, 8, 800, 400, 1200, 0, 1, 4, 0, 0, 8000, 6000, 2000),
+                (0, 100, 100, 0, 0, 100, 200, 400, 1200, 0, 1, 4, 0, 0, 4000, 3200, 800),
+                (1, 100, 100, 0, 0, 100, 200, 400, 1200, 0, 1, 4, 0, 0, 8000, 6000, 2000),
             )
         )
     )
@@ -119,8 +119,8 @@ def test_mok_like_process_metrics_validate_every_process(monkeypatch: pytest.Mon
     assert metrics["mok_like/runtime/process_1/forward_calls"] == 100
     assert metrics["mok_like/runtime/processes_with_protocol_errors"] == 0
     assert metrics["mok_like/runtime/processes_with_forward_staging"] == 2
-    assert metrics["mok_like/runtime/total_forward_staging_calls"] == 12
-    assert metrics["mok_like/runtime/total_forward_staging_bytes"] == 1200
+    assert metrics["mok_like/runtime/total_forward_staging_calls"] == 200
+    assert metrics["mok_like/runtime/total_forward_staging_bytes"] == 400
     assert metrics["mok_like/runtime/total_backward_staging_calls"] == 800
     assert metrics["mok_like/runtime/total_backward_staging_bytes"] == 2400
     assert metrics["mok_like/runtime/processes_using_slot1"] == 0
@@ -180,14 +180,14 @@ def test_mok_like_process_metrics_uses_local_trim_and_runtime_audit(monkeypatch:
 
     metrics = train._mok_like_process_metrics(
         counters,
-        (100, 100),
+        (8, 8),
         trim_audit,
-        expected_handler_calls=100,
+        expected_handler_calls=8,
         expected_trim_count=2,
         forward_x_storage=MokLikeForwardXStorage.RUNTIME_STAGED,
         backward_peer_storage=MokLikeBackwardPeerStorage.XLA_PEER_EXPERIMENTAL,
         num_tokens=1,
-        hidden_dim=1,
+        hidden_dim=large_byte_count // 2,
         top_k=1,
         workspace_slots=1,
     )
