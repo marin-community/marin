@@ -105,7 +105,6 @@ def build_hero_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     rms_gated_norm_implementation: RmsGatedNormImplementation | None = None,
-    rms_gated_norm_backward_chunk_rows: int | None = None,
     flavor: str = "ep",
     eval_every: int = 0,
     save_checkpoints: bool = False,
@@ -168,7 +167,6 @@ def build_hero_run(
             ("capacity_factor", capacity_factor),
             ("latent_dim", latent_dim),
             ("rms_gated_norm_implementation", rms_gated_norm_implementation),
-            ("rms_gated_norm_backward_chunk_rows", rms_gated_norm_backward_chunk_rows),
         )
         if value is not None
     }
@@ -359,12 +357,6 @@ def build_hero_run(
     help="RMSNorm-GatedNorm boundary implementation. Unset keeps the hero value.",
 )
 @click.option(
-    "--rms-gated-norm-backward-chunk-rows",
-    type=click.IntRange(min=1),
-    default=None,
-    help="Local rows per fused reverse iteration. Unset processes all local rows together.",
-)
-@click.option(
     "--flavor",
     type=click.Choice(sorted(FLAVORS)),
     default="ep",
@@ -444,7 +436,6 @@ def main(
     capacity_factor: float | None,
     latent_dim: int | None,
     rms_gated_norm_implementation: RmsGatedNormImplementation | None,
-    rms_gated_norm_backward_chunk_rows: int | None,
     flavor: str,
     save_checkpoints: bool,
     checkpoint_minutes: float,
@@ -468,7 +459,6 @@ def main(
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
         rms_gated_norm_implementation=rms_gated_norm_implementation,
-        rms_gated_norm_backward_chunk_rows=rms_gated_norm_backward_chunk_rows,
         flavor=flavor,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),

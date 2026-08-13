@@ -162,13 +162,21 @@ def _backward_kernels():
     return quack_silu_backward_gemm, quack_coda_rms_backward_producer
 
 
-def _local_reverse(
-    residuals: RmsGatedNormResiduals,
-    output_cotangent: jax.Array,
-    silu_backward,
-    rms_backward_producer,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-    """Reverse one contiguous row tile without crossing a batch-axis collective."""
+@partial(jax.custom_vjp, nondiff_argnums=(4, 5))
+def _fused(x, norm_weight, w_down, w_up, eps, batch_axes):
+    del batch_axes
+    return _exact_forward(x, norm_weight, w_down, w_up, eps)[0]
+
+
+def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
+    del batch_axes
+    return _exact_forward(x, norm_weight, w_down, w_up, eps)
+
+
+def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
+    silu_backward, rms_backward_producer = _backward_kernels()
+
+    del eps
     x = residuals.x
     x_flat = x.reshape((-1, x.shape[-1]))
     up_reverse = exact_gated_norm_up_reverse(output_cotangent, residuals)
@@ -192,116 +200,12 @@ def _local_reverse(
     x_cotangent = exact_rms_backward_consumer(
         unweighted_cotangent, row_dot, x_flat, residuals.norm_weight, residuals.inverse_rms
     ).reshape(x.shape)
-    return x_cotangent, norm_weight_cotangent, w_down_cotangent, up_reverse.w_up
-
-
-def _chunked_local_reverse(
-    residuals: RmsGatedNormResiduals,
-    output_cotangent: jax.Array,
-    backward_chunk_rows: int,
-    batch_axes: tuple[str, ...],
-    silu_backward,
-    rms_backward_producer,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-    """Roll the reverse over row tiles so full-width custom-call edges can be reused."""
-    x_flat = residuals.x.reshape((-1, residuals.x.shape[-1]))
-    row_count = x_flat.shape[0]
-    if row_count % backward_chunk_rows != 0:
-        raise ValueError(f"backward_chunk_rows={backward_chunk_rows} must divide the local row count {row_count}")
-    chunk_count = row_count // backward_chunk_rows
-
-    def _chunks(array: jax.Array) -> jax.Array:
-        return array.reshape((chunk_count, backward_chunk_rows, *array.shape[1:]))
-
-    chunk_inputs = (
-        _chunks(output_cotangent.reshape(x_flat.shape)),
-        _chunks(x_flat),
-        _chunks(residuals.inverse_rms[:, None])[..., 0],
-        _chunks(residuals.normalized),
-        _chunks(residuals.gate_preactivation),
-        _chunks(residuals.gate_hidden),
-        _chunks(residuals.gate),
-    )
-    gradient_accumulators = tuple(
-        jax.lax.pcast(jnp.zeros(parameter.shape, dtype=jnp.float32), batch_axes, to="varying")
-        for parameter in (residuals.norm_weight, residuals.w_down, residuals.w_up)
-    )
-
-    def _reverse_chunk(accumulators, inputs):
-        output_chunk, x_chunk, inverse_rms_chunk, normalized_chunk, preactivation_chunk, hidden_chunk, gate_chunk = (
-            inputs
-        )
-        chunk_residuals = RmsGatedNormResiduals(
-            x=x_chunk,
-            norm_weight=residuals.norm_weight,
-            w_down=residuals.w_down,
-            w_up=residuals.w_up,
-            inverse_rms=inverse_rms_chunk,
-            normalized=normalized_chunk,
-            gate_preactivation=preactivation_chunk,
-            gate_hidden=hidden_chunk,
-            gate=gate_chunk,
-        )
-        x_cotangent, norm_cotangent, down_cotangent, up_cotangent = _local_reverse(
-            chunk_residuals, output_chunk, silu_backward, rms_backward_producer
-        )
-        chunk_cotangents = (norm_cotangent, down_cotangent, up_cotangent)
-        accumulators = tuple(
-            accumulator + cotangent.astype(jnp.float32)
-            for accumulator, cotangent in zip(accumulators, chunk_cotangents, strict=True)
-        )
-        return accumulators, x_cotangent
-
-    accumulated, x_cotangent_chunks = jax.lax.scan(_reverse_chunk, gradient_accumulators, chunk_inputs)
-    norm_weight_cotangent, w_down_cotangent, w_up_cotangent = (
-        cotangent.astype(parameter.dtype)
-        for cotangent, parameter in zip(
-            accumulated,
-            (residuals.norm_weight, residuals.w_down, residuals.w_up),
-            strict=True,
-        )
-    )
-    return (
-        x_cotangent_chunks.reshape(residuals.x.shape),
-        norm_weight_cotangent,
-        w_down_cotangent,
-        w_up_cotangent,
-    )
-
-
-@partial(jax.custom_vjp, nondiff_argnums=(4, 5, 6))
-def _fused(x, norm_weight, w_down, w_up, eps, batch_axes, backward_chunk_rows):
-    del batch_axes, backward_chunk_rows
-    return _exact_forward(x, norm_weight, w_down, w_up, eps)[0]
-
-
-def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes, backward_chunk_rows):
-    del batch_axes, backward_chunk_rows
-    return _exact_forward(x, norm_weight, w_down, w_up, eps)
-
-
-def _fused_bwd(eps, batch_axes, backward_chunk_rows, residuals, output_cotangent):
-    silu_backward, rms_backward_producer = _backward_kernels()
-
-    del eps
-    if backward_chunk_rows is None:
-        cotangents = _local_reverse(residuals, output_cotangent, silu_backward, rms_backward_producer)
-    else:
-        cotangents = _chunked_local_reverse(
-            residuals,
-            output_cotangent,
-            backward_chunk_rows,
-            batch_axes,
-            silu_backward,
-            rms_backward_producer,
-        )
-    x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent = cotangents
     # The parameters enter replicated, so their cotangents must be reduced over the axes the
     # tokens are sharded across. shard_map defaults to check_vma=True, which suppresses the
     # transpose's own defensive psum and requires the reduction here.
     norm_weight_cotangent = jax.lax.psum(norm_weight_cotangent, axis_name=batch_axes)
     w_down_cotangent = jax.lax.psum(w_down_cotangent, axis_name=batch_axes)
-    w_up_cotangent = jax.lax.psum(w_up_cotangent, axis_name=batch_axes)
+    w_up_cotangent = jax.lax.psum(up_reverse.w_up, axis_name=batch_axes)
     return x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent
 
 
@@ -316,20 +220,14 @@ def rms_gated_norm(
     w_up: jax.Array,
     eps: float,
     implementation: RmsGatedNormImplementation,
-    backward_chunk_rows: int | None = None,
 ) -> jax.Array:
     """Apply the RMSNorm-GatedNorm boundary with an explicit implementation.
 
     ``xla`` is the stock path. ``quack_coda_backward`` keeps that forward bit-identical and
-    replaces the reverse with the fused SM100 kernels. ``backward_chunk_rows`` rolls that reverse
-    over local row tiles, limiting the lifetime of full-width custom-call intermediates.
+    replaces the reverse with the fused SM100 kernels.
     """
     if implementation not in ("xla", "quack_coda_backward"):
         raise ValueError(f"unsupported RMS-GatedNorm implementation {implementation!r}")
-    if backward_chunk_rows is not None and backward_chunk_rows <= 0:
-        raise ValueError(f"backward_chunk_rows must be positive, got {backward_chunk_rows}")
-    if implementation == "xla" and backward_chunk_rows is not None:
-        raise ValueError("backward_chunk_rows only applies to quack_coda_backward")
 
     norm_weight = reshard(norm_weight, P(None))
     w_down = reshard(w_down, P(None, None))
@@ -342,15 +240,7 @@ def rms_gated_norm(
     x = reshard(x, P(batch_axes))
 
     def _local(local_x, local_norm_weight, local_w_down, local_w_up):
-        return _fused(
-            local_x,
-            local_norm_weight,
-            local_w_down,
-            local_w_up,
-            eps,
-            batch_axes,
-            backward_chunk_rows,
-        )
+        return _fused(local_x, local_norm_weight, local_w_down, local_w_up, eps, batch_axes)
 
     return shard_map(
         _local,

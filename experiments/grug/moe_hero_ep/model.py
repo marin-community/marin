@@ -193,8 +193,6 @@ class GrugModelConfig:
     rope_fused: bool = False
     rms_gated_norm_implementation: RmsGatedNormImplementation = "xla"
     """Implementation for the RMSNorm followed by rank-128 GatedNorm boundary."""
-    rms_gated_norm_backward_chunk_rows: int | None = None
-    """Local row count per fused reverse iteration. ``None`` runs one full-row kernel chain."""
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -221,13 +219,6 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be positive")
         if self.rms_gated_norm_implementation not in get_args(RmsGatedNormImplementation):
             raise ValueError(f"unsupported RMS-GatedNorm implementation {self.rms_gated_norm_implementation!r}")
-        if self.rms_gated_norm_backward_chunk_rows is not None and self.rms_gated_norm_backward_chunk_rows <= 0:
-            raise ValueError("rms_gated_norm_backward_chunk_rows must be positive")
-        if (
-            self.rms_gated_norm_backward_chunk_rows is not None
-            and self.rms_gated_norm_implementation != "quack_coda_backward"
-        ):
-            raise ValueError("rms_gated_norm_backward_chunk_rows requires quack_coda_backward")
         if self.num_experts_per_token >= self.num_experts:
             # QB routing takes top-(k+1) and keeps the last entry as the threshold alpha, so a
             # full-bank top-k asks `jax.lax.top_k` for more entries than the router has experts.
@@ -637,13 +628,7 @@ class GatedNorm(eqx.Module):
         return output
 
 
-def _apply_rms_gated_norm(
-    x,
-    rms: "RMSNorm",
-    gated: "GatedNorm",
-    implementation,
-    backward_chunk_rows: int | None = None,
-) -> jax.Array:
+def _apply_rms_gated_norm(x, rms: "RMSNorm", gated: "GatedNorm", implementation) -> jax.Array:
     """Unpack this variant's norm modules into the shared boundary implementation."""
     return rms_gated_norm(
         x,
@@ -652,7 +637,6 @@ def _apply_rms_gated_norm(
         w_up=gated.w_up,
         eps=rms.eps,
         implementation=implementation,
-        backward_chunk_rows=backward_chunk_rows,
     )
 
 
@@ -1048,13 +1032,12 @@ class Block(eqx.Module):
         sconv_segment_ids = _seg[0] if _seg is not None else None
 
         norm_implementation = self.attn.cfg.rms_gated_norm_implementation
-        backward_chunk_rows = self.attn.cfg.rms_gated_norm_backward_chunk_rows
-        attn_in = _apply_rms_gated_norm(x, self.rms_attn, self.attn_gated_norm, norm_implementation, backward_chunk_rows)
+        attn_in = _apply_rms_gated_norm(x, self.rms_attn, self.attn_gated_norm, norm_implementation)
         attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
-        mlp_in = _apply_rms_gated_norm(x, self.rms_mlp, self.mlp_gated_norm, norm_implementation, backward_chunk_rows)
+        mlp_in = _apply_rms_gated_norm(x, self.rms_mlp, self.mlp_gated_norm, norm_implementation)
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             for shared_expert in self.shared:
@@ -1136,13 +1119,7 @@ class Transformer(eqx.Module):
 
         cfg = self.config
         hidden = _embedding_gather(self.token_embed, token_ids)
-        hidden = _apply_rms_gated_norm(
-            hidden,
-            self.embed_norm,
-            self.embed_gated_norm,
-            cfg.rms_gated_norm_implementation,
-            cfg.rms_gated_norm_backward_chunk_rows,
-        )
+        hidden = _apply_rms_gated_norm(hidden, self.embed_norm, self.embed_gated_norm, cfg.rms_gated_norm_implementation)
 
         # Local layers use a sliding window; every global_every-th layer is full causal.
         segment_ids = None
@@ -1207,13 +1184,7 @@ class Transformer(eqx.Module):
             "qb_beta_per_layer": stacked_router_stats["qb_beta"],
             "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
         }
-        hidden = _apply_rms_gated_norm(
-            hidden,
-            self.final_norm,
-            self.final_gated_norm,
-            cfg.rms_gated_norm_implementation,
-            cfg.rms_gated_norm_backward_chunk_rows,
-        )
+        hidden = _apply_rms_gated_norm(hidden, self.final_norm, self.final_gated_norm, cfg.rms_gated_norm_implementation)
         return hidden, router_metrics
 
     @named_call
