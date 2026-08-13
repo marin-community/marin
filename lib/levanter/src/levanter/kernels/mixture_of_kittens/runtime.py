@@ -255,6 +255,22 @@ def _rollback_failed_ep64_initialization(
     raise primary_error
 
 
+def _raise_failed_ep64_bootstrap(
+    *,
+    workspace: MokLikeSymmetricWorkspace,
+    local_error: Exception | None,
+    bootstrap_errors: tuple[str | None, ...],
+) -> None:
+    """Release a mapped workspace collectively when source/build/load fails on any rank."""
+
+    primary_error = local_error or RuntimeError(f"MoK-like EP64 bootstrap failed on peer ranks: {bootstrap_errors}")
+    try:
+        workspace.close()
+    except Exception as error:
+        primary_error.add_note(f"EP64 bootstrap workspace release failed: {type(error).__name__}: {error}")
+    raise primary_error
+
+
 @dataclass(eq=False)
 class MokLikeRuntimeHandle:
     """Idempotent owner for one local-EP4 or symmetric-EP64 native runtime."""
@@ -582,28 +598,21 @@ def initialize_mok_like_runtime(
         raise ValueError("num_tokens and hidden_dim must be divisible by 256")
 
     _validate_topology(mesh, topology)
-    mok_source_root(build_config)
-    require_mok_like_available(build_config)
-    if topology is MokLikeTopology.LOCAL_EP4:
-        cuda_driver, library, library_path = load_native_library(build_config)
-    else:
-        cuda_driver, library, library_path = load_native_library(
-            build_config, expert_parallel_size=topology.expert_axis_size
-        )
-    if _REGISTERED_LIBRARY_PATH is None:
-        if topology is MokLikeTopology.LOCAL_EP4:
-            register_ffi_targets(library)
-        else:
-            register_ffi_targets(library, topology=topology)
-        _REGISTERED_LIBRARY_PATH = library_path
-    elif _REGISTERED_LIBRARY_PATH != library_path:
-        raise RuntimeError(
-            f"mok_like FFI targets already use {_REGISTERED_LIBRARY_PATH}; cannot register {library_path}"
-        )
-
     signature = runtime_signature(num_tokens, hidden_dim, top_k, workspace_slots, topology=topology)
     symmetric_workspace = None
-    if topology is MokLikeTopology.NVLINK_EP64:
+    if topology is MokLikeTopology.LOCAL_EP4:
+        mok_source_root(build_config)
+        require_mok_like_available(build_config)
+        cuda_driver, library, library_path = load_native_library(build_config)
+        if _REGISTERED_LIBRARY_PATH is None:
+            register_ffi_targets(library)
+            _REGISTERED_LIBRARY_PATH = library_path
+        elif _REGISTERED_LIBRARY_PATH != library_path:
+            raise RuntimeError(
+                f"mok_like FFI targets already use {_REGISTERED_LIBRARY_PATH}; cannot register {library_path}"
+            )
+        initialize_native_runtime(library, signature)
+    else:
         logger.info("Initializing the MoK EP64 symmetric workspace")
         symmetric_workspace = initialize_mok_like_symmetric_workspace(
             num_tokens=num_tokens,
@@ -611,6 +620,33 @@ def initialize_mok_like_runtime(
             top_k=top_k,
             workspace_slots=workspace_slots,
         )
+        bootstrap_error: Exception | None = None
+        cuda_driver = library = library_path = None
+        try:
+            logger.info("MoK EP64 rank %d materializing the pinned native build", symmetric_workspace.rank)
+            mok_source_root(build_config)
+            require_mok_like_available(build_config)
+            cuda_driver, library, library_path = load_native_library(
+                build_config, expert_parallel_size=topology.expert_axis_size
+            )
+            if _REGISTERED_LIBRARY_PATH is None:
+                register_ffi_targets(library, topology=topology)
+                _REGISTERED_LIBRARY_PATH = library_path
+            elif _REGISTERED_LIBRARY_PATH != library_path:
+                raise RuntimeError(
+                    f"mok_like FFI targets already use {_REGISTERED_LIBRARY_PATH}; cannot register {library_path}"
+                )
+        except Exception as error:
+            bootstrap_error = error
+        bootstrap_errors = symmetric_workspace.gather_initialization_errors(bootstrap_error)
+        if any(error is not None for error in bootstrap_errors):
+            _raise_failed_ep64_bootstrap(
+                workspace=symmetric_workspace,
+                local_error=bootstrap_error,
+                bootstrap_errors=bootstrap_errors,
+            )
+        assert cuda_driver is not None and library is not None and library_path is not None
+        logger.info("MoK EP64 rank %d loaded the native library", symmetric_workspace.rank)
         native_error: Exception | None = None
         try:
             initialize_native_runtime_ep64(library, symmetric_workspace)
@@ -625,8 +661,6 @@ def initialize_mok_like_runtime(
                 native_error=native_error,
                 initialization_errors=initialization_errors,
             )
-    else:
-        initialize_native_runtime(library, signature)
     handle = MokLikeRuntimeHandle(
         build_config=build_config,
         signature=signature,

@@ -253,6 +253,22 @@ def test_ep64_init_rollback_preserves_primary_error_and_does_not_release_unsafe_
     assert raised.value.__notes__ == ["EP64 initialization rollback was incomplete: " f"{workspace.rollback_errors}"]
 
 
+def test_ep64_bootstrap_failure_releases_workspace_and_preserves_primary_error() -> None:
+    events: list[str] = []
+    workspace = _FakeRollbackWorkspace(events, rollback_errors=(None,) * 64)
+    primary_error = RuntimeError("native build failed")
+
+    with pytest.raises(RuntimeError, match="native build failed") as raised:
+        runtime._raise_failed_ep64_bootstrap(
+            workspace=cast(MokLikeSymmetricWorkspace, workspace),
+            local_error=primary_error,
+            bootstrap_errors=("RuntimeError: native build failed", *(None for _ in range(63))),
+        )
+
+    assert raised.value is primary_error
+    assert events == ["close"]
+
+
 def _runtime_handle(tmp_path, *, topology: MokLikeTopology) -> runtime.MokLikeRuntimeHandle:
     return runtime.MokLikeRuntimeHandle(
         build_config=MokLikeBuildConfig(
