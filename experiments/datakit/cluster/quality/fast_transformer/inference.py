@@ -35,7 +35,7 @@ def data_parallel_shardings():
 
 
 @eqx.filter_jit
-def _predict_batch(model: FastTransformer, ids, doc_embed=None):
+def predict_batch(model: FastTransformer, ids, doc_embed=None):
     """Sigmoid quality score for a fixed-shape batch (jitted, inference mode)."""
     return jax.nn.sigmoid(model(ids, doc_embed=doc_embed, key=None, inference=True))
 
@@ -54,7 +54,7 @@ def predict(
 ) -> np.ndarray:
     """Sigmoid quality score for every row in ``ids``.
 
-    Chunks are padded to a constant ``batch_size`` so ``_predict_batch`` compiles
+    Chunks are padded to a constant ``batch_size`` so ``predict_batch`` compiles
     once per sequence length and is reused across all calls. When ``batch_size`` is
     not given it is sized from the sequence length to keep the activation footprint
     bounded. ``doc_embed`` rides along row-for-row when the model takes one.
@@ -76,6 +76,6 @@ def predict(
         chunk = ids[start : start + batch_size]
         pad = batch_size - chunk.shape[0]
         emb = None if doc_embed is None else put(_pad_rows(doc_embed[start : start + batch_size], pad))
-        preds = np.asarray(_predict_batch(model, put(_pad_rows(chunk, pad)), emb))
+        preds = np.asarray(predict_batch(model, put(_pad_rows(chunk, pad)), emb))
         out.append(preds[: batch_size - pad] if pad else preds)
     return np.concatenate(out)
