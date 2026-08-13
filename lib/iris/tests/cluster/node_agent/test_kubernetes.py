@@ -12,12 +12,16 @@ network, and DCGM's ``hostname``/``gpu``/``modelName`` labels).
 import pytest
 from iris.cluster.node_agent.kubernetes import (
     NodeStatsScraper,
+    TaskStatsCollector,
     parse_dcgm,
+    parse_kubelet_resource_metrics,
     parse_node_exporter,
     parse_prometheus,
 )
 from iris.cluster.node_agent.metrics import NodeMetrics, NodeTarget
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
+from iris.test_util import FakeStatsTable
 
 NODE_EXPORTER_TEXT = """
 # HELP node_memory_MemTotal_bytes Memory information field MemTotal_bytes.
@@ -85,6 +89,64 @@ def test_parse_prometheus_handles_labels_values_and_comments():
 
 def test_parse_prometheus_skips_non_finite():
     assert list(parse_prometheus("g 1\nh NaN\ni +Inf\n")) == [("g", {}, 1.0)]
+
+
+def test_parse_kubelet_resource_metrics_selects_container_resources():
+    resources = parse_kubelet_resource_metrics(
+        'container_cpu_usage_seconds_total{container="task",pod="pod-a"} 12.5 123\n'
+        'container_memory_working_set_bytes{container="task",pod="pod-a"} 1073741824 123\n'
+    )
+
+    assert resources[("pod-a", "task")].cpu_seconds == 12.5
+    assert resources[("pod-a", "task")].memory_bytes == 1024**3
+
+
+def test_task_stats_collector_writes_cpu_memory_and_peak():
+    k8s = InMemoryK8sService(namespace="iris")
+    k8s.seed_resource(
+        K8sResource.PODS,
+        "pod-a",
+        {
+            "metadata": {
+                "name": "pod-a",
+                "labels": {
+                    "iris.managed": "true",
+                    "iris.runtime": "iris-kubernetes",
+                    "iris.attempt_id": "3",
+                },
+                "annotations": {"iris.task_id": "/long/job/path/workers/0"},
+            },
+            "spec": {"nodeName": "node-a"},
+            "status": {"phase": "Running"},
+        },
+    )
+    table = FakeStatsTable()
+    sampled_at = iter((100.0, 110.0))
+    collector = TaskStatsCollector(k8s, "node-a", table, clock=lambda: next(sampled_at))
+    k8s.set_node_resource_metrics(
+        "node-a",
+        'container_cpu_usage_seconds_total{container="task",pod="pod-a"} 10\n'
+        'container_memory_working_set_bytes{container="task",pod="pod-a"} 1073741824\n',
+    )
+
+    collector.collect_once()
+    first = table.writes[-1][0]
+    assert first.task_id == "/long/job/path/workers/0"
+    assert first.attempt_id == 3
+    assert first.cpu_millicores == 0
+    assert first.memory_mb == 1024
+    assert first.memory_peak_mb == 1024
+
+    k8s.set_node_resource_metrics(
+        "node-a",
+        'container_cpu_usage_seconds_total{container="task",pod="pod-a"} 12\n'
+        'container_memory_working_set_bytes{container="task",pod="pod-a"} 536870912\n',
+    )
+    collector.collect_once()
+    second = table.writes[-1][0]
+    assert second.cpu_millicores == 200
+    assert second.memory_mb == 512
+    assert second.memory_peak_mb == 1024
 
 
 def test_parse_node_exporter_extracts_host_readings():

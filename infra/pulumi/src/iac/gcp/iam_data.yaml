@@ -97,10 +97,23 @@ custom_roles:
   - artifactregistry.repositories.getIamPolicy
   - cloudkms.cryptoKeys.getIamPolicy
   - compute.addresses.get
+  - compute.backendServices.get
+  - compute.firewalls.get
+  - compute.globalAddresses.get
+  - compute.globalForwardingRules.get
+  - compute.healthChecks.get
+  - compute.instances.get
+  - compute.networkEndpointGroups.get
   - compute.regions.get
+  - compute.securityPolicies.get
+  - compute.sslCertificates.get
+  - compute.targetHttpsProxies.get
+  - compute.urlMaps.get
   - iam.roles.get
   - iam.serviceAccounts.get
   - iam.serviceAccounts.getIamPolicy
+  - iap.webServices.getIamPolicy
+  - iap.webServices.getSettings
   - resourcemanager.projects.getIamPolicy
   - secretmanager.secrets.getIamPolicy
   - storage.buckets.getIamPolicy
@@ -802,6 +815,7 @@ project_grants:
 - role: projects/hai-gcp-models/roles/marinGcpResourcePreviewer
   members:
   - serviceAccount:pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
+  - principal: human-070
 - role: projects/hai-gcp-models/roles/marinIapIamManager
   members:
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com

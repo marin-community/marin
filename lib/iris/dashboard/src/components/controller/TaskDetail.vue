@@ -487,10 +487,11 @@ watch(() => props.taskId, async () => {
           <div v-else class="text-sm text-text-muted py-2">No resource data</div>
         </InfoCard>
 
-        <!-- Build info card -->
-        <InfoCard title="Build Info">
+        <!-- Container provenance. Worker-daemon builds include timing/cache data;
+             direct Kubernetes tasks use the selected prebuilt runtime image. -->
+        <InfoCard title="Build / Runtime">
           <template v-if="task.buildMetrics">
-            <InfoRow label="Image Tag">
+            <InfoRow label="Runtime Image">
               <span class="font-mono text-xs break-all">
                 {{ task.buildMetrics.imageTag ?? '-' }}
               </span>
@@ -498,13 +499,13 @@ watch(() => props.taskId, async () => {
             <InfoRow v-if="buildDuration" label="Build Time">
               <span class="font-mono">{{ buildDuration }}</span>
             </InfoRow>
-            <InfoRow label="From Cache">
+            <InfoRow v-if="task.buildMetrics.buildStarted || task.buildMetrics.buildFinished" label="From Cache">
               <span :class="task.buildMetrics.fromCache ? 'text-status-success' : 'text-text-muted'">
                 {{ task.buildMetrics.fromCache ? 'Yes' : 'No' }}
               </span>
             </InfoRow>
           </template>
-          <div v-else class="text-sm text-text-muted py-2">No build data</div>
+          <div v-else class="text-sm text-text-muted py-2">No runtime image data</div>
         </InfoCard>
       </div>
 

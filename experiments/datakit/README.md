@@ -15,8 +15,9 @@ its pipeline on its own dedicated Zephyr coordinator + worker fleet (vanilla
 the StepRunner walks at once.
 
 Most stages keep one step per source with its own output dir
-(`datakit/<stage>/<source>_<hash>/`). Global exact dedup, fuzzy dedup, the
-decontamination DF filter, and the store combine sources. Steps write their
+(`datakit/<stage>/<source>_<hash>/`). Global exact dedup, fuzzy candidate
+search, full-text verification, the decontamination DF filter, and the store
+combine sources. Steps write their
 main output under `outputs/main/` plus, where it makes sense, a small site/sample side output
 (`outputs/samples/`, `outputs/flagged_sample/`, …) that the per-stage HTML
 reports ([`reports/`](reports/)) read.
@@ -32,7 +33,7 @@ paths load without data recomputation. The framework lineage fields
 
 Datakit attribute Parquet files use a flat schema. The top-level `id` column
 is the join key. Each attribute is another top-level column, such as
-`contaminated`, `dup_doc`, or `is_cluster_canonical`. Attribute files do not
+`contaminated` or `dup_doc`. Attribute files do not
 use a nested `attributes` struct.
 
 Global exact deduplication is one shared step. It selects one canonical record
@@ -42,13 +43,23 @@ records. Only source shards with duplicates get an attribute file; a missing
 file means that the source shard has no exact duplicates. The step does not copy
 normalized text.
 
-The final store uses fuzzy canonical markers when they exist. It applies exact
-duplicate markers only to records without fuzzy markers, which covers records
-that MinHash skipped without conflicting with fuzzy canonical selection.
+Fuzzy dedup first writes all members of each non-singleton candidate cluster.
+The next job joins these sparse attributes to normalized text and saved MinHash
+buckets. It selects the longest document from a bounded cluster head as the
+primary anchor. After a rejection, it ranks retained local representatives by
+their shared LSH buckets. The reference configuration permits two comparisons
+per member and 32 representatives per cluster. It limits local representative
+text to 2,000,000 characters per cluster. A local match needs an equal
+case-folded token sequence after whitespace normalization. Its line-count ratio
+must be at least 0.8. Low-diversity text needs exact normalized token-sequence
+containment when its distinct 3-gram ratio is less than 0.9. The job writes
+`dup_doc=true` only after a direct full-text match. The final store removes
+exact duplicates and verified fuzzy duplicates.
 
-Global exact and fuzzy dedup outputs write `.source_manifest.json` at the output
-root. The file maps each `source_NNN` tag to its source key and its relative
-`outputs/source_NNN` attribute directory.
+Global exact, fuzzy candidate, and fuzzy verification outputs write
+`.source_manifest.json` at the output root. The file maps each `source_NNN`
+tag to its source key and its relative `outputs/source_NNN` attribute
+directory.
 
 A source-set change gives a new global exact-dedup output and a new store
 identity. It does not change the identity of tokenization, embedding, quality,
@@ -85,7 +96,8 @@ flowchart TD
     BLOOM["eval bloom (shared)<br/>datakit/bloom/_combined_fixed"]
     DF["eval n-gram DF (cross-source)<br/>datakit/decon_drop/_combined"]
     EXACT["global exact dedup by record ID<br/>datakit/global_exact_dedup"]
-    DEDUP["fuzzy dedup (cross-source)<br/>datakit/dedup"]
+    DEDUP["fuzzy candidate clusters (cross-source)<br/>datakit/dedup"]
+    VERIFY["direct full-text verification<br/>datakit/verify_fuzzy_dups"]
     STORE["store: shuffle attribute join, apply filters,<br/>group by (cluster_&lt;view&gt;, quality_bucket, subshard)<br/>datakit/store → cluster=C/quality=Q Levanter caches"]
 
     SRC --> EXACT
@@ -101,12 +113,15 @@ flowchart TD
     EMB --> SAMP --> KM --> ASG
     EMB --> ASG
     MH --> DEDUP
+    MH --> VERIFY
+    SRC --> VERIFY
+    DEDUP --> VERIFY
     TOK --> STORE
     ASG --> STORE
     QUAL --> STORE
     DECON --> STORE
     EXACT --> STORE
-    DEDUP --> STORE
+    VERIFY --> STORE
 
     subgraph reports["stage reports — one HTML page each, run when the stage finishes (dashed = reads counters + site/sample outputs)"]
         RN["datakit/report/normalize"]
@@ -124,6 +139,7 @@ flowchart TD
     ASG -.-> RD
     DECON -.-> RC
     DEDUP -.-> RU
+    VERIFY -.-> RU
     STORE -.-> RS
 ```
 
