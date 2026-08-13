@@ -227,6 +227,12 @@ pdf = [
     # only -- it quantizes the graph; openvino is what executes it.
     "openvino>=2025.3.0",
     "nncf>=2.14.0",
+    # Rust PDF classifier/extractor under evaluation as a cheaper front end to the Docling route
+    # (experiments/datakit/build_pdf_source/quality/probe_pdf_inspector.py). Pinned exactly: it is a
+    # native extension with no models, and its parsing limits move release to release, so a timing
+    # or failure-rate measurement is only meaningful against a known build. Ships abi3 manylinux
+    # wheels for x86_64 and aarch64, so it resolves on both the Emerald Rapids and Grace pools.
+    "pdf-inspector==1.14.1",
 ]
 
 math = ["pylatexenc", "sympy"]
