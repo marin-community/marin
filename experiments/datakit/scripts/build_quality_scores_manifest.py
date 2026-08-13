@@ -72,6 +72,16 @@ def _fs():
     return fsspec.filesystem("s3")
 
 
+def _abs_key(path: str) -> str:
+    """Normalize an artifact path to a bucket-qualified key.
+
+    Stage artifacts record output dirs relative to ``MARIN_PREFIX``
+    (``datakit/tokenize/...``); some callers hand in a full ``s3://`` URL instead.
+    """
+    p = path.removeprefix("s3://").strip("/")
+    return p if p.startswith(f"{BUCKET}/") else f"{PREFIX}/{p}"
+
+
 def _leaf_rel(output_dir: str, root_marker: str) -> str:
     """Return ``<source>/<subset>_<hash>`` from a stage output dir.
 
@@ -122,14 +132,14 @@ def discover() -> tuple[list[dict], dict]:
         res = art.get("result") or {}
         if cfg.get("tokenizer") != NEMOTRON:
             continue
-        source_key = res.get("source_key")
+        source_key = (res.get("source_keys") or {}).get("train")
         out_dir = (res.get("output_dirs") or {}).get("train")
         if not source_key or not out_dir:
-            logger.warning("nemotron leaf %s missing source_key/output_dirs.train", path)
+            logger.warning("nemotron leaf %s missing source_keys.train/output_dirs.train", path)
             continue
         if source_key in nemo:
             dup_tokens.append(source_key)
-        nemo[source_key] = {"source_key": source_key, "tokens_dir": out_dir.rstrip("/")}
+        nemo[source_key] = {"source_key": source_key, "tokens_dir": _abs_key(out_dir)}
 
     harrier: dict[str, dict] = {}
     dup_embeds: list[str] = []
@@ -144,7 +154,7 @@ def discover() -> tuple[list[dict], dict]:
             continue
         if source_key in harrier:
             dup_embeds.append(source_key)
-        harrier[source_key] = {"source_key": source_key, "embed_dir": out_dir.rstrip("/")}
+        harrier[source_key] = {"source_key": source_key, "embed_dir": _abs_key(out_dir)}
 
     paired_keys = sorted(set(nemo) & set(harrier))
     pairs = []
@@ -388,8 +398,8 @@ def build_manifest(leaves: list[dict]) -> pl.DataFrame:
             rows["embed_leaf"].append(embed_leaf)
             rows["shard_index"].append(k)
             rows["num_shards"].append(leaf["num_shards"])
-            rows["tokens_path"].append(f"{leaf['tokens_dir']}/{tok_base}")
-            rows["embed_path"].append(f"{leaf['embed_dir']}/{basename}")
+            rows["tokens_path"].append(f"s3://{leaf['tokens_dir']}/{tok_base}")
+            rows["embed_path"].append(f"s3://{leaf['embed_dir']}/{basename}")
             rows["output_path"].append(f"{SCORES_ROOT}/{tokens_leaf}/{tok_base}")
             rows["tokens_bytes"].append(tok_size)
             rows["embed_bytes"].append(emb_size)
