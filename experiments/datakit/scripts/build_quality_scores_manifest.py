@@ -50,9 +50,13 @@ PREFIX = f"{BUCKET}/marin"
 TOKENIZE_ROOT = f"{PREFIX}/datakit/tokenize"
 EMBED_ROOT = f"{PREFIX}/datakit/embed/harrier"
 SCORES_ROOT = f"s3://{PREFIX}/datakit/quality-scores"
-OUT_ROOT = f"s3://{PREFIX}/user/muchanem/quality_scores_run/manifest"
+RUN_ROOT = f"s3://{PREFIX}/user/muchanem/quality_scores_run"
+OUT_ROOT = f"{RUN_ROOT}/manifest"
 
 MANIFEST_URL = f"{OUT_ROOT}/manifest.parquet"
+# Staged leaf tables live outside the manifest prefix: the scoring step polls that prefix
+# for the finished manifest and must not see partial per-leaf files.
+STAGE_ROOT = f"{RUN_ROOT}/_manifest_staging"
 SUMMARY_URL = f"{OUT_ROOT}/summary.json"
 VALIDATION_URL = f"{OUT_ROOT}/validation.json"
 SUCCESS_URL = f"{OUT_ROOT}/_SUCCESS"
@@ -329,7 +333,19 @@ def validate_containment(pairs: list[dict], num_pairs: int) -> dict:
 
 
 def sweep_leaf(pair: dict) -> dict:
-    """List both sides of one leaf and read embed-side parquet footers for doc counts."""
+    """Build one leaf's manifest rows and stage them, returning only a summary.
+
+    The per-leaf table goes straight to object storage rather than back through the Zephyr
+    coordinator: the corpus has ~500k shards, and returning every row as a Python object
+    exhausted the coordinator's memory and put it in a restart loop. A staged leaf is also
+    skipped on retry, so a redelivered task costs a read instead of a full re-listing.
+    """
+    fs = _fs()
+    staged = f"{STAGE_ROOT}/{pair['source_key'].replace('/', '__')}.parquet"
+    if fs.exists(_shard_dir(staged)):
+        with fs.open(_shard_dir(staged), "rb") as fh:
+            return _leaf_summary(pair, pl.read_parquet(fh), staged, 0.0, 0.0, resumed=True)
+
     t0 = time.monotonic()
     tok = list_shards(pair["tokens_dir"])
     emb = list_shards(pair["embed_dir"])
@@ -351,17 +367,30 @@ def sweep_leaf(pair: dict) -> dict:
     footer_time = time.monotonic() - t1
 
     num_shards = max((v[2] for v in tok.values()), default=0)
-    shards = [
-        [
-            k,
-            tok[k][0],
-            tok[k][1],
-            emb[k][0] if k in emb else "",
-            emb[k][1] if k in emb else 0,
-            embed_rows.get(k, -1) if k in emb else -1,
-        ]
-        for k in sorted(tok)
-    ]
+    tokens_leaf, embed_leaf = pair["tokens_rel"], pair["embed_rel"]
+    indices = sorted(tok)
+    df = pl.DataFrame(
+        {
+            "source_key": [pair["source_key"]] * len(indices),
+            "source": [pair["source"]] * len(indices),
+            "subset": [pair["subset"]] * len(indices),
+            "tokens_leaf": [tokens_leaf] * len(indices),
+            "embed_leaf": [embed_leaf] * len(indices),
+            "shard_index": indices,
+            "num_shards": [num_shards] * len(indices),
+            "tokens_path": [f"s3://{pair['tokens_dir']}/{tok[k][0]}" for k in indices],
+            "embed_path": [f"s3://{pair['embed_dir']}/{(emb[k][0] if k in emb else tok[k][0])}" for k in indices],
+            "output_path": [f"{SCORES_ROOT}/{tokens_leaf}/{tok[k][0]}" for k in indices],
+            "tokens_bytes": [tok[k][1] for k in indices],
+            "embed_bytes": [emb[k][1] if k in emb else 0 for k in indices],
+            "embed_exists": [k in emb for k in indices],
+            "embed_rows": [embed_rows.get(k, -1) if k in emb else -1 for k in indices],
+        }
+    ).with_columns(n_docs=pl.col("embed_rows").clip(lower_bound=0))
+
+    buf = BytesIO()
+    df.write_parquet(buf)
+    fs.pipe_file(_shard_dir(staged), buf.getvalue())
 
     stage = counters.pipeline
     stage.update_counter("manifest/leaves", 1)
@@ -370,58 +399,35 @@ def sweep_leaf(pair: dict) -> dict:
     stage.update_counter("manifest/embed_missing", len(set(tok) - set(emb)))
     stage.update_counter("manifest/embed_extra", len(set(emb) - set(tok)))
 
+    summary = _leaf_summary(pair, df, staged, list_time, footer_time, resumed=False)
+    summary["embed_extra"] = sorted(set(emb) - set(tok))
+    summary["declared_totals"] = sorted({v[2] for v in tok.values()} | {v[2] for v in emb.values()})
+    return summary
+
+
+def _leaf_summary(
+    pair: dict, df: pl.DataFrame, staged: str, list_time: float, footer_time: float, resumed: bool
+) -> dict:
     return {
         "source_key": pair["source_key"],
         "source": pair["source"],
         "subset": pair["subset"],
-        "tokens_rel": pair["tokens_rel"],
-        "embed_rel": pair["embed_rel"],
-        "tokens_dir": pair["tokens_dir"],
-        "embed_dir": pair["embed_dir"],
-        "num_shards": num_shards,
-        "n_token_shards": len(tok),
-        "n_embed_shards": len(emb),
-        "embed_missing": sorted(set(tok) - set(emb)),
-        "embed_extra": sorted(set(emb) - set(tok)),
-        "shard_count_mismatch": len(tok) != len(emb),
-        "declared_totals": sorted({v[2] for v in tok.values()} | {v[2] for v in emb.values()}),
+        "staged_path": staged,
+        "num_shards": int(df["num_shards"].max()) if df.height else 0,
+        "n_token_shards": int(df.height),
+        "n_embed_shards": int(df["embed_exists"].sum()),
+        "n_embed_missing": int((~df["embed_exists"]).sum()),
+        "n_zero_row_embed": int(((df["embed_rows"] == 0) & df["embed_exists"]).sum()),
+        "n_footer_failed": int((df["embed_rows"] < 0).sum()),
+        "tokens_bytes": int(df["tokens_bytes"].sum()),
+        "embed_bytes": int(df["embed_bytes"].sum()),
+        "docs": int(df["n_docs"].sum()),
+        "embed_extra": [],
+        "declared_totals": [],
         "list_time": list_time,
         "footer_time": footer_time,
-        "shards": shards,
+        "resumed": resumed,
     }
-
-
-def build_manifest(leaves: list[dict]) -> pl.DataFrame:
-    rows = {
-        c: []
-        for c in (
-            "source_key source subset tokens_leaf embed_leaf shard_index num_shards "
-            "tokens_path embed_path output_path tokens_bytes embed_bytes embed_exists "
-            "embed_rows n_docs"
-        ).split()
-    }
-    for leaf in leaves:
-        tokens_leaf = leaf["tokens_rel"]
-        embed_leaf = leaf["embed_rel"]
-        for k, tok_base, tok_size, emb_base, emb_size, emb_rows in leaf["shards"]:
-            exists = bool(emb_base)
-            basename = emb_base or tok_base
-            rows["source_key"].append(leaf["source_key"])
-            rows["source"].append(leaf["source"])
-            rows["subset"].append(leaf["subset"])
-            rows["tokens_leaf"].append(tokens_leaf)
-            rows["embed_leaf"].append(embed_leaf)
-            rows["shard_index"].append(k)
-            rows["num_shards"].append(leaf["num_shards"])
-            rows["tokens_path"].append(f"s3://{leaf['tokens_dir']}/{tok_base}")
-            rows["embed_path"].append(f"s3://{leaf['embed_dir']}/{basename}")
-            rows["output_path"].append(f"{SCORES_ROOT}/{tokens_leaf}/{tok_base}")
-            rows["tokens_bytes"].append(tok_size)
-            rows["embed_bytes"].append(emb_size)
-            rows["embed_exists"].append(exists)
-            rows["embed_rows"].append(emb_rows)
-            rows["n_docs"].append(max(emb_rows, 0))
-    return pl.DataFrame(rows).sort(["source_key", "shard_index"])
 
 
 def main() -> None:
@@ -464,7 +470,14 @@ def main() -> None:
     leaves = sorted(outcome.results, key=lambda leaf: leaf["source_key"])
     logger.info("swept %d leaves in %.1fs", len(leaves), sweep_wall)
 
-    df = build_manifest(leaves)
+    def _read_staged(leaf: dict) -> pl.DataFrame:
+        with fs.open(_shard_dir(leaf["staged_path"]), "rb") as fh:
+            return pl.read_parquet(fh)
+
+    with ThreadPoolExecutor(max_workers=DISCOVERY_THREADS) as pool:
+        df = pl.concat(list(pool.map(_read_staged, leaves))).sort(["source_key", "shard_index"])
+    logger.info("assembled %d manifest rows from %d staged leaves", df.height, len(leaves))
+
     buf = BytesIO()
     df.write_parquet(buf)
     payload = buf.getvalue()
@@ -486,7 +499,9 @@ def main() -> None:
         "shards_missing_embed": missing_embed,
         "shards_zero_row_embed": zero_row,
         "shards_footer_read_failed": failed_footers,
-        "leaves_with_shard_count_mismatch": [leaf["source_key"] for leaf in leaves if leaf["shard_count_mismatch"]],
+        "leaves_with_shard_count_mismatch": [
+            leaf["source_key"] for leaf in leaves if leaf["n_token_shards"] != leaf["n_embed_shards"]
+        ],
         "leaves_with_embed_extra_shards": [leaf["source_key"] for leaf in leaves if leaf["embed_extra"]],
         "leaves_with_inconsistent_declared_totals": [
             leaf["source_key"] for leaf in leaves if len(leaf["declared_totals"]) != 1
@@ -507,7 +522,10 @@ def main() -> None:
                 "num_shards": leaf["num_shards"],
                 "n_token_shards": leaf["n_token_shards"],
                 "n_embed_shards": leaf["n_embed_shards"],
-                "n_embed_missing": len(leaf["embed_missing"]),
+                "n_embed_missing": leaf["n_embed_missing"],
+                "tokens_bytes": leaf["tokens_bytes"],
+                "embed_bytes": leaf["embed_bytes"],
+                "docs": leaf["docs"],
             }
             for leaf in leaves
         ],
