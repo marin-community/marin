@@ -1199,3 +1199,13 @@ author: Rafal Wojdyla
 - Error check: No endpoint-list timeout, shard retry, source failure, or root failure matched the current checks. TEI logs contain `no permits available` events during request pressure, but the output counter continues to increase.
 - Issue update: None. This is routine progress after the RNO control-plane mitigation.
 - Next action: Continue the root, source, service, and output checks. Recover only a terminal in-scope job failure.
+
+### 2026-08-13 14:27 UTC - RNO batch capacity fell to zero
+
+- Capacity event: RNO had 24 running TEI tasks at 14:10 UTC. By 14:18 UTC, all 512 TEI tasks were in the build state. No RNO TEI endpoint remained active.
+- Cause: The task-attempt records state that Kueue preempted the running tasks to admit higher-priority workloads in the same cluster queue. The backend reported zero free H100s. Interactive jobs held 416 H100s, and batch jobs held the other 96 H100s.
+- Pipeline effect: The active RNO source stayed at 638 of 4,136 output shards. Eight shards entered retry attempt one after the endpoints stopped. No shard entered retry attempt two, and no source or root job failed.
+- East state: The East sources continued to write output and reached 10,694 of 14,843 shards and 6,748 of 14,285 shards.
+- Decision: Keep the RNO root in the batch queue. A restart cannot create GPU capacity and would add another endpoint-pool transition.
+- Issue update: Post one major update for the full RNO capacity loss.
+- Next action: Watch for RNO task admission. When capacity returns, confirm that the eight retried shards complete and that no endpoint-list timeout returns.
