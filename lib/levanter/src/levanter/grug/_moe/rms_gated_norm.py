@@ -339,13 +339,10 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     output_cotangent = output_cotangent.reshape(residuals.normalized.shape)
     up_reverse = exact_gated_norm_up_reverse(output_cotangent, residuals)
     gate_hidden_cotangent = jnp.einsum("td,rd->tr", up_reverse.gate_accumulator, residuals.w_up)
-    sigmoid = jax.nn.sigmoid(residuals.gate_preactivation.astype(jnp.float32))
-    silu_derivative = sigmoid * (1 + residuals.gate_preactivation.astype(jnp.float32) * (1 - sigmoid))
-    gate_preactivation_cotangent = (gate_hidden_cotangent.astype(jnp.float32) * silu_derivative).astype(
-        residuals.gate_preactivation.dtype
-    )
+    _, silu_pullback = jax.vjp(jax.nn.silu, residuals.gate_preactivation)
+    gate_preactivation_cotangent = silu_pullback(gate_hidden_cotangent)[0]
     w_down_cotangent = jnp.einsum("td,tr->dr", residuals.normalized, gate_preactivation_cotangent)
-    row_dot_partial, norm_weight_partial = rms_backward_producer(
+    row_dot_partial, _ = rms_backward_producer(
         gate_preactivation_cotangent,
         residuals.w_down,
         output_cotangent,
@@ -355,7 +352,12 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         residuals.inverse_rms,
     )
     row_dot = jnp.sum(row_dot_partial, axis=-1)
-    norm_weight_cotangent = jnp.sum(norm_weight_partial, axis=0).astype(residuals.norm_weight.dtype)
+    low_rank_cotangent = jnp.einsum("tr,dr->td", gate_preactivation_cotangent, residuals.w_down)
+    unweighted_cotangent = low_rank_cotangent + output_cotangent * residuals.gate
+    normalized_x = x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None]
+    norm_weight_cotangent = jnp.sum(unweighted_cotangent.astype(jnp.float32) * normalized_x, axis=0).astype(
+        residuals.norm_weight.dtype
+    )
     x_cotangent = rms_backward_consumer(
         gate_preactivation_cotangent,
         residuals.w_down,
@@ -367,10 +369,8 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         residuals.inverse_rms,
     ).reshape(x.shape)
     # ``check_vma=False`` below permits the opaque CuTe dx to cross the custom-VJP boundary
-    # without its varying-manual-axis annotation. The JAX contraction gradients retain enough
-    # provenance for shard_map's transpose to reduce replicated inputs. The norm-gain partial
-    # crosses a CuTe boundary and does not, so reduce only that result explicitly.
-    norm_weight_cotangent = jax.lax.psum(norm_weight_cotangent, axis_name=batch_axes)
+    # without its varying-manual-axis annotation. All parameter gradients stay in JAX, so the
+    # shard_map transpose owns their replicated-input reductions.
     return x_cotangent, norm_weight_cotangent, w_down_cotangent, up_reverse.w_up
 
 
