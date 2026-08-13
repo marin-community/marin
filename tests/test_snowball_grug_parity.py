@@ -20,6 +20,7 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from haliax import Axis
 from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import AttentionMask
@@ -129,3 +130,17 @@ def test_snowball_matches_grug_experiment_per_layer_and_logits():
 
     assert np.allclose(exp_logits, snow_logits, atol=1e-5, rtol=1e-5)
     assert np.array_equal(np.argmax(exp_logits, axis=-1), np.argmax(snow_logits, axis=-1))
+
+
+@pytest.mark.parametrize("seq_len", [1, 4, 5, 16])
+def test_snowball_matches_grug_across_lengths(seq_len):
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        exp = gm.Transformer.init(_experiment_config(), key=jax.random.key(11))
+        snow = SnowballLMHeadModel.init(Axis("vocab", _COMMON["vocab_size"]), _snowball_config(), key=jax.random.key(1))
+        snow = snow.from_state_dict(exp.to_state_dict())
+        tokens = (jnp.arange(seq_len, dtype=jnp.int32).reshape(1, seq_len) * 7 + 3) % _COMMON["vocab_size"]
+        exp_logits = np.asarray(jax.jit(lambda m, t: m.logits(t))(exp, tokens))[0]
+        Pos = Axis("position", seq_len)
+        ids = hax.named(tokens[0], (Pos,))
+        snow_logits = np.asarray(hax.named_jit(lambda m, x: m(x))(snow, ids).array)
+    assert np.allclose(exp_logits, snow_logits, atol=1e-5, rtol=1e-5)
