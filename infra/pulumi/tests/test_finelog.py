@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Finelog Kubernetes secret contract."""
+"""Finelog Kubernetes safety contracts."""
 
 from finelog.deploy.config import (
     CidrAuthLayer,
@@ -65,3 +65,10 @@ def test_finelog_resource_args_reference_secret_without_secret_values() -> None:
         "FINELOG_REMOTE_DIR",
     }
     assert "gcp-secret://" not in str(resources.deployment)
+
+
+def test_finelog_retains_deployment_history_for_rollback() -> None:
+    resources = finelog_resource_args(_args(), "image@sha256:digest")
+    assert resources.deployment.spec is not None
+
+    assert resources.deployment.spec.revision_history_limit == 10

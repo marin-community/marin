@@ -1,20 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the out-of-band Secret used by Pulumi-managed Finelog servers."""
+"""Tests for Kubernetes secrets, verification, and rollback."""
 
 import base64
 import json
 import subprocess
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import click
 import pytest
-from click.testing import CliRunner
 from finelog.deploy import _k8s
-from finelog.deploy._k8s import _build_env_secret_manifest, k8s_verify_ingest_ready
+from finelog.deploy._k8s import (
+    K8sRevision,
+    K8sRevisionHistory,
+    _build_env_secret_manifest,
+    k8s_pulumi_up,
+    k8s_rollback,
+    k8s_verify_ingest_ready,
+    select_rollback_revision,
+)
 from finelog.deploy.bootstrap import HEALTH_OK
-from finelog.deploy.cli import cli
 from finelog.deploy.config import (
     Deployment,
     FinelogConfig,
@@ -174,23 +181,147 @@ def test_ingest_verification_rejects_registration_timeout(monkeypatch: pytest.Mo
         k8s_verify_ingest_ready(_forwarding_config(), max_attempts=3)
 
 
-def test_k8s_mutation_is_rejected(tmp_path) -> None:
-    config_path = tmp_path / "finelog.yaml"
-    config_path.write_text(
-        """
-name: finelog-cw
-port: 10001
-image: ghcr.io/marin-community/finelog:latest
-deployment:
-  k8s:
-    namespace: iris
-""".lstrip()
+def _revision(name: str, revision: int, age: int) -> K8sRevision:
+    return K8sRevision(
+        replica_set=name,
+        revision=revision,
+        created_at=datetime(2026, 8, 12, tzinfo=UTC) - timedelta(days=age),
+        image=f"image@sha256:{name}",
+        source_revision=name,
     )
 
-    result = CliRunner().invoke(
-        cli,
-        ["deploy", "up", "--no-build", str(config_path)],
-        standalone_mode=False,
+
+def test_rollback_selection_walks_back_from_active_replica_set() -> None:
+    failed_newer = _revision("failed-newer", 5, 0)
+    current = _revision("current", 6, 2)
+    previous = _revision("previous", 2, 3)
+    history = K8sRevisionHistory(
+        deployment_uid="deployment-uid",
+        current=current,
+        revisions=(failed_newer, current, previous),
     )
 
-    assert isinstance(result.exception, click.ClickException)
+    assert select_rollback_revision(history) == previous
+
+
+class FakeK8sDeploy:
+    def __init__(self, *, current: K8sRevision, revisions: tuple[K8sRevision, ...]) -> None:
+        self.current = current
+        self.revisions = {revision.replica_set: revision for revision in revisions}
+        self.pulumi_failure_target: str | None = None
+        self.unhealthy: set[str] = set()
+        self.refreshed = False
+        self.change_on_second_deployment_read: str | None = None
+        self.deployment_reads = 0
+
+    def _deployment(self) -> dict:
+        return {
+            "metadata": {
+                "uid": "deployment-uid",
+                "annotations": {"deployment.kubernetes.io/revision": str(self.current.revision)},
+            }
+        }
+
+    def _replica_sets(self) -> dict:
+        return {
+            "items": [
+                {
+                    "metadata": {
+                        "name": revision.replica_set,
+                        "creationTimestamp": revision.created_at.isoformat().replace("+00:00", "Z"),
+                        "annotations": {"deployment.kubernetes.io/revision": str(revision.revision)},
+                        "ownerReferences": [{"uid": "deployment-uid", "kind": "Deployment", "controller": True}],
+                    },
+                    "spec": {
+                        "template": {
+                            "metadata": {"annotations": {"finelog.marin/source-revision": revision.source_revision}},
+                            "spec": {"containers": [{"name": "finelog", "image": revision.image}]},
+                        }
+                    },
+                }
+                for revision in self.revisions.values()
+            ]
+        }
+
+    def _activate(self, revision_number: int) -> None:
+        target = next(revision for revision in self.revisions.values() if revision.revision == revision_number)
+        next_revision = max(revision.revision for revision in self.revisions.values()) + 1
+        activated = replace(target, revision=next_revision)
+        self.revisions[target.replica_set] = activated
+        self.current = activated
+
+    def run(self, argv, **kwargs):
+        if argv[0] == "pulumi":
+            if argv[1] == "refresh":
+                self.refreshed = True
+                return subprocess.CompletedProcess(argv, 0)
+            if self.pulumi_failure_target is not None:
+                target = self.revisions[self.pulumi_failure_target]
+                self._activate(target.revision)
+                raise subprocess.CalledProcessError(1, argv)
+            return subprocess.CompletedProcess(argv, 0)
+
+        command = argv[1:]
+        if command[0:2] == ["get", "deployment/finelog-cw"]:
+            self.deployment_reads += 1
+            if self.deployment_reads == 2 and self.change_on_second_deployment_read is not None:
+                target = self.revisions[self.change_on_second_deployment_read]
+                self._activate(target.revision)
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(self._deployment()), stderr="")
+        if command[0:2] == ["get", "replicasets"]:
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(self._replica_sets()), stderr="")
+        if command[0:3] == ["rollout", "undo", "deployment/finelog-cw"]:
+            revision_number = int(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--to-revision=")))
+            self._activate(revision_number)
+            return subprocess.CompletedProcess(argv, 0)
+        if command[0:3] == ["rollout", "status", "deployment/finelog-cw"]:
+            expected = int(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--revision=")))
+            assert expected == self.current.revision
+            return subprocess.CompletedProcess(argv, 0)
+        if command[0] == "exec":
+            body = "degraded: registration failed" if self.current.replica_set in self.unhealthy else HEALTH_OK
+            return subprocess.CompletedProcess(argv, 0, stdout=body, stderr="")
+        raise AssertionError(argv)
+
+
+def test_failed_pulumi_update_restores_captured_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    previous = _revision("finelog-good", 4, 1)
+    attempted = _revision("finelog-bad", 5, 0)
+    deploy = FakeK8sDeploy(current=previous, revisions=(previous, attempted))
+    deploy.pulumi_failure_target = attempted.replica_set
+    monkeypatch.setattr(subprocess, "run", deploy.run)
+
+    with pytest.raises(click.ClickException, match="restored Kubernetes revision 4"):
+        k8s_pulumi_up(_s3_config(), stack="cw", yes=True)
+
+    assert deploy.current.replica_set == previous.replica_set
+    assert deploy.refreshed
+
+
+def test_failed_manual_rollback_restores_source_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    current = _revision("finelog-current", 5, 0)
+    target = _revision("finelog-unhealthy", 4, 1)
+    deploy = FakeK8sDeploy(current=current, revisions=(current, target))
+    deploy.unhealthy.add(target.replica_set)
+    monkeypatch.setattr(subprocess, "run", deploy.run)
+
+    with pytest.raises(click.ClickException, match="restored finelog-current"):
+        k8s_rollback(_s3_config(), stack="cw", to_revision=target.revision, yes=True)
+
+    assert deploy.current.replica_set == current.replica_set
+    assert deploy.refreshed
+
+
+def test_manual_rollback_does_not_override_concurrent_rollout(monkeypatch: pytest.MonkeyPatch) -> None:
+    current = _revision("finelog-current", 5, 0)
+    target = _revision("finelog-target", 4, 1)
+    concurrent = _revision("finelog-concurrent", 6, 0)
+    deploy = FakeK8sDeploy(current=current, revisions=(current, target, concurrent))
+    deploy.change_on_second_deployment_read = concurrent.replica_set
+    monkeypatch.setattr(subprocess, "run", deploy.run)
+
+    with pytest.raises(click.ClickException, match="plan the rollback again"):
+        k8s_rollback(_s3_config(), stack="cw", to_revision=target.revision, yes=True)
+
+    assert deploy.current.replica_set == concurrent.replica_set
+    assert not deploy.refreshed

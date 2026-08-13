@@ -22,19 +22,26 @@ export R2_KEY_SECRET=...
 docker login ghcr.io
 
 uv run finelog deploy sync-secret <cluster>
-cd infra/finelog
-pulumi stack select <cluster>
-pulumi preview
-pulumi up
+uv run finelog deploy up <cluster>
 ```
 
-`pulumi up` builds `lib/finelog/deploy/Dockerfile`, pushes the configured image
-tag, rolls the Deployment to the returned digest, and verifies that the new
-server accepts writes. The Deployment uses `Recreate` because the Finelog store
-permits only one writer. The stack derives its rollout identity from the
-checkout's content-addressed Git tree SHA and stamps the tree SHA, base commit,
-and dirty status into the image. Run `pulumi up` from the intended checkout;
-there is no rollout counter in Pulumi configuration.
+`finelog deploy up` captures the active Kubernetes Deployment revision before
+running `pulumi up` for the matching stack. Pulumi builds
+`lib/finelog/deploy/Dockerfile`, pushes the configured image tag, rolls the
+Deployment to the returned digest, and verifies that the new server accepts
+writes. If the update or verification fails after changing the Deployment, the
+wrapper restores the captured ReplicaSet, verifies it, and refreshes Pulumi
+state to match the restored workload. Pass `--yes` to skip Pulumi's confirmation.
+
+The Deployment uses `Recreate` because the Finelog store permits only one
+writer. It retains ten ReplicaSets for rollback. The stack derives its rollout
+identity from the checkout's content-addressed Git tree SHA and stamps the tree
+SHA, base commit, and dirty status into the image. Run the deploy from the
+intended checkout; there is no rollout counter in Pulumi configuration.
+
+For a read-only preview, run `pulumi preview --stack <cluster>` from
+`infra/finelog`. Running `pulumi up` directly bypasses the wrapper's automatic
+rollback.
 
 After rotating the environment Secret without changing the image or resource
 configuration, replace the pod so the new process reads the updated values,
@@ -47,9 +54,19 @@ kubectl --context "<kube-context>" -n "<namespace>" rollout status deployment/<d
 uv run --frozen --package marin-finelog finelog deploy verify <cluster>
 ```
 
-To roll back an image, check out the last known-good commit and run `pulumi up`
-for the affected stack. The image build publishes that source and the
-Deployment records its returned digest.
+To restore the next older retained ReplicaSet, run:
+
+```bash
+uv run finelog deploy rollback <cluster>
+```
+
+Pass `--to-revision N` to select an exact revision shown by `kubectl rollout
+history deployment/<name>`. The command waits for the exact revision created by
+the rollback, verifies ingest health, and refreshes Pulumi state. If the target
+fails verification, it restores and verifies the revision that was serving when
+the command started. This rolls back the Pod template and image only; it does
+not restore PVC contents or an older value of the out-of-band environment
+Secret. A later deploy from a newer checkout rolls forward again.
 
 ## Adopt an existing server
 

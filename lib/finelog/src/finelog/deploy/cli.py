@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Finelog deployment and operational commands.
-
-The CLI provisions GCE servers and manages out-of-band Kubernetes secrets. Pulumi
-owns Kubernetes workload resources under ``infra/finelog``.
-"""
+"""Finelog deployment and operational commands."""
 
 import csv
 import json
@@ -140,10 +136,17 @@ def deploy() -> None:
     default=False,
     help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a quicker build.",
 )
-def up_cmd(name: str, build: bool, fast: bool) -> None:
-    """Provision the GCE deployment described by `<name>` (idempotent)."""
+@click.option("-y", "--yes", is_flag=True, help="Skip Pulumi confirmation for Kubernetes deploys.")
+def up_cmd(name: str, build: bool, fast: bool, yes: bool) -> None:
+    """Provision the deployment described by `<name>` (idempotent)."""
     cfg = load_finelog_config(name)
-    _require_gcp_mutation(cfg)
+    if cfg.deployment.k8s is not None:
+        if not build:
+            raise click.ClickException("--no-build is not supported for Pulumi-managed Kubernetes deployments")
+        if fast:
+            raise click.ClickException("--fast is not supported for Pulumi-managed Kubernetes deployments")
+        _k8s.k8s_pulumi_up(cfg, stack=name, yes=yes)
+        return
     if build:
         build_finelog_image(image=cfg.image, cargo_profile="fast" if fast else "release")
     _gcp.gcp_up(cfg)
@@ -201,6 +204,18 @@ def verify_cmd(name: str) -> None:
     if cfg.deployment.k8s is None:
         raise click.ClickException("verify requires a Kubernetes deployment config")
     _k8s.k8s_verify_ingest_ready(cfg)
+
+
+@deploy.command("rollback")
+@click.argument("name")
+@click.option("--to-revision", type=int, help="Restore an exact retained Kubernetes Deployment revision.")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation.")
+def rollback_cmd(name: str, to_revision: int | None, yes: bool) -> None:
+    """Restore the previous retained Kubernetes Finelog revision."""
+    cfg = load_finelog_config(name)
+    if cfg.deployment.k8s is None:
+        raise click.ClickException("rollback requires a Kubernetes deployment config")
+    _k8s.k8s_rollback(cfg, stack=name, to_revision=to_revision, yes=yes)
 
 
 @deploy.command("status")

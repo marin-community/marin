@@ -541,32 +541,6 @@ warm instance serves this internal dashboard, min 1 keeps alert evaluation warm 
 paint off a cold start, and max 1 avoids duplicate alert notifications from parallel
 evaluators.
 
-To move production traffic to the previous Cloud Run revision, run from the
-repository root:
-
-```bash
-gcloud auth application-default login
-iris login
-uv run --package marin-iac cloud-run-rollback \
-  --project hai-gcp-models \
-  --region us-central1 \
-  --service marin-grafana \
-  --health-path /api/health
-```
-
-The command derives the target from Cloud Run's retained revision history and
-prints the current and target image digests before confirmation. `--to
-marin-grafana-00000-xxx` selects an exact retained ready revision. It updates
-traffic only after checking the service `etag`, waits for Cloud Run to finish
-reconciling, and reaches Grafana's database-aware health endpoint through IAP.
-If the target fails, it restores and verifies the revision that was serving
-when the command started.
-
-This is an image-only rollback. It does not undo PostgreSQL migrations or
-restore older Secret Manager values. Confirm the selected Grafana revision can
-use the current database schema before proceeding. The next `pulumi up` moves
-traffic back to the latest revision declared by the stack.
-
 Grafana's state is the `grafana` database on the shared `marin-metadata` Cloud SQL Postgres
 (`infra/cloudsql`). `__main__.py` reads the instance connection name from a
 `pulumi.StackReference` to the `marin-cloudsql` stack, mounts the Cloud SQL connector socket

@@ -254,22 +254,19 @@ uv run finelog deploy restart marin              # hub: gcp backend, in-place
 export KUBECONFIG=~/.kube/coreweave-iris
 export R2_KEY_ID=... R2_KEY_SECRET=...
 uv run finelog deploy sync-secret "$CLUSTER"
-
-cd infra/finelog
-pulumi stack select "$CLUSTER"
-pulumi preview
-pulumi up
+uv run finelog deploy up "$CLUSTER"
 ```
 
-`pulumi up` builds and pushes the Finelog image, then rolls the sender
-Deployment to the returned digest. Its rollout identity and image build stamp
-come from the checked-out, content-addressed Git tree SHA. If only the Secret
-changed, replace the pod using `kube_context`, `namespace`, and `name` from
+`finelog deploy up` captures the active Deployment revision, runs the matching
+Pulumi stack, and restores the captured ReplicaSet if the update or ingest
+verification fails. Its rollout identity and image build stamp come from the
+checked-out, content-addressed Git tree SHA. If only the Secret changed, replace
+the pod using `kube_context`, `namespace`, and `name` from
 `lib/finelog/config/$CLUSTER.yaml`, wait for the Deployment, then run `uv run
 --frozen --package marin-finelog finelog deploy verify "$CLUSTER"`. See
-[`infra/finelog/README.md`](../../infra/finelog/README.md) for first-time stack
-adoption. Do not run the first update without the import flag: the live PVC must
-be adopted, not recreated.
+[`infra/finelog/README.md`](../../infra/finelog/README.md) for preview, manual
+rollback, and first-time stack adoption. Do not run the first update without the
+import flag: the live PVC must be adopted, not recreated.
 
 Forwarding starts at the sender's current watermark: rows already in its store
 stay there and stay queryable, but they do not backfill into the hub.
@@ -370,9 +367,8 @@ curl -sf http://<host>:<port>/api/server | jq .ingest
 it first failed, and how many attempts have been made since. The dashboard's
 System page shows the same under **Ingest**. The GCE `deploy up`, `deploy
 restart`, and `safe_deploy` paths gate on the body; `safe_deploy` rolls back a
-failed rollout. Each Kubernetes `infra/finelog` Pulumi update runs `finelog
-deploy verify` after the Deployment becomes Ready and fails the update when
-ingest is wedged; it does not roll back automatically.
+failed GCE rollout. Kubernetes `finelog deploy up` restores the captured
+ReplicaSet when Pulumi's post-Deployment `finelog deploy verify` fails.
 
 ## Serving a copy of a store
 

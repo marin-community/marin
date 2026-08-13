@@ -15,13 +15,12 @@ from shlex import quote
 
 import pulumi
 import pulumi_command as command
+import pulumi_docker_build as docker_build
 import pulumi_kubernetes as k8s
 from finelog.deploy.bootstrap import CACHE_DIR
 from finelog.deploy.build import finelog_source_build_args
 from finelog.deploy.config import FinelogConfig, auth_policy_json, k8s_env_secret_name
 from rigging.provenance import Provenance
-
-from iac.docker import DockerImageConfig, cached_amd64_image
 
 CACHE_MOUNT_PATH = CACHE_DIR
 CACHE_VOLUME_NAME = "cache"
@@ -30,6 +29,7 @@ HEALTH_PATH = "/health"
 NODE_ARCH = "amd64"
 PROBE_FAILURE_THRESHOLD = 3
 PROBE_TIMEOUT = 15
+REVISION_HISTORY_LIMIT = 10
 VERIFY_COMMAND = "uv run --frozen --package marin-finelog finelog deploy verify"
 
 
@@ -184,6 +184,7 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
             metadata=metadata,
             spec=k8s.apps.v1.DeploymentSpecArgs(
                 replicas=1,
+                revision_history_limit=REVISION_HISTORY_LIMIT,
                 # The store permits one writer; rollouts must stop the old pod first.
                 strategy=k8s.apps.v1.DeploymentStrategyArgs(type="Recreate"),
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels=labels),
@@ -236,19 +237,36 @@ class FinelogServer(pulumi.ComponentResource):
         assert config.deployment.k8s is not None
         namespace = config.deployment.k8s.namespace
 
-        image = cached_amd64_image(
+        image = docker_build.Image(
             "image",
-            DockerImageConfig(
-                build_context=args.build_context,
-                dockerfile=args.dockerfile,
-                build_args={
-                    "CARGO_PROFILE": args.cargo_profile,
-                    **finelog_source_build_args(args.source_revision),
-                },
-                cache_ref=args.cache_image,
-                tags=(config.image,),
-            ),
-            parent=self,
+            context=docker_build.BuildContextArgs(location=args.build_context),
+            dockerfile=docker_build.DockerfileArgs(location=f"{args.build_context}/{args.dockerfile}"),
+            build_args={
+                "CARGO_PROFILE": args.cargo_profile,
+                **finelog_source_build_args(args.source_revision),
+            },
+            cache_from=[
+                docker_build.CacheFromArgs(
+                    registry=docker_build.CacheFromRegistryArgs(ref=args.cache_image),
+                )
+            ],
+            cache_to=[
+                docker_build.CacheToArgs(
+                    registry=docker_build.CacheToRegistryArgs(
+                        ref=args.cache_image,
+                        mode=docker_build.CacheMode.MAX,
+                        compression=docker_build.CompressionType.ZSTD,
+                        compression_level=3,
+                        oci_media_types=True,
+                        image_manifest=True,
+                    )
+                )
+            ],
+            platforms=[docker_build.Platform.LINUX_AMD64],
+            tags=[config.image],
+            push=True,
+            build_on_preview=False,
+            opts=pulumi.ResourceOptions(parent=self),
         )
         resources = finelog_resource_args(args, image.ref)
         command_dir = os.path.relpath(args.build_context, Path.cwd())

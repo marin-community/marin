@@ -1,13 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Manage the environment Secret and observe Pulumi-managed Finelog servers."""
+"""Deploy, roll back, and operate Pulumi-managed Kubernetes Finelog servers."""
 
 import base64
 import json
 import os
 import subprocess
 import time
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -20,6 +22,35 @@ from finelog.deploy.config import FinelogConfig, k8s_env_secret_name
 # S3-compatible endpoints that accept only virtual-hosted-style requests
 # (bucket as a host subdomain).
 _VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
+_DEPLOYMENT_REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
+_SOURCE_REVISION_ANNOTATION = "finelog.marin/source-revision"
+_PULUMI_PROJECT_DIR = Path(__file__).resolve().parents[5] / "infra" / "finelog"
+_ROLLOUT_TIMEOUT = "10m"
+_REVISION_DISCOVERY_ATTEMPTS = 60
+
+
+@dataclass(frozen=True)
+class K8sRevision:
+    """A retained Finelog Deployment revision."""
+
+    replica_set: str
+    revision: int
+    created_at: datetime
+    image: str
+    source_revision: str | None
+
+
+@dataclass(frozen=True)
+class K8sRevisionHistory:
+    """The live Deployment and its retained ReplicaSet history."""
+
+    deployment_uid: str
+    current: K8sRevision
+    revisions: tuple[K8sRevision, ...]
+
+
+class K8sRevisionConflict(click.ClickException):
+    """The active Deployment changed after rollback planning."""
 
 
 def _s3_env(cfg: FinelogConfig) -> dict[str, str]:
@@ -143,6 +174,296 @@ def _kubectl(
 
 def _kubectl_apply(cfg: FinelogConfig, manifest: str) -> None:
     _kubectl(cfg, "apply", "-f", "-", stdin=manifest)
+
+
+def _deployment_json(cfg: FinelogConfig) -> dict | None:
+    assert cfg.deployment.k8s is not None
+    result = _kubectl(
+        cfg,
+        "get",
+        f"deployment/{cfg.name}",
+        "-n",
+        cfg.deployment.k8s.namespace,
+        "--ignore-not-found",
+        "-o",
+        "json",
+        capture_output=True,
+    )
+    if not result.stdout.strip():
+        return None
+    return json.loads(result.stdout)
+
+
+def _revision_number(metadata: dict, resource: str) -> int:
+    annotations = metadata.get("annotations") or {}
+    value = annotations.get(_DEPLOYMENT_REVISION_ANNOTATION)
+    if value is None:
+        raise click.ClickException(f"{resource} has no Kubernetes Deployment revision annotation")
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise click.ClickException(f"{resource} has invalid Kubernetes Deployment revision {value!r}") from exc
+
+
+def _replica_set_revision(item: dict) -> K8sRevision:
+    metadata = item["metadata"]
+    replica_set = metadata["name"]
+    created_at = datetime.fromisoformat(metadata["creationTimestamp"].replace("Z", "+00:00"))
+    template = item["spec"]["template"]
+    containers = template["spec"]["containers"]
+    container = next((container for container in containers if container.get("name") == "finelog"), None)
+    if container is None:
+        raise click.ClickException(f"ReplicaSet {replica_set} has no finelog container")
+    annotations = template.get("metadata", {}).get("annotations") or {}
+    return K8sRevision(
+        replica_set=replica_set,
+        revision=_revision_number(metadata, f"ReplicaSet {replica_set}"),
+        created_at=created_at,
+        image=container["image"],
+        source_revision=annotations.get(_SOURCE_REVISION_ANNOTATION),
+    )
+
+
+def _deployment_owns(owner: dict, deployment_uid: str) -> bool:
+    return owner.get("uid") == deployment_uid and owner.get("kind") == "Deployment" and owner.get("controller") is True
+
+
+def _revision_history(cfg: FinelogConfig, deployment: dict) -> K8sRevisionHistory:
+    assert cfg.deployment.k8s is not None
+    metadata = deployment["metadata"]
+    deployment_uid = metadata["uid"]
+    current_revision = _revision_number(metadata, f"Deployment {cfg.name}")
+    result = _kubectl(
+        cfg,
+        "get",
+        "replicasets",
+        "-n",
+        cfg.deployment.k8s.namespace,
+        "-l",
+        f"app={cfg.name}",
+        "-o",
+        "json",
+        capture_output=True,
+    )
+    revisions = tuple(
+        _replica_set_revision(item)
+        for item in json.loads(result.stdout)["items"]
+        if any(_deployment_owns(owner, deployment_uid) for owner in item["metadata"].get("ownerReferences", ()))
+    )
+    current = next((revision for revision in revisions if revision.revision == current_revision), None)
+    if current is None:
+        raise click.ClickException(f"Deployment {cfg.name} revision {current_revision} has no retained ReplicaSet")
+    return K8sRevisionHistory(
+        deployment_uid=deployment_uid,
+        current=current,
+        revisions=revisions,
+    )
+
+
+def k8s_revision_history(cfg: FinelogConfig) -> K8sRevisionHistory:
+    """Read the active Finelog revision and retained rollback targets."""
+    deployment = _deployment_json(cfg)
+    if deployment is None:
+        raise click.ClickException(f"Kubernetes Deployment {cfg.name!r} does not exist")
+    return _revision_history(cfg, deployment)
+
+
+def select_rollback_revision(history: K8sRevisionHistory, *, to_revision: int | None = None) -> K8sRevision:
+    """Select an explicit revision or the next older ReplicaSet release."""
+    if to_revision is not None:
+        target = next((revision for revision in history.revisions if revision.revision == to_revision), None)
+        if target is None:
+            raise click.ClickException(f"Kubernetes revision {to_revision} is not retained")
+        if target.replica_set == history.current.replica_set:
+            raise click.ClickException(f"Kubernetes revision {to_revision} is already active")
+        return target
+
+    ordered = sorted(
+        history.revisions,
+        key=lambda revision: (revision.created_at, revision.revision),
+        reverse=True,
+    )
+    current_index = next(
+        index for index, revision in enumerate(ordered) if revision.replica_set == history.current.replica_set
+    )
+    if current_index + 1 == len(ordered):
+        raise click.ClickException(f"no older retained revision exists before {history.current.replica_set}")
+    return ordered[current_index + 1]
+
+
+def _revision_summary(revision: K8sRevision) -> str:
+    source = f", source {revision.source_revision}" if revision.source_revision else ""
+    return f"revision {revision.revision} {revision.replica_set} ({revision.image}{source})"
+
+
+def _pulumi(stack: str, command: str, *args: str) -> None:
+    if not (_PULUMI_PROJECT_DIR / "Pulumi.yaml").is_file():
+        raise click.ClickException("Finelog Pulumi deploys must run from a Marin repository checkout")
+    subprocess.run(
+        ["pulumi", command, "--stack", stack, *args],
+        cwd=_PULUMI_PROJECT_DIR,
+        check=True,
+    )
+
+
+def _wait_for_active_replica_set(
+    cfg: FinelogConfig,
+    *,
+    replica_set: str,
+    after_revision: int,
+) -> K8sRevisionHistory:
+    for _ in range(_REVISION_DISCOVERY_ATTEMPTS):
+        history = k8s_revision_history(cfg)
+        if history.current.replica_set == replica_set and history.current.revision > after_revision:
+            return history
+        time.sleep(1)
+    raise click.ClickException(f"Deployment {cfg.name} did not activate ReplicaSet {replica_set}")
+
+
+def _activate_revision(
+    cfg: FinelogConfig,
+    *,
+    expected_history: K8sRevisionHistory,
+    target: K8sRevision,
+) -> K8sRevision:
+    assert cfg.deployment.k8s is not None
+    history = k8s_revision_history(cfg)
+    if (
+        history.deployment_uid != expected_history.deployment_uid
+        or history.current.replica_set != expected_history.current.replica_set
+        or history.current.revision != expected_history.current.revision
+    ):
+        raise K8sRevisionConflict(
+            f"Deployment {cfg.name} changed from revision {expected_history.current.revision} "
+            f"to {history.current.revision}; plan the rollback again"
+        )
+    retained_target = next(
+        (revision for revision in history.revisions if revision.replica_set == target.replica_set),
+        None,
+    )
+    if retained_target is None:
+        raise click.ClickException(f"ReplicaSet {target.replica_set} is no longer retained")
+
+    _kubectl(
+        cfg,
+        "rollout",
+        "undo",
+        f"deployment/{cfg.name}",
+        "-n",
+        cfg.deployment.k8s.namespace,
+        f"--to-revision={retained_target.revision}",
+    )
+    activated = _wait_for_active_replica_set(
+        cfg,
+        replica_set=retained_target.replica_set,
+        after_revision=history.current.revision,
+    )
+    _kubectl(
+        cfg,
+        "rollout",
+        "status",
+        f"deployment/{cfg.name}",
+        "-n",
+        cfg.deployment.k8s.namespace,
+        f"--revision={activated.current.revision}",
+        f"--timeout={_ROLLOUT_TIMEOUT}",
+    )
+    k8s_verify_ingest_ready(cfg)
+    return activated.current
+
+
+def _refresh_after_rollback(stack: str) -> None:
+    try:
+        _pulumi(stack, "refresh", "--yes")
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise click.ClickException(
+            f"Finelog is serving the restored revision, but `pulumi refresh` failed for stack {stack!r}"
+        ) from exc
+
+
+def _restore_source_revision(
+    cfg: FinelogConfig,
+    *,
+    stack: str,
+    source: K8sRevision,
+    failure: BaseException,
+    operation: str,
+) -> K8sRevision:
+    live = k8s_revision_history(cfg)
+    if live.current.replica_set == source.replica_set:
+        raise click.ClickException(
+            f"{operation} failed before changing the active ReplicaSet; revision {source.revision} is still serving"
+        ) from failure
+    try:
+        restored = _activate_revision(cfg, expected_history=live, target=source)
+    except (OSError, subprocess.CalledProcessError, click.ClickException) as rollback_failure:
+        raise click.ClickException(
+            f"{operation} failed and automatic recovery to {source.replica_set} also failed: {rollback_failure}"
+        ) from failure
+    _refresh_after_rollback(stack)
+    return restored
+
+
+def k8s_pulumi_up(cfg: FinelogConfig, *, stack: str, yes: bool) -> None:
+    """Run the Finelog Pulumi update and restore the captured revision on failure."""
+    deployment = _deployment_json(cfg)
+    source = _revision_history(cfg, deployment).current if deployment is not None else None
+    if source is not None:
+        click.echo(f"Captured Kubernetes {_revision_summary(source)}")
+    try:
+        _pulumi(stack, "up", *(["--yes"] if yes else []))
+    except (OSError, subprocess.CalledProcessError) as failure:
+        if source is None:
+            raise click.ClickException(
+                "Pulumi update failed; no previous Kubernetes revision was available"
+            ) from failure
+        restored = _restore_source_revision(
+            cfg,
+            stack=stack,
+            source=source,
+            failure=failure,
+            operation="Pulumi update",
+        )
+        raise click.ClickException(
+            f"Pulumi update failed; restored Kubernetes revision {source.revision} "
+            f"as revision {restored.revision} ({source.replica_set})"
+        ) from failure
+
+
+def k8s_rollback(
+    cfg: FinelogConfig,
+    *,
+    stack: str,
+    to_revision: int | None,
+    yes: bool = False,
+) -> None:
+    """Move the Deployment to a retained revision and restore the source on failure."""
+    history = k8s_revision_history(cfg)
+    target = select_rollback_revision(history, to_revision=to_revision)
+    click.echo(f"Current: {_revision_summary(history.current)}")
+    click.echo(f"Target:  {_revision_summary(target)}")
+    if not yes and not click.confirm("Roll back this Finelog Deployment?"):
+        click.echo("Aborted.")
+        return
+
+    try:
+        activated = _activate_revision(cfg, expected_history=history, target=target)
+    except K8sRevisionConflict:
+        raise
+    except (OSError, subprocess.CalledProcessError, click.ClickException) as failure:
+        restored = _restore_source_revision(
+            cfg,
+            stack=stack,
+            source=history.current,
+            failure=failure,
+            operation=f"Rollback to {target.replica_set}",
+        )
+        raise click.ClickException(
+            f"Rollback to {target.replica_set} failed; restored {history.current.replica_set} "
+            f"as revision {restored.revision}"
+        ) from failure
+    _refresh_after_rollback(stack)
+    click.echo(f"Finelog is healthy on revision {activated.revision} ({activated.replica_set}).")
 
 
 def k8s_sync_secret(cfg: FinelogConfig) -> None:
