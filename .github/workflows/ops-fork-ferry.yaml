@@ -31,18 +31,21 @@ jobs:
             forks: evalchemy
           - unit: harbor
             forks: harbor
-    permissions:
-      issues: write
     steps:
-      # Loom ignores weaverbot's own comments. This token belongs to a Loom-approved CI account.
       - name: Request refresh of ${{ matrix.unit }}
         if: ${{ github.event.inputs.unit == '' || github.event.inputs.unit == matrix.unit }}
         env:
+          # This PAT must belong to a Loom-approved CI account. Loom ignores weaverbot's own comments.
           GH_TOKEN: ${{ secrets.WEAVERBOT_GH_TOKEN }}
           FORKS: ${{ matrix.forks }}
           UNIT: ${{ matrix.unit }}
-        run: >-
-          gh issue create --repo "$GITHUB_REPOSITORY"
-          --title "[fork-ferry] Refresh $UNIT (run $GITHUB_RUN_ID)"
-          --label agent-generated
-          --body "@weaverbot Use the refresh-fork skill to update $FORKS."
+        run: |
+          trigger_actor=$(gh api user --jq .login)
+          if [[ "$trigger_actor" == "weaverbot" ]]; then
+            echo "::error::WEAVERBOT_GH_TOKEN authenticates as weaverbot, whose comments Loom ignores."
+            exit 1
+          fi
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "[fork-ferry] Refresh $UNIT (run $GITHUB_RUN_ID)" \
+            --label agent-generated \
+            --body "@weaverbot Use the refresh-fork skill to update $FORKS."

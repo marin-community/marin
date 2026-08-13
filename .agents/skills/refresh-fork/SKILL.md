@@ -215,9 +215,12 @@ the pin set here needs no change after that promotion.
   review it from a compare link (`upstream_base..main-next`) on the Marin PR, and point
   the uv source at `main-next` to validate. After the e2e passes, run
   `uv run config/update-external.py <fork>` to lock `config/external/<fork>/uv.lock`
-  against that exact tip. The lock remains correct after an admin advances `main` to
-  the same commit. Coordinate with the daily external-dependency bump, which also
-  follows `main`.
+  against that exact tip. Keep the source on `main-next` in the draft PR while `main`
+  still points at the old tip; the date tag keeps the staged SHA reachable. After an
+  admin advances `main`, restore the source to `main`, rerun
+  `uv run config/update-external.py <fork>`, and verify the lock still records the
+  validated SHA. Push that follow-up to the same PR before marking it ready or merging
+  it. Coordinate with the daily external-dependency bump, which also follows `main`.
 
 Respect the section's `nuances`. Manual fixed-base overlay changes are a separate
 workflow; see `docs/overlay-only-pr.md`.
@@ -333,6 +336,10 @@ draft Marin PR must identify each `<branch>-next` to `<branch>` hard swap that a
 must complete before merge. On a multi-pin fork keep `main` blank
 (`docs/fork-main-readme.md`); never advance `main` to a pin tip.
 
+Keep the Marin PR draft until every required admin promotion is complete. After an
+`isolated_project` promotion, restore its uv source from `main-next` to `main`, relock,
+and confirm the resolved SHA did not change before marking the PR ready.
+
 ## Review and Open the PR
 
 Do a PR-review pass over the fork commits and Marin diff using
@@ -357,6 +364,9 @@ dropped-patch reasons.
   tag, and the validated tip has a date tag. The stable branch is unchanged, and the
   PR names the admin hard swap still required; a multi-pin fork's `main` is still
   blank.
+- A draft PR that temporarily follows `main-next` stays draft. After the admin
+  promotion, its source follows `main` again and its lock still records the validated
+  SHA before the PR is marked ready or merged.
 - Retained patches explain why they exist; dropped patches are called out.
 - The fork's e2e passed before the promotion tags and PR were created, or the blocker
   is in a Marin issue assigned to `blocker_assignee`.

@@ -29,7 +29,10 @@ For each pin in the refresh after its e2e passes:
 
 Pin Marin at the exact staged SHA or candidate wheel and regenerate
 `external_dependencies.py`. The draft PR must list the staged and stable SHAs, both
-tags, and the pending admin hard swap.
+tags, and the pending admin hard swap. For an `isolated_project`, keep its uv source
+on `main-next` in this draft so regenerating the lock cannot move it back to the old
+`main` tip. The date tag keeps the staged SHA reachable. Do not mark the PR ready or
+merge it in this state.
 
 ## Admin promotion
 
@@ -43,8 +46,11 @@ promotes each pin:
 - Verify remote `<branch>` resolves to the validated tip. Delete `<branch>-next` or
   leave it for the next cycle; the next refresh force-updates it.
 
-The Marin pin needs no edit after this swap because it already records the exact
-validated SHA or wheel.
+Descriptor and release pins need no edit after this swap because they already record
+the exact validated SHA or wheel. For an `isolated_project`, restore the uv source
+from `main-next` to `main`, rerun `uv run config/update-external.py <fork>`, and verify
+the lock still records the validated SHA. Commit and push that follow-up to the draft
+Marin PR before marking it ready or merging it.
 
 ## Blank `main` on multi-pin forks
 
