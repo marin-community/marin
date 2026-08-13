@@ -1321,3 +1321,24 @@ author: Rafal Wojdyla
 - Shared record: Echo entry 2635 records the storage suspension and safe stop.
 - Issue update: https://github.com/marin-community/marin/issues/8162#issuecomment-5287292405.
 - Next action: Use a small multipart write under a TTL prefix to probe the East bucket. Restart the RNO root from its existing output only after the write suspension clears.
+
+### 2026-08-13 23:42 UTC - Remaining work split across East and RNO
+
+- Storage recovery: A 64 MiB multipart write from the RNO controller to `s3://marin-us-east-02a/tmp/ttl=1d/harrier-write-probe-20260813-2316/probe.bin` succeeded at 23:16 UTC. This proved that East S3 multipart writes had recovered.
+- Partition proof: The old RNO partition `1/2` has 146 sources. Partitions `1/4` and `3/4` have 73 sources each, are disjoint, and their union is exactly partition `1/2`.
+- Stop race: `/rav/harrier-fuzzy-dups-rno-p1-20260813-batch-max-v5` reached RNO as its parent stop request arrived. The RNO controller reported the root as killed before it created child jobs. Two first replacement submissions were stopped before handoff to prevent an overlap.
+- Final East command: `uv run iris --cluster marin job run --no-wait --target-cluster cw-us-east-02a --job-name harrier-fuzzy-dups-east-p1of4-20260813-batch-max-v4 --priority batch --cpu 2 --memory 8GB --disk 16GB --enable-extra-resources --extra datakit -e MARIN_PREFIX s3://marin-us-east-02a/marin -- python -m experiments.datakit.embeddings.harrier.run --document-set fuzzy_duplicates --partition-index 1 --partition-count 4 --tei-instances 256 --max-concurrent 1`.
+- Final RNO command: `uv run iris --cluster marin job run --no-wait --target-cluster cw-rno2a --job-name harrier-fuzzy-dups-rno-p3of4-20260813-batch-max-v7 --priority batch --cpu 2 --memory 8GB --disk 16GB --enable-extra-resources --extra datakit -e MARIN_PREFIX s3://marin-us-east-02a/marin -- python -m experiments.datakit.embeddings.harrier.run --document-set fuzzy_duplicates --partition-index 3 --partition-count 4 --tei-instances 512 --max-concurrent 1`.
+- Admission result: Both final roots reached their target clusters. East created all 256 TEI service jobs. RNO created all 512 TEI service jobs. The East root had one batch preemption and began its automatic retry. The RNO root remained running with no failures or preemptions.
+- Issue update: None. Wait for confirmed new output before posting the storage-recovery update.
+- Next action: Confirm that both roots select their first unfinished source, skip existing shards, and write new shards. Then post one major recovery update.
+
+### 2026-08-13 23:54 UTC - Split restart writes new output
+
+- Root health: The East `1/4` and RNO `3/4` replacement roots are running. East has zero failures and one recovered batch preemption. RNO has zero failures and zero preemptions.
+- Resume proof: Each root selected the first incomplete source in its disjoint partition. Earlier complete source steps did not run again.
+- Durable output proof: A direct S3 object count from the RNO controller found 163,020 of 166,775 output Parquet shards. This is 51 more than the 162,969 shards present before the split restart. The run is 97.75 percent complete, with 3,755 shards left.
+- Active work: RNO is in the embed and write stage for `nemotron_sft/sft_math`. East is rebuilding the join state for `nemotron_cc_v2/medium_high_quality`; completed embedding output remains in place and the write stage uses `skip_existing=True`.
+- Storage result: The new RNO output proves that multipart writes to the East bucket work after the storage suspension.
+- Shared records: Echo entry 2640 records the recovery proof. The major issue update is https://github.com/marin-community/marin/issues/8162#issuecomment-5287731523.
+- Next action: Continue both roots through completion. Verify all 292 source artifacts and all 166,775 shard names before the production merge.
