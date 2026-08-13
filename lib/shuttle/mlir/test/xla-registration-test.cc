@@ -18,11 +18,13 @@
 namespace {
 
 constexpr char kSourceOrderedOptions[] =
-    R"json({"execution_mode":"stablehlo_round_trip","numerics":"source_ordered","pipeline_abi_version":7,"schema_version":1,"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion","maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}})json";
+    R"json({"execution_mode":"stablehlo_round_trip","numerics":"source_ordered","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion","maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}})json";
 constexpr char kFastOptions[] =
-    R"json({"execution_mode":"stablehlo_round_trip","numerics":"fast","pipeline_abi_version":7,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+    R"json({"execution_mode":"stablehlo_round_trip","numerics":"fast","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
 constexpr char kCpuExecutableBundleOptions[] =
-    R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":7,"schema_version":1,"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion","maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}})json";
+    R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion","maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}})json";
+constexpr char kCpuExecutableBundleFastOptions[] =
+    R"json({"execution_mode":"cpu_executable_bundle","numerics":"fast","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion","maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}})json";
 constexpr char kProgram[] = R"mlir(
 module {
   func.func @main(%arg0: tensor<7xf32>) -> tensor<7xf32> {
@@ -54,7 +56,7 @@ TEST(ShuttleXlaOptionsTest, ParsesCanonicalPythonWireFormat) {
   mlir::shuttle::ShuttlePipelineIdentity sourceIdentity =
       mlir::shuttle::shuttlePipelineIdentity(*source);
   EXPECT_EQ(sourceIdentity.policyDigest,
-            "88f3100a3dc4445c7c3be0f87c8395e573f06eca40688047178c5f5eb62dc631");
+            "beb31276720f877399cf9a4358613703bcf97d0be25da4d38d0cbd12c37c5cca");
   EXPECT_EQ(sourceIdentity.tuningDigest,
             "ae69cb474b1ddc91067687e7351ee27afe4e3b0814ae59e310a42bec5911326f");
 
@@ -72,6 +74,15 @@ TEST(ShuttleXlaOptionsTest, ParsesCanonicalPythonWireFormat) {
             mlir::shuttle::ExecutionMode::CpuExecutableBundle);
   EXPECT_NE(mlir::shuttle::shuttlePipelineIdentity(*source).policyDigest,
             mlir::shuttle::shuttlePipelineIdentity(*cpuBundle).policyDigest);
+
+  absl::StatusOr<mlir::shuttle::ShuttlePipelineOptions> cpuFast =
+      mlir::shuttle::parseShuttleXlaOptions(kCpuExecutableBundleFastOptions);
+  ASSERT_TRUE(cpuFast.ok()) << cpuFast.status();
+  EXPECT_EQ(cpuFast->executionMode,
+            mlir::shuttle::ExecutionMode::CpuExecutableBundle);
+  EXPECT_EQ(cpuFast->numerics, mlir::shuttle::NumericalPolicy::Fast);
+  EXPECT_NE(mlir::shuttle::shuttlePipelineIdentity(*cpuBundle).policyDigest,
+            mlir::shuttle::shuttlePipelineIdentity(*cpuFast).policyDigest);
 }
 
 TEST(ShuttleXlaOptionsTest, RejectsInvalidOrNoncanonicalWireFormats) {
@@ -107,6 +118,20 @@ TEST(ShuttleXlaOptionsTest, RejectsInvalidOrNoncanonicalWireFormats) {
     EXPECT_EQ(parsed.status().code(), absl::StatusCode::kInvalidArgument)
         << serialized << "\n"
         << parsed.status();
+  }
+}
+
+TEST(ShuttleXlaOptionsTest, RejectsPreviousPipelineAbiForBothCpuPolicies) {
+  constexpr const char *abi7Options[] = {
+      R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":7,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
+      R"json({"execution_mode":"cpu_executable_bundle","numerics":"fast","pipeline_abi_version":7,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
+  };
+  for (const char *serialized : abi7Options) {
+    EXPECT_EQ(mlir::shuttle::parseShuttleXlaOptions(serialized)
+                  .status()
+                  .code(),
+              absl::StatusCode::kInvalidArgument)
+        << serialized;
   }
 }
 

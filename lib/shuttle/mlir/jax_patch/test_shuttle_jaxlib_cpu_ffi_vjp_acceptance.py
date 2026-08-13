@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavior contracts for the unbuilt ABI 7 VJP Host proof."""
+"""Behavior contracts for the unbuilt ABI 8 identity-policy Host proof."""
 
 import json
 
@@ -10,9 +10,11 @@ import pytest
 from shuttle_jaxlib_cpu_ffi_vjp_acceptance import (
     BOUNDARIES,
     PIPELINE_ABI_VERSION,
+    POLICIES,
     SHAPE,
     arrays,
     boundary_function,
+    cell_identities,
     fixed_inputs,
     load_baseline,
     ready,
@@ -20,40 +22,64 @@ from shuttle_jaxlib_cpu_ffi_vjp_acceptance import (
     subject_options,
 )
 
-
-def test_vjp_host_driver_binds_abi7_cpu_mode() -> None:
-    assert PIPELINE_ABI_VERSION == 7
-    payload = json.loads(subject_options()["xla_shuttle_options"])
-    assert payload == {
-        "execution_mode": "cpu_executable_bundle",
-        "numerics": "source_ordered",
-        "pipeline_abi_version": 7,
-        "schema_version": 1,
-        "tuning": {
-            "cluster_shape": [],
-            "materialization": "automatic",
-            "maximum_candidates": 1,
-            "pipeline_stages": 1,
-            "tile_sizes": [],
-        },
-    }
+from shuttle import Numerics
 
 
-def test_vjp_host_driver_preserves_public_jax_result_order() -> None:
-    assert BOUNDARIES == ("backward", "composed")
+def test_identity_policy_host_driver_binds_six_distinct_abi8_cells() -> None:
+    assert PIPELINE_ABI_VERSION == 8
+    assert BOUNDARIES == ("forward", "backward", "composed")
+    assert POLICIES == (Numerics.SOURCE_ORDERED, Numerics.FAST)
+    assert cell_identities() == (
+        ("forward", "source_ordered"),
+        ("backward", "source_ordered"),
+        ("composed", "source_ordered"),
+        ("forward", "fast"),
+        ("backward", "fast"),
+        ("composed", "fast"),
+    )
+    canonical = {}
+    for numerics in POLICIES:
+        payload_text = subject_options(numerics)["xla_shuttle_options"]
+        assert isinstance(payload_text, str)
+        payload = json.loads(payload_text)
+        assert payload == {
+            "execution_mode": "cpu_executable_bundle",
+            "numerics": numerics.value,
+            "pipeline_abi_version": 8,
+            "schema_version": 1,
+            "tuning": {
+                "cluster_shape": [],
+                "materialization": "automatic",
+                "maximum_candidates": 1,
+                "pipeline_stages": 1,
+                "tile_sizes": [],
+            },
+        }
+        canonical[numerics] = payload_text
+    assert canonical[Numerics.SOURCE_ORDERED] != canonical[Numerics.FAST]
+
+
+def test_identity_policy_host_driver_preserves_public_jax_result_order() -> None:
+    forward = arrays(ready(boundary_function("forward")(*fixed_inputs(SHAPE, "forward"))))
     backward = arrays(ready(boundary_function("backward")(*fixed_inputs(SHAPE, "backward"))))
     composed = arrays(ready(boundary_function("composed")(*fixed_inputs(SHAPE, "composed"))))
+    assert [value.shape for value in forward] == [(7, 13)]
     assert [value.shape for value in backward] == [(7, 13), (13,)]
     assert [value.shape for value in composed] == [(7, 13), (7, 13), (13,)]
+    assert composed[0].tobytes() == forward[0].tobytes()
     assert composed[1].tobytes() == backward[0].tobytes()
     assert composed[2].tobytes() == backward[1].tobytes()
 
 
-def test_vjp_host_baseline_roundtrips_closed_bf16_bits(tmp_path) -> None:
+def test_identity_policy_host_baseline_roundtrips_closed_bf16_bits(tmp_path) -> None:
     path = tmp_path / "baseline.npz"
     save_baseline(path)
+    forward = load_baseline(path, "forward")
     backward = load_baseline(path, "backward")
     composed = load_baseline(path, "composed")
+    assert [(value.dtype, value.shape) for value in forward] == [
+        (np.dtype(np.uint16), (7, 13)),
+    ]
     assert [(value.dtype, value.shape) for value in backward] == [
         (np.dtype(np.uint16), (7, 13)),
         (np.dtype(np.uint16), (13,)),

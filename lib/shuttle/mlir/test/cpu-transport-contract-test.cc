@@ -53,7 +53,8 @@ std::string readText(llvm::StringRef name) {
   return input && !contents.str().empty() ? contents.str() : std::string();
 }
 
-std::unique_ptr<BuiltBundle> buildBundle(llvm::StringRef program) {
+std::unique_ptr<BuiltBundle> buildBundle(llvm::StringRef program,
+                                         bool fast = false) {
   mlir::DialectRegistry registry;
   mlir::stablehlo::registerAllDialects(registry);
   registry.insert<mlir::arith::ArithDialect, mlir::func::FuncDialect,
@@ -69,11 +70,20 @@ std::unique_ptr<BuiltBundle> buildBundle(llvm::StringRef program) {
   manager.addPass(mlir::shuttle::createAnnotateSourcePass());
   manager.addPass(mlir::shuttle::createFormStructuralRegionsPass());
   manager.addPass(mlir::shuttle::createConvertStablehloToAlgebraPass());
-  manager.addPass(mlir::shuttle::createPlanRowFoldMaterializationPass());
-  manager.addPass(mlir::shuttle::createPlanSimt32RowFoldSchedulePass());
-  manager.addPass(mlir::shuttle::createBuildCpuExecutableBundlePass());
-  manager.addPass(mlir::shuttle::createVerifyCpuExecutableBundlePass());
   if (mlir::failed(manager.run(*built->module))) {
+    return {};
+  }
+  if (fast) {
+    built->module->walk([](mlir::shuttle::RegionOp region) {
+      region.setPolicy(mlir::shuttle::NumericalPolicy::Fast);
+    });
+  }
+  mlir::PassManager physical(built->context.get());
+  physical.addPass(mlir::shuttle::createPlanRowFoldMaterializationPass());
+  physical.addPass(mlir::shuttle::createPlanSimt32RowFoldSchedulePass());
+  physical.addPass(mlir::shuttle::createBuildCpuExecutableBundlePass());
+  physical.addPass(mlir::shuttle::createVerifyCpuExecutableBundlePass());
+  if (mlir::failed(physical.run(*built->module))) {
     return {};
   }
   for (mlir::Operation &operation :
@@ -85,6 +95,97 @@ std::unique_ptr<BuiltBundle> buildBundle(llvm::StringRef program) {
     }
   }
   return built;
+}
+
+TEST(CpuTransportContractTest,
+     IdentityFastKeepsCodeBytesButClosesDistinctPolicyTransports) {
+  struct ExpectedIdentity {
+    llvm::StringLiteral boundary;
+    llvm::StringLiteral codeDigest;
+    llvm::StringLiteral sourceOrderedRoot;
+    llvm::StringLiteral fastRoot;
+  };
+  constexpr std::array<ExpectedIdentity, 3> expected{{
+      {"forward",
+       "d899d7c259ee220e8930dafa817593a4217972c07fb7c4e488d475833b699ba7",
+       "4f76fbb4399c84799fa36fb58322fec5656ba9fc710cb41a1ac0a60960a775d8",
+       "28f0190cdf0bc5344906172cdb652e9a2b0c70b1aca4ed36204ca27b61e1c918"},
+      {"backward",
+       "359103744700932657348892166566d4ce695b4d02cf06b7744cf608c242277f",
+       "e85f07cf69050c776c2bbad158dcac7348270b1b2faa0cb594aa418522a89b7d",
+       "3976fd93be2721a4390804ef947187936944375c43d32b0c16cdbd3c907cacad"},
+      {"composed",
+       "65e3324f34b4b46e33f693f00b3e287ba408e20188ab2c683cb489143ac699ff",
+       "a86703f07fb3d2a62fb1aa34cc4b403775e2273c37a9cad567cc91d79757d698",
+       "d938d993bc517fbfa679ed044a7eb2e5b901b9a4bc9e546064af5aa6756109bf"},
+  }};
+
+  for (const ExpectedIdentity &item : expected) {
+    std::string fixture = readText(
+        ("jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-" +
+         item.boundary + ".mlir")
+            .str());
+    auto sourceOrdered = buildBundle(fixture, false);
+    auto fast = buildBundle(fixture, true);
+    ASSERT_TRUE(sourceOrdered) << item.boundary.str();
+    ASSERT_TRUE(fast) << item.boundary.str();
+    auto sourceDevice =
+        *sourceOrdered->module->getOps<mlir::shuttle::DeviceModuleOp>().begin();
+    auto fastDevice =
+        *fast->module->getOps<mlir::shuttle::DeviceModuleOp>().begin();
+    auto sourceRoot = *sourceOrdered->module
+                           ->getOps<mlir::shuttle::ExecutableBundleOp>()
+                           .begin();
+    auto fastRoot =
+        *fast->module->getOps<mlir::shuttle::ExecutableBundleOp>().begin();
+    EXPECT_EQ(sourceDevice.getPolicy(),
+              mlir::shuttle::NumericalPolicy::SourceOrdered);
+    EXPECT_EQ(fastDevice.getPolicy(), mlir::shuttle::NumericalPolicy::Fast);
+    EXPECT_EQ(sourceDevice.getCode(), fastDevice.getCode());
+    EXPECT_EQ(sourceDevice.getCodeDigest(), item.codeDigest);
+    EXPECT_EQ(fastDevice.getCodeDigest(), item.codeDigest);
+    EXPECT_EQ(sourceRoot.getFingerprint(), item.sourceOrderedRoot);
+    EXPECT_EQ(fastRoot.getFingerprint(), item.fastRoot);
+
+    auto sourceBytes =
+        mlir::shuttle::serializeCpuExecutableBundle(*sourceOrdered->module);
+    auto fastBytes = mlir::shuttle::serializeCpuExecutableBundle(*fast->module);
+    ASSERT_TRUE(mlir::succeeded(sourceBytes));
+    ASSERT_TRUE(mlir::succeeded(fastBytes));
+    EXPECT_NE(*sourceBytes, *fastBytes);
+    EXPECT_NE(mlir::shuttle::cpuExecutableBundleDigest(*sourceBytes),
+              mlir::shuttle::cpuExecutableBundleDigest(*fastBytes));
+    EXPECT_TRUE(mlir::shuttle::CpuExecutable::Load(*sourceBytes).ok());
+    EXPECT_TRUE(mlir::shuttle::CpuExecutable::Load(*fastBytes).ok());
+  }
+}
+
+TEST(CpuTransportContractTest, RejectsStaleAndCrossPolicyIdentityRoots) {
+  std::string fixture = readText(
+      "jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir");
+  auto sourceOrdered = buildBundle(fixture, false);
+  auto stalePolicy = buildBundle(fixture, true);
+  auto crossPolicyRoot = buildBundle(fixture, true);
+  ASSERT_TRUE(sourceOrdered);
+  ASSERT_TRUE(stalePolicy);
+  ASSERT_TRUE(crossPolicyRoot);
+
+  auto staleDevice =
+      *stalePolicy->module->getOps<mlir::shuttle::DeviceModuleOp>().begin();
+  staleDevice.setPolicy(mlir::shuttle::NumericalPolicy::SourceOrdered);
+  EXPECT_TRUE(mlir::failed(
+      mlir::shuttle::serializeCpuExecutableBundle(*stalePolicy->module)));
+
+  auto sourceDevice =
+      *sourceOrdered->module->getOps<mlir::shuttle::DeviceModuleOp>().begin();
+  auto crossRoot = *crossPolicyRoot->module
+                        ->getOps<mlir::shuttle::ExecutableBundleOp>()
+                        .begin();
+  crossRoot.setDeviceModuleFingerprint(sourceDevice.getFingerprint());
+  crossRoot.setFingerprint(
+      mlir::shuttle::executableBundleFingerprint(crossRoot));
+  EXPECT_TRUE(mlir::failed(
+      mlir::shuttle::serializeCpuExecutableBundle(*crossPolicyRoot->module)));
 }
 
 llvm::SmallVector<uint8_t> goldenBytes(llvm::StringRef name) {

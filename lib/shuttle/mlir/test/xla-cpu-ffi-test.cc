@@ -90,7 +90,8 @@ std::string readText(llvm::StringRef name) {
   return input && !contents.str().empty() ? contents.str() : std::string();
 }
 
-llvm::SmallVector<uint8_t> fixtureBundle(llvm::StringRef boundary) {
+llvm::SmallVector<uint8_t> fixtureBundle(llvm::StringRef boundary,
+                                         bool fast = false) {
   mlir::DialectRegistry registry;
   mlir::stablehlo::registerAllDialects(registry);
   registry.insert<mlir::arith::ArithDialect, mlir::func::FuncDialect,
@@ -108,11 +109,20 @@ llvm::SmallVector<uint8_t> fixtureBundle(llvm::StringRef boundary) {
   manager.addPass(mlir::shuttle::createAnnotateSourcePass());
   manager.addPass(mlir::shuttle::createFormStructuralRegionsPass());
   manager.addPass(mlir::shuttle::createConvertStablehloToAlgebraPass());
-  manager.addPass(mlir::shuttle::createPlanRowFoldMaterializationPass());
-  manager.addPass(mlir::shuttle::createPlanSimt32RowFoldSchedulePass());
-  manager.addPass(mlir::shuttle::createBuildCpuExecutableBundlePass());
-  manager.addPass(mlir::shuttle::createVerifyCpuExecutableBundlePass());
   if (mlir::failed(manager.run(*module))) {
+    return {};
+  }
+  if (fast) {
+    module->walk([](mlir::shuttle::RegionOp region) {
+      region.setPolicy(mlir::shuttle::NumericalPolicy::Fast);
+    });
+  }
+  mlir::PassManager physical(&context);
+  physical.addPass(mlir::shuttle::createPlanRowFoldMaterializationPass());
+  physical.addPass(mlir::shuttle::createPlanSimt32RowFoldSchedulePass());
+  physical.addPass(mlir::shuttle::createBuildCpuExecutableBundlePass());
+  physical.addPass(mlir::shuttle::createVerifyCpuExecutableBundlePass());
+  if (mlir::failed(physical.run(*module))) {
     return {};
   }
   for (mlir::Operation &operation :
@@ -535,6 +545,57 @@ TEST(XlaCpuFfiTest,
   }
 }
 
+TEST(XlaCpuFfiTest, V2TargetExecutesIdentityFastPayloadsForAllBoundaries) {
+  EXPECT_EQ(llvm::StringRef(mlir::shuttle::kCpuExecutableBundleFfiTarget),
+            kCpuExecutableBundleFfiTargetV2);
+  ASSERT_TRUE(xla::ffi::FindHandler(
+                  mlir::shuttle::kCpuExecutableBundleFfiTarget, "Host")
+                  .ok());
+  TF_ASSERT_OK_AND_ASSIGN(xla::LocalClient * client, hostClient());
+  for (llvm::StringRef boundary :
+       {llvm::StringRef("forward"), llvm::StringRef("backward"),
+        llvm::StringRef("composed")}) {
+    llvm::SmallVector<uint8_t> sourceOrdered = fixtureBundle(boundary, false);
+    llvm::SmallVector<uint8_t> fast = fixtureBundle(boundary, true);
+    ASSERT_FALSE(sourceOrdered.empty()) << boundary.str();
+    ASSERT_FALSE(fast.empty()) << boundary.str();
+    ASSERT_NE(sourceOrdered, fast) << boundary.str();
+    ASSERT_NE(mlir::shuttle::cpuExecutableBundleDigest(sourceOrdered),
+              mlir::shuttle::cpuExecutableBundleDigest(fast))
+        << boundary.str();
+    ASSERT_TRUE(mlir::shuttle::CpuExecutable::Load(fast).ok())
+        << boundary.str();
+
+    if (boundary == "forward") {
+      xla::Literal input = inputLiteral();
+      xla::Literal scale = scaleLiteral();
+      TF_ASSERT_OK_AND_ASSIGN(auto actual,
+                              runTypedCall(client, fast, input, scale));
+      EXPECT_EQ(actual, runDirect(fast, input, scale));
+      continue;
+    }
+
+    TF_ASSERT_OK_AND_ASSIGN(CompiledCall call,
+                            compileVjpCall(client, fast, boundary));
+    xla::Literal x = linspaceMatrixLiteral(-0.75f, 0.875f);
+    xla::Literal gamma = linspaceVectorLiteral(-0.625f, 1.0f);
+    xla::Literal dy = linspaceMatrixLiteral(-0.5f, 1.125f);
+    VjpReference expected = referenceVjp(x, gamma, dy);
+    TF_ASSERT_OK_AND_ASSIGN(
+        std::vector<std::vector<uint16_t>> actual,
+        runVjpCompiled(client, call.executable.get(), x, gamma, dy));
+    std::vector<std::vector<uint16_t>> expectedLeaves{
+        {expected.dgamma.begin(), expected.dgamma.end()},
+        {expected.dx.begin(), expected.dx.end()}};
+    if (boundary == "composed") {
+      expectedLeaves.insert(
+          expectedLeaves.begin(),
+          std::vector<uint16_t>(expected.y.begin(), expected.y.end()));
+    }
+    EXPECT_EQ(actual, expectedLeaves) << boundary.str();
+  }
+}
+
 TEST(XlaCpuFfiTest, V2ExecuteRejectsSelfConsistentWrongResultTupleOrder) {
   TF_ASSERT_OK_AND_ASSIGN(xla::LocalClient * client, hostClient());
   llvm::SmallVector<uint8_t> bytes = fixtureBundle("backward");
@@ -554,7 +615,7 @@ TEST(XlaCpuFfiTest, V2ExecuteRejectsSelfConsistentWrongResultTupleOrder) {
 
 TEST(XlaCpuFfiTest, SharedV2ComposedExecutableRunsConcurrently) {
   TF_ASSERT_OK_AND_ASSIGN(xla::LocalClient * client, hostClient());
-  llvm::SmallVector<uint8_t> bytes = fixtureBundle("composed");
+  llvm::SmallVector<uint8_t> bytes = fixtureBundle("composed", true);
   ASSERT_FALSE(bytes.empty());
   TF_ASSERT_OK_AND_ASSIGN(CompiledCall call,
                           compileVjpCall(client, bytes, "composed"));

@@ -380,6 +380,7 @@ cc_test(
         "test/Inputs/cpu-forward-7x13-wrong-projection-transport.hex",
         "test/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-backward.mlir",
         "test/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-composed.mlir",
+        "test/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir",
     ],
     deps = [
         ":ShuttleCpuBytecode",

@@ -32,7 +32,7 @@ def test_compiler_options_have_canonical_closed_wire_format() -> None:
         "xla_shuttle_enable": True,
         "xla_shuttle_options": (
             '{"execution_mode":"stablehlo_round_trip","numerics":"source_ordered",'
-            '"pipeline_abi_version":7,"schema_version":1,'
+            '"pipeline_abi_version":8,"schema_version":1,'
             '"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion",'
             '"maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}}'
         ),
@@ -43,7 +43,7 @@ def test_compiler_options_have_canonical_closed_wire_format() -> None:
             numerics=Numerics.SOURCE_ORDERED,
             tuning=_tuning(),
         )
-        == "88f3100a3dc4445c7c3be0f87c8395e573f06eca40688047178c5f5eb62dc631"
+        == "beb31276720f877399cf9a4358613703bcf97d0be25da4d38d0cbd12c37c5cca"
     )
 
 
@@ -97,13 +97,46 @@ def test_execution_modes_have_distinct_cache_identity() -> None:
     )
 
 
-def test_cpu_executable_mode_rejects_fast_numerics() -> None:
-    with pytest.raises(ValueError, match="requires source_ordered"):
-        compiler_options(
+def test_cpu_executable_mode_has_distinct_source_ordered_and_fast_cache_identities() -> None:
+    source_ordered = compiler_options(
+        execution_mode=ExecutionMode.CPU_EXECUTABLE_BUNDLE,
+        numerics=Numerics.SOURCE_ORDERED,
+        tuning=_tuning(),
+    )
+    fast = compiler_options(
+        execution_mode=ExecutionMode.CPU_EXECUTABLE_BUNDLE,
+        numerics=Numerics.FAST,
+        tuning=_tuning(),
+    )
+
+    assert source_ordered["xla_shuttle_options"] == (
+        '{"execution_mode":"cpu_executable_bundle","numerics":"source_ordered",'
+        '"pipeline_abi_version":8,"schema_version":1,'
+        '"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion",'
+        '"maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}}'
+    )
+    assert fast["xla_shuttle_options"] == (
+        '{"execution_mode":"cpu_executable_bundle","numerics":"fast",'
+        '"pipeline_abi_version":8,"schema_version":1,'
+        '"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion",'
+        '"maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}}'
+    )
+    assert (
+        options_digest(
+            execution_mode=ExecutionMode.CPU_EXECUTABLE_BUNDLE,
+            numerics=Numerics.SOURCE_ORDERED,
+            tuning=_tuning(),
+        )
+        == "d402a2697bfce67ca42c465d9a4ee54d6f4455d766dd2593e33708be22ebe5a9"
+    )
+    assert (
+        options_digest(
             execution_mode=ExecutionMode.CPU_EXECUTABLE_BUNDLE,
             numerics=Numerics.FAST,
             tuning=_tuning(),
         )
+        == "c87f644b9a75ed992c064f8a20601489b02fe66dd3f8a083b9ec86a0b85171f9"
+    )
 
 
 def test_empty_shape_hints_leave_physical_search_unconstrained() -> None:
@@ -122,7 +155,7 @@ def test_empty_shape_hints_leave_physical_search_unconstrained() -> None:
 
     assert options["xla_shuttle_options"] == (
         '{"execution_mode":"stablehlo_round_trip","numerics":"fast",'
-        '"pipeline_abi_version":7,"schema_version":1,'
+        '"pipeline_abi_version":8,"schema_version":1,'
         '"tuning":{"cluster_shape":[],"materialization":"automatic",'
         '"maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}}'
     )
