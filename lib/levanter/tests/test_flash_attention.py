@@ -17,7 +17,7 @@ import haliax.nn as hnn
 import levanter.layers.attention
 from levanter.layers.attention import AttentionMask, simple_attention_with_dropout
 from levanter.models.flash_attention import flash_attention
-from test_utils import use_test_mesh
+from levanter.testing.helpers import use_test_mesh
 
 
 BLOCK_SIZE = 64

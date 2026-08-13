@@ -7,7 +7,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from levanter.eval_harness import TaskConfig
+from levanter.eval_harness_config import TaskConfig
 
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
 

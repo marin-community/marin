@@ -752,6 +752,7 @@ fn telemetry_schema() -> Schema {
             "name",
             "value",
             "resource_attributes_json",
+            "attributes_json",
             "cluster",
         ],
     ))

@@ -1025,6 +1025,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn regex_query_returns_matches_and_prunes_row_groups() {
+        use datafusion::logical_expr::{col, lit};
+        use datafusion::logical_expr::{expr::ScalarFunction, Expr};
+
+        let dir = tempdir("regex_prune");
+        let pattern = r"Bootstrap.*TPU-[a-z]+";
+        let rg1 = vec![
+            "idle heartbeat ok",
+            "E0601 Bootstrap completed for TPU-xyz started",
+            "Bootstrap stopped for GPU-xyz",
+        ];
+        let rg1_rows = rg1.len();
+        let path = write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &rg1);
+
+        let ctx = crate::query::make_ctx();
+        let provider = NamespaceProvider::build(
+            log_arrow(),
+            std::slice::from_ref(&path),
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
+        ctx.register_table(
+            datafusion::common::TableReference::bare("log"),
+            Arc::new(provider),
+        )
+        .unwrap();
+        let batches = ctx
+            .sql(&format!(
+                "SELECT data FROM \"log\" WHERE regexp_matches(data, '{pattern}') ORDER BY seq"
+            ))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            first_column_strings(&batches),
+            vec!["E0601 Bootstrap completed for TPU-xyz started".to_string()]
+        );
+
+        let udf = {
+            use datafusion::execution::FunctionRegistry;
+            ctx.udf("regexp_matches").unwrap()
+        };
+        let filter = Expr::ScalarFunction(ScalarFunction::new_udf(
+            udf,
+            vec![col("data"), lit(pattern)],
+        ));
+        let plan = NamespaceProvider::build(
+            log_arrow(),
+            &[path],
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .scan(&ctx.state(), None, &[filter], None)
+        .await
+        .unwrap();
+        assert_prunes_to_span1(&plan, rg1_rows);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn key_substring_query_prunes_row_groups() {
         // The job sits mid-key, so the `(key, seq)` sort and its min/max
         // statistics cannot bound it. Only the key's trigram section prunes.

@@ -147,17 +147,6 @@ class TestJobs:
         return actual_size
 
     @staticmethod
-    def validate_job_context():
-        """Validate job context via get_job_info() in a coscheduled job."""
-
-        logger = logging.getLogger("iris.test.context")
-        info = get_job_info()
-        if info is None:
-            raise RuntimeError("Not running in an Iris job context")
-        logger.info(f"Task {info.task_index} of {info.num_tasks} on worker {info.worker_id}")
-        return f"Task {info.task_index} done"
-
-    @staticmethod
     def wait_for_sentinel(s):
         """Wait on a sentinel with a short timeout, used for concurrency tests."""
 

@@ -290,6 +290,11 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
         .columns
         .iter()
         .any(|column| column == "attributes_json"));
+    let training_status = projections["training-status"];
+    assert!(training_status
+        .columns
+        .iter()
+        .any(|column| column == "attributes_json"));
     assert_eq!(schema.grouped_extrema.len(), 1);
     let grouped = &schema.grouped_extrema[0];
     assert_eq!(grouped.filter_column, "service");

@@ -244,21 +244,11 @@ class ClusterCapabilities:
     """What the smoke cluster fleet provides, discovered from live workers."""
 
     regions: tuple[str, ...]
-    device_types: frozenset[str]
-    has_coscheduling: bool
     has_workers: bool
 
     @property
     def has_multi_region(self) -> bool:
         return len(self.regions) > 1
-
-    @property
-    def has_gpu(self) -> bool:
-        return "gpu" in self.device_types
-
-    @property
-    def has_tpu(self) -> bool:
-        return "tpu" in self.device_types
 
 
 def discover_capabilities(controller_client: ControllerServiceClientSync) -> ClusterCapabilities:
@@ -268,27 +258,12 @@ def discover_capabilities(controller_client: ControllerServiceClientSync) -> Clu
     healthy = [w for w in response.workers if w.healthy]
 
     regions: set[str] = set()
-    device_types: set[str] = set()
-    tpu_names: set[str] = set()
-
     for w in healthy:
-        attrs = w.metadata.attributes
-        region_attr = attrs.get(WellKnownAttribute.REGION)
+        region_attr = w.metadata.attributes.get(WellKnownAttribute.REGION)
         if region_attr and region_attr.HasField("string_value"):
             regions.add(region_attr.string_value)
-        device_attr = attrs.get(WellKnownAttribute.DEVICE_TYPE)
-        if device_attr and device_attr.HasField("string_value"):
-            device_types.add(device_attr.string_value)
-        tpu_attr = attrs.get(WellKnownAttribute.TPU_NAME)
-        if tpu_attr and tpu_attr.HasField("string_value"):
-            tpu_names.add(tpu_attr.string_value)
 
-    return ClusterCapabilities(
-        regions=tuple(sorted(regions)),
-        device_types=frozenset(device_types),
-        has_coscheduling=len(tpu_names) > 0,
-        has_workers=len(healthy) > 0,
-    )
+    return ClusterCapabilities(regions=tuple(sorted(regions)), has_workers=len(healthy) > 0)
 
 
 def _add_coscheduling_group(config: IrisClusterConfig) -> None:

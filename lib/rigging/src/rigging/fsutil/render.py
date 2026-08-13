@@ -76,12 +76,17 @@ def _json_lines(name: str, text: str) -> list[str]:
         return text.splitlines()
 
 
+def record_lines(records: list[dict]) -> list[str]:
+    """Render records as a table with a column per key, truncating oversized cells."""
+    headers = list({key: None for row in records for key in row})
+    rows = [[_cell(row.get(header)) for header in headers] for row in records]
+    return table_lines(headers, rows)
+
+
 def _json_table_lines(data: object) -> list[str]:
     """Render parsed JSON as an aligned table when it is tabular, else as indented JSON."""
     if isinstance(data, list) and data and all(isinstance(row, dict) for row in data):
-        headers = list({key: None for row in data for key in row})
-        rows = [[_cell(row.get(header)) for header in headers] for row in data]
-        return table_lines(headers, rows)
+        return record_lines(data)
     if isinstance(data, dict):
         return table_lines(["key", "value"], [[key, _cell(value)] for key, value in data.items()])
     return json.dumps(data, indent=2, default=str).splitlines()

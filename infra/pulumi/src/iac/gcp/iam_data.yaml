@@ -97,10 +97,23 @@ custom_roles:
   - artifactregistry.repositories.getIamPolicy
   - cloudkms.cryptoKeys.getIamPolicy
   - compute.addresses.get
+  - compute.backendServices.get
+  - compute.firewalls.get
+  - compute.globalAddresses.get
+  - compute.globalForwardingRules.get
+  - compute.healthChecks.get
+  - compute.instances.get
+  - compute.networkEndpointGroups.get
   - compute.regions.get
+  - compute.securityPolicies.get
+  - compute.sslCertificates.get
+  - compute.targetHttpsProxies.get
+  - compute.urlMaps.get
   - iam.roles.get
   - iam.serviceAccounts.get
   - iam.serviceAccounts.getIamPolicy
+  - iap.webServices.getIamPolicy
+  - iap.webServices.getSettings
   - resourcemanager.projects.getIamPolicy
   - secretmanager.secrets.getIamPolicy
   - storage.buckets.getIamPolicy

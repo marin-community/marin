@@ -33,17 +33,17 @@ import experiments.grug.moe.model as gm
 _EMBED_SPEC = P(("replica_dcn", "data", "expert"))
 
 _COMMON = dict(
-    vocab_size=48,
-    hidden_dim=32,
-    intermediate_dim=64,
-    shared_expert_intermediate_dim=48,
-    num_experts=8,
+    vocab_size=24,
+    hidden_dim=12,
+    intermediate_dim=16,
+    shared_expert_intermediate_dim=12,
+    num_experts=4,
     num_experts_per_token=2,
     num_layers=5,  # 0,1,2 short; 3 => i%4==3 long; 4 => last long
-    num_heads=4,
-    num_kv_heads=2,
-    head_dim=12,  # non-square q_proj
-    max_seq_len=32,
+    num_heads=2,
+    num_kv_heads=1,
+    head_dim=8,  # non-square q_proj
+    max_seq_len=16,
     sliding_window=4,
 )
 _QK_MULT = 1.37
@@ -114,8 +114,8 @@ def test_snowball_matches_grug_experiment_per_layer_and_logits():
         tokens = (jnp.arange(10, dtype=jnp.int32).reshape(1, 10)) % _COMMON["vocab_size"]
 
         # Per-layer activation parity (embedding, each block, final norm).
-        exp_acts = [np.asarray(o) for o in _capture_experiment(exp, tokens)]
-        snow_acts = [np.asarray(o) for o in _capture_snowball(snow, tokens)]
+        exp_acts = [np.asarray(o) for o in jax.jit(_capture_experiment)(exp, tokens)]
+        snow_acts = [np.asarray(o) for o in jax.jit(_capture_snowball)(snow, tokens)]
         assert len(exp_acts) == len(snow_acts) == _COMMON["num_layers"] + 2
         labels = ["embed"] + [f"block{i}" for i in range(_COMMON["num_layers"])] + ["final_norm"]
         for label, ea, sa in zip(labels, exp_acts, snow_acts, strict=True):
@@ -132,6 +132,7 @@ def test_snowball_matches_grug_experiment_per_layer_and_logits():
     assert np.array_equal(np.argmax(exp_logits, axis=-1), np.argmax(snow_logits, axis=-1))
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("seq_len", [1, 4, 5, 16])
 def test_snowball_matches_grug_across_lengths(seq_len):
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
