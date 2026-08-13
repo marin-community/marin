@@ -356,20 +356,24 @@ def _finelog_backend(
         f"{logical_prefix}-armor",
         project=args.project,
         name=armor_name,
-        description=f"sender sources admitted to {finelog.instance}",
+        description=f"relay sources admitted to {finelog.instance}",
         rules=[
             gcp.compute.SecurityPolicyRuleArgs(
                 action="allow",
+                description="",
+                preview=False,
                 priority=ARMOR_ALLOW_PRIORITY,
                 match=gcp.compute.SecurityPolicyRuleMatchArgs(
                     versioned_expr="SRC_IPS_V1",
                     config=gcp.compute.SecurityPolicyRuleMatchConfigArgs(
-                        src_ip_ranges=list(finelog.sender_source_ranges)
+                        src_ip_ranges=sorted(finelog.sender_source_ranges)
                     ),
                 ),
             ),
             gcp.compute.SecurityPolicyRuleArgs(
                 action="deny(403)",
+                description="default rule",
+                preview=False,
                 priority=ARMOR_DEFAULT_PRIORITY,
                 match=gcp.compute.SecurityPolicyRuleMatchArgs(
                     versioned_expr="SRC_IPS_V1",
@@ -486,6 +490,9 @@ class GcpGclbIap(pulumi.ComponentResource):
         ]
         finelog_resources = [_finelog_backend(finelog, context=context) for finelog in args.finelogs]
         backends = [*controller_resources, *finelog_resources]
+        # Route order is semantically irrelevant to GCP but positional in provider state.
+        # Reverse matcher-name order preserves the imported map and stays deterministic.
+        route_backends = sorted(backends, key=lambda backend: backend.matcher_name, reverse=True)
         primary = next(
             backend
             for controller, backend in zip(args.controllers, controller_resources, strict=True)
@@ -510,7 +517,7 @@ class GcpGclbIap(pulumi.ComponentResource):
             default_service=primary.service.id,
             host_rules=[
                 gcp.compute.URLMapHostRuleArgs(hosts=[backend.domain], path_matcher=backend.matcher_name)
-                for backend in backends
+                for backend in route_backends
             ],
             path_matchers=[
                 gcp.compute.URLMapPathMatcherArgs(
@@ -518,7 +525,7 @@ class GcpGclbIap(pulumi.ComponentResource):
                     default_service=backend.service.id,
                     path_rules=list(backend.path_rules),
                 )
-                for backend in backends
+                for backend in route_backends
             ],
             opts=context.options(protect=True),
         )

@@ -22,7 +22,10 @@ Each controller contributes a zonal NEG, endpoint, health check, IAP-enabled
 backend service, certificate, firewall rule, and URL-map route. The optional
 capability backend uses the same NEG and health check but leaves IAP disabled
 only for `/proxy/t` and `/proxy/t/*`. Each finelog contributes an IAP-free
-backend protected by Cloud Armor and its own firewall rules.
+backend protected by Cloud Armor and its own firewall rules. The existing
+`finelog-dev.oa.dev` route is adopted unchanged. Its CIDR-only application auth
+does not admit requests forwarded by the load balancer, so it must gain a JWT
+auth layer before it can accept external pushes.
 
 ## Configuration sources
 

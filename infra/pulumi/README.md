@@ -216,10 +216,12 @@ uv run --package marin-iac --extra deploy python infra/pulumi/import_resources.p
 
 Before changing state, `apply` regenerates the current candidates and rejects a stale or edited
 manifest. It then runs `pulumi import --preview-only`, prints the same digest for confirmation,
-and imports with Pulumi's default deletion protection. Finally it runs a normal preview. Stop on
-any unexpected replace or delete, especially for a NodePool. When the follow-up preview is
-correct, run a normal `pulumi up`; that creates entries omitted from the import and reconciles
-temporary import protection with each resource's declared protection setting.
+and imports with Pulumi's default deletion protection. Finally it runs a normal preview. Lock
+changes on newly imported resources are stack metadata: the normal update removes temporary
+protection from leaf resources and retains it where the program declares `protect=True`. Stop on
+any unexpected provider update, replacement, or deletion, especially for a NodePool. When the
+follow-up preview is correct, run a normal `pulumi up`; that creates entries omitted from the
+import and reconciles the protection settings.
 
 For a new stack, initialize it before generating the transaction:
 

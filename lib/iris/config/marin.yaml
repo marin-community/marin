@@ -55,6 +55,11 @@ provisioning:
         - cluster: marin
         - cluster: marin-dev
       finelogs:
+        # Preserve the existing finelog-dev route during adoption. Its CIDR-only
+        # auth does not admit application requests through the load balancer.
+        - cluster: marin-dev
+          domain: finelog-dev.oa.dev
+          sender_source_ranges: [192.112.160.0/20]
         - cluster: marin
           domain: finelog.oa.dev
           # Public egress blocks of finelog forwarders; JWT auth still authenticates each push.
