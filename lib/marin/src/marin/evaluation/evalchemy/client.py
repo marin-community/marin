@@ -5,7 +5,7 @@
 
 Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG`` (the parent builds it in
 :mod:`marin.evaluation.evalchemy.runner`), so nothing else in Marin needs to import here.
-Each task runs through the evalchemy fork's ``eval.eval`` once (one invocation per task so each
+Each task runs through the evalchemy fork's ``evalchemy`` CLI once (one invocation per task so each
 carries its own ``num_fewshot``) with lm-eval's ``local-completions`` (or ``local-chat-completions``)
 API model pointed at the served URL. Its ``results_*.json`` tree is uploaded to ``out_path/<dir>/``
 for :class:`~marin.evaluation.evalchemy.result.EvalchemyResult` to read back. ``out_path`` is an
@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from pathlib import Path
 
 import fsspec
 
@@ -71,29 +72,30 @@ def served_max_length(base_url: str) -> int | None:
 def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> str:
     """lm-eval ``--model_args`` for the served OpenAI endpoint (comma-joined ``key=value`` list)."""
     endpoint_path = "chat/completions" if use_chat else "completions"
-    args = [
-        f"model={config['model_id']}",
-        f"base_url={config['base_url'].rstrip('/')}/{endpoint_path}",
-        f"tokenizer={config['tokenizer']}",
-        "tokenizer_backend=huggingface",
-        "tokenized_requests=False",
-        f"num_concurrent={config['num_concurrent']}",
+    args: dict[str, object] = {
+        "model": config["model_id"],
+        "base_url": f"{config['base_url'].rstrip('/')}/{endpoint_path}",
+        "tokenizer": config["tokenizer"],
+        "tokenizer_backend": "huggingface",
+        "tokenized_requests": False,
+        "num_concurrent": config["num_concurrent"],
         # The TPU vLLM prompt-logprobs path 500s in whole-batch bursts (every in-flight request at
         # once); one request exhausting its retries mid-burst closes lm-eval's shared session and
         # fails the whole task, so give each request enough headroom to ride out a burst.
-        "max_retries=8",
+        "max_retries": 8,
         # lm-eval's per-request client timeout defaults to 300s; a long reasoning generation
         # (multi-thousand-token chat benchmark) can exceed that, and a spurious timeout retry-storms
         # the endpoint. 1800s covers a full max_gen_toks generation on a slow serve.
-        "timeout=1800",
-    ]
+        "timeout": 1800,
+    }
+    args.update(config.get("extra_model_args", {}))
     if max_length is not None:
-        args.append(f"max_length={max_length}")
-    return ",".join(args)
+        args["max_length"] = max_length
+    return ",".join(f"{key}={value}" for key, value in args.items())
 
 
 def build_command(config: dict, task: dict, output_path: str, python: str, max_length: int | None) -> list[str]:
-    """The ``eval.eval`` argv for one task. ``python`` runs the evalchemy fork + lm-eval in its venv.
+    """The ``evalchemy`` argv for one task. ``python`` identifies the evaluator virtualenv.
 
     One invocation per task so each carries its own ``num_fewshot`` (lm-eval's ``--num_fewshot`` is a
     single global override). The chat route applies only to generation tasks of a chat-template model:
@@ -117,9 +119,7 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         [f"max_gen_toks={gen_budget}", *(f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items())]
     )
     cmd = [
-        python,
-        "-m",
-        "eval.eval",
+        str(Path(python).with_name("evalchemy")),
         "--model",
         model,
         "--model_args",
@@ -140,11 +140,14 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         "--verbosity",
         "INFO",
     ]
-    # Always pass --num_fewshot, including 0. evalchemy's parser defaults it to None, so omitting the
-    # flag lets lm-eval fall back to the task YAML's own default (gsm8k defaults to 5-shot) and a
-    # 0-shot request is silently ignored. Chat-native benchmarks record it in their config but do not
-    # few-shot on it, so an explicit 0 is harmless there.
-    cmd += ["--num_fewshot", str(task["num_fewshot"])]
+    # Pass every explicit shot count, including 0. A file-backed task may leave the value unset to use
+    # the evaluator task's own default; explicit 0 must still override defaults such as gsm8k's 5-shot.
+    if task["num_fewshot"] is not None:
+        cmd += ["--num_fewshot", str(task["num_fewshot"])]
+    if config.get("batch_size") is not None:
+        cmd += ["--batch_size", str(config["batch_size"])]
+    if config.get("seed") is not None:
+        cmd += ["--seed", str(config["seed"])]
     if task["unsafe_code"]:
         # code_eval tasks execute model-generated code; lm-eval refuses them without this opt-in.
         cmd.append("--confirm_run_unsafe_code")
@@ -171,6 +174,20 @@ def scored_results(local_out: str) -> bool:
     return False
 
 
+def upload_task_output(out_fs, local_out: str, dest: str) -> None:
+    """Replace ``dest`` with the task tree ``local_out`` holds.
+
+    fsspec ``put(local_out, dest, recursive=True)`` copies the tempdir's *contents* into ``dest`` only
+    while ``dest`` does not yet exist; once it does — a retried evaluation reuses the same durable
+    ``dest`` — ``put`` nests the tempdir under it as ``dest/tmp<random>/...``, leaving a second complete
+    task tree that later reads must deduplicate. Removing ``dest`` first makes every attempt write
+    exactly one tree.
+    """
+    if out_fs.exists(dest):
+        out_fs.rm(dest, recursive=True)
+    out_fs.put(local_out, dest, recursive=True)
+
+
 def main() -> None:
     config = json.loads(os.environ[CONFIG_ENV_KEY])
     tasks = config["tasks"]
@@ -184,14 +201,16 @@ def main() -> None:
     # is pinned to the serve region), so no cross-region copy.
     out_fs, _ = fsspec.core.url_to_fs(out_path)
     served = served_max_length(config["base_url"])
-    max_length = served - _CONTEXT_MARGIN if served is not None else None
+    available_context = served - _CONTEXT_MARGIN if served is not None else None
+    configured_context = config.get("max_length")
+    configured_lengths = [value for value in (available_context, configured_context) if value is not None]
+    max_length = min(configured_lengths) if configured_lengths else None
     print(f"served max_model_len: {served} (lm-eval max_length={max_length})", flush=True)
     failures: list[str] = []
     for task in tasks:
         dest = f"{out_path}/{task['dir']}"
         with tempfile.TemporaryDirectory() as local_out:
-            # sys.executable is the uvx environment's interpreter, so ``-m eval.eval`` resolves the
-            # fork + lm-eval installed there.
+            # Evalchemy is installed beside the uvx environment's interpreter.
             cmd = build_command(config, task, local_out, sys.executable, max_length)
             print(f"running evalchemy: {' '.join(cmd)}", flush=True)
             # Upload whatever the task produced before reacting to its exit code, so one task's failure
@@ -200,10 +219,10 @@ def main() -> None:
             produced = os.listdir(local_out)
             scored = scored_results(local_out)
             if produced:
-                out_fs.put(local_out, dest, recursive=True)
+                upload_task_output(out_fs, local_out, dest)
                 print(f"uploaded {len(produced)} path(s) to {dest}", flush=True)
         if result.returncode != 0:
-            failures.append(f"{task['name']}: eval.eval exited {result.returncode}")
+            failures.append(f"{task['name']}: evalchemy exited {result.returncode}")
         elif not produced:
             failures.append(f"{task['name']}: produced no artifacts")
         elif not scored:

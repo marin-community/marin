@@ -83,6 +83,7 @@ class GrugEvalConfig:
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
+    shuffle: bool = True  # Mix eval domains within batches to reduce expert-capacity drops.
 
 
 @dataclass(frozen=True)
@@ -182,7 +183,7 @@ def build_tagged_evaluator(
         )
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
-        per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+        per_pos_token_id = jnp.pad(batch.tokens[:, 1:], ((0, 0), (0, 1)))
         return per_pos_loss, per_pos_weight, per_pos_token_id
 
     return TaggedEvaluator(
@@ -193,6 +194,7 @@ def build_tagged_evaluator(
         device_mesh=mesh,
         axis_mapping=eval_axis_mapping,
         max_examples_per_dataset=max_examples_per_dataset,
+        shuffle=eval_cfg.shuffle,
     )
 
 

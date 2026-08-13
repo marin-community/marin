@@ -85,7 +85,8 @@ gpu = [
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
-  "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
+  # 2.29.3 carries the upstream aarch64 proxy freeOps CAS leak fix, which a Grace host needs.
+  "nvidia-nccl-cu13>=2.29.3; sys_platform == 'linux'",
   # FA4 CuTe/THD attention backends.
   "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
   "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
@@ -103,7 +104,7 @@ deepep = [
   # The Levanter wheel ships the JAX FFI shim sources; CUDA toolchain dependencies
   # come from the host GPU environment.
 ]
-tpu = ["jax==0.10.1", "jaxlib==0.10.1", "libtpu==0.0.41"]
+tpu = ["jax==0.11.0", "jaxlib==0.11.0", "libtpu==0.0.44.*"]
 torch_test = [
   "torch>=2.7.0",
   "peft>=0.12.0",

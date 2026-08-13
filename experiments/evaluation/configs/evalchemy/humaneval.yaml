@@ -1,0 +1,9 @@
+tasks: [humaneval]
+task_options:
+  humaneval:
+    num_fewshot: 0
+    task_alias: humaneval_0shot
+    generation: true
+    unsafe_code: true
+    completion_only: true
+max_tokens: 1024

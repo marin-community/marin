@@ -9,19 +9,50 @@ Launch:
 
 ```bash
 # dry-run: print the lowered plan locally, no GPUs
-python -m experiments.grug.moe_hero_fsdp.launch --dp-racks 1 --num-steps 25 --version dev
+python -m experiments.grug.moe_hero_fsdp.launch \
+  --run-id moe-hero-fsdp-test-1rack --dp-racks 1 --num-steps 25 --version dev
 
 # submit one or more racks; each rack gets 16 GB200x4 nodes and batch 1024
 RID="moe-hero-fsdp-test-2rack"
 iris --cluster=marin job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB --timeout 5400 --job-name "${RID}-coord" \
-  -e WANDB_API_KEY "$WANDB_API_KEY" -e RUN_ID "$RID" \
-  -- python -m experiments.grug.moe_hero_fsdp.launch --dp-racks 2 --num-steps 200 --version dev --run
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.grug.moe_hero_fsdp.launch \
+    --run-id "$RID" --dp-racks 2 --num-steps 200 --version dev --run
 ```
 
-W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`. Pass
+W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `--run-id`. Pass
 `-e WANDB_PROJECT <project>` to the Iris coordinator command to use another W&B project.
+
+Pass `--mode supervised` for NCCL diagnostics. Each GPU task runs training in a child process with
+XLA's 600-second per-execution deadman and no in-pod restart. The supervisor allows one hour for the
+first completed step, then 30 minutes between completed steps. A deadman abort or another child
+failure fails the task immediately; the existing 15-minute progress watchdog remains the fallback.
+
+Use `--mode failsafe-control` to keep the XLA failsafes without the supervisor parent, or
+`--mode stock-control` to run without either and without task retries.
+
+Checkpoint staging benchmark:
+
+```bash
+python -m experiments.grug.moe_hero_fsdp.checkpoint_benchmark \
+  --run-id checkpoint-52b-1rack --dp-racks 1 --num-steps 12 \
+  --checkpoint-every-steps 8 --version dev
+```
+
+This uses a 52.85B-total, approximately 1.71B-active top-1 MoE. It offloads the optimizer state,
+writes a deterministic checkpoint at step 8 and another at clean completion, and records the
+synchronous host-staging and asynchronous commit phases without enabling Python allocation tracing.
+The entire artifact is pinned under `marin_temp_bucket(ttl_days=1)`, so it is disposable and covered
+by the one-day lifecycle policy.
+
+### Kernel cache
+
+The QuACK and FA4 kernels compile through CuTeDSL during MLIR lowering, before JAX's compilation
+cache is consulted, so a compilation-cache hit still regenerates them. Levanter persists them under
+`cutlass-kernels/` in the 30-day region-local temp prefix, fronted by an in-process memory tier.
+Entries are content-addressed, so runs share them and a launcher edit invalidates only its own kernels.
 
 ## Files
 
@@ -54,6 +85,7 @@ W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`. Pas
   the scan.
 
 ### Systems (FSDP)
+- Each Iris task reserves one four-GPU GB200 node and starts one JAX process per GPU.
 - **One rack**: `expert_axis_size=1`, `replica_axis_size=1` → one 64-GPU `data` axis.
 - **Two racks**: `expert_axis_size=1`, `replica_axis_size=2` → two DP replicas, each with a
   64-GPU `data` axis. Model parameters are replicated across `replica_dcn` and FSDP-sharded only
@@ -66,6 +98,9 @@ W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`. Pas
   tile at ~99KB and cannot take v=4096). No liger, no pure-JAX chunked CE.
 - `offload_opt_state` to pinned host; `remat_mode="recompute_all"`.
 - Runtime env baked in: `JAX_ENABLE_PGLE=1`, `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`.
+- XLA GPU command buffers are disabled by default with `--xla_gpu_enable_command_buffer=`.
+  See [#5675](https://github.com/marin-community/marin/issues/5675) for the CUDA graph failure and
+  the plan to enable them again.
 
 ### Optimizer — MuonH
 - **Muon direction** (Newton-Schulz orthogonalization) + a **Frobenius hyperball** scale-invariant
@@ -84,6 +119,11 @@ W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `$RUN_ID`. Pas
 - **25 steps**, batch **1024 per rack**, seq **4096**, SlimPajama-6B, Llama-3 tokenizer, vocab
   128256.
 - Mixed precision: params fp32, compute/output bf16.
-- Checkpointing and eval are **off for this run** but the machinery is retained for later.
+- Eval is off. Training writes a resumable checkpoint every 30 minutes and at clean completion;
+  a restarted gang resumes from the latest fully committed checkpoint.
+- The process-local watchdog is disabled until one training hour has elapsed and the first step has
+  completed. It then exits with code 124 when a later training step runs for 15 minutes or another
+  lifecycle phase makes no progress for 60 minutes. This is a fallback for collectives that fail to
+  honor XLA's 10-minute NCCL termination timeout; Iris treats it as a failure and retries the gang.
 - FA4 metadata constants are explicitly replicated before batch sharding. This prevents the
   compiler from routing each attention metadata transfer through device 0 on a multi-rack run.

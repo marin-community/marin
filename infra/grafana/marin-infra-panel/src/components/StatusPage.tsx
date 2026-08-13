@@ -313,8 +313,9 @@ export function StatusPage({ frames, width, height }: Props) {
           <span className={css`font-size:13px;color:${theme.colors.text.secondary};`}>Grafana refresh controls update all sources</span>
         </div>
         <nav className={css`display:flex;flex-wrap:wrap;justify-content:flex-end;gap:5px 14px;font-size:13px;`}>
-          <a href="/d/marin-fleet">Fleet</a><a href="/d/marin-iris">Iris</a><a href="/d/marin-k8s">Kubernetes</a>
-          <a href="/d/marin-training">Training</a><a href="https://github.com/marin-community/marin/actions" target="_blank" rel="noreferrer">GitHub Actions ↗</a>
+          <a href="/d/marin-home">Home</a><a href="/d/marin-accel">Accelerators</a><a href="/d/marin-jobs">Jobs</a>
+          <a href="/d/marin-runs">Runs</a><a href="/d/marin-clusters">Clusters</a>
+          <a href="https://github.com/marin-community/marin/actions" target="_blank" rel="noreferrer">GitHub Actions ↗</a>
         </nav>
       </header>
 

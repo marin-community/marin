@@ -5,14 +5,16 @@
 
 Reads one or more :class:`~marin.datakit.normalize.NormalizedData` sources, runs
 the shared tokenization core, and writes co-partitioned attribute parquet shards
-with columns ``id`` and ``input_ids`` (one row per input document).
+with columns ``id``, ``chunk_index`` and ``input_ids``.
 
 Each output shard mirrors the basename of its source shard, which ensures the
 datakit invariants hold by construction:
 
 * Same shard count as source (co-partitioned).
 * Sorted by ``id`` within each shard (sources are already sorted; the
-  tokenize pipeline preserves order).
+  tokenize pipeline preserves order). A document above the token limit of one
+  Parquet row occupies several adjacent rows that share its ``id``, in
+  ``chunk_index`` order, so the sort by ``id`` holds.
 
 Downstream:
 
@@ -40,20 +42,34 @@ from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
-from marin.processing.tokenize._core import tokenize_pipeline
+from marin.processing.tokenize._core import (
+    CHUNK_INDEX_FIELD,
+    resolve_window_and_batch,
+    tokenize_batches_with_id,
+    tokenize_pipeline,
+)
 
 logger = logging.getLogger(__name__)
-TOKENIZED_ATTR_DATA_VERSION = 2
+TOKENIZED_ATTR_DATA_VERSION = 4
 
 
 class TokenizedAttrData(BaseModel):
     """Per-split datakit attribute datasets produced by :func:`tokenize_attributes`.
 
     Each split's attribute parquet shards live under ``output_dirs[split]/`` with
-    columns ``id: string`` and ``input_ids: list<int>``. Shards mirror their source
+    columns ``id: string``, ``chunk_index: int32`` and ``input_ids: list<int>``.
+    Shards mirror their source
     :class:`~marin.datakit.normalize.NormalizedData` partitions 1:1 (same basename,
-    same row order, same id range), so the dataset is sorted by ``id`` per partition
-    and co-partitioned with the source — both datakit invariants.
+    same source order, same id range), so the dataset is sorted by ``id`` per
+    partition and co-partitioned with the source — both datakit invariants.
+
+    ``id`` is the source document id, and is the join key against the other datakit
+    attribute datasets. A document with more tokens than one Parquet row can hold
+    occupies several adjacent rows that share that id, in zero-based
+    ``chunk_index`` order. An unsplit document is a single row with
+    ``chunk_index == 0``. A consumer that needs one row per document must group by
+    ``id``. A consumer that walks this dataset positionally against a
+    one-row-per-document dataset must not: the row counts differ.
 
     Persisted as the step's ``.artifact``. Load via
     ``Artifact.from_path(step, TokenizedAttrData)``.
@@ -104,6 +120,7 @@ class TokenizeAttributesConfig:
     text_field: str = "text"
     max_workers: int = 4096
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
+    zephyr_context: ZephyrContext | None = None
 
     def __post_init__(self):
         if self.train_source is None and self.validation_source is None:
@@ -113,9 +130,23 @@ class TokenizeAttributesConfig:
 _ATTRIBUTE_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string()),
+        pa.field(CHUNK_INDEX_FIELD, pa.int32()),
         pa.field("input_ids", pa.list_(pa.int32())),
     ]
 )
+
+
+def _tokenize_text_batch(
+    batch: pa.RecordBatch,
+    *,
+    data_format: TextLmDatasetFormat,
+    window_size: int,
+) -> pa.RecordBatch:
+    """Tokenize one projected Arrow batch and return writer-ready Arrow."""
+    rows = batch.to_pylist()
+    windows = (rows[start : start + window_size] for start in range(0, len(rows), window_size))
+    tokenized = tokenize_batches_with_id(data_format=data_format, batches=windows)
+    return pa.RecordBatch.from_pylist(list(tokenized), schema=_ATTRIBUTE_SCHEMA)
 
 
 def _process_split(
@@ -146,17 +177,31 @@ def _process_split(
         split_dir,
     )
 
-    ds = Dataset.from_list(source_shards).flat_map(load_file)
-    tokenized_ds, _ = tokenize_pipeline(
-        ds,
-        data_format=config.format,
-        text_field=config.text_field,
-        sample_count=config.sample_count,
-        # The first source shard is parquet by construction; pass it for the
-        # row-group-aware window sizing in the shared core.
-        sample_parquet_path=source_shards[0],
-        levanter_batch_size=None,
-    )
+    if isinstance(config.format, TextLmDatasetFormat) and config.sample_count is None:
+        window_size, _ = resolve_window_and_batch(source_shards[0], requested_batch_size=None)
+        tokenized_ds = (
+            Dataset.from_list(source_shards)
+            .load_parquet(columns=["id", config.format.text_key], batch_mode=True)
+            .map(
+                lambda batch, fmt=config.format, size=window_size: _tokenize_text_batch(
+                    batch,
+                    data_format=fmt,
+                    window_size=size,
+                )
+            )
+        )
+    else:
+        ds = Dataset.from_list(source_shards).flat_map(load_file)
+        tokenized_ds, _ = tokenize_pipeline(
+            ds,
+            data_format=config.format,
+            text_field=config.text_field,
+            sample_count=config.sample_count,
+            # The first source shard is parquet by construction; pass it for the
+            # row-group-aware window sizing in the shared core.
+            sample_parquet_path=source_shards[0],
+            levanter_batch_size=None,
+        )
 
     pipeline = tokenized_ds.write_parquet(
         _output_path,
@@ -164,7 +209,7 @@ def _process_split(
         skip_existing=True,
     )
 
-    ctx = ZephyrContext(
+    ctx = config.zephyr_context or ZephyrContext(
         resources=config.worker_resources,
         max_workers=min(config.max_workers, len(source_shards)),
         name=f"tokenize-attributes-{split}",
@@ -172,14 +217,18 @@ def _process_split(
     ctx.put("tokenizer_name", config.tokenizer)
     ctx.put("tokenizer_backend", config.tokenizer_backend)
 
-    outcome = ctx.execute(pipeline, verbose=True)
+    outcome = ctx.execute(
+        pipeline,
+        verbose=True,
+        map_task_resources=config.worker_resources,
+    )
     return split_dir, dict(outcome.counters)
 
 
 def _attribute_schema(data_format: LmDatasetFormatBase) -> pa.Schema | None:
     """Return the parquet schema for attribute output, or ``None`` to let zephyr infer.
 
-    For text formats we pin ``id: string`` and ``input_ids: list<int32>`` to keep
+    For text formats we pin ``id: string``, ``chunk_index: int32`` and ``input_ids: list<int32>`` to keep
     files compact and stable across workers. For chat or other multi-output formats,
     we let zephyr infer from the first record so additional columns like
     ``assistant_masks`` flow through unchanged.
@@ -193,7 +242,7 @@ def tokenize_attributes(config: TokenizeAttributesConfig) -> TokenizedAttrData:
     """Tokenize :class:`NormalizedData` source(s) into datakit attribute parquet.
 
     Each split's source shards become co-partitioned attribute parquet files
-    sharing basenames with the source. Output records carry ``{id, input_ids}``
+    sharing basenames with the source. Output rows carry ``{id, chunk_index, input_ids}``
     (plus any extra fields produced by the format processor for non-text formats).
 
     Args:
@@ -241,6 +290,7 @@ def tokenize_attributes_step(
     text_field: str = "text",
     max_workers: int = 4096,
     worker_resources: ResourceConfig | None = None,
+    zephyr_context: ZephyrContext | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a :class:`StepSpec` that tokenizes :class:`NormalizedData` source(s) into attribute parquet.
@@ -267,6 +317,7 @@ def tokenize_attributes_step(
             on non-normalized paths (not used here, but mirrored to the config).
         max_workers: Zephyr worker cap.
         worker_resources: Per-worker resources; defaults inside the config.
+        zephyr_context: Optional shared Zephyr context.
         override_output_path: Optional explicit output path.
     """
     if train_normalize is None and validation_normalize is None:
@@ -284,6 +335,7 @@ def tokenize_attributes_step(
             "sample_count": sample_count,
             "text_field": text_field,
             "max_workers": max_workers,
+            "zephyr_context": zephyr_context,
         }
         if train_normalize is not None:
             kwargs["train_source"] = read_artifact(train_normalize.output_path, NormalizedData)

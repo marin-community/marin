@@ -1,15 +1,25 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import stat
+import sys
+from datetime import timedelta
+from pathlib import Path
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from rigging import telemetry
-from rigging.testing import RecordingTelemetryTransport
+from rigging.telemetry.probes import nccl_ras
+from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
+from rigging.testing import RecordingTelemetryTransport, nccl_ras_payload
 
-from levanter.tracker import telemetry as tracker_telemetry
+from levanter.callbacks import ProgressEvent
+from levanter.callbacks.progress_watchdog import ProgressTimeout
+from levanter.tracker import BackgroundTracker, current_tracker, telemetry as tracker_telemetry
 from levanter.tracker.histogram import SummaryStats
-from levanter.tracker.telemetry import TelemetryTracker, TrainingPhase
+from levanter.tracker.telemetry import TelemetryConfig, TelemetryTracker, TrainingPhase
 
 
 @pytest.fixture
@@ -24,6 +34,19 @@ def exported(monkeypatch):
 
 def _values(records: list[dict]) -> dict[str, float]:
     return {record["name"]: record["value"] for record in records}
+
+
+def _install_fake_nccl_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    detail: nccl_ras.RasDetail,
+) -> None:
+    report = nccl_ras.reduce_response(json.dumps(nccl_ras_payload()).encode(), detail=detail)
+    output = nccl_ras.NcclRasClientOutput.success(report).to_string()
+    command = tmp_path / "nccl-client"
+    command.write_text(f"#!{sys.executable}\nprint({output!r})\n")
+    command.chmod(command.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setattr(tracker_telemetry.nccl, "_CLIENT_COMMAND", (str(command),))
 
 
 def test_log_exports_jax_scalar_snapshots_without_service_prefix(exported):
@@ -92,6 +115,22 @@ def test_training_progress_and_phase_are_current_snapshots(exported, monkeypatch
     assert values["phase"] == TrainingPhase.FINISHED
 
 
+def test_nonprimary_process_publishes_progress_but_not_replicated_tracker_metrics(exported, monkeypatch):
+    monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 1)
+    monkeypatch.setattr(tracker_telemetry.runtime_telemetry, "configure", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("levanter.tracker.telemetry.time", lambda: 1234.5)
+    tracker = TelemetryConfig().init("run-42")
+
+    tracker.log({"train/loss": 1.25, "throughput": 7.0}, step=3)
+    telemetry.shutdown()
+
+    values = _values(exported.records)
+    assert values["step"] == 3.0
+    assert values["progress_time_seconds"] == 1234.5
+    assert "train_loss" not in values
+    assert "throughput" not in values
+
+
 @pytest.fixture
 def fast_heartbeat(monkeypatch):
     heartbeat = tracker_telemetry._PhaseHeartbeat(interval=0.01)
@@ -123,3 +162,60 @@ def test_finish_stops_the_phase_heartbeat(exported, fast_heartbeat):
     tracker.finish()
 
     assert not fast_heartbeat.running
+
+
+def test_gpu_primary_process_exports_nccl_ras_until_finish(exported, monkeypatch, tmp_path):
+    _install_fake_nccl_client(monkeypatch, tmp_path, nccl_ras.RasDetail.PERIODIC)
+    monkeypatch.setenv(NCCL_RAS_ENABLE_ENV, "1")
+    monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 0)
+
+    tracker = TelemetryTracker()
+    rank = exported.record(
+        "communicator_rank_status",
+        {"communicator_hash": "0xae94423cfbb2ef4a", "rank": "1"},
+    )
+
+    tracker.finish()
+
+    assert rank["attributes"]["rank_host"] == "10.0.0.2"
+
+
+def test_gpu_nonprimary_process_does_not_duplicate_nccl_ras_polling(exported, monkeypatch):
+    monkeypatch.setenv(NCCL_RAS_ENABLE_ENV, "1")
+    monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 1)
+    monkeypatch.setattr(
+        tracker_telemetry.nccl,
+        "start",
+        lambda **_kwargs: pytest.fail("nonprimary process started NCCL RAS polling"),
+    )
+
+    tracker = TelemetryTracker()
+    tracker.finish()
+
+    assert not any(record["name"] == "communicators" for record in exported.records)
+
+
+def test_stall_diagnostic_exports_fresh_detail_without_disabling_telemetry(exported, monkeypatch, tmp_path):
+    _install_fake_nccl_client(monkeypatch, tmp_path, nccl_ras.RasDetail.STALL)
+    monkeypatch.setenv(NCCL_RAS_ENABLE_ENV, "1")
+    monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 0)
+    tracker = BackgroundTracker(TelemetryTracker())
+
+    with current_tracker(tracker):
+        tracker_telemetry.capture_stall_diagnostics(
+            ProgressTimeout(ProgressEvent.TRAIN_STEP_STARTED, timedelta(minutes=15).total_seconds(), 900)
+        )
+
+    stall = next(
+        record
+        for record in exported.records
+        if record["name"] == "communicators"
+        and record["attributes"].get("trigger") == "stall"
+        and record["attributes"].get("detail") == "stall"
+    )
+    assert stall["value"] == 1
+    assert telemetry.runtime_status().configured
+    tracker.finish()

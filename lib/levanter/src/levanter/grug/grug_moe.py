@@ -44,6 +44,7 @@ from levanter.grug._moe.ep_common import (
     _shard_a2a_params as _shard_a2a_params,
 )
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
+from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
@@ -79,6 +80,7 @@ class MoEExpertMlp(eqx.Module):
         intermediate_dim: int,
         initializer_std: float,
         key: jax.Array,
+        gate_up_initializer_std: float | None = None,
         implementation: MoeImplementation | str | None = None,
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
@@ -87,8 +89,11 @@ class MoEExpertMlp(eqx.Module):
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
         k_gate, k_up, k_down = jax.random.split(key, 3)
-        w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), initializer_std)
-        w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), initializer_std)
+        # `w_gate`/`w_up` contract over `hidden_dim`, so their fan-in moves when the experts run
+        # in a latent space; `w_down` contracts over `intermediate_dim` and is unaffected.
+        gate_up_std = initializer_std if gate_up_initializer_std is None else gate_up_initializer_std
+        w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), gate_up_std)
+        w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), gate_up_std)
         w_down = _reshard_for_init(
             _init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std),
             pspecs.w_down,
@@ -224,6 +229,8 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
+        elif resolved_implementation == "fixed_all_to_all":
+            shard_local_fn = _moe_mlp_ep_fixed_a2a_local
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
         else:

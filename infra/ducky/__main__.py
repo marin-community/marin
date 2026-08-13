@@ -51,7 +51,7 @@ def main() -> None:
             env=dict(config.get_object("env") or {}),
             secret_env=dict(config.get_object("secret_env") or {}),
             deploy_generation=config.get_int("deploy_generation") or 0,
-            code_paths=("lib/ducky",),
+            code_paths=("lib/ducky", "infra/pulumi/src/iac/iris"),
             build_commands=(DASHBOARD_BUILD,),
             extra_bundle_includes=(DASHBOARD_DIST_INCLUDE,),
         ),

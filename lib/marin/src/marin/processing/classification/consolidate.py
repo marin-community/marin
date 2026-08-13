@@ -186,13 +186,12 @@ def consolidate(
         # Drop rejected docs before the next join so its key extractor never sees None.
         ds = ds.filter(lambda r: r is not None)
 
-    ctx_kwargs: dict = {
-        "name": "consolidate-filter",
-        "max_workers": max_workers,
-        "resources": worker_resources or ResourceConfig(cpu=2, ram="4g"),
-    }
-    if map_task_resources is not None:
-        ctx_kwargs["map_task_resources"] = map_task_resources
-
-    ctx = ZephyrContext(**ctx_kwargs)
-    return ctx.execute(ds.write_parquet(f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}.parquet"))
+    ctx = ZephyrContext(
+        name="consolidate-filter",
+        max_workers=max_workers,
+        resources=worker_resources or ResourceConfig(cpu=2, ram="4g"),
+    )
+    return ctx.execute(
+        ds.write_parquet(f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}.parquet"),
+        map_task_resources=map_task_resources,
+    )

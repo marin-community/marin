@@ -28,7 +28,7 @@ from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from rigging.filesystem import StoragePath, url_to_fs
 from zephyr import counters
 from zephyr.dataset import Dataset, FileEntry
-from zephyr.readers import InputFileSpec
+from zephyr.input_file import InputFileSpec
 from zephyr.worker_context import zephyr_worker_ctx
 
 from marin.datakit.normalize import generate_id
@@ -39,6 +39,16 @@ MIN_GROUP_BYTES = 100_000_000  # 100 MB floor to avoid degenerate tiny shards
 # Empirical upper bound on the zephyr window size (see
 # https://github.com/marin-community/marin/issues/2829#issuecomment-3963661943).
 _MAX_WINDOW_SIZE = 64
+
+# Parquet writes each repeated-list row into a single data page, and a page is
+# limited to a signed 32-bit byte count. Keep token rows far below that limit,
+# with room for the repetition-level data that rides along with the values.
+MAX_TOKENS_PER_RECORD = 16 * 1024 * 1024
+
+# Zero-based position of a row inside its source document. See
+# :func:`split_oversized_token_record` for the contract.
+CHUNK_INDEX_FIELD = "chunk_index"
+INPUT_IDS_FIELD = "input_ids"
 
 _TOKENIZE_EXTENSIONS = ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet"]
 
@@ -177,18 +187,80 @@ class IdPreservingPreprocessor:
         return [{**out, "id": rec["id"]} for rec, out in zip(batch, outputs_list, strict=True)]
 
 
+def _splits_with_tokens(value: object, num_tokens: int) -> bool:
+    """Is ``value`` a per-token field that must be cut at the same boundaries?
+
+    A duck-typed length test rather than an ``isinstance`` against ``Sequence``:
+    Levanter's chat and prebuilt-cache processors return ``np.ndarray`` for
+    ``input_ids``, ``assistant_masks`` and loss weights, and ``np.ndarray`` is not
+    a ``Sequence``. Treating those as scalars would copy the whole oversized array
+    into every chunk, which both defeats the split and duplicates the document.
+    """
+    if isinstance(value, str | bytes | bytearray | Mapping):
+        return False
+    try:
+        return len(value) == num_tokens  # pyrefly: ignore[missing-attribute]
+    except TypeError:
+        return False
+
+
+def split_oversized_token_record(
+    record: dict,
+    *,
+    token_data_key: str = INPUT_IDS_FIELD,
+    max_tokens: int = MAX_TOKENS_PER_RECORD,
+) -> Iterator[dict]:
+    """Split one token record into Parquet-safe rows.
+
+    ``id`` stays the source document id on every row, and ``chunk_index`` carries
+    the order, zero-based. A consumer that joins on ``id`` thus still matches the
+    document, and reassembles it by a sort on ``(id, chunk_index)``. An id with
+    the order encoded into it would instead match nothing on such a join, which
+    fails silently. Fields whose length matches ``input_ids`` are split at the same
+    boundaries, lists and arrays alike. Every other field is copied to each chunk.
+
+    A document at or below ``max_tokens`` yields one row with ``chunk_index == 0``,
+    which keeps the column uniform across the dataset.
+    """
+    if max_tokens <= 0:
+        raise ValueError(f"max_tokens must be positive, got {max_tokens}")
+
+    input_ids = record.get(token_data_key, [])
+    num_tokens = len(input_ids)
+    if num_tokens <= max_tokens:
+        yield {**record, CHUNK_INDEX_FIELD: 0}
+        return
+
+    for chunk_index, start in enumerate(range(0, num_tokens, max_tokens)):
+        end = min(start + max_tokens, num_tokens)
+        # Same key order as the unsplit branch above: a writer that infers its
+        # schema from the first record must see one column order per shard,
+        # whether or not that record happened to be oversized.
+        chunk = {
+            key: value[start:end] if _splits_with_tokens(value, num_tokens) else value for key, value in record.items()
+        }
+        yield {**chunk, CHUNK_INDEX_FIELD: chunk_index}
+
+
 def tokenize_batches_with_id(
     *,
     data_format: LmDatasetFormatBase,
     batches: Iterator[Sequence[dict]],
 ) -> Iterator[dict]:
-    """Tokenize batches and yield ``{id, input_ids, ...}`` per input doc.
+    """Tokenize batches and yield ``{id, chunk_index, input_ids, ...}`` rows.
+
+    Empty documents are dropped. A non-empty document yields one row with
+    ``chunk_index == 0``, unless its token count is above
+    :data:`MAX_TOKENS_PER_RECORD`. Such a document yields several adjacent rows
+    that share its ``id``, in ``chunk_index`` order — see
+    :func:`split_oversized_token_record`.
 
     Each input record must already carry ``id`` (apply :func:`attach_id` upstream).
     The worker tokenizer config is read from zephyr's shared context — caller is
     responsible for ``ctx.put('tokenizer_name', ...)`` and
     ``ctx.put('tokenizer_backend', ...)`` before pipeline execution.
     """
+    initialization_start = time.monotonic()
     ctx = zephyr_worker_ctx()
     name = ctx.get_shared("tokenizer_name")
     backend = ctx.get_shared("tokenizer_backend")
@@ -204,6 +276,8 @@ def tokenize_batches_with_id(
     if hasattr(inner, "_long_string_workaround"):
         inner._long_string_workaround = True
     processor = IdPreservingPreprocessor(inner)
+    token_data_key = data_format.token_data_key
+    counters.pipeline.update_counter("tokenize/initialization_seconds", time.monotonic() - initialization_start)
 
     batch_count = 0
     record_count = 0
@@ -212,13 +286,30 @@ def tokenize_batches_with_id(
 
     for batch in batches:
         batch_count += 1
-        for record in processor(batch):
-            n_tokens = len(record.get("input_ids", []))
-            counters.pipeline.update_counter("tokenize/docs_out", 1)
-            counters.pipeline.update_counter("tokenize/tokens_out", n_tokens)
-            record_count += 1
-            token_count += n_tokens
-            yield record
+        records = processor(batch)
+        empty_docs = sum(len(record[token_data_key]) == 0 for record in records)
+        if empty_docs:
+            counters.pipeline.update_counter("tokenize/empty_docs", empty_docs)
+            records = [record for record in records if len(record[token_data_key]) > 0]
+        batch_token_count = sum(len(record[token_data_key]) for record in records)
+        counters.pipeline.update_counter("tokenize/docs_out", len(records))
+        counters.pipeline.update_counter("tokenize/tokens_out", batch_token_count)
+        record_count += len(records)
+        token_count += batch_token_count
+        oversized = 0
+        for record in records:
+            num_tokens = len(record.get(token_data_key, []))
+            if num_tokens > MAX_TOKENS_PER_RECORD:
+                oversized += 1
+                logger.warning(
+                    "Document %s has %d tokens, above the %d limit of one Parquet row.",
+                    record["id"],
+                    num_tokens,
+                    MAX_TOKENS_PER_RECORD,
+                )
+            yield from split_oversized_token_record(record, token_data_key=token_data_key)
+        if oversized:
+            counters.pipeline.update_counter("tokenize/oversized_docs", oversized)
         if batch_count % 10 == 0:
             elapsed = time.monotonic() - start_time
             tok_per_sec = token_count / elapsed if elapsed > 0 else 0
@@ -231,6 +322,7 @@ def tokenize_batches_with_id(
             )
 
     elapsed = time.monotonic() - start_time
+    counters.pipeline.update_counter("tokenize/processing_seconds", elapsed)
     tok_per_sec = token_count / elapsed if elapsed > 0 else 0
     doc_per_sec = record_count / elapsed if elapsed > 0 else 0
     avg_tok_per_doc = token_count / record_count if record_count > 0 else 0
@@ -293,7 +385,7 @@ def tokenize_pipeline(
     """Build the tokenize pipeline tail.
 
     Attaches ``id`` to each input record, optionally subsamples per shard, windows,
-    and tokenizes. Returns the dataset of ``{id, input_ids, ...}`` records and the
+    and tokenizes. Returns the dataset of ``{id, chunk_index, input_ids, ...}`` rows and the
     chosen Levanter cache batch size (``None`` keeps Levanter's default).
     """
     window_size, batch_size = resolve_window_and_batch(sample_parquet_path, levanter_batch_size)

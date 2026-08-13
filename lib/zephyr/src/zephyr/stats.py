@@ -19,14 +19,17 @@ sent to the coordinator via heartbeats for aggregation into stage stats.
 import enum
 import logging
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import ClassVar
 
 from finelog.client import LogClient, Table
-from iris.client import get_iris_ctx
+from iris.client.client import get_iris_ctx
+from iris.cluster.client.job_info import get_job_info
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,24 @@ ZEPHYR_WORKER_MEM_AVERAGE_KEY = "zephyr/worker/mem_average_bytes"
 """Average resident-set size of the runner process in bytes"""
 ZEPHYR_WORKER_MEM_PEAK_KEY = "zephyr/worker/mem_peak_bytes"
 """Monotonically increasing peak RSS seen across all sampling intervals"""
+
+
+def _push_iris_task_status(
+    rate_limiter: RateLimiter,
+    build_md: Callable[[], tuple[str, str]],
+) -> None:
+    """Send status text to the active Iris task."""
+    iris_ctx = get_iris_ctx()
+    if iris_ctx is None or iris_ctx.client is None:
+        return
+    job_info = get_job_info()
+    if job_info is None or not rate_limiter.should_run():
+        return
+    detail_md, summary_md = build_md()
+    try:
+        iris_ctx.client.report_task_status_text(job_info.task_id, job_info.attempt_id, detail_md, summary_md)
+    except Exception:
+        logger.warning("Failed to report task status text to Iris controller", exc_info=True)
 
 
 def per_second(total: float, elapsed: float) -> float:

@@ -14,8 +14,9 @@ On the read side, each reducer scans only its target shard via
 ``pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == target).drop(_SHARD_COL)``.
 Polars predicate pushdown with row-group statistics skips non-matching row
 groups via byte-range GETs, so each reducer reads roughly 1/N of each file.
-The resulting LazyFrames are merged via ``external_sort_merge`` (two-pass
-fan-in merge with ``sink_parquet`` pass-1, fully streaming).
+The resulting LazyFrames are merged via ``external_sort_merge``: a fully
+streaming multi-pass merge that writes runs with ``sink_parquet`` and keeps
+every merge below ``_EXTERNAL_SORT_MAX_MERGE_FAN_IN`` inputs.
 
 Write-side memory is bounded by buffer estimated size: when the sum of
 ``DataFrame.estimated_size()`` across buffered frames exceeds
@@ -50,7 +51,7 @@ from rigging.filesystem.s3_compat import needs_virtual_host_addressing
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.external_sort import external_sort_merge
-from zephyr.shard_keys import deterministic_hash
+from zephyr.shard_keys import encode_key, hash_encoded_key
 from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
 
@@ -82,10 +83,6 @@ class ListShard:
         for ref in self.refs:
             yield from ref
 
-    def get_iterators(self) -> Iterator[Iterator]:
-        for ref in self.refs:
-            yield iter(ref)
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -108,6 +105,8 @@ _SCATTER_READ_PYTHON_ROW_OVERHEAD = 2
 _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 # Polars streaming chunk size, important to avoid excessive memory usage during merge.
 _POLARS_STREAMING_CHUNK_SIZE = 10000
+# Maximum run files that Polars merges at one time during an external sort.
+_EXTERNAL_SORT_MAX_MERGE_FAN_IN = 32
 
 # Helper column names injected by _items_to_dataframe and stripped before
 # writing to disk.  Both are internal implementation details; user schemas must
@@ -123,14 +122,27 @@ _SORT_VALUE_TMP_COL = "__zephyr_sort_value_tmp__"
 
 # Python items consumed before creating a DataFrame.
 _DATAFRAME_ROW_COUNT = 1000
-# Flush all scatter buffers when the buffer's estimated size exceeds this fraction of available memory.
-_SCATTER_FLUSH_THRESHOLD = 0.75
+# Flush all scatter buffers when the buffer's estimated size exceeds this fraction of task memory.
+_SCATTER_FLUSH_THRESHOLD = 0.20
 # Empirically measured ratio of DataFrame.estimated_size() to actual per-shard process RSS growth,
 # across three datasets (nemotron: 0.54-0.60, skewed: 0.59-0.66, FineWeb-Edu: 0.66-0.70).
-# Applied to _SCATTER_FLUSH_THRESHOLD so the effective trigger is ~45% of available memory.
+# Applied to _SCATTER_FLUSH_THRESHOLD so the effective trigger is 12% of task memory. The 2.27x
+# flush peak was measured during the 2026-08-02 fuzzy-dedup incident: https://echo.oa.dev/wiki/68.
 _ESTIMATED_SIZE_CORRECTION_FACTOR = 0.60
 # Threshold for triggering a gc.collect() after a flush.
 _GC_FLUSH_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
+
+
+def _task_memory_bytes() -> int:
+    ctx = _worker_ctx_var.get()
+    if ctx is not None and ctx.task_memory_bytes > 0:
+        return ctx.task_memory_bytes
+
+    memory_bytes = TaskResources.from_environment().memory_bytes
+    if memory_bytes <= 0:
+        logger.warning("No task memory is available. Using a 1 GiB memory budget.")
+        return 1024 * 1024 * 1024
+    return memory_bytes
 
 
 def _dataframe_to_items(df: pl.DataFrame) -> Iterator[Any]:
@@ -152,7 +164,7 @@ def _columns_to_dataframe(
     fast path, and ``pl.struct`` over existing columns is cheap. Field order
     (key first) drives the (key, sort_value) sort order.
 
-    ``key_bytes`` must be pre-encoded via ``msgspec.msgpack.encode`` so that
+    ``key_bytes`` must be pre-encoded via :func:`~zephyr.shard_keys.encode_key` so that
     ``_KEY_TMP_COL`` is always ``Binary`` — preventing struct schema mismatches
     when different mapper shards produce keys of different Python types.
     """
@@ -179,9 +191,6 @@ def _columns_to_dataframe(
         raise ValueError("sort_fn must return an Arrow-serializable object.") from err
 
 
-_msgpack_encoder = msgspec.msgpack.Encoder(order="deterministic")
-
-
 def _items_to_dataframe(
     items: list[Any],
     key_fn: Callable,
@@ -195,6 +204,10 @@ def _items_to_dataframe(
     between Python-item pipelines and the DataFrame-based
     :class:`ScatterWriter`; DataFrame-native pipelines can feed the writer
     directly.
+
+    ``num_output_shards=0`` means the caller assigns ``_SHARD_COL`` itself (the
+    combiner path in :meth:`ScatterWriter._flush`, whose rows are already
+    routed); routing is then skipped rather than computed and discarded.
     """
     shards: list[int] = []
     key_bytes: list[bytes] = []
@@ -202,11 +215,12 @@ def _items_to_dataframe(
     for item in items:
         key = key_fn(item)
         try:
-            kb = _msgpack_encoder.encode(key)
+            kb = encode_key(key)
         except TypeError as err:
             raise ValueError(f"key_fn must return a msgpack-serializable object; got {type(key).__name__!r}.") from err
-        key_hash = deterministic_hash(key)
-        shards.append(key_hash % num_output_shards if num_output_shards > 0 else 0)
+        # Route from the bytes we just encoded: deterministic_hash(key) would
+        # msgpack-encode the same key a second time for every scattered item.
+        shards.append(hash_encoded_key(kb) % num_output_shards if num_output_shards > 0 else 0)
         key_bytes.append(kb)
         sort_values.append(sort_fn(item) if sort_fn is not None else None)
     payloads = [cloudpickle.dumps(item) for item in items]
@@ -448,13 +462,7 @@ class ScatterReader:
             # Overhead per row in the Polars DataFrame plus the deserialized Python object.
             # Future Polars-only processing would remove the Python overhead.
             overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
-            ctx = _worker_ctx_var.get()
-            if ctx is not None and ctx.task_memory_bytes > 0:
-                memory_bytes = ctx.task_memory_bytes
-            else:
-                memory_bytes = TaskResources.from_environment().memory_bytes
-                if memory_bytes <= 0:
-                    memory_bytes = 1024 * 1024 * 1024
+            memory_bytes = _task_memory_bytes()
 
             if estimated_merge_memory_bytes * overhead > memory_bytes * _SCATTER_READ_MEMORY_FRACTION:
                 fan_in = math.ceil(math.sqrt(self.total_chunks))
@@ -474,6 +482,7 @@ class ScatterReader:
                     sort_key=_SORT_KEY_COL,
                     external_sort_dir=external_sort_dir,
                     fan_in=fan_in,
+                    max_merge_fan_in=_EXTERNAL_SORT_MAX_MERGE_FAN_IN,
                     shard=self._target_shard,
                 )
 
@@ -539,10 +548,7 @@ class ScatterWriter:
 
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
-        self._memory_available_bytes = TaskResources.from_environment().memory_bytes
-        if self._memory_available_bytes == 0:
-            logger.warning("No memory available for scatter write, defaulting to 1GB. This will likely fail.")
-            self._memory_available_bytes = 1024 * 1024 * 1024
+        self._memory_available_bytes = _task_memory_bytes()
         # estimated_size() measures only the buffer columns, not process overhead (Python runtime,
         # Arrow allocator, Parquet scan). The correction factor maps estimated_size to estimated RSS.
         self._flush_threshold_bytes = int(

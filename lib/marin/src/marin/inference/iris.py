@@ -9,18 +9,20 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from typing import cast
 
 import requests
 from fray.client import JobHandle
 from fray.current_client import current_client
 from fray.types import ActorConfig, CpuConfig, Entrypoint, JobRequest, JobStatus
-from iris.client import iris_ctx
+from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess
+from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName, is_job_finished
+from iris.rpc import job_pb2
 from rigging.connect import capability_path, proxy_path
 from rigging.log_setup import configure_logging
-from rigging.timing import Duration
+from rigging.timing import Deadline, Duration
 
 from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.broker import InferenceBroker
@@ -48,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
+_ENDPOINT_PROBE_TIMEOUT_SECONDS = 5.0
 _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
 _METADATA_BACKEND = "backend"
@@ -66,10 +69,20 @@ class RemoteInferenceStartupError(RuntimeError):
         self.jobs = jobs
 
 
+class InferenceBackendState(StrEnum):
+    """Aggregate lifecycle state of the jobs serving an inference endpoint."""
+
+    READY = "ready"
+    RECOVERING = "recovering"
+    FINISHED = "finished"
+
+
 @dataclass(frozen=True)
 class RemoteInferenceSession:
     model: RunningModel
     jobs: tuple[JobHandle, ...]
+    endpoint_name: str
+    endpoint_health_timeout_seconds: float
     streaming: bool
     tensor_parallel_size: int
     backend_name: str
@@ -80,6 +93,64 @@ class RemoteInferenceSession:
             status = job.status()
             if JobStatus.finished(status):
                 raise RuntimeError(f"Inference job {job.job_id} finished unexpectedly with status {status}")
+
+    def backend_state(self) -> InferenceBackendState:
+        """Return the aggregate state Iris reports for the serving jobs and their tasks."""
+        if not self.jobs:
+            return InferenceBackendState.READY
+
+        state = InferenceBackendState.READY
+        client = iris_ctx().client
+        for job in self.jobs:
+            job_id = JobName.from_string(str(job.job_id))
+            status = client.status(job_id)
+            if is_job_finished(status.state):
+                return InferenceBackendState.FINISHED
+            tasks = client.list_tasks(job_id)
+            if not tasks or any(task.state != job_pb2.TASK_STATE_RUNNING for task in tasks):
+                state = InferenceBackendState.RECOVERING
+        if state is InferenceBackendState.READY and not client.list_endpoint_instances(self.endpoint_name):
+            state = InferenceBackendState.RECOVERING
+        return state
+
+    def wait_until_ready(self) -> None:
+        """Wait for serving tasks and the routed OpenAI endpoint to become ready."""
+        endpoint_deadline: Deadline | None = None
+        while True:
+            state = self.backend_state()
+            if state is InferenceBackendState.FINISHED:
+                raise RuntimeError("Inference backend finished before becoming ready")
+            if state is InferenceBackendState.RECOVERING:
+                endpoint_deadline = None
+                time.sleep(_ENDPOINT_READY_POLL_SECONDS)
+                continue
+
+            if endpoint_deadline is None:
+                endpoint_deadline = Deadline.from_seconds(self.endpoint_health_timeout_seconds)
+                logger.info(
+                    "Inference tasks are running; probing endpoint %s for up to %.0fs",
+                    self.endpoint_name,
+                    self.endpoint_health_timeout_seconds,
+                )
+            timeout_message = (
+                f"Inference endpoint {self.endpoint_name!r} did not become healthy within "
+                f"{self.endpoint_health_timeout_seconds}s"
+            )
+            endpoint_deadline.raise_if_expired(timeout_message)
+            try:
+                response = requests.get(
+                    self.model.endpoint.url("models"),
+                    timeout=max(
+                        0.001,
+                        min(_ENDPOINT_PROBE_TIMEOUT_SECONDS, endpoint_deadline.remaining_seconds()),
+                    ),
+                )
+                if response.status_code == 200:
+                    return
+            except requests.RequestException:
+                pass
+            endpoint_deadline.raise_if_expired(timeout_message)
+            time.sleep(_ENDPOINT_READY_POLL_SECONDS)
 
 
 @dataclass(frozen=True)
@@ -394,6 +465,8 @@ def _start_direct_inference(
                 else running_model
             ),
             jobs=(job,),
+            endpoint_name=endpoint_name,
+            endpoint_health_timeout_seconds=iris.endpoint_health_timeout_seconds,
             streaming=True,
             tensor_parallel_size=tensor_parallel_size,
             backend_name=backend_name,
@@ -518,6 +591,8 @@ def _expose_brokered_inference(
             yield RemoteInferenceSession(
                 model=exposed_model,
                 jobs=tuple(worker_jobs),
+                endpoint_name=endpoint_name,
+                endpoint_health_timeout_seconds=iris.endpoint_health_timeout_seconds,
                 streaming=False,
                 tensor_parallel_size=worker_metadata.tensor_parallel_size,
                 backend_name=worker_metadata.backend_name,

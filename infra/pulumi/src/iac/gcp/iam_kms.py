@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared KMS helpers for the iam_data.py encrypted-member tooling (`iam_audit.py`,
+"""Shared KMS helpers for the IAM YAML principal tooling (`iam_audit.py`,
 `iam_principal.py`). Both encrypt/decrypt `user:<email>` principals against the marin-iac key;
 this is the one place the project, key path, and base64 framing live."""
 
@@ -9,17 +9,17 @@ import base64
 
 from google.cloud import kms_v1
 
-from iac.gcp import iam_data
+from iac.gcp.iam_config import GcpIamConfig
 
-# iam_data's KMS_* constants name only the key ring/key, not the project the key lives under.
-# That project matches lib/iris/config/marin.yaml's provisioning.gcp.project.
+# The YAML names only the key ring/key, not the project the key lives under. That
+# project matches lib/iris/config/marin.yaml's provisioning.gcp.project.
 PROJECT = "hai-gcp-models"
 
 
-def crypto_key_id() -> str:
+def crypto_key_id(config: GcpIamConfig) -> str:
     return (
-        f"projects/{PROJECT}/locations/{iam_data.KMS_LOCATION}/keyRings/{iam_data.KMS_KEY_RING}/"
-        f"cryptoKeys/{iam_data.KMS_KEY}"
+        f"projects/{PROJECT}/locations/{config.kms_location}/keyRings/{config.kms_key_ring}/"
+        f"cryptoKeys/{config.kms_key}"
     )
 
 

@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -45,14 +46,23 @@ _INVALID_SOURCE_DOCUMENTS = {
 }
 
 
-def _external_python(*args: str, hash_seed: str = "0", check: bool = True) -> subprocess.CompletedProcess[str]:
+def _external_python(
+    *args: str,
+    hash_seed: str = "0",
+    check: bool = True,
+    extra_python_path: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     environment = dict(os.environ)
     environment["PYTHONHASHSEED"] = hash_seed
-    environment["PYTHONPATH"] = str(_ROOT / "lib/marin/src")
+    python_paths = [str(_ROOT / "lib/marin/src")]
+    if extra_python_path is not None:
+        python_paths.insert(0, str(extra_python_path))
+    environment["PYTHONPATH"] = os.pathsep.join(python_paths)
     return subprocess.run(
         [
             "uv",
             "run",
+            "--isolated",
             "--project",
             str(_EXTERNAL_PROJECT),
             "--frozen",
@@ -72,6 +82,7 @@ def _preflight(
     *,
     hash_seed: str = "0",
     check: bool = True,
+    extra_python_path: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     request_path = tmp_path / f"requests-{hash_seed}.json"
     request_path.write_text(
@@ -80,7 +91,105 @@ def _preflight(
             separators=(",", ":"),
         )
     )
-    return _external_python(str(_DRIVER), "preflight", str(request_path), hash_seed=hash_seed, check=check)
+    return _external_python(
+        str(_DRIVER),
+        "preflight",
+        str(request_path),
+        hash_seed=hash_seed,
+        check=check,
+        extra_python_path=extra_python_path,
+    )
+
+
+def _run_single_turn_aime_agent(
+    tmp_path: Path,
+    *,
+    content: str,
+    finish_reason: str | None = None,
+    transient_failures: int = 0,
+) -> dict[str, object]:
+    """Exercise the agent in Harbor's frozen environment with fake HTTP and sandbox I/O boundaries."""
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    answer_path = tmp_path / "answer.txt"
+    choice: dict[str, object] = {"message": {"content": content}}
+    if finish_reason is not None:
+        choice["finish_reason"] = finish_reason
+    response_bytes = json.dumps({"choices": [choice]}).encode()
+    script = textwrap.dedent(
+        f"""
+        import asyncio
+        import io
+        import json
+        import subprocess
+        import urllib.error
+        from types import SimpleNamespace
+
+        from marin.evaluation.harbor import single_turn_aime_agent as agent_module
+
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                self.close()
+
+
+        class UrlOpen:
+            def __init__(self):
+                self.attempts = 0
+
+            def __call__(self, request, timeout):
+                self.attempts += 1
+                if self.attempts <= {transient_failures}:
+                    raise urllib.error.HTTPError(request.full_url, 503, "Service Unavailable", None, None)
+                return Response({response_bytes!r})
+
+
+        class Environment:
+            async def exec(self, command, **kwargs):
+                completed = subprocess.run(
+                    ["/bin/sh", "-c", command],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                return SimpleNamespace(
+                    return_code=completed.returncode,
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
+                )
+
+
+        urlopen = UrlOpen()
+        agent_module.urllib.request.urlopen = urlopen
+        agent = agent_module.SingleTurnAimeAgent(
+            logs_dir=agent_module.Path({str(logs_dir)!r}),
+            model_name="hosted_vllm/iceball-micro",
+            api_base="https://inference.example/v1",
+            answer_path={str(answer_path)!r},
+            max_tokens=256,
+            request_retry_initial=0.001,
+        )
+        async def drive_agent():
+            environment = Environment()
+            await agent.setup(environment=environment)
+            await agent.run(
+                instruction="Solve this AIME problem",
+                environment=environment,
+                context=object(),
+            )
+
+        asyncio.run(drive_agent())
+        print(json.dumps({{
+            "answer": agent_module.Path({str(answer_path)!r}).read_text(),
+            "response": agent_module.Path({str(logs_dir / "response.txt")!r}).read_text(),
+            "attempts": urlopen.attempts,
+        }}))
+        """
+    )
+    return json.loads(_external_python("-c", script).stdout)
 
 
 @pytest.fixture(scope="module")
@@ -99,6 +208,144 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     expected = checked_policies[path.name]
     assert all(result["stable_policy_json"] == expected["stable_policy_json"] for result in seeded)
     assert all(result["digest"] == expected["digest"] for result in seeded)
+
+
+@pytest.mark.parametrize(
+    ("setup_parameters", "run_parameters", "callback", "keywords"),
+    [
+        ("_environment", "instruction, environment, context", "setup", "environment"),
+        ("environment", "instruction, environment, _context", "run", "instruction, environment, context"),
+        (
+            "environment",
+            "instruction, environment, context, scratch_dir",
+            "run",
+            "instruction, environment, context",
+        ),
+    ],
+)
+def test_preflight_rejects_agent_callback_keyword_mismatch(
+    tmp_path,
+    setup_parameters,
+    run_parameters,
+    callback,
+    keywords,
+):
+    module_path = tmp_path / "keyword_mismatched_agent.py"
+    module_path.write_text(
+        textwrap.dedent(
+            f"""
+            class KeywordMismatchedAgent:
+                async def setup(self, {setup_parameters}):
+                    pass
+
+                async def run(self, {run_parameters}):
+                    pass
+            """
+        )
+    )
+    document = yaml.safe_load((_POLICIES / "aime-smoke.yaml").read_text())
+    document["agents"][0]["import_path"] = "keyword_mismatched_agent:KeywordMismatchedAgent"
+    policy_path = tmp_path / "keyword-mismatched-agent.yaml"
+    policy_path.write_text(yaml.safe_dump(document))
+
+    completed = _preflight(
+        tmp_path,
+        [(policy_path, {})],
+        check=False,
+        extra_python_path=tmp_path,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert f"keyword_mismatched_agent:KeywordMismatchedAgent.{callback}()" in completed.stderr
+    assert all(keyword in completed.stderr for keyword in keywords.split(", "))
+
+
+def test_single_turn_aime_agent_grades_length_finished_response(tmp_path):
+    content = "A long incomplete derivation mentions 12. The final result is \\boxed{137}."
+    result = _run_single_turn_aime_agent(tmp_path, content=content, finish_reason="length")
+
+    assert result == {"answer": "137\n", "response": content, "attempts": 1}
+
+
+def test_single_turn_aime_agent_retries_transient_proxy_failure(tmp_path):
+    result = _run_single_turn_aime_agent(
+        tmp_path,
+        content="Final answer: 42",
+        transient_failures=1,
+    )
+
+    assert result == {"answer": "42\n", "response": "Final answer: 42", "attempts": 2}
+
+
+def test_terminus_policies_retry_transient_endpoint_errors(tmp_path, checked_policies):
+    policies = {
+        name: payload["stable_policy_json"]
+        for name, payload in checked_policies.items()
+        if json.loads(payload["stable_policy_json"])["agents"][0]["name"] == "terminus-2"
+    }
+    assert policies
+    policies_path = tmp_path / "policies.json"
+    policies_path.write_text(json.dumps(policies))
+    script = textwrap.dedent(
+        """
+        import asyncio
+        import json
+        import sys
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        import harbor.trial.queue as queue_module
+        from harbor.models.job.config import JobConfig
+        from harbor.trial.queue import TrialQueue
+        from harbor.trial.trial import Trial
+
+        async def main():
+            policies = json.loads(Path(sys.argv[1]).read_text())
+            outcomes = {}
+            for name, serialized_policy in policies.items():
+                retry = JobConfig.model_validate_json(serialized_policy).retry
+                attempts = 0
+                waits = []
+                failed_result = SimpleNamespace(
+                    exception_info=SimpleNamespace(exception_type="InternalServerError")
+                )
+
+                class FailedTrial:
+                    paths = SimpleNamespace(trial_dir=Path("/tmp/unused-harbor-trial"))
+
+                    async def run(self):
+                        nonlocal attempts
+                        attempts += 1
+                        return failed_result
+
+                    def add_hook(self, _event, _hook):
+                        pass
+
+                async def create_trial(_config):
+                    return FailedTrial()
+
+                async def record_wait(delay):
+                    waits.append(delay)
+
+                Trial.create = staticmethod(create_trial)
+                queue_module.asyncio.sleep = record_wait
+                queue_module.safe_rmtree = lambda *_args, **_kwargs: None
+                result = await TrialQueue(n_concurrent=1, retry_config=retry)._run_trial(
+                    SimpleNamespace(trial_name="endpoint-failure")
+                )
+                assert result is failed_result
+                outcomes[name] = {"attempts": attempts, "wait_seconds": sum(waits)}
+
+            print(json.dumps(outcomes, sort_keys=True))
+
+        asyncio.run(main())
+        """
+    )
+
+    outcomes = json.loads(_external_python("-c", script, str(policies_path)).stdout)
+
+    assert outcomes == {name: {"attempts": 11, "wait_seconds": 303.0} for name in policies}
 
 
 def test_local_source_is_rebased_onto_worker_workspace(tmp_path, monkeypatch):

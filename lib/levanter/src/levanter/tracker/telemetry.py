@@ -5,6 +5,7 @@
 
 import dataclasses
 import logging
+import os
 import re
 import threading
 from collections.abc import Mapping
@@ -12,11 +13,14 @@ from enum import IntEnum
 from time import time
 from typing import Any, Optional
 
+import jax
 import numpy as np
 from iris.runtime import telemetry as runtime_telemetry
 from rigging import telemetry
+from rigging.telemetry.probes import nccl, nccl_client
 
-from levanter.tracker import Tracker, TrackerConfig
+from levanter.callbacks.progress_watchdog import ProgressTimeout
+from levanter.tracker import Tracker, TrackerConfig, get_tracker
 from levanter.tracker.histogram import SummaryStats
 
 logger = logging.getLogger(__name__)
@@ -44,6 +48,9 @@ def _set(name: str, value: float, *, attributes: dict[str, str] = _CURRENT) -> N
 # drops records under queue pressure, so several missed beats must not un-enroll a
 # live job. The reader's window lives in infra/grafana/src/training_stalls.py.
 _PHASE_HEARTBEAT_SECONDS = 60.0
+_NCCL_RAS_POLL_SECONDS = 10 * 60.0
+_NCCL_STALL_CAPTURE_SECONDS = 8.0
+_STALL_TELEMETRY_FLUSH_SECONDS = 5.0
 
 
 class _PhaseHeartbeat:
@@ -116,17 +123,50 @@ def _as_scalar(value: Any) -> float | None:
     return float(array)
 
 
+def _start_nccl_ras_probe() -> nccl.NcclRasSession | None:
+    try:
+        if not telemetry.runtime_status().configured:
+            return None
+        if os.environ.get(nccl_client.NCCL_RAS_ENABLE_ENV, "1") == "0":
+            return None
+        if jax.default_backend() != "gpu" or jax.process_index() != 0:
+            return None
+        return nccl.start(interval=_NCCL_RAS_POLL_SECONDS)
+    except RuntimeError:
+        logger.warning("could not start NCCL RAS telemetry", exc_info=True)
+        return None
+
+
+def capture_stall_diagnostics(timeout: ProgressTimeout) -> None:
+    """Capture bounded process-zero diagnostics immediately before watchdog exit."""
+    try:
+        tracker = get_tracker("telemetry")
+    except KeyError:
+        logger.warning("No telemetry tracker is available for stalled-training diagnostics")
+        return
+    logger.error(
+        "Capturing NCCL RAS after %s made no progress for %.1f seconds",
+        timeout.event.value,
+        timeout.elapsed,
+    )
+    tracker.capture_stall_diagnostics()
+
+
 class TelemetryTracker(Tracker):
-    """Exports scalar and pre-aggregated training snapshots as gauges."""
+    """Export training snapshots and phase transitions."""
 
     name: str = "telemetry"
 
-    def __init__(self) -> None:
+    def __init__(self, *, publish_tracker_metrics: bool = True) -> None:
+        self._publish_tracker_metrics = publish_tracker_metrics
+        self._nccl_ras_probe = _start_nccl_ras_probe()
         _set("progress_time_seconds", 0)
         set_training_phase(TrainingPhase.INITIALIZING)
         _HEARTBEAT.start()
 
     def _publish(self, metrics: Mapping[str, object]) -> None:
+        if not self._publish_tracker_metrics:
+            return
         for key, value in metrics.items():
             if isinstance(value, SummaryStats):
                 self._publish_summary(key, value)
@@ -173,19 +213,35 @@ class TelemetryTracker(Tracker):
         pass
 
     def finish(self):
+        if self._nccl_ras_probe is not None:
+            try:
+                self._nccl_ras_probe.shutdown()
+            except Exception:
+                logger.warning("could not stop NCCL RAS telemetry", exc_info=True)
         set_training_phase(TrainingPhase.FINISHED)
         # The run is over, so there is nothing left to keep enrolled. FINISHED is
         # already published above, and republishing it for the process's remaining
         # lifetime tells the reader nothing new.
         _HEARTBEAT.stop()
 
+    def capture_stall_diagnostics(self) -> None:
+        """Stop periodic RAS polling, publish a fresh stall sample, and flush telemetry."""
+        if self._nccl_ras_probe is not None:
+            self._nccl_ras_probe.capture_stall(_NCCL_STALL_CAPTURE_SECONDS)
+        if not telemetry.flush(_STALL_TELEMETRY_FLUSH_SECONDS):
+            logger.warning("Telemetry did not flush within the stalled-training diagnostic budget")
+
 
 @TrackerConfig.register_subclass("telemetry")
 @dataclasses.dataclass
 class TelemetryConfig(TrackerConfig):
+    """Configure direct training telemetry."""
+
     def init(self, run_id: Optional[str]) -> Tracker:
+        process_index = jax.process_index()
         runtime_telemetry.configure(
             "levanter",
             root_run_uid=run_id,
+            process_index=process_index,
         )
-        return TelemetryTracker()
+        return TelemetryTracker(publish_tracker_metrics=process_index == 0)

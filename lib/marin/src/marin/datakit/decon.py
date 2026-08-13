@@ -35,11 +35,12 @@ The bloom can also be built once and shared across many corpus marks via
 """
 
 import hashlib
+import json
 import logging
 import os
 import random
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import islice
 from typing import Any
@@ -67,8 +68,12 @@ logger = logging.getLogger(__name__)
 # the corpus mark fold this into their step hash_attrs, so a policy change
 # re-addresses cached blooms/marks instead of silently reusing incompatible
 # features. v2 added the no-alphabetic-character ngram filter (marin#6852 cluster D).
-FEATURE_FILTER_VERSION = 2
+# v3 added an exact feature for short alphabetic paragraphs with at least three
+# tokens. This keeps required eval records matchable without restoring the
+# one-token punctuation and label collisions removed in v2.
+FEATURE_FILTER_VERSION = 3
 DECON_ATTRIBUTES_VERSION = 4
+MIN_SHORT_EXACT_TOKENS = 3
 
 
 @dataclass(frozen=True)
@@ -197,25 +202,49 @@ def _extract_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
             yield ngram
 
 
+def _short_exact_feature(text: str, n: int) -> str | None:
+    """Return one normalized feature for guarded short exact matching."""
+    tokens = text.split()
+    if MIN_SHORT_EXACT_TOKENS <= len(tokens) < n and _has_alpha(text):
+        return " ".join(tokens)
+    return None
+
+
+def _extract_paragraph_features(text: str, n: int, stride: int) -> Iterator[str]:
+    """Yield n-grams, or one guarded exact feature for a short paragraph."""
+    short_exact = _short_exact_feature(text, n)
+    if short_exact is not None:
+        yield short_exact
+        return
+    yield from _extract_ngrams(text, n, stride)
+
+
 def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
     """Yield matchable features: ngrams within each paragraph, or whole paragraphs.
 
-    In n-gram mode, paragraphs with fewer than ``ngram_length`` tokens
-    contribute nothing — no fallback. A whole-paragraph fallback would be
-    symmetric with the consumer side but creates trivial collisions on very
-    short paragraphs (e.g. ``"..."``, ``"A."``, ``"##"`` that show up
-    routinely in eval and pretraining text alike). See PR #5656 for the
-    smoke-test finding (~18% phantom contamination on MMLU vs nemotron-math
-    came from the literal ``"..."`` short-paragraph artifact).
+    In n-gram mode, an alphabetic paragraph with 3 to ``ngram_length - 1``
+    tokens contributes one normalized exact feature. Shorter and
+    non-alphabetic paragraphs contribute nothing. This avoids the trivial
+    ``"..."`` and ``"A."`` collisions found in PR #5656 while keeping short
+    required eval records matchable. If every paragraph is shorter than three
+    tokens, a full record with at least three tokens contributes one exact
+    feature.
     """
     delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
+    yielded = False
     for para in text.split(delimiter):
         if not para:
             continue
         if ngram is None:
             yield para
             continue
-        yield from _extract_ngrams(para, ngram.ngram_length, ngram.stride)
+        for feature in _extract_paragraph_features(para, ngram.ngram_length, ngram.stride):
+            yielded = True
+            yield feature
+    if ngram is not None and not yielded:
+        short_exact = _short_exact_feature(text, ngram.ngram_length)
+        if short_exact is not None:
+            yield short_exact
 
 
 def _paragraph_overlap_and_matches(
@@ -233,16 +262,16 @@ def _paragraph_overlap_and_matches(
     distinctive leak ngrams stay matchable; a leak made entirely of dropped
     ngrams is intentionally suppressed.
 
-    Paragraphs with fewer than ``ngram_length`` tokens in n-gram mode return
-    ``(0.0, [])`` — see :func:`_extract_features` for why we don't fall back
-    to whole-paragraph hashing.
+    Alphabetic paragraphs with at least three but fewer than ``ngram_length``
+    tokens use one exact feature. Shorter and non-alphabetic paragraphs return
+    ``(0.0, [])``.
     """
     if ngram is None:
         h = _bloom_hash(paragraph)
         if h in drop_hashes:
             return 0.0, []
         return (1.0, [h]) if h in bf else (0.0, [])
-    ngrams = list(_extract_ngrams(paragraph, ngram.ngram_length, ngram.stride))
+    ngrams = list(_extract_paragraph_features(paragraph, ngram.ngram_length, ngram.stride))
     if not ngrams:
         return 0.0, []
     hashes = [_bloom_hash(ng) for ng in ngrams]
@@ -283,6 +312,16 @@ def _discover_eval_files(eval_paths: list[str], exclude_dir_names: frozenset[str
     for source in eval_paths:
         fs, resolved = url_to_fs(source)
         protocol = source.split("://")[0] if "://" in source else ""
+        if fs.isfile(resolved):
+            filename = os.path.basename(resolved)
+            parent_name = os.path.basename(os.path.dirname(resolved).rstrip("/"))
+            if (
+                parent_name not in exclude_dir_names
+                and not filename.startswith(".")
+                and filename.endswith(SUPPORTED_EXTENSIONS)
+            ):
+                yield source
+            continue
         for root, _dirs, files in fs.walk(resolved):
             if _is_hidden_dir(root, resolved):
                 continue
@@ -345,7 +384,8 @@ def _build_filter(
                     seen_in_record.add(h)
                     stats["n_index_rows"] += 1
                     yield {"hash": h, "eval_id": eval_id}
-                stats["n_records"] += 1
+                if seen_in_record:
+                    stats["n_records"] += 1
 
     # Stream the index parquet; this iteration also fills the bloom.
     idx_dir = os.path.dirname(index_path)
@@ -431,13 +471,27 @@ def _make_marker(
                     text = str(record.get(text_field, "") or "")
                     max_score = 0.0
                     matched: set[int] = set()
+                    has_paragraph_features = False
                     for para in text.split(delimiter):
                         if not para:
                             continue
+                        if (
+                            ngram is not None
+                            and next(_extract_paragraph_features(para, ngram.ngram_length, ngram.stride), None)
+                            is not None
+                        ):
+                            has_paragraph_features = True
                         score, hits = _paragraph_overlap_and_matches(para, bf, ngram, drop_hashes)
                         if score > max_score:
                             max_score = score
                         matched.update(hits)
+                    if ngram is not None and not has_paragraph_features:
+                        short_exact = _short_exact_feature(text, ngram.ngram_length)
+                        if short_exact is not None:
+                            short_hash = _bloom_hash(short_exact)
+                            if short_hash not in drop_hashes and short_hash in bf:
+                                max_score = 1.0
+                                matched.add(short_hash)
                     contaminated = max_score > 0 and max_score >= threshold
                     counters.pipeline.update_counter("decon/contaminated" if contaminated else "decon/clean", 1)
                     if contaminated and flagged_sample_size:
@@ -491,6 +545,7 @@ def decon_to_parquet(
     false_positive_rate: float = 1e-9,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> DeconAttributes:
     """Mark records in *normalized_data* that overlap with eval text.
 
@@ -584,8 +639,11 @@ def decon_to_parquet(
     ctx_kwargs: dict[str, Any] = {"name": "decon-mark", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
-    ctx = ZephyrContext(**ctx_kwargs)
-    outcome = ctx.execute(pipeline)
+    ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    outcome = ctx.execute(
+        pipeline,
+        map_task_resources=resources,
+    )
 
     return DeconAttributes(
         main_output_dir=prefix_join(output_path, "outputs/main"),
@@ -605,6 +663,11 @@ def build_eval_bloom(
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
     exclude_eval_dirs: frozenset[str] = frozenset(),
+    required_eval_manifest_path: str | None = None,
+    required_eval_corpus_version: str | None = None,
+    required_eval_names: tuple[str, ...] = (),
+    best_effort_eval_manifest_path: str | None = None,
+    best_effort_eval_corpus_version: str | None = None,
 ) -> EvalBloom:
     """Build a reusable bloom + hash-index sidecar from one or more eval sources.
 
@@ -632,6 +695,18 @@ def build_eval_bloom(
         exclude_eval_dirs: Eval task directory names to skip while walking
             ``eval_data_sources`` (see :func:`_discover_eval_files`). Excludes
             those tasks from the bloom without regenerating the eval corpus.
+        required_eval_manifest_path: Optional manifest that must report a
+            complete required eval suite before Bloom creation starts. When
+            set, only the exact artifacts in this manifest enter the Bloom.
+        required_eval_corpus_version: Version that the required manifest must
+            report. Set this with ``required_eval_manifest_path``.
+        required_eval_names: Exact benchmark names that the required manifest
+            must contain.
+        best_effort_eval_manifest_path: Optional manifest with the exact
+            best-effort artifacts to include. Artifacts must be below the
+            manifest directory.
+        best_effort_eval_corpus_version: Version that the best-effort manifest
+            must report.
 
     Returns:
         :class:`EvalBloom` artifact pointing at the produced files.
@@ -639,6 +714,33 @@ def build_eval_bloom(
     eval_paths = [eval_data_sources] if isinstance(eval_data_sources, str) else list(eval_data_sources)
     if not eval_paths:
         raise ValueError("eval_data_sources must be non-empty")
+    if (required_eval_manifest_path is None) != (required_eval_corpus_version is None):
+        raise ValueError("required eval manifest path and corpus version must be set together")
+    if required_eval_manifest_path is not None:
+        assert required_eval_corpus_version is not None
+        eval_paths = _validate_required_eval_manifest(
+            required_eval_manifest_path,
+            required_eval_corpus_version,
+            required_eval_names,
+            text_field=text_field,
+            ngram=ngram,
+        )
+    best_effort_parameters = (
+        best_effort_eval_manifest_path,
+        best_effort_eval_corpus_version,
+    )
+    if any(value is not None for value in best_effort_parameters) and not all(
+        value is not None for value in best_effort_parameters
+    ):
+        raise ValueError("best-effort eval manifest path and corpus version must be set together")
+    if best_effort_eval_manifest_path is not None:
+        assert best_effort_eval_corpus_version is not None
+        eval_paths.extend(
+            _validate_best_effort_eval_manifest(
+                best_effort_eval_manifest_path,
+                best_effort_eval_corpus_version,
+            )
+        )
 
     bloom_path, index_path = bloom_paths(output_path)
     n_records = _build_filter(
@@ -659,6 +761,138 @@ def build_eval_bloom(
         false_positive_rate=false_positive_rate,
         n_eval_records=n_records,
     )
+
+
+def _validate_required_eval_manifest(
+    manifest_path: str,
+    expected_corpus_version: str,
+    expected_names: tuple[str, ...],
+    *,
+    text_field: str,
+    ngram: NGramConfig | None,
+) -> list[str]:
+    """Validate required artifacts and confirm that each record has a feature."""
+    manifest_storage = StoragePath(manifest_path)
+    if not manifest_storage.exists():
+        raise ValueError(f"required eval manifest does not exist: {manifest_path}")
+    with manifest_storage.open("r") as source:
+        manifest = json.load(source)
+    if not isinstance(manifest, Mapping):
+        raise ValueError(f"required eval manifest must be an object: {manifest_path}")
+    if manifest.get("corpus_version") != expected_corpus_version:
+        raise ValueError(
+            f"required eval manifest version is {manifest.get('corpus_version')!r}, "
+            f"expected {expected_corpus_version!r}"
+        )
+    if manifest.get("required") is not True:
+        raise ValueError("required eval manifest does not mark the suite as required")
+    if manifest.get("status") != "complete":
+        raise ValueError(f"required eval manifest status is {manifest.get('status')!r}, expected 'complete'")
+
+    benchmarks = manifest.get("benchmarks")
+    if not isinstance(benchmarks, list) or not all(isinstance(entry, Mapping) for entry in benchmarks):
+        raise ValueError("required eval manifest benchmarks must be a list of objects")
+    if not all(isinstance(entry.get("name"), str) for entry in benchmarks):
+        raise ValueError("required eval manifest benchmark entries need string names")
+    actual_names = tuple(entry["name"] for entry in benchmarks)
+    if set(actual_names) != set(expected_names) or len(actual_names) != len(expected_names):
+        raise ValueError(
+            f"required eval manifest benchmarks are {sorted(str(name) for name in actual_names)}, "
+            f"expected {sorted(expected_names)}"
+        )
+
+    manifest_parent = os.path.dirname(manifest_path)
+    paths: list[str] = []
+    for entry in benchmarks:
+        name = entry.get("name")
+        artifact = entry.get("artifact")
+        expected_records = entry.get("expected_records")
+        if not isinstance(name, str) or not isinstance(artifact, str) or not isinstance(expected_records, int):
+            raise ValueError("required eval manifest benchmark entries need name, artifact, and expected_records")
+        artifact_path = prefix_join(manifest_parent, artifact)
+        artifact_storage = StoragePath(artifact_path)
+        if not artifact_storage.exists():
+            raise ValueError(f"{name}: required eval artifact does not exist: {artifact_path}")
+        with artifact_storage.open("rb") as source:
+            parquet = pq.ParquetFile(source)
+            actual_records = parquet.metadata.num_rows
+            if text_field not in parquet.schema_arrow.names:
+                raise ValueError(f"{name}: required eval artifact does not contain text field {text_field!r}")
+            texts = parquet.read(columns=[text_field]).column(text_field).to_pylist()
+        if actual_records != expected_records:
+            raise ValueError(f"{name}: manifest expects {expected_records} records, artifact contains {actual_records}")
+        records_with_features = sum(
+            bool(text) and next(_extract_features(str(text), ngram), None) is not None for text in texts
+        )
+        if records_with_features != expected_records:
+            raise ValueError(
+                f"{name}: {expected_records - records_with_features} of {expected_records} required eval records "
+                "produce no matchable features"
+            )
+        paths.append(artifact_path)
+    return paths
+
+
+def _validate_best_effort_eval_manifest(
+    manifest_path: str,
+    expected_corpus_version: str,
+) -> list[str]:
+    """Validate a best-effort manifest and return its exact artifact paths."""
+    manifest_storage = StoragePath(manifest_path)
+    if not manifest_storage.exists():
+        raise ValueError(f"best-effort eval manifest does not exist: {manifest_path}")
+    with manifest_storage.open("r") as source:
+        manifest = json.load(source)
+    if not isinstance(manifest, Mapping):
+        raise ValueError(f"best-effort eval manifest must be an object: {manifest_path}")
+    if manifest.get("corpus_version") != expected_corpus_version:
+        raise ValueError(
+            f"best-effort eval manifest version is {manifest.get('corpus_version')!r}, "
+            f"expected {expected_corpus_version!r}"
+        )
+    if manifest.get("required") is not False:
+        raise ValueError("best-effort eval manifest must mark the suite as not required")
+    if manifest.get("status") not in {"complete", "complete_with_failures"}:
+        raise ValueError(
+            f"best-effort eval manifest status is {manifest.get('status')!r}, "
+            "expected 'complete' or 'complete_with_failures'"
+        )
+
+    included_tasks = manifest.get("included_leaf_tasks")
+    artifacts = manifest.get("artifacts")
+    if not isinstance(included_tasks, list) or not all(isinstance(task, str) for task in included_tasks):
+        raise ValueError("best-effort eval manifest included_leaf_tasks must be a list of strings")
+    if not isinstance(artifacts, list) or not all(isinstance(entry, Mapping) for entry in artifacts):
+        raise ValueError("best-effort eval manifest artifacts must be a list of objects")
+
+    manifest_parent = os.path.dirname(manifest_path)
+    paths: list[str] = []
+    artifact_tasks: list[str] = []
+    for entry in artifacts:
+        task = entry.get("task")
+        artifact = entry.get("artifact")
+        expected_records = entry.get("records")
+        if not isinstance(task, str) or not isinstance(artifact, str) or not isinstance(expected_records, int):
+            raise ValueError("best-effort eval artifacts need task, artifact, and records")
+        if artifact.startswith("/") or ".." in artifact.split("/"):
+            raise ValueError(f"{task}: best-effort artifact must be relative to its root: {artifact}")
+        artifact_path = prefix_join(manifest_parent, artifact)
+        artifact_storage = StoragePath(artifact_path)
+        if not artifact_storage.exists():
+            raise ValueError(f"{task}: best-effort eval artifact does not exist: {artifact_path}")
+        with artifact_storage.open("rb") as source:
+            actual_records = pq.ParquetFile(source).metadata.num_rows
+        if actual_records != expected_records:
+            raise ValueError(
+                f"{task}: best-effort manifest expects {expected_records} records, "
+                f"artifact contains {actual_records}"
+            )
+        artifact_tasks.append(task)
+        paths.append(artifact_path)
+
+    if sorted(artifact_tasks) != sorted(included_tasks) or len(artifact_tasks) != len(included_tasks):
+        raise ValueError("best-effort eval artifact tasks do not match included_leaf_tasks")
+    return paths
 
 
 def merge_eval_blooms(
@@ -752,6 +986,11 @@ def build_eval_bloom_step(
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
     exclude_eval_dirs: frozenset[str] = frozenset(),
+    required_eval_manifest_path: str | None = None,
+    required_eval_corpus_version: str | None = None,
+    required_eval_names: tuple[str, ...] = (),
+    best_effort_eval_manifest_path: str | None = None,
+    best_effort_eval_corpus_version: str | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
@@ -769,6 +1008,13 @@ def build_eval_bloom_step(
         exclude_eval_dirs: Eval task directory names to drop from the bloom
             (see :func:`build_eval_bloom`). Folded into ``hash_attrs`` so
             changing the exclusion set rebuilds the bloom at a fresh path.
+        required_eval_manifest_path, required_eval_corpus_version,
+            required_eval_names: Required-suite gate passed to
+            :func:`build_eval_bloom`. The path is an external input. The
+            expected version and names enter the step hash.
+        best_effort_eval_manifest_path, best_effort_eval_corpus_version:
+            Optional best-effort suite. Only the exact artifacts below its
+            immutable, versioned manifest directory enter the Bloom.
         output_path_prefix, override_output_path: StepSpec routing.
     """
     raw_paths: list[str] = []
@@ -800,6 +1046,9 @@ def build_eval_bloom_step(
         # invalidates the cache.
         "eval_data_sources": tuple(sorted(s for s in raw_paths if s not in (d.output_path for d in step_deps))),
         "exclude_eval_dirs": tuple(sorted(exclude_eval_dirs)),
+        "required_eval_corpus_version": required_eval_corpus_version,
+        "required_eval_names": tuple(sorted(required_eval_names)),
+        "best_effort_eval_corpus_version": best_effort_eval_corpus_version,
     }
 
     return StepSpec(
@@ -812,6 +1061,11 @@ def build_eval_bloom_step(
             estimated_doc_count=estimated_doc_count,
             false_positive_rate=false_positive_rate,
             exclude_eval_dirs=exclude_eval_dirs,
+            required_eval_manifest_path=required_eval_manifest_path,
+            required_eval_corpus_version=required_eval_corpus_version,
+            required_eval_names=required_eval_names,
+            best_effort_eval_manifest_path=best_effort_eval_manifest_path,
+            best_effort_eval_corpus_version=best_effort_eval_corpus_version,
         ),
         deps=step_deps,
         hash_attrs=hash_attrs,
@@ -1028,6 +1282,7 @@ def build_all_source_drop_sets(
     global_common_min_sources: int,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> AllSourceDropSets:
     """Build per-source and cross-source common eval-ngram drop sets.
 
@@ -1101,7 +1356,11 @@ def build_all_source_drop_sets(
     ctx_kwargs: dict[str, Any] = {"name": "decon-drop-set", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
-    outcome = ZephyrContext(**ctx_kwargs).execute(pipeline)
+    ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    outcome = ctx.execute(
+        pipeline,
+        map_task_resources=resources,
+    )
     global_rows = list(outcome.results)
     global_output_dir = f"{output_path.rstrip('/')}/{_GLOBAL_DROP_SET_DIRECTORY}"
     out_file = _write_global_drop_set(global_output_dir, global_rows)
@@ -1139,6 +1398,7 @@ def all_source_drop_sets_step(
     global_common_min_sources: int,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
@@ -1203,6 +1463,7 @@ def all_source_drop_sets_step(
             global_common_min_sources=global_common_min_sources,
             worker_resources=worker_resources,
             max_workers=max_workers,
+            zephyr_context=zephyr_context,
         ),
         deps=[prebuilt_bloom, *source_dependencies],
         hash_attrs=hash_attrs,
@@ -1229,6 +1490,7 @@ def decon_step(
     false_positive_rate: float = 1e-9,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
@@ -1335,6 +1597,7 @@ def decon_step(
                 flagged_sample_size=flagged_sample_size,
                 worker_resources=worker_resources,
                 max_workers=max_workers,
+                zephyr_context=zephyr_context,
             ),
             deps=[*norm_deps, bloom_step, *drop_deps],
             hash_attrs=hash_attrs,
@@ -1365,6 +1628,7 @@ def decon_step(
             false_positive_rate=false_positive_rate,
             worker_resources=worker_resources,
             max_workers=max_workers,
+            zephyr_context=zephyr_context,
         ),
         deps=[*norm_deps, *eval_steps, *drop_deps],
         hash_attrs=inline_hash_attrs,

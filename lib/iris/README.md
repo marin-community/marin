@@ -27,7 +27,7 @@ uv run iris --cluster=marin cluster stop
 ### Submit a Job
 
 ```python
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
 
 def my_task():
@@ -234,7 +234,7 @@ When a job requests TPU resources (`device=tpu_device("v5litepod-16")`), workers
 
 **Docker flags:**
 - `--device /dev/vfio:/dev/vfio` - VFIO device for TPU passthrough
-- `--shm-size=100g` - Large shared memory for TPU operations
+- `--shm-size=<task memory>` - Shared-memory capacity; `/dev/shm` usage and direct memory share the task memory limit. TPU requests without a memory limit retain a 100 GiB fallback.
 - `--cap-add=SYS_RESOURCE` - Resource management capabilities
 - `--ulimit memlock=68719476736:68719476736` - Unlocked memory limits
 

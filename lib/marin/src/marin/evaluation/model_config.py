@@ -31,7 +31,9 @@ class ResourceHint:
     ``{"H100": 8}``. A CLI accelerator override may change the GPU shape but cannot move a
     GPU-required model onto TPU.
 
-    ``cpu``, ``memory``, and ``disk`` override the inference worker's host-resource defaults.
+    ``cpu``, ``memory``, and ``disk`` override the inference worker's host-resource defaults. Leave
+    ``memory`` unset unless the model needs more than its checkpoint implies: the lowering path
+    otherwise sizes host memory from the checkpoint's weight files and the slice's rank count.
     """
 
     hbm_gb: int | None = None
@@ -106,8 +108,9 @@ class AgentConfig:
 class ModelConfig:
     """A model the launcher can serve and evaluate: where its weights live and how to serve/query it.
 
-    ``location`` is an HF repo id or an object-store (``gs://``/``s3://``) HF-format export directory;
-    an object-store location requires ``tokenizer`` (the eval client loads its tokenizer through HF).
+    ``name`` is the slash-free launch identity used in Iris job names and record paths. ``location``
+    is an HF repo id or an object-store (``gs://``/``s3://``) HF-format export directory; an
+    object-store location requires ``tokenizer`` (the eval client loads its tokenizer through HF).
     ``revision`` pins an immutable checkpoint for a base HF model. ``apply_chat_template`` controls
     whether Evalchemy formats requests with the tokenizer's chat template. ``resource_hint`` states
     where the model is compatible; ``serve`` states how its inference server behaves. ``generation``
@@ -123,6 +126,10 @@ class ModelConfig:
     serve: ServeConfig = field(default_factory=ServeConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
+
+    def __post_init__(self) -> None:
+        if "/" in self.name:
+            raise ValueError("model name cannot contain '/'")
 
 
 def has_vllm_option(args: tuple[str, ...], option: str) -> bool:

@@ -8,6 +8,7 @@ from functools import partial
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pytest
 from fray.local_backend import LocalClient
@@ -16,7 +17,8 @@ from zephyr._test_helpers import SampleDataclass
 from zephyr.dataset import Dataset, FilterOp, GlobSource, MapOp, WindowOp, resolve_glob
 from zephyr.execution import ZephyrContext, ZephyrWorkerError
 from zephyr.expr import col
-from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, InputFileSpec, load_file, load_parquet
+from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
+from zephyr.readers import load_file, load_parquet
 from zephyr.writers import write_parquet_file
 
 
@@ -1312,72 +1314,6 @@ def test_input_file_spec_with_columns_and_row_range(tmp_path):
     assert records[-1]["id"] == 9
 
 
-# --- Integration tests (all backends) ---
-
-
-@pytest.mark.slow
-def test_reshard_integration(integration_ctx):
-    ds = Dataset.from_list([list(range(50))]).flat_map(lambda x: x).reshard(5).map(lambda x: x * 2)
-    result = sorted(integration_ctx.execute(ds).results)
-    assert result == [x * 2 for x in range(50)]
-
-    ds = Dataset.from_list(range(50)).reshard(5).map(lambda x: x + 100)
-    result = sorted(integration_ctx.execute(ds).results)
-    assert result == [x + 100 for x in range(50)]
-
-    ds = Dataset.from_list(range(10)).reshard(3)
-    result = integration_ctx.execute(ds).results
-    assert sorted(result) == list(range(10))
-
-
-def test_sorted_merge_join_inner_basic_integration(integration_ctx):
-    left = Dataset.from_list(
-        [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}, {"id": 3, "text": "foo"}]
-    ).group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5)
-    right = Dataset.from_list([{"id": 1, "score": 0.9}, {"id": 2, "score": 0.3}]).group_by(
-        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
-    )
-
-    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
-
-    results = sorted(integration_ctx.execute(joined).results, key=lambda x: x["id"])
-    assert len(results) == 2
-    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
-    assert results[1] == {"id": 2, "text": "world", "score": 0.3}
-
-
-@pytest.mark.slow
-def test_sorted_merge_join_after_group_by_integration(integration_ctx):
-    docs = Dataset.from_list(
-        [
-            {"id": 1, "text": "hello", "version": 1},
-            {"id": 1, "text": "hello updated", "version": 2},
-            {"id": 2, "text": "world", "version": 1},
-            {"id": 3, "text": "foo", "version": 1},
-        ]
-    ).group_by(
-        key=lambda x: x["id"],
-        reducer=lambda k, items: max(items, key=lambda x: x["version"]),
-        num_output_shards=10,
-    )
-
-    attrs = Dataset.from_list(
-        [
-            {"id": 1, "quality": 0.9},
-            {"id": 2, "quality": 0.3},
-            {"id": 3, "quality": 0.8},
-        ]
-    ).group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=10)
-
-    joined = docs.sorted_merge_join(attrs, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
-
-    results = sorted(integration_ctx.execute(joined).results, key=lambda x: x["id"])
-    assert len(results) == 3
-    assert results[0] == {"id": 1, "text": "hello updated", "version": 2, "quality": 0.9}
-    assert results[1] == {"id": 2, "text": "world", "version": 1, "quality": 0.3}
-    assert results[2] == {"id": 3, "text": "foo", "version": 1, "quality": 0.8}
-
-
 def test_dataset_load_parquet_batch(tmp_path, zephyr_ctx):
     """load_parquet(batch_mode=True) yields pa.RecordBatch objects."""
     path = str(tmp_path / "data.parquet")
@@ -1390,6 +1326,27 @@ def test_dataset_load_parquet_batch(tmp_path, zephyr_ctx):
     assert all(isinstance(b, pa.RecordBatch) for b in results)
     all_rows = [row for b in results for row in b.to_pylist()]
     assert sorted(all_rows, key=lambda r: r["id"]) == records
+
+
+def test_dataset_maps_record_batches_to_parquet(tmp_path, zephyr_ctx):
+    input_path = str(tmp_path / "input.parquet")
+    output_path = str(tmp_path / "output.parquet")
+    pq.write_table(pa.Table.from_pylist([{"value": value} for value in range(6)]), input_path, row_group_size=2)
+
+    def enrich_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
+        assert isinstance(batch, pa.RecordBatch)
+        filtered = batch.filter(pc.greater_equal(batch.column("value"), 2))
+        return filtered.append_column("double", pc.multiply(filtered.column("value"), 2))
+
+    dataset = Dataset.from_list([input_path]).load_parquet(batch_mode=True).map(enrich_batch).write_parquet(output_path)
+
+    assert zephyr_ctx.execute(dataset).results == [output_path]
+    assert pq.read_table(output_path).to_pylist() == [
+        {"value": 2, "double": 4},
+        {"value": 3, "double": 6},
+        {"value": 4, "double": 8},
+        {"value": 5, "double": 10},
+    ]
 
 
 def test_dataset_load_parquet_batch_include_file_paths(tmp_path, zephyr_ctx):

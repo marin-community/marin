@@ -26,8 +26,7 @@ from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
 from iris.cli.connect import iris_client_for_ctx, require_controller_url
-from iris.client import IrisClient
-from iris.client.client import Job, JobFailedError
+from iris.client.client import IrisClient, Job, JobFailedError
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
     Constraint,

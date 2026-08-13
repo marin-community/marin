@@ -12,6 +12,7 @@ import threading
 import time
 from pathlib import Path
 
+import fsspec
 import pytest
 from aiobotocore.config import AioConfig
 from botocore.awsrequest import AWSRequest
@@ -27,11 +28,43 @@ from rigging.filesystem.factory import (
     unique_temp_path,
     url_to_fs,
 )
+from rigging.filesystem.listing_cache import configure_listing_cache_defaults
 from rigging.filesystem.s3_compat import (
     TotalDeadlineAIOHTTPSession,
+    configure_fsspec_s3,
     fsspec_s3_conf,
     s3_request_bounds_config_kwargs,
 )
+
+
+class _ExternallyMutableFileSystem(fsspec.AbstractFileSystem):
+    """Object-store fake whose listings can change outside this filesystem instance."""
+
+    protocol = ("externallistings", "gs")
+    cachable = False
+
+    def __init__(self, files: set[str], **storage_options: object):
+        super().__init__(**storage_options)
+        self.files = files
+
+    def ls(self, path: str, detail: bool = True, **_kwargs: object) -> list[dict[str, str | int]] | list[str]:
+        path = self._strip_protocol(path)
+        try:
+            listing = self.dircache[path]
+        except KeyError:
+            listing: list[dict[str, str | int]] = [
+                {"name": name, "size": 0, "type": "file"} for name in sorted(self.files)
+            ]
+            self.dircache[path] = listing
+        return listing if detail else [str(entry["name"]) for entry in listing]
+
+
+class _ExternallyMutableS3FileSystem(_ExternallyMutableFileSystem):
+    protocol = ("externals3listings", "s3")
+
+
+fsspec.register_implementation("externallistings", _ExternallyMutableFileSystem, clobber=True)
+fsspec.register_implementation("externals3listings", _ExternallyMutableS3FileSystem, clobber=True)
 
 
 def test_unique_temp_path_produces_distinct_paths():
@@ -141,6 +174,59 @@ def test_open_url_local_file(tmp_path):
 def test_filesystem_local():
     fs = filesystem("file")
     assert not isinstance(fs, CrossRegionGuardedFS)
+
+
+@pytest.mark.parametrize("entrypoint", ["url_to_fs", "filesystem", "fsspec"])
+def test_cloud_filesystem_detects_externally_added_files_by_default(entrypoint):
+    files = {"bucket/first"}
+    if entrypoint == "url_to_fs":
+        fs, path = url_to_fs("externallistings://bucket", files=files)
+    elif entrypoint == "filesystem":
+        fs, path = filesystem("externallistings", files=files), "bucket"
+    else:
+        fs, path = fsspec.core.url_to_fs("externallistings://bucket", files=files)
+
+    assert fs.ls(path, detail=False) == ["bucket/first"]
+
+    files.add("bucket/second")
+
+    assert fs.ls(path, detail=False) == ["bucket/first", "bucket/second"]
+
+
+def test_cloud_filesystem_preserves_explicit_listing_cache_opt_in():
+    files = {"bucket/first"}
+    fs, path = url_to_fs("externallistings://bucket", files=files, listings_expiry_time=60)
+    assert fs.ls(path, detail=False) == ["bucket/first"]
+
+    files.add("bucket/second")
+
+    assert fs.ls(path, detail=False) == ["bucket/first"]
+
+
+def test_cloud_filesystem_preserves_process_listing_cache_config(monkeypatch):
+    monkeypatch.setitem(fsspec.config.conf, "gs", {"listings_expiry_time": 60})
+    configure_listing_cache_defaults()
+    files = {"bucket/first"}
+    fs, path = fsspec.core.url_to_fs("externallistings://bucket", files=files)
+    assert fs.ls(path, detail=False) == ["bucket/first"]
+
+    files.add("bucket/second")
+
+    assert fs.ls(path, detail=False) == ["bucket/first"]
+
+
+def test_configure_fsspec_s3_preserves_process_listing_cache_config(monkeypatch):
+    for key in ("AWS_ENDPOINT_URL", "AWS_REGION", "AWS_DEFAULT_REGION", "FSSPEC_S3"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setitem(fsspec.config.conf, "s3", {"listings_expiry_time": 60})
+    configure_fsspec_s3("https://objects.example.com")
+    files = {"bucket/first"}
+    fs, path = fsspec.core.url_to_fs("externals3listings://bucket", files=files)
+    assert fs.ls(path, detail=False) == ["bucket/first"]
+
+    files.add("bucket/second")
+
+    assert fs.ls(path, detail=False) == ["bucket/first"]
 
 
 def test_s3_filesystems_are_built_with_the_deadline():

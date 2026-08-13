@@ -58,6 +58,14 @@ COMPACTED_WHITESPACE_COUNTER = "datakit_normalize_compacted_whitespace"
 DEFAULT_MAX_WORKERS = 1024
 NORMALIZED_DATA_VERSION = "v2"
 
+# The hash attributes every normalize step declares. They fix the identity of a
+# normalized artifact, so the set is effectively frozen — dropping or renaming one
+# re-keys every existing output. A step that does not declare them was not built
+# here and carries none of normalize's guarantees.
+NORMALIZE_IDENTITY_ATTRS = frozenset(
+    {"text_field", "id_field", "target_partition_bytes", "max_whitespace_run_chars", "dedup_mode"}
+)
+
 
 class DedupMode(StrEnum):
     """How aggressively to deduplicate records during normalization.
@@ -571,6 +579,7 @@ def normalize_step(
         hash_attrs["drop_fields"] = drop_fields
     if output_schema is not None:
         hash_attrs["output_schema"] = str(output_schema)
+    assert NORMALIZE_IDENTITY_ATTRS <= hash_attrs.keys()
     return StepSpec(
         name=name,
         fn=lambda output_path: normalize_to_parquet(

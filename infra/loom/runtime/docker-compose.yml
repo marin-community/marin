@@ -1,6 +1,7 @@
 name: loom
 
 x-session-home-volume: &session-home-volume loom_loom_home
+x-session-home-path: &session-home-path /home/app
 x-session-uv-volume: &session-uv-volume loom_uv
 x-session-network: &session-network loom_default
 
@@ -10,7 +11,9 @@ services:
     env_file: .env
     restart: "no"
     volumes:
-      - loom_home:/home/app
+      - type: volume
+        source: loom_home
+        target: *session-home-path
     command:
       - sh
       - -ceu
@@ -22,6 +25,7 @@ services:
   loom:
     image: ${LOOM_IMAGE:?LOOM_IMAGE is required}
     restart: unless-stopped
+    working_dir: *session-home-path
     env_file: .env
     environment:
       RUST_BACKTRACE: "1"
@@ -53,7 +57,9 @@ services:
     cgroup: private
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - loom_home:/home/app
+      - type: volume
+        source: loom_home
+        target: *session-home-path
       - uv:/opt/uv
 
   caddy:

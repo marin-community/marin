@@ -9,6 +9,7 @@ via submitted jobs, and deferred actor handle resolution.
 """
 
 import logging
+import os
 import threading
 import time
 from concurrent.futures import Future
@@ -18,6 +19,7 @@ from typing import Any, cast
 import cloudpickle
 from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
+from iris.actor.resolver import Resolver
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient as IrisClientLib
 from iris.client.client import Job as IrisJob
@@ -170,6 +172,38 @@ def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
     raise ValueError("Entrypoint must have either callable_entrypoint or binary_entrypoint")
 
 
+NSYS_TASKS_ENV = "IRIS_NSYS_TASKS"
+
+
+def wrap_nsys(entrypoint: IrisEntrypoint) -> IrisEntrypoint:
+    """Run the entrypoint under ``nsys profile`` when ``IRIS_NSYS_TASKS`` is set.
+
+    ``iris.hooks.nsys_main`` is a submit-time wrapper: Nsight injects CUDA tracing
+    through ``CUDA_INJECTION64_PATH``, which the driver reads once at ``cuInit``,
+    so nsys has to be the parent process from the start. iris does not inject the
+    wrapper, and a callable entrypoint builds its command inside this backend, so
+    fray composes it here for the same reason it composes the multigpu supervisor.
+
+    The variable holds the ``--tasks`` spec: ``first``, ``all``, or a
+    comma-separated list of task indices. An unselected task execs the command
+    unchanged and pays nothing.
+    """
+    tasks = os.environ.get(NSYS_TASKS_ENV)
+    if not tasks:
+        return entrypoint
+    command = list(entrypoint.command)
+    if command[:2] == ["bash", "-c"] and len(command) == 3:
+        inner = command[2].removeprefix("exec ")
+        wrapped = ["bash", "-c", f"exec $IRIS_PYTHON -m iris.hooks.nsys_main --tasks {tasks} -- {inner}"]
+    else:
+        wrapped = ["$IRIS_PYTHON", "-m", "iris.hooks.nsys_main", "--tasks", tasks, "--", *command]
+    return IrisEntrypoint(
+        command=wrapped,
+        workdir_files=entrypoint.workdir_files,
+        workdir_file_refs=entrypoint.workdir_file_refs,
+    )
+
+
 def wrap_multiprocess(entrypoint: IrisEntrypoint, resources: ResourceSpec, processes_per_task: int) -> IrisEntrypoint:
     """Prepend the multigpu supervisor so each task runs ``processes_per_task`` GPU processes.
 
@@ -309,10 +343,11 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
 
 
 class IrisActorHandle:
-    """Handle to an Iris-hosted actor. Resolves via iris_ctx()."""
+    """Handle to an Iris-hosted actor."""
 
-    def __init__(self, endpoint_name: str):
+    def __init__(self, endpoint_name: str, resolver: Resolver | None = None):
         self._endpoint_name = endpoint_name
+        self._resolver = resolver
         self._client: Any = None  # Lazily resolved ActorClient
         self._resolve_lock = threading.Lock()
 
@@ -322,6 +357,7 @@ class IrisActorHandle:
 
     def __setstate__(self, state: dict) -> None:
         self._endpoint_name = state["endpoint_name"]
+        self._resolver = None
         self._client = None
         self._resolve_lock = threading.Lock()
 
@@ -332,13 +368,16 @@ class IrisActorHandle:
         with self._resolve_lock:
             if self._client is not None:
                 return self._client
-            ctx = get_iris_ctx()
-            if ctx is None:
-                raise RuntimeError(
-                    "IrisActorHandle._resolve() requires IrisContext. "
-                    "Call from within an Iris job or set context via iris_ctx_scope()."
-                )
-            self._client = ActorClient(ctx.resolver, self._endpoint_name)
+            resolver = self._resolver
+            if resolver is None:
+                ctx = get_iris_ctx()
+                if ctx is None:
+                    raise RuntimeError(
+                        "IrisActorHandle._resolve() requires IrisContext. "
+                        "Call from within an Iris job or set context via iris_ctx_scope()."
+                    )
+                resolver = ctx.resolver
+            self._client = ActorClient(resolver, self._endpoint_name)
             return self._client
 
     def __getattr__(self, method_name: str) -> "_IrisActorMethod":
@@ -450,15 +489,17 @@ class _IrisActorMethod:
 class IrisActorGroup:
     """ActorGroup that polls the Iris resolver to discover actors as they start."""
 
-    def __init__(self, name: str, count: int, job_id: Any):
+    def __init__(self, name: str, count: int, job_id: Any, client: IrisClientLib | None = None):
         """Args:
         name: Actor name prefix
         count: Number of actors to discover
         job_id: JobId/JobName for the actor job
+        client: Client for driver-side discovery. Serialized groups use the Iris job context.
         """
         self._name = name
         self._count = count
         self._job_id = job_id
+        self._client = client
         self._handles: list[ActorHandle] = []
         self._discovered_names: set[str] = set()
 
@@ -474,11 +515,14 @@ class IrisActorGroup:
         self._name = state["name"]
         self._count = state["count"]
         self._job_id = state["job_id"]
+        self._client = None
         self._handles = []
         self._discovered_names = set()
 
     def _get_client(self) -> IrisClientLib:
-        """Get IrisClient from context."""
+        """Get the bound Iris client or the client from the Iris job context."""
+        if self._client is not None:
+            return self._client
         ctx = get_iris_ctx()
         if ctx is None or ctx.client is None:
             raise RuntimeError("IrisActorGroup requires IrisContext with client. Set context via iris_ctx_scope().")
@@ -509,13 +553,16 @@ class IrisActorGroup:
         endpoints = client.list_endpoints(prefix=prefix)
 
         newly_discovered: list[ActorHandle] = []
+        resolver = None
         for ep in endpoints:
             if target is not None and len(self._discovered_names) >= target:
                 break
             if ep.name in self._discovered_names:
                 continue
+            if resolver is None:
+                resolver = client.resolver_for_job(self._job_id)
             self._discovered_names.add(ep.name)
-            handle = IrisActorHandle(ep.name)
+            handle = IrisActorHandle(ep.name, resolver=resolver)
             self._handles.append(handle)
             newly_discovered.append(handle)
             logger.info(
@@ -615,6 +662,7 @@ class FrayIrisClient:
         iris_entrypoint = convert_entrypoint(request.entrypoint)
         if request.processes_per_task > 1:
             iris_entrypoint = wrap_multiprocess(iris_entrypoint, iris_resources, request.processes_per_task)
+        iris_entrypoint = wrap_nsys(iris_entrypoint)
         iris_environment = convert_environment(request.environment, request.resources.device)
         iris_constraints = convert_constraints(request.resources)
 
@@ -751,6 +799,7 @@ class FrayIrisClient:
             name=name,
             count=count,
             job_id=job.job_id,
+            client=self._iris,
         )
 
     def shutdown(self, wait: bool = True) -> None:

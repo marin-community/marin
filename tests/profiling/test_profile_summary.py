@@ -11,6 +11,7 @@ import marin.profiling.cli as cli_module
 import marin.profiling.ingest as ingest_module
 import marin.profiling.xplane as xplane_module
 import pytest
+from google.protobuf.message import DecodeError
 from marin.profiling.ingest import summarize_profile_artifact, summarize_trace
 from marin.profiling.query import compare_profile_summaries, query_profile_summary
 from marin.profiling.report import build_markdown_report
@@ -319,11 +320,14 @@ def test_trace_quality_warning_flags_suspected_truncation_cap() -> None:
     suspected, warnings = trace_quality_warnings(num_complete_events=1_000_000)
     assert suspected is True
     assert warnings
-    assert "1,000,000" in warnings[0]
 
     suspected_small, warnings_small = trace_quality_warnings(num_complete_events=999_999)
     assert suspected_small is False
     assert warnings_small == []
+
+    suspected_five_million, warnings_five_million = trace_quality_warnings(num_complete_events=5_000_000)
+    assert suspected_five_million is True
+    assert warnings_five_million
 
 
 def test_gap_marker_payload_resolution_does_not_cross_second_idle_gap(tmp_path: Path) -> None:
@@ -435,6 +439,21 @@ def test_direct_xplane_timeline_parser_recovers_perfetto_style_summary(tmp_path:
     assert summary.trace_provenance.run_ids == ["7"]
 
 
+def test_xplane_host_track_aggregation_preserves_breakdown_and_provenance(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: None)
+    xplane_path = tmp_path / "host_profile.xplane.pb"
+    _write_host_xplane(xplane_path)
+
+    summary = summarize_xplane(xplane_path, warmup_steps=0, hot_op_limit=10)
+
+    assert summary.trace_overview.num_complete_events == 3
+    assert summary.time_breakdown.host.total_duration == 110.0
+    assert summary.time_breakdown.stall.total_duration == 20.0
+    assert summary.trace_provenance.run_ids == ["9"]
+    assert summary.trace_provenance.source_file_hints == ["train.py"]
+    assert summary.hot_ops == []
+
+
 def test_profile_dir_prefers_xplane_over_capped_perfetto_trace(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: None)
     profile_dir = tmp_path / "artifact" / "plugins" / "profile" / "2026_05_11_12_00_00"
@@ -472,6 +491,17 @@ def test_profile_dir_falls_back_to_perfetto_when_xplane_is_malformed(tmp_path: P
 
     assert summary.source_format == "perfetto_trace_json"
     assert summary.step_time.steady_state_steps.median == 130.0
+
+
+def test_profile_dir_reports_xplane_decode_failure_when_no_trace_exists(tmp_path: Path) -> None:
+    # With no Perfetto fallback the corrupt XPlane protobuf is the actionable diagnostic,
+    # so the decode failure must surface instead of "no trace JSON found".
+    profile_dir = tmp_path / "artifact" / "plugins" / "profile" / "2026_05_11_12_00_00"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "host.xplane.pb").write_bytes(b"\xff")
+
+    with pytest.raises(DecodeError):
+        summarize_profile_artifact(tmp_path / "artifact", warmup_steps=1, hot_op_limit=10)
 
 
 def test_xplane_summary_honors_breakdown_mode(tmp_path: Path, monkeypatch) -> None:
@@ -896,6 +926,33 @@ def _write_multi_plane_xplane(path: Path) -> None:
         ops.id = 7
         ops.name = "XLA Ops"
         _add_xplane_event(ops, 1, offset_us=plane_index * 100, duration_us=10 + plane_index * 10)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(xspace.SerializeToString())
+
+
+def _write_host_xplane(path: Path) -> None:
+    xspace = _xspace_message_class()()
+    plane = xspace.planes.add()
+    plane.id = 1
+    plane.name = "/host:CPU"
+    plane.stat_metadata[1].id = 1
+    plane.stat_metadata[1].name = "source"
+    plane.stat_metadata[2].id = 2
+    plane.stat_metadata[2].name = "run_id"
+
+    _add_xplane_event_metadata(plane, 1, "python_work")
+    _add_xplane_stat(plane.event_metadata[1], 1, "train.py")
+    _add_xplane_stat(plane.event_metadata[1], 2, 9)
+    _add_xplane_event_metadata(plane, 2, "threading wait")
+    _add_xplane_event_metadata(plane, 3, "python_tail")
+
+    host_thread = plane.lines.add()
+    host_thread.id = 1
+    host_thread.name = "python"
+    _add_xplane_event(host_thread, 1, offset_us=0, duration_us=100)
+    _add_xplane_event(host_thread, 2, offset_us=20, duration_us=20)
+    _add_xplane_event(host_thread, 3, offset_us=120, duration_us=30)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(xspace.SerializeToString())

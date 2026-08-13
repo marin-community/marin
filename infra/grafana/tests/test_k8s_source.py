@@ -9,12 +9,12 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
-from config import K8sClusterTarget
 from conftest import (
     FINELOG_DEPLOYMENTS_PATH,
     IRIS_DEPLOY,
     KUEUE_DEPLOY,
     KUEUE_SLICES,
+    NODE_POOLS,
     bridge_config,
     deployment,
     healthy_k8s_routes,
@@ -103,19 +103,6 @@ def test_control_plane_flattens_components_and_webhooks():
     assert rows[-1] == {"kind": "webhook", "component": "kueue-system/kueue-webhook-service", "ready_endpoints": 2}
 
 
-def test_control_plane_uses_the_cluster_iris_namespace():
-    routes = healthy_k8s_routes()
-    routes["/apis/apps/v1/namespaces/iris-ci/deployments/iris-controller"] = deployment("iris-ci", "iris-controller")
-    routes["/api/v1/namespaces/iris-ci/pods"] = [pod("iris-ci", "iris-controller-abc")]
-    del routes[IRIS_DEPLOY]
-    target = K8sClusterTarget("cw-ci", "https://api.example", iris_namespace="iris-ci")
-
-    rows = make_k8s_source(k8s_api(routes), target=target).control_plane()
-
-    iris = next(row for row in rows if row.get("component") == "iris-ci/iris-controller")
-    assert (iris["ready"], iris["desired"]) == (1, 1)
-
-
 def test_missing_deployment_reads_as_degraded_not_healthy():
     routes = healthy_k8s_routes()
     del routes[IRIS_DEPLOY]
@@ -202,22 +189,6 @@ def test_crashloop_scope_separates_watched_components_from_workloads():
     assert [(row["pod"], row["scope"], row["reason"]) for row in rows] == [
         ("iris-controller-7f9-x2", "control-plane", "CrashLoopBackOff"),
         ("some-user-task-0", "workload", "ImagePullBackOff"),
-    ]
-
-
-def test_crashloop_scope_uses_the_cluster_iris_namespace():
-    routes = {
-        "/api/v1/namespaces": [_namespace("iris-ci")],
-        "/api/v1/namespaces/iris-ci/pods": [
-            pod("iris-ci", "iris-controller-7f9-x2", waiting="CrashLoopBackOff"),
-        ],
-    }
-    target = K8sClusterTarget("cw-ci", "https://api.example", iris_namespace="iris-ci")
-
-    rows = make_k8s_source(k8s_api(routes), target=target).crashloops()
-
-    assert [(row["pod"], row["scope"]) for row in rows] == [
-        ("iris-controller-7f9-x2", "control-plane"),
     ]
 
 
@@ -454,6 +425,16 @@ def test_nodes_report_coreweave_kernel_deadlock_and_pending_reboot():
                 instance_type="cd-gp-i64-erapids",
                 unschedulable=True,
                 kernel_deadlock_reason="CPUSoftLockup",
+                node_pool="cpu-erapids",
+                compute_class="default",
+                gpu_model="NVIDIA H100 80GB HBM3",
+                rack="14",
+                rack_name="dh1-r014-us-east-02a",
+                rack_slot="dh1-r014-node-01",
+                node_state="production",
+                ib_fabric="US-EAST-02A-FAB14",
+                ib_speed="800G",
+                gpu_driver="595.71.05",
             )
         ]
     }
@@ -462,6 +443,17 @@ def test_nodes_report_coreweave_kernel_deadlock_and_pending_reboot():
         {
             "node": "cpu-1",
             "instance_type": "cd-gp-i64-erapids",
+            "node_pool": "cpu-erapids",
+            "compute_class": "default",
+            "gpu_model": "NVIDIA H100 80GB HBM3",
+            "gpu_capacity": 0,
+            "rack": "14",
+            "rack_name": "dh1-r014-us-east-02a",
+            "rack_slot": "dh1-r014-node-01",
+            "node_state": "production",
+            "ib_fabric": "US-EAST-02A-FAB14",
+            "ib_speed": "800G",
+            "gpu_driver": "595.71.05",
             "ready": True,
             "unschedulable": True,
             "cordon_reason": "KernelDeadlock,NLCCPendingExitProduction",
@@ -469,6 +461,64 @@ def test_nodes_report_coreweave_kernel_deadlock_and_pending_reboot():
             "deadlock_reason": "CPUSoftLockup",
             "deadlock_message": "watchdog: CPU stuck",
             "pending_phase": "production-reboot",
+        }
+    ]
+
+
+def test_node_pools_project_capacity_policy_and_problem_conditions():
+    routes = {
+        NODE_POOLS: [
+            {
+                "metadata": {"name": "h100-8x"},
+                "spec": {
+                    "autoscaling": True,
+                    "computeClass": "default",
+                    "instanceType": "gd-8xh100ib-i128",
+                    "lifecycle": {"scaleDownStrategy": "IdleOnly"},
+                    "minNodes": 8,
+                    "maxNodes": 32,
+                    "targetNodes": 16,
+                },
+                "status": {
+                    "currentNodes": 14,
+                    "targetNodes": 16,
+                    "inProgress": 1,
+                    "queuedNodes": 1,
+                    "prefillNodes": 0,
+                    "conditions": [
+                        {"type": "Validated", "status": "True", "reason": "Valid"},
+                        {"type": "AtTarget", "status": "False", "reason": "Scaling"},
+                        {"type": "Capacity", "status": "False", "reason": "Insufficient"},
+                        {"type": "Quota", "status": "True", "reason": "Under"},
+                        {"type": "NodeReconfigurationRequired", "status": "True", "reason": "Pending"},
+                    ],
+                },
+            }
+        ]
+    }
+
+    assert make_k8s_source(k8s_api(routes)).node_pools() == [
+        {
+            "node_pool": "h100-8x",
+            "instance_type": "gd-8xh100ib-i128",
+            "compute_class": "default",
+            "autoscaling": True,
+            "scale_down_strategy": "IdleOnly",
+            "min_nodes": 8,
+            "max_nodes": 32,
+            "target_nodes": 16,
+            "current_nodes": 14,
+            "in_progress_nodes": 1,
+            "queued_nodes": 1,
+            "prefill_nodes": 0,
+            "missing_nodes": 2,
+            "off_target": 1,
+            "validated": True,
+            "at_target": False,
+            "capacity_available": False,
+            "under_quota": True,
+            "reconfiguration_required": True,
+            "problems": "Capacity: Insufficient; NodeReconfigurationRequired: Pending",
         }
     ]
 
@@ -501,16 +551,6 @@ def test_finelog_health_reports_http_probe_readiness_for_each_mirror():
     assert (health.cluster, health.server, health.role) == ("cw-a", "finelog-cw-a", FinelogRole.MIRROR)
     assert health.responsive is True
     assert (health.ready, health.desired, health.error_class) == (1, 1, "")
-
-
-def test_finelog_health_omits_clusters_without_a_mirror():
-    mirror = make_k8s_source(k8s_api(healthy_k8s_routes()), name="cw-a")
-    target = K8sClusterTarget("cw-ci", "https://api.example", finelog_expected=False)
-    no_mirror = make_k8s_source(k8s_api(healthy_k8s_routes()), target=target)
-
-    health = K8sFleet([mirror, no_mirror]).finelog_health()
-
-    assert [row.cluster for row in health] == ["cw-a"]
 
 
 def test_finelog_health_reports_not_ready_and_k8s_api_failures():
@@ -906,6 +946,7 @@ def test_k8s_routes_serve_fleet_rows():
         "/k8s/kueue",
         "/k8s/events",
         "/k8s/gpu_racks",
+        "/k8s/node_pools",
     ):
         assert client.get(path).status_code == 200
     health = client.get("/k8s/health").json()
@@ -920,6 +961,59 @@ def test_k8s_routes_serve_fleet_rows():
         "trays_total": 1,
         "trays_ready": 1,
     }
+
+
+def test_node_routes_filter_cached_fleet_rows():
+    routes_a = healthy_k8s_routes()
+    routes_b = healthy_k8s_routes()
+    routes_b["/api/v1/nodes"] = [node("g2", gpu_capacity=8)]
+    routes_b[NODE_POOLS] = [
+        {
+            "metadata": {"name": "h100"},
+            "spec": {"targetNodes": 1},
+            "status": {
+                "currentNodes": 1,
+                "conditions": [
+                    {"type": "Validated", "status": "True"},
+                    {"type": "AtTarget", "status": "True"},
+                    {"type": "Capacity", "status": "True"},
+                    {"type": "Quota", "status": "True"},
+                ],
+            },
+        }
+    ]
+    client = _client(_fleet(("cw-a", k8s_api(routes_a)), ("cw-b", k8s_api(routes_b)), ("cw-c", k8s_api({}))))
+
+    assert client.get("/k8s/nodes", params={"cluster": "cw-b", "node": "g2"}).json() == [
+        {
+            "cluster": "cw-b",
+            "node": "g2",
+            "instance_type": "",
+            "node_pool": "",
+            "compute_class": "",
+            "gpu_model": "",
+            "gpu_capacity": 8,
+            "rack": "",
+            "rack_name": "",
+            "rack_slot": "",
+            "node_state": "",
+            "ib_fabric": "",
+            "ib_speed": "",
+            "gpu_driver": "",
+            "ready": True,
+            "unschedulable": False,
+            "cordon_reason": "",
+            "kernel_deadlock": False,
+            "deadlock_reason": "",
+            "deadlock_message": "",
+            "pending_phase": "",
+        }
+    ]
+    assert [row["node_pool"] for row in client.get("/k8s/node_pools", params={"cluster": "cw-b"}).json()] == ["h100"]
+    (error_row,) = client.get("/k8s/nodes", params={"cluster": "cw-c", "node": "missing"}).json()
+    assert error_row["cluster"] == "cw-c"
+    assert error_row["error_class"] == "http"
+    assert "node" not in error_row
 
 
 def test_finelog_route_serializes_pod_diagnostics():

@@ -5,9 +5,9 @@
 
 Loads MinHash bucket attrs from each input, runs LSH-graph connected
 components globally across all inputs, and writes per-source attribute trees
-annotating every non-singleton cluster member. Each source's attr tree is
-co-partitioned with its underlying ``NormalizedData``, so
-:mod:`marin.processing.classification.consolidate` can join them directly.
+that identify every non-singleton cluster member. Each tree is co-partitioned
+with its underlying ``NormalizedData``. The full-text verification job consumes
+this candidate artifact.
 
 Per-document attr rows have schema::
 
@@ -17,12 +17,9 @@ Per-document attr rows have schema::
       is_cluster_canonical: bool,  # True for exactly one member per cluster
     }
 
-Rows are emitted for every member of a non-singleton cluster (canonical +
-non-canonicals). Singletons get no row, preserving the
-``consolidate(..., keep_if_missing=True)`` pattern. This shape lets the
-canonical-selection policy live in consolidate (e.g. the default
-``keep is_cluster_canonical=True``, or any custom per-cluster reducer) rather
-than being baked in here.
+Rows are emitted for every member of a non-singleton cluster. Singletons get
+no row. The ``is_cluster_canonical`` field records the connected-components
+canonical for cluster diagnostics. It is not a verified duplicate decision.
 
 Combining multiple ``MinHashAttrData`` inputs is the foundation for iterative
 global dedup: re-running this job over the union of all per-dataset MinHash
@@ -36,7 +33,7 @@ from fray.types import ResourceConfig
 from pydantic import BaseModel
 from zephyr import counters
 from zephyr.dataset import Dataset
-from zephyr.execution import MAX_WORKERS_PER_JOB, ZephyrContext
+from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -55,6 +52,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import MinHashA
 
 logger = logging.getLogger(__name__)
 FUZZY_DUPS_ATTR_DATA_VERSION = 4
+DEFAULT_CC_MAX_ITERATIONS = 10
 
 
 class FuzzyDupsPerSource(BaseModel):
@@ -223,13 +221,14 @@ def compute_fuzzy_dups_attrs(
     *,
     inputs: list[MinHashAttrData],
     output_path: str,
-    cc_max_iterations: int = 10,
+    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS,
     cc_resume: bool = False,
-    max_parallelism: int = MAX_WORKERS_PER_JOB,
+    max_parallelism: int = MAX_IRIS_WORKER_REPLICAS,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> FuzzyDupsAttrData:
     """Mark fuzzy-duplicate cluster membership across one or more ``MinHashAttrData`` inputs.
 
@@ -243,8 +242,9 @@ def compute_fuzzy_dups_attrs(
 
     Exactly one member per cluster has ``is_cluster_canonical=True`` — the
     one CC's Hash-to-Min picked as the natural canonical (min ``id_norm``).
-    Consolidate may honor that flag (default policy) or ignore it and apply
-    a custom per-``dup_cluster_id`` policy.
+    The full-text verifier compares this deterministic canonical first. It can
+    then compare retained local representatives that share LSH buckets. It does
+    not use this flag alone as a duplicate decision.
 
     Args:
         inputs: ``MinHashAttrData`` artifacts to fuzzy-dedup together.
@@ -258,6 +258,7 @@ def compute_fuzzy_dups_attrs(
         map_task_resources: ResourceConfig for map-stage tasks.
         reduce_task_resources: ResourceConfig for reduce-stage tasks (e.g.
             the per-shard ``group_by`` writer).
+        zephyr_context: Optional shared Zephyr context.
 
     Returns:
         :class:`FuzzyDupsAttrData` describing per-source attr directories,
@@ -289,18 +290,16 @@ def compute_fuzzy_dups_attrs(
         params,
     )
 
+    resources = worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g")
     ctx_kwargs: dict = {
         "name": "fuzzy-dups",
         "max_workers": max_parallelism,
-        "resources": worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+        "resources": resources,
     }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
-    if map_task_resources is not None:
-        ctx_kwargs["map_task_resources"] = map_task_resources
-    if reduce_task_resources is not None:
-        ctx_kwargs["reduce_task_resources"] = reduce_task_resources
-    ctx = ZephyrContext(**ctx_kwargs)
+    ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    map_resources = map_task_resources or resources
 
     # Cap shard count at max_parallelism. Each group reads its attr files
     # sequentially and emits bucket records; file_idx is preserved on the entry
@@ -317,6 +316,9 @@ def compute_fuzzy_dups_attrs(
         output_dir=f"{output_path}/metadata/cc",
         max_iterations=cc_max_iterations,
         resume=cc_resume,
+        num_reduce_shards=max_parallelism,
+        map_task_resources=map_resources,
+        reduce_task_resources=reduce_task_resources,
     )
     if not converged:
         # A non-converged CC is still deterministic and reproducible across
@@ -359,7 +361,12 @@ def compute_fuzzy_dups_attrs(
         )
     )
 
-    outcome = ctx.execute(shard_pipeline, verbose=True)
+    outcome = ctx.execute(
+        shard_pipeline,
+        verbose=True,
+        map_task_resources=map_resources,
+        reduce_task_resources=reduce_task_resources,
+    )
     shard_results = outcome.results
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)
 
@@ -386,7 +393,7 @@ def compute_fuzzy_dups_attrs_step(
     *,
     name: str,
     minhash_steps: list[StepSpec],
-    cc_max_iterations: int = 10,
+    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS,
     max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
@@ -404,6 +411,12 @@ def compute_fuzzy_dups_attrs_step(
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
         ),
-        hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": cc_max_iterations},
+        # Match the identity the Datakit DAG builds, so a step created here
+        # resolves to the artifacts that graph already produced. The MinHash
+        # content parameters reach this hash through the dependency IDs.
+        hash_attrs={
+            "v": FUZZY_DUPS_ATTR_DATA_VERSION,
+            **({"cc_max_iterations": cc_max_iterations} if cc_max_iterations != DEFAULT_CC_MAX_ITERATIONS else {}),
+        },
         override_output_path=override_output_path,
     )

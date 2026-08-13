@@ -463,7 +463,6 @@ dependencies = [
  "pyo3",
  "rand",
  "rand_pcg",
- "regex",
  "xxhash-rust",
 ]
 

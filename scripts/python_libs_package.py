@@ -4,8 +4,9 @@
 
 """Build the marin-* lib wheels for PyPI publication.
 
-Builds the seven pure-Python marin-* lib packages (marin-core, marin-iris,
-marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr) into
+Builds the eight pure-Python marin-* lib packages (marin-core, marin-iris,
+marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr,
+marin-finestore) into
 dist/. The package release engine passes one exact version to this builder.
 Publication is done by `.github/workflows/marin-release-libs-wheels.yaml` via
 `pypa/gh-action-pypi-publish` with OIDC trusted publishing. This script never
@@ -29,7 +30,7 @@ Usage:
     python scripts/python_libs_package.py --mode vendor --vendor ../tiny-tpu/vendor
 
 The build is done from a temporary in-place patch of each package's version
-file plus a cross-pin rewrite of every sibling dependency, so the seven wheels
+file plus a cross-pin rewrite of every sibling dependency, so the wheels
 published together always require each other at the exact same version.
 Mutations are reverted on exit (success OR failure) so the working tree stays
 clean.
@@ -59,6 +60,7 @@ PACKAGES: dict[str, dict[str, str]] = {
     "marin-iris": {"path": "lib/iris", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-fray": {"path": "lib/fray", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-rigging": {"path": "lib/rigging", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "marin-finestore": {"path": "lib/finestore", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-zephyr": {"path": "lib/zephyr", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-levanter": {"path": "lib/levanter", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-haliax": {"path": "lib/haliax", "version_file": "src/haliax/__about__.py", "kind": "about_py"},
@@ -216,9 +218,9 @@ def _bump_patch(version: str) -> str:
 
 
 def _highest_declared_version() -> str:
-    """Highest version currently declared across the seven libs.
+    """Highest version currently declared across the libs.
 
-    All seven share one synthetic version per build so cross-pins resolve
+    They all share one synthetic version per build so cross-pins resolve
     cleanly; the declared versions are the floor that synthetic value sits on.
     """
     return max((_read_base_version(p) for p in PACKAGES), key=_version_key)

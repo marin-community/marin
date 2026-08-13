@@ -1,6 +1,6 @@
 ---
 name: write-design-doc
-description: Produce a 1-page design doc, open a PR, and ping Discord for review.
+description: Produce a 1-page design proposal for an explicit design task or a design-level change identified by another change workflow. Do not use to answer or evaluate an idea inline.
 ---
 
 # Skill: Design Doc Workflow
@@ -21,21 +21,42 @@ The template lives at `.agents/projects/design-template.md`. New docs go to a sl
 
 ## When to use this skill
 
+This is a change-mode design workflow. Use it only when the user explicitly
+asks for a design doc/one-pager/proposal, or when another change-mode playbook
+such as `fix-issue` identifies a design-level change and invokes this skill.
+Follow the calling playbook's delivery target: `fix-issue` embeds the proposal
+in its issue comment, while a standalone design task uses the repository files
+and publishing steps below. Do **not** use this skill for questions,
+walkthroughs, informal architecture reviews, or requests to assess whether an
+idea is reasonable. Investigate those requests and answer inline; start a
+standalone design workflow only after an explicit follow-up asks to publish a
+design.
+
 - A task will likely take more than a day, or is load-bearing for other work.
 - A change crosses subproject boundaries (e.g. iris ↔ levanter, marin ↔ zephyr).
 - A change introduces a new service, package, or persistent data shape.
 
-If none apply, just open the PR — don't manufacture a design doc for a 50-line bug fix.
+If the explicit design request meets none of these criteria, confirm that a
+design artifact is actually wanted. For an ordinary small change, use the
+normal implementation workflow instead of manufacturing a design doc.
 
 ---
 
 # Workflow
 
-Seven phases. Confirm with the user at natural decision points (after Research, Draft, Spec, before Publish), but don't ask permission when the next step is obvious.
+The standalone workflow has seven phases. A calling change-mode playbook may
+reuse the design guidance while overriding persistence and publication, as
+`fix-issue` does for a single issue comment. Confirm with the user at natural
+decision points (after Research, Draft, Spec, before Publish), but don't ask
+permission when the next step is obvious.
 
 ## 1. Frame
 
-The user starts the skill with a framing paragraph stating what they want and why. If they didn't, query them — or infer it from rich prior conversation context. A one-sentence "fix the foo thing" is *not* enough; push back and ask for the why.
+The user starts the skill with a framing paragraph stating what they want and
+why. If they did not, infer it from rich conversation, repository, or prior-work
+context when safe. Ask only when the missing rationale would materially change
+the design; a question is not a reason to turn an answer-mode request into this
+workflow.
 
 **You infer the slug.** Short, lowercase, underscores (`finelog_lift`, `iris_autoscaler_refactor`). State it in one line ("I'll save this as `.agents/projects/<slug>/`") and proceed — only stop if it collides with an existing directory, then propose a disambiguator.
 

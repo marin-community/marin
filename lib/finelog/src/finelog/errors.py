@@ -13,10 +13,12 @@ class StatsError(Exception):
 
 
 class SchemaConflictError(StatsError):
-    """Requested schema differs from the registered one in a non-additive way.
+    """Requested schema disagrees with the registered one about the data's shape.
 
-    Non-additive: a renamed column, a type change, a new non-nullable
-    column, or a changed key column.
+    Today that means a column type change. Index policies and covering
+    projections never raise this: the server adopts, supersedes, or keeps what
+    it has. A new non-nullable column is adopted as nullable, and a differing
+    key column is logged and ignored.
     """
 
 

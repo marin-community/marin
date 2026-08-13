@@ -3,9 +3,10 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatScore, formatStderr, formatTimestamp, objectStoreUrl } from '@/utils/formatting'
-import { fleetBest } from '@/utils/matrix'
-import type { Matrix, MatrixCell, ModelDetail, ModelRun } from '@/types/api'
+import { formatCoverage, formatInterval, formatScore, formatTimestamp, objectStoreUrl } from '@/utils/formatting'
+import { fleetBest, isPartialCoverage } from '@/utils/panel'
+import { isSmokeEval } from '@/constants'
+import { INTERVAL_KIND, type MissingCell, type ModelDetail, type ModelRun, type Panel, type PanelCell } from '@/types/api'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import StatusChip from '@/components/shared/StatusChip.vue'
@@ -14,25 +15,24 @@ const props = defineProps<{ model: string }>()
 const router = useRouter()
 
 const { data, loading, error, refresh } = useApi<ModelDetail>(() => `api/models/${encodeURIComponent(props.model)}`)
-const { data: matrix, refresh: refreshMatrix } = useApi<Matrix>(() => 'api/matrix?include_archived=1')
+const { data: panel, refresh: refreshPanel } = useApi<Panel>(() => 'api/panel?include_archived=1')
 
 onMounted(() => {
   refresh()
-  refreshMatrix()
+  refreshPanel()
 })
-watch(() => props.model, () => {
-  selectedVersion.value = undefined
-  refresh()
-})
+watch(
+  () => props.model,
+  () => {
+    selectedVersion.value = undefined
+    refresh()
+  },
+)
 onViewRefresh(() => {
   refresh()
-  refreshMatrix()
+  refreshPanel()
 })
 
-// Smoke suites are capped-instance launcher validation runs; they stay out of the rail exactly as
-// the matrix and cohorts exclude them (mirrors metrics.py SMOKE_SUFFIX). They remain in the Runs list.
-const SMOKE_SUFFIX = '-smoke'
-const isSmoke = (evalName: string) => evalName.endsWith(SMOKE_SUFFIX)
 
 // Cohort scope: a specific version (null = the unversioned cohort, distinct from ALL), or ALL for the
 // union across every run. Defaults to the current (newest) version once the record loads.
@@ -42,54 +42,55 @@ const scope = computed<string | null>(() =>
   selectedVersion.value === undefined ? (data.value?.current_version ?? null) : selectedVersion.value,
 )
 
-// Benchmarks this model has graded runs for, in the matrix's column order where known (no smoke).
+// Benchmarks this model has runs for, in the panel's column order where known (no smoke).
 const tasks = computed<string[]>(() => {
-  const present = new Set((data.value?.runs ?? []).filter((r) => !isSmoke(r.eval_name)).map((r) => r.eval_name))
-  const ordered = (matrix.value?.tasks ?? []).filter((t) => present.has(t))
+  const present = new Set((data.value?.runs ?? []).filter((r) => !isSmokeEval(r.eval_name)).map((r) => r.eval_name))
+  const ordered = (panel.value?.panel ?? []).filter((t) => present.has(t))
   const extra = [...present].filter((t) => !ordered.includes(t)).sort()
   return [...ordered, ...extra]
 })
 
-// Fleet best per benchmark (for the rail caret), from the matrix across all models.
-const best = computed(() => fleetBest(matrix.value?.rows ?? [], tasks.value))
+// Fleet best per benchmark (for the rail caret), from the panel across all models.
+const best = computed(() => fleetBest(panel.value?.rows ?? [], tasks.value))
 
 // Every run in the selected cohort (smoke included), for the Runs list.
 const scopedRuns = computed<ModelRun[]>(() =>
   (data.value?.runs ?? []).filter((r) => scope.value === ALL || r.version === scope.value),
 )
 
-// Per-benchmark cell from the graded runs in scope (latest succeeded per benchmark, else the latest
-// run's failure) — the same union rule the server applies to a cohort, smoke excluded like the matrix.
-const displayCells = computed<Record<string, MatrixCell>>(() => {
-  const succeeded: Record<string, ModelRun> = {}
+// Per-benchmark result within the cohort: the newest run that produced a score, and — where none did
+// — the newest run that did not, so the rail shows a reason instead of a hole.
+const scopedResults = computed<{ cells: Record<string, PanelCell>; missing: Record<string, MissingCell> }>(() => {
+  const scored: Record<string, ModelRun> = {}
   const latest: Record<string, ModelRun> = {}
   for (const run of scopedRuns.value) {
-    if (isSmoke(run.eval_name)) continue
+    if (isSmokeEval(run.eval_name)) continue
     const key = run.eval_name
     if (!latest[key] || (run.created_at ?? '') > (latest[key].created_at ?? '')) latest[key] = run
-    if (run.value !== null && (!succeeded[key] || (run.created_at ?? '') > (succeeded[key].created_at ?? ''))) {
-      succeeded[key] = run
+    if (run.headline && (!scored[key] || (run.created_at ?? '') > (scored[key].created_at ?? ''))) scored[key] = run
+  }
+  const cells: Record<string, PanelCell> = {}
+  const missing: Record<string, MissingCell> = {}
+  for (const [key, run] of Object.entries(latest)) {
+    const win = scored[key]
+    if (win?.headline) {
+      cells[key] = win.headline
+      continue
+    }
+    missing[key] = {
+      reason: run.gap_reason ?? `status ${run.status}`,
+      run_id: run.run_id,
+      status: run.status,
+      created_at: run.created_at ?? '',
     }
   }
-  const out: Record<string, MatrixCell> = {}
-  for (const key of Object.keys(latest)) {
-    const win = succeeded[key]
-    const src = win ?? latest[key]
-    out[key] = {
-      status: win ? 'succeeded' : latest[key].status,
-      value: win ? win.value : null,
-      stderr: win ? win.stderr : null,
-      metric: win ? win.metric : null,
-      run_id: src.run_id,
-      created_at: src.created_at ?? '',
-    }
-  }
-  return out
+  return { cells, missing }
 })
 
 const runIdByTask = computed<Record<string, string>>(() => {
   const out: Record<string, string> = {}
-  for (const [task, cell] of Object.entries(displayCells.value)) out[task] = cell.run_id
+  for (const [task, cell] of Object.entries(scopedResults.value.cells)) out[task] = cell.run_id
+  for (const [task, gap] of Object.entries(scopedResults.value.missing)) out[task] = gap.run_id
   return out
 })
 
@@ -98,15 +99,22 @@ function onPick(task: string) {
   if (runId) router.push(`/runs/${runId}/samples`)
 }
 
-const cohortLabel = computed(() => (scope.value === ALL ? 'all runs' : scope.value ?? 'unversioned'))
+const cohortLabel = computed(() => (scope.value === ALL ? 'all runs' : (scope.value ?? 'unversioned')))
 const location = computed(() => data.value?.location ?? null)
+
+function coverageNote(cell: PanelCell): string {
+  return isPartialCoverage(cell) ? formatCoverage(cell.coverage) : ''
+}
 </script>
 
 <template>
   <section>
-    <RouterLink to="/" class="text-sm text-accent hover:underline">← Leaderboard</RouterLink>
+    <RouterLink to="/" class="text-sm text-accent hover:underline">← Panel</RouterLink>
 
-    <div v-if="error" class="mt-4 rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">
+    <div
+      v-if="error"
+      class="mt-4 rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2"
+    >
       {{ error }}
     </div>
     <div v-else-if="loading && !data" class="text-sm text-text-muted py-12 text-center">Loading…</div>
@@ -117,7 +125,13 @@ const location = computed(() => data.value?.location ?? null)
         <div>
           <h1 class="font-mono text-2xl font-semibold tracking-tight">{{ data.model }}</h1>
           <div class="mt-1.5 text-sm text-text-secondary font-mono flex flex-wrap items-center gap-x-2 gap-y-1">
-            <a v-if="objectStoreUrl(location)" :href="objectStoreUrl(location)!" target="_blank" class="text-accent hover:underline">{{ location }} ↗</a>
+            <a
+              v-if="objectStoreUrl(location)"
+              :href="objectStoreUrl(location)!"
+              target="_blank"
+              class="text-accent hover:underline"
+              >{{ location }} ↗</a
+            >
             <span v-else-if="location">{{ location }}</span>
             <span v-if="data.backend" class="text-text-muted">· {{ data.backend }}</span>
             <span v-if="data.user" class="text-text-muted">· {{ data.user }}</span>
@@ -129,14 +143,26 @@ const location = computed(() => data.value?.location ?? null)
             v-for="c in data.cohorts"
             :key="c.version ?? 'none'"
             class="font-mono text-xs px-2.5 py-1 rounded border"
-            :class="scope === c.version ? 'border-accent text-text bg-accent-subtle' : 'border-surface-border text-text-secondary hover:bg-surface-raised'"
+            :class="
+              scope === c.version
+                ? 'border-accent text-text bg-accent-subtle'
+                : 'border-surface-border text-text-secondary hover:bg-surface-raised'
+            "
             @click="selectedVersion = c.version"
-          >{{ c.version ?? 'unversioned' }}</button>
+          >
+            {{ c.version ?? 'unversioned' }}
+          </button>
           <button
             class="font-mono text-xs px-2.5 py-1 rounded border"
-            :class="scope === ALL ? 'border-accent text-text bg-accent-subtle' : 'border-surface-border text-text-secondary hover:bg-surface-raised'"
+            :class="
+              scope === ALL
+                ? 'border-accent text-text bg-accent-subtle'
+                : 'border-surface-border text-text-secondary hover:bg-surface-raised'
+            "
             @click="selectedVersion = ALL"
-          >all runs</button>
+          >
+            all runs
+          </button>
         </div>
       </div>
 
@@ -145,7 +171,8 @@ const location = computed(() => data.value?.location ?? null)
         <div class="flex items-baseline justify-between mb-2">
           <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary">Measurement profile</h3>
           <span class="text-xs text-text-muted">
-            cohort {{ cohortLabel }} · latest succeeded run per benchmark · whisker = ±stderr · click a gauge for samples
+            cohort {{ cohortLabel }} · newest scored run per benchmark · whisker = 95% interval · click a gauge for
+            samples
           </span>
         </div>
         <div class="rounded-lg border border-surface-border bg-surface p-6">
@@ -157,7 +184,8 @@ const location = computed(() => data.value?.location ?? null)
             <div class="overflow-x-auto pb-1">
               <EvalRail
                 :tasks="tasks"
-                :cells="displayCells"
+                :cells="scopedResults.cells"
+                :missing="scopedResults.missing"
                 :best="best"
                 :model="data.model"
                 size="lg"
@@ -167,14 +195,18 @@ const location = computed(() => data.value?.location ?? null)
             </div>
           </div>
           <div class="mt-4 flex flex-wrap gap-x-5 gap-y-1 font-mono text-[11px] text-text-secondary">
-            <span class="inline-flex items-center gap-2"><span class="inline-block w-4 h-[3px] rounded-full" style="background: var(--c-best)"></span> fleet best (this benchmark)</span>
+            <span class="inline-flex items-center gap-2"
+              ><span class="inline-block w-4 h-[3px] rounded-full" style="background: var(--c-best)"></span> fleet best
+              (this benchmark)</span
+            >
             <span>sparkline under each gauge = this model's score on that benchmark across its runs</span>
           </div>
         </div>
         <p class="text-xs text-text-muted mt-2 leading-relaxed">
-          How runs merge: a model runs each benchmark many times across versions. The profile shows the latest
-          succeeded run within the selected cohort — the default union. Switch cohorts to pin an older model state;
-          the sparkline under each gauge keeps every run visible so a regression is one glance away.
+          How runs merge: a model runs each benchmark many times across versions. The profile shows the newest run that
+          produced a score within the selected cohort. Switch cohorts to pin an older model state; the sparkline under
+          each gauge keeps every run visible so a regression is one glance away. Each whisker is the run's 95% interval,
+          so a benchmark whose run lost items reads as less determined rather than simply lower.
         </p>
       </div>
 
@@ -182,7 +214,9 @@ const location = computed(() => data.value?.location ?? null)
       <div>
         <div class="flex items-baseline justify-between mb-2">
           <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary">Runs</h3>
-          <span class="text-xs text-text-muted">{{ scopedRuns.length }} run{{ scopedRuns.length === 1 ? '' : 's' }} · cohort {{ cohortLabel }}</span>
+          <span class="text-xs text-text-muted"
+            >{{ scopedRuns.length }} run{{ scopedRuns.length === 1 ? '' : 's' }} · cohort {{ cohortLabel }}</span
+          >
         </div>
         <div class="rounded-lg border border-surface-border overflow-hidden bg-surface">
           <button
@@ -195,8 +229,18 @@ const location = computed(() => data.value?.location ?? null)
             <StatusChip :status="run.status" />
             <span class="font-mono text-[11px] text-text-muted w-40">{{ formatTimestamp(run.created_at) }}</span>
             <span v-if="run.version" class="font-mono text-[11px] text-text-muted">{{ run.version }}</span>
-            <span class="ml-auto font-mono text-[13px] font-semibold tabular-nums">
-              <template v-if="run.value !== null">{{ formatScore(run.value) }}<span class="text-text-muted text-[11px] font-normal"> {{ formatStderr(run.value, run.stderr) }}</span></template>
+            <span
+              v-if="run.headline && coverageNote(run.headline)"
+              class="font-mono text-[11px] text-status-warning"
+              >{{ coverageNote(run.headline) }}</span
+            >
+            <span class="ml-auto font-mono text-[13px] font-semibold tabular-nums text-right">
+              <template v-if="run.headline">
+                {{ formatScore(run.headline.value) }}
+                <span class="block text-[10px] text-text-muted font-normal leading-none">
+                  {{ formatInterval(run.headline.low, run.headline.high) }}
+                </span>
+              </template>
               <span v-else class="text-text-muted">—</span>
             </span>
           </button>

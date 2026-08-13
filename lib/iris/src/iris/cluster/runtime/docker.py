@@ -42,6 +42,7 @@ from iris.cluster.runtime.profile import (
     wrap_with_kill_watchdog,
 )
 from iris.cluster.runtime.types import (
+    ACCELERATOR_SHM_FALLBACK_BYTES,
     ContainerConfig,
     ContainerErrorKind,
     ContainerInfraError,
@@ -219,10 +220,10 @@ def _has_tpu_device(config: ContainerConfig) -> bool:
 def _build_device_flags(config: ContainerConfig) -> list[str]:
     """Build Docker device flags based on resource configuration.
 
-    Detects TPU resources and returns the Docker flags for TPU passthrough: large
-    shared memory, the locked-memory ulimit, and the SYS_RESOURCE capability for
-    memlock. Privilege (``--privileged``) is handled by the security-profile flags,
-    not here. Returns an empty list when no special device configuration is needed.
+    Detects TPU resources and returns the locked-memory ulimit and SYS_RESOURCE
+    capability for memlock. Privilege (``--privileged``) is handled by the
+    security-profile flags, not here. Returns an empty list when no special
+    device configuration is needed.
     """
     flags: list[str] = []
 
@@ -237,7 +238,6 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
     if has_tpu:
         flags.extend(
             [
-                "--shm-size=100g",
                 "--cap-add=SYS_RESOURCE",
                 "--ulimit",
                 "memlock=68719476736:68719476736",
@@ -621,7 +621,12 @@ exec {quoted_cmd}
             memray_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/memray", "memray"),
         )
         if profile_type.HasField("threads"):
-            return capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
+            return capture_threads(
+                dispatch,
+                pid="1",
+                include_locals=profile_type.threads.locals,
+                include_native=profile_type.threads.native,
+            )
         elif profile_type.HasField("cpu"):
             return capture_cpu(dispatch, profile_type.cpu, duration_seconds, pid="1")
         elif profile_type.HasField("memory"):
@@ -739,6 +744,16 @@ exec {quoted_cmd}
         effective_memory_mb = memory_limit_mb or config.get_memory_mb()
         if effective_memory_mb:
             cmd.extend(["--memory", f"{effective_memory_mb}m"])
+
+        # Docker charges tmpfs pages to the container cgroup. Matching the
+        # filesystem ceiling lets tasks spend their requested memory on any
+        # mix of anonymous memory and /dev/shm. Preserve the old TPU fallback
+        # for raw requests that omit a memory limit.
+        shm_size_mb = effective_memory_mb
+        if not shm_size_mb and is_tpu_run:
+            shm_size_mb = ACCELERATOR_SHM_FALLBACK_BYTES // (1024 * 1024)
+        if shm_size_mb:
+            cmd.extend(["--shm-size", f"{shm_size_mb}m"])
 
         # Device env vars (TPU/GPU) are now included in config.env by
         # build_common_iris_env(), so no separate device_env merge needed.

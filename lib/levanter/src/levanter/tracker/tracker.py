@@ -76,6 +76,10 @@ class Tracker(abc.ABC):
     def log_html(self, key: str, html_path, *, step: Optional[int], commit: Optional[bool] = None):
         pass
 
+    def capture_stall_diagnostics(self) -> None:
+        """Capture tracker-specific diagnostics before watchdog termination."""
+        pass
+
     @abc.abstractmethod
     def finish(self):
         """
@@ -139,6 +143,9 @@ class CompositeTracker(Tracker):
 
     def log_html(self, key: str, html_path, *, step: Optional[int], commit: Optional[bool] = None):
         self._for_each("log_html", key, html_path, step=step, commit=commit)
+
+    def capture_stall_diagnostics(self) -> None:
+        self._for_each("capture_stall_diagnostics")
 
     def finish(self):
         # finish() exceptions are logged and swallowed too; a tracker failing to

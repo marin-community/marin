@@ -3,12 +3,13 @@
 
 """Kubernetes node identity and capacity in the cluster status RPC."""
 
-from iris.cluster.backends.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
 from iris.cluster.platforms.k8s.types import K8sResource
-
-from .conftest import make_batch, make_kueue_provider
+from iris.testing.k8s import make_batch, make_kueue_provider
 
 _NODE_NAME = "g83d142"
+LABEL_MANAGED = "iris.managed"
+LABEL_RUNTIME = "iris.runtime"
+RUNTIME_LABEL_VALUE = "iris-kubernetes"
 
 
 def _seed_gpu_node(k8s, name=_NODE_NAME, ip="10.0.0.9", *, unschedulable=False, ready=True):
@@ -44,7 +45,7 @@ def _seed_running_pod_on(k8s, node_name, pod_name="iris-job-0-0"):
         pod_name,
         {
             "kind": "Pod",
-            "metadata": {"name": pod_name, "labels": {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE}},
+            "metadata": {"name": pod_name, "labels": {LABEL_MANAGED: "true", LABEL_RUNTIME: RUNTIME_LABEL_VALUE}},
             "spec": {"nodeName": node_name},
             "status": {"phase": "Running", "containerStatuses": []},
         },

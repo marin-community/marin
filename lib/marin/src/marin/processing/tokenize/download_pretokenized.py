@@ -37,6 +37,8 @@ class PretokenizedCacheDownloadConfig(TokenizeConfigBase):
     hf_revision: str | None = None  # Revision, branch, or tag on Hugging Face
     hf_repo_type_prefix: str = "datasets"  # Typically "datasets" or "models"
     hf_token: str | None = None  # Hugging Face API token for private repositories
+    source_url_override: str | None = None
+    """Optional fsspec source used in place of Hugging Face."""
 
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
     cache_options: CacheOptions | None = None  # For TokenizeConfigBase interface, not used during download
@@ -80,6 +82,7 @@ def fetch_pretokenized_cache(
             revision=cfg.hf_revision,
             hf_repo_type_prefix=cfg.hf_repo_type_prefix,
             gcs_output_path=cfg.cache_path,
+            source_url_override=cfg.source_url_override,
         )
 
         # Execute the download

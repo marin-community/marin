@@ -12,10 +12,11 @@ import functools
 import heapq
 import logging
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from itertools import groupby, islice
-from typing import Any, Protocol
+from typing import Any
 
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
@@ -43,28 +44,12 @@ from zephyr.dataset import (
     resolve_glob,
 )
 from zephyr.expr import Expr, referenced_columns
-from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
+from zephyr.input_file import InputFileSpec
+from zephyr.readers import compute_parquet_splits, load_file, load_file_batch
 from zephyr.shuffle import ScatterReader
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Shard protocol
-# ---------------------------------------------------------------------------
-
-
-class Shard(Protocol):
-    """Protocol for a shard of data assigned to a single worker.
-
-    Implementations:
-    - ListShard: backed by iterable references (source data, non-scatter)
-    - ScatterReader: backed by scatter zstd-chunk files with byte-range sidecar
-    """
-
-    def __iter__(self) -> Iterator: ...
-    def get_iterators(self) -> Iterator[Iterator]: ...
 
 
 @dataclass
@@ -487,10 +472,46 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
             )
 
         else:
-            # Fusible ops: LoadFileOp, MapOp, FilterOp, FlatMapOp, MapShardOp, TakePerShardOp, WindowOp, SelectOp
+            # Fusible ops: LoadFileOp, MapOp, FilterOp, FlatMapOp, MapShardOp,
+            # TakePerShardOp, WindowOp, SelectOp
             state.pending_fusible.append(op)
 
     return state.finalize()
+
+
+# Number of Parquet footer reads issued at once while splitting input files.
+# Each read is a small, latency-bound GET, so a wide pool keeps planning a
+# corpus of thousands of files from serializing into thousands of round-trips.
+_FOOTER_READ_CONCURRENCY = 32
+
+# Whole-file read: a single span with no explicit row bounds.
+_WHOLE_FILE_ROW_RANGE: tuple[int | None, int | None] = (None, None)
+
+
+def _row_ranges_per_file(
+    files: list[FileEntry],
+    load_op: LoadFileOp,
+) -> list[list[tuple[int | None, int | None]]]:
+    """Row spans covering each file, in input order.
+
+    Without ``approx_shard_bytes`` every file is one unbounded span and no IO
+    happens. With it, each Parquet file is split at row-group boundaries, which
+    costs one footer read per file; those reads run concurrently. Splits are
+    best-effort: a row group is never divided, so a span can exceed
+    ``approx_shard_bytes`` when a single row group is larger.
+    """
+    approx_shard_bytes = load_op.approx_shard_bytes
+    if approx_shard_bytes is None:
+        return [[_WHOLE_FILE_ROW_RANGE] for _ in files]
+
+    def row_ranges(entry: FileEntry) -> list[tuple[int | None, int | None]]:
+        is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and entry.path.endswith(".parquet"))
+        if not is_parquet:
+            return [_WHOLE_FILE_ROW_RANGE]
+        return list(compute_parquet_splits(entry.path, approx_shard_bytes))
+
+    with ThreadPoolExecutor(max_workers=_FOOTER_READ_CONCURRENCY) as pool:
+        return list(pool.map(row_ranges, files))
 
 
 def _compute_file_pushdown(
@@ -537,26 +558,15 @@ def _compute_file_pushdown(
         else:
             break
 
-    # Create InputFileSpecs with final columns/filter.
-    # When approx_shard_bytes is set, parquet files are split at row-group boundaries
-    # into multiple SourceItems. Splits are best-effort: a row group is never divided,
-    # so a shard can exceed approx_shard_bytes when a single row group is larger.
+    # Create InputFileSpecs with final columns/filter, one per row span.
     source_items: list[SourceItem] = []
-    for entry in files:
-        path = entry.path
-        is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and path.endswith(".parquet"))
-        row_ranges: list[tuple[int | None, int | None]]
-        if load_op.approx_shard_bytes is not None and is_parquet:
-            row_ranges = list(compute_parquet_splits(path, load_op.approx_shard_bytes))
-        else:
-            # Whole-file read: a single span with no explicit row bounds.
-            row_ranges = [(None, None)]
+    for entry, row_ranges in zip(files, _row_ranges_per_file(files, load_op), strict=True):
         for row_start, row_end in row_ranges:
             source_items.append(
                 SourceItem(
                     shard_idx=len(source_items),
                     data=InputFileSpec(
-                        path=path,
+                        path=entry.path,
                         format=load_op.format,
                         columns=select_columns,
                         row_start=row_start,
@@ -779,15 +789,11 @@ def run_stage(
             return
 
         elif isinstance(op, Reduce):
-            # Build ScatterReader directly from per-mapper sidecars, then
-            # merge sorted chunks and reduce per key.
-            shard = ctx.shard
-            if not isinstance(shard, ScatterReader):
-                # Shard contains every mapper's scatter-data path — reducer
-                # reads all sidecars in parallel and filters for its target.
-                scatter_paths = list(shard)
-                shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
-            stream = _reduce_gen(shard, op.key_fn, op.reducer_fn, external_sort_dir)
+            # The shard holds every mapper's scatter-data path. The reducer
+            # reads all per-mapper sidecars in parallel, filters for its own
+            # target shard, then merges the sorted chunks and reduces per key.
+            reader = ScatterReader.from_sidecars(list(ctx.shard), ctx.shard_idx)
+            stream = _reduce_gen(reader, op.key_fn, op.reducer_fn, external_sort_dir)
             op_index += 1
 
         elif isinstance(op, Fold):

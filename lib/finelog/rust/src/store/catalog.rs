@@ -325,7 +325,7 @@ impl Catalog {
         }
 
         if let Some(existing) = inner.live.get(name).cloned() {
-            // `merge` raises SchemaConflict on a non-additive change.
+            // `merge` raises SchemaConflict on a column-type change.
             let effective = merge(&existing.schema)?;
             if effective != existing.schema {
                 inner.upsert_locked(name, &effective)?;
@@ -622,6 +622,25 @@ impl Catalog {
             .execute(
                 "UPDATE segments SET location = ?1 WHERE namespace = ?2 AND path = ?3",
                 rusqlite::params![location.as_str(), namespace, path],
+            )
+            .map_err(sqlite_err)?;
+        Ok(())
+    }
+
+    /// Update one segment's `byte_size` (after an in-place layout rewrite, which
+    /// re-encodes the same rows and leaves every other field correct).
+    pub fn set_byte_size(
+        &self,
+        namespace: &str,
+        path: &str,
+        byte_size: i64,
+    ) -> Result<(), StatsError> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .conn
+            .execute(
+                "UPDATE segments SET byte_size = ?1 WHERE namespace = ?2 AND path = ?3",
+                rusqlite::params![byte_size, namespace, path],
             )
             .map_err(sqlite_err)?;
         Ok(())

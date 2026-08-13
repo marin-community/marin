@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -5,6 +6,7 @@ use std::time::Duration;
 use arrow::array::{Array, AsArray};
 use bytes::Bytes;
 use connectrpc::client::{full_body, ClientBody};
+use connectrpc::compression::{CompressionProvider, ZstdProvider};
 use http::{HeaderMap, Request, StatusCode};
 use http_body_util::BodyExt;
 use hyper_util::client::legacy::connect::HttpConnector;
@@ -16,6 +18,7 @@ use tokio::sync::{oneshot, Semaphore};
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::{make_ctx, run_query_over};
 use crate::server::auth::AuthPolicy;
+use crate::server::ingest_health::{IngestHealth, HEALTH_OK};
 use crate::server::test_support::{disk_store, serve, PUB_A};
 use crate::server::{build_app_with_config, ServerConfig};
 use crate::store::policy::StoragePolicy;
@@ -64,6 +67,21 @@ fn http_client() -> TestHttpClient {
     HyperClient::builder(TokioExecutor::new()).build(HttpConnector::new())
 }
 
+/// GET a route, asserting 200 and returning the body.
+async fn get_text(client: &TestHttpClient, addr: SocketAddr, path: &str) -> String {
+    let response = client
+        .request(
+            Request::get(format!("http://{addr}{path}"))
+                .body(full_body(Bytes::new()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "GET {path}");
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    String::from_utf8(bytes.to_vec()).unwrap()
+}
+
 async fn serve_with_config(store: Arc<Store>, config: ServerConfig) -> SocketAddr {
     let app = build_app_with_config(store, config);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -79,13 +97,14 @@ async fn serve_with_config(store: Arc<Store>, config: ServerConfig) -> SocketAdd
     addr
 }
 
-async fn post(
+async fn post_encoded(
     client: &TestHttpClient,
     addr: SocketAddr,
     body: Vec<u8>,
     batch_id: Option<&str>,
     content_type: Option<&str>,
     bearer: Option<&str>,
+    content_encoding: Option<&str>,
 ) -> TestResponse {
     let mut request = Request::post(format!("http://{addr}/v1/telemetry"));
     if let Some(batch_id) = batch_id {
@@ -96,6 +115,9 @@ async fn post(
     }
     if let Some(bearer) = bearer {
         request = request.header("authorization", format!("Bearer {bearer}"));
+    }
+    if let Some(content_encoding) = content_encoding {
+        request = request.header("content-encoding", content_encoding);
     }
     let response = client
         .request(request.body(full_body(Bytes::from(body))).unwrap())
@@ -111,6 +133,21 @@ async fn post(
         headers,
         payload,
     }
+}
+
+async fn post(
+    client: &TestHttpClient,
+    addr: SocketAddr,
+    body: Vec<u8>,
+    batch_id: Option<&str>,
+    content_type: Option<&str>,
+    bearer: Option<&str>,
+) -> TestResponse {
+    post_encoded(client, addr, body, batch_id, content_type, bearer, None).await
+}
+
+fn zstd_body(body: &[u8]) -> Vec<u8> {
+    ZstdProvider::with_level(1).compress(body).unwrap().to_vec()
 }
 
 fn batch(batch_id: &str) -> Vec<u8> {
@@ -152,12 +189,183 @@ async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
 }
 
 #[tokio::test]
+async fn router_registers_index_policy_before_first_telemetry_request() {
+    let store = disk_store("telemetry-startup-registration");
+    let health = Arc::new(IngestHealth::new());
+    let _router = super::telemetry::router(
+        Arc::clone(&store),
+        Arc::new(AuthPolicy::allow_localhost()),
+        1,
+        1,
+        Arc::clone(&health),
+    );
+    assert!(
+        health.health_body().contains("registration pending"),
+        "the telemetry namespace is reported unavailable until it registers",
+    );
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while health.health_body() != HEALTH_OK {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("startup registration did not complete");
+    let schema = store.get_table_schema("telemetry_v1").unwrap();
+
+    for name in ["service", "kind", "name"] {
+        let column = schema
+            .columns
+            .iter()
+            .find(|column| column.name == name)
+            .unwrap();
+        assert!(column.index.value_counts);
+    }
+    let name = schema
+        .columns
+        .iter()
+        .find(|column| column.name == "name")
+        .unwrap();
+    assert!(name.index.trigram);
+    assert_eq!(
+        name.index.exact_values,
+        [
+            "global_step",
+            "gpu_memory_temperature_celsius",
+            "gpu_memory_total_bytes",
+            "gpu_memory_used_bytes",
+            "gpu_nvlink_receive_bytes_per_second",
+            "gpu_nvlink_transmit_bytes_per_second",
+            "gpu_pcie_receive_bytes_per_second",
+            "gpu_pcie_replay_errors",
+            "gpu_pcie_transmit_bytes_per_second",
+            "gpu_power_watts",
+            "gpu_row_remap_failures",
+            "gpu_sm_active_ratio",
+            "gpu_temperature_celsius",
+            "gpu_tensor_active_ratio",
+            "gpu_utilization_percent",
+            "gpu_xid_error_code",
+            "hardware_inventory",
+            "node_cpu_utilization_percent",
+            "node_disk_total_bytes",
+            "node_disk_used_bytes",
+            "node_memory_total_bytes",
+            "node_memory_used_bytes",
+            "node_network_receive_bytes",
+            "node_network_transmit_bytes",
+            "phase",
+            "progress_time_seconds",
+            "step",
+        ]
+    );
+    let projections: BTreeMap<_, _> = schema
+        .projections
+        .iter()
+        .map(|projection| (projection.name.as_str(), projection))
+        .collect();
+    assert_eq!(
+        projections.keys().copied().collect::<Vec<_>>(),
+        [
+            "accelerator-faults",
+            "accelerator-interconnect",
+            "accelerator-inventory",
+            "accelerator-memory",
+            "accelerator-power",
+            "accelerator-sm-activity",
+            "accelerator-temperature",
+            "accelerator-tensor-activity",
+            "accelerator-utilization",
+            "node-host-network",
+            "node-host-utilization",
+            "training-run-attribution",
+            "training-status",
+        ]
+    );
+    let power = projections["accelerator-power"];
+    assert_eq!(power.predicate_column, "name");
+    assert_eq!(power.predicate_values, ["gpu_power_watts"]);
+    assert!(power.columns.iter().any(|column| column == "value"));
+    assert!(power
+        .columns
+        .iter()
+        .any(|column| column == "attributes_json"));
+    let training_status = projections["training-status"];
+    assert!(training_status
+        .columns
+        .iter()
+        .any(|column| column == "attributes_json"));
+    assert_eq!(schema.grouped_extrema.len(), 1);
+    let grouped = &schema.grouped_extrema[0];
+    assert_eq!(grouped.filter_column, "service");
+    assert_eq!(grouped.json_column, "resource_attributes_json");
+    assert_eq!(grouped.json_key, "job_id");
+    assert_eq!(grouped.extrema_column, "timestamp_ms");
+}
+
+#[tokio::test]
+async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info() {
+    let store = disk_store("telemetry-wedged-registration");
+    // A `name` column of the wrong type: no additive merge reconciles it.
+    store
+        .register_table(
+            "telemetry_v1",
+            Schema::new(
+                vec![
+                    Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+                    Column::new("name", ColumnType::COLUMN_TYPE_INT64, false),
+                ],
+                "timestamp_ms",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+
+    let addr = serve_with_config(Arc::clone(&store), ServerConfig::default()).await;
+    let client = http_client();
+    // `get_text` asserts 200: /health stays 200 while degraded so the Kubernetes
+    // probes do not crashloop or de-endpoint the pod.
+    let health = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let body = get_text(&client, addr, "/health").await;
+            if body.contains("registration failed") {
+                break body;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the wedged registration never reached /health");
+    assert!(health.contains("telemetry_v1"), "{health}");
+
+    let info: Value = serde_json::from_str(&get_text(&client, addr, "/api/server").await).unwrap();
+    let namespace = &info["ingest"][0];
+    assert_eq!(namespace["namespace"], "telemetry_v1");
+    assert_eq!(namespace["state"], "failed");
+    assert!(namespace["sinceUnix"].as_i64().unwrap() > 0);
+    assert!(namespace["error"].as_str().unwrap().contains("name"));
+
+    let posted = post(
+        &client,
+        addr,
+        batch("11111111-1111-4111-8111-111111111111"),
+        Some("11111111-1111-4111-8111-111111111111"),
+        Some("application/json"),
+        None,
+    )
+    .await;
+    assert_eq!(posted.status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
 async fn accepted_batch_is_queryable_through_normal_store_rows() {
     let remote_dir = unique_dir("telemetry-query-remote");
     let store = Arc::new(
         Store::new(
             Some(unique_dir("telemetry-query")),
             remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Live,
         )
         .unwrap(),
     );
@@ -177,6 +385,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
     .await;
 
     assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(response.headers["accept-encoding"], "zstd");
     assert_eq!(response.payload["status"], "accepted");
     assert_eq!(response.payload["deduplicated"], false);
     assert_eq!(response.payload["record_count"], 2);
@@ -224,6 +433,41 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
         2
     );
     assert_eq!(bounded[0].column(2).as_string::<i32>().value(0), "run-1");
+}
+
+#[tokio::test]
+async fn zstd_batch_is_accepted_and_queryable() {
+    let store = disk_store("telemetry-zstd");
+    let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+    let batch_id = "9d159e5a-2f32-4d50-8e31-6d8522147520";
+    let body = batch(batch_id);
+    let compressed = zstd_body(&body);
+
+    let response = post_encoded(
+        &client,
+        addr,
+        compressed,
+        Some(batch_id),
+        Some("application/json"),
+        None,
+        Some("zstd"),
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    store
+        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let rows = query(&store, "SELECT count(*) AS n FROM telemetry_v1").await;
+    assert_eq!(
+        rows[0]
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int64Type>()
+            .value(0),
+        2
+    );
 }
 
 #[tokio::test]
@@ -305,6 +549,19 @@ async fn malformed_headers_and_records_have_stable_json_errors() {
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert_eq!(response.payload["error"]["code"], "invalid_request");
 
+    let response = post_encoded(
+        &client,
+        addr,
+        b"not a zstd frame".to_vec(),
+        Some(batch_id),
+        Some("application/json"),
+        None,
+        Some("zstd"),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert_eq!(response.payload["error"]["code"], "invalid_request");
+
     let mut unknown: Value = serde_json::from_slice(&batch(batch_id)).unwrap();
     unknown["records"][0]["unexpected"] = json!(true);
     let response = post(
@@ -343,10 +600,23 @@ async fn body_and_normalized_amplification_limits_return_413() {
     let response = post(
         &client,
         addr,
-        oversized,
+        oversized.clone(),
         Some(batch_id),
         Some("application/json"),
         None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(response.payload["error"]["code"], "request_too_large");
+
+    let response = post_encoded(
+        &client,
+        addr,
+        zstd_body(&oversized),
+        Some(batch_id),
+        Some("application/json"),
+        None,
+        Some("zstd"),
     )
     .await;
     assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);

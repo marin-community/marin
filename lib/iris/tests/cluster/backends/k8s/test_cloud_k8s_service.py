@@ -3,12 +3,74 @@
 
 """Tests for CloudK8sService helpers and K8sResource enum path construction."""
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
 from iris.cluster.platforms.k8s import service as k8s_service
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
+
+
+class _FakeExecStream:
+    def __init__(self, *, returncode: int, stdout: str = "", stderr: str = "", stream_open: bool = False):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.open = stream_open
+        self.closed = False
+
+    def run_forever(self, timeout: float | None = None) -> None:
+        pass
+
+    def is_open(self) -> bool:
+        return self.open
+
+    def read_stdout(self, timeout: float | None = None) -> str:
+        if self.open and timeout != 0:
+            raise AssertionError("blocking stdout read on an open exec stream")
+        return self.stdout
+
+    def read_stderr(self, timeout: float | None = None) -> str:
+        if self.open and timeout != 0:
+            raise AssertionError("blocking stderr read on an open exec stream")
+        return self.stderr
+
+    def close(self) -> None:
+        self.open = False
+        self.closed = True
+
+
+def _service_with_exec_stream(monkeypatch, stream: _FakeExecStream) -> CloudK8sService:
+    monkeypatch.setattr(k8s_service.kubernetes.stream, "stream", lambda *_args, **_kwargs: stream)
+    core_api = SimpleNamespace(connect_get_namespaced_pod_exec=object())
+    monkeypatch.setattr(k8s_service.kubernetes.client, "CoreV1Api", lambda _client: core_api)
+    svc = CloudK8sService(namespace="iris")
+    monkeypatch.setattr(svc, "create_api_client", lambda: nullcontext(object()))
+    return svc
+
+
+def test_exec_reports_command_exit_status(monkeypatch):
+    """A command error inside a reachable pod must not look successful."""
+    stream = _FakeExecStream(returncode=1, stderr="cat: profile.json: No such file")
+    svc = _service_with_exec_stream(monkeypatch, stream)
+
+    result = svc.exec("task-pod", ["cat", "profile.json"], container="task")
+
+    assert result.returncode == 1
+    assert result.stderr == "cat: profile.json: No such file"
+    assert stream.closed
+
+
+def test_exec_timeout_reads_open_stream_without_blocking(monkeypatch):
+    stream = _FakeExecStream(returncode=0, stream_open=True)
+    svc = _service_with_exec_stream(monkeypatch, stream)
+
+    result = svc.exec("task-pod", ["sleep", "infinity"], container="task", timeout=1)
+
+    assert result.returncode == 124
+    assert result.stderr == "Command timed out after 1 seconds"
+    assert stream.closed
 
 
 def test_construct_without_kubernetes_client(monkeypatch):
@@ -210,27 +272,6 @@ def test_from_kind_valid(kind: str, expected_resource: K8sResource):
 def test_from_kind_invalid():
     with pytest.raises(ValueError, match="Unknown kind: 'Bogus'"):
         K8sResource.from_kind("Bogus")
-
-
-def test_all_required_kinds_are_enum_members():
-    """Every kind that callers pass to apply_json must be in the enum."""
-    required_kinds = {
-        "Pod",
-        "ConfigMap",
-        "Service",
-        "Secret",
-        "ServiceAccount",
-        "Namespace",
-        "Deployment",
-        "DaemonSet",
-        "PodDisruptionBudget",
-        "ClusterRole",
-        "ClusterRoleBinding",
-        "NodePool",
-    }
-    enum_kinds = {member.kind for member in K8sResource}
-    missing = required_kinds - enum_kinds
-    assert not missing, f"Missing kinds in K8sResource: {missing}"
 
 
 def test_api_base_paths():

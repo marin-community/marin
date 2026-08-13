@@ -22,9 +22,9 @@ pointing one client at both endpoints compares them directly.
 ``--gpu`` and ``--tpu`` are mutually exclusive (the default is TPU ``v6e-8``). On the vLLM GPU
 path CUDA vLLM is provisioned in an isolated ``uv`` tool env — stock PyPI vLLM at ``--vllm-version``,
 or Marin's vLLM fork with ``--vllm-source marin-fork`` (needed for Marin-custom architectures like
-grug_moe); on the vLLM TPU path, a marin checkout serves vLLM from the workspace lock, and outside a
-checkout (or with ``--isolated-vllm``) from an isolated ``uv`` tool env holding Marin's forked TPU
-vLLM. The Levanter backend needs no vLLM at all: it serves from the worker venv's JAX.
+grug_moe); on the vLLM TPU path, vLLM always runs from an isolated ``uv`` tool env holding Marin's
+forked TPU vLLM, so the worker venv only needs the ``tpu`` extra for the serving glue's JAX/libtpu.
+The Levanter backend needs no vLLM at all: it serves from the worker venv's JAX.
 
 ``--cluster`` selects the controller to submit to; ``--target-cluster`` federates the job to a
 named peer. The slice's tensor-parallel size and (for clamped-RoPE models) max sequence length are
@@ -48,7 +48,7 @@ from click.core import ParameterSource
 from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
 from iris.cli.job import parse_gpu_spec
-from iris.client import IrisClient, Job
+from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
     Constraint,
@@ -72,7 +72,6 @@ from rigging.timing import Duration
 
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
-    TPU_VLLM_WORKER_EXTRAS,
     WORKER_PYTHON_VERSION,
     BrokerConfig,
     InferenceProxyConfig,
@@ -102,7 +101,6 @@ _VLLM_ONLY_OPTIONS = {
     "vllm_version": "--vllm-version",
     "vllm_source": "--vllm-source",
     "vllm_args": "--vllm-arg",
-    "isolated_vllm": "--isolated-vllm",
     "max_num_batched_tokens": "--max-num-batched-tokens",
 }
 _LEVANTER_ONLY_OPTIONS = {
@@ -138,7 +136,6 @@ def _resolve_serving_plan(
     tpu: str,
     gpu: str | None,
     in_checkout: bool,
-    isolated_vllm: bool,
     task_image: str | None,
     cuda_vllm_version: str,
     vllm_source: VllmSource,
@@ -151,7 +148,8 @@ def _resolve_serving_plan(
     ``vllm`` and ``levanter`` arrive carrying the knobs the user set; what is decided here is which
     of them serves, and where its runtime comes from. Levanter computes in the worker venv, so that
     venv carries the accelerator's JAX and nothing else; vLLM runs as a subprocess, either from the
-    workspace lock or from an isolated uv-tool env.
+    vllm on the worker's PATH (a GPU task image) or from an isolated uv-tool env (the TPU forks or
+    the CUDA fork/upstream release).
     """
     if vllm_source is VllmSource.MARIN_FORK and (gpu is None or backend != "vllm"):
         raise click.ClickException("--vllm-source marin-fork requires --gpu with the vLLM backend.")
@@ -187,14 +185,10 @@ def _resolve_serving_plan(
     device = tpu_device(tpu)
     if backend == "levanter":
         return ServingPlan(levanter, device, (*_LEVANTER_TPU_EXTRAS, *extras), tpu_type=tpu)
-    if isolated_vllm or not in_checkout:
-        # Provision the forked TPU vLLM from an isolated uvx env when there is no checkout to build
-        # it from (or when explicitly requested); otherwise serve the workspace TPU-vLLM from the
-        # lock. The worker venv always needs the `tpu` extra for the serving glue's jax/libtpu; the
-        # `vllm` extra is only for the in-workspace build.
-        vllm = replace(vllm, launcher=VllmLauncherType.TPU)
-        return ServingPlan(vllm, device, ("tpu", *extras), tpu_type=tpu)
-    return ServingPlan(vllm, device, (*TPU_VLLM_WORKER_EXTRAS, *extras), tpu_type=tpu)
+    # The forked TPU vLLM always runs from an isolated uvx env (it is not in the workspace lock),
+    # so the worker venv only needs the `tpu` extra for the serving glue's jax/libtpu.
+    vllm = replace(vllm, launcher=VllmLauncherType.TPU)
+    return ServingPlan(vllm, device, ("tpu", *extras), tpu_type=tpu)
 
 
 def _default_job_name(model: str) -> str:
@@ -312,13 +306,6 @@ def _mint_and_print_capability_url(
     default=None,
     help="Federate the job to this peer cluster (e.g. cw-rno2a). --cluster still selects the controller.",
 )
-@click.option(
-    "--isolated-vllm",
-    is_flag=True,
-    default=False,
-    help="TPU path: provision vLLM from the isolated uvx env (Marin's forked TPU vLLM) "
-    "even inside a checkout. Auto-selected when marin-serve runs outside a checkout.",
-)
 @click.option("--name", default=None, help="Iris job name (default: derived from the model).")
 @click.option("--endpoint-name", default=None, help="Endpoint name to register (default: /serve/<job-name>).")
 @click.option("--chat-template", default=None, help="Jinja chat template: local file path or http(s) URL.")
@@ -417,7 +404,6 @@ def main(
     tpu: str,
     gpu: str | None,
     target_cluster: str | None,
-    isolated_vllm: bool,
     name: str | None,
     endpoint_name: str | None,
     chat_template: str | None,
@@ -478,7 +464,6 @@ def main(
         tpu=tpu,
         gpu=gpu,
         in_checkout=workspace_dir is not None,
-        isolated_vllm=isolated_vllm,
         task_image=task_image,
         cuda_vllm_version=vllm_version,
         vllm_source=vllm_source_enum,

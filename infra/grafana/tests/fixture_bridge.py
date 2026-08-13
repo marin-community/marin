@@ -12,7 +12,7 @@ from config import K8S_CLUSTERS
 
 _NOW = datetime(2026, 7, 21, 12, tzinfo=UTC)
 _CW_K8S_CLUSTERS = tuple(target.name for target in K8S_CLUSTERS)
-_CW_CI_CLUSTER = next(target.name for target in K8S_CLUSTERS if target.iris_namespace == "iris-ci")
+_CW_NODE_WITH_DEADLOCK = "cw-us-east-08a"
 _LANES = (
     ("tpu-ferry", "TPU ferry", "marin", "training"),
     ("cw-gpu-ferry", "CW ferry", "marin", "training"),
@@ -377,15 +377,15 @@ def _rows(path: str, query: str) -> list[dict] | dict:
         return [
             {
                 "cluster": cluster,
-                "node": "g8fd930" if cluster == _CW_CI_CLUSTER else f"{cluster}-node-1",
+                "node": "g8fd930" if cluster == _CW_NODE_WITH_DEADLOCK else f"{cluster}-node-1",
                 "instance_type": "cd-gp-i64-erapids",
                 "ready": True,
-                "unschedulable": cluster == _CW_CI_CLUSTER,
-                "kernel_deadlock": cluster == _CW_CI_CLUSTER,
-                "deadlock_reason": "CPUSoftLockup" if cluster == _CW_CI_CLUSTER else "",
-                "cordon_reason": "KernelDeadlock,NLCCPendingExitProduction" if cluster == _CW_CI_CLUSTER else "",
-                "pending_phase": "production-reboot" if cluster == _CW_CI_CLUSTER else "",
-                "deadlock_message": "watchdog: CPU stuck" if cluster == _CW_CI_CLUSTER else "",
+                "unschedulable": cluster == _CW_NODE_WITH_DEADLOCK,
+                "kernel_deadlock": cluster == _CW_NODE_WITH_DEADLOCK,
+                "deadlock_reason": "CPUSoftLockup" if cluster == _CW_NODE_WITH_DEADLOCK else "",
+                "cordon_reason": "KernelDeadlock,NLCCPendingExitProduction" if cluster == _CW_NODE_WITH_DEADLOCK else "",
+                "pending_phase": "production-reboot" if cluster == _CW_NODE_WITH_DEADLOCK else "",
+                "deadlock_message": "watchdog: CPU stuck" if cluster == _CW_NODE_WITH_DEADLOCK else "",
             }
             for cluster in _CW_K8S_CLUSTERS
         ]

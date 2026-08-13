@@ -34,7 +34,10 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
 from iris.cluster.node_agent import SERVICE_NAME as _NODE_AGENT_NAME
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
-from iris.cluster.platforms.k8s.kueue_manifests import RESOURCE_FLAVOR_NAME
+from iris.cluster.platforms.k8s.kueue_manifests import (
+    IRIS_WORKLOAD_PRIORITY_CLASSES,
+    build_workload_priority_class,
+)
 from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_name
 from iris.cluster.platforms.k8s.rbac_manifests import cluster_role_name
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
@@ -81,6 +84,10 @@ _CONTROLLER_ARCH = "amd64"
 # queued behind a reconcile tick under heavy load.
 _CONTROLLER_PROBE_TIMEOUT_SECONDS = 10
 _CONTROLLER_PROBE_FAILURE_THRESHOLD = 6
+# Node agents are independently recoverable and briefly unavailable during an
+# image change. A percentage budget keeps large clusters from taking one pod at
+# a time while bounding the number of nodes without fresh telemetry.
+_NODE_AGENT_MAX_UNAVAILABLE = "10%"
 # Secret holding the controller's own credentials, projected into the controller
 # container alone. Held apart from iris-task-env, which every task pod also mounts:
 # a task must never be able to mint its cluster's tokens.
@@ -311,6 +318,10 @@ def _build_node_agent_daemonset(*, namespace: str, image: str) -> dict:
         "metadata": {"name": _NODE_AGENT_NAME, "namespace": namespace},
         "spec": {
             "selector": {"matchLabels": {"app": _NODE_AGENT_NAME}},
+            "updateStrategy": {
+                "type": "RollingUpdate",
+                "rollingUpdate": {"maxUnavailable": _NODE_AGENT_MAX_UNAVAILABLE},
+            },
             "template": {
                 "metadata": {"labels": {"app": _NODE_AGENT_NAME}},
                 "spec": {
@@ -426,10 +437,6 @@ class K8sControllerProvider:
     @property
     def iris_labels(self) -> Labels:
         return self._iris_labels
-
-    @property
-    def s3_enabled(self) -> bool:
-        return self._s3_enabled
 
     # -- ControllerProvider protocol methods -----------------------------------
 
@@ -710,12 +717,13 @@ class K8sControllerProvider:
     def verify_prerequisites(self, config: IrisClusterConfig) -> None:
         """Assert IaC-provisioned prerequisites exist before starting the controller.
 
-        Presence-only (not exact spec): the Namespace, iris-controller ServiceAccount,
-        namespace-qualified ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
-        scale group, the Kueue ClusterQueue + ResourceFlavor, and (best-effort) the
-        IngressClass. All of these are provisioned by `infra/pulumi`'s Pulumi program
-        (spec.md §4) — this method creates nothing. Raises PrerequisitesNotProvisionedError
-        enumerating every missing object if any are absent.
+        Checks the Namespace, iris-controller ServiceAccount, namespace-qualified
+        ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
+        scale group, the Kueue ClusterQueue and its referenced ResourceFlavors, and
+        (best-effort) the IngressClass. All of these are
+        provisioned by `infra/pulumi`'s Pulumi program (spec.md §4) — this method creates
+        nothing. Raises
+        PrerequisitesNotProvisionedError enumerating every missing object if any are absent.
         """
         missing: list[str] = []
 
@@ -738,11 +746,19 @@ class K8sControllerProvider:
             if self._kubectl.get_json(K8sResource.NODE_POOLS, pool_name) is None:
                 missing.append(f"NodePool/{pool_name}")
 
-        cluster_queue = config.kubernetes_provider.kueue.cluster_queue
-        if cluster_queue and self._kubectl.get_json(K8sResource.CLUSTER_QUEUES, cluster_queue) is None:
-            missing.append(f"ClusterQueue/{cluster_queue}")
-        if self._kubectl.get_json(K8sResource.RESOURCE_FLAVORS, RESOURCE_FLAVOR_NAME) is None:
-            missing.append(f"ResourceFlavor/{RESOURCE_FLAVOR_NAME}")
+        cluster_queue_name = config.kubernetes_provider.kueue.cluster_queue
+        cluster_queue = self._kubectl.get_json(K8sResource.CLUSTER_QUEUES, cluster_queue_name)
+        if cluster_queue is None:
+            missing.append(f"ClusterQueue/{cluster_queue_name}")
+        else:
+            flavor_names = {
+                flavor["name"]
+                for resource_group in cluster_queue["spec"]["resourceGroups"]
+                for flavor in resource_group["flavors"]
+            }
+            for flavor_name in sorted(flavor_names):
+                if self._kubectl.get_json(K8sResource.RESOURCE_FLAVORS, flavor_name) is None:
+                    missing.append(f"ResourceFlavor/{flavor_name}")
 
         ingress_class = _ingress_class_from_provisioning(config)
         if ingress_class and self._kubectl.get_json(K8sResource.INGRESS_CLASSES, ingress_class) is None:
@@ -785,7 +801,7 @@ class K8sControllerProvider:
         logger.info("LocalQueue %s applied (clusterQueue=%s)", name, cluster_queue)
 
     def ensure_priority_classes(self) -> None:
-        """Create or update the iris-{system,production,interactive,batch} PriorityClass objects.
+        """Create or update the Iris Pod and Kueue Workload priority classes.
 
         PriorityClass is cluster-scoped. Iris owns these names; any cluster
         running Iris gets them so pods are stamped without manual admin setup.
@@ -806,9 +822,12 @@ class K8sControllerProvider:
                 logger.info("Replacing immutable PriorityClass %s", name)
                 self._kubectl.delete(K8sResource.PRIORITY_CLASSES, name)
             self._kubectl.apply_json(manifest)
+        for priority_class in IRIS_WORKLOAD_PRIORITY_CLASSES:
+            self._kubectl.apply_json(build_workload_priority_class(priority_class.name, priority_class.value))
         logger.info(
-            "PriorityClasses applied: %s",
-            ", ".join(n for n, _, _ in IRIS_PRIORITY_CLASSES),
+            "PriorityClasses applied: %s; WorkloadPriorityClasses applied: %s",
+            ", ".join(name for name, _, _ in IRIS_PRIORITY_CLASSES),
+            ", ".join(priority_class.name for priority_class in IRIS_WORKLOAD_PRIORITY_CLASSES),
         )
 
     # -- Storage Detection ----------------------------------------------------

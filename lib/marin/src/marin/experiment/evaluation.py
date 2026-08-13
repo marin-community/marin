@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from typing import cast
 
 from fray.cluster import ResourceConfig
+from iris.rpc import job_pb2
 from rigging.filesystem import StoragePath, marin_prefix, prefix_join
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
@@ -100,6 +101,7 @@ def run_served_evalchemy(config: EvalchemyEvalConfig) -> ServedEvalchemyRun:
         config.model,
         config.accelerator,
         env_vars=runtime_env,
+        priority=job_pb2.PRIORITY_BAND_INHERIT,
     )
     with remote_inference(inference) as session:
         outcome = run_evalchemy(
