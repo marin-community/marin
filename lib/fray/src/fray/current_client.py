@@ -9,8 +9,6 @@ import logging
 import os
 from collections.abc import Generator
 
-from iris.client.context_state import has_current_context
-
 from fray.client import Client
 from fray.local_backend import LocalClient
 
@@ -32,10 +30,17 @@ def current_client() -> Client:
         logger.info("current_client: using explicitly set client")
         return client
 
+    try:
+        from iris.client.context_state import has_current_context  # noqa: PLC0415
+    except ModuleNotFoundError as error:
+        if error.name is None or not (error.name == "iris" or error.name.startswith("iris.")):
+            raise
+        has_iris_context = False
+    else:
+        has_iris_context = has_current_context()
+
     ctx = None
-    if has_current_context() or os.environ.get("IRIS_TASK_ID"):
-        # Iris is an optional Fray backend. Import its client only inside an Iris
-        # context, where it is needed to resolve the concrete client.
+    if has_iris_context or os.environ.get("IRIS_TASK_ID"):
         from iris.client.client import get_iris_ctx  # noqa: PLC0415
 
         ctx = get_iris_ctx()

@@ -3,6 +3,8 @@
 
 """Tests for current_client() and set_current_client()."""
 
+import subprocess
+import sys
 from typing import cast
 
 import pytest
@@ -15,6 +17,21 @@ from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 def test_default_returns_local_client():
     client = current_client()
     assert isinstance(client, LocalClient)
+
+
+def test_default_without_iris_returns_local_client():
+    script = """
+import sys
+
+sys.modules["iris"] = None
+
+from fray.current_client import current_client
+from fray.local_backend import LocalClient
+
+assert isinstance(current_client(), LocalClient)
+"""
+    result = subprocess.run([sys.executable, "-c", script], check=False, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_set_current_client_context_manager():
