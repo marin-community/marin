@@ -55,6 +55,20 @@ _JAX_DIST_INIT_TIMEOUT_DEFAULT = 1800
 JAX_DIST_INIT_TIMEOUT_ENV = "IRIS_JAX_INIT_TIMEOUT"
 
 
+def _ipv4_bind_address(coordinator_address: str) -> str:
+    """Bind the coordinator on IPv4-any at the coordinator's own port.
+
+    JAX defaults to ``[::]:<port>``. On a host whose ``bindv6only`` is set, an IPv6-any listener
+    does not accept IPv4 connections, so every peer dialing the task's routable IPv4 address gets
+    ECONNREFUSED and the gang never forms. Binding ``0.0.0.0`` fixes that, but only with the port
+    attached: ``JAX_COORDINATOR_BIND_ADDRESS=0.0.0.0`` replaces JAX's default wholesale, leaving
+    the service on an arbitrary port while peers still dial the advertised one, which hangs every
+    client in ``connect()`` until the init timeout.
+    """
+    port = coordinator_address.rsplit(":", 1)[1]
+    return f"0.0.0.0:{port}"
+
+
 def _jax_dist_init_timeout() -> int:
     raw = os.environ.get(JAX_DIST_INIT_TIMEOUT_ENV)
     if raw is None:
@@ -327,18 +341,21 @@ def _initialize_supervised_jax(
         ctx = iris_ctx()
         coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
 
+    bind_address = _ipv4_bind_address(coordinator)
     logger.info(
-        "initialize_jax (supervised): process_id=%d/%d local_device_ids=%s coordinator=%s",
+        "initialize_jax (supervised): process_id=%d/%d local_device_ids=%s coordinator=%s bind=%s",
         proc_index,
         proc_count,
         device_ids,
         coordinator,
+        bind_address,
     )
     jax.distributed.initialize(
         coordinator,
         proc_count,
         proc_index,
         local_device_ids=device_ids,
+        coordinator_bind_address=bind_address,
         initialization_timeout=_jax_dist_init_timeout(),
         heartbeat_timeout_seconds=heartbeat_timeout,
     )

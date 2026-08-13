@@ -349,6 +349,7 @@ def test_initialize_jax_supervised_single_host(
         8,
         3,
         local_device_ids=[3],
+        coordinator_bind_address="0.0.0.0:12345",
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
     )
@@ -382,6 +383,7 @@ def test_initialize_jax_supervised_global_rank0_registers(
         16,
         0,
         local_device_ids=[0],
+        coordinator_bind_address="0.0.0.0:12345",
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
     )
@@ -414,6 +416,7 @@ def test_initialize_jax_supervised_global_rank0_picks_port(
         16,
         0,
         local_device_ids=[0],
+        coordinator_bind_address="0.0.0.0:45678",
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
     )
@@ -447,6 +450,7 @@ def test_initialize_jax_supervised_other_host_polls(
         16,
         8,
         local_device_ids=[0],
+        coordinator_bind_address="0.0.0.0:8476",
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
     )
@@ -492,6 +496,7 @@ def test_initialize_jax_retry_ignores_previous_attempt_coordinator(
         16,
         4,
         local_device_ids=[0],
+        coordinator_bind_address="0.0.0.0:47647",
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
     )
@@ -806,3 +811,21 @@ def test_xla_autotune_directory_does_not_change_the_compilation_cache_key() -> N
 
     assert compilation_cache_key("/cache/node-a") == compilation_cache_key("/cache/node-b")
 
+
+
+def test_supervised_coordinator_binds_ipv4_any_on_the_advertised_port(monkeypatch):
+    """A [::] listener refuses IPv4 peers where bindv6only is set, and a portless bind loses the port."""
+    assert jax_init_module._ipv4_bind_address("10.0.0.1:45678") == "0.0.0.0:45678"
+    assert jax_init_module._ipv4_bind_address("10.0.0.1:1") == "0.0.0.0:1"
+
+
+def test_jax_init_timeout_is_overridable(monkeypatch):
+    monkeypatch.delenv(jax_init_module.JAX_DIST_INIT_TIMEOUT_ENV, raising=False)
+    assert jax_init_module._jax_dist_init_timeout() == 1800
+
+    monkeypatch.setenv(jax_init_module.JAX_DIST_INIT_TIMEOUT_ENV, "180")
+    assert jax_init_module._jax_dist_init_timeout() == 180
+
+    monkeypatch.setenv(jax_init_module.JAX_DIST_INIT_TIMEOUT_ENV, "0")
+    with pytest.raises(ValueError, match="must be positive"):
+        jax_init_module._jax_dist_init_timeout()
