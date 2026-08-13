@@ -1170,3 +1170,12 @@ author: Rafal Wojdyla
 - Incident update: https://echo.oa.dev/wiki/141.
 - Issue update: https://github.com/marin-community/marin/issues/8162#issuecomment-5280678102.
 - Next action: Keep the one-source RNO root running. Watch shard rate, endpoint-list warnings, batch service admission, and both root states.
+
+### 2026-08-13 13:05 UTC - Corrected RNO stage interpretation
+
+- Correction: The 608 and 3,244 counters observed during the RNO v4 validation were join-side stage tasks, not written output Parquet shards. The active source output directory still had 416 Parquet shards at 13:03 UTC.
+- Current validation: All 32 Zephyr workers are live, the join-side stage is active, and no endpoint-list timeout matched v4 logs. Output recovery remains unconfirmed until the write stage adds Parquet shards.
+- Aggregate progress: A direct object count found 142,697 of 166,775 output shards, or 85.56%. There are 24,078 shards left. East has 62,287 shards, RNO has 80,410 shards, 208 sources have output, and no Parquet path is unknown.
+- RNO service admission: The v4 root requests all 512 batch TEI services. Thirty-two TEI tasks are running, and 480 are in the build state.
+- Published correction: Edited the existing issue update at https://github.com/marin-community/marin/issues/8162#issuecomment-5280678102 and updated https://echo.oa.dev/wiki/141.
+- Next action: Verify the first new RNO Parquet shard, then continue root, source, service, and output checks.
