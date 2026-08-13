@@ -12,6 +12,7 @@ nothing behind it, or at a tokenize output built from a different normalize.
 """
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -83,3 +84,42 @@ def test_repointing_a_dedup_pin_changes_dependency_identity(monkeypatch):
 def test_unknown_source_is_rejected():
     with pytest.raises(KeyError):
         hero_data.normalized("no-such-source")
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("version", 2),
+        ("model_sha256", "0" * 64),
+        ("calibration_sha256", "0" * 64),
+        ("name", "some-other-scorer"),
+        ("tokenizer", hero_data.MARIN_TOKENIZER),
+    ],
+)
+def test_quality_path_identifies_the_scorer(field, value):
+    """Any change to the pin must move the path.
+
+    The score path used to derive from the tokenize leaf alone, so the scorer did
+    not appear in it and two pins over one tokenization resolved to the same
+    directory -- a step could claim one model and read another's bytes. Each field
+    here reaches ``hash_id`` by a different route: the digests and version through
+    ``hash_attrs``, the tokenizer through ``dep_names``.
+    """
+    base = hero_data.NEMOTRON_88K
+    changed = replace(base, **{field: value})
+    assert hero_data.quality("stack-v3", changed).output_path != hero_data.quality("stack-v3", base).output_path
+
+
+def test_quality_folds_in_the_tokenization_as_a_dependency():
+    step = hero_data.quality("stack-v3")
+    assert step.dep_names == [hero_data.tokenized("stack-v3", hero_data.NEMOTRON_88K.tokenizer).name_with_hash]
+    # No pinned path: the output sits at ``name_with_hash`` like any ordinary step,
+    # which is what puts the scorer's identity in the path.
+    assert step.override_output_path is None
+    assert step.output_path.endswith(f"/datakit/quality/stack-v3_{step.hash_id}")
+
+
+def test_quality_refuses_to_run():
+    step = hero_data.quality("stack-v3")
+    with pytest.raises(AssertionError, match="must never execute"):
+        step.fn(step.output_path)
