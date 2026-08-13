@@ -317,8 +317,8 @@ def _rms_backward_consumer_kernel(
 
 
 @functools.lru_cache(maxsize=None)
-def _rms_backward_consumer_call(rows: int, hidden_dim: int, dtype, norm_weight_dtype):
-    output_shape = jax.ShapeDtypeStruct((rows, hidden_dim), dtype)
+def _rms_backward_consumer_call(rows: int, hidden_dim: int, dtype, norm_weight_dtype, manual_axis_type):
+    output_shape = jax.ShapeDtypeStruct((rows, hidden_dim), dtype, manual_axis_type=manual_axis_type)
     input_shapes = (
         output_shape,
         jax.ShapeDtypeStruct((rows,), jnp.float32),
@@ -377,7 +377,8 @@ def quack_coda_rms_backward_consumer(
             f"rows and hidden_dim must be multiples of {_CONSUMER_BLOCK_M} and {_CONSUMER_BLOCK_N}, "
             f"got {rows} and {hidden_dim}"
         )
-    call = _rms_backward_consumer_call(rows, hidden_dim, x.dtype, norm_weight.dtype)
+    manual_axis_type = jax.typeof(unweighted_cotangent).manual_axis_type
+    call = _rms_backward_consumer_call(rows, hidden_dim, x.dtype, norm_weight.dtype, manual_axis_type)
     row_mean = row_dot / hidden_dim
     return call(unweighted_cotangent, row_mean, x, norm_weight, inverse_rms)
 
