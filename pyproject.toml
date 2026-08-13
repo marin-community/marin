@@ -51,7 +51,8 @@ fork-strategy = "fewest"
 # marin-dupekit-native nightly (floor in lib/dupekit/pyproject.toml); the
 # omegaconf dev pin in override-dependencies
 # below; and the prerelease-only transitive deps in constraint-dependencies
-# (tfp-nightly / opentelemetry-semantic-conventions publish no stable release).
+# (tfp-nightly and the OpenTelemetry instrumentation packages publish no stable
+# release).
 prerelease = "explicit"
 constraint-dependencies = [
     # Enable pre-releases for transitive deps that publish no stable release at
@@ -59,6 +60,8 @@ constraint-dependencies = [
     # specifier, so the resolved version still follows whatever requires them;
     # the pre-release component here only flips uv's per-package opt-in.
     "tfp-nightly>=0.1.dev0",
+    "opentelemetry-instrumentation>=0.41b0",
+    "opentelemetry-instrumentation-grpc>=0.41b0",
     "opentelemetry-semantic-conventions>=0.1b0",
 ]
 override-dependencies = [

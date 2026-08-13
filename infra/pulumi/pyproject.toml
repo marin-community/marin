@@ -33,7 +33,7 @@ test = [
 # from pulling the pulumi providers into jobs that never deploy.
 [project.optional-dependencies]
 deploy = [
-    "pulumi>=3.140,<4",
+    "pulumi>=3.226,<4",
     "pulumi-kubernetes>=4.18,<5",
     "pulumi-gcp>=9,<10",
     "pulumi-github>=6,<7",
