@@ -13,6 +13,8 @@ from iris.cluster.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
 )
+from iris.cluster.composer import make_task_backend
+from iris.cluster.config import IrisClusterConfig, KubernetesProviderConfig, KueueConfig
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import (
@@ -30,6 +32,7 @@ from iris.cluster.runtime.types import MountKind
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.testing.k8s import add_eq_constraint, common_env_from_req, make_batch, make_pod, make_run_req, pod_config
+from rigging.timing import Duration
 
 INFRASTRUCTURE_FAILURE_REASONS = ("DeadlineExceeded", "Evicted", "Preempting")
 KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
@@ -1614,16 +1617,21 @@ def test_cpu_job_is_unconstrained_when_no_pack_level_is_configured():
     assert "nodeSelector" not in manifest["spec"]
 
 
-def test_cpu_job_prefers_the_configured_pack_level():
-    """A configured level becomes a soft preference, so Kueue scores domains instead of placing
-    per-node and packs CPU work rather than holing the domains gangs hard-bind to."""
-    manifest = _build_pod_manifest(
-        make_run_req("/cpu-job/task/0", num_tasks=1),
-        pod_config(local_queue="iris-lq", cpu_pack_topology=CW_LABEL_NVLINK_DOMAIN),
+def test_configured_cpu_pack_level_reaches_the_pod_as_a_soft_preference():
+    """A level set on the cluster config has to survive composition to change anything, so this
+    runs from IrisClusterConfig through to the annotations Kueue admits the Pod on. Soft, never
+    required: a CPU Pod that fits no domain at this level falls back to coarser ones."""
+    backend = make_task_backend(
+        IrisClusterConfig(
+            kubernetes_provider=KubernetesProviderConfig(
+                kueue=KueueConfig(cluster_queue="iris-cq", cpu_pack_topology=CW_LABEL_NVLINK_DOMAIN)
+            )
+        ),
+        unreachable_grace=Duration.from_seconds(1),
     )
+    manifest = _build_pod_manifest(make_run_req("/cpu-job/task/0", num_tasks=1), backend.pods)
     annotations = manifest["metadata"]["annotations"]
     assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == CW_LABEL_NVLINK_DOMAIN
-    # Preferred, never required: a CPU Pod falls back to coarser levels instead of pending.
     assert _KUEUE_REQUIRED_TOPOLOGY not in annotations
     assert _KUEUE_UNCONSTRAINED_TOPOLOGY not in annotations
 
