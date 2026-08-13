@@ -1,10 +1,12 @@
 # GitHub resources
 
-This Pulumi project records Marin's existing GitHub Actions secrets as external resources.
-Declarations live in [`Pulumi.marin-community.yaml`](Pulumi.marin-community.yaml); values do not.
+This Pulumi project manages Marin's GitHub repository policy and records existing GitHub Actions
+secrets as external resources. Declarations live in
+[`Pulumi.marin-community.yaml`](Pulumi.marin-community.yaml); plaintext values do not.
 
-Secret resources use Pulumi lookups. The stack can read their metadata, but cannot create, update,
-delete, or rotate them. The audit checks declarations against workflow references and live GitHub
+Most secret resources use Pulumi lookups. The stack can read their metadata, but cannot create,
+update, delete, or rotate them. The dedicated updater's environment secret is managed from
+GitHub-sealed ciphertext. The audit checks both forms against workflow references and live GitHub
 scope metadata.
 
 ```bash
@@ -35,3 +37,66 @@ done
 Keep service-account JSON and SSH credentials until their workflows use OIDC. GitHub variables,
 environments, repository settings, and other non-secret resources can be added here as normally
 managed Pulumi resources.
+
+## Dependency updater app
+
+The external-runtime and native-package dependency workflows share a private, repository-scoped
+GitHub App instead of the Nightshift app. It may write repository contents and pull requests; it has
+no webhook, OAuth, administration, or organization permissions. Its private key is available only
+through the `external-runtime-updater` Actions environment, whose deployment policy accepts `main`
+and rejects pull-request branches.
+
+Pulumi gives the app a pull-request-only bypass of the one-review rule and no required-CI bypass.
+Organization admins retain an always-on emergency bypass on both rulesets. The CI ruleset requires
+GitHub Actions' own `marin-integration`, `marin-lint`, `rust-checks`, and `unit-tests` runs; matching
+context names from another integration do not satisfy it.
+
+The app review bypass must exist in both the review ruleset and classic `main` branch protection.
+GitHub enforces both controls: a ruleset-only bypass can leave an updater PR with green CI still
+waiting for review. After changing either control, inspect the preview and run the live audit below.
+
+App registration and installation remain owner-managed because GitHub's repository-selection
+endpoint requires a user-scoped token unsuitable for unattended Pulumi runs. The installation must
+select only `marin`. To recreate or rotate the app credential:
+
+1. Verify that the app has only Contents and Pull requests read/write permission and remains
+   installed only on `marin`. Record the app ID, client ID, and slug from its settings page.
+2. Generate a private key and seal it to the protected environment's Actions public key. `--no-store`
+   prints ciphertext without creating the secret. Record the matching public-key ID:
+
+   ```bash
+   repository_id=$(gh api repos/marin-community/marin --jq .id)
+   gh api "repositories/$repository_id/environments/external-runtime-updater/secrets/public-key" \
+     --jq .key_id
+   gh secret set DEPENDENCY_UPDATER_PRIVATE_KEY \
+     --repo marin-community/marin --env external-runtime-updater --no-store \
+     < /path/to/private-key.pem
+   ```
+
+3. Update `dependencyUpdater` in `Pulumi.marin-community.yaml` with the app metadata, public-key
+   ID, and sealed ciphertext. The ciphertext is safe to commit: only GitHub can decrypt it, and
+   Pulumi never receives the private key plaintext.
+
+   ```yaml
+   marin-github:dependencyUpdater:
+     repository: marin-community/marin
+     appId: 123456
+     clientId: Iv23example-client-id
+     appSlug: marin-external-runtime-updater
+     reviewRulesetId: 785435
+     actionsKeyId: example-key-id
+     encryptedPrivateKey: example-base64-ciphertext
+   ```
+
+4. Run `pulumi preview`. Verify the ruleset bypass actors and the imported classic `main`
+   protection's app bypass, then run `pulumi up` and the live audit:
+
+   ```bash
+   pulumi preview
+   pulumi up
+   uv run --package marin-iac python audit.py --live
+   ```
+
+Delete the downloaded PEM after the ciphertext is recorded. To rotate the key, generate a new PEM,
+repeat the sealing command with the current Actions public-key ID, update the two stack fields, and
+run `pulumi up` again.

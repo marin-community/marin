@@ -12,19 +12,20 @@ Read first:
 ## Mission
 
 Every fork Marin pins under `config/external/` is a `marin-community` fork: our
-commits on top of an upstream project. Refreshing one means rebasing our commits
-onto a newer upstream base, validating with the fork's e2e, and re-pinning Marin —
-or, if a real blocker remains, filing one "can't migrate" issue. `MarinSkyRL` is
-the exception: it is marin-native (no upstream), so its refresh only advances to
-its own latest `main`.
+commits on top of an upstream project. Refreshing a pin means rebasing our commits
+onto a newer upstream base on a `<branch>-next` staging branch, validating with the
+fork's e2e against that branch, promoting `<branch>-next` onto the pin's stable
+`branch`, and re-pinning Marin at it — or, if a real blocker remains, filing one
+"can't migrate" issue.
 
-Refresh one fork, or one atomic `group`, at a time. A `group` refreshes as a unit:
-its sections refresh together on one date-stamped run and re-pin in one PR (each
-still rebases onto its own base). The vllm/tpu-inference pair is grouped because the
-TPU launcher installs both pins at once and vllm's base derives from the
-tpu-inference release; splitting them could pin a mixed, unblessed stack. A weekly coordinator that walks the descriptor in
-`depends_on` order is planned but not yet built; today a human runs it for a single
-fork or group.
+Each pin refreshes independently. The one exception is a `group`, which refreshes as a
+unit: its sections refresh together on one run and re-pin in one PR (each still rebases
+onto its own base). Only the vllm/tpu-inference pair is grouped, because the TPU
+launcher installs both pins at once and vllm's TPU base derives from the tpu-inference
+release; splitting them could pin a mixed, unblessed stack. The vllm fork's GPU pin is
+not in that group — it tracks upstream head on its own `gpu` branch, independent of the
+`tpu` branch. A weekly coordinator that walks the descriptor in `depends_on` order is
+planned but not yet built; today a human runs it for a single pin or group.
 
 Use the same algorithm in CI and local runs. In local/manual mode, ask before
 external mutations: pushing fork branches, opening the Marin PR, or filing a GitHub
@@ -34,12 +35,15 @@ issue. Do not ask before the fork's required e2e.
 
 Read the target fork's section in `config/external/migration.toml`. It gives:
 
-- `upstream` — the repo we rebase onto. Absent only for marin-native forks.
+- `upstream` — the repo we rebase onto. Every fork has one.
 - `group` — if present, refresh every section in the group together in one PR
-  (read them all now); if absent, this fork refreshes alone.
+  (read them all now); if absent, this pin refreshes alone.
 - `base_select` (+ `derived_from`) — how to choose the new upstream base.
-- `pin` — where the resolved pin is recorded (`isolated_project` uv.lock, or
-  `descriptor:<path>#<section>`); drives the re-pin step.
+- `pin` — where the resolved pin is recorded (`isolated_project` uv.lock,
+  `descriptor:<path>#<section>` SHA, or `release:<path>` prebuilt wheel); drives the
+  re-pin step.
+- `branch` — the fork branch this pin tracks (`main` for a single-pin fork; `gpu`/`tpu`
+  for the two-pin vllm fork). The refresh stages on `<branch>-next` and promotes onto it.
 - `e2e` — the Marin end-to-end that validates the refresh.
 - `blocker_assignee` — who owns the "can't migrate" issue.
 - `nuances` — constraints a human must respect (torch pins, known-good ceilings).
@@ -67,13 +71,16 @@ revision.
   `${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}` in Actions, else a UTC timestamp plus a
   short label).
 - Clone the fork and add its `upstream` remote. The fork URL is `repository` in the
-  pin source (`vllm/tpu-forks.toml` for descriptor pins, the `[tool.uv.sources]`
-  git entry for isolated projects); `<upstream>` is this section's `upstream`.
+  pin source (`vllm/tpu-forks.toml` for descriptor pins, the `[tool.uv.sources]` git
+  entry for isolated projects, the release-asset host in `vllm/gpu-release.toml` for the
+  `vllm-gpu` release pin — the same `marin-community/vllm` repo); `<upstream>` is this
+  section's `upstream`.
 
 ```sh
 git clone <repository> <fork>
 git -C <fork> remote add upstream <upstream>
-git -C <fork> fetch --tags origin upstream
+git -C <fork> fetch --tags --multiple origin upstream   # --multiple fetches both remotes; without it "upstream" is read as a refspec
+git -C <fork> remote set-head upstream -a                # so upstream/HEAD resolves
 ```
 
 - Keep working notes as you go — decisions, selected bases, branch SHAs, validation
@@ -81,15 +88,12 @@ git -C <fork> fetch --tags origin upstream
   PR body: base-selection evidence and the carry/drop/fix table in `<details>`, and
   the unresolved risks above the fold.
 
-A marin-native fork (no `upstream`, `base_select = fork_main`) has nothing to rebase
-onto: skip base selection and the rebase, advance to its own latest `main` (see
-Re-pin), and validate.
-
 ## Select the base
 
-- `base_select = upstream_main` (`evalchemy`, `harbor`): the base is the tip of the
-  `upstream` default branch. These forks rebase onto upstream `main`; there is no
-  release to gate on.
+- `base_select = upstream_main` (`evalchemy`, `harbor`, `MarinSkyRL`, `vllm-gpu`): the base is the
+  tip of the `upstream` default branch. These pins rebase onto upstream `main`; there is no
+  release to gate on. `vllm-gpu` tracks vLLM head this way, distinct from the TPU `vllm` pin's
+  tpu-inference-blessed base.
 - `base_select = latest_release` (`tpu-inference`): use GitHub Releases of the
   fork's `upstream`; do not use raw tags or branches. Select the newest release
   where `draft == false`, `prerelease == false`, and the tag is exactly
@@ -104,59 +108,152 @@ If the selected base matches the current one and no pin metadata needs repair, e
 no-op. Do not walk back to older releases when the latest eligible one fails; fix
 the refresh or file a blocker issue.
 
+For an isolated fork whose `upstream` base has not moved, there is nothing to rebase
+and the refresh is a no-op — even if Marin's pin lags the fork's own `main`. Adopting
+patches pushed to the fork since Marin last locked belongs to the daily
+external-dependency bump (`ops-external-dependencies`); refresh-fork runs only when
+there is a newer upstream base to rebase onto.
+
 ## Rebase the overlay
 
-Branch from the selected base as `auto-refresh/<YYYYMMDD>/<base-id>-<shortsha>`
-(`<base-id>` = the tpu-inference release tag, `lkg` for vLLM, or the upstream short
-SHA; same date prefix across a group). Never rewrite an existing remote refresh
-branch; on collision use the next `-rN` suffix.
+Branch from the selected base as `<branch>-next` (the pin's `branch` with a `-next`
+suffix: `gpu-next`, `tpu-next`, or `main-next` for a single-pin fork). This staging
+branch is disposable — a re-run force-updates it — and is distinct from the stable
+`<branch>`, which only the Promote step moves.
 
 Find the base our commits currently sit on: `old_base` is the descriptor's
-`upstream_base` (descriptor pins) or `git merge-base <fork>/main <upstream>/HEAD`
-(isolated pins); `old_tip` is the current pin. Then, onto `new_base`:
+`upstream_base` (descriptor pins) or `git merge-base <fork>/<branch> upstream/HEAD`
+(isolated and release pins, where it is not recorded). `old_tip` is the head of our
+patches: the fork's `main` for isolated pins (Marin's recorded pin may lag `main`, so
+rebase from `main` to cover the full patch set), or the pin's stable `<branch>` tip for
+descriptor and release pins (the descriptor's `commit`, or `gpu-release.toml`'s
+`source_commit`). Then, onto `new_base`:
 
-1. Inventory our commits in order: `git log --reverse old_base..old_tip`.
+1. Inventory our commits in order: `git log --reverse --no-merges old_base..old_tip`.
+   Merge commits (especially merges of `upstream` into a feature branch) are not
+   replayed — their content comes from the new base; drop them.
 2. Classify each meaningful delta: `carry` (still needed, not upstreamed), `drop`
    (upstream absorbed it, obsolete, or temporary), `fix` (intent needed,
-   implementation must change).
+   implementation must change — re-author against the current layout when upstream
+   moved or refactored the files it touches). Before carrying anything, check whether
+   the new base already did it: grep the base for the symbols, APIs, or dependency
+   pins the patch introduces. If they are present it is a `drop` — a backport that has
+   landed, or a version ceiling the base now exceeds (a stale `<X` pin silently
+   downgrades upstream). On a fast-moving fork this "did upstream absorb this?" pass is
+   the highest-value step; it is what keeps the fork converging rather than re-adding
+   duplicate or obsolete code.
 3. Replay only `carry` and `fix` onto `new_base` in the old logical order: clean
    cherry-picks for carries; rewrite fixes as new commits referencing the original
-   SHA(s).
+   SHA(s). Separate genuine conflicts from cascade artifacts: a file the overlay
+   created (absent from the new base) conflicts only because an earlier commit that
+   added it was skipped. Classify each touched path as upstream-shared (exists at both
+   bases) or fork-new, resolve fork-new cascades mechanically, and count conflicts only
+   on shared files — a single abort-on-conflict pass badly overcounts and can read a
+   tractable rebase as intractable.
 4. In every retained commit body, state why it is still needed and its future drop
    condition. For non-obvious patches, leave a short code-adjacent rationale.
 5. Run `git range-diff old_base..old_tip new_base..<new_tip>` as the replay audit
    and explain every dropped or rewritten delta in the notes and PR.
-6. Keep history reviewable — no conflict artifacts, unrelated refactors, or
-   preserved commits whose behavior is now `drop`.
+6. Audit the overlay's call-sites against the new base's API before the build. A
+   clean cherry-pick applies textually but does not prove the upstream symbols the
+   overlay imports or calls still exist: on a fast-moving fork a class becomes a
+   factory function, a helper is deleted, a signature gains a required argument.
+   Statically cross-check every upstream symbol the overlay touches — constructor
+   kwargs, function signatures, attributes, removed helpers — against `new_base`,
+   including the overlay's tests. A vLLM refresh caught two breaks this way: a
+   `FusedMoE` class replaced by a `FusedMoEFactory` function, and a removed
+   `is_interleaved` config helper. A textual replay left both in place, and only a
+   multi-hour GPU build would otherwise have surfaced them.
+7. Keep history reviewable — no conflict artifacts, unrelated refactors, or
+   preserved commits whose behavior is now `drop`. Collapse fork-infra churn
+   (CI, workflow, or prose commits that adopt then revise then disable) to its final
+   state rather than replaying each hop.
 
-A fork far behind upstream (see `nuances`) makes the first rebase large and
-conflict-heavy; budget for it and record the sharp edges.
+Stop and file a blocker instead of forcing a PR when the rebase is not a mechanical
+replay: our overlay is non-linear (merge commits weaving upstream in), upstream
+renamed or refactored files our `fix` commits touch (so they need re-authoring against
+the new layout), or conflicts hit many core files at once. A fork hundreds of commits
+behind upstream is usually in this state. The weekly cadence keeps a fork from ever
+drifting this far; one that already has (see `nuances`) needs a one-time manual
+catch-up outside this skill before it can be auto-migrated. That catch-up replays
+the fork's real commits onto the new base; it never reconstructs the overlay from a
+single net diff, which silently invents drift the fork never carried. Diff each
+hand-ported `fix` file against the fork's `main` to confirm it matches intent. The
+blocker issue carries the carry/drop/fix inventory, the conflict map, and how far
+behind the fork is.
 
-## Re-pin
+## Pin at the staged tip
 
-Re-pin per the section's `pin`, then run `uv run config/update-external.py` to
-regenerate `lib/marin/src/marin/external_dependencies.py`; confirm only the intended
-pins change.
+Point Marin at `<branch>-next` so the e2e runs against the replayed code, then run
+`uv run config/update-external.py` to regenerate
+`lib/marin/src/marin/external_dependencies.py`; confirm only the intended pins change.
+The stable `<branch>` still holds the old tip here — the Promote step moves it after the
+e2e passes. Because `<branch>-next` and the promoted `<branch>` are the same commit, the
+pin set here needs no change after promotion.
 
-- `pin = descriptor:<path>#<section>` (`vllm`, `tpu-inference`): push the refresh
-  branch to the fork; do not move fork `main`. Set the section's `commit` to the
-  pushed branch tip and `upstream_base` to the selected base in the descriptor. The
-  pin references the reviewed branch; promoting it to fork `main` is the post-merge
-  follow-up. This stack resolves entirely inside the `uvx` env from the two forks,
-  so there are no `uv.lock` changes and `jax`/`jaxlib`/`libtpu`/`torch` come from the
-  forks' own dependencies — do not touch `marin-core`, `marin-levanter`, or
-  `marin-fray`.
-- `pin = isolated_project` (`evalchemy`, `harbor`, `MarinSkyRL`): the uv source
-  follows the fork's `main`, so the pin advances only when `main` does. Push the
-  rebased history to the fork's `main` — a history rewrite, so coordinate: the daily
-  external-dependency bump and this pin both follow `main`. Review the rebase from a
-  compare link (`upstream_base..<new_tip>`) on the Marin PR before pushing. Then run
-  `uv run config/update-external.py <fork>` to advance `config/external/<fork>/uv.lock`
-  to the new `main`. A marin-native fork has no rebase — `main` already carries the
-  change, so just re-lock.
+- `pin = descriptor:<path>#<section>` (`vllm`, `tpu-inference`): push `<branch>-next` to
+  the fork. Set the section's `commit` to its tip and `upstream_base` to the selected
+  base in `vllm/tpu-forks.toml`. This stack resolves entirely inside the `uvx` env from
+  the two forks, so there are no `uv.lock` changes and `jax`/`jaxlib`/`libtpu`/`torch`
+  come from the forks' own dependencies — do not touch `marin-core`, `marin-levanter`,
+  or `marin-fray`.
+- `pin = release:<path>` (`vllm-gpu`): the pin is a prebuilt wheel, so push `gpu-next`
+  and build it through the fork's release pipeline — the candidate/release jobs compile
+  both arches and validate the exact wheel bytes on real GPUs. Set `gpu-release.toml`'s
+  `release_tag`, `source_commit`, `version`, `torch_backend`, and per-arch `url`+`sha256`
+  from the promoted manifest. A base that crosses a CUDA/torch or vLLM stable-ABI
+  boundary is a migration, not a bump: re-audit the wheel verifier and the fork's release
+  gate for the extension name (`vllm._C_stable_libtorch` on CUDA 13).
+- `pin = isolated_project` (`evalchemy`, `harbor`, `MarinSkyRL`): the uv source follows
+  the fork's `main`, so `main` is the stable branch. Stage the rebase on `main-next`,
+  review it from a compare link (`upstream_base..main-next`) on the Marin PR, and point
+  the uv source at `main-next` to validate. After the e2e passes, Promote advances `main`
+  and `uv run config/update-external.py <fork>` locks `config/external/<fork>/uv.lock`
+  against it — coordinate with the daily external-dependency bump, which also follows
+  `main`.
 
 Respect the section's `nuances`. Manual fixed-base overlay changes are a separate
 workflow; see `docs/overlay-only-pr.md`.
+
+## Check the fork's own suite
+
+Run the fork's own test suite on the rebased branch before the marin e2e. The e2e
+exercises one path; the fork suite is what catches re-porting drift across the whole
+patch set. Run it locally where the runner supports it, otherwise dispatch it on the
+fork's CI.
+
+Derive the command from the fork's CI config verbatim; do not invent a marker
+subset. A narrow marker such as `-m unit` can silently skip the thousands of unmarked
+tests the CI's real expression (`-m "not runtime"`) collects, so the narrow run reads
+green while most of the suite never ran. CI steps run in order under an implicit
+`if: success()`: a later gated step (a `-m runtime` docker leg) does not run until an
+earlier one is green, so its regressions stay hidden behind the first failure. Run
+every step's marker in order.
+
+Probe the runner before trusting a local run. This VM runs docker but its bind-mounts
+do not propagate into containers, so a container-environment trial (harbor's
+DOCKER-env golden tests) cannot complete here and has to run on the fork's CI. To
+dispatch the suite there when the review PR sits on an `upstream-base/<sha>` branch:
+gate workflows commonly filter `branches: ["main"]`, so such a PR gets no automatic
+CI; only a workflow declaring `workflow_dispatch` and present on the default branch
+can be dispatched against the branch ref; a workflow with neither `workflow_dispatch`
+nor a matching push trigger never runs on that PR, so verify it locally.
+
+A build-heavy fork raises a second ceiling. vLLM's suite needs its compiled CUDA/TPU
+stack, and `import` fails outright when the runner has no torch, so the pre-e2e check
+there is structural only: `py_compile` the replayed tree and sweep for leftover
+conflict markers. A green structural pass is not behavioral validation — say so.
+
+Deterministic golden tests are dependency-version fragile: an upstream-mandated
+dependency floor (an upstream `litellm>=1.92` bump) can stale a golden even when the
+fork source is byte-identical. Read the deciding code path rather than the golden
+diff, and separate the dependency floor from a real port defect — never downgrade
+below the floor to make a golden pass. Prefer making the fixture dependency-independent
+by patching every version-sensitive seam the trigger reads (the sync and async token
+counters both, not just one) over re-tuning the golden to a single version. Regenerate
+in one CI run: a `workflow_dispatch` that runs the suite in update mode and then a
+comparison-mode verify step, both non-failing, uploading the regenerated goldens and
+logs as artifacts.
 
 ## Validate
 
@@ -172,7 +269,20 @@ Run the descriptor's `e2e` before opening the PR:
 uv run iris --config lib/iris/config/marin.yaml job run \
   --job-name served-qwen3-<run-id> --cpu 1 --memory 2G --extra cpu \
   --priority interactive --no-wait -- python -c \
-  "from dataclasses import replace; from fray.types import ResourceConfig; from marin.execution.lazy import lower; from marin.execution.step_runner import StepRunner; from experiments.evals.brokered_eval_suite import brokered_eval_suite; from experiments.evals.served_qwen3 import QWEN3_TPU_INFERENCE; inference = replace(QWEN3_TPU_INFERENCE, worker_resources=ResourceConfig.with_tpu('v6e-4', ram='96g', regions=['europe-west4'])); StepRunner().run([lower(brokered_eval_suite(inference, model_name='qwen3-0.6b-refresh-smoke', version='<run-id>-dev', limit=8))])"
+  "from dataclasses import replace; from fray.types import ResourceConfig; from marin.execution.lazy import lower; from marin.execution.step_runner import StepRunner; from experiments.evals.lm_eval_suite import lm_eval_suite; from experiments.evals.served_qwen3 import QWEN3_TPU_INFERENCE; inference = replace(QWEN3_TPU_INFERENCE, iris=replace(QWEN3_TPU_INFERENCE.iris, worker_resources=ResourceConfig.with_tpu('v6e-4', ram='96g', regions=['europe-west4']))); StepRunner().run([lower(lm_eval_suite(inference, model_name='qwen3-0.6b-refresh-smoke', version='<run-id>-dev', limit=8))])"
+```
+
+- **`tests/cluster/vllm/test_snowball_backend_parity.py`** (`vllm-gpu`) — the
+  Snowball-67B next-token logprob parity gate on H100s. It is `-m cluster` marked, so
+  run it with `-o addopts= --import-mode=importlib`; the H100s live on CoreWeave and are
+  reached through the marin federation hub (`target_cluster`), not a direct controller.
+  Confirm the Levanter reference and `vllm-gpu-pp1` (single-node 8×H100) match the
+  goldens within `max_probability_error` (`pp2` is a 16×H100 multi-node variant). Pair
+  it with a bounded qwen3-0.6B GPU serve+eval to exercise the brokered serving path:
+
+```sh
+uv run pytest tests/cluster/vllm/test_snowball_backend_parity.py \
+  -m cluster -o addopts= --import-mode=importlib -vv -s
 ```
 
 - **`experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml`** (`evalchemy`) and
@@ -187,8 +297,10 @@ uv run python -m experiments.evaluation.cli launch --model qwen3-0.6b --limit 8 
   --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml          # harbor
 ```
 
-  `--dry-run` resolves the model, backend, and task plan without opening Iris for a
-  cheap pre-check.
+  `--dry-run` resolves the model, backend, and task plan — a wiring pre-check, not
+  fork validation. Depending on the eval it may not import the fork at all, or import
+  it without exercising it, so a green dry-run says nothing about whether the new pin
+  runs. Only the live run above validates the refreshed fork.
 
 - **`experiments/post_training/iceball_micro.py`** (`MarinSkyRL`) — the micro
   post-training e2e. `--version` is required and `--run` builds the handles
@@ -201,8 +313,20 @@ uv run python -m experiments.post_training.iceball_micro --stage evaluation --ve
 
 When an e2e fails, rerun the same workload against Marin's current pins on the old
 fork stack, same target and priority. Fix only failures that pass on the old stack
-and fail on the refreshed one. If the old stack is already broken, record it as a
-baseline failure; do not rewrite that workload as part of this refresh.
+and fail on the refreshed one. If the old stack is already broken, the fork's e2e
+cannot gate this refresh: do not open a PR on an unvalidated pin — file or link a
+blocker for the broken e2e and hold the refresh until it is fixed.
+
+## Promote the staged branch
+
+Once the e2e passes on `<branch>-next`, promote it before opening the PR: hard-swap the
+pin's stable `<branch>` onto `<branch>-next` with a backup, per
+`docs/promotion-protocol.md`. The swap is a backed-up force-update, not a merge — a
+rebased refresh does not descend from the old tip, so a merge would splice two upstream
+bases and break the fork's linear history. Marin pins exact SHAs and wheels, so the
+pointer moves without changing what Marin resolves. On a multi-pin fork keep `main`
+blank (`docs/fork-main-readme.md`); never advance `main` to a pin tip. A grouped refresh
+promotes each of its pins.
 
 ## Review and Open the PR
 
@@ -215,22 +339,17 @@ refresh, and no text overclaims validation evidence.
 Open one draft `marin-community/marin` PR via `.agents/skills/commit/SKILL.md`,
 request the descriptor's `blocker_assignee` as reviewer, and follow the commit
 skill's monitoring loop to an exit condition. PR body: above the fold, the fork,
-selected base, fork branch/tip SHAs, e2e outcome, and unresolved risks; in
-`<details>`, the base-selection evidence and the carry/drop/fix table with
-dropped-patch reasons.
-
-## Post-Merge Follow-Up
-
-A `descriptor`-pinned fork keeps its `main` unchanged and pins a reviewed branch;
-after the Marin PR merges, a separate operator promotes that branch to fork `main`
-via `docs/post-merge-protocol.md`. An isolated fork already advanced its `main`
-during the refresh, so it needs no promotion.
+selected base, the promoted `<branch>` tip SHA (and the wheel release tag for
+`vllm-gpu`), e2e outcome, and unresolved risks; in `<details>`, the base-selection
+evidence and the carry/drop/fix table with dropped-patch reasons.
 
 ## Done Means
 
 - The pin source named by `pin` carries the new revision (descriptor pins also carry
   `upstream_base`); `external_dependencies.py` is regenerated.
+- The pin's stable `branch` was hard-swapped onto the validated tip with a backup
+  branch; a multi-pin fork's `main` is still blank.
 - Retained patches explain why they exist; dropped patches are called out.
-- The fork's e2e passed before PR creation, or the blocker is in a Marin issue
-  assigned to `blocker_assignee`.
+- The fork's e2e passed before promotion and PR creation, or the blocker is in a Marin
+  issue assigned to `blocker_assignee`.
 - An opened Marin PR reaches a `commit` skill monitoring exit condition.

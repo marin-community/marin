@@ -69,6 +69,12 @@ def _validated_config(
     )
 
 
+def _write_job_record(job_dir: Path, n_total_trials: int) -> None:
+    """Harbor's own job-level bookkeeping: the count the coverage denominator comes from."""
+    job_dir.mkdir(parents=True, exist_ok=True)
+    job_dir.joinpath("result.json").write_text(json.dumps({"n_total_trials": n_total_trials}))
+
+
 def test_materialize_harbor_dataset_downloads_hf_revision_as_local_tasks(tmp_path, monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     snapshot = tmp_path / "snapshot"
@@ -134,7 +140,13 @@ def test_materialize_harbor_dataset_rebases_local_path_onto_worker_workspace(tmp
 
 def test_write_archive_writes_agentic_samples(tmp_path):
     trial = HarborTrial(
-        task_id="task-one", trial_id="trial-1", reward=0.0, status="completed", trajectory_path=None, error=None
+        task_id="task-one",
+        trial_id="trial-1",
+        reward=0.0,
+        scored=True,
+        status="completed",
+        trajectory_path=None,
+        error=None,
     )
 
     root = _write_archive([trial], "hf://DCAgent2/terminal_bench_2", str(tmp_path))
@@ -288,6 +300,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         nonlocal driver_starts
         driver_starts += 1
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 3)
         completed_result = job_dir / "trial-one" / "result.json"
         completed_result.parent.mkdir(parents=True, exist_ok=True)
         if not completed_result.exists():
@@ -334,6 +347,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         "mean_reward": 2 / 3,
         "solved": 2.0,
         "total": 3.0,
+        "attempted": 3.0,
     }
 
 
@@ -450,10 +464,12 @@ def _harbor_executor(dataset: str) -> HarborExecutor:
     )
 
 
-def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monkeypatch):
+def test_harbor_executor_fails_when_too_few_trials_were_graded(tmp_path, monkeypatch):
     def run_driver(_config, overlay, driver_env, _backend_state) -> None:
         assert isinstance(driver_env, dict)
-        trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 1)
+        trial_dir = job_dir / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text(
             json.dumps(
@@ -474,15 +490,120 @@ def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monk
     with pytest.raises(EvaluationError) as exc_info:
         executor(_inference_session(), str(tmp_path), {})
 
-    assert exc_info.value.status is RunStatus.FAILED
+    # A trial that errored is an ungraded item, not a wrong answer: the only trial here is ungraded,
+    # so the run graded 0% of what it attempted and is rejected as an infrastructure failure.
+    assert exc_info.value.status is RunStatus.INFRA_FAILED
+    assert exc_info.value.coverage["failed-" + tmp_path.name].errors == {"AgentError": 1}
     result = json.loads((tmp_path / "harbor_result.json").read_text())
     assert result["failed_trials"] == 1
+    assert result["errors"] == {"AgentError": 1}
+
+
+def test_harbor_executor_admits_a_batch_that_clears_the_completion_gate(tmp_path, monkeypatch):
+    """One timed-out trial in twenty does not discard the other nineteen. The run keeps its aggregate
+    and its error distribution, and the aggregate is over the trials a verifier actually graded."""
+
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 20)
+        for index in range(20):
+            trial_dir = job_dir / f"trial-{index}"
+            trial_dir.mkdir(parents=True, exist_ok=True)
+            if index == 0:
+                trial_dir.joinpath("result.json").write_text(
+                    json.dumps(
+                        {
+                            "task_name": f"task-{index}",
+                            "verifier_result": None,
+                            "exception_info": {"exception_type": "AgentTimeoutError"},
+                        }
+                    )
+                )
+                continue
+            trial_dir.joinpath("result.json").write_text(
+                json.dumps(
+                    {
+                        "task_name": f"task-{index}",
+                        "verifier_result": {"rewards": {"reward": 1.0 if index % 2 else 0.0}},
+                    }
+                )
+            )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"gated-{tmp_path.name}")
+
+    outcome = executor(_inference_session(), str(tmp_path), {})
+
+    dataset = executor.config.record_dataset
+    metrics = outcome.metrics[dataset]
+    assert metrics["total"] == 19.0
+    assert metrics["attempted"] == 20.0
+    # 10 of the 19 graded trials solved: dividing by 20 instead would publish the worst case as the
+    # estimate, scoring the timed-out trial as a wrong answer.
+    assert metrics["accuracy"] == pytest.approx(10 / 19)
+    coverage = outcome.coverage[dataset]
+    assert (coverage.n_attempted, coverage.n_scored) == (20, 19)
+    assert coverage.errors == {"AgentTimeoutError": 1}
+
+
+def test_an_unreadable_job_record_reports_unknown_coverage_rather_than_complete(tmp_path, monkeypatch):
+    """Without Harbor's job record there is no denominator. Falling back to the number of results
+    found would certify exactly the interrupted runs as complete, so coverage stays unreported and
+    the completion gate -- which has no rate to test -- does not reject the batch either."""
+
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        for index in range(4):
+            trial_dir = job_dir / f"trial-{index}"
+            trial_dir.mkdir(parents=True, exist_ok=True)
+            trial_dir.joinpath("result.json").write_text(
+                json.dumps({"task_name": f"task-{index}", "verifier_result": {"rewards": {"reward": 1.0}}})
+            )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"unknown-{tmp_path.name}")
+
+    outcome = executor(_inference_session(), str(tmp_path), {})
+
+    dataset = executor.config.record_dataset
+    coverage = outcome.coverage[dataset]
+    assert coverage.n_attempted is None
+    assert coverage.n_scored == 4
+    # No attempted count means no "attempted" metric to publish, rather than one equal to the scored
+    # count, which would read as complete.
+    assert "attempted" not in outcome.metrics[dataset]
+
+
+def test_harbor_attempted_trials_come_from_the_job_record_not_the_result_glob(tmp_path, monkeypatch):
+    """A trial that dies before writing a result leaves no file. Counting result files would report
+    perfect coverage for exactly the runs that lost the most trials."""
+
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 20)
+        for index in range(19):
+            trial_dir = job_dir / f"trial-{index}"
+            trial_dir.mkdir(parents=True, exist_ok=True)
+            trial_dir.joinpath("result.json").write_text(
+                json.dumps({"task_name": f"task-{index}", "verifier_result": {"rewards": {"reward": 1.0}}})
+            )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"missing-{tmp_path.name}")
+
+    outcome = executor(_inference_session(), str(tmp_path), {})
+
+    coverage = outcome.coverage[executor.config.record_dataset]
+    assert (coverage.n_attempted, coverage.n_scored) == (20, 19)
+    assert coverage.errors == {"no_result_written": 1}
 
 
 def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, monkeypatch):
     def run_driver(_config, overlay, driver_env, _backend_state) -> None:
         assert isinstance(driver_env, dict)
-        trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        _write_job_record(job_dir, 1)
+        trial_dir = job_dir / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text(
             json.dumps(

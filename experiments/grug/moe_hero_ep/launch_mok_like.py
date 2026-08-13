@@ -50,6 +50,9 @@ GPUS_PER_NODE = 4
 CPUS_PER_NODE = 96
 RAM_PER_NODE = "900g"
 MATCHED_CAPACITY_FACTOR = 1.1
+# The sealed v15 expert width (#8108). Both arms of the comparison are pinned to it because the
+# fused kernel cannot express the hero's asymmetric routed/shared widths.
+MOK_LIKE_EXPERT_INTERMEDIATE_DIM = 3072
 PRODUCTION_MOK_LIKE_WORKSPACE_SLOTS = 1
 DEFAULT_GPU_DEVICE_MEMORY_FRACTION = 0.85
 PROMOTED_MOK_LIKE_PINNED_HOST_MEMORY_LIMIT_GB = 176
@@ -280,6 +283,14 @@ def build_backend_comparison_run(
         num_experts=8,
         num_shared_experts=1,
         capacity_factor=MATCHED_CAPACITY_FACTOR,
+        # The fused kernel runs the routed and shared experts through one megakernel at a single
+        # width, and LatentMoE narrows only the routed path. The hero's widened routed experts
+        # (intermediate_dim 6144 against a 3072 shared width) and its latent compression are both
+        # inexpressible here, so pin the shape on the shared config -- the control arm has to move
+        # with it or the comparison stops being matched.
+        intermediate_dim=MOK_LIKE_EXPERT_INTERMEDIATE_DIM,
+        shared_expert_intermediate_dim=MOK_LIKE_EXPERT_INTERMEDIATE_DIM,
+        latent_dim=None,
         **({"num_layers": num_layers} if num_layers is not None else {}),
     )
     if backend is MoeBackend.MOK_LIKE:
@@ -518,6 +529,8 @@ def build_mok_like_run(
     num_layers: int | None = None,
     watch_interval: int = 0,
     mok_like_preset: MokLikeExperimentPreset = MokLikeExperimentPreset.PROMOTED_DROPLESS_V12,
+    mok_like_num_devices: int = 4,
+    mok_like_workspace_transport: str = MokLikeWorkspaceTransport.IN_PROCESS_PEER.value,
     mok_like_schedule_capacity_factor: float | None = None,
     mok_like_workspace_slots: int | None = None,
     forward_x_storage: MokLikeForwardXStorage | None = None,

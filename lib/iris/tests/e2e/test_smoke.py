@@ -32,10 +32,7 @@ from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from rigging.connect import proxy_path
-from rigging.timing import Duration, ExponentialBackoff
-
-from .conftest import (
+from iris.testing.e2e import (
     DEFAULT_CONFIG,
     MARIN_ROOT,
     ClusterCapabilities,
@@ -46,7 +43,9 @@ from .conftest import (
     discover_capabilities,
     wait_for_dashboard_ready,
 )
-from .helpers import TestJobs
+from iris.testing.e2e_helpers import TestJobs
+from rigging.connect import proxy_path
+from rigging.timing import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -465,9 +464,11 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
         "and non-matching log lines are still visible around the highlights.",
     )
 
-    # The filter re-queries the server and drops non-matching lines entirely. It
-    # applies on Enter, not on every keystroke.
-    filter_input = "input[placeholder^='Filter:']"
+    # The regex filter re-queries the server and drops non-matching lines entirely. It
+    # applies on Enter, not on every keystroke. Keep this pattern literal-compatible
+    # because CI runs Iris smoke tests against the latest published Finelog server;
+    # the Rust test covers regex metacharacters against this branch's server source.
+    filter_input = "input[placeholder^='Filter regex']"
     smoke_page.fill(filter_input, "validation failed")
     smoke_page.press(filter_input, "Enter")
     smoke_page.wait_for_function(
@@ -499,7 +500,7 @@ def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_scree
 
     smoke_page.get_by_role("button", name="Clear filter").click()
     smoke_page.wait_for_function(
-        "() => document.querySelector(\"input[placeholder^='Filter:']\")?.value === '' && "
+        "() => document.querySelector(\"input[placeholder^='Filter regex']\")?.value === '' && "
         "document.body.textContent.includes('processing data batch')",
         timeout=5000,
     )

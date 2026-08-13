@@ -2,13 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import math
 import os
 import subprocess
 import sys
 import textwrap
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
@@ -18,6 +21,7 @@ import pytest
 from click.testing import CliRunner
 from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, use_abstract_mesh
+from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.kernels.mixture_of_kittens import (
@@ -31,6 +35,8 @@ from levanter.kernels.mixture_of_kittens import (
 )
 from levanter.kernels.mixture_of_kittens.schedule import schedule_capacity
 from levanter.schedule import ScheduleStep
+from marin.execution.lazy import StepContext
+from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from marin.execution.lazy import StepContext
 
 from experiments.grug import dispatch as grug_dispatch
@@ -1070,6 +1076,25 @@ def test_mok_like_rejects_eval_with_a_different_static_token_shape() -> None:
 
     with pytest.raises(ValueError, match="evaluation must use the training batch size"):
         train._initialize_mok_like_for_config(config, object(), batch_size=4)
+from experiments.grug.moe_hero_ep import grugmuon_hero, launch, model, train
+from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
+
+
+def test_hero_run_without_shape_overrides_uses_the_selected_model():
+    step = launch.build_hero_run(run_id="selected-default", dp_racks=1, num_steps=1, version="dev")
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert (
+        config.model.hidden_dim,
+        config.model.num_layers,
+        config.model.num_experts,
+        config.model.intermediate_dim,
+        config.model.num_experts_per_token,
+        config.model.latent_dim,
+        config.model.capacity_factor,
+        config.trainer.trainer.train_batch_size,
+        config.model.max_seq_len,
+    ) == (6144, 48, 192, 6144, 4, 3072, 1.33, 1024, 4096)
 
 
 def test_full_bank_top_k_is_rejected_before_launch():
@@ -1077,7 +1102,88 @@ def test_full_bank_top_k_is_rejected_before_launch():
     # more entries than there are experts. Without this the job dies in the router, which is after
     # the 16-node gang is allocated.
     with pytest.raises(ValueError, match="must be < num_experts"):
-        launch.build_hero_run(run_id="full-bank", num_steps=1, num_experts_per_token=128, version="dev")
+        launch.build_hero_run(
+            run_id="full-bank",
+            dp_racks=1,
+            num_steps=1,
+            num_experts=128,
+            num_experts_per_token=128,
+            version="dev",
+        )
+
+
+def test_checkpoint_path_overrides_the_step_output_path():
+    """A run that only exercises the checkpoint write sends it to disposable storage."""
+    temp_path = "s3://marin-us-east-02a/tmp/ttl=1d/hero-ckpt-smoke"
+    step = launch.build_hero_run(
+        run_id="ckpt-elsewhere",
+        dp_racks=1,
+        num_steps=1,
+        save_checkpoints=True,
+        checkpoint_path=temp_path,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.trainer.checkpointer.base_path == temp_path
+
+
+def test_checkpoint_path_defaults_under_the_step_output_path():
+    step = launch.build_hero_run(run_id="ckpt-default", dp_racks=1, num_steps=1, version="dev")
+    ctx = StepContext.for_fingerprint(step.runtime_args, step.deps)
+    config = step.build_config(ctx)
+
+    assert config.trainer.trainer.checkpointer.base_path == f"{ctx.output_path}/checkpoints"
+
+
+def test_checkpoint_interval_must_be_positive():
+    with pytest.raises(ValueError, match="checkpoint_interval must be positive"):
+        launch.build_hero_run(
+            run_id="bad-checkpoint-interval",
+            dp_racks=1,
+            num_steps=1,
+            checkpoint_interval=timedelta(0),
+            version="dev",
+        )
+
+
+@pytest.mark.parametrize(
+    ("profile_steps", "profile_start_step"),
+    [(-1, 0), (1, -1), (1, 3)],
+)
+def test_profile_window_must_fall_inside_the_run(profile_steps, profile_start_step):
+    with pytest.raises(ValueError, match="profile"):
+        launch.build_hero_run(
+            run_id="bad-profile-window",
+            dp_racks=1,
+            num_steps=3,
+            profile_steps=profile_steps,
+            profile_start_step=profile_start_step,
+            version="dev",
+        )
+
+
+def test_data_parallel_racks_keep_the_global_batch_explicit():
+    step = launch.build_hero_run(run_id="two-racks", dp_racks=2, num_steps=1, version="dev")
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.replica_axis_size == 2
+    assert config.trainer.trainer.train_batch_size == launch.HERO_EP_BATCH_SIZE
+    assert step.runtime_args["train_resources"].replicas == 2 * launch.HERO_EP_NODES
+
+
+def test_schedule_steps_do_not_extend_the_run():
+    step = launch.build_hero_run(
+        run_id="schedule-head",
+        dp_racks=1,
+        num_steps=5,
+        schedule_steps=100,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.trainer.num_train_steps == 100
+    assert config.stop_after_steps == 5
 
 
 @pytest.mark.parametrize("scenario", list(mok_like_correctness.RouteScenario))
@@ -1325,7 +1431,7 @@ def test_expert_bank_override_must_divide_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
     with pytest.raises(ValueError, match="must divide the expert axis"):
-        launch.build_hero_run(run_id="bad-bank", num_steps=1, num_experts=200, version="dev")
+        launch.build_hero_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
 
 
 @pytest.mark.parametrize(
@@ -1346,7 +1452,10 @@ def test_run_grug_applies_ep_xla_defaults_and_default_pool_preallocation(
         monkeypatch.delenv(name, raising=False)
     config = SimpleNamespace(
         model=SimpleNamespace(mok_like=None),
-        trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
+            watch_mode=train.WatchMode.INLINE,
+        ),
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
@@ -1389,7 +1498,10 @@ def test_grug_dispatch_sends_attempt_zero_limits_on_child_request(monkeypatch: p
     monkeypatch.setattr(grug_dispatch, "current_client", lambda: SimpleNamespace(submit=submit))
     config = SimpleNamespace(
         model=SimpleNamespace(mok_like=None),
-        trainer=SimpleNamespace(trainer=SimpleNamespace(id="attempt-zero")),
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="attempt-zero", watch=WatchConfig(interval=0)),
+            watch_mode=train.WatchMode.DIAGNOSTIC,
+        ),
         resources=ResourceConfig(cpu=1, ram="1g", disk="1g"),
         processes_per_task=1,
         pip_packages=(),
@@ -1419,7 +1531,10 @@ def test_run_grug_applies_backend_xla_flag_overrides(monkeypatch: pytest.MonkeyP
     monkeypatch.delenv("XLA_FLAGS", raising=False)
     config = SimpleNamespace(
         model=SimpleNamespace(mok_like=None),
-        trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=0)),
+            watch_mode=train.WatchMode.DIAGNOSTIC,
+        ),
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
@@ -1456,7 +1571,10 @@ def test_run_grug_isolates_temp_buffer_pool_without_default_pool_preallocation(
     monkeypatch.setenv("XLA_PYTHON_CLIENT_PREALLOCATE", "true")
     config = SimpleNamespace(
         model=SimpleNamespace(mok_like=None),
-        trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=0)),
+            watch_mode=train.WatchMode.DIAGNOSTIC,
+        ),
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
@@ -1505,7 +1623,10 @@ def test_run_grug_rejects_inapplicable_default_pool_preallocation(
 ) -> None:
     config = SimpleNamespace(
         model=SimpleNamespace(mok_like=None),
-        trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=0)),
+            watch_mode=train.WatchMode.DIAGNOSTIC,
+        ),
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
@@ -1547,7 +1668,10 @@ def test_run_grug_rejects_default_pool_trim_outside_shared_cuda_async_mode(
 ) -> None:
     config = SimpleNamespace(
         model=SimpleNamespace(mok_like=MokLikeConfig(), remat_mode="save_moe"),
-        trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run", num_train_steps=55)),
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", num_train_steps=55, watch=WatchConfig(interval=0)),
+            watch_mode=train.WatchMode.DIAGNOSTIC,
+        ),
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
@@ -1708,7 +1832,10 @@ def test_run_grug_requires_explicit_pinned_host_memory_for_mok_like_offload(monk
     monkeypatch.delenv("XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB", raising=False)
     config = SimpleNamespace(
         model=SimpleNamespace(mok_like=MokLikeConfig(), remat_mode="offload_moe"),
-        trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=0)),
+            watch_mode=train.WatchMode.DIAGNOSTIC,
+        ),
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
@@ -1738,7 +1865,10 @@ def test_run_grug_applies_explicit_mok_like_pinned_host_memory_limit(monkeypatch
     monkeypatch.setenv("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.75")
     config = SimpleNamespace(
         model=SimpleNamespace(mok_like=MokLikeConfig(), remat_mode="offload_moe"),
-        trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=0)),
+            watch_mode=train.WatchMode.DIAGNOSTIC,
+        ),
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
@@ -1769,7 +1899,10 @@ def test_run_grug_requires_explicit_mok_like_device_memory_fraction(monkeypatch:
     monkeypatch.delenv("XLA_PYTHON_CLIENT_MEM_FRACTION", raising=False)
     config = SimpleNamespace(
         model=SimpleNamespace(mok_like=MokLikeConfig(), remat_mode="save_moe"),
-        trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=0)),
+            watch_mode=train.WatchMode.DIAGNOSTIC,
+        ),
         resources=object(),
         processes_per_task=1,
         pip_packages=(),
@@ -1791,6 +1924,115 @@ def test_run_grug_requires_explicit_mok_like_device_memory_fraction(monkeypatch:
             train.run_grug(config)
 
     dispatch.assert_not_called()
+
+
+def _run_grug_config(**overrides):
+    """A config carrying every field `run_grug` reads, for the runtime-environment tests."""
+    config = SimpleNamespace(
+        model=SimpleNamespace(mok_like=None),
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
+            watch_mode=train.WatchMode.INLINE,
+        ),
+        resources=object(),
+        processes_per_task=1,
+        pip_packages=(),
+        mok_like_pinned_host_memory_limit_gb=None,
+        gpu_allocator=train.GpuAllocator.CUDA_ASYNC,
+        gpu_temp_buffer_pool=train.GpuTempBufferPool.SHARED,
+        gpu_default_pool_preallocation=train.GpuDefaultPoolPreallocation.EAGER,
+        gpu_default_pool_trim_interval_updates=None,
+        xla_autotune_cache_mode=train.XlaAutotuneCacheMode.REMOTE_SYNC,
+        gpu_device_memory_fraction=None,
+        xla_flag_overrides=(),
+        max_retries_failure=3,
+        max_retries_preemption=100,
+        max_task_failures=10,
+    )
+    for name, value in overrides.items():
+        setattr(config, name, value)
+    return config
+
+
+def test_run_grug_applies_the_hero_runtime_environment(monkeypatch):
+    """The base runtime env reaches os.environ on a per-node run."""
+    for name in train.HERO_EP_RUNTIME_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _run_grug_config()
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert os.environ["JAX_ENABLE_PGLE"] == "true"
+    assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
+
+
+def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
+    # Per-GPU processes cannot profile: the per-process CUPTI sessions collide with
+    # each other and with the cluster's DCGM, and auto-PGLE's recompile path has
+    # wedged per-node gangs (#7344). Per-GPU runs therefore default PGLE off, while
+    # an explicit env setting still wins.
+    for name in train.HERO_EP_RUNTIME_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _run_grug_config(processes_per_task=4)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert os.environ["JAX_ENABLE_PGLE"] == "false"
+
+    monkeypatch.setenv("JAX_ENABLE_PGLE", "true")
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+    assert os.environ["JAX_ENABLE_PGLE"] == "true"
+
+
+def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
+    """Env overrides win for settings with no config field; typed config fields win over env.
+
+    `JAX_ENABLE_PGLE` exists only in `HERO_EP_RUNTIME_ENV`, which is applied with `setdefault`, so
+    an operator's explicit value survives. The allocator became `GrugRunConfig.gpu_allocator`, which
+    is labelled into the run identity; letting an ambient env silently override it would make the
+    run name disagree with what actually ran, so the config field is authoritative.
+    """
+    monkeypatch.setenv("JAX_ENABLE_PGLE", "false")
+    monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _run_grug_config(processes_per_task=1, gpu_allocator=train.GpuAllocator.VMM)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert os.environ["JAX_ENABLE_PGLE"] == "false"
+    assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == train.GpuAllocator.VMM.value
+
+
+@pytest.mark.parametrize(
+    ("watch_mode", "watch_interval", "expected_overlap_limit"),
+    [
+        (train.WatchMode.INLINE, 1, train.INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT),
+        (train.WatchMode.DIAGNOSTIC, 1, train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT),
+        (train.WatchMode.INLINE, 0, train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT),
+    ],
+)
+def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
+    monkeypatch, watch_mode, watch_interval, expected_overlap_limit
+):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _run_grug_config(
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
+            watch_mode=watch_mode,
+        ),
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={expected_overlap_limit}" in flags
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
@@ -1899,3 +2141,387 @@ def test_ep_padded_newton_schulz_returns_to_parameter_sharding():
         output = jax.eval_shape(apply_ns, x)
 
     assert output.sharding == parameter_sharding
+
+
+def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
+    # The dropless eval transform must retarget only the static MoE backend fields and keep every
+    # weight leaf shared by identity, so the eval scores the trained weights with no capacity drops.
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    cfg = model.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_shared_experts=1,
+        num_experts=4,
+        num_experts_per_token=1,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        local_kv_heads=2,
+        global_kv_heads=1,
+        head_dim=8,
+        max_seq_len=8,
+        sliding_window=4,
+        global_every=2,
+        capacity_factor=1.0,
+        initializer_std=0.5 / math.sqrt(32),
+        qk_mult=1.3,
+        attention_implementation="reference",
+        moe_implementation="fixed_all_to_all",
+        report_capacity_overflow=True,
+    )
+    with set_mesh(mesh):
+        m = model.Transformer.init(cfg, key=jax.random.key(0))
+    dropless = train._to_dropless_local(m)
+
+    original = m.stacked_blocks.stacked.mlp.expert_mlp
+    swapped = dropless.stacked_blocks.stacked.mlp.expert_mlp
+    assert original.implementation == "fixed_all_to_all"  # input model left untouched
+    assert swapped.implementation == "sonic_cute"
+    assert swapped.expert_chunks == 1
+    orig_leaves = jax.tree_util.tree_leaves(original)
+    swapped_leaves = jax.tree_util.tree_leaves(swapped)
+    assert len(orig_leaves) == len(swapped_leaves)
+    assert all(a is b for a, b in zip(orig_leaves, swapped_leaves, strict=True))
+
+
+def test_eval_every_adds_the_held_out_suites_as_dependencies():
+    # Held-out sets are what make a run scoreable; a throughput-only run should not pay for them.
+    off = launch.build_hero_run(run_id="eval-off", dp_racks=1, num_steps=1, version="dev")
+    on = launch.build_hero_run(run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, version="dev")
+    off_config = off.build_config(StepContext.for_fingerprint(off.runtime_args, off.deps))
+    on_config = on.build_config(StepContext.for_fingerprint(on.runtime_args, on.deps))
+
+    assert len(off.deps) == 1
+    assert len(on.deps) > len(off.deps)
+    assert off_config.eval is None
+    assert on_config.eval is not None
+    assert on_config.eval.steps_per_eval == 50
+
+
+def test_ep_ablation_defaults_match_the_documented_arm_and_scale_per_rack():
+    one = abl.build_small_run(run_id="d768", size="d768", flavor="ep", version="dev")
+    cfg = one.build_config(StepContext.for_fingerprint(one.runtime_args, one.deps))
+    m = cfg.model
+    # The EP rung is a downsized hero: latent = hidden/2, capacity 1.33, top-k QB (the hero default).
+    assert m.latent_dim == m.hidden_dim // 2
+    assert m.capacity_factor == 1.33
+    assert m.qb_estimator == model.QbEstimator.TOPK
+    assert m.num_layers % 2 == 0  # even depth applied in the launcher, not GrugModelConfig
+    # The histogram QB estimator is selectable on through the builder.
+    hist = abl.build_small_run(run_id="d768-hist", size="d768", flavor="ep", qb_use_histogram=True, version="dev")
+    assert hist.build_config(StepContext.for_fingerprint(hist.runtime_args, hist.deps)).model.qb_estimator == (
+        model.QbEstimator.HIST
+    )
+    # The global batch scales with the rack count, holding the per-rack token load constant.
+    four = abl.build_small_run(run_id="d2048", size="d2048", flavor="ep", dp_racks=4, version="dev")
+    four_cfg = four.build_config(StepContext.for_fingerprint(four.runtime_args, four.deps))
+    assert four_cfg.trainer.trainer.train_batch_size == cfg.trainer.trainer.train_batch_size * 4
+
+
+def test_odd_depth_config_is_not_silently_rounded():
+    # GrugModelConfig must preserve an odd depth so HF round-trips and odd configs stay faithful;
+    # even-rounding is the launcher's job.
+    cfg = model.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_shared_experts=1,
+        num_experts=4,
+        num_experts_per_token=1,
+        num_layers=3,
+        num_heads=4,
+        num_kv_heads=2,
+        local_kv_heads=2,
+        global_kv_heads=1,
+        head_dim=8,
+        max_seq_len=8,
+    )
+    assert cfg.num_layers == 3
+
+
+def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import math
+
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, set_mesh
+
+        from experiments.grug.moe_hero_ep import model
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 1, 2, 2),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        cfg = model.GrugModelConfig(
+            vocab_size=128,
+            hidden_dim=32,
+            intermediate_dim=16,
+            shared_expert_intermediate_dim=16,
+            num_shared_experts=1,
+            num_experts=4,
+            num_experts_per_token=1,
+            num_layers=1,
+            num_heads=4,
+            num_kv_heads=2,
+            local_kv_heads=2,
+            global_kv_heads=1,
+            head_dim=8,
+            max_seq_len=8,
+            sliding_window=4,
+            global_every=2,
+            capacity_factor=1.0,
+            initializer_std=0.5 / math.sqrt(32),
+            qk_mult=1.3,
+            attention_implementation="reference",
+            moe_implementation="fixed_all_to_all",
+            report_capacity_overflow=True,
+        )
+        tokens = jax.ShapeDtypeStruct((2, 8), jnp.int32)
+        with set_mesh(mesh):
+            output = jax.eval_shape(
+                lambda token_ids: model.Transformer.init(cfg, key=jax.random.key(0))(token_ids)[0],
+                tokens,
+            )
+        assert output.shape == (2, 8, 32)
+    """
+
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _explicit_mesh(*axis_sizes):
+    return Mesh(
+        np.asarray(jax.devices()).reshape(*axis_sizes),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+
+
+def _latent_config(latent_dim=None):
+    return model.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_shared_experts=1,
+        num_experts=4,
+        num_experts_per_token=1,
+        latent_dim=latent_dim,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        local_kv_heads=2,
+        global_kv_heads=2,
+        head_dim=8,
+        max_seq_len=8,
+        sliding_window=4,
+        global_every=2,
+        capacity_factor=1.0,
+        initializer_std=0.5 / math.sqrt(32),
+        qk_mult=1.3,
+        attention_implementation="reference",
+        moe_implementation="fixed_all_to_all",
+        report_capacity_overflow=True,
+    )
+
+
+def test_latent_moe_shrinks_the_dispatched_width_but_not_the_token():
+    # The point of LatentMoE is that the all-to-all payload narrows while the residual stream does
+    # not, so the expert weights must be latent-wide and the layer output hidden-wide.
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    cfg = _latent_config(latent_dim=16)
+    tokens = jax.ShapeDtypeStruct((1, 8), jnp.int32)
+    with set_mesh(mesh):
+        built = jax.eval_shape(lambda: model.MoEMLP.init(cfg, key=jax.random.key(0)))
+        out = jax.eval_shape(lambda t: model.Transformer.init(cfg, key=jax.random.key(0))(t)[0], tokens)
+
+    assert built.w_latent_down.shape == (cfg.hidden_dim, 16)
+    # Normalizing the latent keeps the expert input at unit scale despite the down-projection.
+    assert built.latent_norm.weight.shape == (16,)
+    assert built.w_latent_up.shape == (16, cfg.hidden_dim)
+    # Expert banks are latent-wide: this is what narrows the dispatch.
+    assert built.expert_mlp.w_gate.shape[1] == 16
+    assert built.expert_mlp.w_up.shape[1] == 16
+    assert built.expert_mlp.w_down.shape[2] == 16
+    # The residual stream is untouched.
+    assert out.shape[-1] == cfg.hidden_dim
+
+
+def test_latent_moe_is_absent_by_default():
+    # A config without a latent width must keep the standard MoE layer.
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    cfg = _latent_config(latent_dim=None)
+    with set_mesh(mesh):
+        built = jax.eval_shape(lambda: model.MoEMLP.init(cfg, key=jax.random.key(0)))
+    assert built.w_latent_down is None and built.w_latent_up is None
+    assert built.latent_norm is None
+    assert built.expert_mlp.w_gate.shape[1] == cfg.hidden_dim
+
+
+def test_latent_moe_hf_config_roundtrip_preserves_the_architecture():
+    cfg = _latent_config(latent_dim=16)
+
+    hf_config = cfg.to_hf_config(cfg.vocab_size)
+    roundtripped = model.GrugModelConfig.from_hf_config(hf_config)
+
+    assert hf_config.to_dict()["latent_dim"] == 16
+    assert hf_config.to_dict()[model.GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 2
+    assert roundtripped.latent_dim == 16
+
+
+def test_latent_moe_state_dict_contains_the_projection_state():
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    cfg = _latent_config(latent_dim=16)
+    with set_mesh(mesh):
+        built = model.Transformer.init(cfg, key=jax.random.key(0))
+        state_dict = built.to_state_dict()
+    block = next(iter(built.stacked_blocks.unstacked()))
+    assert block.mlp.w_latent_down is not None
+    assert block.mlp.latent_norm is not None
+    assert block.mlp.w_latent_up is not None
+
+    expected = {
+        "model.layers.0.mlp.latent_down_proj.weight": jnp.swapaxes(block.mlp.w_latent_down, -1, -2),
+        "model.layers.0.mlp.latent_norm.weight": block.mlp.latent_norm.weight,
+        "model.layers.0.mlp.latent_up_proj.weight": jnp.swapaxes(block.mlp.w_latent_up, -1, -2),
+    }
+    for name, value in expected.items():
+        np.testing.assert_array_equal(state_dict[name], value)
+
+
+def test_latent_dim_above_hidden_is_rejected():
+    # A latent wider than the hidden dim adds communication instead of removing it.
+    with pytest.raises(ValueError, match="latent_dim must be in"):
+        _latent_config(latent_dim=99999)
+
+
+def test_latent_moe_flops_replace_routed_width_and_add_projections():
+    latent_dim = 16
+    full_width_config = _latent_config(latent_dim=None)
+    latent_config = _latent_config(latent_dim=latent_dim)
+    full_width_flops, _ = train._compute_flops(model_config=full_width_config)
+    latent_flops, _ = train._compute_flops(model_config=latent_config)
+
+    routed_delta = (
+        2
+        * 3
+        * latent_config.intermediate_dim
+        * latent_config.num_experts_per_token
+        * (latent_dim - latent_config.hidden_dim)
+    )
+    projection_flops = 2 * 2 * latent_config.hidden_dim * latent_dim
+    expected_delta = 3 * latent_config.max_seq_len * latent_config.num_layers * (routed_delta + projection_flops)
+
+    assert latent_flops - full_width_flops == expected_delta
+
+
+class _TinyWatchModel(eqx.Module):
+    weight: jax.Array
+
+    def next_token_loss(
+        self,
+        tokens,
+        loss_weight,
+        *,
+        mask,
+        reduction,
+        logsumexp_weight,
+        return_router_metrics,
+    ):
+        del mask, reduction, logsumexp_weight, return_router_metrics
+        error = self.weight * tokens.astype(self.weight.dtype) - loss_weight
+        return jnp.mean(error**2), {}
+
+
+def test_diagnostic_watch_stats_match_direct_gradient_and_parameter_norms():
+    params = _TinyWatchModel(weight=jnp.array(2.0))
+    batch = SimpleNamespace(
+        tokens=jnp.array([1, 3], dtype=jnp.int32),
+        loss_weight=jnp.array([0.5, 1.0]),
+        attn_mask=None,
+    )
+    mp = jmp.get_policy("params=float32,compute=float32,output=float32")
+    watch = WatchConfig(interval=1)
+
+    actual = train._compute_diagnostic_watch_stats(params, batch, mp, None, watch)
+    grads = jax.grad(
+        lambda model: model.next_token_loss(
+            batch.tokens,
+            batch.loss_weight,
+            mask=batch.attn_mask,
+            reduction="mean",
+            logsumexp_weight=None,
+            return_router_metrics=True,
+        )[0]
+    )(params)
+    expected = compute_watch_stats(
+        watch_targets=watch.watch_targets,
+        include_norms=watch.include_norms,
+        include_per_parameter_norms=watch.include_per_parameter_norms,
+        include_histogram=watch.include_histograms,
+        split_scan_layers=watch.split_scan_layers,
+        params=params,
+        grads=grads,
+        model_tree_type=type(params),
+    )
+
+    assert actual.keys() == expected.keys()
+    for key in actual:
+        np.testing.assert_allclose(actual[key], expected[key])
+
+
+def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
+    params = _TinyWatchModel(weight=jnp.array(2.0))
+    optimizer = optax.sgd(0.1)
+    state = train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        opt_state=optimizer.init(params),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 1)),
+    )
+
+    def loss_and_grads(current_params, batch, mp, z_loss):
+        del batch, mp, z_loss
+        loss = current_params.weight**2
+        grads = _TinyWatchModel(weight=2 * current_params.weight)
+        metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
+        return (loss, metrics), grads
+
+    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
+    train_step = train._make_train_step(
+        optimizer,
+        jmp.get_policy("params=float32,compute=float32,output=float32"),
+        z_loss_weight=0,
+        ema_beta=None,
+        watch_config=WatchConfig(interval=10),
+    )
+
+    state, _, step_zero_stats = train_step(state, jnp.array(0))
+    state, _, step_one_stats = train_step(state, jnp.array(0))
+
+    assert step_zero_stats is not None
+    assert step_one_stats is not None
+    np.testing.assert_allclose(step_zero_stats["grad/norm/total"], 4.0)
+    np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)

@@ -83,7 +83,7 @@ plumbing — the mesh, the checkpointer, the Fray dispatch — while you supply 
 
 ```python
 from fray.cluster import ResourceConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.train import train_lm
 from marin.training.training import LevanterCheckpoint
@@ -163,16 +163,38 @@ Rerunning the same script skips steps whose outputs already exist.
 
 ### Rerunning a failed step
 
-`StepRunner` skips steps that succeeded. To force a failed step to rerun:
+`StepRunner` skips steps that succeeded and reruns steps that failed, so a failed step
+retries on the next invocation. To make a previous failure raise instead of retrying,
+pass `force_run_failed=False`:
 
-```bash
-MARIN_PREFIX=local_store uv run python my_experiment.py --force_run_failed true
+```python
+StepRunner().run([lower(build())], force_run_failed=False)
 ```
 
 ### Rerunning a succeeded step
 
 Remove the artifact directory, then rerun the script. Alternatively, bump the `version`
 in `train_lm` to produce a new artifact at a new path without touching the old one.
+
+### Checked-in smoke launcher
+
+The repository also includes a small launcher for checking the standard training path.
+It prints its plan by default; pass `--run` to execute it. Use `--version dev` while
+iterating, or a calendar version to pin outputs:
+
+```bash
+# Print the CPU/TinyStories plan.
+uv run python -m experiments.tutorials.train_tiny_model \
+  --device cpu --dataset tinystories --version dev
+
+# Run on an Iris H100 worker.
+uv run python -m experiments.tutorials.train_tiny_model \
+  --device h100x8 --dataset wikitext --version dev --run
+```
+
+If the launcher appears to do nothing, check whether `--run` was omitted. It also accepts
+`h100x1`, `gb200x1`, `gb200x4`, `v5litepod-16`, and `v6e-4`. TinyStories and WikiText
+tokenize a 1,000-document sample; `fineweb-edu` uses the checked-in pretokenized cache.
 
 ## Next steps
 

@@ -66,13 +66,11 @@ working tree. See the `consult-echo` skill for the complete workflow.
 - Do not replace it with `uv run pre-commit ...`!
 
 # Type checking (also done by pre-commit.py)
-uv run pyrefly
-- Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
+uv run pyrefly check
+- Keep type hints passing under `uv run pyrefly check`; configuration lives in `pyproject.toml`.
 
-# Safe local test suite
-uv run pytest
-- Pytest's repository defaults exclude slow, integration, data-integration,
-  live-cluster, Docker, and manual tests. Keep those defaults for local runs.
+# Safe tests affected by the current branch and working tree
+uv run --no-project infra/ci/run_tests.py
 
 # Lint review — agentic pass over the branch diff against the infra/lint/ catalog
 ./infra/pre-commit.py --review
@@ -82,7 +80,7 @@ uv run pytest
   follow-up materially changes the design or scope.
 ```
 
-- Python >=3.12. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
+- Python >=3.12. Use `uv run` for entry points.
 - Do not replace pytest's default marker expression with a partial expression
   such as `-m "not slow"`; `-m` overrides the whole default and can select live
   cluster tests. Run excluded markers only when the user or a dedicated task
@@ -115,6 +113,9 @@ uv run pytest
 - PR monitoring is part of the `commit` skill. After opening or updating a PR,
   follow its `wait_for.py` loop through an exit condition. Do not substitute
   `gh pr checks --watch`, repeated `gh pr view` calls, or handoff at green CI.
+  Invoke `wait_for.py` once as a foreground blocking call and let it resume the
+  task when an event fires; do not poll a yielded process handle or narrate
+  unchanged state while it waits.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style

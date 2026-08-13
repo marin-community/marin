@@ -18,7 +18,7 @@ from iris.cli.job import (
     summary,
     wait,
 )
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.config import IrisClusterConfig, ScaleGroupConfig, WorkerSettings
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,

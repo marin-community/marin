@@ -48,7 +48,7 @@ from click.core import ParameterSource
 from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
 from iris.cli.job import parse_gpu_spec
-from iris.client import IrisClient, Job
+from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
     Constraint,
