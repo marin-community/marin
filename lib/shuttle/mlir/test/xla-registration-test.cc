@@ -58,7 +58,7 @@ TEST(ShuttleXlaOptionsTest, ParsesCanonicalPythonWireFormat) {
   mlir::shuttle::ShuttlePipelineIdentity sourceIdentity =
       mlir::shuttle::shuttlePipelineIdentity(*source);
   EXPECT_EQ(sourceIdentity.policyDigest,
-            "b30b7e9d56ffd6f1e723acbbc85d0fe7ef36d376d25c2eb49fcd248289e1254f");
+            "bc351e7e440ce6c1a7f6998231358cde98eda6a7035822856488d89f0aa43ffb");
   EXPECT_EQ(sourceIdentity.tuningDigest,
             "ae69cb474b1ddc91067687e7351ee27afe4e3b0814ae59e310a42bec5911326f");
 
