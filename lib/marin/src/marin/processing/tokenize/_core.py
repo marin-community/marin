@@ -28,7 +28,7 @@ from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from rigging.filesystem import StoragePath, url_to_fs
 from zephyr import counters
 from zephyr.dataset import Dataset, FileEntry
-from zephyr.readers import InputFileSpec
+from zephyr.input_file import InputFileSpec
 from zephyr.worker_context import zephyr_worker_ctx
 
 from marin.datakit.normalize import generate_id

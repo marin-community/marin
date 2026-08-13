@@ -22,7 +22,7 @@ import pytest
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from haliax.partitioning import set_mesh
 from huggingface_hub import snapshot_download
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.rpc import job_pb2
 from jax.sharding import PartitionSpec as P
 from levanter.grug.sharding import compact_grug_mesh

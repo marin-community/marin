@@ -32,7 +32,7 @@ from connectrpc.errors import ConnectError
 from google.protobuf import json_format
 from iris.cli.connect import connect_controller, rpc_client
 from iris.cli.job import build_job_summary
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2, query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync

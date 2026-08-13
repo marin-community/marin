@@ -18,7 +18,7 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from rigging.timing import Duration
 
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import (

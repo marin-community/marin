@@ -16,7 +16,7 @@ import threading
 from pathlib import Path
 
 import pytest
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import job_pb2
 

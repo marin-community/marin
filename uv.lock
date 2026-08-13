@@ -1763,7 +1763,7 @@ wheels = [
 
 [[package]]
 name = "google-api-core"
-version = "2.29.0"
+version = "2.34.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "google-auth" },
@@ -1772,9 +1772,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0d/10/05572d33273292bac49c2d1785925f7bc3ff2fe50e3044cf1062c1dde32e/google_api_core-2.29.0.tar.gz", hash = "sha256:84181be0f8e6b04006df75ddfe728f24489f0af57c96a529ff7cf45bc28797f7", size = 177828, upload-time = "2026-01-08T22:21:39.269Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7b/7c/9be3903e3d45415e8ca493c75f8990a0f6f579d168015d44c379350d0ab0/google_api_core-2.34.0.tar.gz", hash = "sha256:98a779fe72de956eb1c9c2f47ff4c4432a668ece1a002ec38bed07ec2698ae59", size = 187953, upload-time = "2026-08-06T06:23:58.128Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/77/b6/85c4d21067220b9a78cfb81f516f9725ea6befc1544ec9bd2c1acd97c324/google_api_core-2.29.0-py3-none-any.whl", hash = "sha256:d30bc60980daa36e314b5d5a3e5958b0200cb44ca8fa1be2b614e932b75a3ea9", size = 173906, upload-time = "2026-01-08T22:21:36.093Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/c1/a8a92ae1bc4b1a8f804c776d7d3f0c771b78a62c3ad4df1be41b3fd8c767/google_api_core-2.34.0-py3-none-any.whl", hash = "sha256:cdf9c67e7ca2402d86ccbfde5f2503fc83e3cc3f58cc78456ae96cad24a6d2de", size = 180545, upload-time = "2026-08-06T06:22:47.502Z" },
 ]
 
 [package.optional-dependencies]
@@ -3830,12 +3830,17 @@ source = { editable = "lib/fray" }
 dependencies = [
     { name = "cloudpickle" },
     { name = "humanfriendly" },
-    { name = "marin-iris" },
     { name = "marin-rigging" },
+]
+
+[package.optional-dependencies]
+iris = [
+    { name = "marin-iris" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "marin-iris" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
@@ -3844,11 +3849,13 @@ fray-tpu-test = [
     { name = "jax" },
     { name = "jaxlib" },
     { name = "libtpu" },
+    { name = "marin-iris" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "marin-iris" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
@@ -3858,12 +3865,14 @@ test = [
 requires-dist = [
     { name = "cloudpickle", specifier = ">=3.1.2" },
     { name = "humanfriendly", specifier = ">=10.0" },
-    { name = "marin-iris", editable = "lib/iris" },
+    { name = "marin-iris", marker = "extra == 'iris'", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
 ]
+provides-extras = ["iris"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "marin-iris", editable = "lib/iris" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
@@ -3872,11 +3881,13 @@ fray-tpu-test = [
     { name = "jax", specifier = "==0.11.0" },
     { name = "jaxlib", specifier = "==0.11.0" },
     { name = "libtpu", specifier = "==0.0.44.*" },
+    { name = "marin-iris", editable = "lib/iris" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 test = [
+    { name = "marin-iris", editable = "lib/iris" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },

@@ -10,7 +10,7 @@ jobs that can execute any callable.
 
 Example:
     from pathlib import Path
-    from iris.client import IrisClient
+    from iris.client.client import IrisClient
     from iris.client.worker_pool import WorkerPool, WorkerPoolConfig
     from iris.cluster.types import ResourceSpec
 

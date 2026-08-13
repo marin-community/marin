@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
 from fray.client import JobHandle
-from iris.client import IrisClient, Job, iris_ctx
+from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem.s3_compat import configure_coreweave_s3
