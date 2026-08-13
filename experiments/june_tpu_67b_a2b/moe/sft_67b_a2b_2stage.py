@@ -256,6 +256,9 @@ _SMOKE_RUN_ID: str = "grug_67b_a2b_sft_smoke"
 _NEMOTRON_TERMINAL_RUN_ID: str = "snowball_step105149_sft_nemotron_terminal_steps1888_ben_recipe"
 _NEMOTRON_TERMINAL_STEPS: int = 1_888
 _AGENTIC_RUN_ID: str = "snowball_step105149_sft_grug_a2b_agentic_eot_5ep"
+_SECOND_COOLDOWN_CHAT_RUN_ID: str = "snowball_step105149_sft_s1_chat"
+_SECOND_COOLDOWN_THINKING_RUN_ID: str = "snowball_step105149_sft_s2_thinking"
+_SECOND_COOLDOWN_AGENTIC_RUN_ID: str = "snowball_step105149_sft_s3_agentic_eot_5ep"
 _AGENTIC_TRAIN_RESOURCES: str = "agentic_train_resources"
 _AGENTIC_EPOCHS: int = 5
 
@@ -365,6 +368,36 @@ def build_job2(job1: ArtifactStep[LevanterCheckpoint], version: str | None = Non
     return sft_step(spec, _gpu_resources(_NODES))
 
 
+def build_second_cooldown_chat(version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Chat SFT initialized from the second Snowball cooldown at step 105149."""
+    step_name = f"grug/{_SECOND_COOLDOWN_CHAT_RUN_ID}"
+    version = resolve_version(step_name, version)
+    spec = _spec(
+        name=user_namespaced_name(step_name, version),
+        version=version,
+        dataset=_JOB1_DATASET,
+        model_source=_grug_source(_SNOWBALL_STEP105149_CKPT, stage="second_cooldown_s1_chat", seq=_SEQ),
+        epochs=1,
+    )
+    return sft_step(spec, _gpu_resources(_NODES))
+
+
+def build_second_cooldown_thinking(
+    chat: ArtifactStep[LevanterCheckpoint], version: str | None = None
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Thinking SFT initialized from the second-cooldown Chat stage."""
+    step_name = f"grug/{_SECOND_COOLDOWN_THINKING_RUN_ID}"
+    version = resolve_version(step_name, version)
+    spec = _spec(
+        name=user_namespaced_name(step_name, version),
+        version=version,
+        dataset=_JOB2_DATASET,
+        model_source=_grug_source(chat, stage="second_cooldown_s2_thinking", seq=_SEQ),
+        epochs=1,
+    )
+    return sft_step(spec, _gpu_resources(_NODES))
+
+
 def build_smoke(version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Stage-5 smoke: the real 67B at the target Job1 geometry -- 8x H100x8 nodes (cw-us-east-02a),
     AdamH, expert=8, model=1 (data-parallel), replica=1, bs=64, seq=32768, per_device=1, few steps +
@@ -450,12 +483,14 @@ def _agentic_training_steps(data: LmDataConfig) -> int:
 def build_agentic(
     version: str | None = None,
     *,
+    init_from: str | ArtifactStep[LevanterCheckpoint] = _SNOWBALL_STEP105149_CKPT,
+    run_id: str = _AGENTIC_RUN_ID,
     resources: ResourceConfig | None = None,
     accelerator_tag: str = "cw-h100",
 ) -> ArtifactStep[LevanterCheckpoint]:
-    """SFT Snowball step 105149 for five token epochs over the rendered agent traces."""
+    """Run five token epochs over the rendered agent traces."""
     dataset = grug_a2b_agentic_sft_eot_dataset()
-    step_name = f"grug/{_AGENTIC_RUN_ID}"
+    step_name = f"grug/{run_id}"
     version = resolve_version(step_name, version)
     name = user_namespaced_name(step_name, version)
 
@@ -480,7 +515,11 @@ def build_agentic(
                 name=name.split("/")[-1],
             ),
             optimizer=_agentic_optimizer,
-            init_from_path=_SNOWBALL_STEP105149_CKPT,
+            init_from_path=(
+                prefix_join(ctx.artifact_path(init_from), "checkpoints")
+                if isinstance(init_from, ArtifactStep)
+                else init_from
+            ),
             expert_parallel=_EXPERT_PARALLEL,
             per_device_parallelism=_PER_DEVICE_PARALLELISM,
             checkpointer=CheckpointerConfig(
@@ -524,7 +563,7 @@ def build_agentic(
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_sft_trial,
         build_config=build_config,
-        deps=(dataset,),
+        deps=(dataset, *([init_from] if isinstance(init_from, ArtifactStep) else [])),
         runtime_args={_AGENTIC_TRAIN_RESOURCES: resources},
     )
 
@@ -533,7 +572,18 @@ def build_agentic(
 @click.option(
     "--stage",
     type=click.Choice(
-        ["smoke", "job1", "2stage", "nemotron-terminal", "nemotron-terminal-gb200", "agentic", "agentic-gb200"]
+        [
+            "smoke",
+            "job1",
+            "2stage",
+            "second-cooldown-chat",
+            "second-cooldown-thinking",
+            "second-cooldown-3stage",
+            "nemotron-terminal",
+            "nemotron-terminal-gb200",
+            "agentic",
+            "agentic-gb200",
+        ]
     ),
     default="2stage",
     show_default=True,
@@ -545,6 +595,14 @@ def main(stage: str) -> ArtifactStep[LevanterCheckpoint]:
         return build_smoke()
     if stage == "job1":
         return build_job1()
+    if stage == "second-cooldown-chat":
+        return build_second_cooldown_chat()
+    if stage == "second-cooldown-thinking":
+        return build_second_cooldown_thinking(build_second_cooldown_chat())
+    if stage == "second-cooldown-3stage":
+        chat = build_second_cooldown_chat()
+        thinking = build_second_cooldown_thinking(chat)
+        return build_agentic(init_from=thinking, run_id=_SECOND_COOLDOWN_AGENTIC_RUN_ID)
     if stage == "nemotron-terminal":
         return build_nemotron_terminal()
     if stage == "nemotron-terminal-gb200":
