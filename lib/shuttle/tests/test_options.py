@@ -32,7 +32,7 @@ def test_compiler_options_have_canonical_closed_wire_format() -> None:
         "xla_shuttle_enable": True,
         "xla_shuttle_options": (
             '{"execution_mode":"stablehlo_round_trip","numerics":"source_ordered",'
-            '"pipeline_abi_version":9,"schema_version":1,'
+            '"pipeline_abi_version":10,"schema_version":1,'
             '"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion",'
             '"maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}}'
         ),
@@ -43,7 +43,7 @@ def test_compiler_options_have_canonical_closed_wire_format() -> None:
             numerics=Numerics.SOURCE_ORDERED,
             tuning=_tuning(),
         )
-        == "b30b7e9d56ffd6f1e723acbbc85d0fe7ef36d376d25c2eb49fcd248289e1254f"
+        == "bc351e7e440ce6c1a7f6998231358cde98eda6a7035822856488d89f0aa43ffb"
     )
 
 
@@ -85,7 +85,22 @@ def test_execution_modes_have_distinct_cache_identity() -> None:
         tuning=tuning,
     )
 
-    assert roundtrip != cpu_bundle
+    gpu_bundle = compiler_options(
+        execution_mode=ExecutionMode.GPU_EXECUTABLE_BUNDLE,
+        numerics=Numerics.SOURCE_ORDERED,
+        tuning=tuning,
+    )
+
+    assert (
+        len(
+            {
+                roundtrip["xla_shuttle_options"],
+                cpu_bundle["xla_shuttle_options"],
+                gpu_bundle["xla_shuttle_options"],
+            }
+        )
+        == 3
+    )
     assert options_digest(
         execution_mode=ExecutionMode.STABLEHLO_ROUND_TRIP,
         numerics=Numerics.SOURCE_ORDERED,
@@ -95,6 +110,22 @@ def test_execution_modes_have_distinct_cache_identity() -> None:
         numerics=Numerics.SOURCE_ORDERED,
         tuning=tuning,
     )
+
+    assert gpu_bundle["xla_shuttle_options"] == (
+        '{"execution_mode":"gpu_executable_bundle","numerics":"source_ordered",'
+        '"pipeline_abi_version":10,"schema_version":1,'
+        '"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion",'
+        '"maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}}'
+    )
+
+
+def test_gpu_executable_mode_rejects_fast_policy() -> None:
+    with pytest.raises(ValueError, match="GPU executable bundle requires source_ordered"):
+        compiler_options(
+            execution_mode=ExecutionMode.GPU_EXECUTABLE_BUNDLE,
+            numerics=Numerics.FAST,
+            tuning=_tuning(),
+        )
 
 
 def test_cpu_executable_mode_has_distinct_source_ordered_and_fast_cache_identities() -> None:
@@ -111,13 +142,13 @@ def test_cpu_executable_mode_has_distinct_source_ordered_and_fast_cache_identiti
 
     assert source_ordered["xla_shuttle_options"] == (
         '{"execution_mode":"cpu_executable_bundle","numerics":"source_ordered",'
-        '"pipeline_abi_version":9,"schema_version":1,'
+        '"pipeline_abi_version":10,"schema_version":1,'
         '"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion",'
         '"maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}}'
     )
     assert fast["xla_shuttle_options"] == (
         '{"execution_mode":"cpu_executable_bundle","numerics":"fast",'
-        '"pipeline_abi_version":9,"schema_version":1,'
+        '"pipeline_abi_version":10,"schema_version":1,'
         '"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion",'
         '"maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}}'
     )
@@ -127,7 +158,7 @@ def test_cpu_executable_mode_has_distinct_source_ordered_and_fast_cache_identiti
             numerics=Numerics.SOURCE_ORDERED,
             tuning=_tuning(),
         )
-        == "fc1454ea02ec42063fcb9b61410f399883f94e5958d3781eeb24ad15e3183547"
+        == "58c083e68c83cc4e0693e6416d2fe2cf5cfc46f3543fb6fee4c0d228490f25a6"
     )
     assert (
         options_digest(
@@ -135,7 +166,7 @@ def test_cpu_executable_mode_has_distinct_source_ordered_and_fast_cache_identiti
             numerics=Numerics.FAST,
             tuning=_tuning(),
         )
-        == "58ebe25244b1b175baad78e962f1cd5734f3b290973a3e7a3ec7719d1a92142a"
+        == "4d7046a19bf860e24d74a425d579cb5d801046370baf8b041d3218a88115c223"
     )
 
 
@@ -155,7 +186,7 @@ def test_empty_shape_hints_leave_physical_search_unconstrained() -> None:
 
     assert options["xla_shuttle_options"] == (
         '{"execution_mode":"stablehlo_round_trip","numerics":"fast",'
-        '"pipeline_abi_version":9,"schema_version":1,'
+        '"pipeline_abi_version":10,"schema_version":1,'
         '"tuning":{"cluster_shape":[],"materialization":"automatic",'
         '"maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}}'
     )
