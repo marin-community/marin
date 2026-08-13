@@ -46,6 +46,7 @@ def linear_softmax_cross_entropy_loss_reference(
         w,
         (((1,), (0,)), ((), ())),
         precision=precision,
+        preferred_element_type=jnp.float32,
     )
     if dtype is not None:
         logits = logits.astype(dtype)
@@ -78,7 +79,7 @@ def linear_softmax_cross_entropy_loss_streaming(
 
     b_dim = x.shape[0]
     v_dim = w.shape[1]
-    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
+    out_dtype = jnp.dtype(dtype) if dtype is not None else jnp.float32
 
     pad = (-v_dim) % block_size
     if pad:
@@ -104,6 +105,7 @@ def linear_softmax_cross_entropy_loss_streaming(
             w_block,
             (((1,), (0,)), ((), ())),
             precision=precision,
+            preferred_element_type=jnp.float32,
         )
         if dtype is not None:
             logits = logits.astype(dtype)
