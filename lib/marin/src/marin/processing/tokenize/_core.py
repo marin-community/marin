@@ -284,11 +284,11 @@ def tokenize_batches_with_id(
     for batch in batches:
         batch_count += 1
         records = processor(batch)
-        empty_docs = sum(len(record.get("input_ids", [])) == 0 for record in records)
+        empty_docs = sum(len(record["input_ids"]) == 0 for record in records)
         if empty_docs:
             counters.pipeline.update_counter("tokenize/empty_docs", empty_docs)
-            records = [record for record in records if len(record.get("input_ids", [])) > 0]
-        batch_token_count = sum(len(record.get("input_ids", [])) for record in records)
+            records = [record for record in records if len(record["input_ids"]) > 0]
+        batch_token_count = sum(len(record["input_ids"]) for record in records)
         counters.pipeline.update_counter("tokenize/docs_out", len(records))
         counters.pipeline.update_counter("tokenize/tokens_out", batch_token_count)
         record_count += len(records)

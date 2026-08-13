@@ -183,7 +183,6 @@ def _write_normalized_fixture(tmp_path, texts: list[str]) -> NormalizedData:
     )
 
 
-@pytest.mark.slow
 def test_split_pipeline_matches_legacy_tokenize(tmp_path, monkeypatch):
     """Stage A → Stage B should produce a Levanter cache with the same token count
     as the legacy raw-input ``tokenize()`` path on the same texts."""
