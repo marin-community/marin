@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The ``fsutil`` command line: list, read, size, and copy across Marin's buckets.
+"""The ``fsutil`` command line: list, read, size, copy, and remove across Marin's buckets.
 
 Every path is a full URL (``gs://``, ``s3://``, or a local path). There is no implicit
 current bucket, so the same command means the same thing from any shell, and a copy can
@@ -11,8 +11,12 @@ name two different backends. Bare ``fsutil`` opens the interactive browser.
 import logging
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
 import click
+from gcsfs import GCSFileSystem
+from s3fs import S3FileSystem
 
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
@@ -36,6 +40,9 @@ logger = logging.getLogger(__name__)
 # Streaming chunk for cross-backend copies, which cannot use a filesystem's own
 # server-side copy.
 _COPY_CHUNK = 8 * 1024 * 1024
+_RM_WORKERS = 8
+_S3_DELETE_BATCH = 1000
+_GCS_DELETE_BATCH = 20
 
 
 @click.group(invoke_without_command=True)
@@ -160,6 +167,78 @@ def cp(src: str, dst: str, recursive: bool) -> None:
         _copy_file(src_fs, match, dst_fs, _destination(match, src_path, dst_path))
         copied += 1
     click.echo(f"{src} -> {dst} ({copied} objects)")
+
+
+@cli.command()
+@click.argument("url")
+@click.option("-r", "-R", "--recursive", is_flag=True, help="Remove a prefix and everything under it.")
+def rm(url: str, recursive: bool) -> None:
+    """Remove an object, or recursively remove a prefix."""
+    fs, path = filesystem_for(url)
+    is_dir = fs.isdir(path)
+    if is_dir and not recursive:
+        raise click.ClickException(f"{url} is a directory; pass -r to remove it recursively")
+    if not is_dir:
+        fs.rm(path)
+        click.echo(url)
+        return
+
+    click.echo(f"Scanning {url} ...", err=True)
+    entries = fs.find(path, detail=True)
+    files = list(entries)
+    total_bytes = sum(entry.get("size", 0) or 0 for entry in entries.values())
+    batches = _delete_batches(fs, files)
+    with ThreadPoolExecutor(max_workers=_RM_WORKERS) as executor:
+        label = f"Removing {len(files)} objects ({format_size(total_bytes)})"
+        with click.progressbar(length=len(files), label=label, show_pos=True) as progress:
+            for start in range(0, len(batches), _RM_WORKERS):
+                removals = {
+                    executor.submit(_remove_batch, fs, batch): len(batch)
+                    for batch in batches[start : start + _RM_WORKERS]
+                }
+                for removal in as_completed(removals):
+                    removal.result()
+                    progress.update(removals[removal])
+    fs.invalidate_cache()
+    if StoragePath(url).is_local:
+        fs.rm(path, recursive=True)
+    click.echo(url)
+
+
+def _delete_batches(fs: Any, files: list[str]) -> list[list[str]]:
+    if isinstance(fs, S3FileSystem):
+        batch_size = _S3_DELETE_BATCH
+    elif isinstance(fs, GCSFileSystem):
+        batch_size = _GCS_DELETE_BATCH
+    else:
+        batch_size = 1
+    return [files[start : start + batch_size] for start in range(0, len(files), batch_size)]
+
+
+def _remove_batch(fs: Any, files: list[str]) -> None:
+    if not isinstance(fs, S3FileSystem):
+        fs.rm(files)
+        return
+
+    objects = []
+    buckets = set()
+    for path in files:
+        bucket, key, version = fs.split_path(path)
+        buckets.add(bucket)
+        item = {"Key": key}
+        if version is not None:
+            item["VersionId"] = version
+        objects.append(item)
+    assert len(buckets) == 1
+    response = fs.call_s3(
+        "delete_objects",
+        Bucket=buckets.pop(),
+        Delete={"Objects": objects, "Quiet": True},
+    )
+    errors = response.get("Errors", [])
+    if errors:
+        details = ", ".join(f"{error['Key']}: {error['Code']}" for error in errors)
+        raise RuntimeError(f"S3 bulk delete failed: {details}")
 
 
 @cli.command()

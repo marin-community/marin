@@ -10,7 +10,11 @@ an ordinary object-store listing routed through
 """
 
 import dataclasses
+import glob
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime
+from typing import Any
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
@@ -26,6 +30,10 @@ _SCHEME_FOR_STORE = {StoreType.GCS: "gs", StoreType.R2: "s3", StoreType.COREWEAV
 # Preview reads are bounded: browsing should never pull a multi-gigabyte shard down a home
 # connection because someone pressed enter on it. `fsutil cp` fetches whole objects.
 MAX_PREVIEW_BYTES = 10 * 1024 * 1024
+
+# Bucket listings are network-bound, so a modest pool hides request latency without
+# creating enough concurrent requests to overwhelm an object-store endpoint.
+_DU_WORKERS = 32
 
 
 @dataclasses.dataclass(frozen=True)
@@ -65,11 +73,11 @@ def bucket_url(bucket: str) -> str:
 
 
 def list_entries(url: str) -> list[Entry]:
-    """List the immediate children of *url*, directories first then names ascending.
+    """List *url*'s immediate children or the entries matching a glob pattern.
 
     ``url`` may be :data:`ROOT`, in which case the declared buckets are the children.
-    The listed location itself is never included, so a listing is always strictly a
-    level down.
+    Glob matches are named relative to the non-pattern prefix, so matches remain
+    distinguishable when their basenames are the same.
     """
     if url == ROOT:
         return [
@@ -78,9 +86,33 @@ def list_entries(url: str) -> list[Entry]:
 
     parsed = StoragePath(url)
     fs, path = filesystem_for(url)
-    entries = [_entry(parsed, item) for item in fs.ls(path, detail=True) if _is_child(path, item["name"])]
+    if glob.has_magic(path):
+        root = _glob_root(path)
+        entries = [
+            _entry(parsed, item, name=_relative_name(root, item["name"]), url=_qualified_url(parsed, item["name"]))
+            for item in fs.glob(path, detail=True).values()
+        ]
+    else:
+        entries = [_entry(parsed, item) for item in fs.ls(path, detail=True) if _is_child(path, item["name"])]
     entries.sort(key=lambda e: (not e.is_dir, e.name.lower()))
     return entries
+
+
+def _glob_root(pattern: str) -> str:
+    first_magic = min(pattern.find(character) for character in "*?[" if character in pattern)
+    return pattern[:first_magic].rpartition("/")[0]
+
+
+def _relative_name(root: str, name: str) -> str:
+    if root and name.startswith(f"{root}/"):
+        return name[len(root) + 1 :].rstrip("/")
+    return name.rstrip("/")
+
+
+def _qualified_url(parsed: StoragePath, path: str) -> str:
+    if parsed.scheme is None or "://" in path:
+        return path
+    return f"{parsed.scheme}://{path}"
 
 
 def _is_child(listed: str, name: str) -> bool:
@@ -92,11 +124,12 @@ def _is_child(listed: str, name: str) -> bool:
     return name.strip("/") != listed.strip("/")
 
 
-def _entry(parsed: StoragePath, item: dict) -> Entry:
-    name = item["name"].rstrip("/").rsplit("/", 1)[-1]
+def _entry(parsed: StoragePath, item: dict, *, name: str | None = None, url: str | None = None) -> Entry:
+    item_name = item["name"].rstrip("/")
+    name = name or item_name.rsplit("/", 1)[-1]
     is_dir = item["type"] == "directory"
     return Entry(
-        url=str(parsed / name),
+        url=url or str(parsed / name),
         name=name,
         size=None if is_dir else item.get("size", 0),
         mtime=_mtime(item),
@@ -147,15 +180,47 @@ def _read_preview(fs, path: str, *, compression: str | None, full_size: int | No
 
 
 def total_size(url: str) -> tuple[int, int]:
-    """Return ``(bytes, object_count)`` under *url*, walking every prefix beneath it."""
+    """Return ``(bytes, object_count)`` under *url* using parallel detailed listings."""
     fs, path = filesystem_for(url)
-    if fs.isfile(path):
-        return fs.size(path), 1
+    root_entries = fs.ls(path, detail=True)
+    if len(root_entries) == 1 and not _is_child(path, root_entries[0]["name"]):
+        entry = root_entries[0]
+        if entry["type"] != "directory":
+            return entry.get("size", 0) or 0, 1
 
+    total, count, directories = _listing_size(path, root_entries)
+    queued = deque(directories)
+    if not queued:
+        return total, count
+
+    with ThreadPoolExecutor(max_workers=_DU_WORKERS) as executor:
+        pending = {}
+        while queued or pending:
+            while queued and len(pending) < _DU_WORKERS:
+                directory = queued.popleft()
+                pending[executor.submit(fs.ls, directory, detail=True)] = directory
+
+            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                directory = pending.pop(future)
+                subtotal, subcount, subdirectories = _listing_size(directory, future.result())
+                total += subtotal
+                count += subcount
+                queued.extend(subdirectories)
+    return total, count
+
+
+def _listing_size(listed: str, entries: list[dict[str, Any]]) -> tuple[int, int, list[str]]:
     total = 0
     count = 0
-    for _, _, files in fs.walk(path, detail=True):
-        for info in files.values():
-            total += info.get("size", 0) or 0
-            count += 1
-    return total, count
+    directories = []
+    for entry in entries:
+        name = entry["name"]
+        if not _is_child(listed, name):
+            continue
+        if entry["type"] == "directory":
+            directories.append(name)
+            continue
+        total += entry.get("size", 0) or 0
+        count += 1
+    return total, count, directories
