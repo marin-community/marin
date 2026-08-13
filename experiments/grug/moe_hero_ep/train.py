@@ -1143,6 +1143,16 @@ def _write_fatal_traceback(config: GrugRunConfig) -> None:
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    try:
+        _run_grug_local_inner(config)
+    except BaseException:
+        # Cover setup as well as the loop: runtime construction, the MoK arena rendezvous and
+        # model initialization all fail before the loop's own handler exists.
+        _write_fatal_traceback(config)
+        raise
+
+
+def _run_grug_local_inner(config: GrugRunConfig) -> None:
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
@@ -1432,7 +1442,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
             )
-            _write_fatal_traceback(config)
             raise
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
