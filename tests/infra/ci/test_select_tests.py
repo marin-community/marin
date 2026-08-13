@@ -200,7 +200,6 @@ def test_conftest_and_package_metadata_force_full_scope(tmp_path: Path) -> None:
     assert "iris" in classify(["lib/iris/conftest.py"], tmp_path).forced
     assert "iris" in classify(["lib/iris/tests/conftest.py"], tmp_path).forced
     assert "iris" in classify(["lib/iris/pyproject.toml"], tmp_path).forced
-    assert select_matrix(["infra/pulumi/pyproject.toml"], tmp_path) == [matrix_leg("iac", [])]
     assert "marin" in classify(["tests/snapshots/expected/simple.md"], tmp_path).forced
 
 

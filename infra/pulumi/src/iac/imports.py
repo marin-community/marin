@@ -1,7 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Program-first import metadata and manifest validation for Marin IaC."""
+"""Pulumi stack state relates each declared program resource to a live provider object.
+
+An import adopts an existing provider object by attaching its provider ID to the declared resource instead of creating
+it. This module collects those IDs during the normal program, resolves Pulumi's Program-first manifest, and validates
+the reviewed subset before ``pulumi import`` updates stack state.
+"""
 
 import copy
 import hashlib
