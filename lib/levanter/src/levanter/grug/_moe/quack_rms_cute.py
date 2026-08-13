@@ -377,7 +377,10 @@ def quack_coda_rms_backward_consumer(
             f"rows and hidden_dim must be multiples of {_CONSUMER_BLOCK_M} and {_CONSUMER_BLOCK_N}, "
             f"got {rows} and {hidden_dim}"
         )
-    manual_axis_type = jax.typeof(unweighted_cotangent).manual_axis_type
+    # CuTe custom calls erase the manual-axis annotation on their outputs. The original input
+    # retains the enclosing shard_map annotation and the RMS input cotangent must match it for
+    # the custom VJP contract.
+    manual_axis_type = jax.typeof(x).manual_axis_type
     call = _rms_backward_consumer_call(rows, hidden_dim, x.dtype, norm_weight.dtype, manual_axis_type)
     row_mean = row_dot / hidden_dim
     return call(unweighted_cotangent, row_mean, x, norm_weight, inverse_rms)
