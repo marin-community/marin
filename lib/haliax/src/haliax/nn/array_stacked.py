@@ -87,10 +87,8 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
                 layer_args, layer_kwargs = eqx.combine(layer_batched, shared)
                 return module.init(*layer_args, **layer_kwargs)
 
-            # `filter_vmap` maps the array leaves and returns any non-array leaf as the plain
-            # Python value it was, so a module holding e.g. a non-static `int` still reads back
-            # as an `int` rather than an array of per-layer copies. `axis_size` covers a module
-            # whose arguments carry no layer axis at all, where every layer sees the same inputs.
+            # `filter_vmap` over `jax.vmap`: a non-array leaf has to come back as the value it
+            # was. `axis_size` covers arguments that carry no layer axis.
             stacked = eqx.filter_vmap(init_layer, axis_size=num_layers)(batched)
             _reject_named_arrays(stacked)
             return cls(stacked=stacked, num_layers=num_layers, gradient_checkpointing=gradient_checkpointing)
