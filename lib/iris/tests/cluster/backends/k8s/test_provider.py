@@ -24,7 +24,6 @@ from iris.cluster.backends.k8s.tasks import (
     _RUNTIME_LABEL_VALUE,
     K8sTaskProvider,
     PeriodicProfiler,
-    ResourceCollector,
     _lookup_pod,
     _pod_name,
     _ProfileTarget,
@@ -34,8 +33,8 @@ from iris.cluster.backends.k8s.tasks import (
 from iris.cluster.controller.backend import ProviderError, TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
-from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
-from iris.cluster.stats.tables import IrisTaskStat, ProfileTrigger
+from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError
+from iris.cluster.stats.tables import ProfileTrigger
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable, wait_for_condition
@@ -86,6 +85,11 @@ def test_sync_apply_error_yields_worker_failed(provider, k8s):
 
     assert len(result) == 1
     assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+
+
+def test_runtime_image_resolves_requested_or_backend_default(provider):
+    assert provider.runtime_image("registry.example/task:v2") == "registry.example/task:v2"
+    assert provider.runtime_image("") == provider.pods.default_image
 
 
 def test_sync_invalid_manifest_fails_task_terminally(provider, k8s):
@@ -330,7 +334,7 @@ class _CountingK8sService:
             yield item
 
 
-def test_poll_stops_scanning_terminal_pods_once_attempts_resolve(k8s, task_stats_table):
+def test_poll_stops_scanning_terminal_pods_once_attempts_resolve(k8s):
     """Resolving a finished pod must not read the whole terminal backlog.
 
     This scan is on the control loop, and the terminal collection holds up to a full
@@ -341,7 +345,6 @@ def test_poll_stops_scanning_terminal_pods_once_attempts_resolve(k8s, task_stats
     provider = K8sTaskProvider(
         kubectl=counting,
         pods=pod_config(),
-        task_stats_table=task_stats_table,
         cluster_scan_interval=0.0,
     )
     task_id = JobName.from_wire("/job/0")
@@ -484,7 +487,6 @@ def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
 
     # Pod reappears — counter should reset.
     populate_pod(k8s, pod_name, "Running")
-    k8s.set_top_pod(pod_name, None)
     result = provider.sync(batch)
     assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
 
@@ -643,50 +645,6 @@ def test_sync_survives_node_list_failure(provider, k8s):
     # Pod statuses are still populated from the successful pod list.
     resp = provider.get_cluster_status()
     assert any(ps.pod_name == "iris-running" for ps in resp.pod_statuses)
-
-
-# ---------------------------------------------------------------------------
-# Resource stats from kubectl top
-# ---------------------------------------------------------------------------
-
-
-def test_resource_stats_only_for_running_tasks(provider, k8s, task_stats_table):
-    """reconcile registers running pods (not terminal ones) so the background
-    collector emits IrisTaskStat rows only for running tasks."""
-    running = RunningTaskEntry(task_id=JobName.from_wire("/job/run"), attempt_id=0)
-    terminal = RunningTaskEntry(task_id=JobName.from_wire("/job/done"), attempt_id=0)
-    running_pod = _pod_name(running.task_id, running.attempt_id)
-    terminal_pod = _pod_name(terminal.task_id, terminal.attempt_id)
-
-    populate_pod(k8s, running_pod, "Running")
-    populate_pod(k8s, terminal_pod, "Succeeded")
-    k8s.set_top_pod(running_pod, PodResourceUsage(cpu_millicores=500, memory_bytes=1024 * 1024 * 1024))
-    k8s.set_top_pod(terminal_pod, PodResourceUsage(cpu_millicores=999, memory_bytes=1024))
-
-    provider.sync(make_batch(running_tasks=[running, terminal]))
-    # The collector samples all tracked pods in one pass, so once the running
-    # pod's row lands a full cycle has run — the terminal pod's absence is real.
-    wait_for_condition(lambda: bool(task_stats_table.writes), timeout=Duration.from_seconds(5.0))
-
-    rows = [row for batch_rows in list(task_stats_table.writes) for row in batch_rows]
-    assert all(isinstance(r, IrisTaskStat) for r in rows)
-    assert {r.worker_id for r in rows} == {running_pod}, "only the running pod should be sampled"
-    row = next(r for r in rows if r.worker_id == running_pod)
-    assert row.task_id == running.task_id.to_wire()
-    assert row.cpu_millicores == 500
-    assert row.memory_mb == 1024
-
-
-def test_resource_collector_skips_pod_without_metrics_sample(k8s, task_stats_table):
-    """A tracked pod with no metrics sample produces no row."""
-    k8s.set_top_pod("pod-a", None)
-
-    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
-    collector.close()  # stop the background loop; drive one collection synchronously
-    collector.set_pods({("/job/0", 0): "pod-a"})
-    collector.collect_once()
-
-    assert task_stats_table.writes == []
 
 
 # ---------------------------------------------------------------------------
@@ -925,7 +883,7 @@ def test_profile_kubectl_exec_failure_returns_error(provider, k8s):
 
 def _stopped_profiler(k8s, profile_table) -> PeriodicProfiler:
     """A PeriodicProfiler with its background loop stopped, so tests can drive
-    collect_once() synchronously (the ResourceCollector unit-test pattern)."""
+    collect_once() synchronously."""
     profiler = PeriodicProfiler(k8s, profile_table, poll_interval=60.0)
     profiler.close()
     return profiler
@@ -1336,51 +1294,6 @@ def test_gc_defers_configmap_cleanup_for_age_swept_pods(provider, k8s):
 
     provider.collect_garbage()
     assert k8s.get_json(K8sResource.CONFIGMAPS, "swept-pod-wf") is None
-
-
-# ---------------------------------------------------------------------------
-# Collector set_pods
-# ---------------------------------------------------------------------------
-
-
-def test_resource_collector_set_pods_replaces_active_set(k8s, task_stats_table):
-    """set_pods() replaces the tracked pod set wholesale: a pod dropped from the
-    set stops being sampled on the next collection."""
-    k8s.set_top_pod("pod-a", PodResourceUsage(cpu_millicores=100, memory_bytes=128 * 1024 * 1024))
-    k8s.set_top_pod("pod-b", PodResourceUsage(cpu_millicores=100, memory_bytes=128 * 1024 * 1024))
-
-    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
-    collector.close()  # stop the background loop; drive collections synchronously
-
-    collector.set_pods({("/job/0", 0): "pod-a", ("/job/1", 0): "pod-b"})
-    collector.collect_once()
-    assert {r.worker_id for r in task_stats_table.writes[-1]} == {"pod-a", "pod-b"}
-
-    collector.set_pods({("/job/1", 0): "pod-b"})
-    collector.collect_once()
-    assert {r.worker_id for r in task_stats_table.writes[-1]} == {"pod-b"}
-
-
-def test_resource_collector_writes_iris_task_rows(k8s, task_stats_table):
-    """A successful bulk metrics read appends one IrisTaskStat row to the Table."""
-
-    k8s.set_top_pod("pod-a", PodResourceUsage(cpu_millicores=750, memory_bytes=2 * 1024 * 1024 * 1024))
-
-    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
-    # Stop the background loop so we drive a single collection deterministically.
-    collector.close()
-    collector.set_pods({("/job/0", 3): "pod-a"})
-    collector.collect_once()
-
-    rows = [row for batch_rows in task_stats_table.writes for row in batch_rows]
-    assert rows, "no rows emitted"
-    row = rows[-1]
-    assert isinstance(row, IrisTaskStat)
-    assert row.task_id == "/job/0"
-    assert row.attempt_id == 3
-    assert row.worker_id == "pod-a"
-    assert row.cpu_millicores == 750
-    assert row.memory_mb == 2048
 
 
 # ---------------------------------------------------------------------------
