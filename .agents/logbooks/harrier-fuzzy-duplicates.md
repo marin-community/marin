@@ -1130,3 +1130,16 @@ author: Rafal Wojdyla
 - Zephyr health: The checked coordinators have 32 live workers and zero dead workers. One RNO source reported five shards at retry attempt one. No retry attempt two is present.
 - Issue update: None. This is routine progress after the batch restart.
 - Next action: Watch the final two East sources, the eight active RNO sources, service state, and output growth. Recover only a terminal in-scope job failure.
+
+### 2026-08-13 12:02 UTC - Batch output passed 84 percent
+
+- Root health: Both batch roots remain running with zero failures and zero root preemptions.
+- Completed artifacts: The final roots completed 108 new source artifacts. East completed 97, and RNO completed 11. With the artifacts from the stopped roots, East has 144 of 146 artifacts and RNO has 55 of 146 artifacts. The full run has 199 of 292 completed source artifacts.
+- Source concurrency: East has two running source jobs, and RNO has eight. No source job is pending or failed.
+- Aggregate progress: A direct object count at 12:00 UTC found 140,074 of 166,775 output shards, or 83.99%. There are 26,701 shards left. East has 59,825 shards, RNO has 80,249 shards, 206 sources have output, and no Parquet path is unknown.
+- Output rate: The jobs wrote 2,808 shards between 11:12 UTC and 12:00 UTC. A simple rate estimate gives 7.6 hours for the remaining shards. Source sizes and batch capacity can change this estimate.
+- Service state: All 256 East and 512 RNO TEI service jobs remain active. Neither pool has a failed service job.
+- Zephyr health: The checked coordinators have live workers. One translated source had a worker heartbeat timeout, but its other workers completed all 267 shards. The source then sealed without manual recovery. No shard has reached retry attempt two.
+- Large-shard check: The scientific-coding source has two active workers on two large shards. A five-second process sample showed increasing CPU time and I/O. The source is active, although its completed-shard counter remains at zero.
+- Issue update: None. This is routine progress after the batch restart.
+- Next action: Continue the root, source, service, Zephyr, and output checks. Recover only a terminal in-scope job failure.
