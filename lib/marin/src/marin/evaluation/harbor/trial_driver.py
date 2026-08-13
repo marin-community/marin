@@ -6,6 +6,7 @@
 import asyncio
 import hashlib
 import importlib
+import inspect
 import json
 import os
 import sys
@@ -90,22 +91,44 @@ def _single_entry(config: JobConfig, field_name: str) -> object:
     return values[0]
 
 
-def _resolve_import_path(import_path: str, label: str) -> None:
+def _resolve_import_path(import_path: str, label: str) -> object:
     if ":" not in import_path:
         raise ValueError(f"Harbor {label} import path must use module.path:ClassName")
     module_path, class_name = import_path.split(":", 1)
     try:
         module = importlib.import_module(module_path)
-        getattr(module, class_name)
+        return getattr(module, class_name)
     except (ImportError, AttributeError) as exc:
         raise ValueError(f"Harbor {label} import path could not be resolved") from exc
+
+
+_AGENT_CALLBACK_KEYWORDS = {
+    "setup": ("environment",),
+    "run": ("instruction", "environment", "context"),
+}
+
+
+def _validate_agent_callbacks(agent_class: object, import_path: str) -> None:
+    """Validate the keyword callbacks used by upstream Harbor's trial runner."""
+    for method_name, keywords in _AGENT_CALLBACK_KEYWORDS.items():
+        method = getattr(agent_class, method_name, None)
+        if not callable(method):
+            raise ValueError(f"Harbor agent {import_path} does not define a callable {method_name}()")
+        try:
+            inspect.signature(method).bind_partial(agent_class, **dict.fromkeys(keywords))
+        except TypeError as exc:
+            raise ValueError(
+                f"Harbor agent {import_path}.{method_name}() does not accept the keyword arguments "
+                f"upstream Harbor calls it with ({', '.join(keywords)}): {exc}"
+            ) from exc
 
 
 def _validate_agent(agent: AgentConfig) -> str:
     if agent.import_path is not None:
         if agent.mode == "local":
             raise ValueError("Harbor local-mode agents must use a supported agent name")
-        _resolve_import_path(agent.import_path, "agent")
+        agent_class = _resolve_import_path(agent.import_path, "agent")
+        _validate_agent_callbacks(agent_class, agent.import_path)
         return agent.import_path
     if agent.name is None or agent.name not in AgentName.values():
         raise ValueError("Harbor config agent name is not supported by the pinned runtime")
