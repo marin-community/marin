@@ -22,10 +22,10 @@ export R2_KEY_SECRET=...
 docker login ghcr.io
 
 uv run finelog deploy sync-secret <cluster>
-uv run finelog deploy up <cluster>
+uv run finelog deploy rollout <cluster>
 ```
 
-`finelog deploy up` captures the active Kubernetes Deployment revision before
+`finelog deploy rollout` captures the active Kubernetes Deployment revision before
 running `pulumi up` for the matching stack. Pulumi builds
 `lib/finelog/deploy/Dockerfile`, pushes the configured image tag, rolls the
 Deployment to the returned digest, and verifies that the new server accepts

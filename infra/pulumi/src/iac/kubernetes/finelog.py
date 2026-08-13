@@ -19,7 +19,12 @@ import pulumi_docker_build as docker_build
 import pulumi_kubernetes as k8s
 from finelog.deploy.bootstrap import CACHE_DIR
 from finelog.deploy.build import finelog_source_build_args
-from finelog.deploy.config import FinelogConfig, auth_policy_json, k8s_env_secret_name
+from finelog.deploy.config import (
+    SOURCE_REVISION_ANNOTATION,
+    FinelogConfig,
+    auth_policy_json,
+    k8s_env_secret_name,
+)
 from rigging.provenance import Provenance
 
 CACHE_MOUNT_PATH = CACHE_DIR
@@ -192,7 +197,7 @@ def finelog_resource_args(args: FinelogServerArgs, image_ref: pulumi.Input[str])
                     metadata=k8s.meta.v1.ObjectMetaArgs(
                         labels=labels,
                         annotations={
-                            "finelog.marin/source-revision": args.source_revision.tree_hash,
+                            SOURCE_REVISION_ANNOTATION: args.source_revision.tree_hash,
                         },
                     ),
                     spec=pod_spec,

@@ -27,6 +27,7 @@ from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarg
 
 USER_CONFIG_DIR = Path.home() / ".config" / "marin" / "finelog"
 K8S_ENV_SECRET_SUFFIX = "-env"
+SOURCE_REVISION_ANNOTATION = "finelog.marin/source-revision"
 
 
 def _bundled_config_dir() -> Path:

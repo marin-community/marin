@@ -16,7 +16,7 @@ from finelog.deploy._k8s import (
     K8sRevision,
     K8sRevisionHistory,
     _build_env_secret_manifest,
-    k8s_pulumi_up,
+    k8s_pulumi_rollout,
     k8s_rollback,
     k8s_verify_ingest_ready,
     select_rollback_revision,
@@ -114,7 +114,7 @@ def _forwarding_config() -> FinelogConfig:
     )
 
 
-def test_forwarding_signing_key_stays_in_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_forwarding_signing_key_is_written_to_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     key_pem = "-----BEGIN PRIVATE KEY-----\nSEKRIT\n-----END PRIVATE KEY-----"
     monkeypatch.setenv("TEST_FINELOG_SIGNING_KEY", key_pem)
 
@@ -145,7 +145,7 @@ def _health_bodies(monkeypatch: pytest.MonkeyPatch, bodies: list[str]) -> list[s
     remaining = list(bodies)
     observed = []
 
-    def run(argv, **kwargs):
+    def run(argv, **_kwargs):
         body = remaining.pop(0) if len(remaining) > 1 else remaining[0]
         observed.append(body)
         return subprocess.CompletedProcess(argv, 0, stdout=body, stderr="")
@@ -250,7 +250,7 @@ class FakeK8sDeploy:
         self.revisions[target.replica_set] = activated
         self.current = activated
 
-    def run(self, argv, **kwargs):
+    def run(self, argv, **_kwargs):
         if argv[0] == "pulumi":
             if argv[1] == "refresh":
                 self.refreshed = True
@@ -292,7 +292,7 @@ def test_failed_pulumi_update_restores_captured_revision(monkeypatch: pytest.Mon
     monkeypatch.setattr(subprocess, "run", deploy.run)
 
     with pytest.raises(click.ClickException, match="restored Kubernetes revision 4"):
-        k8s_pulumi_up(_s3_config(), stack="cw", yes=True)
+        k8s_pulumi_rollout(_s3_config(), stack="cw", yes=True)
 
     assert deploy.current.replica_set == previous.replica_set
     assert deploy.refreshed

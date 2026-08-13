@@ -136,20 +136,24 @@ def deploy() -> None:
     default=False,
     help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a quicker build.",
 )
-@click.option("-y", "--yes", is_flag=True, help="Skip Pulumi confirmation for Kubernetes deploys.")
-def up_cmd(name: str, build: bool, fast: bool, yes: bool) -> None:
-    """Provision the deployment described by `<name>` (idempotent)."""
+def up_cmd(name: str, build: bool, fast: bool) -> None:
+    """Provision the GCE deployment described by `<name>` (idempotent)."""
     cfg = load_finelog_config(name)
-    if cfg.deployment.k8s is not None:
-        if not build:
-            raise click.ClickException("--no-build is not supported for Pulumi-managed Kubernetes deployments")
-        if fast:
-            raise click.ClickException("--fast is not supported for Pulumi-managed Kubernetes deployments")
-        _k8s.k8s_pulumi_up(cfg, stack=name, yes=yes)
-        return
+    _require_gcp_mutation(cfg)
     if build:
         build_finelog_image(image=cfg.image, cargo_profile="fast" if fast else "release")
     _gcp.gcp_up(cfg)
+
+
+@deploy.command("rollout")
+@click.argument("name")
+@click.option("-y", "--yes", is_flag=True, help="Skip Pulumi confirmation.")
+def rollout_cmd(name: str, yes: bool) -> None:
+    """Deploy and verify a Pulumi-managed Kubernetes Finelog server."""
+    cfg = load_finelog_config(name)
+    if cfg.deployment.k8s is None:
+        raise click.ClickException("rollout requires a Kubernetes deployment config")
+    _k8s.k8s_pulumi_rollout(cfg, stack=name, yes=yes)
 
 
 @deploy.command("down")

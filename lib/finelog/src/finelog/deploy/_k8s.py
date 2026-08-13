@@ -17,13 +17,12 @@ import click
 from rigging.secrets import resolve_secret_spec
 
 from finelog.deploy.bootstrap import HEALTH_OK, REGISTRATION_FAILED, health_probe_command
-from finelog.deploy.config import FinelogConfig, k8s_env_secret_name
+from finelog.deploy.config import SOURCE_REVISION_ANNOTATION, FinelogConfig, k8s_env_secret_name
 
 # S3-compatible endpoints that accept only virtual-hosted-style requests
 # (bucket as a host subdomain).
 _VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
 _DEPLOYMENT_REVISION_ANNOTATION = "deployment.kubernetes.io/revision"
-_SOURCE_REVISION_ANNOTATION = "finelog.marin/source-revision"
 _PULUMI_PROJECT_DIR = Path(__file__).resolve().parents[5] / "infra" / "finelog"
 _ROLLOUT_TIMEOUT = "10m"
 _REVISION_DISCOVERY_ATTEMPTS = 60
@@ -177,6 +176,7 @@ def _kubectl_apply(cfg: FinelogConfig, manifest: str) -> None:
 
 
 def _deployment_json(cfg: FinelogConfig) -> dict | None:
+    """Read the Deployment, or return ``None`` when it has not been created."""
     assert cfg.deployment.k8s is not None
     result = _kubectl(
         cfg,
@@ -220,7 +220,7 @@ def _replica_set_revision(item: dict) -> K8sRevision:
         revision=_revision_number(metadata, f"ReplicaSet {replica_set}"),
         created_at=created_at,
         image=container["image"],
-        source_revision=annotations.get(_SOURCE_REVISION_ANNOTATION),
+        source_revision=annotations.get(SOURCE_REVISION_ANNOTATION),
     )
 
 
@@ -404,7 +404,7 @@ def _restore_source_revision(
     return restored
 
 
-def k8s_pulumi_up(cfg: FinelogConfig, *, stack: str, yes: bool) -> None:
+def k8s_pulumi_rollout(cfg: FinelogConfig, *, stack: str, yes: bool) -> None:
     """Run the Finelog Pulumi update and restore the captured revision on failure."""
     deployment = _deployment_json(cfg)
     source = _revision_history(cfg, deployment).current if deployment is not None else None
