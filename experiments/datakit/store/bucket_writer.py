@@ -5,7 +5,7 @@
 
 import dataclasses
 import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 
 import numpy as np
 from levanter.store.cache import CacheLedger, CacheMetadata
@@ -23,15 +23,15 @@ class BucketSpillRun:
     tokens: int
 
 
-def _aligned_token_chunks(documents: Sequence[np.ndarray], chunk_elements: int) -> Iterator[np.ndarray]:
+def _aligned_token_chunks(token_chunks: Iterable[np.ndarray], chunk_elements: int) -> Iterator[np.ndarray]:
     """Yield a flat token stream in full write-shard chunks and one final tail."""
     if chunk_elements < 1:
         raise ValueError(f"chunk_elements must be positive, got {chunk_elements}")
 
     buffer = np.empty(chunk_elements, dtype=np.int32)
     filled = 0
-    for document in documents:
-        tokens = np.asarray(document, dtype=np.int32).reshape(-1)
+    for chunk in token_chunks:
+        tokens = np.asarray(chunk, dtype=np.int32).reshape(-1)
         position = 0
         while position < len(tokens):
             if filled == 0 and len(tokens) - position >= chunk_elements:
@@ -52,30 +52,12 @@ def _aligned_token_chunks(documents: Sequence[np.ndarray], chunk_elements: int) 
         yield buffer[:filled]
 
 
-def _aligned_spill_chunks(runs: Sequence[BucketSpillRun], chunk_elements: int) -> Iterator[np.ndarray]:
-    """Read local token runs into full write-shard chunks and one final tail."""
-    if chunk_elements < 1:
-        raise ValueError(f"chunk_elements must be positive, got {chunk_elements}")
-
-    buffer = np.empty(chunk_elements, dtype=np.int32)
-    filled = 0
+def _spill_token_chunks(runs: Sequence[BucketSpillRun]) -> Iterator[np.ndarray]:
     for run in runs:
         expected_bytes = run.tokens * np.dtype(np.int32).itemsize
         if os.path.getsize(run.data_path) != expected_bytes:
             raise ValueError(f"{run.data_path}: expected {expected_bytes} bytes for {run.tokens} tokens")
-        with open(run.data_path, "rb") as stream:
-            while True:
-                count = stream.readinto(buffer[filled:].data)
-                if count == 0:
-                    break
-                if count % np.dtype(np.int32).itemsize:
-                    raise ValueError(f"{run.data_path}: token data is not int32-aligned")
-                filled += count // np.dtype(np.int32).itemsize
-                if filled == chunk_elements:
-                    yield buffer
-                    filled = 0
-    if filled:
-        yield buffer[:filled]
+        yield np.memmap(run.data_path, mode="r", dtype=np.int32, shape=(run.tokens,))
 
 
 def _write_store(
@@ -134,23 +116,23 @@ def _write_store(
 
 def write_bucket_cache(
     cache_dir: str,
-    documents: Sequence[np.ndarray],
+    token_chunks: Iterable[np.ndarray],
+    document_lengths: Sequence[int] | np.ndarray,
     *,
     write_chunk_elements: int = DEFAULT_WRITE_CHUNK_SIZE,
     max_pending_commits: int = 4,
 ) -> CacheLedger:
-    """Write documents to a materialized ``input_ids`` cache."""
-    if not documents:
+    """Write a token stream and its document lengths to an ``input_ids`` cache."""
+    lengths = np.asarray(document_lengths, dtype=np.int64)
+    if not len(lengths):
         raise ValueError("write_bucket_cache requires at least one document")
-
-    lengths = np.fromiter((np.asarray(document).size for document in documents), dtype=np.int64, count=len(documents))
     total_tokens = int(lengths.sum())
-    stored_offsets = np.empty(len(documents) + 1, dtype=np.int64)
-    stored_offsets[0] = len(documents)
+    stored_offsets = np.empty(len(lengths) + 1, dtype=np.int64)
+    stored_offsets[0] = len(lengths)
     np.cumsum(lengths, out=stored_offsets[1:])
     return _write_store(
         cache_dir,
-        token_chunks=_aligned_token_chunks(documents, write_chunk_elements),
+        token_chunks=_aligned_token_chunks(token_chunks, write_chunk_elements),
         stored_offsets=stored_offsets,
         total_tokens=total_tokens,
         max_pending_commits=max_pending_commits,
@@ -168,28 +150,21 @@ def write_bucket_cache_from_spills(
     if not runs:
         raise ValueError("write_bucket_cache_from_spills requires at least one run")
 
-    total_rows = sum(run.rows for run in runs)
-    total_tokens = sum(run.tokens for run in runs)
-    stored_offsets = np.empty(total_rows + 1, dtype=np.int64)
-    stored_offsets[0] = total_rows
-    row_position = 1
-    token_position = 0
+    lengths_by_run: list[np.ndarray] = []
     for run in runs:
         lengths = np.fromfile(run.lengths_path, dtype=np.int64)
         if len(lengths) != run.rows:
             raise ValueError(f"{run.lengths_path}: expected {run.rows} lengths, found {len(lengths)}")
-        stop = row_position + run.rows
-        np.cumsum(lengths, out=stored_offsets[row_position:stop])
-        stored_offsets[row_position:stop] += token_position
-        token_position += run.tokens
-        row_position = stop
-    if token_position != total_tokens or (total_rows and stored_offsets[-1] != total_tokens):
+        if int(lengths.sum()) != run.tokens:
+            raise ValueError(f"{run.lengths_path}: lengths do not sum to {run.tokens} tokens")
+        lengths_by_run.append(lengths)
+    document_lengths = np.concatenate(lengths_by_run)
+    if int(document_lengths.sum()) != sum(run.tokens for run in runs):
         raise ValueError("spill lengths do not match declared token counts")
-
-    return _write_store(
+    return write_bucket_cache(
         cache_dir,
-        token_chunks=_aligned_spill_chunks(runs, write_chunk_elements),
-        stored_offsets=stored_offsets,
-        total_tokens=total_tokens,
+        _spill_token_chunks(runs),
+        document_lengths,
+        write_chunk_elements=write_chunk_elements,
         max_pending_commits=max_pending_commits,
     )

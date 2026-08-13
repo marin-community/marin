@@ -308,8 +308,8 @@ def test_store_batches_input_shards_into_one_leaf_per_bucket(tmp_path, monkeypat
         output_path=output_path,
         cluster_view=CLUSTER_VIEW,
         split=SPLIT,
-        shards_per_task=2,
-        local_spill_processes=2,
+        task_count=1,
+        partition_processes=2,
     )
 
     by_key = {(b.cluster_id, b.quality_bucket): b for b in artifact.buckets}
@@ -323,7 +323,13 @@ def test_bucket_writer_roundtrips_aligned_chunks(tmp_path):
     cache_path = str(tmp_path / "leaf")
     documents = [np.arange(3, dtype=np.int32), np.arange(3, 9, dtype=np.int32), np.array([9], dtype=np.int32)]
 
-    ledger = write_bucket_cache(cache_path, documents, write_chunk_elements=4, max_pending_commits=2)
+    ledger = write_bucket_cache(
+        cache_path,
+        documents,
+        [len(document) for document in documents],
+        write_chunk_elements=4,
+        max_pending_commits=2,
+    )
 
     assert ledger.total_num_rows == 3
     assert ledger.field_counts == {"input_ids": 10}
@@ -371,8 +377,13 @@ def test_store_verifier_matches_reordered_documents(tmp_path):
         ),
     )
     output_root = tmp_path / "output"
-    write_bucket_cache(str(output_root / "bucket-0"), [documents[2]], write_chunk_elements=4)
-    write_bucket_cache(str(output_root / "bucket-1"), [documents[1], documents[0]], write_chunk_elements=4)
+    write_bucket_cache(str(output_root / "bucket-0"), [documents[2]], [len(documents[2])], write_chunk_elements=4)
+    write_bucket_cache(
+        str(output_root / "bucket-1"),
+        [documents[1], documents[0]],
+        [len(documents[1]), len(documents[0])],
+        write_chunk_elements=4,
+    )
 
     result = verify_store([input_path], discover_cache_paths(str(output_root)))
 
@@ -398,6 +409,7 @@ def test_store_verifier_reports_same_length_token_corruption(tmp_path):
     write_bucket_cache(
         str(output_root / "bucket-0"),
         [documents[0], np.array([3, 5], dtype=np.int32)],
+        [2, 2],
         write_chunk_elements=4,
     )
 
@@ -417,7 +429,7 @@ def test_store_ignores_orphans_and_resumes_completed_tasks(tmp_path, monkeypatch
     tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
     output_path = str(tmp_path / "store_resumed")
     orphan_path = f"{output_path}/cluster=0/quality=0/part-orphan"
-    write_bucket_cache(orphan_path, [np.array([999], dtype=np.int32)], write_chunk_elements=4)
+    write_bucket_cache(orphan_path, [np.array([999], dtype=np.int32)], [1], write_chunk_elements=4)
 
     arguments = dict(
         tokenize=tokenize,
@@ -429,7 +441,7 @@ def test_store_ignores_orphans_and_resumes_completed_tasks(tmp_path, monkeypatch
         output_path=output_path,
         cluster_view=CLUSTER_VIEW,
         split=SPLIT,
-        shards_per_task=2,
+        task_count=1,
     )
     first = build_clustered_store(**arguments)
     second = build_clustered_store(**arguments)

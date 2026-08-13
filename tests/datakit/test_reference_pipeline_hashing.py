@@ -96,7 +96,7 @@ def test_store_hash_tracks_content_not_resources():
     resourced = _build(scale=pool).output_buckets.hash_id
     execution = dataclasses.replace(SMOKE_SCALE.store, max_parallel_bucket_writes=1)
     rescheduled = _build(scale=dataclasses.replace(SMOKE_SCALE, store=execution)).output_buckets.hash_id
-    spill_execution = dataclasses.replace(SMOKE_SCALE.store, local_spill_processes=2)
+    spill_execution = dataclasses.replace(SMOKE_SCALE.store, partition_processes=2)
     respilled = _build(scale=dataclasses.replace(SMOKE_SCALE, store=spill_execution)).output_buckets.hash_id
     store_worker = dataclasses.replace(SMOKE_SCALE.store, worker=PoolConfig().worker)
     resized = _build(scale=dataclasses.replace(SMOKE_SCALE, store=store_worker)).output_buckets.hash_id

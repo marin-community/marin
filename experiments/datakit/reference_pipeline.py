@@ -166,8 +166,8 @@ from experiments.datakit.reports.quality import quality_report
 from experiments.datakit.reports.store import store_report
 from experiments.datakit.reports.tokenize import tokenize_report
 from experiments.datakit.store.datakit_store import (
-    DEFAULT_INPUT_READ_THREADS,
     DEFAULT_PARALLEL_BUCKET_WRITES,
+    DEFAULT_PARTITION_PROCESSES,
     ClusteredStoreData,
     build_clustered_store,
 )
@@ -278,10 +278,8 @@ class StoreConfig:
     large RAM and local-disk request out of the shared upstream worker pool.
     """
 
-    shards_per_task: int = 1
     task_count: int | None = 192
-    input_read_threads: int = DEFAULT_INPUT_READ_THREADS
-    local_spill_processes: int = 32
+    partition_processes: int = 32
     max_parallel_bucket_writes: int = DEFAULT_PARALLEL_BUCKET_WRITES
     worker: ResourceConfig = field(
         default_factory=lambda: ResourceConfig(cpu=96, ram="700g", disk="900g", preemptible=False)
@@ -321,7 +319,7 @@ SMOKE_SCALE = PipelineScale(
     pool=PoolConfig(n_workers=16, worker=ResourceConfig(cpu=2, ram="8g", disk="8g")),
     store=StoreConfig(
         task_count=None,
-        local_spill_processes=0,
+        partition_processes=DEFAULT_PARTITION_PROCESSES,
         worker=ResourceConfig(cpu=2, ram="8g", disk="8g"),
     ),
     n_per_source_for_sample=20_000,
@@ -836,10 +834,8 @@ def reference_datakit_steps(
             split=SPLIT,
             worker_resources=scale.store.worker,
             max_workers=scale.pool.n_workers,
-            shards_per_task=scale.store.shards_per_task,
             task_count=scale.store.task_count,
-            input_read_threads=scale.store.input_read_threads,
-            local_spill_processes=scale.store.local_spill_processes,
+            partition_processes=scale.store.partition_processes,
             max_parallel_bucket_writes=scale.store.max_parallel_bucket_writes,
         )
 
@@ -856,7 +852,6 @@ def reference_datakit_steps(
         hash_attrs={
             "cluster_view": cluster.cluster_view,
             "split": SPLIT,
-            "shards_per_task": scale.store.shards_per_task,
             "task_count": scale.store.task_count,
             "v": 3,
         },

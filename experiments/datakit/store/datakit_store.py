@@ -1,21 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Datakit -> per-(cluster, quality) Levanter store in one map-only pass.
+"""Build task-partitioned per-(cluster, quality) Levanter stores.
 
 Each Zephyr task joins and filters a batch of co-partitioned input shards,
-partitions surviving token arrays into the task's quality-topic buckets, then
-writes one materialized cache per populated bucket. Large tasks can process
-input shards in parallel into append-only local SSD runs; small tasks can keep
-the partition in RAM. Final token writes align to the TensorStore write grid.
+partitions surviving token arrays into append-only local SSD runs, then writes
+one materialized cache per populated bucket. Final token writes align to the
+TensorStore write grid.
 
 Task outputs live under unique attempt paths. A small sidecar is committed last;
 its presence makes the whole task visible to driver-side ledger aggregation.
-Retries skip completed sidecars and ignore partial attempt directories. Token
-data never passes through a Zephyr ``group_by`` or scatter store.
+Retries skip completed sidecars and ignore partial attempt directories.
 """
 
-import contextvars
 import dataclasses
 import json
 import logging
@@ -28,6 +25,7 @@ from collections import defaultdict
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from functools import partial
+from typing import TypedDict
 
 import numpy as np
 import pyarrow as pa
@@ -51,13 +49,13 @@ from marin.processing.tokenize.attributes import TokenizedAttrData
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, atomic_rename, marin_temp_bucket, prefix_join
 from zephyr import counters
-from zephyr.dataset import Dataset, ShardInfo, format_shard_path
+from zephyr.dataset import Dataset, format_shard_path
 from zephyr.execution import ZephyrContext
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
 from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
-from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache, write_bucket_cache_from_spills
+from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache_from_spills
 
 logger = logging.getLogger(__name__)
 
@@ -210,8 +208,7 @@ _TOKENIZE_BATCH_SIZE = 8192
 # Bucket caches are independent. This bounds simultaneous 512 MiB write buffers
 # while allowing TensorStore compression and object-store commits to overlap.
 DEFAULT_PARALLEL_BUCKET_WRITES = 4
-DEFAULT_INPUT_READ_THREADS = 16
-DEFAULT_LOCAL_SPILL_PROCESSES = 0
+DEFAULT_PARTITION_PROCESSES = 1
 
 
 @dataclasses.dataclass(frozen=True)
@@ -234,6 +231,44 @@ class _TaskCompletion:
     counters: dict[str, int | float]
 
 
+@dataclasses.dataclass
+class _FilterStats:
+    records_in: int = 0
+    contaminated_dropped: int = 0
+    exact_duplicate_dropped: int = 0
+    fuzzy_duplicate_dropped: int = 0
+    records_out: int = 0
+
+    def counters(self) -> dict[str, int]:
+        return {
+            "datakit_store/records_in": self.records_in,
+            "datakit_store/contaminated_dropped": self.contaminated_dropped,
+            "datakit_store/exact_duplicate_dropped": self.exact_duplicate_dropped,
+            "datakit_store/fuzzy_duplicate_dropped": self.fuzzy_duplicate_dropped,
+            "datakit_store/records_out": self.records_out,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class _SurvivingDocument:
+    cluster: int
+    quality: int
+    document_id: str
+    input_ids: np.ndarray
+
+
+class _StoreTask(TypedDict):
+    specs: list[dict[str, str]]
+    task: int
+    total_tasks: int
+
+
+class _TaskConfirmation(TypedDict):
+    sidecar_path: str
+    task: int
+    resumed: int
+
+
 @dataclasses.dataclass(frozen=True)
 class _SpillBucketRun:
     cluster: int
@@ -244,7 +279,7 @@ class _SpillBucketRun:
 @dataclasses.dataclass(frozen=True)
 class _SpillShardResult:
     buckets: list[_SpillBucketRun]
-    counters: dict[str, int]
+    stats: _FilterStats
     tokens: int
 
 
@@ -306,9 +341,9 @@ def _iter_surviving_docs(
     spec: dict[str, str],
     cluster_col: str,
     *,
-    counter_values: dict[str, int] | None = None,
-) -> Iterator[tuple[int, int, str, np.ndarray]]:
-    """Join one shard's datasets; yield ``(cluster, quality_bucket, doc_id, input_ids)`` per surviving doc.
+    stats: _FilterStats,
+) -> Iterator[_SurvivingDocument]:
+    """Join one shard's datasets and yield its surviving documents.
 
     Reads decon/cluster/quality densely and duplicate attributes sparsely. It
     streams tokenize in positional lockstep and drops filtered rows. It fails
@@ -337,55 +372,41 @@ def _iter_surviving_docs(
     exact_duplicates = _load_exact_duplicates(spec["exact_dedup"])
     verified_duplicates = _load_verified_duplicates(spec["dedup"])
 
-    n_in = 0
-    n_contaminated = 0
-    n_exact_dedup_dropped = 0
-    n_dedup_dropped = 0
-    n_out = 0
     doc_idx = 0
-    try:
-        for doc_id, ids in _iter_tokenized_documents(spec["tokenize"]):
-            if doc_idx >= n_decon:
-                raise RuntimeError(
-                    f"{where}: tokenize holds more documents than decon rows ({n_decon}) -- co-partitioning broken"
-                )
-            n_in += 1
-            position, doc_idx = doc_idx, doc_idx + 1
-            if doc_id != expected_ids[position]:
-                raise RuntimeError(
-                    f"{where}: tokenize/decon id mismatch at document {position}: "
-                    f"{doc_id!r} != {expected_ids[position]!r} -- co-partitioning broken"
-                )
-            if contaminated[position]:
-                n_contaminated += 1
-                continue
-            # Verified attributes mark only the members a full-text comparison
-            # confirmed, so membership alone decides.
-            if doc_id in verified_duplicates:
-                n_dedup_dropped += 1
-                continue
-            if doc_id in exact_duplicates:
-                n_exact_dedup_dropped += 1
-                continue
-            n_out += 1
-            yield int(cluster_vals[position]), int(quality_buckets[position]), doc_id, ids
-        if doc_idx != n_decon:
+    for doc_id, ids in _iter_tokenized_documents(spec["tokenize"]):
+        if doc_idx >= n_decon:
             raise RuntimeError(
-                f"{where}: tokenize documents ({doc_idx}) != decon rows ({n_decon}) -- co-partitioning broken"
+                f"{where}: tokenize holds more documents than decon rows ({n_decon}) -- co-partitioning broken"
             )
-    finally:
-        updates = {
-            "datakit_store/records_in": n_in,
-            "datakit_store/contaminated_dropped": n_contaminated,
-            "datakit_store/exact_duplicate_dropped": n_exact_dedup_dropped,
-            "datakit_store/fuzzy_duplicate_dropped": n_dedup_dropped,
-            "datakit_store/records_out": n_out,
-        }
-        if counter_values is None:
-            for name, value in updates.items():
-                counters.pipeline.update_counter(name, value)
-        else:
-            counter_values.update(updates)
+        stats.records_in += 1
+        position, doc_idx = doc_idx, doc_idx + 1
+        if doc_id != expected_ids[position]:
+            raise RuntimeError(
+                f"{where}: tokenize/decon id mismatch at document {position}: "
+                f"{doc_id!r} != {expected_ids[position]!r} -- co-partitioning broken"
+            )
+        if contaminated[position]:
+            stats.contaminated_dropped += 1
+            continue
+        # Verified attributes mark only the members a full-text comparison
+        # confirmed, so membership alone decides.
+        if doc_id in verified_duplicates:
+            stats.fuzzy_duplicate_dropped += 1
+            continue
+        if doc_id in exact_duplicates:
+            stats.exact_duplicate_dropped += 1
+            continue
+        stats.records_out += 1
+        yield _SurvivingDocument(
+            cluster=int(cluster_vals[position]),
+            quality=int(quality_buckets[position]),
+            document_id=doc_id,
+            input_ids=ids,
+        )
+    if doc_idx != n_decon:
+        raise RuntimeError(
+            f"{where}: tokenize documents ({doc_idx}) != decon rows ({n_decon}) -- co-partitioning broken"
+        )
 
 
 def _spill_source_shard(
@@ -398,13 +419,9 @@ def _spill_source_shard(
     shard_dir = os.path.join(scratch_dir, f"shard-{shard_index:05d}")
     os.makedirs(shard_dir)
     buckets: dict[tuple[int, int], list[np.ndarray]] = defaultdict(list)
-    stats: dict[str, int] = {}
-    for cluster, quality, _doc_id, ids in _iter_surviving_docs(
-        spec,
-        cluster_col,
-        counter_values=stats,
-    ):
-        buckets[(cluster, quality)].append(np.asarray(ids, dtype=np.int32))
+    stats = _FilterStats()
+    for document in _iter_surviving_docs(spec, cluster_col, stats=stats):
+        buckets[(document.cluster, document.quality)].append(np.asarray(document.input_ids, dtype=np.int32))
 
     results: list[_SpillBucketRun] = []
     total_tokens = 0
@@ -431,12 +448,12 @@ def _spill_source_shard(
                 ),
             )
         )
-    return _SpillShardResult(buckets=results, counters=stats, tokens=total_tokens)
+    return _SpillShardResult(buckets=results, stats=stats, tokens=total_tokens)
 
 
-def _task_sidecar_path(output_path: str, shard: ShardInfo) -> str:
+def _task_sidecar_path(output_path: str, task: int, total_tasks: int) -> str:
     pattern = prefix_join(output_path, "_done/shard-{shard:05d}-of-{total:05d}.json")
-    return format_shard_path(pattern, shard.shard_idx, shard.total_shards)
+    return format_shard_path(pattern, task, total_tasks)
 
 
 def _write_task_sidecar(path: str, completion: _TaskCompletion) -> None:
@@ -454,77 +471,47 @@ def _load_task_sidecar(path: str) -> _TaskCompletion:
 
 
 def _partition_and_write_task(
-    items: Iterator[list[dict[str, str]]],
-    shard: ShardInfo,
+    task_input: _StoreTask,
     *,
     cluster_col: str,
     output_path: str,
     max_parallel_bucket_writes: int,
-    input_read_threads: int,
-    local_spill_processes: int,
-) -> Iterator[dict[str, int | str]]:
+    partition_processes: int,
+) -> _TaskConfirmation:
     """Join, partition, and write one map task; commit its sidecar last."""
-    sidecar_path = _task_sidecar_path(output_path, shard)
+    task = task_input["task"]
+    total_tasks = task_input["total_tasks"]
+    batch_specs = task_input["specs"]
+    sidecar_path = _task_sidecar_path(output_path, task, total_tasks)
     if StoragePath(sidecar_path).exists():
         counters.pipeline.update_counter("datakit_store/tasks_resumed", 1)
-        yield {"sidecar_path": sidecar_path, "task": shard.shard_idx, "resumed": 1}
-        return
+        return {"sidecar_path": sidecar_path, "task": task, "resumed": 1}
 
     initial_counters = counters.pipeline.get_counters()
-    buckets: dict[tuple[int, int], list[np.ndarray]] = defaultdict(list)
     spill_runs: dict[tuple[int, int], list[BucketSpillRun]] = defaultdict(list)
     bucket_tokens: dict[tuple[int, int], int] = defaultdict(int)
     n_tokens = 0
-    batch_specs = next(iter(items))
     partition_started = time.monotonic()
-    scratch: tempfile.TemporaryDirectory[str] | None = None
-    try:
-        if local_spill_processes:
-            scratch = tempfile.TemporaryDirectory(prefix="datakit-store-")
-            with ProcessPoolExecutor(
-                max_workers=min(local_spill_processes, len(batch_specs)),
-                mp_context=multiprocessing.get_context("spawn"),
-            ) as executor:
-                results = executor.map(
-                    _spill_source_shard,
-                    batch_specs,
-                    [cluster_col] * len(batch_specs),
-                    [scratch.name] * len(batch_specs),
-                    range(len(batch_specs)),
-                )
-                for result in results:
-                    n_tokens += result.tokens
-                    for name, value in result.counters.items():
-                        counters.pipeline.update_counter(name, value)
-                    for bucket in result.buckets:
-                        key = (bucket.cluster, bucket.quality)
-                        spill_runs[key].append(bucket.run)
-                        bucket_tokens[key] += bucket.run.tokens
-        else:
-            worker_context = contextvars.copy_context()
-
-            def load_shard(spec: dict[str, str]) -> list[tuple[int, int, str, np.ndarray]]:
-                return list(
-                    _iter_surviving_docs(
-                        spec,
-                        cluster_col,
-                    )
-                )
-
-            executor = ThreadPoolExecutor(max_workers=min(input_read_threads, len(batch_specs)))
-            futures = [executor.submit(worker_context.copy().run, load_shard, spec) for spec in batch_specs]
-            try:
-                for future in futures:
-                    documents = future.result()
-                    for cluster, quality, _doc_id, ids in documents:
-                        token_count = len(ids)
-                        tokens = np.asarray(ids, dtype=np.int32)
-                        key = (cluster, quality)
-                        buckets[key].append(tokens)
-                        bucket_tokens[key] += token_count
-                        n_tokens += token_count
-            finally:
-                executor.shutdown(wait=True)
+    with tempfile.TemporaryDirectory(prefix="datakit-store-") as scratch_dir:
+        with ProcessPoolExecutor(
+            max_workers=min(partition_processes, len(batch_specs)),
+            mp_context=multiprocessing.get_context("spawn"),
+        ) as executor:
+            results = executor.map(
+                _spill_source_shard,
+                batch_specs,
+                [cluster_col] * len(batch_specs),
+                [scratch_dir] * len(batch_specs),
+                range(len(batch_specs)),
+            )
+            for result in results:
+                n_tokens += result.tokens
+                for name, value in result.stats.counters().items():
+                    counters.pipeline.update_counter(name, value)
+                for bucket in result.buckets:
+                    key = (bucket.cluster, bucket.quality)
+                    spill_runs[key].append(bucket.run)
+                    bucket_tokens[key] += bucket.run.tokens
         partition_seconds = time.monotonic() - partition_started
 
         attempt = uuid.uuid4().hex
@@ -533,24 +520,18 @@ def _partition_and_write_task(
             cluster, quality = key
             bucket_root = prefix_join(output_path, f"cluster={cluster}/quality={quality}")
             pattern = prefix_join(bucket_root, f"part-{{shard:05d}}-of-{{total:05d}}-attempt-{attempt}")
-            cache_path = format_shard_path(pattern, shard.shard_idx, shard.total_shards)
-            if local_spill_processes:
-                ledger = write_bucket_cache_from_spills(cache_path, spill_runs[key])
-            else:
-                documents = buckets[key]
-                ledger = write_bucket_cache(cache_path, documents)
-                documents.clear()
+            cache_path = format_shard_path(pattern, task, total_tasks)
+            ledger = write_bucket_cache_from_spills(cache_path, spill_runs[key])
             return _TaskBucketStat(
                 cluster=cluster,
                 quality=quality,
-                task=shard.shard_idx,
+                task=task,
                 path=cache_path,
                 rows=ledger.total_num_rows,
                 tokens=bucket_tokens[key],
             )
 
-        populated = spill_runs if local_spill_processes else buckets
-        ordered_keys = sorted(populated, key=lambda key: bucket_tokens[key], reverse=True)
+        ordered_keys = sorted(spill_runs, key=lambda key: bucket_tokens[key], reverse=True)
         bucket_stats: list[_TaskBucketStat] = []
         write_started = time.monotonic()
         if ordered_keys:
@@ -559,10 +540,6 @@ def _partition_and_write_task(
                 for future in as_completed(futures):
                     bucket_stats.append(future.result())
         write_seconds = time.monotonic() - write_started
-    finally:
-        if scratch is not None:
-            scratch.cleanup()
-
     counters.pipeline.update_counter("datakit_store/tokens_out", n_tokens)
     counters.pipeline.update_counter("datakit_store/tasks_written", 1)
     counters.pipeline.update_counter("datakit_store/bucket_caches_written", len(bucket_stats))
@@ -581,7 +558,7 @@ def _partition_and_write_task(
     }
     bucket_stats.sort(key=lambda stat: (stat.cluster, stat.quality))
     _write_task_sidecar(sidecar_path, _TaskCompletion(buckets=bucket_stats, counters=task_counters))
-    yield {"sidecar_path": sidecar_path, "task": shard.shard_idx, "resumed": 0}
+    return {"sidecar_path": sidecar_path, "task": task, "resumed": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -658,27 +635,19 @@ def build_clustered_store(
     split: str = "train",
     worker_resources: ResourceConfig | None = None,
     max_workers: int = 4096,
-    shards_per_task: int = 1,
     task_count: int | None = None,
     max_parallel_bucket_writes: int = DEFAULT_PARALLEL_BUCKET_WRITES,
-    input_read_threads: int = DEFAULT_INPUT_READ_THREADS,
-    local_spill_processes: int = DEFAULT_LOCAL_SPILL_PROCESSES,
-    zephyr_context: ZephyrContext | None = None,
+    partition_processes: int = DEFAULT_PARTITION_PROCESSES,
 ) -> ClusteredStoreData:
     """Build materialized caches for each populated ``(cluster, quality)`` bucket.
 
     Args:
-        shards_per_task: Consecutive source shards per map task when
-            ``task_count`` is omitted.
-        task_count: Split all input shards round-robin across this many tasks.
-            This takes precedence over ``shards_per_task``.
+        task_count: Split input shards round-robin across this many tasks. When
+            omitted, each input shard becomes one task.
         max_parallel_bucket_writes: Bucket caches finalized concurrently per
             task. Each writer may hold one 512 MiB aligned token buffer.
-        input_read_threads: Source shards joined concurrently inside each task.
-        local_spill_processes: Join/filter source shards in separate processes
-            and write append-only bucket runs to local disk before finalizing.
-            This uses CPU cores beyond the Python GIL and bounds RAM at the
-            cost of one local write/read pass. Zero keeps the in-memory path.
+        partition_processes: Source shards joined and partitioned concurrently
+            into append-only local bucket runs inside each task.
     """
     if not tokenize:
         raise ValueError("build_clustered_store: tokenize is empty")
@@ -687,16 +656,12 @@ def build_clustered_store(
             missing = sorted(set(tokenize) - set(d))
             extra = sorted(set(d) - set(tokenize))
             raise ValueError(f"{label} source set must equal tokenize: missing={missing!r}, extra={extra!r}")
-    if shards_per_task < 1:
-        raise ValueError(f"shards_per_task must be >= 1, got {shards_per_task}")
     if task_count is not None and task_count < 1:
         raise ValueError(f"task_count must be >= 1, got {task_count}")
     if max_parallel_bucket_writes < 1:
         raise ValueError(f"max_parallel_bucket_writes must be >= 1, got {max_parallel_bucket_writes}")
-    if input_read_threads < 1:
-        raise ValueError(f"input_read_threads must be >= 1, got {input_read_threads}")
-    if local_spill_processes < 0:
-        raise ValueError(f"local_spill_processes must be >= 0, got {local_spill_processes}")
+    if partition_processes < 1:
+        raise ValueError(f"partition_processes must be >= 1, got {partition_processes}")
 
     # Every source must share one quality model so bucket IDs are comparable.
     models = {(q.model_dir, q.calib_file, tuple(q.bucket_edges)) for q in quality.values()}
@@ -762,11 +727,8 @@ def build_clustered_store(
     if not shard_specs:
         raise ValueError("No input shards resolved -- nothing to do")
 
-    if task_count is None:
-        batched_specs = [shard_specs[i : i + shards_per_task] for i in range(0, len(shard_specs), shards_per_task)]
-    else:
-        resolved_task_count = min(task_count, len(shard_specs))
-        batched_specs = [shard_specs[i::resolved_task_count] for i in range(resolved_task_count)]
+    resolved_task_count = len(shard_specs) if task_count is None else min(task_count, len(shard_specs))
+    batched_specs = [shard_specs[i::resolved_task_count] for i in range(resolved_task_count)]
     logger.info(
         "build_clustered_store: %d sources, %d input shards -> %d map-only tasks -> %s",
         len(tokenize),
@@ -779,7 +741,7 @@ def build_clustered_store(
         # Production supplies a dedicated worker shape through StoreConfig.
         worker_resources = ResourceConfig(cpu=2, ram="16g", disk="16g")
 
-    ctx = zephyr_context or ZephyrContext(
+    ctx = ZephyrContext(
         resources=worker_resources,
         coordinator_resources=ResourceConfig(cpu=1, ram="3g", preemptible=False),
         max_workers=min(max_workers, len(batched_specs)),
@@ -791,10 +753,12 @@ def build_clustered_store(
         cluster_col=cluster_col,
         output_path=output_path,
         max_parallel_bucket_writes=max_parallel_bucket_writes,
-        input_read_threads=input_read_threads,
-        local_spill_processes=local_spill_processes,
+        partition_processes=partition_processes,
     )
-    ds = Dataset.from_list(batched_specs).map_shard(write_task)
+    tasks: list[_StoreTask] = [
+        {"specs": specs, "task": task, "total_tasks": resolved_task_count} for task, specs in enumerate(batched_specs)
+    ]
+    ds = Dataset.from_list(tasks).map(write_task)
     outcome = ctx.execute(
         ds,
         verbose=True,
