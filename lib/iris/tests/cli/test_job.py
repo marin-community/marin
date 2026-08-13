@@ -130,8 +130,8 @@ def recorded_bundle_exclude(monkeypatch):
 
 
 def test_exclude_options_become_one_or_ed_bundle_regex(recorded_bundle_exclude):
-    # Repeated --exclude flags are OR'd; each pattern anchors independently, so grouping
-    # them wrong (e.g. bare alternation) would let one pattern's anchor bind the other.
+    # Each --exclude flag contributes an independent alternative; a path matching any
+    # one is dropped, and an unrelated path is kept.
     result = _run_cli(["--exclude", r"^docs/", "--exclude", r"^data/"])
     assert result.exit_code == 0, result.output
     pattern = recorded_bundle_exclude["bundle_exclude"]
