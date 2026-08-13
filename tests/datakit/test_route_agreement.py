@@ -1,21 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behaviour of the Docling-versus-VLM agreement metric.
+"""Behaviour of the cross-route agreement metric.
 
 The metric exists to separate three things that all look like "the texts differ": the routes'
-different serialization conventions (which is not disagreement), Docling losing content the VLM
+different serialization conventions (which is not disagreement), one route losing content another
 read (which is), and Docling adding figure text the VLM was told to skip (which is neither). These
 tests pin those distinctions, because a metric that confuses them trains the router backwards.
+
+Three routes now share the metric -- Docling, the VLM and pdf-inspector -- so the conventions of
+each have to normalize away against the conventions of both others, not just against one.
 """
 
 import pytest
 
 from experiments.datakit.build_pdf_source.quality.route_agreement import (
+    DOCLING,
+    INSPECTOR,
+    VLM,
     align_pages,
     document_agreement,
-    ocr_streams,
+    markdown_streams,
     page_agreement,
+    pages_agreement,
     split_pages,
 )
 
@@ -27,7 +34,7 @@ def test_serialization_conventions_are_not_disagreement():
     docling = "<docling_table>| Name | Count |\n|------|-------|\n| Widgets | 12 |</docling_table>"
     vlm = "| Name | Count |\n| --- | --- |\n| Widgets | 12 |"
 
-    agreement = page_agreement(docling, vlm)
+    agreement = page_agreement(vlm, docling, VLM, DOCLING)
 
     assert agreement.unigram_recall == pytest.approx(1.0)
     assert agreement.bigram_recall == pytest.approx(1.0)
@@ -35,7 +42,9 @@ def test_serialization_conventions_are_not_disagreement():
 
 def test_heading_and_emphasis_markup_is_not_disagreement():
     """Docling strips heading markers and the VLM emits them; the words are the same."""
-    agreement = page_agreement(SENTENCE, f"# {SENTENCE.split()[0]}\n\n**{' '.join(SENTENCE.split()[1:])}**")
+    marked = f"# {SENTENCE.split()[0]}\n\n**{' '.join(SENTENCE.split()[1:])}**"
+
+    agreement = page_agreement(marked, SENTENCE, VLM, DOCLING)
 
     assert agreement.unigram_recall == pytest.approx(1.0)
 
@@ -43,7 +52,7 @@ def test_heading_and_emphasis_markup_is_not_disagreement():
 def test_lost_body_text_shows_up_as_lost_recall():
     docling = " ".join(SENTENCE.split()[:4])
 
-    agreement = page_agreement(docling, SENTENCE)
+    agreement = page_agreement(SENTENCE, docling, VLM, DOCLING)
 
     assert agreement.unigram_recall < 0.4
     # Docling produced nothing the VLM did not have, so precision stays perfect: the metric says
@@ -56,7 +65,7 @@ def test_reordered_text_keeps_unigram_recall_but_loses_bigram_recall():
     words = SENTENCE.split()
     spliced = " ".join(words[::2] + words[1::2])
 
-    agreement = page_agreement(spliced, SENTENCE)
+    agreement = page_agreement(SENTENCE, spliced, VLM, DOCLING)
 
     assert agreement.unigram_recall == pytest.approx(1.0)
     assert agreement.bigram_recall < 0.2
@@ -66,10 +75,10 @@ def test_figure_text_is_excluded_from_comparison_and_reported_separately():
     """Docling's chart labels must not read as content the VLM lost, nor as content Docling invented."""
     docling = f"{SENTENCE} <docling_picture_annotation>vertical axis label</docling_picture_annotation>"
 
-    agreement = page_agreement(docling, SENTENCE)
+    agreement = page_agreement(SENTENCE, docling, VLM, DOCLING)
 
     assert agreement.unigram_precision == pytest.approx(1.0)
-    assert agreement.docling_figure_tokens == 3
+    assert agreement.candidate_figure_tokens == 3
 
 
 def test_figure_text_can_be_credited_when_the_vlm_read_the_figure_as_prose():
@@ -77,22 +86,68 @@ def test_figure_text_can_be_credited_when_the_vlm_read_the_figure_as_prose():
     docling = "<docling_picture_annotation>Submit application then review then notify</docling_picture_annotation>"
     vlm = "Submit application then review then notify"
 
-    agreement = page_agreement(docling, vlm)
+    agreement = page_agreement(vlm, docling, VLM, DOCLING)
 
     assert agreement.unigram_recall == pytest.approx(0.0)
     assert agreement.unigram_recall_with_figures == pytest.approx(1.0)
 
 
 def test_ligatures_and_width_variants_normalize_to_the_same_tokens():
-    agreement = page_agreement("ﬁnal oﬀice \uff57idth", "final office width")
+    agreement = page_agreement("final office width", "ﬁnal oﬀice \uff57idth", VLM, DOCLING)
 
     assert agreement.unigram_recall == pytest.approx(1.0)
 
 
 def test_pipe_tables_need_a_delimiter_row_to_count_as_a_table():
     """A line containing pipes is not a table; the delimiter row is what makes one."""
-    assert ocr_streams("a | b | c\nd | e | f").table_chars == 0
-    assert ocr_streams("| a | b |\n| --- | --- |\n| c | d |\n").table_chars > 0
+    assert markdown_streams("a | b | c\nd | e | f").table_chars == 0
+    assert markdown_streams("| a | b |\n| --- | --- |\n| c | d |\n").table_chars > 0
+
+
+def test_a_link_target_is_markup_and_not_content():
+    """pdf-inspector writes every URL twice, as its own label; only one of them is text."""
+    assert markdown_streams("see [the manual](https://example.org/manual) here").tokens == [
+        "see",
+        "the",
+        "manual",
+        "here",
+    ]
+
+
+def test_an_image_is_dropped_with_its_target_rather_than_kept_as_its_label():
+    assert markdown_streams("before ![alt caption](https://example.org/figure.png) after").tokens == [
+        "before",
+        "after",
+    ]
+
+
+def test_a_placeholder_for_content_a_route_could_not_read_is_not_content():
+    """Docling stands an undecoded formula up as an HTML comment, on every equation in the corpus.
+
+    Counted as text it is three words Docling "added" and the VLM "lost", which is backwards: the
+    comment marks content Docling failed to read.
+    """
+    docling = f"{SENTENCE} <docling_formula><!-- formula-not-decoded --></docling_formula>"
+
+    agreement = page_agreement(SENTENCE, docling, VLM, DOCLING)
+
+    assert agreement.unigram_precision == pytest.approx(1.0)
+    assert agreement.candidate_formula_chars > 0
+
+
+def test_the_two_markdown_routes_normalize_to_the_same_tokens():
+    """pdf-inspector's dialect against the VLM's: `<u>`-wrapped links, headings, bold, pipe tables."""
+    inspector = (
+        "## Results\n\nSee <u>[https://example.org/data](https://example.org/data)</u> for **detail**.\n\n"
+        "| Year | Count |\n| --- | --- |\n| 2019 | 42 |\n"
+    )
+    vlm = "# Results\n\nSee https://example.org/data for detail.\n\n| Year | Count |\n|---|---|\n| 2019 | 42 |\n"
+
+    agreement = page_agreement(vlm, inspector, VLM, INSPECTOR)
+
+    assert agreement.unigram_recall == pytest.approx(1.0)
+    assert agreement.unigram_precision == pytest.approx(1.0)
+    assert agreement.bigram_recall == pytest.approx(1.0)
 
 
 def test_pages_are_compared_positionally_on_each_route_own_offsets():
@@ -166,6 +221,24 @@ def test_a_dropped_page_costs_that_page_and_not_the_ones_after_it():
     assert result["frac_pages_unigram_below_50"] == pytest.approx(0.25)
     assert result["unigram_recall_mean"] == pytest.approx(0.75, abs=0.02)
     assert result["page_count_mismatch"] == -1
+
+
+def test_a_route_that_emits_its_own_pages_needs_no_offsets():
+    """pdf-inspector returns one Markdown string per page, so its pages skip the offset split."""
+    pages = [" ".join(f"alpha{index}" for index in range(60)), " ".join(f"beta{index}" for index in range(60))]
+
+    result = pages_agreement(pages, pages, VLM, INSPECTOR)
+
+    assert result["pages_compared"] == 2
+    assert result["bigram_recall_mean"] == pytest.approx(1.0)
+
+
+def test_a_pair_names_its_count_columns_after_its_own_routes():
+    """Two pairs sharing a route must report that route's totals under the same name."""
+    result = pages_agreement(["alpha beta"], ["alpha beta"], DOCLING, INSPECTOR)
+
+    assert result["docling_tokens"] == 2
+    assert result["inspector_tokens"] == 2
 
 
 def test_alignment_marks_the_page_that_is_actually_missing():

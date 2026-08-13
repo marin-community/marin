@@ -164,7 +164,7 @@ SURVIVED_OUTCOMES = (Outcome.OK, Outcome.EXCEPTION, Outcome.PANIC, Outcome.MEMOR
 # ---------------------------------------------------------------------------
 
 
-def _read_exactly(stream, size: int) -> bytes:
+def read_exactly(stream, size: int) -> bytes:
     payload = stream.read(size)
     if payload is None or len(payload) != size:
         raise EOFError(f"expected {size} bytes, got {0 if payload is None else len(payload)}")
@@ -190,7 +190,7 @@ def _extracted(result) -> dict:
     }
 
 
-def _failure_outcome(error: BaseException) -> Outcome:
+def failure_outcome(error: BaseException) -> Outcome:
     if isinstance(error, MemoryError):
         return Outcome.MEMORY
     # PyO3 names its unwind-catching exception PanicException and derives it from BaseException.
@@ -214,7 +214,7 @@ def _measure(module, op: str, payload: bytes) -> dict:
     # reported as a worker death would invert this probe's central conclusion.
     except BaseException as error:
         return {
-            "outcome": str(_failure_outcome(error)),
+            "outcome": str(failure_outcome(error)),
             "milliseconds": 1000 * (time.perf_counter() - started),
             "error": f"{type(error).__name__}: {error}"[:500],
         }
@@ -238,7 +238,7 @@ def worker_main() -> None:
         if not header:
             return
         request = json.loads(header)
-        payload = _read_exactly(stdin, request["size"])
+        payload = read_exactly(stdin, request["size"])
         stdout.write(json.dumps(_measure(pdf_inspector, request["op"], payload)).encode() + b"\n")
         stdout.flush()
 
@@ -257,14 +257,21 @@ class Reply:
 
 
 class Worker:
-    """A subprocess running :func:`worker_main`, replaced whenever it dies.
+    """A subprocess running some module's ``--worker`` entrypoint, replaced whenever it dies.
 
     Deliberately ``subprocess`` rather than ``multiprocessing``: an Iris callable entrypoint runs at
     module top level of ``__main__`` with no ``if __name__ == "__main__"`` guard, so both ``spawn``
     and ``forkserver`` would re-execute the job body in every child.
+
+    The module to run is a parameter because this probe is not the only caller: the Stage 1 study
+    (:mod:`~experiments.datakit.build_pdf_source.quality.build_inspector_study`) reuses the driver
+    with a worker of its own, and a second copy of this protocol would be a second thing to keep
+    right.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, module_name: str, timeout: float = CALL_TIMEOUT) -> None:
+        self._module_name = module_name
+        self._timeout = timeout
         self._process: subprocess.Popen | None = None
         self._selector = selectors.DefaultSelector()
         self.spawns = 0
@@ -272,7 +279,7 @@ class Worker:
 
     def start(self) -> None:
         self._process = subprocess.Popen(
-            [sys.executable, "-u", "-m", MODULE_NAME, WORKER_FLAG],
+            [sys.executable, "-u", "-m", self._module_name, WORKER_FLAG],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             # stderr stays on the job log so a panic or abort message survives the process.
@@ -312,9 +319,9 @@ class Worker:
             if b"\n" in buffer:
                 return buffer.split(b"\n", 1)[0].decode()
 
-    def call(self, op: Op, payload: bytes) -> Reply:
+    def call(self, op: str, payload: bytes) -> Reply:
         """Run one document through the worker, replacing it if it does not come back."""
-        deadline = time.monotonic() + CALL_TIMEOUT
+        deadline = time.monotonic() + self._timeout
         try:
             self._process.stdin.write(json.dumps({"op": str(op), "size": len(payload)}).encode() + b"\n")
             self._process.stdin.write(payload)
@@ -333,7 +340,7 @@ class Worker:
             self._process.wait(timeout=1.0)
             result = self._death()
         except subprocess.TimeoutExpired:
-            result = {"outcome": str(Outcome.TIMEOUT), "error": f"no reply within {CALL_TIMEOUT:.0f}s"}
+            result = {"outcome": str(Outcome.TIMEOUT), "error": f"no reply within {self._timeout:.0f}s"}
         self.stop()
         self.start()
         return Reply(result=result, worker_lost=True)
@@ -387,7 +394,7 @@ def probe_row(worker: Worker, document: dict) -> dict:
 
 
 def run_probe(documents: pl.DataFrame) -> list[dict]:
-    worker = Worker()
+    worker = Worker(MODULE_NAME)
     rows = []
     try:
         for index, document in enumerate(documents.iter_rows(named=True)):

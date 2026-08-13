@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Measure how far Docling's reading of a document is from the VLM's.
+"""Measure how far one extraction route's reading of a document is from another's.
 
 This is the target side of the routing problem: :mod:`route_features` proposes cheap signals, and
 these numbers are what those signals have to predict. They are a *proxy* for the routing label, not
@@ -9,12 +9,17 @@ the label itself -- two extractions can disagree without either being wrong, and
 matters is decided by adjudication rather than by any number here. What these metrics do is make
 the disagreement measurable and sortable, so adjudication can be spent where it is informative.
 
-**The two routes serialize differently by construction**, so comparison happens on a normalized
-token stream rather than on the stored text. Docling emits tagged plain text -- ``<docling_table>``
+**Routes serialize differently by construction**, so comparison happens on a normalized token
+stream rather than on the stored text. Docling emits tagged plain text -- ``<docling_table>``
 GitHub grids, ``<docling_formula>``, ``<docling_picture_annotation>``, no heading markers -- while
-the VLM emits Markdown with LaTeX math and HTML or pipe tables, and its prompt tells it to ignore
-figures outright. Left unnormalized, every table would read as total disagreement and every figure
-as content Docling invented.
+the VLM and pdf-inspector emit Markdown with HTML fragments, pipe tables and, in the VLM's case,
+LaTeX math; the VLM's prompt tells it to ignore figures outright. Left unnormalized, every table
+would read as total disagreement and every figure as content one route invented.
+
+A :class:`Route` pairs a name with the normalizer for its dialect, so a new route is added by
+declaring one rather than by threading a third serialization convention through the metric. The two
+Markdown routes share :func:`markdown_streams`: pdf-inspector's dialect is the VLM's dialect plus
+``<u>`` wrappers around links, which the HTML stripping already covers.
 
 **Figure text is separated rather than compared.** Docling transcribes the text inside charts and
 diagrams; the VLM is instructed not to. Neither is wrong, and including that text in the comparison
@@ -37,6 +42,7 @@ one of the properties the router is supposed to protect, so it is measured direc
 import re
 import unicodedata
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import pairwise
 
@@ -57,6 +63,14 @@ _PIPE_TABLE = re.compile(r"(?:^\|.*\|[ \t]*\n)+", re.MULTILINE)
 _PIPE_DELIMITER = re.compile(r"^\|[\s:|-]+\|[ \t]*$", re.MULTILINE)
 _HTML_TAG = re.compile(r"</?[a-zA-Z][^>]*>")
 _MARKDOWN_IMAGE = re.compile(r"!\[.*?\]\(.*?\)", re.DOTALL)
+# A link's target is an address, not text a route read off the page. Docling never writes one;
+# pdf-inspector writes one for every URL it sees, as `<u>[https://x/y](https://x/y)</u>`, which
+# would otherwise count that URL's words twice and only for that route.
+_MARKDOWN_LINK = re.compile(r"\[([^\]\n]*)\]\([^)\s]*(?:\s+\"[^\"]*\")?\)")
+# A comment is markup in every dialect here, and Docling stands a formula it could not read up as
+# the literal `<!-- formula-not-decoded -->`, which would otherwise enter the stream as three words
+# Docling "added" on every equation in the corpus.
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 _LATEX_MATH = re.compile(r"\$\$.*?\$\$|\$[^$\n]+\$|\\\[.*?\\\]|\\\(.*?\\\)", re.DOTALL)
 _LATEX_COMMAND = re.compile(r"\\[a-zA-Z]+")
@@ -90,6 +104,7 @@ def docling_streams(page: str) -> Streams:
     page = _PICTURE_ANNOTATION.sub(" ", page)
     table_chars = sum(len(match.group(1)) for match in _DOCLING_TABLE.finditer(page))
     formula_chars = sum(len(match.group(1)) for match in _DOCLING_FORMULA.finditer(page))
+    page = _HTML_COMMENT.sub(" ", page)
     return Streams(
         tokens=_tokenize(_DOCLING_TAG.sub(" ", page)),
         table_chars=table_chars,
@@ -99,14 +114,22 @@ def docling_streams(page: str) -> Streams:
     )
 
 
-def ocr_streams(page: str) -> Streams:
-    """Split a VLM Markdown page the same way. Its figure stream is empty by prompt design."""
+def markdown_streams(page: str) -> Streams:
+    """Split a Markdown page -- the VLM's or pdf-inspector's -- the same way.
+
+    Both dialects are Markdown with HTML fragments and pipe tables, so they normalize identically;
+    the VLM adds LaTeX math and pdf-inspector adds ``<u>`` around links, and each is handled by a
+    rule the other's stream simply never triggers. The figure stream is empty for both: the VLM is
+    prompted past figures and pdf-inspector does not transcribe them.
+    """
     table_chars = sum(len(match.group(0)) for match in _HTML_TABLE.finditer(page))
     table_chars += sum(
         len(match.group(0)) for match in _PIPE_TABLE.finditer(page) if _PIPE_DELIMITER.search(match.group(0))
     )
     formula_chars = sum(len(match.group(0)) for match in _LATEX_MATH.finditer(page))
-    page = _MARKDOWN_IMAGE.sub(" ", page)
+    page = _HTML_COMMENT.sub(" ", _MARKDOWN_IMAGE.sub(" ", page))
+    # After the images, so an image's target is dropped with it rather than kept as its label.
+    page = _MARKDOWN_LINK.sub(r"\1", page)
     page = _HTML_TAG.sub(" ", _LATEX_COMMAND.sub(" ", page))
     return Streams(
         tokens=_tokenize(page),
@@ -115,6 +138,23 @@ def ocr_streams(page: str) -> Streams:
         figure_chars=0,
         figure_tokens=[],
     )
+
+
+@dataclass(frozen=True)
+class Route:
+    """One extraction route: how to normalize its serialization, and what to call it in a column.
+
+    ``name`` is the prefix the per-route count columns carry, so a pair of routes names its own
+    output and two pairs sharing a route agree on that route's numbers.
+    """
+
+    name: str
+    streams: Callable[[str], Streams]
+
+
+VLM = Route("ocr", markdown_streams)
+DOCLING = Route("docling", docling_streams)
+INSPECTOR = Route("inspector", markdown_streams)
 
 
 def _overlap(reference: Counter, candidate: Counter) -> tuple[float, float]:
@@ -133,43 +173,49 @@ def _bigrams(tokens: list[str]) -> Counter:
 
 @dataclass(frozen=True)
 class PageAgreement:
-    """How far one aligned page pair diverged."""
+    """How far one aligned page pair diverged.
+
+    Roles rather than route names: ``reference`` is the route being read *against* -- recall is the
+    share of its tokens the candidate also produced -- and ``candidate`` is the route under test.
+    """
 
     unigram_recall: float
     unigram_precision: float
     bigram_recall: float
     bigram_precision: float
     unigram_recall_with_figures: float
-    ocr_tokens: int
-    docling_tokens: int
-    docling_figure_tokens: int
-    docling_table_chars: int
-    ocr_table_chars: int
-    docling_formula_chars: int
-    ocr_formula_chars: int
+    reference_tokens: int
+    candidate_tokens: int
+    reference_figure_tokens: int
+    candidate_figure_tokens: int
+    reference_table_chars: int
+    candidate_table_chars: int
+    reference_formula_chars: int
+    candidate_formula_chars: int
 
 
-def page_agreement(docling_page: str, ocr_page: str) -> PageAgreement:
-    """Compare one page of Docling text against the same page of VLM text."""
-    docling, ocr = docling_streams(docling_page), ocr_streams(ocr_page)
-    unigram_recall, unigram_precision = _overlap(Counter(ocr.tokens), Counter(docling.tokens))
-    bigram_recall, bigram_precision = _overlap(_bigrams(ocr.tokens), _bigrams(docling.tokens))
-    # Docling's figure transcriptions rejoin the stream here, which is the fair comparison on a
-    # page whose "figure" is really a flowchart the VLM read as a table.
-    with_figures, _ = _overlap(Counter(ocr.tokens), Counter(docling.tokens + docling.figure_tokens))
+def page_agreement(reference_page: str, candidate_page: str, reference: Route, candidate: Route) -> PageAgreement:
+    """Compare one page as the candidate route read it against the same page as the reference did."""
+    referenced, candidated = reference.streams(reference_page), candidate.streams(candidate_page)
+    unigram_recall, unigram_precision = _overlap(Counter(referenced.tokens), Counter(candidated.tokens))
+    bigram_recall, bigram_precision = _overlap(_bigrams(referenced.tokens), _bigrams(candidated.tokens))
+    # The candidate's figure transcriptions rejoin the stream here, which is the fair comparison on
+    # a page whose "figure" is really a flowchart the reference route read as a table.
+    with_figures, _ = _overlap(Counter(referenced.tokens), Counter(candidated.tokens + candidated.figure_tokens))
     return PageAgreement(
         unigram_recall=unigram_recall,
         unigram_precision=unigram_precision,
         bigram_recall=bigram_recall,
         bigram_precision=bigram_precision,
         unigram_recall_with_figures=with_figures,
-        ocr_tokens=len(ocr.tokens),
-        docling_tokens=len(docling.tokens),
-        docling_figure_tokens=len(docling.figure_tokens),
-        docling_table_chars=docling.table_chars,
-        ocr_table_chars=ocr.table_chars,
-        docling_formula_chars=docling.formula_chars,
-        ocr_formula_chars=ocr.formula_chars,
+        reference_tokens=len(referenced.tokens),
+        candidate_tokens=len(candidated.tokens),
+        reference_figure_tokens=len(referenced.figure_tokens),
+        candidate_figure_tokens=len(candidated.figure_tokens),
+        reference_table_chars=referenced.table_chars,
+        candidate_table_chars=candidated.table_chars,
+        reference_formula_chars=referenced.formula_chars,
+        candidate_formula_chars=candidated.formula_chars,
     )
 
 
@@ -186,29 +232,29 @@ def split_pages(text: str, offsets: list[int] | None) -> list[str]:
     return pages
 
 
-# Aligning a Docling page to a VLM page must beat leaving both unaligned, and this is the margin it
+# Aligning one route's page to another's must beat leaving both unaligned, and this is the margin it
 # must beat by. Set low because two readings of a hard page can genuinely share few tokens and still
 # be the same page; set above zero so that a page one route simply does not have is skipped rather
 # than matched to whatever happens to sit at that index.
 _ALIGNMENT_GAP_PENALTY = 0.05
-# Docling drops pages; it never invents them. The alignment therefore only has to consider offsets
+# Routes drop pages; they do not invent them. The alignment therefore only has to consider offsets
 # within this many pages of the diagonal, which keeps a 178-page document from costing 31k page
 # comparisons.
 _ALIGNMENT_BAND_MARGIN = 3
 
 
-def _page_similarity(docling_page: str, ocr_page: str) -> float:
+def _page_similarity(candidate_page: str, reference_page: str) -> float:
     """Cheap token overlap, used only to decide which pages are the same page."""
-    docling, ocr = Counter(_tokenize(docling_page)), Counter(_tokenize(ocr_page))
-    if not docling and not ocr:
+    candidate, reference = Counter(_tokenize(candidate_page)), Counter(_tokenize(reference_page))
+    if not candidate and not reference:
         return 1.0
-    if not docling or not ocr:
+    if not candidate or not reference:
         return 0.0
-    shared = sum((docling & ocr).values())
-    return 2 * shared / (sum(docling.values()) + sum(ocr.values()))
+    shared = sum((candidate & reference).values())
+    return 2 * shared / (sum(candidate.values()) + sum(reference.values()))
 
 
-def align_pages(docling_pages: list[str], ocr_pages: list[str]) -> list[tuple[int | None, int | None]]:
+def align_pages(candidate_pages: list[str], reference_pages: list[str]) -> list[tuple[int | None, int | None]]:
     """Pair up the two routes' pages, allowing either side to have pages the other lacks.
 
     Positional pairing is wrong here and quietly so. Docling drops pages it reads nothing from --
@@ -222,12 +268,12 @@ def align_pages(docling_pages: list[str], ocr_pages: list[str]) -> list[tuple[in
     Needleman-Wunsch over token overlap. Returns index pairs; ``None`` on a side means that page
     has no counterpart, which is the honest encoding of "this route lost this page".
     """
-    if len(docling_pages) == len(ocr_pages):
+    if len(candidate_pages) == len(reference_pages):
         # The common case, and the one where content alignment would only add noise: equal page
         # counts on two byte-exact page partitions of the same PDF are the same pages.
-        return [(index, index) for index in range(len(ocr_pages))]
+        return [(index, index) for index in range(len(reference_pages))]
 
-    rows, columns = len(docling_pages), len(ocr_pages)
+    rows, columns = len(candidate_pages), len(reference_pages)
     band = abs(rows - columns) + _ALIGNMENT_BAND_MARGIN
 
     def in_band(i: int, j: int) -> bool:
@@ -242,7 +288,10 @@ def align_pages(docling_pages: list[str], ocr_pages: list[str]) -> list[tuple[in
             options = []
             if i > 0 and j > 0 and (i - 1, j - 1) in best:
                 options.append(
-                    (best[(i - 1, j - 1)] + _page_similarity(docling_pages[i - 1], ocr_pages[j - 1]), (i - 1, j - 1))
+                    (
+                        best[(i - 1, j - 1)] + _page_similarity(candidate_pages[i - 1], reference_pages[j - 1]),
+                        (i - 1, j - 1),
+                    )
                 )
             if i > 0 and (i - 1, j) in best:
                 options.append((best[(i - 1, j)] - _ALIGNMENT_GAP_PENALTY, (i - 1, j)))
@@ -272,72 +321,77 @@ def align_pages(docling_pages: list[str], ocr_pages: list[str]) -> list[tuple[in
     return list(reversed(pairs))
 
 
-def document_agreement(docling_text: str, docling_offsets, ocr_text: str, ocr_offsets) -> dict:
-    """Compare two extractions of one document, page by page.
+_MEANED_METRICS = (
+    "unigram_recall",
+    "unigram_precision",
+    "bigram_recall",
+    "bigram_precision",
+    "unigram_recall_with_figures",
+)
+_SUMMED_COUNTS = ("tokens", "figure_tokens", "table_chars", "formula_chars")
 
-    Pages are matched by content rather than by index -- see :func:`align_pages` -- so a page
-    Docling dropped costs that page rather than shifting every page after it. An unmatched VLM page
-    is compared against nothing, which scores as total loss, because that is what it is.
 
-    Page numbers are averaged weighted by the VLM page's token count, so a document's score is
+def pages_agreement(reference_pages: list[str], candidate_pages: list[str], reference: Route, candidate: Route) -> dict:
+    """Compare two routes' readings of one document, page by page.
+
+    Pages are matched by content rather than by index -- see :func:`align_pages` -- so a page the
+    candidate dropped costs that page rather than shifting every page after it. An unmatched
+    reference page is compared against nothing, which scores as total loss, because that is what it
+    is.
+
+    Page numbers are averaged weighted by the reference page's token count, so a document's score is
     dominated by the pages that carry its text rather than by its blank back cover. The minimum and
     the fraction of bad pages come along because a single destroyed page in a long report is a real
     loss that any mean will bury.
     """
-    docling_pages = split_pages(docling_text, docling_offsets)
-    ocr_pages = split_pages(ocr_text, ocr_offsets)
-    page_count_mismatch = len(docling_pages) - len(ocr_pages)
-
-    alignment = align_pages(docling_pages, ocr_pages)
+    alignment = align_pages(candidate_pages, reference_pages)
     pages = [
         page_agreement(
-            docling_pages[docling_index] if docling_index is not None else "",
-            ocr_pages[ocr_index] if ocr_index is not None else "",
+            reference_pages[reference_index] if reference_index is not None else "",
+            candidate_pages[candidate_index] if candidate_index is not None else "",
+            reference,
+            candidate,
         )
-        for docling_index, ocr_index in alignment
+        for candidate_index, reference_index in alignment
     ]
     width = len(pages)
-    weights = [max(page.ocr_tokens, 1) for page in pages]
+    weights = [max(page.reference_tokens, 1) for page in pages]
     total_weight = sum(weights)
-
-    def weighted(name: str) -> float:
-        return sum(getattr(page, name) * weight for page, weight in zip(pages, weights, strict=True)) / total_weight
 
     result: dict[str, float] = {
         "pages_compared": width,
-        "page_count_mismatch": page_count_mismatch,
+        "page_count_mismatch": len(candidate_pages) - len(reference_pages),
     }
-    for name in (
-        "unigram_recall",
-        "unigram_precision",
-        "bigram_recall",
-        "bigram_precision",
-        "unigram_recall_with_figures",
-    ):
+    for name in _MEANED_METRICS:
         values = [getattr(page, name) for page in pages]
-        result[f"{name}_mean"] = weighted(name)
+        result[f"{name}_mean"] = (
+            sum(value * weight for value, weight in zip(values, weights, strict=True)) / total_weight
+        )
         result[f"{name}_min"] = min(values)
-    # Pages where Docling lost half the VLM's word bigrams: destroyed, not merely reformatted.
+    # Pages where the candidate lost half the reference's word bigrams: destroyed, not reformatted.
     result["frac_pages_bigram_below_50"] = sum(1 for page in pages if page.bigram_recall < 0.5) / width
     result["frac_pages_unigram_below_50"] = sum(1 for page in pages if page.unigram_recall < 0.5) / width
 
-    for name in (
-        "ocr_tokens",
-        "docling_tokens",
-        "docling_figure_tokens",
-        "docling_table_chars",
-        "ocr_table_chars",
-        "docling_formula_chars",
-        "ocr_formula_chars",
-    ):
-        result[name] = sum(getattr(page, name) for page in pages)
-    result["token_ratio"] = result["docling_tokens"] / max(result["ocr_tokens"], 1)
+    for role, route in (("reference", reference), ("candidate", candidate)):
+        for count in _SUMMED_COUNTS:
+            result[f"{route.name}_{count}"] = sum(getattr(page, f"{role}_{count}") for page in pages)
+    result["token_ratio"] = result[f"{candidate.name}_tokens"] / max(result[f"{reference.name}_tokens"], 1)
     return result
 
 
-AGREEMENT_COLUMNS: tuple[str, ...] = tuple(document_agreement("", None, "", None))
+def document_agreement(docling_text: str, docling_offsets, ocr_text: str, ocr_offsets) -> dict:
+    """The Docling-versus-VLM pair, from each route's stored text and its own page offsets."""
+    return pages_agreement(split_pages(ocr_text, ocr_offsets), split_pages(docling_text, docling_offsets), VLM, DOCLING)
 
 
-def empty_agreement() -> dict:
-    """The agreement row for a document the Docling route never produced."""
-    return dict.fromkeys(AGREEMENT_COLUMNS, None)
+def agreement_columns(reference: Route, candidate: Route) -> tuple[str, ...]:
+    """The column names a route pair emits, for building the null row without running the metric."""
+    return tuple(pages_agreement([""], [""], reference, candidate))
+
+
+AGREEMENT_COLUMNS: tuple[str, ...] = agreement_columns(VLM, DOCLING)
+
+
+def empty_agreement(reference: Route = VLM, candidate: Route = DOCLING) -> dict:
+    """The agreement row for a document one of the two routes never produced."""
+    return dict.fromkeys(agreement_columns(reference, candidate), None)
