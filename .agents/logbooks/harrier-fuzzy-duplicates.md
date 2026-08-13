@@ -1004,3 +1004,14 @@ author: Rafal Wojdyla
 - Aggregate progress: A direct object count found 99,918 of 166,775 output shards, or 59.91%. There are 66,857 shards left. East has written 40,574 shards, and RNO has written 59,344 shards.
 - Issue update: Posted the major RNO service recovery and USPTO completion update at https://github.com/marin-community/marin/issues/8162#issuecomment-5274704587.
 - Next action: Watch the 16 queued RNO services, both active sources, and all source or root failure counters.
+
+### 2026-08-13 02:09 UTC - RNO TEI pool fully recovered
+
+- Root health: Both roots remain running with zero failures and zero preemptions. East has 47 completed source artifacts, and RNO has 40. The full run has 87 of 292 completed source artifacts.
+- Service recovery: All 16 queued RNO TEI services obtained H100 capacity. RNO has 96 running services, zero building services, and zero failed services. This state stayed stable for more than ten minutes.
+- Service 030 check: The recovered service is running with zero failures and zero preemptions. Its local TEI health check on fixed port 12252 succeeded.
+- East result: `nemotron_cc_v2-high_quality_synthetic_ea28c25e` completed all 8,778 output shards. `nemotron_cc_v2-medium_quality_edb2d9ae` started next.
+- RNO results: `finepdfs-fra_latn_a27736a4`, `finepdfs-ind_latn_866435e0`, and `finepdfs-jpn_jpan_e6d158b1` succeeded. `finepdfs-pol_latn_51d3c17a` started next.
+- Aggregate progress: A direct object count found 104,318 of 166,775 output shards, or 62.55%. There are 62,457 shards left. East has written 42,582 shards, and RNO has written 61,736 shards.
+- Issue update: Posted the stable full-capacity recovery at https://github.com/marin-community/marin/issues/8162#issuecomment-5275096234.
+- Next action: Continue the regular root, source, service, and error checks.
