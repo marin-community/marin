@@ -39,6 +39,7 @@ from experiments.datakit.store.datakit_store import (
     _iter_tokenized_documents,
     build_clustered_store,
 )
+from experiments.datakit.store.verify_store import discover_cache_paths, verify_store
 
 CLUSTER_VIEW = 2  # cluster column "cluster_2", clusters {0, 1}
 SPLIT = "train"
@@ -354,6 +355,61 @@ def test_bucket_writer_roundtrips_local_spill_runs(tmp_path):
     assert ledger.field_counts == {"input_ids": 10}
     recovered = [np.asarray(row["input_ids"]) for row in TreeCache.load(cache_path, EXEMPLAR)]
     assert [row.tolist() for row in recovered] == [row.tolist() for row in documents]
+
+
+def test_store_verifier_matches_reordered_documents(tmp_path):
+    documents = [np.array([1, 2], dtype=np.int32), np.array([3], dtype=np.int32), np.array([1, 2], dtype=np.int32)]
+    input_path = str(tmp_path / "input.parquet")
+    _write_parquet(
+        input_path,
+        pa.table(
+            {
+                "id": ["first", "first", "second", "duplicate"],
+                "chunk_index": pa.array([0, 1, 0, 0], type=pa.int32()),
+                "input_ids": pa.array([[1], [2], documents[1], documents[2]], type=pa.list_(pa.int32())),
+            }
+        ),
+    )
+    output_root = tmp_path / "output"
+    write_bucket_cache(str(output_root / "bucket-0"), [documents[2]], write_chunk_elements=4)
+    write_bucket_cache(str(output_root / "bucket-1"), [documents[1], documents[0]], write_chunk_elements=4)
+
+    result = verify_store([input_path], discover_cache_paths(str(output_root)))
+
+    assert result.matches
+    assert result.input_documents == result.output_documents == 3
+    assert result.input_tokens == result.output_tokens == 5
+    assert result.mismatches == []
+
+
+def test_store_verifier_reports_same_length_token_corruption(tmp_path):
+    documents = [np.array([1, 2], dtype=np.int32), np.array([3, 4], dtype=np.int32)]
+    input_path = str(tmp_path / "input.parquet")
+    _write_parquet(
+        input_path,
+        pa.table(
+            {
+                "id": ["intact", "corrupted"],
+                "input_ids": pa.array(documents, type=pa.list_(pa.int32())),
+            }
+        ),
+    )
+    output_root = tmp_path / "output"
+    write_bucket_cache(
+        str(output_root / "bucket-0"),
+        [documents[0], np.array([3, 5], dtype=np.int32)],
+        write_chunk_elements=4,
+    )
+
+    result = verify_store([input_path], discover_cache_paths(str(output_root)))
+
+    assert not result.matches
+    assert result.input_documents == result.output_documents == 2
+    assert result.input_tokens == result.output_tokens == 4
+    assert result.missing_documents == 1
+    assert result.extra_documents == 1
+    assert len(result.mismatches) == 2
+    assert {mismatch.sample_id for mismatch in result.mismatches} == {"corrupted", None}
 
 
 def test_store_ignores_orphans_and_resumes_completed_tasks(tmp_path, monkeypatch):
