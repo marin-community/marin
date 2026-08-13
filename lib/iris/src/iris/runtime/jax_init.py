@@ -48,7 +48,21 @@ _XLA_AUTOTUNE_REMOTE_PREFIX = "xla-per-fusion-autotune"
 # GCS-read setup past 300s, so the already-registered hosts hit DEADLINE_EXCEEDED and abort the
 # whole gang. Give cold gang-init more slack; a longer timeout only affects how long a
 # genuinely-stuck init waits.
-_JAX_DIST_INIT_TIMEOUT = 1800
+_JAX_DIST_INIT_TIMEOUT_DEFAULT = 1800
+# The default is sized for a cold many-host gang. On a small gang that is being iterated on, a
+# genuinely-stuck init costs the full 30 minutes before it reports anything, which dominates the
+# debug cycle. Override it downward for those runs; leave it alone for production gangs.
+JAX_DIST_INIT_TIMEOUT_ENV = "IRIS_JAX_INIT_TIMEOUT"
+
+
+def _jax_dist_init_timeout() -> int:
+    raw = os.environ.get(JAX_DIST_INIT_TIMEOUT_ENV)
+    if raw is None:
+        return _JAX_DIST_INIT_TIMEOUT_DEFAULT
+    timeout = int(raw)
+    if timeout <= 0:
+        raise ValueError(f"{JAX_DIST_INIT_TIMEOUT_ENV} must be positive, got {timeout}")
+    return timeout
 # Pin the coordination heartbeat timeout instead of inheriting JAX's default.
 # This bounds how long healthy ranks wait after a peer process disappears before
 # JAX fate sharing tears the distributed world down and Iris can retry the gang.
@@ -325,7 +339,7 @@ def _initialize_supervised_jax(
         proc_count,
         proc_index,
         local_device_ids=device_ids,
-        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        initialization_timeout=_jax_dist_init_timeout(),
         heartbeat_timeout_seconds=heartbeat_timeout,
     )
 
@@ -333,7 +347,7 @@ def _initialize_supervised_jax(
 def initialize_jax(
     port: int | None = None,
     endpoint_name: str = "jax_coordinator",
-    poll_timeout: float = _JAX_DIST_INIT_TIMEOUT,
+    poll_timeout: float | None = None,
     poll_interval: float = 2.0,
     heartbeat_timeout: int = _JAX_DIST_HEARTBEAT_TIMEOUT,
 ) -> None:
@@ -356,7 +370,7 @@ def initialize_jax(
         endpoint_name: Base name for coordinator discovery. Iris scopes the
             registered name to the current task attempt.
         poll_timeout: Maximum seconds for non-coordinator tasks to wait for the
-            coordinator endpoint to register. Defaults to ``_JAX_DIST_INIT_TIMEOUT``
+            coordinator endpoint to register. Defaults to the resolved init timeout
             so a slow coordinator host on a large-gang cold restart does not abort
             the pollers before the JAX barrier itself gets its longer timeout.
         poll_interval: Initial backoff delay for polling (seconds).
@@ -382,10 +396,14 @@ def initialize_jax(
         logger.info("jax.distributed already initialized; skipping")
         return
 
+    if poll_timeout is None:
+        poll_timeout = _jax_dist_init_timeout()
+
     job_info = get_job_info()
     if job_info is not None:
         endpoint_name = _attempt_endpoint_name(endpoint_name, job_info.attempt_id)
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
+    logger.info("JAX distributed init timeout: %ds (%s)", _jax_dist_init_timeout(), JAX_DIST_INIT_TIMEOUT_ENV)
 
     # Supervised (multi-process-per-task) mode short-circuits the task-derived
     # paths: the multigpu supervisor has already assigned this process its global
@@ -428,7 +446,7 @@ def initialize_jax(
             coordinator,
             job_info.num_tasks,
             task_index,
-            initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+            initialization_timeout=_jax_dist_init_timeout(),
             heartbeat_timeout_seconds=heartbeat_timeout,
         )
     else:
@@ -438,6 +456,6 @@ def initialize_jax(
             coordinator,
             job_info.num_tasks,
             task_index,
-            initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+            initialization_timeout=_jax_dist_init_timeout(),
             heartbeat_timeout_seconds=heartbeat_timeout,
         )
