@@ -134,6 +134,7 @@ jobs:
       - name: Run slow CPU tests
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          PYTHONPATH: lib/zephyr/tests:lib/levanter/tests
         run: |
           status=0
           uv run \
