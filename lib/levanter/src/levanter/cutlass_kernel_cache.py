@@ -87,18 +87,27 @@ def cute_launcher_factory(build: Callable[..., Any]) -> Callable[..., Any]:
 
 
 @functools.lru_cache(maxsize=None)
-def cutlass_call(launcher: Any, **kwargs: Any) -> Any:
+def _cached_cutlass_call(
+    launcher: Any,
+    input_output_aliases: tuple[tuple[int, int], ...],
+    kwargs: tuple[tuple[str, Any], ...],
+) -> Any:
+    cjax = importlib.import_module("cutlass.jax")
+    return cjax.cutlass_call(launcher, input_output_aliases=dict(input_output_aliases), **dict(kwargs))
+
+
+def cutlass_call(launcher: Any, *, input_output_aliases: dict[int, int] | None = None, **kwargs: Any) -> Any:
     """Return ``cutlass.jax.cutlass_call(launcher, **kwargs)``, memoized on its arguments.
 
     ``cutlass_call`` builds its JAX entry point as a fresh ``@jax.jit`` closure, and
     JAX's tracing cache is keyed on function identity, so rebuilding it per call
     site re-traces and re-lowers the same kernel as its own nested ``pjit``.
 
-    Keyword arguments must be passed in a consistent order: ``lru_cache`` does not
-    sort them, so a reordered call misses rather than hits.
+    Keyword arguments must be passed in a consistent order: the cache key preserves
+    their insertion order. Aliases are normalized to a tuple so the mapping remains cacheable.
     """
-    cjax = importlib.import_module("cutlass.jax")
-    return cjax.cutlass_call(launcher, **kwargs)
+    aliases = () if input_output_aliases is None else tuple(input_output_aliases.items())
+    return _cached_cutlass_call(launcher, aliases, tuple(kwargs.items()))
 
 
 def cutlass_kernel_cache() -> PersistentKvCache:

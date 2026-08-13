@@ -155,11 +155,12 @@ def _backward_kernels():
     indirected through one function so CPU tests can substitute the pure-JAX references.
     """
     from levanter.grug._moe.quack_rms_cute import (  # noqa: PLC0415
+        quack_coda_rms_backward_consumer,
         quack_coda_rms_backward_producer,
         quack_silu_backward_gemm,
     )
 
-    return quack_silu_backward_gemm, quack_coda_rms_backward_producer
+    return quack_silu_backward_gemm, quack_coda_rms_backward_producer, quack_coda_rms_backward_consumer
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(4, 5))
@@ -174,7 +175,7 @@ def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
 
 
 def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
-    silu_backward, rms_backward_producer = _backward_kernels()
+    silu_backward, rms_backward_producer, rms_backward_consumer = _backward_kernels()
 
     del eps
     x = residuals.x
@@ -197,7 +198,7 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     norm_weight_cotangent = jnp.sum(unweighted_cotangent.astype(jnp.float32) * normalized_x, axis=0).astype(
         residuals.norm_weight.dtype
     )
-    x_cotangent = exact_rms_backward_consumer(
+    x_cotangent = rms_backward_consumer(
         unweighted_cotangent, row_dot, x_flat, residuals.norm_weight, residuals.inverse_rms
     ).reshape(x.shape)
     # The parameters enter replicated, so their cotangents must be reduced over the axes the

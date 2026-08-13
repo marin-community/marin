@@ -6,16 +6,21 @@
 
 from __future__ import annotations
 
+import functools
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from jax.experimental import pallas as pl
+from jax.experimental.pallas import triton as plgpu
 
 import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from levanter.grug._moe.quack_moe_cute import _cute_dtype
+from levanter.grug._moe.rms_gated_norm import exact_rms_backward_consumer
+from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 from quack.activation import dact_fn_map
 from quack.cute_dsl_utils import get_max_active_clusters, mlir_namedtuple
 from quack.epi_ops import (
@@ -43,6 +48,8 @@ _FALLBACK_MAX_ACTIVE_CLUSTERS = 148
 _MATRIX_MODE = (1, 2, 0)
 _MATRIX_DIVISIBILITY = (1, 1, 8)
 _VECTOR_DIVISIBILITY = (1, 4)
+_CONSUMER_BLOCK_M = 128
+_CONSUMER_BLOCK_N = 128
 
 
 def _max_active_clusters(cluster_mnk: tuple[int, int, int]) -> int:
@@ -114,7 +121,7 @@ class _GemmRmsBackwardSm100(_GemmRmsBackwardMixin, GemmSm100):  # pyrefly: ignor
 
 
 @cute_launcher_factory
-def _build_backward_producer_launcher(
+def _build_aliased_backward_producer_launcher(
     *,
     a_dtype: type[cutlass.Numeric],
     tile_mn: tuple[int, int],
@@ -122,18 +129,17 @@ def _build_backward_producer_launcher(
     max_active_clusters: int,
     max_swizzle: int,
 ):
-    """Build the CODA backward producer GEMM and its row partials."""
+    """Build the producer with ``direct`` serving as its output buffer."""
 
     @cute.jit
     def launcher(
         stream,
         mGatePreactivationCotangent,
         mWDown,
-        mDirectCotangent,
+        mDirectAndUnweightedCotangent,
         mX,
         mNormWeight,
         mInverseRms,
-        mUnweightedCotangent,
         mRowDotPartial,
     ):
         gemm = _GemmRmsBackwardSm100(
@@ -147,10 +153,10 @@ def _build_backward_producer_launcher(
         epilogue = _GemmRmsBackwardMixin.EpilogueArguments(
             mNormWeight=mNormWeight,
             mInverseRms=mInverseRms,
-            mDirectCotangent=mDirectCotangent,
+            mDirectCotangent=mDirectAndUnweightedCotangent,
             mX=mX,
             mRowDotPartial=mRowDotPartial,
-            mAuxOut=mUnweightedCotangent,
+            mAuxOut=mDirectAndUnweightedCotangent,
         )
         scheduler = make_scheduler_args(max_active_clusters, max_swizzle, None)
         gemm(
@@ -243,7 +249,7 @@ def quack_coda_rms_backward_producer(
 
     _, tile_n = tile_mn
     hidden_tiles = (hidden_dim + tile_n - 1) // tile_n
-    launcher = _build_backward_producer_launcher(
+    launcher = _build_aliased_backward_producer_launcher(
         a_dtype=_cute_dtype(gate_preactivation_cotangent.dtype),
         tile_mn=tile_mn,
         cluster_mnk=cluster_mnk,
@@ -266,6 +272,7 @@ def quack_coda_rms_backward_producer(
         output_shape_dtype=output_shape_dtype,
         input_spec=(a_spec, w_down_spec, matrix_spec, matrix_spec, vector_spec, vector_spec),
         output_spec=(matrix_spec, partial_spec),
+        input_output_aliases={2: 0},
         use_static_tensors=False,
     )
     unweighted_cotangent, row_dot_partial = call(
@@ -277,6 +284,91 @@ def quack_coda_rms_backward_producer(
         inverse_rms[None, :],
     )
     return unweighted_cotangent[0], row_dot_partial[0]
+
+
+def _rms_backward_consumer_kernel(
+    unweighted_ref,
+    row_dot_ref,
+    x_ref,
+    norm_weight_ref,
+    inverse_rms_ref,
+    output_ref,
+):
+    unweighted = plgpu.load(unweighted_ref).astype(jnp.float32)
+    row_mean = plgpu.load(row_dot_ref).astype(jnp.float32)
+    x = plgpu.load(x_ref).astype(jnp.float32)
+    norm_weight = plgpu.load(norm_weight_ref).astype(jnp.float32)
+    inverse_rms = plgpu.load(inverse_rms_ref).astype(jnp.float32)
+    normalized_x = x * inverse_rms[:, None]
+    weighted_cotangent = unweighted * norm_weight[None, :]
+    output = (weighted_cotangent - normalized_x * row_mean[:, None]) * inverse_rms[:, None]
+    plgpu.store(output_ref, output.astype(output_ref.dtype))
+
+
+@functools.lru_cache(maxsize=None)
+def _rms_backward_consumer_call(rows: int, hidden_dim: int, dtype, norm_weight_dtype):
+    output_shape = jax.ShapeDtypeStruct((rows, hidden_dim), dtype)
+    input_shapes = (
+        output_shape,
+        jax.ShapeDtypeStruct((rows,), jnp.float32),
+        output_shape,
+        jax.ShapeDtypeStruct((hidden_dim,), norm_weight_dtype),
+        jax.ShapeDtypeStruct((rows,), jnp.float32),
+    )
+    body_cost = pl.estimate_cost(exact_rms_backward_consumer, *input_shapes)
+    cost_estimate = with_io_bytes_accessed(
+        body_cost,
+        kernel_inputs_specs=input_shapes,
+        kernel_outputs_specs=(output_shape,),
+    )
+    return pl.pallas_call(
+        _rms_backward_consumer_kernel,
+        out_shape=output_shape,
+        in_specs=(
+            pl.BlockSpec((_CONSUMER_BLOCK_M, _CONSUMER_BLOCK_N), lambda i, j: (i, j)),
+            pl.BlockSpec((_CONSUMER_BLOCK_M,), lambda i, j: (i,)),
+            pl.BlockSpec((_CONSUMER_BLOCK_M, _CONSUMER_BLOCK_N), lambda i, j: (i, j)),
+            pl.BlockSpec((_CONSUMER_BLOCK_N,), lambda i, j: (j,)),
+            pl.BlockSpec((_CONSUMER_BLOCK_M,), lambda i, j: (i,)),
+        ),
+        out_specs=pl.BlockSpec((_CONSUMER_BLOCK_M, _CONSUMER_BLOCK_N), lambda i, j: (i, j)),
+        grid=(pl.cdiv(rows, _CONSUMER_BLOCK_M), pl.cdiv(hidden_dim, _CONSUMER_BLOCK_N)),
+        input_output_aliases={0: 0},
+        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=2),
+        cost_estimate=cost_estimate,
+        name="rms_backward_consumer",
+    )
+
+
+def quack_coda_rms_backward_consumer(
+    unweighted_cotangent: jax.Array,
+    row_dot: jax.Array,
+    x: jax.Array,
+    norm_weight: jax.Array,
+    inverse_rms: jax.Array,
+) -> jax.Array:
+    """Overwrite ``unweighted_cotangent`` with the final RMS input cotangent.
+
+    This function is called inside the RMS-GatedNorm ``shard_map``; every argument is already
+    local to one device. The aliased input/output contract lets XLA reuse the producer buffer.
+    """
+    if unweighted_cotangent.ndim != 2 or x.shape != unweighted_cotangent.shape:
+        raise ValueError("unweighted_cotangent and x must be rank-2 arrays with matching shapes")
+    rows, hidden_dim = x.shape
+    if row_dot.shape != (rows,) or inverse_rms.shape != (rows,) or norm_weight.shape != (hidden_dim,):
+        raise ValueError("RMS backward consumer vector dimensions do not agree")
+    if unweighted_cotangent.dtype != x.dtype or x.dtype != jnp.bfloat16:
+        raise ValueError("RMS backward consumer requires matching BF16 full-width tensors")
+    if row_dot.dtype != jnp.float32 or inverse_rms.dtype != jnp.float32:
+        raise ValueError("row_dot and inverse_rms must be float32")
+    if rows % _CONSUMER_BLOCK_M != 0 or hidden_dim % _CONSUMER_BLOCK_N != 0:
+        raise ValueError(
+            f"rows and hidden_dim must be multiples of {_CONSUMER_BLOCK_M} and {_CONSUMER_BLOCK_N}, "
+            f"got {rows} and {hidden_dim}"
+        )
+    call = _rms_backward_consumer_call(rows, hidden_dim, x.dtype, norm_weight.dtype)
+    row_mean = row_dot / hidden_dim
+    return call(unweighted_cotangent, row_mean, x, norm_weight, inverse_rms)
 
 
 def quack_silu_backward_gemm(

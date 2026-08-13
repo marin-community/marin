@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 from levanter.grug._moe.rms_gated_norm import (
+    exact_rms_backward_consumer,
     exact_rms_backward_producer_reference,
     exact_silu_backward_reference,
 )
@@ -83,6 +84,21 @@ def test_backward_producer_row_partials_have_one_column_per_tile():
     tile_n = quack_rms_cute._DEFAULT_BACKWARD_TILE_MN[1]
     assert row_dot_partial.shape == (_ROWS, (_HIDDEN_DIM + tile_n - 1) // tile_n)
     assert row_dot_partial.dtype == jnp.float32
+
+
+def test_backward_consumer_matches_reference():
+    _require_gpu()
+
+    args = _producer_inputs()
+    _, _, _, x, norm_weight, inverse_rms = args
+    unweighted_cotangent, row_dot_partial = quack_rms_cute.quack_coda_rms_backward_producer(*args)
+    row_dot = jnp.sum(row_dot_partial, axis=-1)
+    expected = exact_rms_backward_consumer(unweighted_cotangent, row_dot, x, norm_weight, inverse_rms)
+    actual = quack_rms_cute.quack_coda_rms_backward_consumer(
+        unweighted_cotangent, row_dot, x, norm_weight, inverse_rms
+    )
+
+    _assert_close(actual, expected, tolerance=_BF16_TOLERANCE, label="input cotangent")
 
 
 def test_backward_producer_rejects_non_float32_inverse_rms():
