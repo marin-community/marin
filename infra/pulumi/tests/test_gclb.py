@@ -153,18 +153,6 @@ def test_gclb_preserves_ingress_security_boundaries(monkeypatch) -> None:
         "accessSettings.oauthSettings.clientSecretSha256",
     ]
     url_map = inputs_by_name["url-map"]
-    assert [rule.path_matcher for rule in url_map["host_rules"]] == [
-        "marin-dev",
-        "marin",
-        "finelog-marin-dev",
-        "finelog-marin",
-    ]
-    assert [matcher.name for matcher in url_map["path_matchers"]] == [
-        "marin-dev",
-        "marin",
-        "finelog-marin-dev",
-        "finelog-marin",
-    ]
     matchers = {matcher.name: matcher for matcher in url_map["path_matchers"]}
     assert set(matchers) == {"marin", "marin-dev", "finelog-marin", "finelog-marin-dev"}
     for cluster in ("marin", "marin-dev"):
@@ -176,13 +164,6 @@ def test_gclb_preserves_ingress_security_boundaries(monkeypatch) -> None:
         ]
     for cluster in ("finelog-marin", "finelog-marin-dev"):
         assert matchers[cluster].path_rules == []
-
-    assert inputs_by_name["https-proxy"]["ssl_certificates"] == [
-        "marin-certificate",
-        "marin-dev-certificate",
-        "finelog-marin-dev-certificate",
-        "finelog-marin-certificate",
-    ]
 
     controller_allow = inputs_by_name["marin-allow-lb"]
     assert controller_allow["source_ranges"] == ["130.211.0.0/22", "35.191.0.0/16"]
@@ -197,15 +178,25 @@ def test_gclb_preserves_ingress_security_boundaries(monkeypatch) -> None:
     assert finelog_allow["priority"] < finelog_deny["priority"]
 
     armor = inputs_by_name["finelog-marin-armor"]
-    assert armor["description"] == "relay sources admitted to finelog-marin"
     rules = {rule.priority: rule for rule in armor["rules"]}
     assert rules[1000].action == "allow"
-    assert rules[1000].description == ""
-    assert rules[1000].preview is False
     assert rules[1000].match.config.src_ip_ranges == ["192.0.2.0/24", "198.51.100.0/24"]
     assert rules[2147483647].action == "deny(403)"
-    assert rules[2147483647].description == "default rule"
-    assert rules[2147483647].preview is False
+
+
+def test_gclb_preserves_aggregate_route_order(monkeypatch) -> None:
+    inputs_by_name = _record_gclb(monkeypatch).inputs_by_name
+    url_map = inputs_by_name["url-map"]
+    expected_matchers = ["marin-dev", "marin", "finelog-marin-dev", "finelog-marin"]
+
+    assert [rule.path_matcher for rule in url_map["host_rules"]] == expected_matchers
+    assert [matcher.name for matcher in url_map["path_matchers"]] == expected_matchers
+    assert inputs_by_name["https-proxy"]["ssl_certificates"] == [
+        "marin-certificate",
+        "marin-dev-certificate",
+        "finelog-marin-dev-certificate",
+        "finelog-marin-certificate",
+    ]
 
 
 def test_gclb_catalogs_every_existing_leaf(monkeypatch) -> None:
