@@ -30,6 +30,8 @@ All paths resolve against ``MARIN_PREFIX``. The hero data currently lives on
 CoreWeave, so read it with ``MARIN_PREFIX=s3://marin-us-east-02a/marin``.
 """
 
+import json
+import pathlib
 from dataclasses import dataclass, replace
 from typing import NoReturn
 
@@ -37,8 +39,17 @@ from levanter.tokenizers import TokenizerBackend
 from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import tokenize_attributes_step
+from rigging.filesystem import marin_prefix
 
 from experiments.datakit.reference_pipeline import select_sources, zephyr_datakit_steps
+
+MANIFEST_PATH = pathlib.Path(__file__).with_name("hero_data_paths.json")
+
+# The manifest records the paths as they resolve under the prefix that holds the
+# hero data. It is not region-independent: ``materialize_ghalogs_step`` hashes the
+# absolute ``source_path`` of its download, so the whole ghalogs/public chain
+# re-keys per region and the same data sits at a different path in each one.
+MANIFEST_PREFIX = "s3://marin-us-east-02a/marin"
 
 
 @dataclass(frozen=True)
@@ -162,3 +173,28 @@ def all_paths() -> dict[str, str]:
         paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
         paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
     return paths
+
+
+def write_manifest() -> dict[str, str]:
+    """Rewrite :data:`MANIFEST_PATH` from the paths current code resolves.
+
+    Must run under :data:`MANIFEST_PREFIX`, because not every source hashes
+    independently of the prefix. Entries are stored relative to it. Returns what
+    it wrote.
+    """
+    prefix = marin_prefix().rstrip("/")
+    if prefix != MANIFEST_PREFIX:
+        raise ValueError(f"regenerate the manifest with MARIN_PREFIX={MANIFEST_PREFIX}, got {prefix!r}")
+
+    relative = {key: path.removeprefix(f"{prefix}/") for key, path in all_paths().items()}
+    escaped = sorted(key for key, path in relative.items() if "://" in path)
+    if escaped:
+        raise ValueError(f"paths outside {prefix} cannot be stored relative: {escaped}")
+
+    MANIFEST_PATH.write_text(json.dumps(relative, indent=1, sort_keys=True) + "\n")
+    return relative
+
+
+if __name__ == "__main__":
+    written = write_manifest()
+    print(f"wrote {len(written)} paths to {MANIFEST_PATH}")

@@ -12,20 +12,21 @@ nothing behind it, or at a tokenize output built from a different normalize.
 """
 
 import json
-import pathlib
 
 import pytest
 
 from experiments.datakit import hero_data
 
-PREFIX = "gs://marin-test-region"
-MANIFEST = pathlib.Path(hero_data.__file__).with_name("hero_data_paths.json")
+PREFIX = hero_data.MANIFEST_PREFIX
+MANIFEST = hero_data.MANIFEST_PATH
 
 
 @pytest.fixture(autouse=True)
 def _marin_prefix(monkeypatch):
     # ``StepSpec.output_path`` resolves ``marin_prefix()``; pin it so the test never
-    # depends on ambient GCS metadata, and so manifest entries stay prefix-relative.
+    # depends on ambient GCS metadata. It must be the prefix the manifest was built
+    # under: ghalogs/public hashes its region-specific download path, so its entries
+    # differ per region.
     monkeypatch.setenv("MARIN_PREFIX", PREFIX)
 
 
@@ -34,15 +35,10 @@ def _relative_paths() -> dict[str, str]:
 
 
 def test_paths_match_the_checked_in_manifest():
-    """Regenerate with:
-
-    MARIN_PREFIX=gs://marin-test-region uv run python -c \
-      'import json;from experiments.datakit.hero_data import all_paths;\
-       print(json.dumps({k: v.removeprefix("gs://marin-test-region/") for k, v in all_paths().items()},\
-       indent=1, sort_keys=True))' > experiments/datakit/hero_data_paths.json
+    """Regenerate with ``uv run python -m experiments.datakit.hero_data``.
 
     A diff here means a hero path moved. The stored data does not move with it,
-    so update the manifest only once the new paths are known to hold the data.
+    so regenerate only once the new paths are known to hold the data.
     """
     assert _relative_paths() == json.loads(MANIFEST.read_text())
 
