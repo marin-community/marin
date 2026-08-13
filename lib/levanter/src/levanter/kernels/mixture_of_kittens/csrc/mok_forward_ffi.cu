@@ -485,7 +485,67 @@ class RuntimeManager {
                   "cudaStreamCreateWithFlags(cancellation)");
       runtimes_[0][slot] = std::move(runtime);
     }
+
+    // Each slot's runtime carries a view of every slot's completion cursor, so this can only be
+    // filled once all slots exist -- the in-process path does the same in a second pass. The
+    // kernel dereferences this array on device inside the forward stamp validator, so leaving it
+    // null faults the first launch with an illegal address instead of failing here.
+    for (int slot = 0; slot < workspace_slots_; ++slot) {
+      for (int other = 0; other < workspace_slots_; ++other) {
+        runtimes_[0][slot]->local_slot_forward_completion_ptrs[other] =
+            runtimes_[0][other]->last_forward_completion;
+      }
+    }
+
+    for (int slot = 0; slot < workspace_slots_; ++slot) {
+      ValidateRuntimePointers(*runtimes_[0][slot]);
+    }
     initialized_ = true;
+  }
+
+  // Fail on the host for any pointer the kernel will dereference on device.
+  //
+  // A null here surfaces as CUDA_ERROR_ILLEGAL_ADDRESS on the first launch, which poisons the
+  // context: the process dies without unwinding, so no Python handler runs and no traceback is
+  // recorded. That is expensive to diagnose and easy to prevent, since every table is fully
+  // determined once peers are imported.
+  static void ValidateRuntimePointers(const DeviceRuntime& runtime) {
+    auto require = [](const void* pointer, const char* what) {
+      if (pointer == nullptr) {
+        throw std::runtime_error(std::string("Mixture-of-Kittens arena binding left ") + what +
+                                 " null; the kernel would fault on its first launch");
+      }
+    };
+    require(runtime.x, "x");
+    require(runtime.combine, "combine");
+    require(runtime.d_y, "d_y");
+    require(runtime.d_x_routed, "d_x_routed");
+    require(runtime.router_weights, "router_weights");
+    require(runtime.d_router_weights, "d_router_weights");
+    require(runtime.generation, "generation");
+    require(runtime.forward_input_ready, "forward_input_ready");
+    require(runtime.backward_input_ready, "backward_input_ready");
+    require(runtime.forward_completions, "forward_completions");
+    require(runtime.backward_completions, "backward_completions");
+    require(runtime.cancellation, "cancellation");
+    require(runtime.debug_counters, "debug_counters");
+    require(runtime.last_forward_completion, "last_forward_completion");
+    for (int peer = 0; peer < runtime.num_devices; ++peer) {
+      require(runtime.x_ptrs[peer], "a peer x pointer");
+      require(runtime.combine_ptrs[peer], "a peer combine pointer");
+      require(runtime.d_y_ptrs[peer], "a peer d_y pointer");
+      require(runtime.d_x_routed_ptrs[peer], "a peer d_x_routed pointer");
+      require(runtime.router_weight_ptrs[peer], "a peer router_weights pointer");
+      require(runtime.d_router_weight_ptrs[peer], "a peer d_router_weights pointer");
+      require(runtime.forward_input_ready_ptrs[peer], "a peer forward_input_ready pointer");
+      require(runtime.backward_input_ready_ptrs[peer], "a peer backward_input_ready pointer");
+      require(runtime.forward_completion_ptrs[peer], "a peer forward_completions pointer");
+      require(runtime.backward_completion_ptrs[peer], "a peer backward_completions pointer");
+      require(runtime.cancellation_ptrs[peer], "a peer cancellation pointer");
+    }
+    for (int slot = 0; slot < runtime.workspace_slots; ++slot) {
+      require(runtime.local_slot_forward_completion_ptrs[slot], "a local slot completion cursor");
+    }
   }
 
   void Init(int num_devices, int num_tokens, int hidden_dim, int top_k, int workspace_slots) {
