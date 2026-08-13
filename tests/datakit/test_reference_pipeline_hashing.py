@@ -13,11 +13,28 @@ import dataclasses
 import json
 
 import pytest
+from fray.types import ResourceConfig
+from marin.execution.artifact import ArtifactRecord, write_artifact, write_record
 from marin.execution.step_spec import StepSpec
-from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
-from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
+from marin.processing.classification.deduplication.fuzzy_dups import (
+    FuzzyDupsAttrData,
+    FuzzyDupsPerSource,
+    compute_fuzzy_dups_attrs_step,
+)
+from marin.processing.classification.deduplication.fuzzy_minhash import (
+    MinHashAttrData,
+    MinHashParams,
+    compute_minhash_attrs_step,
+)
+from marin.processing.classification.deduplication.verify_fuzzy_dups import FuzzyVerificationStoreConfig
 
 from experiments.datakit import reference_pipeline
+from experiments.datakit.fuzzy_validation import (
+    FOCUS_SOURCE_NAME,
+    _legacy_candidate_input_steps,
+    build_fuzzy_validation_step,
+    build_repacked_fuzzy_validation_step,
+)
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
     PoolConfig,
@@ -54,6 +71,12 @@ def _steps_by_name(result) -> dict[str, StepSpec]:
 
 def _depends_on(step: StepSpec, dependency: StepSpec) -> bool:
     return any(parent is dependency or _depends_on(parent, dependency) for parent in step.deps)
+
+
+def _ancestor_names(step: StepSpec) -> set[str]:
+    return {parent.name for parent in step.deps} | {
+        ancestor_name for parent in step.deps for ancestor_name in _ancestor_names(parent)
+    }
 
 
 def test_global_exact_dedup_filters_only_the_store():
@@ -211,3 +234,95 @@ def test_dedup_step_builders_match_the_datakit_graph_identity():
         name: step.hash_id for name, step in graph.minhash.items()
     }
     assert dedup.hash_id == graph.fuzzy_dedup.hash_id
+
+
+def test_fuzzy_validation_entry_point_matches_reference_graph():
+    sources = _sources()
+    target = build_fuzzy_validation_step(sources, scale=SMOKE_SCALE)
+    reference_target = _steps_by_name(
+        reference_datakit_steps(
+            sources,
+            quality_model="gs://some-region/quality/pooled_junkgate2",
+            quality_model_version="pooled-junkgate2",
+            scale=SMOKE_SCALE,
+        )
+    )["datakit/verify_fuzzy_dups"]
+
+    assert target.output_path == reference_target.output_path
+    assert target.dep_paths == reference_target.dep_paths
+
+
+def test_repacked_fuzzy_validation_uses_current_normalized_and_minhash_steps():
+    sources = _sources()
+    minhash_steps = zephyr_datakit_steps(sources, SMOKE_SCALE).minhash
+    target = build_repacked_fuzzy_validation_step(
+        sources,
+        minhash_steps,
+        candidate_artifact_path="s3://candidate-bucket/legacy-dedup",
+        legacy_source_key="normalized/legacy-a/outputs/main",
+        source_name="a",
+        repack_output_path_prefix="s3://temp-bucket/ttl=7d/fuzzy-validation/run-1",
+        validation_output_path_prefix="s3://production-bucket/marin",
+        validation_step_name="datakit/verify_fuzzy_dups",
+        validation_scale=SMOKE_SCALE,
+        store_config=FuzzyVerificationStoreConfig(recovery_timeout=30, ready_timeout=30, lookup_batch_size=8),
+        coordinator_resources=ResourceConfig(cpu=1, ram="1g"),
+        task_resources=ResourceConfig(cpu=1, ram="1g"),
+    )
+
+    ancestor_names = _ancestor_names(target)
+    repack_step = next(step for step in target.deps if step.name == "fuzzy-validation/repack/a")
+    assert target.output_path.startswith("s3://production-bucket/marin/datakit/verify_fuzzy_dups_")
+    assert repack_step.output_path.startswith("s3://temp-bucket/ttl=7d/fuzzy-validation/run-1/")
+    assert "datakit/minhash/a" in ancestor_names
+    assert "datakit/minhash/b" in ancestor_names
+    assert "datakit/normalize/a" in ancestor_names
+    assert "fuzzy-validation/repack/a" in ancestor_names
+    assert "fuzzy-validation/legacy-candidates" in ancestor_names
+    assert "datakit/dedup" not in ancestor_names
+    assert not any(name.startswith("datakit/tokenize/") for name in ancestor_names)
+
+
+def test_legacy_candidate_inputs_replace_only_the_focus_source(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    legacy_focus_key = "normalized/legacy-focus/outputs/main"
+    other_key = "normalized/other/outputs/main"
+    params = MinHashParams(num_perms=8, num_bands=4, ngram_size=5, seed=0)
+    minhash_paths = [str(tmp_path / "minhash-focus"), str(tmp_path / "minhash-other")]
+    write_artifact(
+        MinHashAttrData(params=params, source_key=legacy_focus_key, attr_dir="attrs/focus", counters={}),
+        minhash_paths[0],
+    )
+    write_artifact(
+        MinHashAttrData(params=params, source_key=other_key, attr_dir="attrs/other", counters={}),
+        minhash_paths[1],
+    )
+    candidate_path = str(tmp_path / "candidates")
+    candidates = FuzzyDupsAttrData(
+        params=params,
+        sources={
+            legacy_focus_key: FuzzyDupsPerSource(attr_dir="attrs/focus"),
+            other_key: FuzzyDupsPerSource(attr_dir="attrs/other"),
+        },
+        counters={},
+    )
+    write_record(
+        ArtifactRecord(output_path=candidate_path, dep_paths=minhash_paths, result=candidates.model_dump(mode="json"))
+    )
+    focus_normalized = StepSpec(name="normalized/current-focus", override_output_path="normalized/current-focus")
+    focus_minhash = StepSpec(name="minhash/current-focus", override_output_path="minhash/current-focus")
+
+    normalized_steps, minhash_steps = _legacy_candidate_input_steps(
+        candidate_artifact_path=candidate_path,
+        legacy_focus_source_key=legacy_focus_key,
+        focus_normalized_step=focus_normalized,
+        focus_minhash_step=focus_minhash,
+    )
+
+    assert normalized_steps[FOCUS_SOURCE_NAME] is focus_normalized
+    assert minhash_steps[FOCUS_SOURCE_NAME] is focus_minhash
+    pinned_names = set(normalized_steps) - {FOCUS_SOURCE_NAME}
+    assert len(pinned_names) == 1
+    pinned_name = pinned_names.pop()
+    assert normalized_steps[pinned_name].output_path == str(tmp_path / "normalized/other")
+    assert minhash_steps[pinned_name].output_path == minhash_paths[1]

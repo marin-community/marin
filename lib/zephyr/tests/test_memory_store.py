@@ -83,12 +83,14 @@ def _load_store(
     name: str = "documents",
     hash_key=_key_partition,
     recovery_timeout: float = 10,
+    load_concurrency: int = 1,
 ):
     return context.load_memory_store(
         dataset,
         name=name,
         hash_key=hash_key,
         recovery_timeout=recovery_timeout,
+        load_concurrency=load_concurrency,
     )
 
 
@@ -133,6 +135,34 @@ def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(loca
             (0, (0, 2), 5),
             (1, (1, 3), 2),
         ]
+
+
+def test_memory_store_loads_source_partitions_concurrently(local_client, tmp_path):
+    load_barrier = threading.Barrier(2)
+
+    def wait_for_another_partition(rows):
+        load_barrier.wait(timeout=5)
+        yield from rows
+
+    dataset = Dataset.from_list(
+        [
+            [((0, "a"), "zero-a")],
+            [((1, "a"), "one-a")],
+        ]
+    ).flat_map(wait_for_another_partition)
+
+    with _store_context(local_client, tmp_path, max_workers=1) as context:
+        store = _load_store(context, dataset, load_concurrency=2)
+
+        assert store.get_many([(1, "a"), (0, "a")]) == ["one-a", "zero-a"]
+
+
+def test_memory_store_rejects_nonpositive_load_concurrency(local_client, tmp_path):
+    dataset = Dataset.from_list([((0, "a"), "value")])
+
+    with _store_context(local_client, tmp_path, max_workers=1) as context:
+        with pytest.raises(ValueError, match="load_concurrency must be at least 1"):
+            _load_store(context, dataset, load_concurrency=0)
 
 
 def test_memory_store_rejects_hash_that_disagrees_with_existing_partition(local_client, tmp_path):

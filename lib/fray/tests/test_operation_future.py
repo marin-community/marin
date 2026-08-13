@@ -4,8 +4,12 @@
 """Tests for OperationFuture (fray wrapper over Iris LRO polling)."""
 
 import time
+from unittest.mock import MagicMock
 
 import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from fray.actor import ActorUnavailableError
 from fray.iris_backend import OperationFuture
 from iris.actor.client import ActorClient
 from iris.actor.resolver import FixedResolver
@@ -81,3 +85,12 @@ def test_operation_future_propagates_exception():
             future.result()
     finally:
         server.stop()
+
+
+def test_operation_future_reports_lost_operation_as_actor_unavailable():
+    client = MagicMock(spec=ActorClient)
+    client.poll_operation_status.side_effect = ConnectError(Code.NOT_FOUND, "operation not found")
+    future = OperationFuture(client, "lost-operation", poll_interval=0.1)
+
+    with pytest.raises(ActorUnavailableError, match="lost while its actor restarted"):
+        future.result()
