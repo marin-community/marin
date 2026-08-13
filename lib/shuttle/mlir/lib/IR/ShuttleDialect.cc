@@ -1273,8 +1273,12 @@ std::string executableCodeDigest(ArrayRef<int8_t> code) {
 }
 
 std::string deviceModuleFingerprint(DeviceModuleOp module) {
+  StringRef version =
+      module.getCodeFormat() == ExecutableCodeFormat::CpuBytecodeV2
+          ? "shuttle.device_module.v2"
+          : "shuttle.device_module.v1";
   return executablePlanFingerprint<DeviceModuleOp, DeviceModuleYieldOp>(
-      module, "shuttle.device_module.v1");
+      module, version);
 }
 
 std::string invocationAbiFingerprint(InvocationAbiOp abi) {
@@ -1291,10 +1295,14 @@ LogicalResult DeviceModuleOp::verifyRegions() {
   if (!getOperation()->getDiscardableAttrs().empty()) {
     return emitOpError("does not permit discardable attributes");
   }
-  if (getSchemaVersion() != 1 ||
-      getCodeFormat() != ExecutableCodeFormat::CpuBytecodeV1) {
+  const bool validVersionPair =
+      (getSchemaVersion() == 1 &&
+       getCodeFormat() == ExecutableCodeFormat::CpuBytecodeV1) ||
+      (getSchemaVersion() == 2 &&
+       getCodeFormat() == ExecutableCodeFormat::CpuBytecodeV2);
+  if (!validVersionPair) {
     return emitOpError(
-        "requires device-module schema 1 and CPU bytecode format 1");
+        "requires matching device-module and CPU bytecode versions");
   }
   if (!isLowerHexDigest(getSourceScheduleFingerprint()) ||
       !isLowerHexDigest(getCodeDigest()) ||

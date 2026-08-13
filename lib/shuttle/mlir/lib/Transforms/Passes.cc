@@ -74,7 +74,7 @@ ShuttlePipelineOptions commandLinePipelineOptions(NumericalPolicy numerics) {
   options.numerics = numerics;
   if (numerics == NumericalPolicy::Fast) {
     options.canonicalOptions =
-        R"json({"execution_mode":"stablehlo_round_trip","numerics":"fast","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+        R"json({"execution_mode":"stablehlo_round_trip","numerics":"fast","pipeline_abi_version":9,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
   }
   return options;
 }
@@ -3825,6 +3825,7 @@ struct CpuSlotSpec {
 };
 
 struct CpuExecutableSpec {
+  ExecutableCodeFormat codeFormat;
   SmallVector<int8_t> code;
   SmallVector<CpuEntrySpec> entries;
   SmallVector<CpuSlotSpec> slots;
@@ -3832,8 +3833,11 @@ struct CpuExecutableSpec {
 
 LogicalResult appendTaskHeader(Operation *owner, CpuTaskKind kind,
                                ArrayRef<int64_t> domain,
+                               ExecutableCodeFormat codeFormat,
                                SmallVectorImpl<int8_t> &bytes) {
-  for (uint8_t byte : ArrayRef<uint8_t>{'S', 'B', 'C', 1}) {
+  const uint8_t version =
+      codeFormat == ExecutableCodeFormat::CpuBytecodeV2 ? 2 : 1;
+  for (uint8_t byte : ArrayRef<uint8_t>{'S', 'B', 'C', version}) {
     appendByte(bytes, byte);
   }
   appendByte(bytes, static_cast<uint8_t>(kind));
@@ -3851,11 +3855,13 @@ LogicalResult appendTaskHeader(Operation *owner, CpuTaskKind kind,
 }
 
 FailureOr<SmallVector<int8_t>> encodeCpuTask(Operation *operation,
-                                             ScheduleTaskOp scheduleTask) {
+                                             ScheduleTaskOp scheduleTask,
+                                             ExecutableCodeFormat codeFormat) {
   SmallVector<int8_t> bytes;
   if (auto map = dyn_cast<MapOp>(operation)) {
     if (failed(appendTaskHeader(map, CpuTaskKind::Map,
-                                scheduleTask.getDomainShape(), bytes)) ||
+                                scheduleTask.getDomainShape(), codeFormat,
+                                bytes)) ||
         map.getInputs().size() > UINT8_MAX || map.getNumResults() != 1) {
       return failure();
     }
@@ -3886,7 +3892,8 @@ FailureOr<SmallVector<int8_t>> encodeCpuTask(Operation *operation,
   }
   auto fold = dyn_cast<FoldOp>(operation);
   if (!fold || failed(appendTaskHeader(fold, CpuTaskKind::Fold,
-                                       scheduleTask.getDomainShape(), bytes))) {
+                                       scheduleTask.getDomainShape(),
+                                       codeFormat, bytes))) {
     return failure();
   }
   appendByte(bytes, 2);
@@ -3903,6 +3910,9 @@ FailureOr<SmallVector<int8_t>> encodeCpuTask(Operation *operation,
   appendByte(bytes,
              static_cast<uint8_t>(
                  ScheduleReductionOrder::TreeAssociationFreeLeafOrderFixed));
+  if (codeFormat == ExecutableCodeFormat::CpuBytecodeV2) {
+    appendByte(bytes, 0); // AdjacentBalancedInitializerLast.
+  }
   if (failed(encodeScalarBody(fold, fold.getCombiner().front(), bytes))) {
     return failure();
   }
@@ -3933,20 +3943,50 @@ deriveCpuExecutable(ModuleOp module, MaterializationPlanOp materialization,
   if (algebra.size() != scheduleTasks.size()) {
     return failure();
   }
+
+  RegionOp region = regions.front();
+  auto bf16Tensor = [&](ArrayRef<int64_t> shape) {
+    return Type(
+        RankedTensorType::get(shape, BFloat16Type::get(module.getContext())));
+  };
+  const bool largeForward =
+      region.getPolicy() == NumericalPolicy::SourceOrdered &&
+      region.getInputs().size() == 2 && region.getResults().size() == 1 &&
+      region.getInputs()[0].getType() == bf16Tensor({2048, 4096}) &&
+      region.getInputs()[1].getType() == bf16Tensor({4096}) &&
+      region.getResults()[0].getType() == bf16Tensor({2048, 4096}) &&
+      llvm::count_if(algebra, [](Operation *operation) {
+        return isa<FoldOp>(operation);
+      }) == 1;
+  const ExecutableCodeFormat codeFormat =
+      largeForward ? ExecutableCodeFormat::CpuBytecodeV2
+                   : ExecutableCodeFormat::CpuBytecodeV1;
   for (ScheduleTaskOp task : scheduleTasks) {
     FailureOr<int64_t> elements = scheduleElementCount(task.getDomainShape());
-    if ((!task.getDomainShape().empty() &&
-         (failed(elements) || *elements > 256)) ||
-        task.getSerialTiles() != 1) {
+    if (failed(elements)) {
+      return failure();
+    }
+    if (codeFormat == ExecutableCodeFormat::CpuBytecodeV1 &&
+        ((!task.getDomainShape().empty() && *elements > 256) ||
+         task.getSerialTiles() != 1)) {
+      return failure();
+    }
+    if (codeFormat == ExecutableCodeFormat::CpuBytecodeV2 &&
+        (*elements > static_cast<int64_t>(kMaximumCpuTaskElements) ||
+         (task.getKind() == ScheduleTaskKind::RowFold
+              ? task.getSerialTiles() != 16 ||
+                    task.getDomainShape() != ArrayRef<int64_t>({2048, 4096})
+              : task.getSerialTiles() != 1))) {
       return failure();
     }
   }
 
   CpuExecutableSpec spec;
+  spec.codeFormat = codeFormat;
   for (auto [ordinal, operation, scheduleTask] :
        llvm::enumerate(algebra, scheduleTasks)) {
     FailureOr<SmallVector<int8_t>> encoded =
-        encodeCpuTask(operation, scheduleTask);
+        encodeCpuTask(operation, scheduleTask, codeFormat);
     if (failed(encoded)) {
       return failure();
     }
@@ -4022,8 +4062,27 @@ public:
     FailureOr<CpuExecutableSpec> spec = deriveCpuExecutable(
         module, materializations.front(), schedules.front());
     if (failed(spec)) {
-      module.emitError(
-          "requires a bounded generated Map/Fold CPU bytecode subset");
+      bool hasRepresentativeMatrix = false;
+      for (MaterializationBufferOp buffer :
+           materializations.front()
+               .getBody()
+               .front()
+               .getOps<MaterializationBufferOp>()) {
+        auto type = dyn_cast<RankedTensorType>(buffer.getTensorType());
+        hasRepresentativeMatrix |=
+            type && type.getShape() == ArrayRef<int64_t>({2048, 4096});
+      }
+      if (hasRepresentativeMatrix &&
+          schedules.front().getPolicy() == NumericalPolicy::Fast) {
+        module.emitError(
+            "cpu_bytecode_v2 representative-shape execution requires "
+            "source_ordered");
+      } else if (hasRepresentativeMatrix) {
+        module.emitError("requires the bounded cpu_bytecode_v2 forward subset");
+      } else {
+        module.emitError(
+            "requires a bounded generated Map/Fold CPU bytecode subset");
+      }
       return signalPassFailure();
     }
     OpBuilder builder(module.getContext());
@@ -4032,11 +4091,13 @@ public:
 
     OperationState deviceState(module.getLoc(),
                                DeviceModuleOp::getOperationName());
-    deviceState.addAttribute("schema_version", builder.getI64IntegerAttr(1));
+    deviceState.addAttribute(
+        "schema_version",
+        builder.getI64IntegerAttr(
+            spec->codeFormat == ExecutableCodeFormat::CpuBytecodeV2 ? 2 : 1));
     deviceState.addAttribute(
         "code_format",
-        ExecutableCodeFormatAttr::get(module.getContext(),
-                                      ExecutableCodeFormat::CpuBytecodeV1));
+        ExecutableCodeFormatAttr::get(module.getContext(), spec->codeFormat));
     deviceState.addAttribute("policy", schedules.front().getPolicyAttr());
     deviceState.addAttribute("source_schedule_fingerprint",
                              schedules.front().getFingerprintAttr());
@@ -4205,6 +4266,7 @@ LogicalResult verifyCpuExecutableAgainstSource(ModuleOp module) {
       deriveCpuExecutable(module, materializations.front(), schedules.front());
   if (failed(expected) ||
       devices.front().getPolicy() != schedules.front().getPolicy() ||
+      devices.front().getCodeFormat() != expected->codeFormat ||
       devices.front().getSourceScheduleFingerprint() !=
           schedules.front().getFingerprint() ||
       abis.front().getSourcePlanFingerprint() !=
@@ -4308,34 +4370,47 @@ public:
       return signalPassFailure();
     }
     RegionOp region = regions.front();
-    const Type matrix =
+    const Type smallMatrix =
         RankedTensorType::get({7, 13}, BFloat16Type::get(module.getContext()));
-    const Type vector =
+    const Type smallVector =
         RankedTensorType::get({13}, BFloat16Type::get(module.getContext()));
-    const bool twoInputOneResult = region.getInputs().size() == 2 &&
-                                   region.getResults().size() == 1 &&
-                                   region.getInputs()[0].getType() == matrix &&
-                                   region.getInputs()[1].getType() == vector &&
-                                   region.getResults()[0].getType() == matrix;
+    const Type largeMatrix = RankedTensorType::get(
+        {2048, 4096}, BFloat16Type::get(module.getContext()));
+    const Type largeVector =
+        RankedTensorType::get({4096}, BFloat16Type::get(module.getContext()));
+    const bool smallTwoInputOneResult =
+        region.getInputs().size() == 2 && region.getResults().size() == 1 &&
+        region.getInputs()[0].getType() == smallMatrix &&
+        region.getInputs()[1].getType() == smallVector &&
+        region.getResults()[0].getType() == smallMatrix;
+    const bool largeTwoInputOneResult =
+        region.getPolicy() == NumericalPolicy::SourceOrdered &&
+        region.getInputs().size() == 2 && region.getResults().size() == 1 &&
+        region.getInputs()[0].getType() == largeMatrix &&
+        region.getInputs()[1].getType() == largeVector &&
+        region.getResults()[0].getType() == largeMatrix &&
+        devices.front().getSchemaVersion() == 2 &&
+        devices.front().getCodeFormat() == ExecutableCodeFormat::CpuBytecodeV2;
+    const bool twoInputOneResult =
+        smallTwoInputOneResult || largeTwoInputOneResult;
     const bool threeInputTwoResult =
         region.getInputs().size() == 3 && region.getResults().size() == 2 &&
-        region.getInputs()[0].getType() == matrix &&
-        region.getInputs()[1].getType() == vector &&
-        region.getInputs()[2].getType() == matrix &&
-        region.getResults()[0].getType() == vector &&
-        region.getResults()[1].getType() == matrix;
+        region.getInputs()[0].getType() == smallMatrix &&
+        region.getInputs()[1].getType() == smallVector &&
+        region.getInputs()[2].getType() == smallMatrix &&
+        region.getResults()[0].getType() == smallVector &&
+        region.getResults()[1].getType() == smallMatrix;
     const bool threeInputThreeResult =
         region.getInputs().size() == 3 && region.getResults().size() == 3 &&
-        region.getInputs()[0].getType() == matrix &&
-        region.getInputs()[1].getType() == vector &&
-        region.getInputs()[2].getType() == matrix &&
-        region.getResults()[0].getType() == matrix &&
-        region.getResults()[1].getType() == vector &&
-        region.getResults()[2].getType() == matrix;
-    if (!twoInputOneResult && !threeInputTwoResult &&
-        !threeInputThreeResult) {
+        region.getInputs()[0].getType() == smallMatrix &&
+        region.getInputs()[1].getType() == smallVector &&
+        region.getInputs()[2].getType() == smallMatrix &&
+        region.getResults()[0].getType() == smallMatrix &&
+        region.getResults()[1].getType() == smallVector &&
+        region.getResults()[2].getType() == smallMatrix;
+    if (!twoInputOneResult && !threeInputTwoResult && !threeInputThreeResult) {
       region.emitOpError(
-          "CPU typed-FFI bridge requires a supported closed 7x13 signature");
+          "CPU typed-FFI bridge requires a supported closed signature");
       signalPassFailure();
       return;
     }
@@ -4728,7 +4803,7 @@ void registerShuttleStablehloPipelines() {
             commandLinePipelineOptions(NumericalPolicy::SourceOrdered);
         options.executionMode = ExecutionMode::CpuExecutableBundle;
         options.canonicalOptions =
-            R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+            R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":9,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
         buildShuttleStablehloPipeline(manager, options);
       });
   PassPipelineRegistration<>(
@@ -4739,7 +4814,7 @@ void registerShuttleStablehloPipelines() {
             commandLinePipelineOptions(NumericalPolicy::Fast);
         options.executionMode = ExecutionMode::CpuExecutableBundle;
         options.canonicalOptions =
-            R"json({"execution_mode":"cpu_executable_bundle","numerics":"fast","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+            R"json({"execution_mode":"cpu_executable_bundle","numerics":"fast","pipeline_abi_version":9,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
         buildShuttleStablehloPipeline(manager, options);
       });
 }

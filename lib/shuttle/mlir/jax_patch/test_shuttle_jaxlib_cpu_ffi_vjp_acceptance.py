@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavior contracts for the unbuilt ABI 8 identity-policy Host proof."""
+"""Behavior contracts for the unbuilt ABI 9 identity-policy Host proof."""
 
 import json
 
@@ -63,8 +63,8 @@ def _cpu_bundle_events() -> list[dict[str, object]]:
     ]
 
 
-def test_identity_policy_host_driver_binds_six_distinct_abi8_cells() -> None:
-    assert PIPELINE_ABI_VERSION == 8
+def test_identity_policy_host_driver_binds_six_distinct_abi9_cells() -> None:
+    assert PIPELINE_ABI_VERSION == 9
     assert BOUNDARIES == ("forward", "backward", "composed")
     assert POLICIES == (Numerics.SOURCE_ORDERED, Numerics.FAST)
     assert cell_identities() == (
@@ -83,7 +83,7 @@ def test_identity_policy_host_driver_binds_six_distinct_abi8_cells() -> None:
         assert payload == {
             "execution_mode": "cpu_executable_bundle",
             "numerics": numerics.value,
-            "pipeline_abi_version": 8,
+            "pipeline_abi_version": 9,
             "schema_version": 1,
             "tuning": {
                 "cluster_shape": [],

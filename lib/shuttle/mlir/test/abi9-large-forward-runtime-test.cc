@@ -65,8 +65,8 @@ std::unique_ptr<BuiltBundle> buildLargeForward() {
                   mlir::math::MathDialect, mlir::shuttle::ShuttleDialect>();
   auto built = std::make_unique<BuiltBundle>();
   built->context = std::make_unique<mlir::MLIRContext>(registry);
-  built->module = mlir::parseSourceString<mlir::ModuleOp>(
-      contents.str(), built->context.get());
+  built->module = mlir::parseSourceString<mlir::ModuleOp>(contents.str(),
+                                                          built->context.get());
   if (!built->module) {
     return {};
   }
@@ -112,10 +112,10 @@ float balancedAdjacentSum(std::vector<float> leaves) {
   while (leaves.size() > 1) {
     size_t output = 0;
     for (size_t input = 0; input < leaves.size(); input += 2) {
-      leaves[output++] = input + 1 == leaves.size()
-                             ? leaves[input]
-                             : static_cast<float>(leaves[input] +
-                                                  leaves[input + 1]);
+      leaves[output++] =
+          input + 1 == leaves.size()
+              ? leaves[input]
+              : static_cast<float>(leaves[input] + leaves[input + 1]);
     }
     leaves.resize(output);
   }
@@ -132,8 +132,8 @@ struct AlignedDelete {
 using AlignedBf16 = std::unique_ptr<uint16_t[], AlignedDelete>;
 
 AlignedBf16 allocateBf16(size_t elements) {
-  return AlignedBf16(static_cast<uint16_t *>(::operator new[](
-      elements * sizeof(uint16_t), std::align_val_t(64))));
+  return AlignedBf16(static_cast<uint16_t *>(
+      ::operator new[](elements * sizeof(uint16_t), std::align_val_t(64))));
 }
 
 void refreshFingerprints(mlir::ModuleOp module, bool codeChanged) {
@@ -159,9 +159,11 @@ TEST(Abi9LargeForwardRuntimeTest,
      BuildsClosedV2TransportWithExactScheduleAndNoReuseCensus) {
   auto bundle = buildLargeForward();
   ASSERT_TRUE(bundle);
-  auto device = *bundle->module->getOps<mlir::shuttle::DeviceModuleOp>().begin();
+  auto device =
+      *bundle->module->getOps<mlir::shuttle::DeviceModuleOp>().begin();
   auto abi = *bundle->module->getOps<mlir::shuttle::InvocationAbiOp>().begin();
-  auto root = *bundle->module->getOps<mlir::shuttle::ExecutableBundleOp>().begin();
+  auto root =
+      *bundle->module->getOps<mlir::shuttle::ExecutableBundleOp>().begin();
 
   EXPECT_EQ(device.getSchemaVersion(), 2);
   EXPECT_EQ(abi.getSchemaVersion(), 2);
@@ -174,17 +176,21 @@ TEST(Abi9LargeForwardRuntimeTest,
   EXPECT_EQ(llvm::ArrayRef<int8_t>(device.getCode()).take_front(4),
             llvm::ArrayRef<int8_t>(kVersionTwoMagic));
   EXPECT_EQ(device.getPolicy(), mlir::shuttle::NumericalPolicy::SourceOrdered);
-  EXPECT_EQ(std::distance(device.getBody().front()
+  EXPECT_EQ(std::distance(device.getBody()
+                              .front()
                               .getOps<mlir::shuttle::DeviceEntryOp>()
                               .begin(),
-                          device.getBody().front()
+                          device.getBody()
+                              .front()
                               .getOps<mlir::shuttle::DeviceEntryOp>()
                               .end()),
             kTaskCount);
-  EXPECT_EQ(std::distance(abi.getBody().front()
+  EXPECT_EQ(std::distance(abi.getBody()
+                              .front()
                               .getOps<mlir::shuttle::InvocationSlotOp>()
                               .begin(),
-                          abi.getBody().front()
+                          abi.getBody()
+                              .front()
                               .getOps<mlir::shuttle::InvocationSlotOp>()
                               .end()),
             kSlotCount);
@@ -223,23 +229,23 @@ TEST(Abi9LargeForwardRuntimeTest,
   AlignedBf16 scale = allocateBf16(kFeatures);
   AlignedBf16 output = allocateBf16(matrixElements);
   for (size_t index = 0; index < matrixElements; ++index) {
-    input[index] = toBf16(-0.75f + static_cast<float>((index * 17) % 257) /
-                                      128.0f);
+    input[index] =
+        toBf16(-0.75f + static_cast<float>((index * 17) % 257) / 128.0f);
   }
   for (size_t feature = 0; feature < kFeatures; ++feature) {
     scale[feature] =
         toBf16(0.5f + static_cast<float>((feature * 5) % 193) / 128.0f);
   }
   std::array<mlir::shuttle::CpuExternalBuffer, 3> buffers{{
-      {0, llvm::MutableArrayRef<uint8_t>(
-              reinterpret_cast<uint8_t *>(input.get()),
-              matrixElements * sizeof(uint16_t))},
-      {1, llvm::MutableArrayRef<uint8_t>(
-              reinterpret_cast<uint8_t *>(scale.get()),
-              kFeatures * sizeof(uint16_t))},
-      {20, llvm::MutableArrayRef<uint8_t>(
-               reinterpret_cast<uint8_t *>(output.get()),
-               matrixElements * sizeof(uint16_t))},
+      {0,
+       llvm::MutableArrayRef<uint8_t>(reinterpret_cast<uint8_t *>(input.get()),
+                                      matrixElements * sizeof(uint16_t))},
+      {1,
+       llvm::MutableArrayRef<uint8_t>(reinterpret_cast<uint8_t *>(scale.get()),
+                                      kFeatures * sizeof(uint16_t))},
+      {20,
+       llvm::MutableArrayRef<uint8_t>(reinterpret_cast<uint8_t *>(output.get()),
+                                      matrixElements * sizeof(uint16_t))},
   }};
   ASSERT_TRUE(mlir::succeeded(
       mlir::shuttle::executeCpuExecutableBundle(*bundle->module, buffers)));
@@ -251,15 +257,14 @@ TEST(Abi9LargeForwardRuntimeTest,
       leaves[feature] = static_cast<float>(value * value);
     }
     const float sum = balancedAdjacentSum(leaves);
-    const float inverse = 1.0f / std::sqrt(
-                                     static_cast<float>(sum / kFeatures) +
-                                     9.99999974E-6f);
+    const float inverse =
+        1.0f / std::sqrt(static_cast<float>(sum / kFeatures) + 9.99999974E-6f);
     for (int64_t feature = 0; feature < kFeatures; ++feature) {
       const float value = fromBf16(input[row * kFeatures + feature]);
       const float gamma = fromBf16(scale[feature]);
       EXPECT_EQ(output[row * kFeatures + feature],
-                toBf16(static_cast<float>(
-                    static_cast<float>(value * inverse) * gamma)));
+                toBf16(static_cast<float>(static_cast<float>(value * inverse) *
+                                          gamma)));
     }
   }
 }
@@ -286,8 +291,7 @@ TEST(Abi9LargeForwardRuntimeTest,
 
   auto unknownRealization = buildLargeForward();
   ASSERT_TRUE(unknownRealization);
-  device = *unknownRealization->module
-                ->getOps<mlir::shuttle::DeviceModuleOp>()
+  device = *unknownRealization->module->getOps<mlir::shuttle::DeviceModuleOp>()
                 .begin();
   llvm::SmallVector<int8_t> code(device.getCode());
   bool mutated = false;
@@ -312,11 +316,110 @@ TEST(Abi9LargeForwardRuntimeTest,
     break;
   }
   ASSERT_TRUE(mutated);
-  device.setCodeAttr(mlir::DenseI8ArrayAttr::get(
-      unknownRealization->context.get(), code));
+  device.setCodeAttr(
+      mlir::DenseI8ArrayAttr::get(unknownRealization->context.get(), code));
   refreshFingerprints(*unknownRealization->module, true);
   EXPECT_TRUE(mlir::failed(mlir::shuttle::serializeCpuExecutableBundle(
       *unknownRealization->module)));
+}
+
+TEST(Abi9LargeForwardRuntimeTest, RejectsEachV2ResourceLimitBoundary) {
+  auto expectSerializationRejected = [](std::unique_ptr<BuiltBundle> bundle) {
+    ASSERT_TRUE(bundle);
+    EXPECT_TRUE(mlir::failed(
+        mlir::shuttle::serializeCpuExecutableBundle(*bundle->module)));
+  };
+
+  auto oversizedTask = buildLargeForward();
+  ASSERT_TRUE(oversizedTask);
+  auto device =
+      *oversizedTask->module->getOps<mlir::shuttle::DeviceModuleOp>().begin();
+  llvm::SmallVector<int8_t> code(device.getCode());
+  auto firstEntry =
+      *device.getBody().front().getOps<mlir::shuttle::DeviceEntryOp>().begin();
+  ASSERT_EQ(static_cast<uint8_t>(code[firstEntry.getCodeOffset() + 5]), 2);
+  constexpr uint32_t kOversizedRows = kRows + 1;
+  for (unsigned byte = 0; byte < 4; ++byte) {
+    code[firstEntry.getCodeOffset() + 6 + byte] =
+        static_cast<int8_t>(kOversizedRows >> (byte * 8));
+  }
+  device.setCodeAttr(
+      mlir::DenseI8ArrayAttr::get(oversizedTask->context.get(), code));
+  refreshFingerprints(*oversizedTask->module, true);
+  expectSerializationRejected(std::move(oversizedTask));
+
+  auto excessiveAggregate = buildLargeForward();
+  ASSERT_TRUE(excessiveAggregate);
+  device = *excessiveAggregate->module->getOps<mlir::shuttle::DeviceModuleOp>()
+                .begin();
+  code.assign(device.getCode().begin(), device.getCode().end());
+  bool expandedVectorTask = false;
+  for (auto entry :
+       device.getBody().front().getOps<mlir::shuttle::DeviceEntryOp>()) {
+    const size_t offset = entry.getCodeOffset();
+    if (static_cast<uint8_t>(code[offset + 5]) != 1) {
+      continue;
+    }
+    uint32_t extent = 0;
+    for (unsigned byte = 0; byte < 4; ++byte) {
+      extent |=
+          static_cast<uint32_t>(static_cast<uint8_t>(code[offset + 6 + byte]))
+          << (byte * 8);
+    }
+    ++extent;
+    for (unsigned byte = 0; byte < 4; ++byte) {
+      code[offset + 6 + byte] = static_cast<int8_t>(extent >> (byte * 8));
+    }
+    expandedVectorTask = true;
+    break;
+  }
+  ASSERT_TRUE(expandedVectorTask);
+  device.setCodeAttr(
+      mlir::DenseI8ArrayAttr::get(excessiveAggregate->context.get(), code));
+  refreshFingerprints(*excessiveAggregate->module, true);
+  expectSerializationRejected(std::move(excessiveAggregate));
+
+  auto oversizedSlot = buildLargeForward();
+  ASSERT_TRUE(oversizedSlot);
+  auto abi =
+      *oversizedSlot->module->getOps<mlir::shuttle::InvocationAbiOp>().begin();
+  auto slots = abi.getBody().front().getOps<mlir::shuttle::InvocationSlotOp>();
+  auto temporary = *std::next(slots.begin(), 2);
+  constexpr int64_t kOversizedElements =
+      mlir::shuttle::kMaximumCpuSlotBytes / sizeof(float) + 1;
+  temporary->setAttr(
+      "tensor_type",
+      mlir::TypeAttr::get(mlir::RankedTensorType::get(
+          {kOversizedElements},
+          mlir::Float32Type::get(oversizedSlot->context.get()))));
+  temporary.setRequiredBytes(kOversizedElements * sizeof(float));
+  temporary.setStridesAttr(
+      mlir::DenseI64ArrayAttr::get(oversizedSlot->context.get(), {4}));
+  refreshFingerprints(*oversizedSlot->module, false);
+  expectSerializationRejected(std::move(oversizedSlot));
+
+  auto excessiveTemporaries = buildLargeForward();
+  ASSERT_TRUE(excessiveTemporaries);
+  abi = *excessiveTemporaries->module->getOps<mlir::shuttle::InvocationAbiOp>()
+             .begin();
+  constexpr int64_t kMaximumSlotElements =
+      mlir::shuttle::kMaximumCpuSlotBytes / sizeof(float);
+  for (auto slot :
+       abi.getBody().front().getOps<mlir::shuttle::InvocationSlotOp>()) {
+    if (slot.getStorage() != mlir::shuttle::MaterializationStorage::Temporary) {
+      continue;
+    }
+    slot->setAttr(
+        "tensor_type",
+        mlir::TypeAttr::get(mlir::RankedTensorType::get(
+            {kMaximumSlotElements},
+            mlir::Float32Type::get(excessiveTemporaries->context.get()))));
+    slot.setRequiredBytes(mlir::shuttle::kMaximumCpuSlotBytes);
+    slot.setStridesAttr(
+        mlir::DenseI64ArrayAttr::get(excessiveTemporaries->context.get(), {4}));
+  }
+  refreshFingerprints(*excessiveTemporaries->module, false);
+  expectSerializationRejected(std::move(excessiveTemporaries));
 }
 
 } // namespace

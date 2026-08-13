@@ -143,7 +143,9 @@ def Shuttle_ScheduleTaskKindAttr
 def Shuttle_ExecutableCodeFormat
     : I32EnumAttr<"ExecutableCodeFormat", "Closed local executable format",
                   [I32EnumAttrCase<"CpuBytecodeV1", 0,
-                                   "cpu_bytecode_v1">]> {
+                                   "cpu_bytecode_v1">,
+                   I32EnumAttrCase<"CpuBytecodeV2", 1,
+                                   "cpu_bytecode_v2">]> {
   let genSpecializedAttr = 0;
   let cppNamespace = "::mlir::shuttle";
 }

@@ -118,27 +118,46 @@ validateProjection(llvm::ArrayRef<mlir::shuttle::CpuExternalBinding> bindings,
     projection->push_back(binding);
   }
 
-  auto isMatrix = [](const mlir::shuttle::CpuExternalBinding &binding) {
+  auto isSmallMatrix = [](const mlir::shuttle::CpuExternalBinding &binding) {
     auto tensor = mlir::cast<mlir::RankedTensorType>(binding.tensorType);
     return tensor.getElementType().isBF16() && tensor.getRank() == 2 &&
            tensor.getDimSize(0) == 7 && tensor.getDimSize(1) == 13;
   };
-  auto isVector = [](const mlir::shuttle::CpuExternalBinding &binding) {
+  auto isSmallVector = [](const mlir::shuttle::CpuExternalBinding &binding) {
     auto tensor = mlir::cast<mlir::RankedTensorType>(binding.tensorType);
     return tensor.getElementType().isBF16() && tensor.getRank() == 1 &&
            tensor.getDimSize(0) == 13;
   };
-  const bool twoInputOneResult = operands.size() == 2 && results.size() == 1 &&
-                                 isMatrix(operands[0]) &&
-                                 isVector(operands[1]) && isMatrix(results[0]);
+  auto isLargeMatrix = [](const mlir::shuttle::CpuExternalBinding &binding) {
+    auto tensor = mlir::cast<mlir::RankedTensorType>(binding.tensorType);
+    return tensor.getElementType().isBF16() && tensor.getRank() == 2 &&
+           tensor.getDimSize(0) == 2048 && tensor.getDimSize(1) == 4096;
+  };
+  auto isLargeVector = [](const mlir::shuttle::CpuExternalBinding &binding) {
+    auto tensor = mlir::cast<mlir::RankedTensorType>(binding.tensorType);
+    return tensor.getElementType().isBF16() && tensor.getRank() == 1 &&
+           tensor.getDimSize(0) == 4096;
+  };
+  const bool smallTwoInputOneResult =
+      operands.size() == 2 && results.size() == 1 &&
+      isSmallMatrix(operands[0]) && isSmallVector(operands[1]) &&
+      isSmallMatrix(results[0]);
+  const bool largeTwoInputOneResult =
+      operands.size() == 2 && results.size() == 1 &&
+      isLargeMatrix(operands[0]) && isLargeVector(operands[1]) &&
+      isLargeMatrix(results[0]);
+  const bool twoInputOneResult =
+      smallTwoInputOneResult || largeTwoInputOneResult;
   const bool threeInputTwoResult =
-      operands.size() == 3 && results.size() == 2 && isMatrix(operands[0]) &&
-      isVector(operands[1]) && isMatrix(operands[2]) && isVector(results[0]) &&
-      isMatrix(results[1]);
+      operands.size() == 3 && results.size() == 2 &&
+      isSmallMatrix(operands[0]) && isSmallVector(operands[1]) &&
+      isSmallMatrix(operands[2]) && isSmallVector(results[0]) &&
+      isSmallMatrix(results[1]);
   const bool threeInputThreeResult =
-      operands.size() == 3 && results.size() == 3 && isMatrix(operands[0]) &&
-      isVector(operands[1]) && isMatrix(operands[2]) && isMatrix(results[0]) &&
-      isVector(results[1]) && isMatrix(results[2]);
+      operands.size() == 3 && results.size() == 3 &&
+      isSmallMatrix(operands[0]) && isSmallVector(operands[1]) &&
+      isSmallMatrix(operands[2]) && isSmallMatrix(results[0]) &&
+      isSmallVector(results[1]) && isSmallMatrix(results[2]);
   if (!twoInputOneResult && !threeInputTwoResult && !threeInputThreeResult) {
     return absl::InvalidArgumentError(
         "Shuttle CPU executable external bindings do not match the closed "

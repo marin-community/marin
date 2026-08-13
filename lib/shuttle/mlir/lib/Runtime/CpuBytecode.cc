@@ -45,6 +45,9 @@ enum class Opcode : uint8_t {
 
 enum class TaskKind : uint8_t { Map = 0, Fold = 1 };
 enum class ElementType : uint8_t { Bf16 = 0, F32 = 1 };
+enum class FoldRealization : uint8_t {
+  AdjacentBalancedInitializerLast = 0,
+};
 
 struct IndexAxis {
   uint8_t domainAxis;
@@ -70,6 +73,7 @@ struct ParsedTask {
   ElementType outputType;
   std::optional<uint8_t> reductionAxis;
   std::optional<ScheduleReductionOrder> reductionOrder;
+  std::optional<FoldRealization> foldRealization;
   SmallVector<ElementType> argumentTypes;
   SmallVector<Instruction> instructions;
   uint8_t yieldRegister;
@@ -113,9 +117,33 @@ std::optional<Enum> checkedEnum(std::optional<uint8_t> value, uint8_t maximum) {
   return static_cast<Enum>(*value);
 }
 
-FailureOr<ParsedTask> parseTask(ArrayRef<int8_t> bytes) {
+struct ResourceLimits {
+  uint64_t taskElements;
+  uint64_t slotBytes;
+  uint64_t temporaryBytes;
+  uint64_t aggregateTaskElements;
+};
+
+FailureOr<ResourceLimits> resourceLimits(ExecutableCodeFormat format) {
+  if (format == ExecutableCodeFormat::CpuBytecodeV1) {
+    return ResourceLimits{
+        kMaximumCpuBytecodeV1TaskElements, kMaximumCpuBytecodeV1SlotBytes,
+        kMaximumCpuBytecodeV1TemporaryBytes,
+        kMaximumCpuExecutableRecords * kMaximumCpuBytecodeV1TaskElements};
+  }
+  if (format == ExecutableCodeFormat::CpuBytecodeV2) {
+    return ResourceLimits{kMaximumCpuTaskElements, kMaximumCpuSlotBytes,
+                          kMaximumCpuTemporaryBytes,
+                          kMaximumCpuAggregateTaskElements};
+  }
+  return failure();
+}
+
+FailureOr<ParsedTask> parseTask(ArrayRef<int8_t> bytes,
+                                ExecutableCodeFormat format) {
   Reader reader(bytes);
-  for (uint8_t expected : ArrayRef<uint8_t>{'S', 'B', 'C', 1}) {
+  const uint8_t version = format == ExecutableCodeFormat::CpuBytecodeV2 ? 2 : 1;
+  for (uint8_t expected : ArrayRef<uint8_t>{'S', 'B', 'C', version}) {
     if (reader.byte() != expected) {
       return failure();
     }
@@ -127,11 +155,14 @@ FailureOr<ParsedTask> parseTask(ArrayRef<int8_t> bytes) {
   }
   ParsedTask task;
   task.kind = *kind;
+  FailureOr<ResourceLimits> limits = resourceLimits(format);
+  if (failed(limits)) {
+    return failure();
+  }
   uint64_t elements = 1;
   for (uint8_t axis = 0; axis < *rank; ++axis) {
     std::optional<uint32_t> extent = reader.u32();
-    if (!extent || *extent == 0 ||
-        elements > kMaximumCpuTaskElements / *extent) {
+    if (!extent || *extent == 0 || elements > limits->taskElements / *extent) {
       return failure();
     }
     elements *= *extent;
@@ -176,6 +207,15 @@ FailureOr<ParsedTask> parseTask(ArrayRef<int8_t> bytes) {
     }
     task.reductionAxis = reductionAxis;
     task.reductionOrder = order;
+    if (format == ExecutableCodeFormat::CpuBytecodeV2) {
+      std::optional<FoldRealization> realization =
+          checkedEnum<FoldRealization>(reader.byte(), 0);
+      if (!realization || task.domain.size() != 2 || *task.reductionAxis != 1 ||
+          task.domain[0] != 2048 || task.domain[1] != 4096) {
+        return failure();
+      }
+      task.foldRealization = *realization;
+    }
   }
   std::optional<uint8_t> argumentCount = reader.byte();
   if (!argumentCount || *argumentCount != task.inputs.size()) {
@@ -469,11 +509,62 @@ LogicalResult executeFold(const ParsedTask &task, DeviceEntryOp entry,
       outputType.getShape() != ArrayRef<int64_t>{task.domain[outputAxis]}) {
     return failure();
   }
+  SmallVector<uint32_t, 0> foldScratch;
+  if (task.foldRealization) {
+    const uint64_t scratchBytes =
+        static_cast<uint64_t>(task.domain[reductionAxis]) * sizeof(uint32_t);
+    if (scratchBytes > kMaximumCpuFoldScratchBytes) {
+      return failure();
+    }
+    foldScratch.resize(task.domain[reductionAxis]);
+  }
   for (int64_t outputIndex = 0; outputIndex < task.domain[outputAxis];
        ++outputIndex) {
     FailureOr<Scalar> accumulator = loadScalar(initializer, {});
     if (failed(accumulator)) {
       return failure();
+    }
+    if (task.foldRealization ==
+        FoldRealization::AdjacentBalancedInitializerLast) {
+      for (int64_t leafIndex = 0; leafIndex < task.domain[reductionAxis];
+           ++leafIndex) {
+        std::array<int64_t, 2> coordinates{};
+        coordinates[outputAxis] = outputIndex;
+        coordinates[reductionAxis] = leafIndex;
+        FailureOr<Scalar> leaf = loadScalar(input, coordinates);
+        if (failed(leaf) || leaf->type != ElementType::F32) {
+          return failure();
+        }
+        foldScratch[leafIndex] = leaf->bits;
+      }
+      size_t remaining = foldScratch.size();
+      while (remaining > 1) {
+        size_t outputPosition = 0;
+        for (size_t inputPosition = 0; inputPosition < remaining;
+             inputPosition += 2) {
+          if (inputPosition + 1 == remaining) {
+            foldScratch[outputPosition++] = foldScratch[inputPosition];
+            continue;
+          }
+          std::array<Scalar, 2> pair{
+              Scalar{ElementType::F32, foldScratch[inputPosition]},
+              Scalar{ElementType::F32, foldScratch[inputPosition + 1]}};
+          Scalar combined = evaluate(task, pair);
+          if (combined.type != ElementType::F32) {
+            return failure();
+          }
+          foldScratch[outputPosition++] = combined.bits;
+        }
+        remaining = outputPosition;
+      }
+      std::array<Scalar, 2> finalArguments{
+          Scalar{ElementType::F32, foldScratch.front()}, *accumulator};
+      *accumulator = evaluate(task, finalArguments);
+      if (accumulator->type != ElementType::F32 ||
+          failed(storeScalar(output, {outputIndex}, *accumulator))) {
+        return failure();
+      }
+      continue;
     }
     for (int64_t leafIndex = 0; leafIndex < task.domain[reductionAxis];
          ++leafIndex) {
@@ -721,7 +812,7 @@ FailureOr<DecodedModule> decodeCpuExecutableBundle(ArrayRef<uint8_t> bytes) {
 
   std::optional<int64_t> deviceSchema = reader.i64();
   FailureOr<ExecutableCodeFormat> codeFormat =
-      transportEnum<ExecutableCodeFormat>(reader.u8(), 0);
+      transportEnum<ExecutableCodeFormat>(reader.u8(), 1);
   FailureOr<NumericalPolicy> policy =
       transportEnum<NumericalPolicy>(reader.u8(), 1);
   std::optional<StringRef> scheduleFingerprint = reader.string();
@@ -957,8 +1048,13 @@ validateCpuExecutableResources(ModuleOp module) {
       slots.size() > kMaximumCpuExecutableRecords) {
     return failure();
   }
+  FailureOr<ResourceLimits> limits = resourceLimits(device.getCodeFormat());
+  if (failed(limits)) {
+    return failure();
+  }
   SmallVector<ParsedTask, 0> tasks;
   tasks.reserve(entries.size());
+  uint64_t aggregateTaskElements = 0;
   for (DeviceEntryOp entry : entries) {
     if (entry.getInputBuffers().size() > kMaximumCpuExecutableRecords ||
         entry.getOutputBuffers().size() > kMaximumCpuExecutableRecords ||
@@ -968,10 +1064,24 @@ validateCpuExecutableResources(ModuleOp module) {
       return failure();
     }
     FailureOr<ParsedTask> task = parseTask(
-        device.getCode().slice(entry.getCodeOffset(), entry.getCodeLength()));
+        device.getCode().slice(entry.getCodeOffset(), entry.getCodeLength()),
+        device.getCodeFormat());
     if (failed(task)) {
       return failure();
     }
+    uint64_t taskElements = 1;
+    for (int64_t extent : task->domain) {
+      const uint64_t value = static_cast<uint64_t>(extent);
+      if (taskElements > limits->taskElements / value) {
+        return failure();
+      }
+      taskElements *= value;
+    }
+    if (taskElements > limits->aggregateTaskElements ||
+        aggregateTaskElements > limits->aggregateTaskElements - taskElements) {
+      return failure();
+    }
+    aggregateTaskElements += taskElements;
     tasks.push_back(std::move(*task));
   }
   uint64_t temporaryBytes = 0;
@@ -983,14 +1093,15 @@ validateCpuExecutableResources(ModuleOp module) {
     }
     const int64_t requiredBytes = slot.getRequiredBytes();
     if (requiredBytes <= 0 ||
-        static_cast<uint64_t>(requiredBytes) > kMaximumCpuSlotBytes) {
+        static_cast<uint64_t>(requiredBytes) > limits->slotBytes) {
       return failure();
     }
     if (slot.getStorage() != MaterializationStorage::Temporary) {
       continue;
     }
     const uint64_t bytes = static_cast<uint64_t>(requiredBytes);
-    if (temporaryBytes > kMaximumCpuTemporaryBytes - bytes) {
+    if (bytes > limits->temporaryBytes ||
+        temporaryBytes > limits->temporaryBytes - bytes) {
       return failure();
     }
     temporaryBytes += bytes;
@@ -1210,6 +1321,10 @@ executeCpuExecutableBundleImpl(ModuleOp module,
   }
   DeviceModuleOp device = devices.front();
   InvocationAbiOp abi = abis.front();
+  FailureOr<ResourceLimits> limits = resourceLimits(device.getCodeFormat());
+  if (failed(limits)) {
+    return runtimeError(module, "CPU executable format has no resource policy");
+  }
   SmallVector<InvocationSlotOp> descriptors(
       abi.getBody().front().getOps<InvocationSlotOp>());
   SmallVector<DeviceEntryOp> entries(
@@ -1233,7 +1348,7 @@ executeCpuExecutableBundleImpl(ModuleOp module,
   uint64_t temporaryBytes = 0;
   for (InvocationSlotOp descriptor : descriptors) {
     const uint64_t requiredBytes = descriptor.getRequiredBytes();
-    if (requiredBytes > kMaximumCpuSlotBytes) {
+    if (requiredBytes > limits->slotBytes) {
       return runtimeError(module, "CPU executable slot exceeds the byte limit");
     }
     MutableArrayRef<uint8_t> bytes;
@@ -1254,7 +1369,8 @@ executeCpuExecutableBundleImpl(ModuleOp module,
       externalRanges.push_back({begin, begin + descriptor.getRequiredBytes()});
     } else {
       const uint64_t alignment = descriptor.getAlignment();
-      if (temporaryBytes > kMaximumCpuTemporaryBytes - requiredBytes) {
+      if (requiredBytes > limits->temporaryBytes ||
+          temporaryBytes > limits->temporaryBytes - requiredBytes) {
         return runtimeError(module,
                             "CPU executable exceeds the temporary byte limit");
       }
@@ -1318,7 +1434,7 @@ executeCpuExecutableBundleImpl(ModuleOp module,
         device.getCode().slice(entry.getCodeOffset(), entry.getCodeLength());
     FailureOr<ParsedTask> decodedTask =
         preParsedTasks.empty()
-            ? parseTask(entryBytes)
+            ? parseTask(entryBytes, device.getCodeFormat())
             : FailureOr<ParsedTask>(preParsedTasks[entryOrdinal]);
     if (failed(decodedTask)) {
       return runtimeError(module, "CPU bytecode entry is invalid");

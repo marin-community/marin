@@ -25,14 +25,22 @@ struct CpuExternalBuffer {
 };
 
 inline constexpr char kCpuExecutableBundleFfiTarget[] =
-    "shuttle.cpu.executable_bundle.v2";
+    "shuttle.cpu.executable_bundle.v3";
 // Canonical transport v1 is deliberately bounded before immutable state or
 // per-invocation temporary storage is allocated.
 inline constexpr uint64_t kMaximumCpuTransportBytes = 16 * 1024 * 1024;
 inline constexpr uint64_t kMaximumCpuExecutableRecords = 256;
-inline constexpr uint64_t kMaximumCpuTaskElements = 256;
-inline constexpr uint64_t kMaximumCpuSlotBytes = 1024 * 1024;
-inline constexpr uint64_t kMaximumCpuTemporaryBytes = 16 * 1024 * 1024;
+inline constexpr uint64_t kMaximumCpuBytecodeV1TaskElements = 256;
+inline constexpr uint64_t kMaximumCpuBytecodeV1SlotBytes = 1024 * 1024;
+inline constexpr uint64_t kMaximumCpuBytecodeV1TemporaryBytes =
+    16 * 1024 * 1024;
+// CPU bytecode v2 is bounded to the 2048x4096 Host proof. Runtime validation
+// selects these limits only after verifying the device schema/format pair.
+inline constexpr uint64_t kMaximumCpuTaskElements = 2048 * 4096;
+inline constexpr uint64_t kMaximumCpuSlotBytes = 32 * 1024 * 1024;
+inline constexpr uint64_t kMaximumCpuTemporaryBytes = 256 * 1024 * 1024;
+inline constexpr uint64_t kMaximumCpuAggregateTaskElements = 67129347;
+inline constexpr uint64_t kMaximumCpuFoldScratchBytes = 16 * 1024;
 
 struct CpuExternalBinding {
   ExecutableBindingKind kind;

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ordinary-JAX ABI 8 Host proof for the 7x13 identity-policy boundaries."""
+"""Ordinary-JAX ABI 9 Host proof for the 7x13 identity-policy boundaries."""
 
 import argparse
 import hashlib
@@ -35,7 +35,7 @@ from shuttle import ExecutionMode, Numerics, compiler_options
 
 JAX_VERSION = "0.10.1"
 JAXLIB_VERSION = "0.10.1"
-PIPELINE_ABI_VERSION = 8
+PIPELINE_ABI_VERSION = 9
 BOUNDARIES = ("forward", "backward", "composed")
 POLICIES = (Numerics.SOURCE_ORDERED, Numerics.FAST)
 WORKERS = ("baseline", "populate", "reuse")
@@ -74,7 +74,7 @@ def subject_options(numerics: Numerics) -> dict[str, object]:
         raise TypeError("xla_shuttle_options must be canonical JSON text")
     payload = json.loads(encoded)
     if payload.get("pipeline_abi_version") != PIPELINE_ABI_VERSION:
-        raise AssertionError("identity-policy Host proof requires pipeline ABI 8")
+        raise AssertionError("identity-policy Host proof requires pipeline ABI 9")
     if payload.get("numerics") != numerics.value:
         raise AssertionError("identity-policy Host proof lost its numerical policy")
     return options
@@ -199,11 +199,11 @@ def run_subject(worker: str, baseline: Path, cache_directory: Path, key_map: Pat
     configure_cache(cache_directory)
     initial = cache_snapshot(cache_directory)
     if worker == "populate" and initial:
-        raise AssertionError("ABI 8 populate cache must start empty")
+        raise AssertionError("ABI 9 populate cache must start empty")
     expected_keys = json.loads(key_map.read_text()) if worker == "reuse" else {}
     expected_labels = {f"{boundary}_{numerics}" for boundary, numerics in cell_identities()}
     if worker == "reuse" and set(expected_keys) != expected_labels:
-        raise AssertionError("ABI 8 reuse key map does not cover the six exact cells")
+        raise AssertionError("ABI 9 reuse key map does not cover the six exact cells")
     counter = CacheHitCounter()
     jax.monitoring.register_event_listener(counter.observe)
     bridge = bridge_module()
@@ -236,7 +236,7 @@ def run_subject(worker: str, baseline: Path, cache_directory: Path, key_map: Pat
             added = set(after) - set(before)
             if worker == "populate":
                 if len(added) != 1 or counter.count != hits:
-                    raise AssertionError(f"{label}: expected one ABI 8 cache miss")
+                    raise AssertionError(f"{label}: expected one ABI 9 cache miss")
                 keys[label] = added.pop()
                 observer = validate_cpu_bundle_success_events(
                     events,
@@ -244,7 +244,7 @@ def run_subject(worker: str, baseline: Path, cache_directory: Path, key_map: Pat
                     target1_expectation(SHAPE.shape_id, boundary),
                 )
             elif after != before or counter.count != hits + 1:
-                raise AssertionError(f"{label}: expected one immutable ABI 8 cache hit")
+                raise AssertionError(f"{label}: expected one immutable ABI 9 cache hit")
             else:
                 keys[label] = expected_keys[label]
                 if keys[label] not in after:
@@ -268,7 +268,7 @@ def run_subject(worker: str, baseline: Path, cache_directory: Path, key_map: Pat
     if worker == "populate":
         key_map.write_text(json.dumps(keys, indent=2, sort_keys=True) + "\n")
     if worker == "reuse" and final != initial:
-        raise AssertionError("ABI 8 reuse changed persistent-cache bytes")
+        raise AssertionError("ABI 9 reuse changed persistent-cache bytes")
     return {
         "worker": worker,
         "pipeline_abi_version": PIPELINE_ABI_VERSION,
@@ -319,7 +319,7 @@ def run_orchestrator(work_directory: Path) -> dict[str, object]:
         )
         reports[worker] = json.loads(report.read_text())
     if reports["populate"]["cell_to_cache_file"] != reports["reuse"]["cell_to_cache_file"]:
-        raise AssertionError("reuse process changed ABI 8 cache-key attribution")
+        raise AssertionError("reuse process changed ABI 9 cache-key attribution")
     if reports["reuse"]["cache_hits"] != len(cell_identities()):
         raise AssertionError("reuse process omitted an identity-policy cache hit")
     return {

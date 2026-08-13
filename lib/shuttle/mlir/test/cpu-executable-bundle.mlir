@@ -8,7 +8,6 @@
 // RUN: diff %t.original %t.renamed
 // RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-test-set-fast-region-policy --shuttle-plan-row-fold-materialization --shuttle-plan-simt32-row-fold-schedule --shuttle-build-cpu-executable-bundle --shuttle-verify-cpu-executable-bundle --shuttle-test-report-executable-bundle-fingerprint %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir -o /dev/null > %t.fast
 // RUN: not diff %t.original %t.fast
-// RUN: not shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-plan-row-fold-materialization --shuttle-plan-simt32-row-fold-schedule --shuttle-build-cpu-executable-bundle %S/Inputs/jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-forward.mlir 2>&1 | FileCheck %s --check-prefix=BOUNDS
 // RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-plan-row-fold-materialization --shuttle-plan-simt32-row-fold-schedule --shuttle-build-cpu-executable-bundle --shuttle-verify-cpu-executable-bundle --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-backward.mlir | FileCheck %s --check-prefix=BWD-SO
 // RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-test-set-fast-region-policy --shuttle-plan-row-fold-materialization --shuttle-plan-simt32-row-fold-schedule --shuttle-build-cpu-executable-bundle --shuttle-verify-cpu-executable-bundle --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-backward.mlir | FileCheck %s --check-prefix=BWD-FAST
 // RUN: shuttle-test-opt --shuttle-annotate-source --shuttle-form-structural-regions --shuttle-convert-stablehlo-to-algebra --shuttle-plan-row-fold-materialization --shuttle-plan-simt32-row-fold-schedule --shuttle-build-cpu-executable-bundle --shuttle-verify-cpu-executable-bundle --mlir-print-op-generic %S/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-backward.mlir | FileCheck %s --check-prefix=BWDC
@@ -44,8 +43,6 @@
 // COMPOSEDC-COUNT-51: "shuttle.device_entry"
 // COMPOSEDC-COUNT-54: "shuttle.invocation_slot"
 // COMPOSED-FOLDS-COUNT-10: reduction_order = #shuttle.schedule_reduction_order<tree_association_free_leaf_order_fixed>
-// BOUNDS: requires a bounded generated Map/Fold CPU bytecode subset
-
 // COUNT-COUNT-19: "shuttle.device_entry"
 // COUNT-COUNT-21: "shuttle.invocation_slot"
 // BUNDLE: "shuttle.device_entry"() <{{.*}}ordinal = 3{{.*}}predication = #shuttle.executable_predication<domain_bounds>{{.*}}reduction_order = #shuttle.schedule_reduction_order<tree_association_free_leaf_order_fixed>

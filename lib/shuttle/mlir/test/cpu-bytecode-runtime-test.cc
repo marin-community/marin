@@ -426,7 +426,7 @@ TEST(CpuBytecodeRuntimeTest, CanonicalTransportEnforcesClosedResourceLimits) {
       continue;
     }
     constexpr uint32_t kOversizedExtent =
-        mlir::shuttle::kMaximumCpuTaskElements + 1;
+        mlir::shuttle::kMaximumCpuBytecodeV1TaskElements + 1;
     for (unsigned byte = 0; byte < 4; ++byte) {
       code[offset + 6 + byte] =
           static_cast<int8_t>(kOversizedExtent >> (byte * 8));
@@ -468,7 +468,7 @@ TEST(CpuBytecodeRuntimeTest, CanonicalTransportEnforcesClosedResourceLimits) {
   auto slots = abi.getBody().front().getOps<mlir::shuttle::InvocationSlotOp>();
   auto temporary = *std::next(slots.begin(), 2);
   constexpr int64_t kOversizedElements =
-      mlir::shuttle::kMaximumCpuSlotBytes / sizeof(float) + 1;
+      mlir::shuttle::kMaximumCpuBytecodeV1SlotBytes / sizeof(float) + 1;
   temporary->setAttr(
       "tensor_type",
       mlir::TypeAttr::get(mlir::RankedTensorType::get(
@@ -485,7 +485,7 @@ TEST(CpuBytecodeRuntimeTest, CanonicalTransportEnforcesClosedResourceLimits) {
   abi = *excessiveAggregate->module->getOps<mlir::shuttle::InvocationAbiOp>()
              .begin();
   constexpr int64_t kMaximumSlotElements =
-      mlir::shuttle::kMaximumCpuSlotBytes / sizeof(float);
+      mlir::shuttle::kMaximumCpuBytecodeV1SlotBytes / sizeof(float);
   for (auto slot :
        abi.getBody().front().getOps<mlir::shuttle::InvocationSlotOp>()) {
     if (slot.getStorage() != mlir::shuttle::MaterializationStorage::Temporary) {
@@ -496,7 +496,7 @@ TEST(CpuBytecodeRuntimeTest, CanonicalTransportEnforcesClosedResourceLimits) {
         mlir::TypeAttr::get(mlir::RankedTensorType::get(
             {kMaximumSlotElements},
             mlir::Float32Type::get(excessiveAggregate->context.get()))));
-    slot.setRequiredBytes(mlir::shuttle::kMaximumCpuSlotBytes);
+    slot.setRequiredBytes(mlir::shuttle::kMaximumCpuBytecodeV1SlotBytes);
     slot.setStridesAttr(
         mlir::DenseI64ArrayAttr::get(excessiveAggregate->context.get(), {4}));
   }

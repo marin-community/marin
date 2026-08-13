@@ -46,8 +46,8 @@
 
 namespace {
 
-constexpr llvm::StringLiteral kCpuExecutableBundleFfiTargetV2 =
-    "shuttle.cpu.executable_bundle.v2";
+constexpr llvm::StringLiteral kCpuExecutableBundleFfiTargetV3 =
+    "shuttle.cpu.executable_bundle.v3";
 
 std::string runfile(llvm::StringRef name) {
   std::string error;
@@ -90,10 +90,9 @@ std::string readText(llvm::StringRef name) {
   return input && !contents.str().empty() ? contents.str() : std::string();
 }
 
-llvm::SmallVector<uint8_t> fixtureBundle(llvm::StringRef boundary,
-                                         bool fast = false,
-                                         llvm::StringRef shapeId =
-                                             "81928ab3539c0f03") {
+llvm::SmallVector<uint8_t>
+fixtureBundle(llvm::StringRef boundary, bool fast = false,
+              llvm::StringRef shapeId = "81928ab3539c0f03") {
   mlir::DialectRegistry registry;
   mlir::stablehlo::registerAllDialects(registry);
   registry.insert<mlir::arith::ArithDialect, mlir::func::FuncDialect,
@@ -216,8 +215,8 @@ compileCall(xla::LocalClient *client, llvm::ArrayRef<uint8_t> bundle,
 absl::StatusOr<CompiledCall>
 compileLargeForwardCall(xla::LocalClient *client,
                         llvm::ArrayRef<uint8_t> bundle) {
-  xla::Shape matrix = xla::ShapeUtil::MakeShapeWithDenseLayout(
-      xla::BF16, {2048, 4096}, {1, 0});
+  xla::Shape matrix =
+      xla::ShapeUtil::MakeShapeWithDenseLayout(xla::BF16, {2048, 4096}, {1, 0});
   xla::Shape vector =
       xla::ShapeUtil::MakeShapeWithDenseLayout(xla::BF16, {4096}, {0});
   xla::XlaBuilder builder("shuttle_cpu_ffi_forward_2048x4096");
@@ -229,8 +228,8 @@ compileLargeForwardCall(xla::LocalClient *client,
       mlir::shuttle::cpuExecutableBundleDigest(bundle) +
       "\", bundle_size = " + std::to_string(bundle.size()) +
       " : i64, transport_schema_version = 1 : i64}";
-  xla::CustomCall(&builder, "shuttle.cpu.executable_bundle.v3",
-                  {input, scale}, matrix, backendConfig,
+  xla::CustomCall(&builder, "shuttle.cpu.executable_bundle.v3", {input, scale},
+                  matrix, backendConfig,
                   /*has_side_effect=*/false,
                   /*output_operand_aliasing=*/{}, /*literal=*/nullptr,
                   xla::CustomCallSchedule::SCHEDULE_NONE,
@@ -273,7 +272,7 @@ absl::StatusOr<CompiledCall> compileVjpCall(xla::LocalClient *client,
       mlir::shuttle::cpuExecutableBundleDigest(bundle) +
       "\", bundle_size = " + std::to_string(bundle.size()) +
       " : i64, transport_schema_version = 1 : i64}";
-  xla::CustomCall(&builder, kCpuExecutableBundleFfiTargetV2.str(),
+  xla::CustomCall(&builder, kCpuExecutableBundleFfiTargetV3.str(),
                   {input, scale, cotangent}, tuple, backendConfig,
                   /*has_side_effect=*/false,
                   /*output_operand_aliasing=*/{}, /*literal=*/nullptr,
@@ -314,9 +313,9 @@ xla::Literal scaleLiteral() {
 }
 
 xla::Literal largeInputLiteral() {
-  xla::Literal literal = xla::Literal::CreateFromShape(
-      xla::ShapeUtil::MakeShapeWithDenseLayout(xla::BF16, {2048, 4096},
-                                               {1, 0}));
+  xla::Literal literal =
+      xla::Literal::CreateFromShape(xla::ShapeUtil::MakeShapeWithDenseLayout(
+          xla::BF16, {2048, 4096}, {1, 0}));
   auto values = literal.data<uint16_t>();
   for (size_t index = 0; index < values.size(); ++index) {
     values[index] =
@@ -576,9 +575,9 @@ TEST(XlaCpuFfiTest, InstantiateRejectsWrongTypedCanonicalProjection) {
 }
 
 TEST(XlaCpuFfiTest,
-     V2TargetExecutesBackwardAndComposedTupleLeavesInBundleOrder) {
+     V3TargetExecutesBackwardAndComposedTupleLeavesInBundleOrder) {
   EXPECT_EQ(llvm::StringRef(mlir::shuttle::kCpuExecutableBundleFfiTarget),
-            kCpuExecutableBundleFfiTargetV2);
+            kCpuExecutableBundleFfiTargetV3);
   TF_ASSERT_OK_AND_ASSIGN(xla::LocalClient * client, hostClient());
   for (llvm::StringRef boundary :
        {llvm::StringRef("backward"), llvm::StringRef("composed")}) {
@@ -605,9 +604,9 @@ TEST(XlaCpuFfiTest,
   }
 }
 
-TEST(XlaCpuFfiTest, V2TargetExecutesIdentityFastPayloadsForAllBoundaries) {
+TEST(XlaCpuFfiTest, V3TargetExecutesIdentityFastPayloadsForAllBoundaries) {
   EXPECT_EQ(llvm::StringRef(mlir::shuttle::kCpuExecutableBundleFfiTarget),
-            kCpuExecutableBundleFfiTargetV2);
+            kCpuExecutableBundleFfiTargetV3);
   ASSERT_TRUE(xla::ffi::FindHandler(
                   mlir::shuttle::kCpuExecutableBundleFfiTarget, "Host")
                   .ok());
@@ -656,7 +655,7 @@ TEST(XlaCpuFfiTest, V2TargetExecutesIdentityFastPayloadsForAllBoundaries) {
   }
 }
 
-TEST(XlaCpuFfiTest, V2ExecuteRejectsSelfConsistentWrongResultTupleOrder) {
+TEST(XlaCpuFfiTest, V3ExecuteRejectsSelfConsistentWrongResultTupleOrder) {
   TF_ASSERT_OK_AND_ASSIGN(xla::LocalClient * client, hostClient());
   llvm::SmallVector<uint8_t> bytes = fixtureBundle("backward");
   ASSERT_FALSE(bytes.empty());
@@ -673,7 +672,7 @@ TEST(XlaCpuFfiTest, V2ExecuteRejectsSelfConsistentWrongResultTupleOrder) {
             std::string::npos);
 }
 
-TEST(XlaCpuFfiTest, SharedV2ComposedExecutableRunsConcurrently) {
+TEST(XlaCpuFfiTest, SharedV3ComposedExecutableRunsConcurrently) {
   TF_ASSERT_OK_AND_ASSIGN(xla::LocalClient * client, hostClient());
   llvm::SmallVector<uint8_t> bytes = fixtureBundle("composed", true);
   ASSERT_FALSE(bytes.empty());
@@ -755,9 +754,9 @@ TEST(XlaCpuFfiTest, V3TargetExecutesRepresentativeForwardLikeRawBundle) {
       {1, llvm::MutableArrayRef<uint8_t>(
               reinterpret_cast<uint8_t *>(scale.data<uint16_t>().data()),
               scale.size_bytes())},
-      {20, llvm::MutableArrayRef<uint8_t>(
-               reinterpret_cast<uint8_t *>(raw.data()),
-               raw.size() * sizeof(uint16_t))},
+      {20,
+       llvm::MutableArrayRef<uint8_t>(reinterpret_cast<uint8_t *>(raw.data()),
+                                      raw.size() * sizeof(uint16_t))},
   }};
   ASSERT_TRUE((*loaded)->Execute(buffers).ok());
   EXPECT_EQ(host, raw);
