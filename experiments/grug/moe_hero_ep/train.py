@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 HERO_EP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "true",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
+    "NCCL_PROTO": "Simple",
 }
 _XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
