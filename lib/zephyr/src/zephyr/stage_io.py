@@ -229,11 +229,14 @@ def _write_stage_output(
     TaskResult with a ListShard.
     """
     if scatter_op is not None:
-        first_item = next(stage_gen, None)
-        if first_item is None:
+        # islice rather than ``next(stage_gen, None)``: a stage whose first item
+        # is legitimately ``None`` must not be mistaken for an exhausted stream,
+        # which would silently drop the whole shard.
+        first_item = list(itertools.islice(stage_gen, 1))
+        if not first_item:
             return TaskResult(shard=ListShard(refs=[]))
 
-        full_gen = itertools.chain([first_item], stage_gen)
+        full_gen = itertools.chain(first_item, stage_gen)
 
         num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
         data_path = f"{stage_dir}/shard-{shard_idx:04d}/scatter/"
