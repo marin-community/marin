@@ -9,7 +9,9 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import jax
 import jaxlib
@@ -27,7 +29,7 @@ from shuttle_jaxlib_target1_acceptance import (
     fixed_inputs,
     ready,
 )
-from target1_acceptance_contract import target1_expectation, validate_target1_success_events
+from target1_acceptance_contract import Target1FixtureExpectation, target1_expectation
 
 from shuttle import ExecutionMode, Numerics, compiler_options
 
@@ -38,6 +40,27 @@ BOUNDARIES = ("forward", "backward", "composed")
 POLICIES = (Numerics.SOURCE_ORDERED, Numerics.FAST)
 WORKERS = ("baseline", "populate", "reuse")
 SHAPE = Shape(7, 13, "81928ab3539c0f03")
+CPU_BUNDLE_PHASES = ("algebra_coverage", "final_erasure")
+CPU_BUNDLE_FINAL_FINGERPRINTS = {
+    (
+        "81928ab3539c0f03",
+        "forward",
+        "source_ordered",
+    ): "8e3af5d400b23fdd2924058ff242a1947e2cbf89b2c35dd2839609c28bf44467",
+    (
+        "81928ab3539c0f03",
+        "backward",
+        "source_ordered",
+    ): "27e878ad4b71067810c6f63e05fa8233fba53fccaab721f719704f752f2ef04c",
+    (
+        "81928ab3539c0f03",
+        "composed",
+        "source_ordered",
+    ): "80354aaede9c4779dfc542fb229cdc62688097fd395cbb9488ec587326a68885",
+    ("81928ab3539c0f03", "forward", "fast"): "748116e5720695370aacd37d7d569c9498366d2083c008a86c4a4ed1d07fb6cf",
+    ("81928ab3539c0f03", "backward", "fast"): "b9dbdffc10095e6f085e0194e214188c6cc88f8cffad64b5ad3e62b55722f32c",
+    ("81928ab3539c0f03", "composed", "fast"): "137f69ffaeda5aec2f2be52c15fcfe34767368ebb5a34a5c420872d5e8d21206",
+}
 
 
 def subject_options(numerics: Numerics) -> dict[str, object]:
@@ -76,6 +99,67 @@ def expected_identity(numerics: Numerics) -> ObserverIdentity:
         canonical_options=canonical,
         canonical_tuning=canonical_tuning,
     )
+
+
+def validate_cpu_bundle_success_events(
+    events: Sequence[Mapping[str, Any]],
+    identity: ObserverIdentity,
+    fixture: Target1FixtureExpectation,
+) -> dict[str, Any]:
+    """Require the CPU bundle pipeline's coverage and final-erasure phases."""
+    if len(events) != len(CPU_BUNDLE_PHASES):
+        raise AssertionError("one CPU bundle compilation must emit exactly two observer phases")
+    if tuple(event["phase"] for event in events) != CPU_BUNDLE_PHASES:
+        raise AssertionError("one CPU bundle compilation must emit the two ordered observer phases")
+    if len({event["invocation_id"] for event in events}) != 1:
+        raise AssertionError("CPU bundle observer phases do not share one invocation ID")
+
+    expected_manifest = fixture.coverage_manifest(identity)
+    if fixture.excluded_manifest != "[]":
+        raise AssertionError("CPU bundle observer fixture contains an excluded source result")
+    for event in events:
+        if event["policy"] != identity.policy or event["policy_digest"] != identity.policy_digest:
+            raise AssertionError("CPU bundle observer policy identity differs from compiler options")
+        if event["tuning_digest"] != identity.tuning_digest:
+            raise AssertionError("CPU bundle observer tuning identity differs from compiler options")
+        if event["failure_pass"] != "":
+            raise AssertionError("successful CPU bundle compilation emitted a failure pass")
+
+    algebra, final = events
+    if algebra["region_membership"] != fixture.region_membership:
+        raise AssertionError(f"{fixture.label}: CPU bundle selected-region membership changed")
+    if algebra["coverage_manifest"] != expected_manifest:
+        raise AssertionError(f"{fixture.label}: CPU bundle coverage manifest changed")
+    if algebra["unsupported_fingerprint"] != fixture.unsupported_fingerprint:
+        raise AssertionError(f"{fixture.label}: CPU bundle unsupported structural island changed")
+    if algebra["normalized_module_fingerprint"] != "" or algebra["no_shuttle_semantics"] is not False:
+        raise AssertionError("CPU bundle algebra phase erased provenance early")
+
+    if final["region_membership"] != "" or final["coverage_manifest"] != "":
+        raise AssertionError("CPU bundle final phase retained provenance")
+    if final["unsupported_fingerprint"] != "":
+        raise AssertionError("CPU bundle final phase retained an unsupported-island fingerprint")
+    try:
+        expected_fingerprint = CPU_BUNDLE_FINAL_FINGERPRINTS[(fixture.shape_id, fixture.boundary, identity.policy)]
+    except KeyError as error:
+        raise AssertionError("CPU bundle observer identity is outside the closed six-cell matrix") from error
+    if final["normalized_module_fingerprint"] != expected_fingerprint:
+        raise AssertionError(f"{fixture.label}: CPU bundle final fingerprint changed")
+    if final["no_shuttle_semantics"] is not True:
+        raise AssertionError("CPU bundle final phase did not prove erasure")
+
+    return {
+        "invocation_id": algebra["invocation_id"],
+        "shape_id": fixture.shape_id,
+        "boundary": fixture.boundary,
+        "policy": identity.policy,
+        "policy_digest": identity.policy_digest,
+        "tuning_digest": identity.tuning_digest,
+        "complete_source_results": len(fixture.complete),
+        "excluded_source_results": 0,
+        "coverage_manifest": expected_manifest,
+        "final_fingerprint": expected_fingerprint,
+    }
 
 
 def _key(boundary: str, result: int) -> str:
@@ -154,7 +238,7 @@ def run_subject(worker: str, baseline: Path, cache_directory: Path, key_map: Pat
                 if len(added) != 1 or counter.count != hits:
                     raise AssertionError(f"{label}: expected one ABI 8 cache miss")
                 keys[label] = added.pop()
-                observer = validate_target1_success_events(
+                observer = validate_cpu_bundle_success_events(
                     events,
                     expected_identity(numerics),
                     target1_expectation(SHAPE.shape_id, boundary),

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Installed-wheel CPU contract for the six ABI 7 BF16 rowwise fixtures."""
+"""Installed-wheel CPU contract for the six ABI 8 BF16 rowwise fixtures."""
 
 import argparse
 import hashlib
@@ -32,7 +32,7 @@ from shuttle import Materialization, Numerics, Tuning, compiler_options
 
 JAX_VERSION = "0.10.1"
 JAXLIB_VERSION = "0.10.1"
-PIPELINE_ABI_VERSION = 7
+PIPELINE_ABI_VERSION = 8
 CACHE_HIT_EVENT = "/jax/compilation_cache/cache_hits"
 BOUNDARIES = ("forward", "backward", "composed")
 WORKER_MODES = ("baseline", "populate", "reuse")
@@ -175,7 +175,7 @@ def expected_identity(numerics: Numerics) -> ObserverIdentity:
         raise AssertionError("canonical options must be a string")
     payload = json.loads(canonical)
     if payload.get("pipeline_abi_version") != PIPELINE_ABI_VERSION:
-        raise AssertionError("installed Shuttle options are not ABI 7")
+        raise AssertionError("installed Shuttle options are not ABI 8")
     canonical_tuning = json.dumps(payload["tuning"], sort_keys=True, separators=(",", ":"))
     return ObserverIdentity(
         policy=numerics.value,
@@ -242,7 +242,7 @@ def attributed_new_cache_entry(before: frozenset[str], after: frozenset[str], la
     """Return the one public persistent-cache file added by a wrapper."""
     added = after - before
     if len(added) != 1:
-        raise AssertionError(f"{label}: first ABI 7 compile did not add exactly one cache entry")
+        raise AssertionError(f"{label}: first ABI 8 compile did not add exactly one cache entry")
     return next(iter(added))
 
 
@@ -295,10 +295,10 @@ def run_cache_worker(mode: str, cache_directory: Path, baseline_path: Path, key_
     initial_files = cache_files(cache_directory)
     initial_snapshot = cache_snapshot(cache_directory)
     if mode == "populate" and initial_files:
-        raise AssertionError("ABI 7 populate cache must start empty")
+        raise AssertionError("ABI 8 populate cache must start empty")
     expected_cache_files = frozenset(expected_keys.values())
     if mode == "reuse" and not expected_cache_files.issubset(initial_files):
-        raise AssertionError("ABI 7 reuse cache omits an attributed Target 1 entry")
+        raise AssertionError("ABI 8 reuse cache omits an attributed Target 1 entry")
 
     reports = []
     label_to_key = {}
@@ -350,10 +350,10 @@ def run_cache_worker(mode: str, cache_directory: Path, baseline_path: Path, key_
 
     attributed_files = frozenset(label_to_key.values())
     if len(label_to_key) != 12 or len(attributed_files) != 12:
-        raise AssertionError("Target 1 workers did not attribute twelve distinct ABI 7 cache entries")
+        raise AssertionError("Target 1 workers did not attribute twelve distinct ABI 8 cache entries")
     final_files = cache_files(cache_directory)
     if not attributed_files.issubset(final_files):
-        raise AssertionError("Target 1 workers lost an attributed ABI 7 cache entry")
+        raise AssertionError("Target 1 workers lost an attributed ABI 8 cache entry")
     if len(final_files) != 12:
         raise AssertionError("Target 1 cache must contain exactly twelve closed regular-file entries")
     if mode == "populate":
@@ -412,7 +412,7 @@ def run_orchestrator(work_directory: Path) -> dict[str, Any]:
         )
         reports[worker] = json.loads(report.read_text())
     if reports["populate"]["label_to_cache_file"] != reports["reuse"]["label_to_cache_file"]:
-        raise AssertionError("reuse process changed ABI 7 cache-key attribution")
+        raise AssertionError("reuse process changed ABI 8 cache-key attribution")
     if reports["reuse"]["public_cache_hits"] != 12:
         raise AssertionError("reuse process omitted a Target 1 cache hit")
     return {

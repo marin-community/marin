@@ -9,20 +9,58 @@ import numpy as np
 import pytest
 from shuttle_jaxlib_cpu_ffi_vjp_acceptance import (
     BOUNDARIES,
+    CPU_BUNDLE_FINAL_FINGERPRINTS,
     PIPELINE_ABI_VERSION,
     POLICIES,
     SHAPE,
     arrays,
     boundary_function,
     cell_identities,
+    expected_identity,
     fixed_inputs,
     load_baseline,
     ready,
     save_baseline,
     subject_options,
+    validate_cpu_bundle_success_events,
 )
+from target1_acceptance_contract import target1_expectation
 
 from shuttle import Numerics
+
+
+def _cpu_bundle_events() -> list[dict[str, object]]:
+    identity = expected_identity(Numerics.SOURCE_ORDERED)
+    fixture = target1_expectation(SHAPE.shape_id, "forward")
+    common = {
+        "invocation_id": 17,
+        "policy": identity.policy,
+        "policy_digest": identity.policy_digest,
+        "tuning_digest": identity.tuning_digest,
+        "failure_pass": "",
+    }
+    return [
+        {
+            **common,
+            "phase": "algebra_coverage",
+            "region_membership": fixture.region_membership,
+            "coverage_manifest": fixture.coverage_manifest(identity),
+            "unsupported_fingerprint": fixture.unsupported_fingerprint,
+            "normalized_module_fingerprint": "",
+            "no_shuttle_semantics": False,
+        },
+        {
+            **common,
+            "phase": "final_erasure",
+            "region_membership": "",
+            "coverage_manifest": "",
+            "unsupported_fingerprint": "",
+            "normalized_module_fingerprint": CPU_BUNDLE_FINAL_FINGERPRINTS[
+                (SHAPE.shape_id, "forward", "source_ordered")
+            ],
+            "no_shuttle_semantics": True,
+        },
+    ]
 
 
 def test_identity_policy_host_driver_binds_six_distinct_abi8_cells() -> None:
@@ -95,3 +133,41 @@ def test_identity_policy_host_baseline_roundtrips_closed_bf16_bits(tmp_path) -> 
     np.savez(path, **stored)
     with pytest.raises(AssertionError, match="bit payload 0 changed"):
         load_baseline(path, "backward")
+
+
+def test_cpu_bundle_observer_accepts_exact_two_phase_contract() -> None:
+    identity = expected_identity(Numerics.SOURCE_ORDERED)
+    fixture = target1_expectation(SHAPE.shape_id, "forward")
+    report = validate_cpu_bundle_success_events(_cpu_bundle_events(), identity, fixture)
+    assert report["invocation_id"] == 17
+    assert report["complete_source_results"] == len(fixture.complete)
+    assert report["excluded_source_results"] == 0
+    assert report["final_fingerprint"] == CPU_BUNDLE_FINAL_FINGERPRINTS[(SHAPE.shape_id, "forward", "source_ordered")]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "diagnostic"),
+    [
+        ("missing", "exactly two observer phases"),
+        ("extra", "exactly two observer phases"),
+        ("reordered", "two ordered observer phases"),
+        ("wrong_policy", "policy identity differs"),
+    ],
+)
+def test_cpu_bundle_observer_rejects_phase_contract_drift(mutation: str, diagnostic: str) -> None:
+    events = _cpu_bundle_events()
+    if mutation == "missing":
+        events.pop()
+    elif mutation == "extra":
+        events.insert(1, dict(events[0]))
+    elif mutation == "reordered":
+        events.reverse()
+    elif mutation == "wrong_policy":
+        events[0]["policy"] = "fast"
+    else:
+        raise AssertionError(f"unknown mutation: {mutation}")
+
+    identity = expected_identity(Numerics.SOURCE_ORDERED)
+    fixture = target1_expectation(SHAPE.shape_id, "forward")
+    with pytest.raises(AssertionError, match=diagnostic):
+        validate_cpu_bundle_success_events(events, identity, fixture)

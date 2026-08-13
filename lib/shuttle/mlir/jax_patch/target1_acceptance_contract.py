@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exact ABI 7 observer contracts for the six BF16 rowwise fixtures."""
+"""Exact ABI 8 observer contracts for the six BF16 rowwise fixtures."""
 
 import hashlib
 from collections.abc import Iterable, Mapping, Sequence

@@ -11,7 +11,7 @@ from enum import StrEnum
 SCHEMA_VERSION = 1
 # Bump when unchanged JSON fields acquire new compiler semantics. This forces a
 # distinct JAX/XLA cache identity even when the wire schema itself is stable.
-PIPELINE_ABI_VERSION = 7
+PIPELINE_ABI_VERSION = 8
 ENABLE_OPTION = "xla_shuttle_enable"
 OPTIONS_OPTION = "xla_shuttle_options"
 MAXIMUM_TENSOR_RANK = 8
@@ -88,8 +88,6 @@ def compiler_options(
 ) -> CompilerOptions:
     """Return canonical XLA compiler options for a Shuttle-enabled jaxlib."""
     options = Options(numerics=numerics, execution_mode=execution_mode, tuning=tuning)
-    if execution_mode is ExecutionMode.CPU_EXECUTABLE_BUNDLE and numerics is not Numerics.SOURCE_ORDERED:
-        raise ValueError("cpu_executable_bundle requires source_ordered numerics")
     return {
         ENABLE_OPTION: True,
         OPTIONS_OPTION: canonical_options_json(options),

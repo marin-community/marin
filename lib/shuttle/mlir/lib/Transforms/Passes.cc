@@ -74,7 +74,7 @@ ShuttlePipelineOptions commandLinePipelineOptions(NumericalPolicy numerics) {
   options.numerics = numerics;
   if (numerics == NumericalPolicy::Fast) {
     options.canonicalOptions =
-        R"json({"execution_mode":"stablehlo_round_trip","numerics":"fast","pipeline_abi_version":7,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+        R"json({"execution_mode":"stablehlo_round_trip","numerics":"fast","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
   }
   return options;
 }
@@ -1757,8 +1757,7 @@ LogicalResult verifyManifestCoverage(ModuleOp module, DictionaryAttr manifest) {
   cpuPrefix.push_back('"');
   const bool validOptionsPrefix =
       canonicalOptions.getValue().starts_with(roundTripPrefix) ||
-      (policy.getValue() == "source_ordered" &&
-       canonicalOptions.getValue().starts_with(cpuPrefix));
+      canonicalOptions.getValue().starts_with(cpuPrefix);
   if ((policy.getValue() != "source_ordered" && policy.getValue() != "fast") ||
       tuningDigest.getValue().size() != 64 ||
       !llvm::all_of(tuningDigest.getValue(), llvm::isHexDigit) ||
@@ -4333,12 +4332,10 @@ public:
         region.getResults()[0].getType() == matrix &&
         region.getResults()[1].getType() == vector &&
         region.getResults()[2].getType() == matrix;
-    if (region.getPolicy() != NumericalPolicy::SourceOrdered ||
-        (!twoInputOneResult && !threeInputTwoResult &&
-         !threeInputThreeResult)) {
+    if (!twoInputOneResult && !threeInputTwoResult &&
+        !threeInputThreeResult) {
       region.emitOpError(
-          "CPU typed-FFI bridge requires a supported closed 7x13 "
-          "source-ordered signature");
+          "CPU typed-FFI bridge requires a supported closed 7x13 signature");
       signalPassFailure();
       return;
     }
@@ -4731,7 +4728,18 @@ void registerShuttleStablehloPipelines() {
             commandLinePipelineOptions(NumericalPolicy::SourceOrdered);
         options.executionMode = ExecutionMode::CpuExecutableBundle;
         options.canonicalOptions =
-            R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":7,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+            R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+        buildShuttleStablehloPipeline(manager, options);
+      });
+  PassPipelineRegistration<>(
+      "shuttle-cpu-executable-bundle-fast-pipeline",
+      "Replace the closed 7x13 identity-fast graph with a typed FFI call",
+      [](OpPassManager &manager) {
+        ShuttlePipelineOptions options =
+            commandLinePipelineOptions(NumericalPolicy::Fast);
+        options.executionMode = ExecutionMode::CpuExecutableBundle;
+        options.canonicalOptions =
+            R"json({"execution_mode":"cpu_executable_bundle","numerics":"fast","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
         buildShuttleStablehloPipeline(manager, options);
       });
 }
