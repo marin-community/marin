@@ -10,9 +10,10 @@ quality, the scale is working and the corpus is simply homogeneous; if they read
 the scores carry no signal.
 
 The text comes from the normalized stage, which is where ``id`` still maps to a document.
-A manifest ``source_key`` *is* the normalized output dir, and normalize, tokenize, embed
-and the scores are all co-partitioned with the same basenames, so shard ``k`` of the
-scores and shard ``k`` of the normalized side hold the same documents.
+The manifest names a source, whose normalized directory :mod:`hero_data` resolves, and
+normalize, tokenize, embed and the scores are all co-partitioned with the same
+basenames, so shard ``k`` of the scores and shard ``k`` of the normalized side hold the
+same documents.
 
     uv run iris --cluster=marin job run --target-cluster cw-us-east-02a \\
         --cpu 8 --memory 32g --disk 32g --enable-extra-resources \\
@@ -28,14 +29,16 @@ from io import BytesIO
 
 import fsspec
 import polars as pl
+from marin.datakit.normalize import NormalizedData
+from marin.execution.artifact import read_artifact
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 
+from experiments.datakit import hero_data
 from experiments.datakit.cluster.quality.fast_transformer.score_corpus import DEFAULT_MANIFEST, read_manifest
 
 logger = logging.getLogger(__name__)
 
-PREFIX = "marin-us-east-02a/marin"
 TEXT_CHARS = 900
 
 
@@ -46,7 +49,7 @@ def _read(fs, url: str, columns: list[str]) -> pl.DataFrame:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default=DEFAULT_MANIFEST)
-    ap.add_argument("--sources", nargs="*", default=[], help="substrings selecting source_keys (default: a spread)")
+    ap.add_argument("--sources", nargs="*", default=[], help="substrings selecting sources (default: a spread)")
     ap.add_argument("--shards-per-source", type=int, default=2)
     ap.add_argument("--per-end", type=int, default=4, help="documents to print from each end")
     args = ap.parse_args()
@@ -59,13 +62,13 @@ def main() -> None:
     wanted = args.sources or ["penfever-traces", "safety_pt"]
     picked: list[dict] = []
     for want in wanted:
-        hits = [r for r in rows if want in r["source_key"]]
+        hits = [r for r in rows if want in r["source"]]
         # Spread across distinct leaves rather than taking one leaf's first shards.
         seen: set[str] = set()
         for row in sorted(hits, key=lambda r: -r["embed_rows"]):
-            if row["source_key"] in seen:
+            if row["source"] in seen:
                 continue
-            seen.add(row["source_key"])
+            seen.add(row["source"])
             picked.append(row)
             if len(seen) >= args.shards_per_source:
                 break
@@ -73,7 +76,7 @@ def main() -> None:
     report = []
     for row in picked:
         scores = _read(fs, row["output_path"], ["id", "score"])
-        normalized = f"s3://{PREFIX}/{row['source_key'].strip('/')}"
+        normalized = read_artifact(hero_data.normalized(row["source"]).output_path, NormalizedData).main_output_dir
         basename = row["output_path"].rsplit("/", 1)[-1]
         try:
             text = _read(fs, f"{normalized}/{basename}", ["id", "text"])
@@ -85,7 +88,7 @@ def main() -> None:
         ends = [("LOW", ordered.head(args.per_end)), ("HIGH", ordered.tail(args.per_end))]
         logger.info(
             "SOURCE %s shard %s: %d scored, %d with text, score min=%.4f max=%.4f mean=%.4f std=%.4f",
-            row["source_key"],
+            row["source"],
             row["shard_index"],
             scores.height,
             joined.height,
@@ -97,12 +100,10 @@ def main() -> None:
         for end, frame in ends:
             for record in frame.to_dicts():
                 body = re.sub(r"\s+", " ", record["text"])[:TEXT_CHARS]
-                logger.info(
-                    "DOC %s %s score=%.4f id=%s :: %s", end, row["source_key"], record["score"], record["id"], body
-                )
+                logger.info("DOC %s %s score=%.4f id=%s :: %s", end, row["source"], record["score"], record["id"], body)
                 report.append(
                     {
-                        "source_key": row["source_key"],
+                        "source": row["source"],
                         "end": end,
                         "score": record["score"],
                         "id": record["id"],

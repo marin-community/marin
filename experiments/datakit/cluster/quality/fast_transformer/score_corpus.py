@@ -5,11 +5,13 @@
 
 The corpus already carries everything the fusion scorer eats: ``datakit/tokenize``
 holds Nemotron ``input_ids`` per document chunk and ``datakit/embed/harrier`` holds
-the int8[1024] document embedding. Both are hash-partitioned from one normalized
-source and share a shard count and basename, so a shard pair joins on ``id`` with
-no shuffle. Row order within a shard is *not* guaranteed and on at least one source
-is not sorted, so the join sorts the embed side itself rather than reading the
-stored order as an invariant (see :func:`join_shard`).
+the int8[1024] document embedding. The embed side spans two stage roots -- one run
+embedded what the global fuzzy dedup kept, a second embedded what it dropped -- and
+their union is the whole normalized set. All of them are hash-partitioned from one
+normalized source and share a shard count and basename, so a shard's leaves join on
+``id`` with no shuffle. Row order within a shard is *not* guaranteed and on at least
+one source is not sorted, so the join sorts the embed side itself rather than
+reading the stored order as an invariant (see :func:`join_shard`).
 
 Five modes:
 
@@ -18,8 +20,8 @@ Five modes:
   dir. Gather and matmul commute row-wise so this is exact, not an approximation;
   the mode asserts score parity on real rows before writing. Deployment reads the
   folded dir, so 48 workers do not each redo a 1.1 GB read and a fold.
-* ``manifest`` -- pair the Nemotron tokenize leaves with the harrier embed leaves
-  on ``result.source_key`` and emit one row per (source_key, shard_index).
+* ``manifest`` -- pair each source's Nemotron tokenize leaf with its harrier embed
+  leaves and emit one row per (source, shard_index).
 * ``score`` -- one worker, one GPU: take this worker's slice of the manifest and
   stream join -> score -> write for each shard pair it owns.
 * ``node`` -- fan out one ``score`` subprocess per visible GPU.
@@ -49,6 +51,7 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -67,32 +70,47 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from iris.cluster.client.job_info import get_job_info
-from marin.datakit.source_key import datakit_source_path
 from rigging.filesystem import StoragePath, open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 
+from experiments.datakit import hero_data
 from experiments.datakit.cluster.quality.fast_transformer.data import NUM_RESERVED, PAD_ID, UNK_ID
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict
 from experiments.datakit.cluster.quality.fast_transformer.model import COMPUTE_DTYPE, FastTransformer
 from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledScorer, artifact_names, load_pooled_scorer
+from experiments.datakit.hero_data import NEMOTRON_88K
 
 logger = logging.getLogger(__name__)
 
 MODULE = "experiments.datakit.cluster.quality.fast_transformer.score_corpus"
 
 EMBED_DIM = 1024
-NEMOTRON_CORPUS_TOKENIZER = "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16"
 SPLIT = "train"
-TOKENIZE_ROOT = "s3://marin-us-east-02a/marin/datakit/tokenize"
+# The embedded corpus is split across two stage roots, not one. The first run
+# embedded only what survived the global fuzzy dedup `dedup_709f5997`; the second
+# embedded exactly the documents that run dropped. `select_document` partitions on
+# `is_cluster_canonical`, so the two are disjoint by construction and their union
+# is the whole normalized set. Both write one output shard per *normalized* input
+# shard under the same basename, so a source's two embed leaves are co-partitioned
+# with each other and with the token side.
 EMBED_ROOT = "s3://marin-us-east-02a/marin/datakit/embed/harrier"
-DEFAULT_OUT_ROOT = "s3://marin-us-east-02a/marin/datakit/quality-scores"
+EMBED_FUZZY_ROOT = "s3://marin-us-east-02a/marin/datakit/embed/harrier-fuzzy-duplicates"
 DEFAULT_MODEL_DIR = "s3://marin-us-east-02a/marin/user/muchanem/quality_exp/nemotron_donor"
 DEFAULT_FOLDED_DIR = "s3://marin-us-east-02a/marin/user/muchanem/quality_scores_run/model/nemotron_88k_folded"
 DEFAULT_MANIFEST = "s3://marin-us-east-02a/marin/user/muchanem/quality_scores_run/manifest"
 # Cutpoints `calibrate_corpus` fitted through this scoring path; `verify` digitizes
 # the written scores under the interior knots to report bucket shares.
 DEFAULT_CALIBRATION = f"{DEFAULT_FOLDED_DIR}/calib_bme.json"
+
+# A stage leaf is `<source>_<8 hex>`; the source part may itself hold slashes.
+LEAF_SUFFIX = re.compile(r"_[0-9a-f]{8}/?$")
+
+# Sources kept out of the manifest. Each entry needs a reason and a way out: a
+# held source is not scored at all, which is safer than scoring it against a leaf
+# chosen by guess, and the per-source output layout means adding one later costs
+# only that source's shards.
+HOLD_SOURCES: frozenset[str] = frozenset()
 
 # Rows per arrow record batch when streaming a token shard. The token side is the
 # expanded one (a long document occupies several adjacent rows), so this is rows,
@@ -259,123 +277,135 @@ def fold_mode(args) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _leaf_artifacts(fs, root: str, threads: int) -> list[dict]:
-    """Every ``<source>/<subset>_<hash>`` leaf's ``.artifact.json`` under a stage root.
+def _stage_leaves(fs, root: str, threads: int) -> dict[str, str]:
+    """``{source_name: leaf_dir}`` for a stage root, walked to any depth.
 
-    Delimiter listings one level at a time rather than a recursive glob. The
-    tokenize tree holds on the order of a million parquet shards, and a
-    ``*/*/.artifact.json`` pattern makes s3fs walk all of them to match three
-    path components -- measured at over 20 minutes without returning.
+    Source names are not all one path component -- ``penfever-traces/*/*`` and
+    ``safety_pt/*/*`` sit two levels down -- and a ``{*,*/*}`` glob silently
+    dropped 150 of them on an earlier pass. Descending until the leaf pattern
+    matches finds every depth without enumerating the shard lists.
+
+    Keyed on the *name* parsed from the directory rather than on the artifact's
+    recorded ``source_key``: at least one leaf records a redirected, legacy-spelled
+    key that joins against nothing, and the fuzzy-duplicate run writes no
+    ``result`` block at all, so neither side can be paired through it.
     """
     base = root.removeprefix("s3://").rstrip("/")
-
-    def artifact(directory: str) -> dict | None:
-        try:
-            return json.loads(fs.cat(f"{directory.rstrip('/')}/.artifact.json"))
-        except Exception:
-            return None
-
+    leaves: dict[str, str] = {}
+    frontier = [base]
     with ThreadPoolExecutor(max_workers=threads) as pool:
-        # Leaf depth is not uniform: most leaves are `<source>/<subset>_<hash>`,
-        # but some sit directly under the stage root as `<subset>_<hash>`. Probe
-        # for the artifact at the first level and only descend where there is
-        # none, so a one-level source is not walked into its shard list (and a
-        # two-level one is not missed, which would silently drop it from the
-        # pairing rather than fail).
-        top = fs.ls(base, detail=False)
-        found = list(pool.map(artifact, top))
-        leaves = [a for a in found if a]
-        deeper = [d for d, a in zip(top, found, strict=True) if a is None]
-        nested = [
-            child
-            for got in pool.map(lambda d: fs.ls(d, detail=False), deeper)
-            for child in got
-            if not child.endswith(".parquet")
-        ]
-        leaves += [a for a in pool.map(artifact, nested) if a]
-    logger.info("%s: %d top entries, %d nested, %d leaf artifacts", root, len(top), len(nested), len(leaves))
+        while frontier:
+            listings = pool.map(lambda d: fs.ls(d, detail=False), frontier)
+            frontier = []
+            for children in listings:
+                for child in children:
+                    if child.endswith(".parquet") or child.rsplit("/", 1)[-1].startswith("."):
+                        continue
+                    if LEAF_SUFFIX.search(child):
+                        leaves[child[len(base) :].strip("/").rsplit("_", 1)[0]] = f"s3://{child}"
+                    else:
+                        frontier.append(child)
+    logger.info("%s: %d leaves", root, len(leaves))
     return leaves
 
 
-def _leaf_rel(output_dir: str, marker: str) -> str:
-    """``<source>/<subset>_<hash>`` from a stage output dir.
-
-    Split on the stage marker rather than by counting path components: one
-    source_key carries an anomalous ``data/datakit/normalized/...`` prefix, so
-    positional parsing is wrong on it.
-    """
-    index = output_dir.find(marker)
-    if index < 0:
-        raise ValueError(f"{output_dir!r} does not contain {marker!r}")
-    return output_dir[index + len(marker) :].strip("/").removesuffix("/train")
-
-
 def manifest_mode(args) -> dict:
-    """Build the minimum manifest the scorer needs: paths and an existence flag.
+    """Pair every source's Nemotron token shards with its harrier embed shards.
 
-    STEP 1's ``build_quality_scores_manifest`` writes a richer artifact carrying
-    shard sizes and row counts for planning. This is the fallback that needs only
-    directory listings, so it costs two listings per leaf rather than a footer
-    read per shard, and is consumed by exactly the same reader.
+    Discovery runs off :mod:`hero_data`, which names the sources and resolves the
+    tokenize leaf and the score output path from step identity. The embed side is
+    still listed, because the leaves on disk were written by an older hash than
+    current code reproduces and so cannot be resolved structurally.
+
+    Emits ``embed_paths`` per shard -- one entry per stage root that carries the
+    source. A source whose fuzzy-duplicate leaf is absent or unwritten yields one
+    path and scores only its dedup-surviving documents, which is why
+    ``fuzzy_shards`` is reported: it is the coverage the run would bake in.
     """
     fs = fsspec.filesystem("s3")
-    tokenize, embed = {}, {}
-    # The two stages spell their result differently: tokenize is per-split
-    # (`source_keys`/`output_dirs` keyed by split), embed is single-output
-    # (`source_key`/`output_dir`). Both store paths with MARIN_PREFIX stripped,
-    # so every directory is resolved back before use. A leaf whose stage failed
-    # or is still running has no result at all and is skipped rather than paired
-    # against the wrong directory.
-    for art in _leaf_artifacts(fs, TOKENIZE_ROOT, args.discovery_threads):
-        cfg, res = art.get("config") or {}, art.get("result") or {}
-        source_key = (res.get("source_keys") or {}).get(SPLIT)
-        train = (res.get("output_dirs") or {}).get(SPLIT)
-        if cfg.get("tokenizer") == NEMOTRON_CORPUS_TOKENIZER and source_key and train:
-            tokenize[source_key] = datakit_source_path(train)
-    for art in _leaf_artifacts(fs, EMBED_ROOT, args.discovery_threads):
-        res = art.get("result") or {}
-        if res.get("source_key") and res.get("output_dir"):
-            embed[res["source_key"]] = datakit_source_path(res["output_dir"])
-    shared = sorted(set(tokenize) & set(embed))
-    logger.info("nemotron leaves=%d harrier leaves=%d paired=%d", len(tokenize), len(embed), len(shared))
-    if not shared:
-        raise ValueError(
-            f"no source_key pairs between {len(tokenize)} nemotron tokenize leaves and "
-            f"{len(embed)} harrier embed leaves; the artifact schema likely moved"
-        )
+    embed = _stage_leaves(fs, EMBED_ROOT, args.discovery_threads)
+    embed_fuzzy = _stage_leaves(fs, EMBED_FUZZY_ROOT, args.discovery_threads)
+    sources = [s for s in hero_data.source_names() if s not in HOLD_SOURCES]
+    missing_embed = sorted(set(sources) - set(embed))
+    logger.info(
+        "sources=%d dedup-leaves=%d fuzzy-leaves=%d held=%s no-embed=%s",
+        len(sources),
+        len(embed),
+        len(embed_fuzzy),
+        sorted(HOLD_SOURCES),
+        missing_embed,
+    )
 
-    def leaf_rows(source_key: str) -> list[dict]:
-        tok_dir, emb_dir = tokenize[source_key].rstrip("/"), embed[source_key].rstrip("/")
-        tok = sorted(f"s3://{p}" for p in fs.glob(f"{tok_dir.removeprefix('s3://')}/*.parquet"))
-        emb = {p.rsplit("/", 1)[-1] for p in fs.glob(f"{emb_dir.removeprefix('s3://')}/*.parquet")}
-        leaf = _leaf_rel(tok_dir, "/datakit/tokenize/")
+    def leaf_rows(source: str) -> list[dict]:
+        tok_dir = f"{hero_data.tokenized(source, NEMOTRON_88K.tokenizer).output_path.rstrip('/')}/{SPLIT}"
+        out_dir = hero_data.quality(source, NEMOTRON_88K).output_path.rstrip("/")
+        tok = sorted(fs.ls(tok_dir.removeprefix("s3://"), detail=True), key=lambda e: e["name"])
+        tok = [e for e in tok if e["name"].endswith(".parquet")]
+        present = {}
+        for tag, table in (("dedup", embed), ("fuzzy", embed_fuzzy)):
+            leaf = table.get(source)
+            if leaf:
+                present[tag] = {
+                    e["name"].rsplit("/", 1)[-1]: (f"s3://{e['name']}", e["size"])
+                    for e in fs.ls(leaf.removeprefix("s3://"), detail=True)
+                    if e["name"].endswith(".parquet")
+                }
         rows = []
-        for index, path in enumerate(tok):
-            base = path.rsplit("/", 1)[-1]
+        for index, entry in enumerate(tok):
+            base = entry["name"].rsplit("/", 1)[-1]
+            found = [present[tag][base] for tag in ("dedup", "fuzzy") if base in present.get(tag, {})]
             rows.append(
                 {
-                    "source_key": source_key,
+                    "source": source,
                     "shard_index": index,
                     "num_shards": len(tok),
-                    "tokens_path": path,
-                    "embed_path": f"{emb_dir}/{base}",
-                    "output_path": f"{args.out_root.rstrip('/')}/{leaf}/{base}",
-                    "embed_exists": base in emb,
+                    "tokens_path": f"s3://{entry['name']}",
+                    "embed_paths": [path for path, _ in found],
+                    "output_path": f"{out_dir}/{base}",
+                    "embed_leaves": len(found),
+                    "tokens_bytes": entry["size"],
+                    "embed_bytes": sum(size for _, size in found),
                 }
             )
         return rows
 
     rows: list[dict] = []
     with ThreadPoolExecutor(max_workers=args.discovery_threads) as pool:
-        for got in pool.map(leaf_rows, shared):
+        for got in pool.map(leaf_rows, sources):
             rows.extend(got)
-    missing = sum(1 for r in rows if not r["embed_exists"])
+    if not rows:
+        raise ValueError("no shard tasks discovered; the stage layout likely moved")
+
+    # Footer reads, once, here: `embed_rows` is what `verify` compares the written
+    # score count against, and computing it at verify time would reread the embed
+    # side of a leaf that has already been scored. Two range GETs per shard.
+    def embed_rows(row: dict) -> int:
+        total = 0
+        for path in row["embed_paths"]:
+            with fs.open(path, "rb", cache_type="none") as raw:
+                total += pq.ParquetFile(raw).metadata.num_rows
+        return total
+
+    with ThreadPoolExecutor(max_workers=args.footer_threads) as pool:
+        for row, count in zip(rows, pool.map(embed_rows, rows), strict=True):
+            row["embed_rows"] = count
     table = pa.table({c: [r[c] for r in rows] for c in rows[0]})
     path = f"{args.manifest.rstrip('/')}/manifest.parquet"
     with open_url(path, "wb") as fh:
         pq.write_table(table, fh)
-    logger.info("wrote %s: %d tasks over %d sources (%d without embeds)", path, len(rows), len(shared), missing)
-    return {"manifest": path, "tasks": len(rows), "sources": len(shared), "missing_embed": missing}
+    result = {
+        "manifest": path,
+        "tasks": len(rows),
+        "sources": len(sources),
+        "held": sorted(HOLD_SOURCES),
+        "sources_without_embed": missing_embed,
+        "dedup_shards": sum(1 for r in rows if r["embed_leaves"] >= 1),
+        "fuzzy_shards": sum(1 for r in rows if r["embed_leaves"] == 2),
+        "unembedded_shards": sum(1 for r in rows if r["embed_leaves"] == 0),
+        "embed_rows": sum(r["embed_rows"] for r in rows),
+    }
+    logger.info("wrote %s: %s", path, json.dumps(result, default=str))
+    return result
 
 
 def read_manifest(manifest: str) -> pa.Table:
@@ -397,10 +427,12 @@ def read_manifest(manifest: str) -> pa.Table:
 
 @dataclass(frozen=True)
 class ShardTask:
-    source_key: str
+    source: str
     shard_index: int
     tokens_path: str
-    embed_path: str
+    embed_paths: tuple[str, ...]
+    """The shard's embed leaves, to be unioned. One per stage root that has this
+    source: the dedup-surviving leaf, and the fuzzy-duplicate leaf where it exists."""
     output_path: str
     total_bytes: int
 
@@ -471,8 +503,8 @@ def _ragged_to_padded(column: pa.ChunkedArray | pa.Array, max_tokens: int, vocab
     return np.where(mask, compact, PAD_ID).astype(np.int32)
 
 
-def read_embed_side(path: str, fs) -> tuple[np.ndarray, np.ndarray]:
-    """A shard's ``(ids, int8[n, 1024] embeddings)``, read in batches.
+def read_one_embed_shard(path: str, fs) -> tuple[np.ndarray, np.ndarray]:
+    """One shard's ``(ids, int8[n, 1024] embeddings)``, read in batches.
 
     Batched rather than one ``read()`` because arrow indexes a list column's
     values with int32: the largest shards hold 2,682,446 documents, whose
@@ -493,6 +525,24 @@ def read_embed_side(path: str, fs) -> tuple[np.ndarray, np.ndarray]:
             embeddings[at : at + n] = flat.reshape(n, EMBED_DIM)
             at += n
     return (np.concatenate(ids) if ids else np.empty(0, dtype=object)), embeddings
+
+
+def read_embed_side(paths: tuple[str, ...], fs) -> tuple[np.ndarray, np.ndarray]:
+    """The union of a shard's embed leaves as one ``(ids, embeddings)`` pair.
+
+    The dedup-surviving and fuzzy-duplicate leaves partition the shard's documents,
+    so concatenating them reconstructs the normalized shard with no overlap and no
+    ordering assumption -- :func:`join_shard` sorts the result anyway. A path that
+    does not exist is skipped: the second run is per-source, so a source can have
+    one leaf while another has two, and a missing leaf means "no rows here", not a
+    corrupt shard.
+    """
+    parts = [read_one_embed_shard(path, fs) for path in paths if fs.exists(path)]
+    if not parts:
+        return np.empty(0, dtype=object), np.empty((0, EMBED_DIM), dtype=np.int8)
+    if len(parts) == 1:
+        return parts[0]
+    return np.concatenate([ids for ids, _ in parts]), np.concatenate([emb for _, emb in parts])
 
 
 def normalize_embeddings(rows: np.ndarray) -> np.ndarray:
@@ -517,9 +567,11 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
     few of those at once exceeds the container's memory cap. Peak memory here is
     set by ``block_docs``, not by the shard.
 
-    The embed side is a dedup-filtered subset and the token side a chunk-expanded
-    superset, so the two are never positionally alignable and the match is on the
-    key. It is also on the key *without* assuming either side is ordered: the shard
+    The embed side is the union of the shard's embed leaves and the token side a
+    chunk-expanded superset, so the two are never positionally alignable and the
+    match is on the key. It is also on the key *without* assuming either side is
+    ordered -- concatenating two leaves guarantees the union is unordered even
+    where each leaf was sorted. The shard
     writers do not guarantee ordering, and ``common-crawl-focus-2026-22`` is a
     source where they did not deliver it -- its shard 0 carries 3,081 ``id``
     inversions in 6,096 rows. A match that read the stored order as sorted
@@ -532,7 +584,7 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
     later chunks are dropped as soon as they are decoded.
     """
     t0 = time.monotonic()
-    embed_ids, embeddings = read_embed_side(task.embed_path, fs)
+    embed_ids, embeddings = read_embed_side(task.embed_paths, fs)
     embed_rows = len(embed_ids)
     # `order` maps a rank in `lookup` back to its row in `embeddings`; the gather
     # into the embedding array therefore stays on original row positions.
@@ -644,27 +696,26 @@ def score_mode(args) -> dict:
     manifest = read_manifest(args.manifest)
     tasks = [
         ShardTask(
-            source_key=row["source_key"],
+            source=row["source"],
             shard_index=row["shard_index"],
             tokens_path=row["tokens_path"],
-            embed_path=row["embed_path"],
+            embed_paths=tuple(row["embed_paths"]),
             output_path=row["output_path"],
             total_bytes=(row.get("tokens_bytes") or 0) + (row.get("embed_bytes") or 0),
         )
         for row in manifest.to_pylist()
-        # A shard with no embedded documents has nothing to score: the embedding
-        # is a required forward input, so an inner join empties it anyway. A
-        # fully-deduped-out shard writes a zero-row parquet rather than no file,
-        # so this is a row count check, not an existence check. An unknown count
-        # keeps the shard -- the join is what decides, and dropping on a missing
-        # column would silently skip the whole corpus.
-        if row.get("embed_exists", True) and row.get("embed_rows") != 0
+        # A shard with no embedded documents has nothing to score: the embedding is
+        # a required forward input, so an inner join empties it anyway. A shard
+        # whose documents were all dedup-dropped still writes a zero-row parquet on
+        # the surviving side, so this is a row count check rather than an existence
+        # check, and it is taken over the union of the leaves.
+        if row["embed_rows"]
         # Rescoring one source: the output is overwritten shard by shard, so a
         # partially-written leaf is repaired rather than skipped.
-        and (not args.source_key or row["source_key"] == args.source_key)
+        and (not args.source or row["source"] == args.source)
     ]
-    if args.source_key and not tasks:
-        raise ValueError(f"no manifest rows for source_key {args.source_key!r}")
+    if args.source and not tasks:
+        raise ValueError(f"no manifest rows for source {args.source!r}")
     # Deal largest-first round-robin over manifest *rows*, not source_keys. Leaves
     # range from 1 to 25,962 shards, so a per-leaf fan-out would hand one worker
     # an entire large source; and shard sizes vary enough within a leaf that
@@ -736,7 +787,7 @@ def score_mode(args) -> dict:
             unmatched_embed += item.unmatched_embed
             logger.warning(
                 "%s shard %d: %d embed rows absent from the token side; containment does not hold here",
-                task.source_key,
+                task.source,
                 task.shard_index,
                 item.unmatched_embed,
             )
@@ -752,7 +803,7 @@ def score_mode(args) -> dict:
             write_seconds += time.monotonic() - t1
             docs += rows
         else:
-            logger.warning("%s shard %d: no joined rows", task.source_key, task.shard_index)
+            logger.warning("%s shard %d: no joined rows", task.source, task.shard_index)
         shard_ids, shard_scores = [], []
         done += 1
         if done % 25 == 0 or done == len(mine):
@@ -816,9 +867,9 @@ def verify_mode(args) -> dict:
     join that did not complete.
     """
     fs = fsspec.filesystem("s3")
-    rows = [r for r in read_manifest(args.manifest).to_pylist() if r["source_key"] == args.source_key]
+    rows = [r for r in read_manifest(args.manifest).to_pylist() if r["source"] == args.source]
     if not rows:
-        raise ValueError(f"no manifest rows for source_key {args.source_key!r}")
+        raise ValueError(f"no manifest rows for source {args.source!r}")
     rows.sort(key=lambda r: r["shard_index"])
 
     with ThreadPoolExecutor(max_workers=args.verify_threads) as pool:
@@ -841,7 +892,7 @@ def verify_mode(args) -> dict:
     counts = np.bincount(np.digitize(scores, edges), minlength=len(edges) + 1)
 
     result = {
-        "source_key": args.source_key,
+        "source": args.source,
         "manifest_shards": len(rows),
         "missing_score_files": len(missing),
         "empty_score_files": len(empty),
@@ -922,8 +973,8 @@ def node_mode(args) -> dict:
             str(args.block_docs),
             "--model-tag",
             args.model_tag,
-            "--source-key",
-            args.source_key,
+            "--source",
+            args.source,
         ]
         if args.limit:
             argv += ["--limit", str(args.limit)]
@@ -947,7 +998,7 @@ def main() -> None:
 
     m = sub.add_parser("manifest", help="build the minimum shard-task manifest from listings")
     m.add_argument("--manifest", default=DEFAULT_MANIFEST)
-    m.add_argument("--out-root", default=DEFAULT_OUT_ROOT)
+    m.add_argument("--footer-threads", type=int, default=256)
     m.add_argument("--discovery-threads", type=int, default=48)
 
     s = sub.add_parser("score", help="score this worker's slice of the manifest")
@@ -959,7 +1010,7 @@ def main() -> None:
     s.add_argument("--prefetch", type=int, default=DEFAULT_PREFETCH_SHARDS, help="blocks queued ahead of the forward")
     s.add_argument("--block-docs", type=int, default=DEFAULT_BLOCK_DOCS)
     s.add_argument("--model-tag", default="nemotron88k_v1")
-    s.add_argument("--source-key", default="", help="score only this manifest source_key (default: all)")
+    s.add_argument("--source", default="", help="score only this source (default: all)")
     s.add_argument("--limit", type=int, default=0, help="cap shards per worker (smoke runs)")
 
     n = sub.add_parser("node", help="fan out one score subprocess per GPU on this node")
@@ -973,12 +1024,12 @@ def main() -> None:
     n.add_argument("--prefetch", type=int, default=DEFAULT_PREFETCH_SHARDS)
     n.add_argument("--block-docs", type=int, default=DEFAULT_BLOCK_DOCS)
     n.add_argument("--model-tag", default="nemotron88k_v1")
-    n.add_argument("--source-key", default="", help="score only this manifest source_key (default: all)")
+    n.add_argument("--source", default="", help="score only this source (default: all)")
     n.add_argument("--limit", type=int, default=0)
 
     v = sub.add_parser("verify", help="reconcile one source's written scores against the manifest")
     v.add_argument("--manifest", default=DEFAULT_MANIFEST)
-    v.add_argument("--source-key", required=True)
+    v.add_argument("--source", required=True)
     v.add_argument("--calibration", default=DEFAULT_CALIBRATION)
     v.add_argument("--verify-threads", type=int, default=64)
 

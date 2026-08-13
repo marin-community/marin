@@ -4,7 +4,7 @@
 """Reconcile a whole scoring run's written shards against its manifest.
 
 ``score_corpus.py verify`` answers this for one source. A repair run covers 150 of
-them, so this drives that same check across every ``source_key`` in a manifest and
+them, so this drives that same check across every source in a manifest and
 pools the result, rather than reimplementing the reconciliation.
 
 The invariant that matters is per shard: the join is an inner join and every embedded
@@ -68,21 +68,21 @@ def main() -> None:
     configure_coreweave_s3()
 
     manifest = read_manifest(args.manifest)
-    source_keys = sorted(set(manifest.column("source_key").to_pylist()))
-    logger.info("verifying %d source_keys from %s", len(source_keys), args.manifest)
+    sources = sorted(set(manifest.column("source").to_pylist()))
+    logger.info("verifying %d sources from %s", len(sources), args.manifest)
 
-    def one(source_key: str) -> dict:
+    def one(source: str) -> dict:
         return verify_mode(
             Namespace(
                 manifest=args.manifest,
-                source_key=source_key,
+                source=source,
                 calibration=args.calibration,
                 verify_threads=args.verify_threads,
             )
         )
 
     with ThreadPoolExecutor(max_workers=args.source_threads) as pool:
-        reports = list(pool.map(one, source_keys))
+        reports = list(pool.map(one, sources))
 
     score_rows = sum(r["score_rows"] for r in reports)
     embed_rows = sum(r["embed_rows"] for r in reports)
@@ -102,8 +102,7 @@ def main() -> None:
         "embed_rows": embed_rows,
         "shortfall": embed_rows - score_rows,
         "sources_with_row_mismatch": [
-            {"source_key": r["source_key"], "score_rows": r["score_rows"], "embed_rows": r["embed_rows"]}
-            for r in mismatched
+            {"source": r["source"], "score_rows": r["score_rows"], "embed_rows": r["embed_rows"]} for r in mismatched
         ],
         "shards_below_embed_rows": sum(r["shards_below_embed_rows"] for r in reports),
         "missing_score_files": sum(r["missing_score_files"] for r in reports),

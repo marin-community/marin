@@ -68,11 +68,11 @@ def main() -> None:
     rows = [r for r in read_manifest(args.manifest).to_pylist() if 0 < (r.get("embed_rows") or 0) <= args.max_embed_rows]
     if not rows:
         raise ValueError("no manifest rows small enough to rescore")
-    rows.sort(key=lambda r: (r["source_key"], r["shard_index"]))
+    rows.sort(key=lambda r: (r["source"], r["shard_index"]))
     picked = rows[:: max(1, len(rows) // args.shards)][: args.shards]
     scratch = args.scratch.rstrip("/")
     redirected = [
-        {**r, "output_path": f"{scratch}/shards/{r['source_key'].replace('/', '__')}__{r['shard_index']}.parquet"}
+        {**r, "output_path": f"{scratch}/shards/{r['source'].replace('/', '__')}__{r['shard_index']}.parquet"}
         for r in picked
     ]
 
@@ -106,9 +106,7 @@ def main() -> None:
     for row in redirected:
         fresh = pl.read_parquet(BytesIO(fs.cat(row["output_path"].removeprefix("s3://"))), columns=["id", "score"])
         stored_path = next(
-            r["output_path"]
-            for r in picked
-            if r["shard_index"] == row["shard_index"] and r["source_key"] == row["source_key"]
+            r["output_path"] for r in picked if r["shard_index"] == row["shard_index"] and r["source"] == row["source"]
         )
         stored = pl.read_parquet(BytesIO(fs.cat(stored_path.removeprefix("s3://"))), columns=["id", "score"])
         # Deduplicate before joining. A content-derived id repeats when a shard carries
@@ -122,7 +120,7 @@ def main() -> None:
         deltas.append(delta)
         per_shard.append(
             {
-                "source_key": row["source_key"],
+                "source": row["source"],
                 "shard_index": row["shard_index"],
                 "fresh_rows": fresh.height,
                 "stored_rows": stored.height,
