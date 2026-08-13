@@ -995,10 +995,22 @@ class RuntimeManager {
       state->slot = static_cast<int>(
           std::find(slot_active_.begin(), active_slots_end, false) - slot_active_.begin());
       slot_active_[state->slot] = true;
+      // Under the fabric transport this counter is per process, so agreement across ranks rests
+      // on every process reserving the same invocations in the same order -- which SPMD execution
+      // guarantees, since the ordinal is per (run, collective, phase) and slot availability
+      // evolves identically. A rank that ever diverges would stamp a generation its peers reject,
+      // which the kernel reports as a generation mismatch rather than reading stale memory.
       state->generation = (++next_generation_ << 1) | static_cast<uint64_t>(state->slot);
       cv_.notify_all();
     }
     const RankMask rank_bit = static_cast<RankMask>(1) << rank;
+    // Which ranks this host-side reservation must see before the invocation may proceed.
+    // In-process, one manager owns every rank and collects each rank's XLA buffer pointers, so it
+    // waits for all of them. Under the fabric transport each process owns exactly one rank and no
+    // pointer exchange is needed -- peers are reached through the arena at a fixed offset -- so
+    // waiting for absent ranks would deadlock. Cross-rank ordering is carried by the arena's
+    // generation and readiness flags on device, not by this mutex.
+    const RankMask rendezvous_mask = arena_mode_ ? rank_bit : kAllRanksMask;
     if ((state->arrival_mask & rank_bit) != 0) {
       ++host_slot_reuse_failures_[rank];
       CancelReservationLocked(key, state, "Mixture-of-Kittens workspace reservation received a duplicate rank");
@@ -1045,15 +1057,15 @@ class RuntimeManager {
       }
     }
     state->arrival_mask |= rank_bit;
-    if (state->arrival_mask == kAllRanksMask &&
-        (phase == InvocationPhase::kForward && state->forward_x_mask != kAllRanksMask)) {
+    if (state->arrival_mask == rendezvous_mask &&
+        (phase == InvocationPhase::kForward && state->forward_x_mask != rendezvous_mask)) {
       state->error = "Mixture-of-Kittens forward did not register one XLA x buffer per rank";
     }
-    if (state->arrival_mask == kAllRanksMask &&
-        (phase == InvocationPhase::kBackward && state->backward_peer_mask != kAllRanksMask)) {
+    if (state->arrival_mask == rendezvous_mask &&
+        (phase == InvocationPhase::kBackward && state->backward_peer_mask != rendezvous_mask)) {
       state->error = "Mixture-of-Kittens backward did not register all four XLA peer buffers per rank";
     }
-    if (state->arrival_mask == kAllRanksMask && !state->error.empty()) {
+    if (state->arrival_mask == rendezvous_mask && !state->error.empty()) {
       state->cancelled = true;
       if (failure_message_.empty()) {
         failure_message_ = state->error;
@@ -1061,7 +1073,7 @@ class RuntimeManager {
     }
     cv_.notify_all();
     const bool all_ranks_arrived = cv_.wait_for(lock, kWorkspaceAcquireTimeout, [&] {
-      return state->cancelled || (state->slot >= 0 && state->arrival_mask == kAllRanksMask);
+      return state->cancelled || (state->slot >= 0 && state->arrival_mask == rendezvous_mask);
     });
     if (!all_ranks_arrived) {
       ++host_slot_reuse_failures_[rank];
@@ -1071,7 +1083,7 @@ class RuntimeManager {
           "Mixture-of-Kittens workspace reservation did not rendezvous all four ranks");
     }
     if (state->cancelled) {
-      if (state->arrival_mask == kAllRanksMask && state->slot >= 0) {
+      if (state->arrival_mask == rendezvous_mask && state->slot >= 0) {
         FinishRankLocked(key, state, rank);
       }
       throw std::runtime_error(state->error);
@@ -1227,7 +1239,7 @@ class RuntimeManager {
       return;
     }
     state->completion_mask |= rank_bit;
-    if (state->completion_mask != kAllRanksMask) {
+    if (state->completion_mask != (arena_mode_ ? rank_bit : kAllRanksMask)) {
       return;
     }
     ReleaseSlotLocked(state);
