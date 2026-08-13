@@ -253,6 +253,7 @@ class GcpVmConfig(_Config):
     machine_type: str = ""  # default: "n2-standard-4"
     boot_disk_size_gb: int = 0  # default: 50
     service_account: str = ""
+    network_tags: tuple[str, ...] = ()
 
 
 class ManualVmConfig(_Config):

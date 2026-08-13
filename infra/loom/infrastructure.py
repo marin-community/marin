@@ -19,6 +19,7 @@ import pulumi_command as command
 import pulumi_docker_build as docker_build
 import pulumi_gcp as gcp
 import pulumi_github as github
+from iac.gcp.firewall import FirewallPort, GcpFirewallRuleArgs, create_firewall_rule
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DISK_TYPE = "pd-balanced"
@@ -38,6 +39,7 @@ RESOURCE_HASH_LENGTH = 10
 SERVICE_ACCOUNT_MEMBER = "serviceAccount:{}"
 WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
+FIREWALL_PRIORITY = 1000
 GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
 DOCKER_DAEMON_CONFIG = (
@@ -543,32 +545,36 @@ class NetworkResources:
 
 
 def _create_network(config: DeploymentConfig, apis: list[gcp.projects.Service]) -> NetworkResources:
-    web_firewall = gcp.compute.Firewall(
+    web_firewall = create_firewall_rule(
         "loom-web",
-        project=config.project,
-        network=config.network,
-        name=f"{config.instance_name}-allow-web",
-        direction="INGRESS",
-        source_ranges=["0.0.0.0/0"],
-        target_tags=[WEB_FIREWALL_TAG],
-        # Preserve provider-normalized ordering from the imported firewall so
-        # equivalent policy does not produce a permanent diff.
-        allows=[
-            {"protocol": "tcp", "ports": ["443"]},
-            {"protocol": "udp", "ports": ["443"]},
-            {"protocol": "tcp", "ports": ["80"]},
-        ],
+        GcpFirewallRuleArgs(
+            project=config.project,
+            network=config.network,
+            name=f"{config.instance_name}-allow-web",
+            priority=FIREWALL_PRIORITY,
+            source_ranges=("0.0.0.0/0",),
+            target_tags=(WEB_FIREWALL_TAG,),
+            # Preserve provider-normalized ordering from the imported firewall so
+            # equivalent policy does not produce a permanent diff.
+            allows=(
+                FirewallPort(protocol="tcp", ports=("443",)),
+                FirewallPort(protocol="udp", ports=("443",)),
+                FirewallPort(protocol="tcp", ports=("80",)),
+            ),
+        ),
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
-    ssh_firewall = gcp.compute.Firewall(
+    ssh_firewall = create_firewall_rule(
         "loom-ssh",
-        project=config.project,
-        network=config.network,
-        name=f"{config.instance_name}-allow-ssh",
-        direction="INGRESS",
-        source_ranges=[config.operator_cidr],
-        target_tags=[SSH_FIREWALL_TAG],
-        allows=[{"protocol": "tcp", "ports": ["22"]}],
+        GcpFirewallRuleArgs(
+            project=config.project,
+            network=config.network,
+            name=f"{config.instance_name}-allow-ssh",
+            priority=FIREWALL_PRIORITY,
+            source_ranges=(config.operator_cidr,),
+            target_tags=(SSH_FIREWALL_TAG,),
+            allows=(FirewallPort(protocol="tcp", ports=("22",)),),
+        ),
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
     address = gcp.compute.Address(

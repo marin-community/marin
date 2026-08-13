@@ -435,6 +435,7 @@ class GcpWorkerProvider:
             boot_disk_type=DEFAULT_BOOT_DISK_TYPE,
             image_family="debian-12",
             image_project="debian-cloud",
+            network_tags=tuple(gcp.network_tags),
         )
 
         logger.info("Creating GCE instance: %s (zone=%s, type=%s)", config.name, zone, machine_type)

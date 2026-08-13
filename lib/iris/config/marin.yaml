@@ -46,6 +46,19 @@ provisioning:
           - id: delete-old
             action: DELETE
             older_than: 2592000s
+    # Shared external HTTPS frontend. Controller domains are read from each cluster's
+    # auth.iap.url; VM details and backend IDs come from the cluster and finelog configs.
+    # DNS and the Web OAuth client remain externally managed.
+    gclb:
+      frontend_name: marin
+      controllers:
+        - cluster: marin
+        - cluster: marin-dev
+      finelogs:
+        - cluster: marin
+          domain: finelog.oa.dev
+          # Public egress blocks of finelog forwarders; JWT auth still authenticates each push.
+          sender_source_ranges: [192.112.160.0/20, 166.19.0.0/16]
 
 platform:
   label_prefix: marin
