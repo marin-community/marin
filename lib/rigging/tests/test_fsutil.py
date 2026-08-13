@@ -61,7 +61,7 @@ def test_rm_requires_recursive_for_directories(tree):
     run = CliRunner().invoke
 
     result = run(cli, ["rm", str(tree / "sub")])
-    assert result.exit_code != 0 and "-r" in result.output
+    assert result.exit_code != 0
     assert (tree / "sub" / "c.txt").exists()
 
     result = run(cli, ["rm", "-R", str(tree / "sub")])

@@ -12,9 +12,9 @@ import logging
 import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
 
 import click
+from fsspec import AbstractFileSystem
 from gcsfs import GCSFileSystem
 from s3fs import S3FileSystem
 
@@ -77,7 +77,7 @@ def buckets() -> None:
 @click.argument("url", default=ROOT)
 @click.option("-l", "--long", is_flag=True, help="Show size and modification time.")
 def list_command(url: str, long: bool) -> None:
-    """List the immediate children of URL. With no URL, list the known buckets."""
+    """List URL's immediate children or glob matches. With no URL, list the known buckets."""
     entries = list_entries(url)
     if not long:
         for entry in entries:
@@ -205,7 +205,7 @@ def rm(url: str, recursive: bool) -> None:
     click.echo(url)
 
 
-def _delete_batches(fs: Any, files: list[str]) -> list[list[str]]:
+def _delete_batches(fs: AbstractFileSystem, files: list[str]) -> list[list[str]]:
     if isinstance(fs, S3FileSystem):
         batch_size = _S3_DELETE_BATCH
     elif isinstance(fs, GCSFileSystem):
@@ -215,7 +215,7 @@ def _delete_batches(fs: Any, files: list[str]) -> list[list[str]]:
     return [files[start : start + batch_size] for start in range(0, len(files), batch_size)]
 
 
-def _remove_batch(fs: Any, files: list[str]) -> None:
+def _remove_batch(fs: AbstractFileSystem, files: list[str]) -> None:
     if not isinstance(fs, S3FileSystem):
         fs.rm(files)
         return
