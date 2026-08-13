@@ -12,6 +12,7 @@ nothing behind it, or at a tokenize output built from a different normalize.
 """
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -48,7 +49,7 @@ def test_every_registered_source_has_every_stage():
     missing = {
         f"{stage}/{source}"
         for source in hero_data.source_names()
-        for stage in ("normalized", "minhash", "tokenize.marin", "tokenize.nemotron")
+        for stage in ("normalized", "minhash", "tokenize.marin", "tokenize.nemotron", "quality")
     } - keys
     assert not missing
 
@@ -62,6 +63,7 @@ def test_steps_refuse_to_run():
         hero_data.minhash("stack-v3"),
         hero_data.exact_dups(),
         hero_data.fuzzy_dups(),
+        hero_data.quality("stack-v3"),
     ]
     for step in steps:
         with pytest.raises(AssertionError, match="must never execute"):
@@ -77,6 +79,40 @@ def test_repointing_a_dedup_pin_changes_dependency_identity(monkeypatch):
     after = hero_data.fuzzy_dups()
 
     assert before.output_path != after.output_path
+    assert before.name_with_hash != after.name_with_hash
+
+
+def test_quality_scores_sit_beside_their_tokenization():
+    # The scoring run wrote each source's scores under the leaf of the Nemotron
+    # tokenization it read, so the quality path is that path with the root
+    # swapped. Anything else resolves to a prefix with no data under it.
+    source = "cp/peS2o"
+    tokenize_path = hero_data.tokenized(source, hero_data.NEMOTRON_TOKENIZER).output_path
+    expected = tokenize_path.replace(f"{PREFIX}/datakit/tokenize/", f"{PREFIX}/datakit/quality-scores/")
+
+    assert tokenize_path != expected
+    assert hero_data.quality(source).output_path == expected
+
+
+def test_focus_crawl_quality_keeps_its_pre_extraction_leaf():
+    # The Focus Crawl was scored from the pre-#8111 extraction, so its scores do
+    # not sit beside the tokenization current code resolves. Deriving its path
+    # the way every other source derives it points at nothing.
+    source = "common-crawl-focus-2026-22"
+    derived = hero_data.tokenized(source, hero_data.NEMOTRON_TOKENIZER).name_with_hash.removeprefix("datakit/tokenize/")
+
+    assert hero_data.quality(source).output_path.endswith("/common-crawl-focus-2026-22_fe127aa9")
+    assert not hero_data.quality(source).output_path.endswith(f"/{derived}")
+
+
+def test_rescoring_changes_quality_identity_without_moving_the_data():
+    # The scorer is not in the output path, so a rescore in place would leave
+    # consumers free to reuse results computed against the old scores. The
+    # digest carries that in ``hash_attrs`` instead.
+    before = hero_data.quality("stack-v3")
+    after = hero_data.quality("stack-v3", replace(hero_data.NEMOTRON_88K, version=2))
+
+    assert before.output_path == after.output_path
     assert before.name_with_hash != after.name_with_hash
 
 

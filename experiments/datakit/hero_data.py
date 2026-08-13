@@ -24,7 +24,8 @@ as the registry moves. :func:`tokenized` pins the artifact version instead,
 because the tokenize hash includes one and it has changed under the runs that
 produced this data: each tokenizer was applied to the whole registry in a single
 fleet run, and each of those runs wrote a different version. The dedup stages
-are pinned to a specific run outright.
+are pinned to a specific run outright, and :func:`quality` is pinned to the
+scorer and calibration that produced the scores.
 
 All paths resolve against ``MARIN_PREFIX``. The hero data currently lives on
 CoreWeave, so read it with ``MARIN_PREFIX=s3://marin-us-east-02a/marin``.
@@ -86,6 +87,61 @@ _ARTIFACT_VERSION_OVERRIDES = {"common-crawl-focus-2026-22": 4}
 # also hash the run id into their own steps.
 EXACT_DUPS_ID = "global_exact_dedup_af4c6c3e"
 FUZZY_DUPS_ID = "dedup_709f5997"
+
+
+@dataclass(frozen=True)
+class QualityPin:
+    """The scorer that produced the quality scores, and the calibration that buckets them."""
+
+    tokenizer: TokenizerPin
+    """The tokenization the scores were computed from. Its step hash is part of
+    the scores' path, so this is what resolves them."""
+
+    model_path: str
+    """Folded scorer artifact. Provenance only -- the weights determined every
+    score but are never read again, so moving them is not a change."""
+
+    model_sha256: str
+    """Digest of the folded artifact. Part of the quality hash: this, not the
+    path, identifies the scorer."""
+
+    calibration_path: str
+    """Bucket edges, as ``apply_calibration`` knots. Read by any consumer that
+    buckets, so the location is part of the contract. Part of the quality hash."""
+
+    calibration_sha256: str
+    """Digest of that file. Part of the quality hash, so a refit is a change
+    whether or not it lands on a new path."""
+
+    version: int
+    """Bumped when the score data changes under an unchanged path, as when
+    scores for the currently-undeduplicated documents are merged in. Part of
+    the quality hash."""
+
+
+# One scorer produced the corpus scores. Unlike the tokenizers, it does not
+# appear in the output path, so it is a constant rather than a parameter:
+# a second scorer would need its own output tree, not a second pin here.
+#
+# ``model_sha256`` digests the artifact directory, which is not a single file.
+# The recipe: list every file under ``model_path`` recursively, take each path
+# relative to that root, sort those relative paths bytewise, and fold them into
+# one sha256 as ``rel.encode() + b"\0" + sha256(content).digest()`` per file, in
+# that order. ``calibration_sha256`` is a plain sha256 of the one file.
+NEMOTRON_88K = QualityPin(
+    tokenizer=NEMOTRON_TOKENIZER,
+    model_path="user/muchanem/quality_scores_run/model/nemotron_88k_folded",
+    model_sha256="e1be09c903bf7a926046bac97d40db050ca399fbb336c7541df42dc8cf6eda10",
+    calibration_path="user/muchanem/quality_scores_run/model/nemotron_88k_folded/calib_bme.json",
+    calibration_sha256="1a1dcfd31c20d9f3879878d617f0f8fb0b6898c4445885ffae29ebea63738fd8",
+    version=1,
+)
+
+# The Focus Crawl was scored from the same pre-#8111 extraction the dedup runs
+# key it under, so its scores sit beside a tokenization that current code no
+# longer resolves and its ids do not join against today's normalize. Every other
+# scored source sits at exactly the leaf :func:`tokenized` computes.
+_QUALITY_LEAF_OVERRIDES = {"common-crawl-focus-2026-22": "common-crawl-focus-2026-22_fe127aa9"}
 
 
 def _refuse_to_run(output_path: str) -> NoReturn:
@@ -158,12 +214,43 @@ def fuzzy_dups() -> StepSpec:
     return _frozen_step("hero/fuzzy_dups", f"datakit/{FUZZY_DUPS_ID}")
 
 
+def quality(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
+    """Return the quality scores for ``source``.
+
+    Raw sigmoid, one row per scored document, keyed by the same content-derived
+    ``id`` as every other stage. Bucket with the edges at
+    ``quality_model.calibration_path``; that remap is monotonic, so it changes
+    bucketing but never ranking.
+
+    The scores sit beside the tokenization they were computed from, so their
+    leaf carries that step's hash and is resolved through :func:`tokenized`.
+    """
+    leaf = _QUALITY_LEAF_OVERRIDES.get(source)
+    if leaf is None:
+        leaf = tokenized(source, quality_model.tokenizer).name_with_hash.removeprefix("datakit/tokenize/")
+    step = _frozen_step(f"hero/quality/{source}", f"datakit/quality-scores/{leaf}")
+    return replace(
+        step,
+        hash_attrs={
+            **step.hash_attrs,
+            "model": quality_model.model_sha256,
+            "calibration": quality_model.calibration_sha256,
+            "version": quality_model.version,
+        },
+    )
+
+
 def all_paths() -> dict[str, str]:
     """Every hero data path, keyed ``<stage>/<source>`` for the per-source stages.
 
     ``tests/datakit/test_hero_data.py`` pins this against
     ``experiments/datakit/hero_data_paths.json``, so a change that moves a hero
     path fails there instead of silently repointing whoever reads it.
+
+    Emitted per stage for every source, including the ``quality`` entries of the
+    150 sources that have no scores yet. This is a drift pin, not a catalogue of
+    what exists: the point is that a path cannot move unnoticed, and a quality
+    path moves exactly when the tokenize path it is derived from moves.
     """
     sources = select_sources(None)
     minhash_steps = zephyr_datakit_steps(sources).minhash
@@ -176,6 +263,7 @@ def all_paths() -> dict[str, str]:
         paths[f"minhash/{source}"] = _read_only(minhash_steps[source]).output_path
         paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
         paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
+        paths[f"quality/{source}"] = quality(source, NEMOTRON_88K).output_path
     return paths
 
 
