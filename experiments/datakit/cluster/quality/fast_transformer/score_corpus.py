@@ -6,10 +6,12 @@
 The corpus already carries everything the fusion scorer eats: ``datakit/tokenize``
 holds Nemotron ``input_ids`` per document chunk and ``datakit/embed/harrier`` holds
 the int8[1024] document embedding. Both are hash-partitioned from one normalized
-source, share a shard count and basename, and are sorted by ``id`` within a shard,
-so a shard pair joins with a streaming merge on ``id`` and no shuffle.
+source and share a shard count and basename, so a shard pair joins on ``id`` with
+no shuffle. Row order within a shard is *not* guaranteed and on at least one source
+is not sorted, so the join sorts the embed side itself rather than reading the
+stored order as an invariant (see :func:`join_shard`).
 
-Four modes:
+Five modes:
 
 * ``fold`` -- collapse the frozen ``[vocab, 2048]`` donor table and its learned
   ``[2048, 256]`` projection into one ``[vocab, 256]`` table and write a new model
@@ -21,6 +23,8 @@ Four modes:
 * ``score`` -- one worker, one GPU: take this worker's slice of the manifest and
   stream join -> score -> write for each shard pair it owns.
 * ``node`` -- fan out one ``score`` subprocess per visible GPU.
+* ``verify`` -- reconcile one source's written score shards against the manifest's
+  per-shard embed row counts, and report the score distribution and bucket shares.
 
 Reader *processes*, not threads. A measured 8xH100 study on this cluster found the
 scoring loop feed-bound at ~795k docs/s/node with threaded readers: independent
@@ -86,6 +90,9 @@ DEFAULT_OUT_ROOT = "s3://marin-us-east-02a/marin/datakit/quality-scores"
 DEFAULT_MODEL_DIR = "s3://marin-us-east-02a/marin/user/muchanem/quality_exp/nemotron_donor"
 DEFAULT_FOLDED_DIR = "s3://marin-us-east-02a/marin/user/muchanem/quality_scores_run/model/nemotron_88k_folded"
 DEFAULT_MANIFEST = "s3://marin-us-east-02a/marin/user/muchanem/quality_scores_run/manifest"
+# Cutpoints `calibrate_corpus` fitted through this scoring path; `verify` digitizes
+# the written scores under the interior knots to report bucket shares.
+DEFAULT_CALIBRATION = f"{DEFAULT_FOLDED_DIR}/calib_bme.json"
 
 # Rows per arrow record batch when streaming a token shard. The token side is the
 # expanded one (a long document occupies several adjacent rows), so this is rows,
@@ -510,16 +517,27 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
     few of those at once exceeds the container's memory cap. Peak memory here is
     set by ``block_docs``, not by the shard.
 
-    Both sides are ascending by ``id`` within a shard: the embed side is a
-    dedup-filtered subset, the token side a chunk-expanded superset. Neither is
-    positionally alignable with the other, so this joins on the key -- matching by
-    ``searchsorted`` against the sorted embed ids rather than by row position.
+    The embed side is a dedup-filtered subset and the token side a chunk-expanded
+    superset, so the two are never positionally alignable and the match is on the
+    key. It is also on the key *without* assuming either side is ordered: the shard
+    writers do not guarantee ordering, and ``common-crawl-focus-2026-22`` is a
+    source where they did not deliver it -- its shard 0 carries 3,081 ``id``
+    inversions in 6,096 rows. A match that read the stored order as sorted
+    degenerated silently there, emitting 3 rows for a 6,048-document shard rather
+    than failing, and lost 36.3M documents across the leaf. Sorting the embed ids
+    here costs one ``argsort`` per shard and makes the join independent of how
+    either side happens to be laid out.
+
     Only ``chunk_index == 0`` is scored (the model reads the first 512 tokens);
     later chunks are dropped as soon as they are decoded.
     """
     t0 = time.monotonic()
     embed_ids, embeddings = read_embed_side(task.embed_path, fs)
     embed_rows = len(embed_ids)
+    # `order` maps a rank in `lookup` back to its row in `embeddings`; the gather
+    # into the embedding array therefore stays on original row positions.
+    order = np.argsort(embed_ids, kind="stable")
+    lookup = embed_ids[order]
 
     id_blocks: list[np.ndarray] = []
     token_blocks: list[np.ndarray] = []
@@ -548,9 +566,9 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
                 continue
             doc_ids = batch.column("id").take(pa.array(first)).to_numpy(zero_copy_only=False)
             # Inner join: keep only ids the (dedup-filtered) embed side carries.
-            position = np.searchsorted(embed_ids, doc_ids)
-            position = np.minimum(position, max(embed_rows - 1, 0))
-            keep = np.flatnonzero(embed_rows and (embed_ids[position] == doc_ids))
+            rank = np.searchsorted(lookup, doc_ids)
+            rank = np.minimum(rank, max(embed_rows - 1, 0))
+            keep = np.flatnonzero(embed_rows and (lookup[rank] == doc_ids))
             if not len(keep):
                 continue
             # Narrow to the matched rows before decoding `input_ids`. Dedup drops a
@@ -561,7 +579,7 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
             matched = batch.column("input_ids").take(pa.array(first[keep]))
             token_blocks.append(_ragged_to_padded(matched, max_tokens, vocab_size))
             # Positions, not rows: the gather happens once per block.
-            embed_blocks.append(position[keep])
+            embed_blocks.append(order[rank[keep]])
             pending += len(keep)
             matched_total += len(keep)
             if pending >= block_docs:
@@ -641,7 +659,12 @@ def score_mode(args) -> dict:
         # keeps the shard -- the join is what decides, and dropping on a missing
         # column would silently skip the whole corpus.
         if row.get("embed_exists", True) and row.get("embed_rows") != 0
+        # Rescoring one source: the output is overwritten shard by shard, so a
+        # partially-written leaf is repaired rather than skipped.
+        and (not args.source_key or row["source_key"] == args.source_key)
     ]
+    if args.source_key and not tasks:
+        raise ValueError(f"no manifest rows for source_key {args.source_key!r}")
     # Deal largest-first round-robin over manifest *rows*, not source_keys. Leaves
     # range from 1 to 25,962 shards, so a per-leaf fan-out would hand one worker
     # an entire large source; and shard sizes vary enough within a leaf that
@@ -699,9 +722,7 @@ def score_mode(args) -> dict:
             break
         if isinstance(item, Block):
             t0 = time.monotonic()
-            shard_scores.append(
-                predict(scorer.model, item.ids, batch_size=args.batch_size, doc_embed=item.embedding)
-            )
+            shard_scores.append(predict(scorer.model, item.ids, batch_size=args.batch_size, doc_embed=item.embedding))
             score_seconds += time.monotonic() - t0
             shard_ids.append(item.doc_ids)
             continue
@@ -769,6 +790,79 @@ def score_mode(args) -> dict:
     return result
 
 
+# ---------------------------------------------------------------------------
+# verify
+# ---------------------------------------------------------------------------
+
+
+def read_score_shard(path: str, fs) -> tuple[np.ndarray, set[str]] | None:
+    """A written score shard's scores and its model tags, or None if absent."""
+    if not fs.exists(path):
+        return None
+    with fs.open(path, "rb", cache_type="none") as raw:
+        table = pq.ParquetFile(raw).read(columns=["score", "model"])
+    scores = table.column("score").combine_chunks().to_numpy(zero_copy_only=False)
+    return scores, set(table.column("model").unique().to_pylist())
+
+
+def verify_mode(args) -> dict:
+    """Reconcile one source's written scores against its manifest and calibration.
+
+    Reads every score shard the manifest names for the source, so the row count is
+    the written one rather than a footer sum over whatever happens to be in the
+    output directory. The per-shard comparison is against ``embed_rows``: the join
+    is an inner join and every embedded document has a chunk-0 token row, so a
+    shard whose score count falls short of its embed count is the signature of a
+    join that did not complete.
+    """
+    fs = fsspec.filesystem("s3")
+    rows = [r for r in read_manifest(args.manifest).to_pylist() if r["source_key"] == args.source_key]
+    if not rows:
+        raise ValueError(f"no manifest rows for source_key {args.source_key!r}")
+    rows.sort(key=lambda r: r["shard_index"])
+
+    with ThreadPoolExecutor(max_workers=args.verify_threads) as pool:
+        found = list(pool.map(lambda r: read_score_shard(r["output_path"], fs), rows))
+
+    missing = [r["shard_index"] for r, got in zip(rows, found, strict=True) if got is None]
+    empty = [r["shard_index"] for r, got in zip(rows, found, strict=True) if got is not None and not len(got[0])]
+    short = [
+        {"shard_index": r["shard_index"], "score_rows": len(got[0]), "embed_rows": r["embed_rows"]}
+        for r, got in zip(rows, found, strict=True)
+        if got is not None and len(got[0]) != r["embed_rows"]
+    ]
+    tags = sorted({tag for got in found if got for tag in got[1]})
+    scores = np.concatenate([got[0] for got in found if got]) if any(found) else np.zeros(0, dtype=np.float32)
+    embed_rows = sum(r["embed_rows"] for r in rows)
+
+    with open_url(args.calibration, "rb") as fh:
+        knots = json.loads(fh.read())["default"]["xk"]
+    edges = np.asarray(knots[1:-1], dtype=np.float64)
+    counts = np.bincount(np.digitize(scores, edges), minlength=len(edges) + 1)
+
+    result = {
+        "source_key": args.source_key,
+        "manifest_shards": len(rows),
+        "missing_score_files": len(missing),
+        "empty_score_files": len(empty),
+        "shards_below_embed_rows": len(short),
+        "score_rows": len(scores),
+        "embed_rows": embed_rows,
+        "shortfall": embed_rows - len(scores),
+        "model_tags": tags,
+        "score_mean": float(scores.mean()) if len(scores) else None,
+        "score_std": float(scores.std()) if len(scores) else None,
+        "score_percentiles": {str(q): float(np.percentile(scores, q)) for q in (1, 25, 50, 75, 99) if len(scores)},
+        "bucket_edges": edges.tolist(),
+        "bucket_counts": counts.tolist(),
+        "bucket_shares": (counts / max(len(scores), 1)).tolist(),
+        "worst_shards": sorted(short, key=lambda s: s["score_rows"] - s["embed_rows"])[:10],
+        "missing_shard_indices": missing[:20],
+    }
+    logger.info("verify %s", json.dumps(result, indent=2))
+    return result
+
+
 def node_placement(args) -> tuple[int, int]:
     """This replica's (index, count), from Iris when it is running one.
 
@@ -828,6 +922,8 @@ def node_mode(args) -> dict:
             str(args.block_docs),
             "--model-tag",
             args.model_tag,
+            "--source-key",
+            args.source_key,
         ]
         if args.limit:
             argv += ["--limit", str(args.limit)]
@@ -863,6 +959,7 @@ def main() -> None:
     s.add_argument("--prefetch", type=int, default=DEFAULT_PREFETCH_SHARDS, help="blocks queued ahead of the forward")
     s.add_argument("--block-docs", type=int, default=DEFAULT_BLOCK_DOCS)
     s.add_argument("--model-tag", default="nemotron88k_v1")
+    s.add_argument("--source-key", default="", help="score only this manifest source_key (default: all)")
     s.add_argument("--limit", type=int, default=0, help="cap shards per worker (smoke runs)")
 
     n = sub.add_parser("node", help="fan out one score subprocess per GPU on this node")
@@ -871,19 +968,30 @@ def main() -> None:
     n.add_argument("--node-index", type=int, default=None, help="default: this Iris replica's index")
     n.add_argument("--num-nodes", type=int, default=None, help="default: the Iris job's replica count")
     n.add_argument("--gpus-per-node", type=int, default=8)
-    n.add_argument(
-        "--procs-per-node", type=int, default=0, help="worker processes per node (default: one per GPU)"
-    )
+    n.add_argument("--procs-per-node", type=int, default=0, help="worker processes per node (default: one per GPU)")
     n.add_argument("--batch-size", type=int, default=DEFAULT_BATCH)
     n.add_argument("--prefetch", type=int, default=DEFAULT_PREFETCH_SHARDS)
     n.add_argument("--block-docs", type=int, default=DEFAULT_BLOCK_DOCS)
     n.add_argument("--model-tag", default="nemotron88k_v1")
+    n.add_argument("--source-key", default="", help="score only this manifest source_key (default: all)")
     n.add_argument("--limit", type=int, default=0)
+
+    v = sub.add_parser("verify", help="reconcile one source's written scores against the manifest")
+    v.add_argument("--manifest", default=DEFAULT_MANIFEST)
+    v.add_argument("--source-key", required=True)
+    v.add_argument("--calibration", default=DEFAULT_CALIBRATION)
+    v.add_argument("--verify-threads", type=int, default=64)
 
     args = p.parse_args()
     configure_logging(logging.INFO)
     configure_coreweave_s3()
-    modes = {"fold": fold_mode, "manifest": manifest_mode, "score": score_mode, "node": node_mode}
+    modes = {
+        "fold": fold_mode,
+        "manifest": manifest_mode,
+        "score": score_mode,
+        "node": node_mode,
+        "verify": verify_mode,
+    }
     result = modes[args.mode](args)
     logger.info("%s result: %s", args.mode, json.dumps(result, default=str))
 
