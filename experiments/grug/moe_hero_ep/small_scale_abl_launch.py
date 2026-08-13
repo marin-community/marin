@@ -223,11 +223,6 @@ def _small_model(
         qb_estimator=QbEstimator.HIST if qb_use_histogram else QbEstimator.TOPK,
         qb_hist_bins=qb_hist_bins,
         report_capacity_overflow=True,
-        # autoresearch: the hero hardcodes recompute_all because saving the dispatch
-        # tensors cannot fit at d6144 (~4.3 GB/layer x 48 layers against a 154.7 GiB
-        # peak). The rungs peak at 12.45 GiB, so backward re-running all six EP
-        # all-to-alls per layer is pure recompute tax here; save_moe skips it.
-        remat_mode="save_moe",
         rope_fused=True,
     )
 
