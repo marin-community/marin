@@ -18,6 +18,7 @@ from enum import StrEnum, auto
 from itertools import groupby, islice
 from typing import Any
 
+import polars as pl
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
@@ -111,7 +112,8 @@ class Reduce:
     """
 
     key: Callable[[Any], Any] | ColumnExpr
-    reducer_fn: Callable[[Any, Iterator], Any]
+    reducer_fn: Callable
+    reducer_schema: Callable[[pl.Schema], pl.Schema] | None = None
 
 
 @dataclass
@@ -161,22 +163,6 @@ def _filter_gen(stream: Iterator, predicate: Callable) -> Iterator:
 def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
     for item in stream:
         yield from fn(item)
-
-
-def _reduce_gen(
-    shard: ScatterReader,
-    key: Callable | ColumnExpr,
-    reducer_fn: Callable,
-    external_sort_dir: str,
-) -> Iterator:
-    row_key = key.evaluate if isinstance(key, ColumnExpr) else key
-    merged = shard.merge_sorted_chunks(external_sort_dir)
-    for group_key, grouped in groupby(merged, key=row_key):
-        result = reducer_fn(group_key, grouped)
-        if isinstance(result, Iterator):
-            yield from result
-        else:
-            yield result
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
@@ -449,7 +435,7 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
                 output_shards=num_shards if num_shards > 0 else None,
             )
             state.end_stage()
-            state.add_op(Reduce(key=op.key, reducer_fn=op.reducer_fn))
+            state.add_op(Reduce(key=op.key, reducer_fn=op.reducer_fn, reducer_schema=op.reducer_schema))
 
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
@@ -798,7 +784,7 @@ def run_stage(
                 # reads all sidecars in parallel and filters for its target.
                 scatter_paths = list(shard)
                 shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
-            stream = _reduce_gen(shard, op.key, op.reducer_fn, external_sort_dir)
+            stream = shard.merge_sorted_chunks(external_sort_dir, op.key, op.reducer_fn, op.reducer_schema)
             op_index += 1
 
         elif isinstance(op, Fold):

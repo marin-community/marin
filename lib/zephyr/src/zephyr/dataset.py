@@ -11,6 +11,7 @@ from enum import StrEnum
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 import fsspec
+import polars as pl
 from braceexpand import braceexpand
 from pyarrow import RecordBatch
 from rigging.filesystem import StoragePath, url_to_fs
@@ -283,10 +284,11 @@ class GroupByOp:
     """Group items by `key`, reducing each group with `reducer_fn`."""
 
     key: Callable | ColumnExpr  # Function (or zephyr.expr.col(...)) from item -> hashable key
-    reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
+    reducer_fn: Callable  # DataFrame -> DataFrame, or (key, Iterator[items]) -> result
     num_output_shards: int | None = None  # None = auto-detect from current shard count
     sort_by: Callable | ColumnExpr | None = None  # Optional secondary sort within each group
     combiner_fn: Callable | None = None  # Optional local pre-aggregation during scatter
+    reducer_schema: Callable[[pl.Schema], pl.Schema] | None = None
 
     def __repr__(self):
         return f"GroupByOp(key={_get_fn_name(self.key)})"
@@ -869,9 +871,22 @@ class Dataset(Generic[T]):
     @overload
     def group_by(
         self,
+        key: ColumnExpr,
+        *,
+        reducer: Callable[[pl.DataFrame], pl.DataFrame],
+        reducer_schema: Callable[[pl.Schema], pl.Schema],
+        sort_by: ColumnExpr | None = None,
+        num_output_shards: int | None = None,
+        combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
+    ) -> "Dataset[pl.DataFrame]": ...
+
+    @overload
+    def group_by(
+        self,
         key: Callable[[T], K] | ColumnExpr,
         *,
         reducer: Callable[[K, Iterator[T]], Iterator[R]],
+        reducer_schema: None = None,
         sort_by: Callable[[T], Any] | ColumnExpr | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
@@ -883,6 +898,7 @@ class Dataset(Generic[T]):
         key: Callable[[T], K] | ColumnExpr,
         *,
         reducer: Callable[[K, Iterator[T]], R],
+        reducer_schema: None = None,
         sort_by: Callable[[T], Any] | ColumnExpr | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
@@ -892,17 +908,21 @@ class Dataset(Generic[T]):
         self,
         key: Callable[[T], K] | ColumnExpr,
         *,
-        reducer: Callable[[K, Iterator[T]], R | Iterator[R]],
+        reducer: Callable[[pl.DataFrame], pl.DataFrame] | Callable[[K, Iterator[T]], R | Iterator[R]],
+        reducer_schema: Callable[[pl.Schema], pl.Schema] | None = None,
         sort_by: Callable[[T], Any] | ColumnExpr | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
     ) -> "Dataset[R]":
         """Group items by key and apply reducer function.
 
-        The reducer receives ``(key, iterator_of_items)`` and returns a single
-        result or an iterator of results for that group. After scatter, items
-        delivered to the reducer are always plain dict rows (including when the
-        map side ingested ``pl.DataFrame`` / ``pa.RecordBatch`` batches).
+        A one-argument reducer receives each group as a ``pl.DataFrame`` and
+        returns a ``pl.DataFrame``. ``reducer_schema`` maps the input group schema
+        to the reducer's output schema so it can run through Polars ``map_groups``
+        before the merged frame is collected. A two-argument reducer receives
+        ``(key, iterator_of_items)`` and returns a single result or an iterator
+        of results. Columnar inputs become plain dict rows; Python inputs are
+        restored to their original objects.
 
         ``key`` / ``sort_by`` must match the item shape:
 
@@ -921,7 +941,11 @@ class Dataset(Generic[T]):
             key: Function extracting grouping key from item (must be hashable), or a
                 ``zephyr.expr.col(name)`` when items are columnar batches (e.g. after
                 ``load_parquet(batch_mode=True)``).
-            reducer: Function from (key, Iterator[items]) -> result
+            reducer: Function from ``DataFrame`` to ``DataFrame``, or from
+                ``(key, Iterator[items])`` to a result.
+            reducer_schema: Required for a DataFrame reducer. Receives the group
+                schema after Zephyr's internal sort key is removed and returns
+                the reducer's output schema.
             sort_by: Optional function (or ``col(...)``) extracting a sort key from each
                 item. When provided, items within each group are delivered to the
                 reducer sorted by this key. Use the same Callable-vs-``col`` rule as
@@ -962,12 +986,26 @@ class Dataset(Generic[T]):
             ...     .from_list(files)
             ...     .load_parquet(batch_mode=True)
             ...     .map(my_batch_transform)  # RecordBatch -> pl.DataFrame
-            ...     .group_by(key=col("cat"), sort_by=col("id"), reducer=my_reducer)
+            ...     .group_by(
+            ...         key=col("cat"),
+            ...         sort_by=col("id"),
+            ...         reducer=my_reducer,
+            ...         reducer_schema=my_reducer_schema,
+            ...     )
             ... )
         """
         return cast(
             "Dataset[R]",
-            self._derive(GroupByOp(key, reducer, num_output_shards, sort_by=sort_by, combiner_fn=combiner)),
+            self._derive(
+                GroupByOp(
+                    key,
+                    reducer,
+                    num_output_shards,
+                    sort_by=sort_by,
+                    combiner_fn=combiner,
+                    reducer_schema=reducer_schema,
+                )
+            ),
         )
 
     def deduplicate(self, key: Callable[[T], object], num_output_shards: int | None = None) -> "Dataset[T]":

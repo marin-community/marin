@@ -58,6 +58,10 @@ def _key(item):
     return item["k"]
 
 
+def _identity_reducer(_key, items):
+    return items
+
+
 def _target(key, num_shards):
     """Match Python-item scatter routing: Polars hash of msgpack-encoded key bytes."""
     encoded = encode_key(key)
@@ -229,7 +233,11 @@ def test_scatter_dataframe_items_with_sort_by(tmp_path):
     # Routing uses Polars hash over the native column (not the msgpack Binary
     # encoding used by the Python-item path), so find the shard that got "a".
     merged_by_shard = {
-        shard_idx: list(ScatterReader.from_sidecars(scatter_paths, shard_idx).merge_sorted_chunks(str(tmp_path)))
+        shard_idx: list(
+            ScatterReader.from_sidecars(scatter_paths, shard_idx).merge_sorted_chunks(
+                str(tmp_path), col("k"), _identity_reducer
+            )
+        )
         for shard_idx in range(num_shards)
     }
     non_empty = [merged for merged in merged_by_shard.values() if merged]
@@ -321,7 +329,7 @@ def test_merge_sorted_chunks_basic(tmp_path):
     scatter_paths = list(writer.close())
 
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
-    merged = list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path)))
+    merged = list(shard.merge_sorted_chunks(str(tmp_path), _key, _identity_reducer))
 
     assert [_key(item) for item in merged] == ["a", "a", "b", "b"]
     assert [item["v"] for item in merged] == [1, 3, 2, 4]
@@ -341,7 +349,7 @@ def test_merge_sorted_chunks_secondary_sort(tmp_path):
     scatter_paths = list(writer.close())
 
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
-    merged = list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path)))
+    merged = list(shard.merge_sorted_chunks(str(tmp_path), _key, _identity_reducer))
 
     assert len(merged) == 2
     assert [item["v"] for item in merged] == [2, 1]  # ts=5 comes before ts=10
@@ -406,7 +414,7 @@ def test_merge_sorted_chunks_cross_shard_null_sort_value(tmp_path):
     shard = ScatterReader.from_sidecars(paths_0 + paths_1, target_shard=0)
     # Currently raises SchemaError: struct field sort_value is Null in shard 0's
     # file but Int64 in shard 1's file; pl.merge_sorted requires identical schemas.
-    merged = list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort")))
+    merged = list(shard.merge_sorted_chunks(str(tmp_path / "sort"), _key, _identity_reducer))
     assert sorted(x["v"] for x in merged) == [0, 1, 2, 3]
 
 
@@ -423,7 +431,7 @@ def test_merge_sorted_chunks_rejects_incompatible_columnar_key_dtypes(tmp_path):
 
     shard = ScatterReader.from_sidecars(paths_0 + paths_1, target_shard=0)
     with pytest.raises(ValueError, match="incompatible scatter sort-key"):
-        list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort")))
+        list(shard.merge_sorted_chunks(str(tmp_path / "sort"), col("k"), _identity_reducer))
 
 
 def test_scatter_with_combiner(tmp_path):
@@ -466,10 +474,47 @@ def test_merge_sorted_chunks_external_trigger(tmp_path):
     with patch("iris.env_resources.TaskResources.from_environment") as mock_res:
         # 1 byte memory limit will trigger external sort
         mock_res.return_value = TaskResources(memory_bytes=1, cpu_cores=1, gpu_count=0, tpu_count=0)
-        merged = list(shard.merge_sorted_chunks(external_sort_dir=str(external_dir)))
+        merged = list(shard.merge_sorted_chunks(str(external_dir), _key, _identity_reducer))
 
     assert len(merged) == 10
     assert [item["k"] for item in merged] == list(range(10))
+
+
+def test_merge_sorted_chunks_dataframe_reducer_external_sort(tmp_path):
+    paths = []
+    for source_shard, frame in enumerate(
+        [
+            pl.DataFrame({"k": ["a", "b"], "rank": [2, 2], "v": [2, 20]}),
+            pl.DataFrame({"k": ["a", "b"], "rank": [1, 1], "v": [1, 10]}),
+        ]
+    ):
+        with ScatterWriter(
+            data_path=str(tmp_path / f"shard-{source_shard:04d}"),
+            key=col("k"),
+            sort_by=col("rank"),
+            source_shard=source_shard,
+            num_output_shards=1,
+        ) as writer:
+            writer.write_batch(frame)
+            paths.extend(writer.close())
+
+    def collect_values(group: pl.DataFrame) -> pl.DataFrame:
+        return pl.DataFrame({"k": [group.item(0, "k")], "values": [group["v"].to_list()]})
+
+    def collect_values_schema(_input_schema: pl.Schema) -> pl.Schema:
+        return pl.Schema({"k": pl.String, "values": pl.List(pl.Int64)})
+
+    shard = ScatterReader.from_sidecars(paths, target_shard=0)
+    with patch("iris.env_resources.TaskResources.from_environment") as mock_res:
+        mock_res.return_value = TaskResources(memory_bytes=1, cpu_cores=1, gpu_count=0, tpu_count=0)
+        batches = list(
+            shard.merge_sorted_chunks(str(tmp_path / "sort_work"), col("k"), collect_values, collect_values_schema)
+        )
+
+    assert pl.concat(batches).sort("k").to_dicts() == [
+        {"k": "a", "values": [1, 2]},
+        {"k": "b", "values": [10, 20]},
+    ]
 
 
 def test_scatter_null_keys(tmp_path):
@@ -490,7 +535,7 @@ def test_scatter_empty_input(tmp_path):
     scatter_paths = _build_shard(tmp_path, [], num_output_shards=1)
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
     assert _read_shard(shard) == []
-    assert list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path))) == []
+    assert list(shard.merge_sorted_chunks(str(tmp_path), _key, _identity_reducer)) == []
 
 
 def test_scatter_key_fn_must_be_serializable(tmp_path):

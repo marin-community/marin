@@ -19,7 +19,6 @@ All discovered files are merged into a single output: main records land in
 import logging
 import os
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -66,6 +65,7 @@ NORMALIZED_DATA_VERSION = "v2"
 NORMALIZE_IDENTITY_ATTRS = frozenset(
     {"text_field", "id_field", "target_partition_bytes", "max_whitespace_run_chars", "dedup_mode"}
 )
+_DUPLICATE_OUTPUT_COLUMN = "__marin_duplicate__"
 
 
 class DedupMode(StrEnum):
@@ -377,24 +377,14 @@ def _compute_total_bytes(file_paths: list[str]) -> int:
     return sum(StoragePath(path).size() for path in file_paths)
 
 
-@dataclass
-class MainOutput:
-    """Wraps a unique record destined for the main output shard."""
-
-    data: dict[str, Any]
-
-
-@dataclass
-class ExactDupSideOutput:
-    """Wraps a duplicate record destined for the side (dups) output shard."""
-
-    data: dict[str, Any]
+def _dedup_reducer_schema(input_schema: pl.Schema) -> pl.Schema:
+    return pl.Schema({**input_schema, _DUPLICATE_OUTPUT_COLUMN: pl.Boolean})
 
 
 def _make_split_writer(
     output_dir: str,
     output_schema: pa.Schema | None = None,
-) -> Callable[[Iterator[MainOutput | ExactDupSideOutput], ShardInfo], Iterator[dict[str, dict[str, Any]]]]:
+) -> Callable[[Iterator[pl.DataFrame], ShardInfo], Iterator[dict[str, dict[str, Any]]]]:
     """Return a ``map_shard`` function that fans records out to main and dup Parquet files.
 
     Each shard writes two files concurrently via ``ThreadedBatchWriter`` so the
@@ -405,7 +395,7 @@ def _make_split_writer(
     # TODO (rav): consider whether we want to generalize this in the future.
 
     def split_writer(
-        records: Iterator[MainOutput | ExactDupSideOutput],
+        frames: Iterator[pl.DataFrame],
         shard: ShardInfo,
     ) -> Iterator[dict[str, dict[str, Any]]]:
         # NOTE: we could add support for split_existing - but we intentionally don't
@@ -417,23 +407,32 @@ def _make_split_writer(
         # the ThreadedBatchWriter context exits (which joins the thread).
         results: dict[str, dict[str, Any]] = {}
 
-        def write_to(path: str, key: str) -> Callable[[Iterable[dict[str, Any]]], None]:
-            def _fn(items: Iterable[dict[str, Any]]) -> None:
+        def write_to(path: str, key: str) -> Callable[[Iterable[pa.RecordBatch]], None]:
+            def _fn(items: Iterable[pa.RecordBatch]) -> None:
                 results[key] = write_parquet_file(items, output_path=path, schema=output_schema)
 
             return _fn
+
+        def submit_frame(frame: pl.DataFrame, writer: ThreadedBatchWriter) -> None:
+            if frame.is_empty():
+                return
+            table = frame.drop(_DUPLICATE_OUTPUT_COLUMN).to_arrow()
+            if output_schema is not None:
+                table = table.select(output_schema.names).cast(output_schema)
+            for batch in table.to_batches():
+                writer.submit(batch)
 
         with (
             ThreadedBatchWriter(write_to(main_path, "main")) as main_writer,
             ThreadedBatchWriter(write_to(dup_path, "dup")) as dup_writer,
         ):
-            for item in records:
-                if isinstance(item, MainOutput):
-                    counters.pipeline.update_counter("normalize/unique_records_out", 1)
-                    main_writer.submit(item.data)
-                else:
-                    counters.pipeline.update_counter("normalize/duplicate_records_out", 1)
-                    dup_writer.submit(item.data)
+            for frame in frames:
+                main = frame.filter(~pl.col(_DUPLICATE_OUTPUT_COLUMN))
+                duplicates = frame.filter(pl.col(_DUPLICATE_OUTPUT_COLUMN))
+                counters.pipeline.update_counter("normalize/unique_records_out", main.height)
+                counters.pipeline.update_counter("normalize/duplicate_records_out", duplicates.height)
+                submit_frame(main, main_writer)
+                submit_frame(duplicates, dup_writer)
 
         yield results
 
@@ -466,22 +465,16 @@ def _build_pipeline(
         drop_fields=drop_fields,
     )
 
-    def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
-        """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
-        prev_id: str | None = None
-        for record in items:
-            rid = record["id"]
-            if rid != prev_id:
-                prev_id = rid
-                yield MainOutput(data=record)
-            else:
-                yield ExactDupSideOutput(data=record)
+    def dedup(group: pl.DataFrame) -> pl.DataFrame:
+        return group.with_columns((pl.int_range(pl.len()) > 0).alias(_DUPLICATE_OUTPUT_COLUMN))
 
-    def passthrough(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput]:
-        """Yield items unchanged; used when dedup is disabled."""
-        yield from (MainOutput(data=item) for item in items)
+    def passthrough(group: pl.DataFrame) -> pl.DataFrame:
+        return group.with_columns(pl.lit(False).alias(_DUPLICATE_OUTPUT_COLUMN))
 
-    reducers: dict[DedupMode, Callable] = {DedupMode.EXACT: dedup, DedupMode.NONE: passthrough}
+    reducers: dict[DedupMode, Callable[[pl.DataFrame], pl.DataFrame]] = {
+        DedupMode.EXACT: dedup,
+        DedupMode.NONE: passthrough,
+    }
 
     # Prefer Dataset.load_parquet(batch_mode=True) when every input is Parquet
     # so the plan can use LoadFileOp; otherwise pack non-Parquet formats into
@@ -497,6 +490,7 @@ def _build_pipeline(
         .group_by(
             key=col("id"),
             reducer=reducers[dedup_mode],
+            reducer_schema=_dedup_reducer_schema,
             sort_by=col("id"),
             num_output_shards=num_shards,
         )
