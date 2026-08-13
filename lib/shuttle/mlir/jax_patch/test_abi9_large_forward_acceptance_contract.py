@@ -4,7 +4,6 @@
 """Red behavior contracts for the unbuilt ABI 9 representative Host slice."""
 
 import hashlib
-import json
 from pathlib import Path
 
 import jax
@@ -29,14 +28,12 @@ from abi9_large_forward_acceptance_contract import (
 from shuttle_jaxlib_target1_acceptance import boundary_function, fixed_inputs
 
 
-def test_large_forward_subject_is_one_exact_abi9_cell() -> None:
+def test_large_forward_subject_rejects_current_abi10_options() -> None:
     assert PIPELINE_ABI_VERSION == 9
     assert (SHAPE.rows, SHAPE.features, BOUNDARY, POLICY.value) == (2048, 4096, "forward", "source_ordered")
     assert WORKERS == ("baseline", "populate", "reuse")
-    payload = json.loads(subject_options()["xla_shuttle_options"])
-    assert payload["pipeline_abi_version"] == 9
-    assert payload["execution_mode"] == "cpu_executable_bundle"
-    assert payload["numerics"] == "source_ordered"
+    with pytest.raises(AssertionError, match="requires pipeline ABI 9"):
+        subject_options()
 
 
 def test_balanced_adjacent_fold_preserves_frozen_ordinary_jax_bits() -> None:

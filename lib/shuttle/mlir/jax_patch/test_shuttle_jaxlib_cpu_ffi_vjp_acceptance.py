@@ -3,10 +3,12 @@
 
 """Behavior contracts for the unbuilt ABI 9 identity-policy Host proof."""
 
+import hashlib
 import json
 
 import numpy as np
 import pytest
+from acceptance_contract import ObserverIdentity
 from shuttle_jaxlib_cpu_ffi_vjp_acceptance import (
     BOUNDARIES,
     CPU_BUNDLE_FINAL_FINGERPRINTS,
@@ -16,7 +18,6 @@ from shuttle_jaxlib_cpu_ffi_vjp_acceptance import (
     arrays,
     boundary_function,
     cell_identities,
-    expected_identity,
     fixed_inputs,
     load_baseline,
     ready,
@@ -30,7 +31,7 @@ from shuttle import Numerics
 
 
 def _cpu_bundle_events() -> list[dict[str, object]]:
-    identity = expected_identity(Numerics.SOURCE_ORDERED)
+    identity = _historical_identity(Numerics.SOURCE_ORDERED)
     fixture = target1_expectation(SHAPE.shape_id, "forward")
     common = {
         "invocation_id": 17,
@@ -63,7 +64,32 @@ def _cpu_bundle_events() -> list[dict[str, object]]:
     ]
 
 
-def test_identity_policy_host_driver_binds_six_distinct_abi9_cells() -> None:
+def _historical_identity(numerics: Numerics) -> ObserverIdentity:
+    payload = {
+        "execution_mode": "cpu_executable_bundle",
+        "numerics": numerics.value,
+        "pipeline_abi_version": 9,
+        "schema_version": 1,
+        "tuning": {
+            "cluster_shape": [],
+            "materialization": "automatic",
+            "maximum_candidates": 1,
+            "pipeline_stages": 1,
+            "tile_sizes": [],
+        },
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    canonical_tuning = json.dumps(payload["tuning"], sort_keys=True, separators=(",", ":"))
+    return ObserverIdentity(
+        policy=numerics.value,
+        policy_digest=hashlib.sha256(canonical.encode()).hexdigest(),
+        tuning_digest=hashlib.sha256(canonical_tuning.encode()).hexdigest(),
+        canonical_options=canonical,
+        canonical_tuning=canonical_tuning,
+    )
+
+
+def test_identity_policy_host_driver_rejects_current_abi10_options() -> None:
     assert PIPELINE_ABI_VERSION == 9
     assert BOUNDARIES == ("forward", "backward", "composed")
     assert POLICIES == (Numerics.SOURCE_ORDERED, Numerics.FAST)
@@ -75,26 +101,10 @@ def test_identity_policy_host_driver_binds_six_distinct_abi9_cells() -> None:
         ("backward", "fast"),
         ("composed", "fast"),
     )
-    canonical = {}
     for numerics in POLICIES:
-        payload_text = subject_options(numerics)["xla_shuttle_options"]
-        assert isinstance(payload_text, str)
-        payload = json.loads(payload_text)
-        assert payload == {
-            "execution_mode": "cpu_executable_bundle",
-            "numerics": numerics.value,
-            "pipeline_abi_version": 9,
-            "schema_version": 1,
-            "tuning": {
-                "cluster_shape": [],
-                "materialization": "automatic",
-                "maximum_candidates": 1,
-                "pipeline_stages": 1,
-                "tile_sizes": [],
-            },
-        }
-        canonical[numerics] = payload_text
-    assert canonical[Numerics.SOURCE_ORDERED] != canonical[Numerics.FAST]
+        with pytest.raises(AssertionError, match="requires pipeline ABI 9"):
+            subject_options(numerics)
+    assert _historical_identity(Numerics.SOURCE_ORDERED) != _historical_identity(Numerics.FAST)
 
 
 def test_identity_policy_host_driver_preserves_public_jax_result_order() -> None:
@@ -136,7 +146,7 @@ def test_identity_policy_host_baseline_roundtrips_closed_bf16_bits(tmp_path) -> 
 
 
 def test_cpu_bundle_observer_accepts_exact_two_phase_contract() -> None:
-    identity = expected_identity(Numerics.SOURCE_ORDERED)
+    identity = _historical_identity(Numerics.SOURCE_ORDERED)
     fixture = target1_expectation(SHAPE.shape_id, "forward")
     report = validate_cpu_bundle_success_events(_cpu_bundle_events(), identity, fixture)
     assert report["invocation_id"] == 17
@@ -167,7 +177,7 @@ def test_cpu_bundle_observer_rejects_phase_contract_drift(mutation: str, diagnos
     else:
         raise AssertionError(f"unknown mutation: {mutation}")
 
-    identity = expected_identity(Numerics.SOURCE_ORDERED)
+    identity = _historical_identity(Numerics.SOURCE_ORDERED)
     fixture = target1_expectation(SHAPE.shape_id, "forward")
     with pytest.raises(AssertionError, match=diagnostic):
         validate_cpu_bundle_success_events(events, identity, fixture)

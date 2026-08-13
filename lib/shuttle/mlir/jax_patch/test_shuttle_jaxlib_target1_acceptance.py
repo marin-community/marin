@@ -31,16 +31,15 @@ def test_driver_has_exact_twelve_cell_identity_matrix() -> None:
     }
 
 
-def test_driver_pins_abi_and_policy_in_public_compiler_options() -> None:
+def test_historical_driver_rejects_current_abi10_options() -> None:
     assert PIPELINE_ABI_VERSION == 9
     for numerics in Numerics:
         canonical = compiler_options(numerics=numerics, tuning=acceptance_tuning())["xla_shuttle_options"]
         payload = json.loads(canonical)
-        identity = expected_identity(numerics)
-        assert payload["pipeline_abi_version"] == 9
+        assert payload["pipeline_abi_version"] == 10
         assert payload["numerics"] == numerics.value
-        assert identity.policy == numerics.value
-        assert identity.canonical_options == canonical
+        with pytest.raises(AssertionError, match="not ABI 9"):
+            expected_identity(numerics)
 
 
 def test_cache_entry_attribution_rejects_zero_or_multiple_deltas() -> None:
