@@ -4,9 +4,9 @@
 """Verify a Marin vLLM wheel before invoking its normal CLI.
 
 The launcher already names one promoted wheel URL, so startup only checks what building that command
-cannot settle: the PEP 610 record identifies the promoted wheel, ``vllm._C`` comes from inside that
-distribution, and the GPU this process was scheduled onto is one the wheel was compiled for. The
-first two are a pair. A leaked ``PYTHONPATH`` entry holding a complete vLLM install would satisfy the
+cannot settle: the PEP 610 record identifies the promoted wheel, ``vllm._C_stable_libtorch`` comes from
+inside that distribution, and the GPU this process was scheduled onto is one the wheel was compiled for.
+The first two are a pair. A leaked ``PYTHONPATH`` entry holding a complete vLLM install would satisfy the
 extension check on its own, because its metadata and its extension agree with each other.
 """
 
@@ -83,13 +83,15 @@ def main() -> None:
             f"targets {expected.sm_targets}"
         )
 
-    vllm_extension = importlib.import_module("vllm._C")
+    vllm_extension = importlib.import_module("vllm._C_stable_libtorch")
     extension_path = vllm_extension.__file__
     assert extension_path is not None
     resolved_extension_path = Path(extension_path).resolve()
     distribution_root = Path(distribution.locate_file("")).resolve()
     if not resolved_extension_path.is_relative_to(distribution_root):
-        raise RuntimeError(f"vllm._C loaded outside the verified distribution: {resolved_extension_path}")
+        raise RuntimeError(
+            f"vllm._C_stable_libtorch loaded outside the verified distribution: {resolved_extension_path}"
+        )
 
     provenance = {
         **expected.record(),

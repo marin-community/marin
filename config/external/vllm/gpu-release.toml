@@ -1,16 +1,16 @@
-release_tag = "marin-vllm-gpu-20260805-fa50698a9a30"
-source_commit = "fa50698a9a303f7282aa0e969f35717703de4911"
-version = "0.0.0.dev20260805+marin.fa50698a9a30.cu129"
-torch_backend = "cu129"
+release_tag = "marin-vllm-gpu-20260813-76c6650513a9"
+source_commit = "76c6650513a97507a485e142d48b4ce50c7fd0e0"
+version = "0.0.0.dev20260813+marin.76c6650513a9"
+torch_backend = "cu130"
 
 [[wheels]]
 architecture = "x86_64"
 sm_targets = ["9.0"]
-url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260805-fa50698a9a30/vllm-0.0.0.dev20260805%2Bmarin.fa50698a9a30.cu129-cp38-abi3-manylinux_2_28_x86_64.whl"
-sha256 = "d4e5d6e19da49c0f1dd030bd14d3ab795a10b8f1185c55162ae5daf6745c98eb"
+url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260813-76c6650513a9/vllm-0.0.0.dev20260813%2Bmarin.76c6650513a9-cp38-abi3-manylinux_2_28_x86_64.whl"
+sha256 = "249012b13629a78dbebd2490ec913766206e68892b773af8f5fd7b504760ae2f"
 
 [[wheels]]
 architecture = "aarch64"
 sm_targets = ["10.0"]
-url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260805-fa50698a9a30/vllm-0.0.0.dev20260805%2Bmarin.fa50698a9a30.cu129-cp38-abi3-manylinux_2_28_aarch64.whl"
-sha256 = "a248408d444425906a0e878513c8f31a43582ddf6e82e32a1573b6c714b677f9"
+url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260813-76c6650513a9/vllm-0.0.0.dev20260813%2Bmarin.76c6650513a9-cp38-abi3-manylinux_2_28_aarch64.whl"
+sha256 = "31d3b80da458ea78385ab8d93bb4d5479004fd898070e2de3f0b20b3c37c5fa7"

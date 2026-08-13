@@ -27,6 +27,8 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from fray.current_client import set_current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import JobRequest, JobStatus
@@ -60,8 +62,12 @@ _MISSING_CREDENTIAL_ERRORS: tuple[type[BaseException], ...] = (
 # tests/cluster/conftest.py -> repo root is two parents up.
 MARIN_ROOT = Path(__file__).resolve().parents[2]
 
-# The standing GCP cluster (TPU pools) and the standing CoreWeave cluster (H100).
+# The standing GCP cluster (TPU pools) and the standing CoreWeave peer (H100).
 MARIN_TPU_CLUSTER = "marin"
+# CoreWeave holds the H100s but its controller is kube-fronted: reaching it directly needs a kubectl
+# port-forward, which credentials without pods/portforward (the agent token, the CI kubeconfig) cannot
+# open. GPU jobs instead submit through the IAP-fronted marin hub with target_cluster set to this peer,
+# so the marin controller federates the work to CoreWeave without a direct tunnel.
 MARIN_GPU_CLUSTER = "cw-us-east-02a"
 
 # Region the TPU smokes pin. v6e lives in us-east5-b, so the slice and its artifacts colocate here.
@@ -120,9 +126,35 @@ def smoke_region() -> Iterator[str]:
 
 @pytest.fixture
 def marin_gpu_client() -> Iterator[IrisClient]:
-    """The standing CoreWeave GPU cluster (``cw-us-east-02a``) for the vLLM e2es."""
-    with open_cluster_client(MARIN_GPU_CLUSTER) as client:
+    """The IAP-fronted marin hub for the GPU vLLM e2es.
+
+    The H100s live on the CoreWeave peer, but its controller is only reachable by a kubectl
+    port-forward that agent and CI credentials cannot open. Tests submit through this hub client and
+    set ``target_cluster=MARIN_GPU_CLUSTER`` on each H100 job, so the marin controller federates the
+    work to CoreWeave without a direct tunnel.
+    """
+    with open_cluster_client(MARIN_TPU_CLUSTER) as client:
         yield client
+
+
+def _task_left_queue(client: IrisClient, task_id: JobName) -> bool:
+    """Whether a task has left the queue, tolerating the federation handoff window.
+
+    A job with ``target_cluster`` set federates to a peer cluster, and its task does not exist on
+    the hub until the handoff completes, so ``task_status`` raises NOT_FOUND for the first seconds
+    after submit. Treat that as still queued rather than a failure.
+    """
+    try:
+        state = client.task_status(task_id).state
+    except ConnectError as exc:
+        if exc.code == Code.NOT_FOUND:
+            return False
+        raise
+    return state not in (
+        job_pb2.TASK_STATE_PENDING,
+        job_pb2.TASK_STATE_ASSIGNED,
+        job_pb2.TASK_STATE_BUILDING,
+    )
 
 
 @pytest.fixture
@@ -144,12 +176,7 @@ def run_test_job() -> Callable[..., None]:
         try:
             task_id = JobName.from_string(job.job_id).task(0)
             wait_for_condition(
-                lambda: client.task_status(task_id).state
-                not in (
-                    job_pb2.TASK_STATE_PENDING,
-                    job_pb2.TASK_STATE_ASSIGNED,
-                    job_pb2.TASK_STATE_BUILDING,
-                ),
+                lambda: _task_left_queue(client, task_id),
                 timeout=Duration.from_seconds(pending_timeout),
                 poll_interval=5,
             )
