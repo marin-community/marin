@@ -18,6 +18,9 @@ import threading
 import time
 import zipfile
 from collections import OrderedDict
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -28,6 +31,12 @@ logger = logging.getLogger(__name__)
 # Maximum size (bytes) of a submitted workspace bundle. Enforced by the client
 # when creating the zip and re-checked by the controller when receiving it.
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+
+
+@dataclass
+class _ContentLock:
+    lock: threading.RLock
+    users: int = 0
 
 
 def content_id(data: bytes) -> str:
@@ -47,7 +56,9 @@ class BundleStore:
         self._controller_address = controller_address.rstrip("/") if controller_address else ""
         self._max_cache_items = max_cache_items
         self._max_cache_bytes = max_cache_bytes
-        self._lock = threading.RLock()
+        self._cache_lock = threading.RLock()
+        self._content_locks_guard = threading.Lock()
+        self._content_locks: dict[str, _ContentLock] = {}
 
         self._fs, self._fs_path = fsspec.core.url_to_fs(storage_dir)
         self._fs.mkdirs(self._fs_path, exist_ok=True)
@@ -59,8 +70,32 @@ class BundleStore:
     def _path_for(self, cid: str) -> str:
         return f"{self._fs_path}/{cid}"
 
+    @contextmanager
+    def _content_lock(self, cid: str) -> Iterator[None]:
+        with self._content_locks_guard:
+            state = self._content_locks.get(cid)
+            if state is None:
+                state = _ContentLock(threading.RLock())
+                self._content_locks[cid] = state
+            state.users += 1
+        try:
+            with state.lock:
+                yield
+        finally:
+            with self._content_locks_guard:
+                state.users -= 1
+                if state.users == 0:
+                    del self._content_locks[cid]
+
+    def _cached(self, cid: str) -> bytes | None:
+        with self._cache_lock:
+            data = self._cache.get(cid)
+            if data is not None:
+                self._cache.move_to_end(cid)
+            return data
+
     def _cache_put(self, cid: str, data: bytes) -> None:
-        """Insert into in-memory cache and evict if needed. Caller must hold _lock."""
+        """Insert into in-memory cache and evict if needed. Caller must hold ``_cache_lock``."""
         if cid in self._cache:
             self._cache.move_to_end(cid)
             return
@@ -79,31 +114,35 @@ class BundleStore:
         """Write bytes if absent and return canonical content id."""
         cid = content_id(data)
         path = self._path_for(cid)
-        with self._lock:
+        with self._content_lock(cid):
             # Always ensure disk has the bytes: a cache hit without disk write
             # would leave workers unable to fetch this id after a restart.
             if not self._fs.exists(path):
                 with self._fs.open(path, "wb") as f:
                     f.write(data)
-            self._cache_put(cid, data)
+            with self._cache_lock:
+                self._cache_put(cid, data)
         return cid
 
     def get(self, cid: str) -> bytes:
         """Read bytes by content id. Falls back to controller on workers."""
         path = self._path_for(cid)
-        with self._lock:
-            if cid in self._cache:
-                self._cache.move_to_end(cid)
-                return self._cache[cid]
+        cached = self._cached(cid)
+        if cached is not None:
+            return cached
+        with self._content_lock(cid):
+            cached = self._cached(cid)
+            if cached is not None:
+                return cached
             if self._fs.exists(path):
                 with self._fs.open(path, "rb") as f:
                     data = f.read()
-                self._cache_put(cid, data)
+                with self._cache_lock:
+                    self._cache_put(cid, data)
                 return data
-        # Outside lock: fetch from controller and persist locally.
-        data = self._fetch_from_controller(cid)
-        self.write(data)
-        return data
+            data = self._fetch_from_controller(cid)
+            self.write(data)
+            return data
 
     def _fetch_from_controller(self, cid: str) -> bytes:
         """Fetch content over HTTP and verify hash. Retries up to 3 times."""
