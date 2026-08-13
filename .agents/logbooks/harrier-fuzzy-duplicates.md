@@ -981,3 +981,14 @@ author: Rafal Wojdyla
 - East progress: `nemotron_cc_v2-high_quality_synthetic_ea28c25e` reached 3,353 of 8,778 shards with 32 live workers and no dead workers.
 - Issue update: Post one major update for the stable RNO capacity recovery.
 - Next action: Continue to watch both active sources and the eight building RNO services.
+
+### 2026-08-13 00:33 UTC - RNO USPTO coordinator recovered automatically
+
+- Root health: Both roots remain running with zero failures and zero preemptions. East has 46 completed source artifacts, and RNO has 33. The full run has 79 of 292 completed source artifacts.
+- RNO recovery: The first USPTO coordinator lost its actor endpoint at 00:22:55 UTC after two preemptions. Iris ended its workers and started a replacement coordinator at 00:22:57 UTC. The source job stayed running, so no manual recovery was necessary.
+- Resume check: The replacement coordinator found the completed output shards through `skip_existing`, restored 32 of 32 workers, and advanced USPTO from 320 to 352 of 551 shards. No worker is dead, and no retry-two, rate-limit, memory, or missing-file error matched the replacement logs.
+- Aggregate progress: A direct object count found 97,973 of 166,775 output shards, or 58.75%. There are 68,802 shards left. East has written 38,853 shards, and RNO has written 59,120 shards.
+- East progress: `nemotron_cc_v2-high_quality_synthetic_ea28c25e` reached 5,071 of 8,778 shards with 32 live workers and no dead workers.
+- Service capacity: RNO has 88 running TEI services and eight services in the build state. No TEI service job failed.
+- Issue update: Post one major update for the automatic coordinator recovery.
+- Next action: Watch USPTO through completion and confirm that later sources start without another coordinator preemption.
