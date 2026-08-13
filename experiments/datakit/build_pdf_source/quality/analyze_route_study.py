@@ -27,6 +27,7 @@ training on them teaches the router the wrong lesson.
 import logging
 from dataclasses import dataclass
 
+import fsspec
 import numpy as np
 import polars as pl
 
@@ -44,6 +45,41 @@ INCUMBENT_THRESHOLD = 0.20
 
 def load(paths: list[str], storage_options: dict[str, str] | None = None) -> pl.DataFrame:
     return pl.scan_parquet(paths, storage_options=storage_options).collect(engine="streaming")
+
+
+def read_table(prefix: str, fs: fsspec.AbstractFileSystem) -> pl.DataFrame:
+    """Read every part file under a prefix into one frame.
+
+    Shard by shard rather than one ``scan_parquet``: a shard in which no document failed types its
+    error columns as null, and a strict concatenation of that against a shard that did have a
+    failure errors out.
+    """
+    paths = sorted(fs.glob(f"{prefix}/*.parquet"))
+    if not paths:
+        raise FileNotFoundError(f"no shards under {prefix}")
+    frames = []
+    for path in paths:
+        with fs.open(path, "rb") as stream:
+            frames.append(pl.read_parquet(stream))
+    logger.info("read %d shards from %s", len(paths), prefix)
+    return pl.concat(frames, how="diagonal_relaxed")
+
+
+def route_ok(prefix: str, missing: pl.Expr, metric: str = "bigram") -> pl.Expr:
+    """``docling_ok`` generalized to any cheap route, from that route's agreement columns.
+
+    The identical construction the published label uses: recall at or above the floor, no more than
+    :data:`MAX_DESTROYED_PAGE_FRACTION` of pages destroyed outright, and false wherever the route
+    produced nothing at all. The metric is a parameter only so the unigram variant can be reported
+    alongside; the decision is made on bigrams, because reading-order damage is invisible to
+    unigrams and this repository has already retired a backend that scored 0.935 unigram F1 while
+    splicing multi-column reading order.
+    """
+    return (
+        missing.not_()
+        & (pl.col(f"{prefix}_{metric}_recall_mean") >= RECALL_FLOOR)
+        & (pl.col(f"{prefix}_frac_pages_{metric}_below_50") <= MAX_DESTROYED_PAGE_FRACTION)
+    )
 
 
 def label(frame: pl.DataFrame) -> pl.DataFrame:

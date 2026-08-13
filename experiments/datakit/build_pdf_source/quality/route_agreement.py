@@ -140,21 +140,123 @@ def markdown_streams(page: str) -> Streams:
     )
 
 
+# ---------------------------------------------------------------------------
+# Dialect-neutral presentation, for adjudication rather than for scoring
+# ---------------------------------------------------------------------------
+
+# The metric normalizes to a token multiset, which is all a number needs. A human or model judge
+# reads text, and there the same serialization differences the metric folds away are a *cue*:
+# Markdown with pipe tables is recognizably not Docling's tagged plain text, so a judge with a style
+# preference could produce a verdict that looks like a quality judgment and is not. These renderers
+# put every route into one presentation, preserving content and reading order exactly -- a route
+# that scrambles a table's cells still shows scrambled cells -- and erasing only the convention.
+
+TABLE_MARKER = "[table]"
+FORMULA_MARKER = "[formula]"
+FIGURE_MARKER = "[figure]"
+
+# A delimiter row is what makes a run of pipes a table; it carries no content and is dropped rather
+# than rendered as a row of dashes.
+_DELIMITER_ROW = re.compile(r"^\|[\s:|-]+\|?$")
+_HEADING_MARKER = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
+_LIST_MARKER = re.compile(r"^\s*[-*+]\s+", re.MULTILINE)
+_EMPHASIS = re.compile(r"(\*\*|\*|__|_|`)")
+_HTML_ROW = re.compile(r"<tr\b.*?</tr>", re.DOTALL | re.IGNORECASE)
+_HTML_CELL = re.compile(r"<(?:td|th)\b[^>]*>(.*?)</(?:td|th)>", re.DOTALL | re.IGNORECASE)
+_MARKDOWN_IMAGE_ALT = re.compile(r"!\[(.*?)\]\(.*?\)", re.DOTALL)
+_BLANK_RUN = re.compile(r"\n{3,}")
+_SPACE_RUN = re.compile(r"[ \t]{2,}")
+
+
+def _canonical_rows(block: str) -> str:
+    """Render a pipe-delimited grid as one ``cell | cell`` line per row.
+
+    Docling pads its cells to a common width and the VLM does not, so the same table read the same
+    way by both routes differs by hundreds of space characters before a judge reads a word of it.
+    """
+    rows = []
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not stripped.startswith("|"):
+            rows.append(stripped)
+            continue
+        if _DELIMITER_ROW.match(stripped):
+            continue
+        rows.append(" | ".join(cell.strip() for cell in stripped.strip("|").split("|")))
+    return "\n".join(rows)
+
+
+def _canonical_html_table(block: str) -> str:
+    """The same rendering for an HTML table, which the VLM emits as often as a pipe grid."""
+    rows = []
+    for row in _HTML_ROW.finditer(block):
+        cells = [_HTML_TAG.sub(" ", cell).strip() for cell in _HTML_CELL.findall(row.group(0))]
+        if cells:
+            rows.append(" | ".join(cells))
+    return "\n".join(rows) if rows else _HTML_TAG.sub(" ", block).strip()
+
+
+def _tidy(text: str) -> str:
+    return _BLANK_RUN.sub("\n\n", _SPACE_RUN.sub(" ", text)).strip()
+
+
+def canonical_docling(page: str) -> str:
+    """Docling's tagged plain text, re-rendered dialect-neutrally."""
+    page = page.replace(PAGE_BREAK, " ")
+    page = _PICTURE_ANNOTATION.sub(lambda m: f"\n{FIGURE_MARKER} {m.group(1).strip()}\n", page)
+    page = _DOCLING_TABLE.sub(lambda m: f"\n{TABLE_MARKER}\n{_canonical_rows(m.group(1))}\n", page)
+    page = _DOCLING_FORMULA.sub(lambda m: f"{FORMULA_MARKER} {m.group(1).strip()}", page)
+    page = _HTML_COMMENT.sub(" ", page)
+    return _tidy(_DOCLING_TAG.sub(" ", page))
+
+
+def canonical_markdown(page: str) -> str:
+    """The VLM's or pdf-inspector's Markdown, re-rendered into the same neutral form.
+
+    Ordering follows :func:`markdown_streams`: images are consumed before links, so an image's
+    target is dropped with it rather than surviving as its label.
+    """
+    page = _MARKDOWN_IMAGE_ALT.sub(lambda m: f"\n{FIGURE_MARKER} {m.group(1).strip()}\n", page)
+    page = _HTML_TABLE.sub(lambda m: f"\n{TABLE_MARKER}\n{_canonical_html_table(m.group(0))}\n", page)
+    page = _PIPE_TABLE.sub(
+        lambda m: (
+            f"\n{TABLE_MARKER}\n{_canonical_rows(m.group(0))}\n" if _PIPE_DELIMITER.search(m.group(0)) else m.group(0)
+        ),
+        page,
+    )
+    page = _LATEX_MATH.sub(lambda m: f"{FORMULA_MARKER} {_LATEX_COMMAND.sub(' ', m.group(0)).strip('$\\[]() ')}", page)
+    page = _HTML_COMMENT.sub(" ", page)
+    page = _MARKDOWN_LINK.sub(r"\1", page)
+    page = _HTML_TAG.sub(" ", page)
+    page = _HEADING_MARKER.sub("", page)
+    page = _LIST_MARKER.sub("", page)
+    return _tidy(_EMPHASIS.sub("", page))
+
+
 @dataclass(frozen=True)
 class Route:
     """One extraction route: how to normalize its serialization, and what to call it in a column.
 
     ``name`` is the prefix the per-route count columns carry, so a pair of routes names its own
-    output and two pairs sharing a route agree on that route's numbers.
+    output and two pairs sharing a route agree on that route's numbers. ``streams`` is the
+    normalization the metric reads; ``canonical`` is the one a judge reads, and they exist
+    separately because a token multiset and a legible page are not the same normalization.
     """
 
     name: str
     streams: Callable[[str], Streams]
+    canonical: Callable[[str], str]
 
 
-VLM = Route("ocr", markdown_streams)
-DOCLING = Route("docling", docling_streams)
-INSPECTOR = Route("inspector", markdown_streams)
+VLM = Route("ocr", markdown_streams, canonical_markdown)
+DOCLING = Route("docling", docling_streams, canonical_docling)
+INSPECTOR = Route("inspector", markdown_streams, canonical_markdown)
+
+# Keyed by the name the study tables and the adjudication packets use for each route, which is not
+# the metric's column prefix: the VLM's columns are named ``ocr``.
+ROUTES_BY_NAME: dict[str, Route] = {"vlm": VLM, "docling": DOCLING, "inspector": INSPECTOR}
 
 
 def _overlap(reference: Counter, candidate: Counter) -> tuple[float, float]:
