@@ -1103,3 +1103,17 @@ author: Rafal Wojdyla
 - TEI health: East service logs show successful embedding requests. Short `no permits available` events occur during queue pressure, and later requests succeed.
 - Issue update: None. The user-directed restart update already contains the major state change.
 - Next action: Continue the root, source, service, Zephyr, and output checks. Recover only a terminal in-scope job failure.
+
+### 2026-08-13 09:32 UTC - Batch output passed 77 percent
+
+- Root health: Both batch roots remain running with zero failures and zero root preemptions after 2 hours and 42 minutes.
+- Completed artifacts: The final roots completed 65 new source artifacts. East completed 61, and RNO completed four. The full run has 156 of 292 completed source artifacts.
+- Source concurrency: RNO has eight running source jobs. East has six running sources and one pending source during rapid source turnover. No source job failed.
+- Aggregate progress: A direct object count at 09:31 UTC found 129,544 of 166,775 output shards, or 77.68%. There are 37,231 shards left. East has 53,840 shards, RNO has 75,704 shards, 162 sources have output, and no Parquet path is unknown.
+- Output rate: The jobs wrote 4,286 shards between 08:43 UTC and 09:31 UTC. A simple rate estimate gives 6.8 hours for the remaining shards. Source sizes and batch capacity can change this estimate.
+- Zephyr progress: East Nemotron medium-quality reached 5,116 of 14,843 shards. RNO Dolma4PDFs reached 7,098 of 8,683 shards. Each source has 32 live workers and zero dead workers.
+- Service state: All 256 East and 512 RNO service jobs remain active. East has 192 running service tasks and 64 building tasks. RNO has 112 running service tasks and 400 building tasks.
+- Error check: The last ten-minute root scans found no retry, connection, port, rate-limit, memory, dead-worker, missing-file, traceback, or exception event.
+- Restart status note: The root logs show `previous status: FAILED` for sources from the stopped interactive roots. The final roots use force-run mode and start those sources. Current source failures remain zero.
+- Issue update: None. This is routine progress after the batch restart.
+- Next action: Continue the root, source, service, Zephyr, and output checks. Recover only a terminal in-scope job failure.
