@@ -16,9 +16,13 @@ Four things per document:
 * **the classification signals**, from ``detect_pdf_bytes`` -- the candidate routing features for
   Stage 2. Deliberately not ``classify_pdf_bytes``, which Stage 0 timed: that entry point returns
   four of the nine signals and does not expose ``has_encoding_issues``, ``is_complex_layout``,
-  ``pages_with_tables`` or ``pages_with_columns``, so it is not the call a router would make. The
-  extraction reports its own ``is_complex_layout`` and table/column pages from a deeper read of the
-  page, and those disagree with detect's often enough to be worth carrying separately.
+  ``pages_with_tables`` or ``pages_with_columns``, so it is not the call a router would make.
+  Detect's own copies of those four turn out to be constant over all 100,000 documents --
+  ``has_encoding_issues`` is always false, and the three layout signals are always empty -- so the
+  cheap path carries only ``pdf_type``, ``confidence``, ``page_count``, ``pages_needing_ocr`` and
+  its reasons. The layout signals exist, but only after the extraction, which is why both readings
+  are columns here: ``detect_*`` costs 0.44 ms/page and says nothing, ``extract_*`` costs
+  4.66 ms/page and separates the corpus (71% complex, 55% with tables, 63% with columns).
 * **agreement against the VLM**, computed with
   :mod:`~experiments.datakit.build_pdf_source.quality.route_agreement` exactly as the
   Docling-versus-VLM numbers were, so the two routes are directly comparable.
