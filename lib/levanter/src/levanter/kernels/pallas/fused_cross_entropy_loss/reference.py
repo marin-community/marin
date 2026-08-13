@@ -100,10 +100,6 @@ def linear_softmax_cross_entropy_loss_streaming(
         start = block_idx * block_size
 
         w_block = jax.lax.dynamic_slice(w, (0, start), (w.shape[0], block_size))
-        # Without this, bfloat16 operands give bfloat16 logits. The streaming backward
-        # recomputes them in float32 and forms exp(logits - lse), so the rounding gap becomes
-        # an unbounded gradient error: at magnitude 4000 the peak probability came out ~2.5e3
-        # times high.
         logits = jax.lax.dot_general(
             x,
             w_block,
