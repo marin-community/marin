@@ -90,3 +90,4 @@ Validation so far:
 - Evalstore: 1 passed; CI selector: 39 passed; root evaluation archive: 24 passed.
 - `./infra/pre-commit.py --changed-files --fix`: all gates passed.
 - The first isolated CI leg inherited the repository-root Marin pytest plugin. Added a package-local pytest configuration so Evalstore remains independently testable without taking a reverse dependency on `marin-core`.
+- The selected Levanter suite exposed a repeated race between the fake trainer's `os.abort()` core dump and its three-second deadman. Disabled core dumps in that synthetic crash path so the test still observes `SIGABRT` without misclassifying core-dump latency as a stall.
