@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 _IMEX_DEVICE_ROOT = Path("/dev/nvidia-caps-imex-channels")
 _DIRECT_SYMMETRIC_MEMORY_ENV = "TORCH_SYMMMEM_IMPLICIT_POOL"
+_DISABLE_SYMMETRIC_MEMORY_MULTICAST_ENV = "TORCH_SYMM_MEM_DISABLE_MULTICAST"
 _DEFAULT_SIGNAL_PAD_BYTES = 1024 * 1024
 
 
@@ -158,9 +159,10 @@ def _coordinator_endpoint(rank: ProbeRank) -> str:
 def _validate_fabric(fabric: FabricEnvironment) -> None:
     if not fabric.imex_channels:
         raise RuntimeError(f"No IMEX channel devices are visible under {_IMEX_DEVICE_ROOT}")
-    if fabric.fabric_states and any(value.lower() != "completed" for value in fabric.fabric_states):
+    if not fabric.fabric_states or any(value.lower() != "completed" for value in fabric.fabric_states):
         raise RuntimeError(f"NVLink fabric is not completed: {fabric.fabric_states}")
-    if fabric.fabric_statuses and any(value.lower() != "success" for value in fabric.fabric_statuses):
+    valid_statuses = {"success", "nvml_success"}
+    if not fabric.fabric_statuses or any(value.lower() not in valid_statuses for value in fabric.fabric_statuses):
         raise RuntimeError(f"NVLink fabric status is not successful: {fabric.fabric_statuses}")
     if not fabric.cluster_uuids or any(value.lower() in {"n/a", "none", "0"} for value in fabric.cluster_uuids):
         raise RuntimeError(f"NVLink fabric has no usable cluster UUID: {fabric.cluster_uuids}")
@@ -177,6 +179,31 @@ def _validate_world_fabric(fabrics: list[FabricEnvironment]) -> None:
         raise RuntimeError(f"Ranks do not share one NVLink clique ID: {sorted(clique_ids)}")
 
 
+def _jax_device_round_trip(rank: ProbeRank, expected: int) -> None:
+    import jax  # noqa: PLC0415  # optional GPU dependency, imported only by the live probe
+    import jax.numpy as jnp  # noqa: PLC0415
+
+    if jax.process_index() != rank.global_rank or jax.process_count() != rank.world_size:
+        raise RuntimeError(
+            f"JAX rank/world mismatch: got {jax.process_index()}/{jax.process_count()}, "
+            f"expected {rank.global_rank}/{rank.world_size}"
+        )
+    devices = jax.local_devices()
+    if len(devices) != 1:
+        raise RuntimeError(f"EP64 probe requires one local JAX device, got {devices}")
+    device = devices[0]
+    if device.platform != "gpu":
+        raise RuntimeError(f"EP64 probe requires a JAX GPU device, got {device}")
+    local_hardware_id = getattr(device, "local_hardware_id", None)
+    if local_hardware_id is not None and int(local_hardware_id) != rank.local_device_id:
+        raise RuntimeError(
+            f"JAX local hardware id {local_hardware_id} does not match supervised GPU {rank.local_device_id}"
+        )
+    observed = int(jax.device_get(jax.jit(lambda value: value + 1)(jnp.asarray(expected - 1, dtype=jnp.int32))))
+    if observed != expected:
+        raise RuntimeError(f"JAX device round trip expected {expected}, got {observed}")
+
+
 def run_probe(*, expected_world_size: int, arena_bytes: int, iterations: int, timeout: float) -> ProbeResult:
     """Rendezvous one CUDA arena per rank and validate all peer mappings."""
     rank = probe_rank_from_env(dict(os.environ))
@@ -189,8 +216,10 @@ def run_probe(*, expected_world_size: int, arena_bytes: int, iterations: int, ti
     offsets = sample_offsets(arena_bytes)
 
     os.environ[_DIRECT_SYMMETRIC_MEMORY_ENV] = "0"
+    os.environ[_DISABLE_SYMMETRIC_MEMORY_MULTICAST_ENV] = "1"
     os.environ["LOCAL_RANK"] = str(rank.local_device_id)
     initialize_jax()
+    _jax_device_round_trip(rank, expected=rank.global_rank + 1)
 
     import torch  # noqa: PLC0415  # optional GPU dependency, imported only by the live probe
     import torch.distributed as dist  # noqa: PLC0415
@@ -221,6 +250,8 @@ def run_probe(*, expected_world_size: int, arena_bytes: int, iterations: int, ti
     try:
         world_fabrics: list[FabricEnvironment | None] = [None] * rank.world_size
         dist.all_gather_object(world_fabrics, fabric, group=group)
+        if any(item is None for item in world_fabrics):
+            raise RuntimeError(f"Fabric metadata gather was incomplete: {world_fabrics}")
         _validate_world_fabric([item for item in world_fabrics if item is not None])
         symm_mem.set_signal_pad_size(_DEFAULT_SIGNAL_PAD_BYTES)
         symm_mem.set_backend("CUDA")
@@ -242,9 +273,10 @@ def run_probe(*, expected_world_size: int, arena_bytes: int, iterations: int, ti
         remote_tensors = [handle.get_remote_tensor(peer, arena.size(), arena.dtype) for peer in range(rank.world_size)]
         remote_reads_checked = 0
         remote_writes_checked = 0
+        barrier_timeout_ms = int(timeout * 1000)
         for iteration in range(iterations):
             arena.fill_(pattern_byte(rank.global_rank, iteration))
-            handle.barrier(channel=0)
+            handle.barrier(channel=0, timeout_ms=barrier_timeout_ms)
             for peer, remote in enumerate(remote_tensors):
                 observed = [int(remote[offset].item()) for offset in offsets]
                 expected = pattern_byte(peer, iteration)
@@ -255,23 +287,25 @@ def run_probe(*, expected_world_size: int, arena_bytes: int, iterations: int, ti
                     )
                 remote_reads_checked += len(offsets)
 
-            destination = (rank.global_rank + 1) % rank.world_size
-            remote_tensors[destination][rank.global_rank] = pattern_byte(rank.global_rank, iteration + 101)
-            handle.barrier(channel=1)
-            source = (rank.global_rank - 1) % rank.world_size
-            observed = int(arena[source].item())
-            expected = pattern_byte(source, iteration + 101)
-            if observed != expected:
-                raise AssertionError(
-                    f"Remote write mismatch rank={rank.global_rank} source={source} iteration={iteration}: "
-                    f"expected {expected}, got {observed}"
-                )
-            remote_writes_checked += 1
-            handle.barrier(channel=0)
+            expected_write = pattern_byte(rank.global_rank, iteration + 101)
+            for remote in remote_tensors:
+                remote[rank.global_rank] = expected_write
+            handle.barrier(channel=1, timeout_ms=barrier_timeout_ms)
+            for source in range(rank.world_size):
+                observed = int(arena[source].item())
+                expected = pattern_byte(source, iteration + 101)
+                if observed != expected:
+                    raise AssertionError(
+                        f"Remote write mismatch rank={rank.global_rank} source={source} iteration={iteration}: "
+                        f"expected {expected}, got {observed}"
+                    )
+                remote_writes_checked += 1
+            handle.barrier(channel=0, timeout_ms=barrier_timeout_ms)
 
         torch.cuda.synchronize(device)
-        handle.barrier(channel=1)
+        handle.barrier(channel=1, timeout_ms=barrier_timeout_ms)
         dist.barrier(group=group)
+        _jax_device_round_trip(rank, expected=rank.global_rank + iterations + 1)
         result = ProbeResult(
             rank=rank,
             backend=str(symm_mem.get_backend(device)),

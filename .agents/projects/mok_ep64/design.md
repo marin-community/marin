@@ -16,7 +16,7 @@ strict capacity bound for EP4; EP64 needs a newly explicit capacity contract.
 
 ## Costs / Risks
 
-- The first transport uses PyTorch's private symmetric-memory API and a second NCCL process group.
+- The first transport uses PyTorch's private symmetric-memory API and a CPU/Gloo metadata group.
   We pin its version and isolate it behind a workspace interface, but it remains a dependency risk.
 - Runtime staging adds local copies. Cross-process XLA zero-copy is explicitly deferred.
 - One process per GPU means 64 JAX processes. Compile and host-memory behavior must be measured,
@@ -29,7 +29,7 @@ strict capacity bound for EP4; EP64 needs a newly explicit capacity contract.
 Iris will continue to allocate 16 tasks with four GB200s each in one hard NVLink domain, but will
 set `processes_per_task=4`. Its existing supervisor gives each child one device and a stable global
 rank. JAX forms mesh `(replica_dcn=1, data=1, expert=64, model=1)`; Torch forms a separate 64-rank
-NCCL process group with the same ordering and a separately discovered TCP endpoint.
+Gloo process group with the same ordering and a separately discovered TCP endpoint.
 
 A new symmetric workspace owner allocates one flat, identically sized byte arena per rank and
 workspace slot through `torch.distributed._symmetric_memory`. The arena packs staged forward input,
@@ -47,6 +47,10 @@ process-local four-GPU rendezvous disappear. A deterministic operation stamp der
 epoch, static collective ID, ordinal, and phase guards the one workspace slot. Device readiness,
 completion, and cancellation cells require exact stamp equality. Any mismatch cancels the
 operation instead of accepting a later generation.
+
+Generated upstream masks must also become 64-rank safe. Replace every `1U << peer_rank` source
+patch with either a 64-bit mask (`1ULL`) or per-peer generation cells. Contract tests exercise
+peers 31, 32, and 63 so the historical rank-32 boundary cannot survive compilation.
 
 Initial forward and backward storage are both runtime-staged. JAX retains route `all_gather`,
 schedule construction, shared-weight reductions, and a full-expert-axis `pmax` of the native

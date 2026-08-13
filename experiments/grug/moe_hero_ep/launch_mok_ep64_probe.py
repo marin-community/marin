@@ -50,6 +50,7 @@ def build_probe_request(
         environment=create_environment(
             env_vars={
                 XLA_AUTOTUNE_CACHE_MODE_ENV: "local_only",
+                "TORCH_SYMM_MEM_DISABLE_MULTICAST": "1",
                 "TORCH_SYMMMEM_IMPLICIT_POOL": "0",
             },
             extras=extras_for_resources(resources),
