@@ -14,6 +14,42 @@ def _apply_logit_soft_cap(logits: Float[Array, "B V"], logit_soft_cap: Optional[
     return jnp.tanh(logits / logit_soft_cap) * logit_soft_cap
 
 
+def _logit_state_dtype(dtype: Optional[jnp.dtype]) -> jnp.dtype:
+    """Dtype the logits and the logsumexp carry are held in.
+
+    Float32 when the caller does not name one, matching the accumulate dtype the streaming
+    backward in `xla.py` uses. See `_logits` for why the two must agree.
+    """
+    return jnp.dtype(dtype) if dtype is not None else jnp.dtype(jnp.float32)
+
+
+def _logits(
+    x: Float[Array, "B H"],
+    w: Float[Array, "H V"],
+    *,
+    dtype: Optional[jnp.dtype],
+    precision: jax.lax.PrecisionLike,
+) -> Float[Array, "B V"]:
+    """Logits accumulated in float32, then narrowed to `dtype`.
+
+    `preferred_element_type` is required, not optional. Without it a bfloat16 `x @ w` emits
+    bfloat16 logits, so the forward would round the logits while the streaming backward
+    recomputes them in float32 (`xla.py`). The backward's `probs = exp(logits - lse)` then
+    exponentiates the gap between the two logit sets: at bf16 logit magnitude 4000 a half-ulp
+    gap of ~8 inflates the peak probability by e^8, and the gradient with it.
+    """
+    logits = jax.lax.dot_general(
+        x,
+        w,
+        (((1,), (0,)), ((), ())),
+        precision=precision,
+        preferred_element_type=jnp.float32,
+    )
+    if dtype is not None:
+        logits = logits.astype(dtype)
+    return logits
+
+
 def linear_softmax_cross_entropy_loss_reference(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
@@ -41,15 +77,7 @@ def linear_softmax_cross_entropy_loss_reference(
         lse: [B] logsumexp of logits.
     """
     del block_sizes  # unused in reference implementation
-    logits = jax.lax.dot_general(
-        x,
-        w,
-        (((1,), (0,)), ((), ())),
-        precision=precision,
-    )
-    if dtype is not None:
-        logits = logits.astype(dtype)
-
+    logits = _logits(x, w, dtype=dtype, precision=precision)
     logits = _apply_logit_soft_cap(logits, logit_soft_cap)
     lse = jax.nn.logsumexp(logits, axis=-1)
     label_logits = logits[jnp.arange(logits.shape[0]), labels]
@@ -78,7 +106,7 @@ def linear_softmax_cross_entropy_loss_streaming(
 
     b_dim = x.shape[0]
     v_dim = w.shape[1]
-    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
+    out_dtype = _logit_state_dtype(dtype)
 
     pad = (-v_dim) % block_size
     if pad:
@@ -99,14 +127,7 @@ def linear_softmax_cross_entropy_loss_streaming(
         start = block_idx * block_size
 
         w_block = jax.lax.dynamic_slice(w, (0, start), (w.shape[0], block_size))
-        logits = jax.lax.dot_general(
-            x,
-            w_block,
-            (((1,), (0,)), ((), ())),
-            precision=precision,
-        )
-        if dtype is not None:
-            logits = logits.astype(dtype)
+        logits = _logits(x, w_block, dtype=dtype, precision=precision)
         logits = _apply_logit_soft_cap(logits, logit_soft_cap)
 
         valid = (start + jnp.arange(block_size)) < v_dim

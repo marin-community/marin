@@ -9,7 +9,11 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
-from .reference import linear_softmax_cross_entropy_loss_reference, linear_softmax_cross_entropy_loss_streaming
+from .reference import (
+    _logit_state_dtype,
+    linear_softmax_cross_entropy_loss_reference,
+    linear_softmax_cross_entropy_loss_streaming,
+)
 from .tuned_block_sizes import (
     _largest_divisor_at_most,
     infer_block_sizes_with_tuned_match,
@@ -133,7 +137,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd(
             ),
         )
 
-    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
+    out_dtype = _logit_state_dtype(dtype)
     loss_init = jnp.zeros((b_dim,), dtype=out_dtype)
     lse_init = jnp.zeros((b_dim,), dtype=out_dtype)
     num_b_blocks = b_dim // batch_block_size
@@ -199,7 +203,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
             ),
         )
 
-    out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
+    out_dtype = _logit_state_dtype(dtype)
     loss_init = jnp.zeros((b_dim,), dtype=out_dtype)
     lse_init = jnp.zeros((b_dim,), dtype=out_dtype)
     argmax_init = jnp.zeros((b_dim,), dtype=jnp.int32)
