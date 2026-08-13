@@ -377,6 +377,10 @@ def _compute_total_bytes(file_paths: list[str]) -> int:
     return sum(StoragePath(path).size() for path in file_paths)
 
 
+def _dedup_reducer_schema(input_schema: pl.Schema) -> pl.Schema:
+    return pl.Schema({**input_schema, _DUPLICATE_OUTPUT_COLUMN: pl.Boolean})
+
+
 def _make_split_writer(
     output_dir: str,
     output_schema: pa.Schema | None = None,
@@ -486,6 +490,7 @@ def _build_pipeline(
         .group_by(
             key=col("id"),
             reducer=reducers[dedup_mode],
+            reducer_schema=_dedup_reducer_schema,
             sort_by=col("id"),
             num_output_shards=num_shards,
         )

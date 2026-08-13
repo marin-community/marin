@@ -133,6 +133,10 @@ def test_group_by_dataframe_reducer(zephyr_ctx):
     def sum_group(group: pl.DataFrame) -> pl.DataFrame:
         return group.select("cat", pl.col("val").sum().alias("total")).head(1)
 
+    def sum_group_schema(input_schema: pl.Schema) -> pl.Schema:
+        assert input_schema == pl.Schema({"cat": pl.String, "rank": pl.Int64, "val": pl.Int64})
+        return pl.Schema({"cat": pl.String, "total": pl.Int64})
+
     ds = Dataset.from_list(
         [
             pl.DataFrame(
@@ -143,7 +147,7 @@ def test_group_by_dataframe_reducer(zephyr_ctx):
                 }
             )
         ]
-    ).group_by(key=col("cat"), sort_by=col("rank"), reducer=sum_group)
+    ).group_by(key=col("cat"), sort_by=col("rank"), reducer=sum_group, reducer_schema=sum_group_schema)
 
     results = pl.concat(zephyr_ctx.execute(ds).results).sort("cat")
 

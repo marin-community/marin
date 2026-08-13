@@ -160,6 +160,19 @@ def _dataframe_rows(frame: pl.DataFrame) -> Iterator[dict]:
     yield from frame.iter_rows(named=True)
 
 
+def _per_shard_writer_schema(_input_schema: pl.Schema) -> pl.Schema:
+    return pl.Schema(
+        {
+            "path": pl.String,
+            "count": pl.Int64,
+            "file_idx": pl.Int64,
+            "source_tag": pl.String,
+            "cluster_members": pl.Int64,
+            "canonicals": pl.Int64,
+        }
+    )
+
+
 def _emit_bucket_records(entries: list[CopartitionedShard]) -> Iterator[dict]:
     """For each (bucket, id) pair across all attr shards in *entries*, emit a routing record."""
     for entry in entries:
@@ -361,6 +374,7 @@ def compute_fuzzy_dups_attrs(
             col("file_idx"),
             sort_by=col("id"),
             reducer=aggregator,
+            reducer_schema=_per_shard_writer_schema,
         )
         .flat_map(_dataframe_rows)
     )

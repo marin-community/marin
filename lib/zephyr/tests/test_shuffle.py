@@ -501,10 +501,15 @@ def test_merge_sorted_chunks_dataframe_reducer_external_sort(tmp_path):
     def collect_values(group: pl.DataFrame) -> pl.DataFrame:
         return pl.DataFrame({"k": [group.item(0, "k")], "values": [group["v"].to_list()]})
 
+    def collect_values_schema(_input_schema: pl.Schema) -> pl.Schema:
+        return pl.Schema({"k": pl.String, "values": pl.List(pl.Int64)})
+
     shard = ScatterReader.from_sidecars(paths, target_shard=0)
     with patch("iris.env_resources.TaskResources.from_environment") as mock_res:
         mock_res.return_value = TaskResources(memory_bytes=1, cpu_cores=1, gpu_count=0, tpu_count=0)
-        batches = list(shard.merge_sorted_chunks(str(tmp_path / "sort_work"), col("k"), collect_values))
+        batches = list(
+            shard.merge_sorted_chunks(str(tmp_path / "sort_work"), col("k"), collect_values, collect_values_schema)
+        )
 
     assert pl.concat(batches).sort("k").to_dicts() == [
         {"k": "a", "values": [1, 2]},

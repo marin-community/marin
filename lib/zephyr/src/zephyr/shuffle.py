@@ -450,6 +450,7 @@ class ScatterReader:
         external_sort_dir: str,
         key: Callable | ColumnExpr,
         reducer: Callable,
+        reducer_schema: Callable[[pl.Schema], pl.Schema] | None = None,
     ) -> Iterator[Any]:
         """Merge sorted chunks and reduce each key group.
 
@@ -463,6 +464,8 @@ class ScatterReader:
                 spill intermediate runs.
             key: Group key extractor used by Python-item reducers.
             reducer: One-argument DataFrame reducer or two-argument Python-item reducer.
+            reducer_schema: DataFrame reducer output schema as a function of its
+                input schema.
 
         Yields:
             DataFrame batches from a DataFrame reducer, or Python reducer results.
@@ -480,6 +483,10 @@ class ScatterReader:
         dataframe_reducer = accepts_positional_args(1) and not accepts_positional_args(2)
         if dataframe_reducer and not isinstance(key, ColumnExpr):
             raise TypeError("DataFrame group_by reducers require key=zephyr.expr.col(...)")
+        if dataframe_reducer and reducer_schema is None:
+            raise TypeError("DataFrame group_by reducers require reducer_schema")
+        if not dataframe_reducer and reducer_schema is not None:
+            raise TypeError("Python group_by reducers cannot specify reducer_schema")
 
         worker_context = _worker_ctx_var.get()
 
@@ -494,10 +501,24 @@ class ScatterReader:
                 _worker_ctx_var.reset(token)
 
         def reduce_dataframe_groups(merged: pl.LazyFrame) -> pl.LazyFrame:
+            assert reducer_schema is not None
+            input_schema = pl.Schema(
+                {name: dtype for name, dtype in merged.collect_schema().items() if name != _SORT_KEY_COL}
+            )
+            output_schema = reducer_schema(input_schema)
+
+            def apply_with_schema(group: pl.DataFrame) -> pl.DataFrame:
+                result = apply_dataframe_reducer(group)
+                if result.schema != output_schema:
+                    raise TypeError(
+                        f"DataFrame group_by reducer returned schema {result.schema}, expected {output_schema}"
+                    )
+                return result
+
             return merged.group_by(
                 pl.col(_SORT_KEY_COL).struct.field("key").set_sorted(),
                 maintain_order=True,
-            ).map_groups(apply_dataframe_reducer, schema=None)
+            ).map_groups(apply_with_schema, schema=output_schema)
 
         with pl.Config() as polars_config:
             polars_config.set_streaming_chunk_size(_POLARS_STREAMING_CHUNK_SIZE)

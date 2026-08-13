@@ -18,6 +18,7 @@ from enum import StrEnum, auto
 from itertools import groupby, islice
 from typing import Any
 
+import polars as pl
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
@@ -111,7 +112,8 @@ class Reduce:
     """
 
     key: Callable[[Any], Any] | ColumnExpr
-    reducer_fn: Callable[[Any, Iterator], Any]
+    reducer_fn: Callable
+    reducer_schema: Callable[[pl.Schema], pl.Schema] | None = None
 
 
 @dataclass
@@ -433,7 +435,7 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
                 output_shards=num_shards if num_shards > 0 else None,
             )
             state.end_stage()
-            state.add_op(Reduce(key=op.key, reducer_fn=op.reducer_fn))
+            state.add_op(Reduce(key=op.key, reducer_fn=op.reducer_fn, reducer_schema=op.reducer_schema))
 
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
@@ -782,7 +784,7 @@ def run_stage(
                 # reads all sidecars in parallel and filters for its target.
                 scatter_paths = list(shard)
                 shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
-            stream = shard.merge_sorted_chunks(external_sort_dir, op.key, op.reducer_fn)
+            stream = shard.merge_sorted_chunks(external_sort_dir, op.key, op.reducer_fn, op.reducer_schema)
             op_index += 1
 
         elif isinstance(op, Fold):
