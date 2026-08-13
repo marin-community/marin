@@ -141,3 +141,24 @@ def exact_dups() -> StepSpec:
 def fuzzy_dups() -> StepSpec:
     """Return the pinned fuzzy-duplicate attributes covering every source."""
     return _frozen_step("hero/fuzzy_dups", f"datakit/{FUZZY_DUPS_ID}")
+
+
+def all_paths() -> dict[str, str]:
+    """Every hero data path, keyed ``<stage>/<source>`` for the per-source stages.
+
+    ``tests/datakit/test_hero_data.py`` pins this against
+    ``experiments/datakit/hero_data_paths.json``, so a change that moves a hero
+    path fails there instead of silently repointing whoever reads it.
+    """
+    sources = select_sources(None)
+    minhash_steps = zephyr_datakit_steps(sources).minhash
+    paths = {
+        "exact_dups": exact_dups().output_path,
+        "fuzzy_dups": fuzzy_dups().output_path,
+    }
+    for source in sorted(sources):
+        paths[f"normalized/{source}"] = _read_only(sources[source]).output_path
+        paths[f"minhash/{source}"] = _read_only(minhash_steps[source]).output_path
+        paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
+        paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
+    return paths
