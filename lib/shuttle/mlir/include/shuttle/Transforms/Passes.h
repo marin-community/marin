@@ -39,6 +39,9 @@ std::unique_ptr<Pass> createVerifySimt32RowFoldSchedulePass();
 std::unique_ptr<Pass> createBuildCpuExecutableBundlePass();
 std::unique_ptr<Pass> createVerifyCpuExecutableBundlePass();
 std::unique_ptr<Pass> createReplaceWithCpuExecutableBundlePass();
+std::unique_ptr<Pass> createBuildGpuExecutableBundlePass();
+std::unique_ptr<Pass> createVerifyGpuExecutableBundlePass();
+std::unique_ptr<Pass> createReplaceWithGpuExecutableBundlePass();
 
 std::string normalizedStablehloFingerprint(ModuleOp module);
 

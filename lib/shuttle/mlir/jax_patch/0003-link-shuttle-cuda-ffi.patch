@@ -1,0 +1,39 @@
+diff --git a/jaxlib/cuda/BUILD b/jaxlib/cuda/BUILD
+--- a/jaxlib/cuda/BUILD
++++ b/jaxlib/cuda/BUILD
+@@ -701,6 +701,7 @@ nanobind_extension(
+         "@local_config_cuda//cuda:cuda_headers",
+         "@nanobind",
++        "@shuttle_mlir//:ShuttleGpuFfi",
+         "@xla//xla/pjrt:status_casters",
+         "@xla//xla/tsl/cuda:cublas",
+         "@xla//xla/tsl/cuda:cudart",
+     ],
+diff --git a/jaxlib/cuda/cuda_plugin_extension.cc b/jaxlib/cuda/cuda_plugin_extension.cc
+--- a/jaxlib/cuda/cuda_plugin_extension.cc
++++ b/jaxlib/cuda/cuda_plugin_extension.cc
+@@ -23,4 +23,5 @@ limitations under the License.
+ #include "jaxlib/gpu/gpu_plugin_extension.h"
+ #include "jaxlib/gpu/py_client_gpu.h"
+ #include "jaxlib/kernel_nanobind_helpers.h"
++#include "shuttle/Runtime/GpuFfi.h"
+ #include "xla/pjrt/status_casters.h"
+@@ -69,6 +70,18 @@ nb::dict FfiHandlers() {
+   dict["xla_buffer_python_gpu_callback_cmd_buffer"] =
+       EncapsulateFfiHandler(cuda::kXlaBufferPythonGpuCallbackCmdBuffer);
+   dict["dce_sink"] =
+       EncapsulateFfiHandler(cuda::dce_sink_gpu_ffi);
++  XLA_FFI_Handler_Bundle shuttle =
++      mlir::shuttle::gpuExecutableBundleFfiHandlerBundle();
++  nb::dict shuttle_handlers;
++  shuttle_handlers["instantiate"] =
++      EncapsulateFfiHandler(shuttle.instantiate);
++  shuttle_handlers["prepare"] = EncapsulateFfiHandler(shuttle.prepare);
++  shuttle_handlers["initialize"] =
++      EncapsulateFfiHandler(shuttle.initialize);
++  shuttle_handlers["execute"] = EncapsulateFfiHandler(shuttle.execute);
++  shuttle_handlers["api_version"] = 1;
++  shuttle_handlers["traits"] = 0;
++  dict["shuttle.gpu.executable_bundle.v1"] = shuttle_handlers;
+   return dict;
+ }

@@ -145,7 +145,9 @@ def Shuttle_ExecutableCodeFormat
                   [I32EnumAttrCase<"CpuBytecodeV1", 0,
                                    "cpu_bytecode_v1">,
                    I32EnumAttrCase<"CpuBytecodeV2", 1,
-                                   "cpu_bytecode_v2">]> {
+                                   "cpu_bytecode_v2">,
+                   I32EnumAttrCase<"CudaPtxSm90V1", 2,
+                                   "cuda_ptx_sm90_v1">]> {
   let genSpecializedAttr = 0;
   let cppNamespace = "::mlir::shuttle";
 }
@@ -201,7 +203,9 @@ def Shuttle_ExecutablePredicationAttr
 
 def Shuttle_ExecutableCompletion
     : I32EnumAttr<"ExecutableCompletion", "Local consumer completion policy",
-                  [I32EnumAttrCase<"Synchronous", 0, "synchronous">]> {
+                  [I32EnumAttrCase<"Synchronous", 0, "synchronous">,
+                   I32EnumAttrCase<"StreamOrdered", 1,
+                                   "stream_ordered">]> {
   let genSpecializedAttr = 0;
   let cppNamespace = "::mlir::shuttle";
 }

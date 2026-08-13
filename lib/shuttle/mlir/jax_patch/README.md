@@ -34,6 +34,15 @@ Apply `0002-add-acceptance-observer-bridge.patch` after `0001` only for the
 acceptance wheel. The source/query proof expects both patches and checks that
 the test bridge is selected only with its build define.
 
+The CUDA-only ABI 10 proof additionally applies
+`0003-link-shuttle-cuda-ffi.patch` to the exact pinned JAX checkout. That patch
+links `ShuttleGpuFfi` only into `cuda_plugin_extension` and exposes the single
+four-stage `shuttle.gpu.executable_bundle.v1` bundle from the plugin's existing
+`ffi_handlers()` entry point. It does not register the target in `_jax` or the
+Host adapter. The checked-in registration driver routes that returned bundle
+through the plugin's real PJRT registration entry point using a fake extension;
+it does not load kernels or launch GPU work.
+
 For the reviewed CPU acceptance wheel, first run the guarded source/query
 proof, then build a release-versioned jaxlib wheel:
 

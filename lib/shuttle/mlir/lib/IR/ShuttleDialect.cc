@@ -1273,22 +1273,26 @@ std::string executableCodeDigest(ArrayRef<int8_t> code) {
 }
 
 std::string deviceModuleFingerprint(DeviceModuleOp module) {
-  StringRef version =
-      module.getCodeFormat() == ExecutableCodeFormat::CpuBytecodeV2
-          ? "shuttle.device_module.v2"
-          : "shuttle.device_module.v1";
+  StringRef version = "shuttle.device_module.v1";
+  if (module.getCodeFormat() == ExecutableCodeFormat::CpuBytecodeV2) {
+    version = "shuttle.device_module.v2";
+  } else if (module.getCodeFormat() == ExecutableCodeFormat::CudaPtxSm90V1) {
+    version = "shuttle.device_module.v3";
+  }
   return executablePlanFingerprint<DeviceModuleOp, DeviceModuleYieldOp>(
       module, version);
 }
 
 std::string invocationAbiFingerprint(InvocationAbiOp abi) {
   return executablePlanFingerprint<InvocationAbiOp, InvocationAbiYieldOp>(
-      abi, "shuttle.invocation_abi.v2");
+      abi, abi.getSchemaVersion() == 3 ? "shuttle.invocation_abi.v3"
+                                       : "shuttle.invocation_abi.v2");
 }
 
 std::string executableBundleFingerprint(ExecutableBundleOp bundle) {
   return executablePlanFingerprint<ExecutableBundleOp, Operation>(
-      bundle, "shuttle.executable_bundle.v1");
+      bundle, bundle.getSchemaVersion() == 2 ? "shuttle.executable_bundle.v2"
+                                             : "shuttle.executable_bundle.v1");
 }
 
 LogicalResult DeviceModuleOp::verifyRegions() {
@@ -1299,14 +1303,20 @@ LogicalResult DeviceModuleOp::verifyRegions() {
       (getSchemaVersion() == 1 &&
        getCodeFormat() == ExecutableCodeFormat::CpuBytecodeV1) ||
       (getSchemaVersion() == 2 &&
-       getCodeFormat() == ExecutableCodeFormat::CpuBytecodeV2);
+       getCodeFormat() == ExecutableCodeFormat::CpuBytecodeV2) ||
+      (getSchemaVersion() == 3 &&
+       getCodeFormat() == ExecutableCodeFormat::CudaPtxSm90V1);
   if (!validVersionPair) {
     return emitOpError(
-        "requires matching device-module and CPU bytecode versions");
+        "requires a matching device-module and executable-code version");
   }
   if (getCodeFormat() == ExecutableCodeFormat::CpuBytecodeV2 &&
       getPolicy() != NumericalPolicy::SourceOrdered) {
     return emitOpError("requires source_ordered policy for CPU bytecode v2");
+  }
+  const bool gpu = getCodeFormat() == ExecutableCodeFormat::CudaPtxSm90V1;
+  if (gpu && getPolicy() != NumericalPolicy::SourceOrdered) {
+    return emitOpError("requires source_ordered policy for CUDA PTX v1");
   }
   if (!isLowerHexDigest(getSourceScheduleFingerprint()) ||
       !isLowerHexDigest(getCodeDigest()) ||
@@ -1344,7 +1354,12 @@ LogicalResult DeviceModuleOp::verifyRegions() {
           "entry byte range must partition the code object");
     }
     expectedOffset += entry.getCodeLength();
-    if (entry.getCodeDigest() != getCodeDigest()) {
+    ArrayRef<int8_t> entryCode =
+        getCode().slice(entry.getCodeOffset(), entry.getCodeLength());
+    if (gpu && entry.getCodeDigest() != executableCodeDigest(entryCode)) {
+      return entry.emitOpError("entrypoint code SHA-256 is invalid");
+    }
+    if (!gpu && entry.getCodeDigest() != getCodeDigest()) {
       return entry.emitOpError(
           "entrypoint must bind the verified device-module code object");
     }
@@ -1391,6 +1406,55 @@ LogicalResult DeviceModuleOp::verifyRegions() {
         entry.getPredication() != ExecutablePredication::DomainBounds) {
       return entry.emitOpError("uses an unsupported predication policy");
     }
+    if (!gpu) {
+      if (entry.getGrid() || entry.getBlock() ||
+          entry.getDynamicSharedBytes() || entry.getKernelArity()) {
+        return entry.emitOpError(
+            "CPU entries do not permit CUDA launch attributes");
+      }
+      continue;
+    }
+    if (!entry.getGrid() || !entry.getBlock() ||
+        !entry.getDynamicSharedBytes() || !entry.getKernelArity() ||
+        entry.getGrid()->size() != 3 || entry.getBlock()->size() != 3) {
+      return entry.emitOpError("CUDA entry requires complete launch geometry");
+    }
+    uint64_t threads = 1;
+    for (int64_t extent : *entry.getGrid()) {
+      if (extent <= 0 || extent > UINT32_MAX) {
+        return entry.emitOpError("CUDA grid extent is unsupported");
+      }
+    }
+    for (int64_t extent : *entry.getBlock()) {
+      if (extent <= 0 || extent > UINT16_MAX ||
+          static_cast<uint64_t>(extent) > 1024 / threads) {
+        return entry.emitOpError("CUDA block extent is unsupported");
+      }
+      threads *= extent;
+    }
+    if (*entry.getDynamicSharedBytes() < 0 ||
+        *entry.getDynamicSharedBytes() > 16 * 1024 ||
+        *entry.getKernelArity() !=
+            static_cast<int64_t>(entry.getInputBuffers().size() +
+                                 entry.getOutputBuffers().size())) {
+      return entry.emitOpError("CUDA scratch or kernel arity is invalid");
+    }
+    StringRef ptx(reinterpret_cast<const char *>(entryCode.data()),
+                  entryCode.size());
+    if (ptx.empty() || !ptx.ends_with("\n") ||
+        ptx.find(".version 8.0") == StringRef::npos ||
+        ptx.find(".target sm_90") == StringRef::npos ||
+        ptx.find(".address_size 64") == StringRef::npos ||
+        ptx.find(".visible .entry shuttle_entry(") == StringRef::npos ||
+        ptx.find("ret;") == StringRef::npos) {
+      return entry.emitOpError("CUDA PTX slice is not the closed SM90 form");
+    }
+    for (char character : ptx) {
+      if (character != '\n' && character != '\t' &&
+          (character < 0x20 || character > 0x7e)) {
+        return entry.emitOpError("CUDA PTX slice must be printable ASCII");
+      }
+    }
   }
   if (ordinal == 0 ||
       expectedOffset != static_cast<int64_t>(getCode().size())) {
@@ -1410,12 +1474,12 @@ LogicalResult InvocationAbiOp::verifyRegions() {
   if (!getOperation()->getDiscardableAttrs().empty()) {
     return emitOpError("does not permit discardable attributes");
   }
-  if (getSchemaVersion() != 2 ||
+  if ((getSchemaVersion() != 2 && getSchemaVersion() != 3) ||
       !isLowerHexDigest(getSourcePlanFingerprint()) ||
       !isLowerHexDigest(getSourceScheduleFingerprint()) ||
       !isLowerHexDigest(getFingerprint())) {
     return emitOpError(
-        "requires ABI schema 2 and lowercase SHA-256 fingerprints");
+        "requires ABI schema 2 or 3 and lowercase SHA-256 fingerprints");
   }
   Region &body = getBody();
   if (body.empty() || !llvm::hasSingleElement(body) ||
@@ -1463,10 +1527,18 @@ LogicalResult InvocationAbiOp::verifyRegions() {
       return slot.emitOpError("required bytes and strides must encode "
                               "contiguous row-major storage");
     }
+    const ExecutableAddressSpace expectedAddressSpace =
+        getSchemaVersion() == 3 ? ExecutableAddressSpace::Device
+                                : ExecutableAddressSpace::Host;
     if (slot.getOffset() != 0 || slot.getAlignment() != *elementBytes ||
-        slot.getAddressSpace() != ExecutableAddressSpace::Host) {
-      return slot.emitOpError("closed CPU ABI requires host storage, zero "
-                              "offset, and natural alignment");
+        slot.getAddressSpace() != expectedAddressSpace) {
+      if (getSchemaVersion() == 3)
+        return slot.emitOpError(
+            "closed GPU ABI requires device storage, zero offset, and "
+            "natural alignment");
+      return slot.emitOpError(
+          "closed CPU ABI requires host storage, zero offset, and natural "
+          "alignment");
     }
     if (!aliasGroups.insert(slot.getAliasGroup()).second ||
         slot.getAliasGroup() != slot.getOrdinal() ||
@@ -1516,14 +1588,17 @@ LogicalResult ExecutableBundleOp::verify() {
   if (!getOperation()->getDiscardableAttrs().empty()) {
     return emitOpError("does not permit discardable attributes");
   }
-  if (getSchemaVersion() != 1 ||
-      getCompletion() != ExecutableCompletion::Synchronous ||
-      !isLowerHexDigest(getSourceScheduleFingerprint()) ||
+  const bool validVersion =
+      (getSchemaVersion() == 1 &&
+       getCompletion() == ExecutableCompletion::Synchronous) ||
+      (getSchemaVersion() == 2 &&
+       getCompletion() == ExecutableCompletion::StreamOrdered);
+  if (!validVersion || !isLowerHexDigest(getSourceScheduleFingerprint()) ||
       !isLowerHexDigest(getDeviceModuleFingerprint()) ||
       !isLowerHexDigest(getInvocationAbiFingerprint()) ||
       !isLowerHexDigest(getFingerprint())) {
-    return emitOpError("requires bundle schema 1, synchronous completion, and "
-                       "SHA-256 bindings");
+    return emitOpError(
+        "requires a matching bundle schema/completion and SHA-256 bindings");
   }
   auto module = getOperation()->getParentOfType<ModuleOp>();
   if (!module) {
@@ -1545,7 +1620,14 @@ LogicalResult ExecutableBundleOp::verify() {
       getDeviceModuleFingerprint() != deviceModule.getFingerprint() ||
       getInvocationAbiFingerprint() != abi.getFingerprint() ||
       getFingerprint() != executableBundleFingerprint(*this)) {
-    return emitOpError("invalid closed CPU executable bundle");
+    return emitOpError(getSchemaVersion() == 1
+                           ? "invalid closed CPU executable bundle"
+                           : "invalid closed GPU executable bundle");
+  }
+  const bool gpuBundle = getSchemaVersion() == 2;
+  if (gpuBundle != (deviceModule.getSchemaVersion() == 3) ||
+      gpuBundle != (abi.getSchemaVersion() == 3)) {
+    return emitOpError("bundle schema does not match its device and ABI roots");
   }
   return success();
 }

@@ -27,7 +27,7 @@ namespace mlir::shuttle {
 namespace {
 
 constexpr int64_t kSchemaVersion = 1;
-constexpr int64_t kPipelineAbiVersion = 9;
+constexpr int64_t kPipelineAbiVersion = 10;
 constexpr int64_t kMaximumNativeInteger = 2147483647;
 constexpr size_t kMaximumTensorRank = 8;
 constexpr size_t kMaximumClusterRank = 3;
@@ -157,7 +157,7 @@ parseShuttleXlaOptions(absl::string_view serializedOptions) {
     return invalidOptions("field 'schema_version' must be integer 1");
   }
   if (object->getInteger("pipeline_abi_version") != kPipelineAbiVersion) {
-    return invalidOptions("field 'pipeline_abi_version' must be integer 9");
+    return invalidOptions("field 'pipeline_abi_version' must be integer 10");
   }
 
   std::optional<llvm::StringRef> numerics = object->getString("numerics");
@@ -168,9 +168,12 @@ parseShuttleXlaOptions(absl::string_view serializedOptions) {
     options.executionMode = ExecutionMode::StablehloRoundTrip;
   } else if (executionMode && *executionMode == "cpu_executable_bundle") {
     options.executionMode = ExecutionMode::CpuExecutableBundle;
+  } else if (executionMode && *executionMode == "gpu_executable_bundle") {
+    options.executionMode = ExecutionMode::GpuExecutableBundle;
   } else {
     return invalidOptions("field 'execution_mode' must be "
-                          "'stablehlo_round_trip' or 'cpu_executable_bundle'");
+                          "'stablehlo_round_trip', 'cpu_executable_bundle', "
+                          "or 'gpu_executable_bundle'");
   }
   if (numerics && *numerics == "source_ordered") {
     options.numerics = NumericalPolicy::SourceOrdered;
@@ -179,6 +182,11 @@ parseShuttleXlaOptions(absl::string_view serializedOptions) {
   } else {
     return invalidOptions(
         "field 'numerics' must be 'source_ordered' or 'fast'");
+  }
+  if (options.executionMode == ExecutionMode::GpuExecutableBundle &&
+      options.numerics != NumericalPolicy::SourceOrdered) {
+    return invalidOptions(
+        "GPU executable bundle requires source_ordered numerics");
   }
   const llvm::json::Value *tuningValue = object->get("tuning");
   const llvm::json::Object *tuning = tuningValue->getAsObject();

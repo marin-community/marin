@@ -176,7 +176,7 @@ def Shuttle_DeviceModuleOp
     : Shuttle_Op<"device_module", [IsolatedFromAbove,
                          SingleBlockImplicitTerminator<
                              "::mlir::shuttle::DeviceModuleYieldOp">]> {
-  let summary = "Closed generated CPU bytecode and entrypoint bindings";
+  let summary = "Closed generated device code and entrypoint bindings";
   let arguments = (ins I64Attr:$schema_version,
       Shuttle_ExecutableCodeFormatAttr:$code_format, Shuttle_PolicyAttr:$policy,
       StrAttr:$source_schedule_fingerprint, DenseI8ArrayAttr:$code,
@@ -196,7 +196,11 @@ def Shuttle_DeviceEntryOp
       DenseI64ArrayAttr:$dependencies,
       Shuttle_ExecutablePredicationAttr:$predication,
       OptionalAttr<Shuttle_ScheduleReductionOrderAttr>:$reduction_order,
-      StrAttr:$code_digest);
+      StrAttr:$code_digest,
+      OptionalAttr<DenseI64ArrayAttr>:$grid,
+      OptionalAttr<DenseI64ArrayAttr>:$block,
+      OptionalAttr<I64Attr>:$dynamic_shared_bytes,
+      OptionalAttr<I64Attr>:$kernel_arity);
 }
 
 def Shuttle_DeviceModuleYieldOp

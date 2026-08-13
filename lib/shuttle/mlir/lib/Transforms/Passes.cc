@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "ObserverInternal.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -34,6 +35,7 @@
 #include "shuttle/IR/ShuttleDialect.h"
 #include "shuttle/IR/ShuttleOps.h"
 #include "shuttle/Runtime/CpuBytecode.h"
+#include "shuttle/Runtime/GpuExecutable.h"
 #include "stablehlo/dialect/StablehloOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -65,6 +67,9 @@ namespace mlir::shuttle {
 #define GEN_PASS_DEF_SHUTTLEBUILDCPUEXECUTABLEBUNDLEPASS
 #define GEN_PASS_DEF_SHUTTLEVERIFYCPUEXECUTABLEBUNDLEPASS
 #define GEN_PASS_DEF_SHUTTLEREPLACEWITHCPUEXECUTABLEBUNDLEPASS
+#define GEN_PASS_DEF_SHUTTLEBUILDGPUEXECUTABLEBUNDLEPASS
+#define GEN_PASS_DEF_SHUTTLEVERIFYGPUEXECUTABLEBUNDLEPASS
+#define GEN_PASS_DEF_SHUTTLEREPLACEWITHGPUEXECUTABLEBUNDLEPASS
 #include "shuttle/Transforms/Passes.h.inc"
 
 namespace {
@@ -74,7 +79,7 @@ ShuttlePipelineOptions commandLinePipelineOptions(NumericalPolicy numerics) {
   options.numerics = numerics;
   if (numerics == NumericalPolicy::Fast) {
     options.canonicalOptions =
-        R"json({"execution_mode":"stablehlo_round_trip","numerics":"fast","pipeline_abi_version":9,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+        R"json({"execution_mode":"stablehlo_round_trip","numerics":"fast","pipeline_abi_version":10,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
   }
   return options;
 }
@@ -1755,9 +1760,14 @@ LogicalResult verifyManifestCoverage(ModuleOp module, DictionaryAttr manifest) {
       "{\"execution_mode\":\"cpu_executable_bundle\",\"numerics\":\"";
   cpuPrefix.append(policy.getValue().data(), policy.getValue().size());
   cpuPrefix.push_back('"');
+  std::string gpuPrefix =
+      "{\"execution_mode\":\"gpu_executable_bundle\",\"numerics\":\"";
+  gpuPrefix.append(policy.getValue().data(), policy.getValue().size());
+  gpuPrefix.push_back('"');
   const bool validOptionsPrefix =
       canonicalOptions.getValue().starts_with(roundTripPrefix) ||
-      canonicalOptions.getValue().starts_with(cpuPrefix);
+      canonicalOptions.getValue().starts_with(cpuPrefix) ||
+      canonicalOptions.getValue().starts_with(gpuPrefix);
   if ((policy.getValue() != "source_ordered" && policy.getValue() != "fast") ||
       tuningDigest.getValue().size() != 64 ||
       !llvm::all_of(tuningDigest.getValue(), llvm::isHexDigit) ||
@@ -3831,6 +3841,324 @@ struct CpuExecutableSpec {
   SmallVector<CpuSlotSpec> slots;
 };
 
+struct GpuEntrySpec {
+  int64_t ordinal;
+  int64_t codeOffset;
+  int64_t codeLength;
+  SmallVector<int64_t> inputs;
+  SmallVector<int64_t> outputs;
+  SmallVector<int64_t> dependencies;
+  ExecutablePredication predication;
+  std::optional<ScheduleReductionOrder> reductionOrder;
+  std::array<int64_t, 3> grid;
+  std::array<int64_t, 3> block;
+  int64_t dynamicSharedBytes;
+  int64_t kernelArity;
+  std::string codeDigest;
+};
+
+struct GpuExecutableSpec {
+  SmallVector<int8_t> code;
+  std::vector<GpuEntrySpec> entries;
+  SmallVector<CpuSlotSpec> slots;
+};
+
+FailureOr<int64_t> staticElementCount(RankedTensorType type) {
+  int64_t elements = 1;
+  for (int64_t extent : type.getShape()) {
+    if (extent <= 0 || elements > std::numeric_limits<int64_t>::max() / extent)
+      return failure();
+    elements *= extent;
+  }
+  return elements;
+}
+
+struct PtxEmitter {
+  explicit PtxEmitter(int64_t arity) : arity(arity), stream(text) {}
+
+  void header(StringRef certificate) {
+    stream << ".version 8.0\n.target sm_90\n.address_size 64\n"
+              "// shuttle structural certificate: "
+           << certificate << "\n.visible .entry shuttle_entry(";
+    for (int64_t index = 0; index < arity; ++index) {
+      if (index)
+        stream << ", ";
+      stream << ".param .u64 p" << index;
+    }
+    stream << ")\n{\n"
+              "  .reg .pred %p<16>;\n"
+              "  .reg .b16 %h<16>;\n"
+              "  .reg .b32 %r<64>;\n"
+              "  .reg .b64 %rd<128>;\n"
+              "  .reg .f32 %f<128>;\n";
+  }
+
+  int64_t nextF32() { return f32++; }
+  int64_t nextU64() { return u64++; }
+
+  void finish() { stream << "$done:\n  ret;\n}\n"; }
+
+  int64_t arity;
+  int64_t f32 = 0;
+  int64_t u64 = 8;
+  std::string text;
+  llvm::raw_string_ostream stream;
+};
+
+LogicalResult emitLinearThread(PtxEmitter &ptx, int64_t elements) {
+  if (elements <= 0 || elements > UINT32_MAX)
+    return failure();
+  ptx.stream << "  mov.u32 %r0, %tid.x;\n"
+                "  mov.u32 %r1, %ctaid.x;\n"
+                "  mov.u32 %r2, %ntid.x;\n"
+                "  mad.lo.u32 %r3, %r1, %r2, %r0;\n"
+                "  setp.ge.u32 %p0, %r3, "
+             << elements << ";\n  @%p0 bra $done;\n"
+             << "  cvt.u64.u32 %rd0, %r3;\n";
+  return success();
+}
+
+FailureOr<SmallVector<int64_t>> emitOutputCoordinates(PtxEmitter &ptx,
+                                                      RankedTensorType type) {
+  SmallVector<int64_t> coordinates;
+  int64_t stride = 1;
+  SmallVector<int64_t> strides(type.getRank());
+  for (int64_t axis = type.getRank(); axis > 0; --axis) {
+    strides[axis - 1] = stride;
+    stride *= type.getDimSize(axis - 1);
+  }
+  for (auto [axis, extent] : llvm::enumerate(type.getShape())) {
+    int64_t reg = ptx.nextU64();
+    ptx.stream << "  div.u64 %rd" << reg << ", %rd0, " << strides[axis]
+               << ";\n  rem.u64 %rd" << reg << ", %rd" << reg << ", " << extent
+               << ";\n";
+    coordinates.push_back(reg);
+  }
+  return coordinates;
+}
+
+FailureOr<int64_t> emitAffineCoordinate(PtxEmitter &ptx, AffineExpr expression,
+                                        ArrayRef<int64_t> coordinates) {
+  if (auto dimension = dyn_cast<AffineDimExpr>(expression)) {
+    if (dimension.getPosition() >= coordinates.size())
+      return failure();
+    return coordinates[dimension.getPosition()];
+  }
+  auto binary = dyn_cast<AffineBinaryOpExpr>(expression);
+  if (!binary || binary.getKind() != AffineExprKind::FloorDiv)
+    return failure();
+  auto dimension = dyn_cast<AffineDimExpr>(binary.getLHS());
+  auto divisor = dyn_cast<AffineConstantExpr>(binary.getRHS());
+  if (!dimension || !divisor || divisor.getValue() <= 1 ||
+      dimension.getPosition() >= coordinates.size())
+    return failure();
+  int64_t reg = ptx.nextU64();
+  ptx.stream << "  div.u64 %rd" << reg << ", %rd"
+             << coordinates[dimension.getPosition()] << ", "
+             << divisor.getValue() << ";\n";
+  return reg;
+}
+
+FailureOr<int64_t> emitMapInput(PtxEmitter &ptx, int64_t parameter,
+                                RankedTensorType type, AffineMap map,
+                                ArrayRef<int64_t> coordinates) {
+  if (map.getNumResults() != type.getRank())
+    return failure();
+  int64_t linear = ptx.nextU64();
+  ptx.stream << "  mov.u64 %rd" << linear << ", 0;\n";
+  for (auto [axis, expression] : llvm::enumerate(map.getResults())) {
+    FailureOr<int64_t> coordinate =
+        emitAffineCoordinate(ptx, expression, coordinates);
+    if (failed(coordinate))
+      return failure();
+    ptx.stream << "  mad.lo.u64 %rd" << linear << ", %rd" << linear << ", "
+               << type.getDimSize(axis) << ", %rd" << *coordinate << ";\n";
+  }
+  int64_t pointer = ptx.nextU64();
+  int64_t bytes = type.getElementType().isBF16() ? 2 : 4;
+  ptx.stream << "  ld.param.u64 %rd" << pointer << ", [p" << parameter
+             << "];\n  mad.lo.u64 %rd" << pointer << ", %rd" << linear << ", "
+             << bytes << ", %rd" << pointer << ";\n";
+  int64_t value = ptx.nextF32();
+  if (type.getElementType().isBF16()) {
+    ptx.stream << "  ld.global.u16 %h0, [%rd" << pointer
+               << "];\n  cvt.f32.bf16 %f" << value << ", %h0;\n";
+  } else {
+    ptx.stream << "  ld.global.f32 %f" << value << ", [%rd" << pointer
+               << "];\n";
+  }
+  return value;
+}
+
+FailureOr<int64_t> emitScalarBody(PtxEmitter &ptx, Block &body,
+                                  ArrayRef<int64_t> arguments) {
+  if (body.getNumArguments() != arguments.size())
+    return failure();
+  DenseMap<Value, int64_t> values;
+  for (auto [argument, reg] : llvm::zip_equal(body.getArguments(), arguments))
+    values[argument] = reg;
+  for (Operation &operation : body.without_terminator()) {
+    int64_t result = ptx.nextF32();
+    if (auto constant = dyn_cast<arith::ConstantOp>(operation)) {
+      auto value = dyn_cast<FloatAttr>(constant.getValue());
+      if (!value || !value.getType().isF32())
+        return failure();
+      uint32_t bits = value.getValue().bitcastToAPInt().getZExtValue();
+      ptx.stream << "  mov.b32 %f" << result << ", 0f"
+                 << llvm::utohexstr(bits, /*LowerCase=*/false, /*Width=*/8)
+                 << ";\n";
+    } else if (isa<ScalarConvertOp>(operation)) {
+      result = values.lookup(operation.getOperand(0));
+    } else if (auto add = dyn_cast<arith::AddFOp>(operation)) {
+      ptx.stream << "  add.rn.f32 %f" << result << ", %f"
+                 << values.lookup(add.getLhs()) << ", %f"
+                 << values.lookup(add.getRhs()) << ";\n";
+    } else if (auto multiply = dyn_cast<arith::MulFOp>(operation)) {
+      ptx.stream << "  mul.rn.f32 %f" << result << ", %f"
+                 << values.lookup(multiply.getLhs()) << ", %f"
+                 << values.lookup(multiply.getRhs()) << ";\n";
+    } else if (auto divide = dyn_cast<arith::DivFOp>(operation)) {
+      ptx.stream << "  div.rn.f32 %f" << result << ", %f"
+                 << values.lookup(divide.getLhs()) << ", %f"
+                 << values.lookup(divide.getRhs()) << ";\n";
+    } else if (auto rsqrt = dyn_cast<math::RsqrtOp>(operation)) {
+      int64_t root = ptx.nextF32();
+      ptx.stream << "  sqrt.rn.f32 %f" << root << ", %f"
+                 << values.lookup(rsqrt.getOperand()) << ";\n  rcp.rn.f32 %f"
+                 << result << ", %f" << root << ";\n";
+    } else {
+      return failure();
+    }
+    if (operation.getNumResults() != 1)
+      return failure();
+    values[operation.getResult(0)] = result;
+  }
+  auto yield = dyn_cast<YieldOp>(body.getTerminator());
+  if (!yield || yield.getValues().size() != 1 ||
+      !values.count(yield.getValues().front()))
+    return failure();
+  return values.lookup(yield.getValues().front());
+}
+
+FailureOr<std::string> emitMapPtx(MapOp map, ScheduleTaskOp task) {
+  auto output = dyn_cast<RankedTensorType>(map.getResult(0).getType());
+  if (!output || map.getNumResults() != 1)
+    return failure();
+  FailureOr<int64_t> elements = staticElementCount(output);
+  if (failed(elements))
+    return failure();
+  PtxEmitter ptx(map.getInputs().size() + 1);
+  ptx.header(task.getSemanticFingerprint());
+  if (failed(emitLinearThread(ptx, *elements)))
+    return failure();
+  FailureOr<SmallVector<int64_t>> coordinates =
+      emitOutputCoordinates(ptx, output);
+  if (failed(coordinates))
+    return failure();
+  SmallVector<int64_t> arguments;
+  ArrayRef<Attribute> maps = map.getIndexingMaps().getValue();
+  if (maps.size() != map.getInputs().size() + 1)
+    return failure();
+  for (auto [index, input] : llvm::enumerate(map.getInputs())) {
+    auto inputType = dyn_cast<RankedTensorType>(input.getType());
+    auto indexing = dyn_cast<AffineMapAttr>(maps[index]);
+    if (!inputType || !indexing)
+      return failure();
+    FailureOr<int64_t> value =
+        emitMapInput(ptx, index, inputType, indexing.getValue(), *coordinates);
+    if (failed(value))
+      return failure();
+    arguments.push_back(*value);
+  }
+  FailureOr<int64_t> result =
+      emitScalarBody(ptx, map.getBody().front(), arguments);
+  if (failed(result))
+    return failure();
+  int64_t outputPointer = ptx.nextU64();
+  ptx.stream << "  ld.param.u64 %rd" << outputPointer << ", [p"
+             << map.getInputs().size() << "];\n";
+  int64_t bytes = output.getElementType().isBF16() ? 2 : 4;
+  ptx.stream << "  mad.lo.u64 %rd" << outputPointer << ", %rd0, " << bytes
+             << ", %rd" << outputPointer << ";\n";
+  if (output.getElementType().isBF16()) {
+    ptx.stream << "  cvt.rn.bf16.f32 %h1, %f" << *result
+               << ";\n  st.global.u16 [%rd" << outputPointer << "], %h1;\n";
+  } else {
+    ptx.stream << "  st.global.f32 [%rd" << outputPointer << "], %f" << *result
+               << ";\n";
+  }
+  ptx.finish();
+  ptx.stream.flush();
+  return ptx.text;
+}
+
+FailureOr<std::string> emitFoldPtx(FoldOp fold, ScheduleTaskOp task) {
+  if (fold.getReductionDimensions() != ArrayRef<int64_t>({1}) ||
+      task.getDomainShape() != ArrayRef<int64_t>({2048, 4096}) ||
+      task.getWorkgroupThreads() != 256 || task.getScratchBytes() != 1024)
+    return failure();
+  PtxEmitter ptx(3);
+  ptx.header(task.getSemanticFingerprint());
+  ptx.stream << "  .extern .shared .align 4 .b8 shuttle_smem[];\n"
+                "  mov.u32 %r0, %tid.x;\n"
+                "  mov.u32 %r1, %ctaid.x;\n"
+                "  setp.ge.u32 %p0, %r1, 2048;\n"
+                "  @%p0 bra $done;\n"
+                "  ld.param.u64 %rd0, [p0];\n"
+                "  cvt.u64.u32 %rd1, %r1;\n"
+                "  mul.lo.u64 %rd1, %rd1, 16384;\n"
+                "  add.u64 %rd0, %rd0, %rd1;\n"
+                "  cvt.u64.u32 %rd2, %r0;\n"
+                "  mul.lo.u64 %rd2, %rd2, 64;\n"
+                "  add.u64 %rd0, %rd0, %rd2;\n";
+  for (int64_t index = 0; index < 16; ++index)
+    ptx.stream << "  ld.global.f32 %f" << index << ", [%rd0+" << index * 4
+               << "];\n";
+  int64_t width = 16;
+  while (width > 1) {
+    for (int64_t index = 0; index < width / 2; ++index)
+      ptx.stream << "  add.rn.f32 %f" << index << ", %f" << index * 2 << ", %f"
+                 << index * 2 + 1 << ";\n";
+    width /= 2;
+  }
+  ptx.stream << "  cvt.u64.u32 %rd3, %r0;\n"
+                "  mul.lo.u64 %rd3, %rd3, 4;\n"
+                "  cvta.to.shared.u64 %rd4, shuttle_smem;\n"
+                "  add.u64 %rd3, %rd4, %rd3;\n"
+                "  st.shared.f32 [%rd3], %f0;\n"
+                "  bar.sync 0;\n";
+  for (int64_t step = 128; step >= 1; step /= 2) {
+    ptx.stream << "  setp.ge.u32 %p1, %r0, " << step << ";\n  @%p1 bra $skip"
+               << step << ";\n"
+               << "  mul.lo.u32 %r4, %r0, 2;\n"
+               << "  cvt.u64.u32 %rd5, %r4;\n"
+               << "  mul.lo.u64 %rd5, %rd5, 4;\n"
+               << "  add.u64 %rd5, %rd4, %rd5;\n"
+               << "  ld.shared.f32 %f32, [%rd5];\n"
+               << "  ld.shared.f32 %f33, [%rd5+4];\n"
+               << "  add.rn.f32 %f34, %f32, %f33;\n"
+               << "  cvt.u64.u32 %rd6, %r0;\n"
+               << "  mul.lo.u64 %rd6, %rd6, 4;\n"
+               << "  add.u64 %rd6, %rd4, %rd6;\n"
+               << "  st.shared.f32 [%rd6], %f34;\n$skip" << step
+               << ":\n  bar.sync 0;\n";
+  }
+  ptx.stream << "  setp.ne.u32 %p2, %r0, 0;\n"
+                "  @%p2 bra $done;\n"
+                "  ld.shared.f32 %f35, [%rd4];\n"
+                "  ld.param.u64 %rd7, [p1];\n"
+                "  ld.global.f32 %f36, [%rd7];\n"
+                "  add.rn.f32 %f37, %f35, %f36;\n"
+                "  ld.param.u64 %rd8, [p2];\n"
+                "  cvt.u64.u32 %rd9, %r1;\n"
+                "  mul.lo.u64 %rd9, %rd9, 4;\n"
+                "  add.u64 %rd8, %rd8, %rd9;\n"
+                "  st.global.f32 [%rd8], %f37;\n";
+  ptx.finish();
+  ptx.stream.flush();
+  return ptx.text;
+}
+
 LogicalResult appendTaskHeader(Operation *owner, CpuTaskKind kind,
                                ArrayRef<int64_t> domain,
                                ExecutableCodeFormat codeFormat,
@@ -4030,12 +4358,264 @@ deriveCpuExecutable(ModuleOp module, MaterializationPlanOp materialization,
   return spec;
 }
 
+FailureOr<GpuExecutableSpec>
+deriveGpuExecutable(ModuleOp module, MaterializationPlanOp materialization,
+                    SchedulePlanOp schedule) {
+  FailureOr<CpuExecutableSpec> cpu =
+      deriveCpuExecutable(module, materialization, schedule);
+  if (failed(cpu) || cpu->codeFormat != ExecutableCodeFormat::CpuBytecodeV2 ||
+      cpu->entries.size() != 19 || cpu->slots.size() != 21 ||
+      schedule.getPolicy() != NumericalPolicy::SourceOrdered)
+    return failure();
+  SmallVector<RegionOp> regions;
+  module.walk([&](RegionOp region) { regions.push_back(region); });
+  if (regions.size() != 1)
+    return failure();
+  SmallVector<Operation *> algebra;
+  for (Operation &operation :
+       regions.front().getBody().front().without_terminator())
+    algebra.push_back(&operation);
+  SmallVector<ScheduleTaskOp> tasks(
+      schedule.getBody().front().getOps<ScheduleTaskOp>());
+  if (algebra.size() != 19 || tasks.size() != 19)
+    return failure();
+
+  GpuExecutableSpec spec;
+  spec.slots = cpu->slots;
+  for (auto [ordinal, operation, task] : llvm::enumerate(algebra, tasks)) {
+    FailureOr<std::string> ptx =
+        isa<MapOp>(operation)    ? emitMapPtx(cast<MapOp>(operation), task)
+        : isa<FoldOp>(operation) ? emitFoldPtx(cast<FoldOp>(operation), task)
+                                 : FailureOr<std::string>(failure());
+    if (failed(ptx) || ptx->empty() || !StringRef(*ptx).ends_with("\n") ||
+        ptx->size() > kMaximumGpuEntryCodeBytes ||
+        task.getGridShape().size() != 1 || task.getGridShape()[0] <= 0 ||
+        task.getGridShape()[0] > UINT32_MAX ||
+        task.getWorkgroupThreads() <= 0 || task.getWorkgroupThreads() > 1024 ||
+        task.getScratchBytes() < 0 ||
+        task.getScratchBytes() > kMaximumGpuDynamicSharedMemoryBytes)
+      return failure();
+    int64_t offset = spec.code.size();
+    spec.code.append(ptx->begin(), ptx->end());
+    SmallVector<int64_t> inputs(task.getInputBuffers());
+    SmallVector<int64_t> outputs(task.getOutputBuffers());
+    spec.entries.push_back(
+        {static_cast<int64_t>(ordinal),
+         offset,
+         static_cast<int64_t>(ptx->size()),
+         std::move(inputs),
+         std::move(outputs),
+         SmallVector<int64_t>(task.getDependencies()),
+         task.getKind() == ScheduleTaskKind::Scalar
+             ? ExecutablePredication::None
+             : ExecutablePredication::DomainBounds,
+         task.getReductionOrder(),
+         {task.getGridShape()[0], 1, 1},
+         {static_cast<int64_t>(task.getWorkgroupThreads()), 1, 1},
+         static_cast<int64_t>(task.getScratchBytes()),
+         static_cast<int64_t>(task.getInputBuffers().size() +
+                              task.getOutputBuffers().size()),
+         sha256(*ptx)});
+  }
+  if (spec.code.size() > kMaximumGpuCodeBytes)
+    return failure();
+  return spec;
+}
+
 ArrayAttr accessArray(MLIRContext *context, ExecutableAccess access,
                       size_t count) {
   SmallVector<Attribute> values(count,
                                 ExecutableAccessAttr::get(context, access));
   return ArrayAttr::get(context, values);
 }
+
+class BuildGpuExecutableBundlePass
+    : public impl::ShuttleBuildGpuExecutableBundlePassBase<
+          BuildGpuExecutableBundlePass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    SmallVector<MaterializationPlanOp> materializations(
+        module.getOps<MaterializationPlanOp>());
+    SmallVector<SchedulePlanOp> schedules(module.getOps<SchedulePlanOp>());
+    if (materializations.size() != 1 || schedules.size() != 1 ||
+        !module.getOps<DeviceModuleOp>().empty() ||
+        !module.getOps<InvocationAbiOp>().empty() ||
+        !module.getOps<ExecutableBundleOp>().empty() ||
+        failed(verifyMaterializationPlanAgainstSource(
+            module, materializations.front())) ||
+        failed(schedules.front().verifyRegions()) ||
+        failed(verifySchedulePlanAgainstMaterialization(
+            materializations.front(), schedules.front()))) {
+      module.emitError(
+          "requires one source-bound plan and no GPU executable bundle");
+      return signalPassFailure();
+    }
+    FailureOr<GpuExecutableSpec> spec = deriveGpuExecutable(
+        module, materializations.front(), schedules.front());
+    if (failed(spec)) {
+      module.emitError("failed to build exact GPU executable bundle");
+      return signalPassFailure();
+    }
+    OpBuilder builder(module.getContext());
+    builder.setInsertionPointToEnd(module.getBody());
+    const std::string codeDigest = executableCodeDigest(spec->code);
+    OperationState deviceState(module.getLoc(),
+                               DeviceModuleOp::getOperationName());
+    deviceState.addAttribute("schema_version", builder.getI64IntegerAttr(3));
+    deviceState.addAttribute(
+        "code_format",
+        ExecutableCodeFormatAttr::get(module.getContext(),
+                                      ExecutableCodeFormat::CudaPtxSm90V1));
+    deviceState.addAttribute("policy", schedules.front().getPolicyAttr());
+    deviceState.addAttribute("source_schedule_fingerprint",
+                             schedules.front().getFingerprintAttr());
+    deviceState.addAttribute(
+        "code", DenseI8ArrayAttr::get(module.getContext(), spec->code));
+    deviceState.addAttribute("code_digest", builder.getStringAttr(codeDigest));
+    deviceState.addAttribute("fingerprint",
+                             builder.getStringAttr(std::string(64, '0')));
+    deviceState.addRegion();
+    auto device = cast<DeviceModuleOp>(builder.create(deviceState));
+    device.getBody().push_back(new Block());
+    builder.setInsertionPointToEnd(&device.getBody().front());
+    for (const GpuEntrySpec &entry : spec->entries) {
+      SmallVector<NamedAttribute> attributes{
+          builder.getNamedAttr("ordinal",
+                               builder.getI64IntegerAttr(entry.ordinal)),
+          builder.getNamedAttr("source_task",
+                               builder.getI64IntegerAttr(entry.ordinal)),
+          builder.getNamedAttr("code_offset",
+                               builder.getI64IntegerAttr(entry.codeOffset)),
+          builder.getNamedAttr("code_length",
+                               builder.getI64IntegerAttr(entry.codeLength)),
+          builder.getNamedAttr(
+              "input_buffers",
+              DenseI64ArrayAttr::get(module.getContext(), entry.inputs)),
+          builder.getNamedAttr(
+              "output_buffers",
+              DenseI64ArrayAttr::get(module.getContext(), entry.outputs)),
+          builder.getNamedAttr("input_accesses",
+                               accessArray(module.getContext(),
+                                           ExecutableAccess::Read,
+                                           entry.inputs.size())),
+          builder.getNamedAttr("output_accesses",
+                               accessArray(module.getContext(),
+                                           ExecutableAccess::Write,
+                                           entry.outputs.size())),
+          builder.getNamedAttr(
+              "dependencies",
+              DenseI64ArrayAttr::get(module.getContext(), entry.dependencies)),
+          builder.getNamedAttr(
+              "predication", ExecutablePredicationAttr::get(module.getContext(),
+                                                            entry.predication)),
+          builder.getNamedAttr("code_digest",
+                               builder.getStringAttr(entry.codeDigest)),
+          builder.getNamedAttr(
+              "grid", DenseI64ArrayAttr::get(module.getContext(), entry.grid)),
+          builder.getNamedAttr("block", DenseI64ArrayAttr::get(
+                                            module.getContext(), entry.block)),
+          builder.getNamedAttr(
+              "dynamic_shared_bytes",
+              builder.getI64IntegerAttr(entry.dynamicSharedBytes)),
+          builder.getNamedAttr("kernel_arity",
+                               builder.getI64IntegerAttr(entry.kernelArity))};
+      if (entry.reductionOrder)
+        attributes.push_back(builder.getNamedAttr(
+            "reduction_order",
+            ScheduleReductionOrderAttr::get(module.getContext(),
+                                            *entry.reductionOrder)));
+      createScheduleRecord(builder, module.getLoc(),
+                           DeviceEntryOp::getOperationName(), attributes);
+    }
+    builder.create<DeviceModuleYieldOp>(module.getLoc());
+    device.setFingerprint(deviceModuleFingerprint(device));
+
+    builder.setInsertionPointToEnd(module.getBody());
+    OperationState abiState(module.getLoc(),
+                            InvocationAbiOp::getOperationName());
+    abiState.addAttribute("schema_version", builder.getI64IntegerAttr(3));
+    abiState.addAttribute("source_plan_fingerprint",
+                          materializations.front().getFingerprintAttr());
+    abiState.addAttribute("source_schedule_fingerprint",
+                          schedules.front().getFingerprintAttr());
+    abiState.addAttribute("fingerprint",
+                          builder.getStringAttr(std::string(64, '0')));
+    abiState.addRegion();
+    auto abi = cast<InvocationAbiOp>(builder.create(abiState));
+    abi.getBody().push_back(new Block());
+    builder.setInsertionPointToEnd(&abi.getBody().front());
+    int64_t operandBinding = 0;
+    int64_t resultBinding = 0;
+    for (auto [ordinal, slot] : llvm::enumerate(spec->slots)) {
+      ExecutableBindingKind binding = ExecutableBindingKind::None;
+      std::optional<int64_t> bindingIndex;
+      if (slot.storage == MaterializationStorage::External &&
+          slot.access == ExecutableAccess::Read) {
+        binding = ExecutableBindingKind::Operand;
+        bindingIndex = operandBinding++;
+      } else if (slot.storage == MaterializationStorage::External &&
+                 slot.access == ExecutableAccess::Write) {
+        binding = ExecutableBindingKind::Result;
+        bindingIndex = resultBinding++;
+      }
+      SmallVector<NamedAttribute> attributes{
+          builder.getNamedAttr("ordinal", builder.getI64IntegerAttr(ordinal)),
+          builder.getNamedAttr("source_buffer",
+                               builder.getI64IntegerAttr(ordinal)),
+          builder.getNamedAttr("tensor_type", TypeAttr::get(slot.tensorType)),
+          builder.getNamedAttr("required_bytes",
+                               builder.getI64IntegerAttr(slot.requiredBytes)),
+          builder.getNamedAttr(
+              "strides",
+              DenseI64ArrayAttr::get(module.getContext(), slot.strides)),
+          builder.getNamedAttr("offset", builder.getI64IntegerAttr(0)),
+          builder.getNamedAttr("alignment",
+                               builder.getI64IntegerAttr(slot.alignment)),
+          builder.getNamedAttr(
+              "address_space",
+              ExecutableAddressSpaceAttr::get(module.getContext(),
+                                              ExecutableAddressSpace::Device)),
+          builder.getNamedAttr("access", ExecutableAccessAttr::get(
+                                             module.getContext(), slot.access)),
+          builder.getNamedAttr(
+              "storage", MaterializationStorageAttr::get(module.getContext(),
+                                                         slot.storage)),
+          builder.getNamedAttr("alias_group",
+                               builder.getI64IntegerAttr(ordinal)),
+          builder.getNamedAttr("reuse_group",
+                               builder.getI64IntegerAttr(ordinal)),
+          builder.getNamedAttr("binding", ExecutableBindingKindAttr::get(
+                                              module.getContext(), binding))};
+      if (bindingIndex)
+        attributes.push_back(builder.getNamedAttr(
+            "binding_index", builder.getI64IntegerAttr(*bindingIndex)));
+      createScheduleRecord(builder, module.getLoc(),
+                           InvocationSlotOp::getOperationName(), attributes);
+    }
+    builder.create<InvocationAbiYieldOp>(module.getLoc());
+    abi.setFingerprint(invocationAbiFingerprint(abi));
+
+    builder.setInsertionPointToEnd(module.getBody());
+    OperationState bundleState(module.getLoc(),
+                               ExecutableBundleOp::getOperationName());
+    bundleState.addAttribute("schema_version", builder.getI64IntegerAttr(2));
+    bundleState.addAttribute("source_schedule_fingerprint",
+                             schedules.front().getFingerprintAttr());
+    bundleState.addAttribute("device_module_fingerprint",
+                             device.getFingerprintAttr());
+    bundleState.addAttribute("invocation_abi_fingerprint",
+                             abi.getFingerprintAttr());
+    bundleState.addAttribute(
+        "completion",
+        ExecutableCompletionAttr::get(module.getContext(),
+                                      ExecutableCompletion::StreamOrdered));
+    bundleState.addAttribute("fingerprint",
+                             builder.getStringAttr(std::string(64, '0')));
+    auto bundle = cast<ExecutableBundleOp>(builder.create(bundleState));
+    bundle.setFingerprint(executableBundleFingerprint(bundle));
+  }
+};
 
 class BuildCpuExecutableBundlePass
     : public impl::ShuttleBuildCpuExecutableBundlePassBase<
@@ -4526,6 +5106,201 @@ public:
   }
 };
 
+LogicalResult verifyGpuExecutableAgainstSource(ModuleOp module) {
+  SmallVector<MaterializationPlanOp> materializations(
+      module.getOps<MaterializationPlanOp>());
+  SmallVector<SchedulePlanOp> schedules(module.getOps<SchedulePlanOp>());
+  SmallVector<DeviceModuleOp> devices(module.getOps<DeviceModuleOp>());
+  SmallVector<InvocationAbiOp> abis(module.getOps<InvocationAbiOp>());
+  SmallVector<ExecutableBundleOp> bundles(module.getOps<ExecutableBundleOp>());
+  if (materializations.size() != 1 || schedules.size() != 1 ||
+      devices.size() != 1 || abis.size() != 1 || bundles.size() != 1 ||
+      failed(verifyMaterializationPlanAgainstSource(
+          module, materializations.front())) ||
+      failed(schedules.front().verifyRegions()) ||
+      failed(verifySchedulePlanAgainstMaterialization(materializations.front(),
+                                                      schedules.front())) ||
+      failed(devices.front().verifyRegions()) ||
+      failed(abis.front().verifyRegions()) || failed(bundles.front().verify()))
+    return failure();
+  FailureOr<GpuExecutableSpec> expected =
+      deriveGpuExecutable(module, materializations.front(), schedules.front());
+  if (failed(expected) || devices.front().getSchemaVersion() != 3 ||
+      devices.front().getCodeFormat() != ExecutableCodeFormat::CudaPtxSm90V1 ||
+      devices.front().getPolicy() != NumericalPolicy::SourceOrdered ||
+      devices.front().getSourceScheduleFingerprint() !=
+          schedules.front().getFingerprint() ||
+      abis.front().getSchemaVersion() != 3 ||
+      abis.front().getSourcePlanFingerprint() !=
+          materializations.front().getFingerprint() ||
+      bundles.front().getSchemaVersion() != 2 ||
+      bundles.front().getCompletion() != ExecutableCompletion::StreamOrdered ||
+      devices.front().getCode() != ArrayRef<int8_t>(expected->code))
+    return failure();
+  SmallVector<DeviceEntryOp> entries(
+      devices.front().getBody().front().getOps<DeviceEntryOp>());
+  SmallVector<InvocationSlotOp> slots(
+      abis.front().getBody().front().getOps<InvocationSlotOp>());
+  if (entries.size() != expected->entries.size() ||
+      slots.size() != expected->slots.size())
+    return failure();
+  for (auto [actual, spec] : llvm::zip_equal(entries, expected->entries)) {
+    if (actual.getOrdinal() != spec.ordinal ||
+        actual.getSourceTask() != spec.ordinal ||
+        actual.getCodeOffset() != spec.codeOffset ||
+        actual.getCodeLength() != spec.codeLength ||
+        actual.getInputBuffers() != ArrayRef<int64_t>(spec.inputs) ||
+        actual.getOutputBuffers() != ArrayRef<int64_t>(spec.outputs) ||
+        actual.getDependencies() != ArrayRef<int64_t>(spec.dependencies) ||
+        actual.getPredication() != spec.predication ||
+        actual.getReductionOrder() != spec.reductionOrder ||
+        actual.getGrid() != ArrayRef<int64_t>(spec.grid) ||
+        actual.getBlock() != ArrayRef<int64_t>(spec.block) ||
+        actual.getDynamicSharedBytes() != spec.dynamicSharedBytes ||
+        actual.getKernelArity() != spec.kernelArity ||
+        actual.getCodeDigest() != spec.codeDigest)
+      return failure();
+  }
+  int64_t operandBinding = 0;
+  int64_t resultBinding = 0;
+  for (auto [actual, spec] : llvm::zip_equal(slots, expected->slots)) {
+    ExecutableBindingKind binding = ExecutableBindingKind::None;
+    std::optional<int64_t> bindingIndex;
+    if (spec.storage == MaterializationStorage::External &&
+        spec.access == ExecutableAccess::Read) {
+      binding = ExecutableBindingKind::Operand;
+      bindingIndex = operandBinding++;
+    } else if (spec.storage == MaterializationStorage::External &&
+               spec.access == ExecutableAccess::Write) {
+      binding = ExecutableBindingKind::Result;
+      bindingIndex = resultBinding++;
+    }
+    if (actual.getTensorType() != spec.tensorType ||
+        actual.getRequiredBytes() != spec.requiredBytes ||
+        actual.getStrides() != ArrayRef<int64_t>(spec.strides) ||
+        actual.getOffset() != 0 || actual.getAlignment() != spec.alignment ||
+        actual.getAddressSpace() != ExecutableAddressSpace::Device ||
+        actual.getAccess() != spec.access ||
+        actual.getStorage() != spec.storage ||
+        actual.getAliasGroup() != actual.getOrdinal() ||
+        actual.getReuseGroup() != actual.getOrdinal() ||
+        actual.getBinding() != binding ||
+        actual.getBindingIndex() != bindingIndex)
+      return failure();
+  }
+  return success();
+}
+
+class VerifyGpuExecutableBundlePass
+    : public impl::ShuttleVerifyGpuExecutableBundlePassBase<
+          VerifyGpuExecutableBundlePass> {
+public:
+  void runOnOperation() override {
+    if (failed(verifyGpuExecutableAgainstSource(getOperation()))) {
+      getOperation().emitError("GPU executable bundle no longer matches "
+                               "Shuttle algebra and schedule");
+      signalPassFailure();
+    }
+  }
+};
+
+class ReplaceWithGpuExecutableBundlePass
+    : public impl::ShuttleReplaceWithGpuExecutableBundlePassBase<
+          ReplaceWithGpuExecutableBundlePass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    SmallVector<RegionOp> regions;
+    module.walk([&](RegionOp region) { regions.push_back(region); });
+    if (regions.size() != 1 ||
+        failed(verifyGpuExecutableAgainstSource(module))) {
+      module.emitError("requires one source-bound closed GPU executable");
+      return signalPassFailure();
+    }
+    RegionOp region = regions.front();
+    Type matrix = RankedTensorType::get({2048, 4096},
+                                        BFloat16Type::get(module.getContext()));
+    Type vector =
+        RankedTensorType::get({4096}, BFloat16Type::get(module.getContext()));
+    if (region.getPolicy() != NumericalPolicy::SourceOrdered ||
+        region.getInputs().size() != 2 || region.getResults().size() != 1 ||
+        region.getInputs()[0].getType() != matrix ||
+        region.getInputs()[1].getType() != vector ||
+        region.getResults()[0].getType() != matrix) {
+      region.emitOpError(
+          "GPU typed-FFI bridge requires the closed large forward signature");
+      return signalPassFailure();
+    }
+    SmallVector<DeviceModuleOp> devices(module.getOps<DeviceModuleOp>());
+    SmallVector<InvocationAbiOp> abis(module.getOps<InvocationAbiOp>());
+    SmallVector<ExecutableBundleOp> bundles(
+        module.getOps<ExecutableBundleOp>());
+    OpBuilder builder(module.getContext());
+    OwningOpRef<ModuleOp> stripped = ModuleOp::create(module.getLoc());
+    builder.setInsertionPointToEnd(stripped->getBody());
+    builder.insert(devices.front()->clone());
+    builder.insert(abis.front()->clone());
+    builder.insert(bundles.front()->clone());
+    FailureOr<SmallVector<uint8_t>> bundleBytes =
+        serializeGpuExecutableBundle(*stripped);
+    if (failed(bundleBytes)) {
+      module.emitError("failed to serialize the closed GPU executable");
+      return signalPassFailure();
+    }
+    std::string digest = gpuExecutableBundleDigest(*bundleBytes);
+    StringRef opaque(reinterpret_cast<const char *>(bundleBytes->data()),
+                     bundleBytes->size());
+    DictionaryAttr backendConfig = builder.getDictionaryAttr({
+        builder.getNamedAttr("bundle_bytes", builder.getStringAttr(opaque)),
+        builder.getNamedAttr("bundle_sha256", builder.getStringAttr(digest)),
+        builder.getNamedAttr("bundle_size",
+                             builder.getI64IntegerAttr(bundleBytes->size())),
+        builder.getNamedAttr("transport_schema_version",
+                             builder.getI64IntegerAttr(2)),
+        builder.getNamedAttr("device_schema_version",
+                             builder.getI64IntegerAttr(3)),
+        builder.getNamedAttr("invocation_abi_schema_version",
+                             builder.getI64IntegerAttr(3)),
+        builder.getNamedAttr("bundle_schema_version",
+                             builder.getI64IntegerAttr(2)),
+        builder.getNamedAttr("completion",
+                             builder.getStringAttr("stream_ordered")),
+    });
+    SmallVector<Attribute> operandLayouts;
+    for (Value input : region.getInputs())
+      operandLayouts.push_back(
+          rowMajorLayout(cast<RankedTensorType>(input.getType())));
+    SmallVector<Attribute> resultLayouts;
+    for (Value result : region.getResults())
+      resultLayouts.push_back(
+          rowMajorLayout(cast<RankedTensorType>(result.getType())));
+    builder.setInsertionPoint(region);
+    OperationState callState(region.getLoc(), "stablehlo.custom_call");
+    callState.addOperands(region.getInputs());
+    callState.addTypes(region.getResultTypes());
+    callState.addAttribute(
+        "call_target_name",
+        builder.getStringAttr(kGpuExecutableBundleFfiTarget));
+    callState.addAttribute("api_version", builder.getI32IntegerAttr(4));
+    callState.addAttribute("backend_config", backendConfig);
+    callState.addAttribute("called_computations", builder.getArrayAttr({}));
+    callState.addAttribute("has_side_effect", builder.getBoolAttr(false));
+    callState.addAttribute("operand_layouts",
+                           builder.getArrayAttr(operandLayouts));
+    callState.addAttribute("output_operand_aliases", builder.getArrayAttr({}));
+    callState.addAttribute("result_layouts",
+                           builder.getArrayAttr(resultLayouts));
+    Operation *call = builder.create(callState);
+    region.getResults().replaceAllUsesWith(call->getResults());
+    region.erase();
+    for (Operation &operation :
+         llvm::make_early_inc_range(module.getBody()->without_terminator()))
+      if (isa<MaterializationPlanOp, SchedulePlanOp, DeviceModuleOp,
+              InvocationAbiOp, ExecutableBundleOp>(operation))
+        operation.erase();
+  }
+};
+
 void emitObserverSnapshot(
     const std::shared_ptr<detail::ShuttleObserverInvocation> &invocation,
     ModuleOp module, ShuttlePipelinePhase phase,
@@ -4644,6 +5419,32 @@ void buildShuttleCpuExecutablePipeline(
       ShuttlePipelinePhase::FinalErasure, invocation));
 }
 
+void buildShuttleGpuExecutablePipeline(
+    OpPassManager &manager, const ShuttlePipelineOptions &options,
+    const std::shared_ptr<detail::ShuttleObserverInvocation> &invocation) {
+  manager.addPass(createAnnotateSourcePass());
+  manager.addPass(createFormStructuralRegionsPass(
+      options.numerics, options.canonicalOptions, options.canonicalTuning));
+  manager.addPass(createConvertStablehloToAlgebraPass());
+  manager.addPass(createVerifySourceCoveragePass());
+  manager.addPass(std::make_unique<EmitObserverPass>(
+      ShuttlePipelinePhase::AlgebraCoverage, invocation));
+  manager.addPass(createVerifySemanticErasurePass());
+  manager.addPass(createShuttleCanonicalizePass());
+  manager.addPass(createPlanRowFoldMaterializationPass());
+  manager.addPass(createVerifyMaterializationPlanPass());
+  manager.addPass(createPlanSimt32RowFoldSchedulePass());
+  manager.addPass(createVerifySimt32RowFoldSchedulePass());
+  manager.addPass(createBuildGpuExecutableBundlePass());
+  manager.addPass(createVerifyGpuExecutableBundlePass());
+  manager.addPass(createVerifySourceCoveragePass());
+  manager.addPass(createReplaceWithGpuExecutableBundlePass());
+  manager.addPass(createStripSourceProvenancePass());
+  manager.addPass(createVerifyNoShuttleOpsPass());
+  manager.addPass(std::make_unique<EmitObserverPass>(
+      ShuttlePipelinePhase::FinalErasure, invocation));
+}
+
 class RunShuttleStablehloPipelinePass
     : public PassWrapper<RunShuttleStablehloPipelinePass,
                          OperationPass<ModuleOp>> {
@@ -4679,6 +5480,8 @@ public:
         std::make_unique<FailureCaptureInstrumentation>(failure));
     if (options.executionMode == ExecutionMode::CpuExecutableBundle) {
       buildShuttleCpuExecutablePipeline(manager, options, invocation);
+    } else if (options.executionMode == ExecutionMode::GpuExecutableBundle) {
+      buildShuttleGpuExecutablePipeline(manager, options, invocation);
     } else {
       buildShuttleStablehloCorePipeline(manager, options, invocation);
     }
@@ -4772,6 +5575,18 @@ std::unique_ptr<Pass> createReplaceWithCpuExecutableBundlePass() {
   return std::make_unique<ReplaceWithCpuExecutableBundlePass>();
 }
 
+std::unique_ptr<Pass> createBuildGpuExecutableBundlePass() {
+  return std::make_unique<BuildGpuExecutableBundlePass>();
+}
+
+std::unique_ptr<Pass> createVerifyGpuExecutableBundlePass() {
+  return std::make_unique<VerifyGpuExecutableBundlePass>();
+}
+
+std::unique_ptr<Pass> createReplaceWithGpuExecutableBundlePass() {
+  return std::make_unique<ReplaceWithGpuExecutableBundlePass>();
+}
+
 void buildShuttleStablehloPipeline(
     OpPassManager &manager, const ShuttlePipelineOptions &options,
     std::shared_ptr<const ShuttlePipelineObserver> observer) {
@@ -4803,7 +5618,7 @@ void registerShuttleStablehloPipelines() {
             commandLinePipelineOptions(NumericalPolicy::SourceOrdered);
         options.executionMode = ExecutionMode::CpuExecutableBundle;
         options.canonicalOptions =
-            R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":9,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+            R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":10,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
         buildShuttleStablehloPipeline(manager, options);
       });
   PassPipelineRegistration<>(
@@ -4814,7 +5629,19 @@ void registerShuttleStablehloPipelines() {
             commandLinePipelineOptions(NumericalPolicy::Fast);
         options.executionMode = ExecutionMode::CpuExecutableBundle;
         options.canonicalOptions =
-            R"json({"execution_mode":"cpu_executable_bundle","numerics":"fast","pipeline_abi_version":9,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+            R"json({"execution_mode":"cpu_executable_bundle","numerics":"fast","pipeline_abi_version":10,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+        buildShuttleStablehloPipeline(manager, options);
+      });
+  PassPipelineRegistration<>(
+      "shuttle-gpu-executable-bundle-pipeline",
+      "Replace the closed 2048x4096 source-ordered graph with a CUDA typed FFI "
+      "call",
+      [](OpPassManager &manager) {
+        ShuttlePipelineOptions options =
+            commandLinePipelineOptions(NumericalPolicy::SourceOrdered);
+        options.executionMode = ExecutionMode::GpuExecutableBundle;
+        options.canonicalOptions =
+            R"json({"execution_mode":"gpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":10,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
         buildShuttleStablehloPipeline(manager, options);
       });
 }

@@ -109,4 +109,23 @@ def ShuttleReplaceWithCpuExecutableBundlePass
   let constructor = "createReplaceWithCpuExecutableBundlePass()";
 }
 
+def ShuttleBuildGpuExecutableBundlePass
+    : Pass<"shuttle-build-gpu-executable-bundle", "::mlir::ModuleOp"> {
+  let summary = "Generate the closed SM90 PTX bundle from Shuttle IR";
+  let dependentDialects = ["::mlir::shuttle::ShuttleDialect"];
+  let constructor = "createBuildGpuExecutableBundlePass()";
+}
+
+def ShuttleVerifyGpuExecutableBundlePass
+    : Pass<"shuttle-verify-gpu-executable-bundle", "::mlir::ModuleOp"> {
+  let summary = "Rederive and verify the closed SM90 PTX bundle";
+  let constructor = "createVerifyGpuExecutableBundlePass()";
+}
+
+def ShuttleReplaceWithGpuExecutableBundlePass
+    : Pass<"shuttle-replace-with-gpu-executable-bundle", "::mlir::ModuleOp"> {
+  let summary = "Replace the closed GPU bundle with one CUDA typed FFI call";
+  let constructor = "createReplaceWithGpuExecutableBundlePass()";
+}
+
 #endif // SHUTTLE_TRANSFORMS_PASSES_TD_

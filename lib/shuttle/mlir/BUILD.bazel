@@ -106,6 +106,7 @@ cc_library(
     deps = [
         ":ShuttleCpuBytecode",
         ":ShuttleDialect",
+        ":ShuttleGpuExecutable",
         ":shuttle_passes_inc_gen",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:AffineDialect",
@@ -131,6 +132,43 @@ cc_library(
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
+    ],
+)
+
+cc_library(
+    name = "ShuttleGpuExecutable",
+    srcs = ["lib/Runtime/GpuExecutable.cc"],
+    hdrs = ["include/shuttle/Runtime/GpuExecutable.h"],
+    strip_include_prefix = "include",
+    deps = [
+        ":ShuttleDialect",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Support",
+    ],
+)
+
+cc_library(
+    name = "ShuttleGpuFfi",
+    srcs = ["lib/Runtime/GpuFfi.cc"],
+    hdrs = ["include/shuttle/Runtime/GpuFfi.h"],
+    strip_include_prefix = "include",
+    deps = [
+        ":ShuttleGpuExecutable",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@xla//xla/backends/gpu:ffi",
+        "@xla//xla/ffi",
+        "@xla//xla/service/gpu:stream_executor_util",
+        "@xla//xla/stream_executor:device_address_allocator",
+        "@xla//xla/stream_executor:kernel",
+        "@xla//xla/stream_executor:kernel_spec",
+        "@xla//xla/stream_executor:stream",
     ],
 )
 
