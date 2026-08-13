@@ -64,7 +64,7 @@ class HumanEvalTask:
     def make_prompts_step(self) -> ExecutorStep:
         return ExecutorStep(
             name="downstream_scaling/evals/prompts/humaneval",
-            fn=remote(write_humaneval_prompts, pip_dependency_groups=["eval"]),
+            fn=remote(write_humaneval_prompts, pip_dependency_groups=["lm_eval"]),
             config=HumanEvalPromptsConfig(
                 output_path=this_output_path(),
                 num_fewshot=versioned(self.config.num_fewshot),  # type: ignore[arg-type]
@@ -82,7 +82,7 @@ class HumanEvalTask:
     ) -> ExecutorStep:
         return ExecutorStep(
             name=name,
-            fn=remote(grade_humaneval, pip_dependency_groups=["eval"]),
+            fn=remote(grade_humaneval, pip_dependency_groups=["lm_eval"]),
             config=HumanEvalGradeConfig(
                 output_path=this_output_path(),
                 prompts_path=version_path(prompts_path),  # type: ignore[arg-type]

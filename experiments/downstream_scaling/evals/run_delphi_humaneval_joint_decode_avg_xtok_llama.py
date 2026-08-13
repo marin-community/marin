@@ -88,7 +88,7 @@ STOP_TOKENS = ("\nclass", "\ndef", "\n#", "\nif", "\nprint")
 NUM_FEWSHOT = 0
 FEWSHOT_SEED = 1234
 
-TEMPERATURE = 0.4
+TEMPERATURE = 0.7 # 0.4
 # Same top-k both sides, matching the joint_decode_avg runs this baselines.
 TOP_K_A = 16
 TOP_K_B = 16

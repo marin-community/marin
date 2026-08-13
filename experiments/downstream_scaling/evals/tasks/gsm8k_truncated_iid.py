@@ -61,7 +61,7 @@ class TruncatedGSM8KIIDTask:
             fn=remote(
                 write_truncated_gsm8k_iid_prompts,
                 resources=ResourceConfig.with_cpu(cpu=1, ram="4g"),
-                pip_dependency_groups=["eval"],
+                pip_dependency_groups=["lm_eval"],
             ),
             config=TruncatedGSM8KIIDPromptsConfig(
                 output_path=this_output_path(),
@@ -82,7 +82,7 @@ class TruncatedGSM8KIIDTask:
     ) -> ExecutorStep:
         return ExecutorStep(
             name=name,
-            fn=remote(grade_gsm8k_truncated_iid, pip_dependency_groups=["eval"]),
+            fn=remote(grade_gsm8k_truncated_iid, pip_dependency_groups=["lm_eval"]),
             config=GSM8KGradeConfig(
                 output_path=this_output_path(),
                 prompts_path=version_path(prompts_path),  # type: ignore[arg-type]

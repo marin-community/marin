@@ -73,7 +73,7 @@ class MaskedGSM8KIIDTask:
             fn=remote(
                 write_masked_gsm8k_iid_prompts,
                 resources=ResourceConfig.with_cpu(cpu=1, ram="4g"),
-                pip_dependency_groups=["eval"],
+                pip_dependency_groups=["lm_eval"],
             ),
             config=MaskedGSM8KIIDPromptsConfig(
                 output_path=this_output_path(),
@@ -96,7 +96,7 @@ class MaskedGSM8KIIDTask:
     ) -> ExecutorStep:
         return ExecutorStep(
             name=name,
-            fn=remote(grade_gsm8k_masked_iid, pip_dependency_groups=["eval"]),
+            fn=remote(grade_gsm8k_masked_iid, pip_dependency_groups=["lm_eval"]),
             config=GSM8KGradeConfig(
                 output_path=this_output_path(),
                 prompts_path=version_path(prompts_path),  # type: ignore[arg-type]

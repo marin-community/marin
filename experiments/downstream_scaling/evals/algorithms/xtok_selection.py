@@ -342,6 +342,13 @@ class GateDirection(StrEnum):
     ADVISOR_AT_OR_ABOVE = "advisor_at_or_above"
 
 
+class EntropySource(StrEnum):
+    """Which model's top-k entropy drives an entropy gate."""
+
+    ADVISOR = "advisor"
+    DECODER = "decoder"
+
+
 def _advisor_wins(signal: float, threshold: float, gate: GateDirection) -> bool:
     if gate is GateDirection.ADVISOR_BELOW:
         return signal < threshold
@@ -393,6 +400,7 @@ def select_entropy_gate(
     a_topk: list[dict[str, Any]],
     b_topk: list[dict[str, Any]],
     *,
+    entropy_source: EntropySource,
     entropy_threshold: float,
     gate: GateDirection,
     temperature: float,
@@ -400,20 +408,18 @@ def select_entropy_gate(
     vocab_a: Vocab,
     vocab_b: Vocab,
 ) -> tuple[list[int], list[int], float]:
-    """Gate on the advisor's entropy: ``topk_entropy`` of B's top-k decides
-    which side's own top-k the round's winner is temperature-sampled from —
-    each side's own candidates only, not a union. The same gate shape as
-    ``select_kl_gate`` with B's entropy as the signal. Under
-    ``ADVISOR_AT_OR_ABOVE`` B takes the round when ``entropy >=
-    entropy_threshold``, so threshold 0 is pure advisor and anything above
-    log(top_k_b) pure decoder; ``ADVISOR_BELOW`` inverts the comparison and
-    swaps those two anchors. The winner is forced on both sides as usual.
-    Returns ``(tokens_a, tokens_b, entropy)``; the entropy is for the caller's
-    token-path sidecar, and recovering which side was sampled needs both it
-    and the run's gate direction."""
+    """Gate on one side's top-k entropy.
+
+    The configured side's own candidates provide the signal; the winning
+    side is still sampled from its own top-k and forced on both tokenizers.
+    Under ``ADVISOR_AT_OR_ABOVE`` B wins when the signal is at or above the
+    threshold. Returns the configured entropy signal with both token lists;
+    recovering the winner requires the gate direction and entropy source.
+    """
     a = candidates(vocab_a, a_topk)
     b = candidates(vocab_b, b_topk)
-    entropy = topk_entropy(b)
+    entropy_candidates = a if entropy_source is EntropySource.DECODER else b
+    entropy = topk_entropy(entropy_candidates)
     source = b if _advisor_wins(entropy, entropy_threshold, gate) else a
     key = _temperature_sample(list(source), [candidate.logit for candidate in source.values()], temperature, rng)
     return force(vocab_a, key, a), force(vocab_b, key, b), entropy

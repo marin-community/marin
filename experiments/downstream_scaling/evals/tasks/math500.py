@@ -66,7 +66,7 @@ class Math500Task:
     def make_prompts_step(self) -> ExecutorStep:
         return ExecutorStep(
             name="downstream_scaling/evals/prompts/math500",
-            fn=remote(write_math500_prompts, pip_dependency_groups=["eval"]),
+            fn=remote(write_math500_prompts),
             config=Math500PromptsConfig(
                 output_path=this_output_path(),
                 prompt_prefix=versioned(self.config.prompt_prefix),  # type: ignore[arg-type]
@@ -95,7 +95,7 @@ class Math500Task:
 
 
 def write_math500_prompts(config: Math500PromptsConfig) -> None:
-    from datasets import load_dataset
+    from datasets import load_dataset  # noqa: PLC0415  # deferred: datasets is a slow import
 
     dataset = list(load_dataset("HuggingFaceH4/MATH-500", split="test"))
     if config.n_problems is not None:
@@ -129,8 +129,10 @@ def write_math500_prompts(config: Math500PromptsConfig) -> None:
 
 
 def _grade_math500_shard(items, shard_info):
-    from marin.rl.environments.tinker_environments.math_env import safe_grade
-    from marin.rl.environments.tinker_environments.math_grading import extract_boxed
+    # Optional deps: math_grading pulls sympy and pylatexenc, which arrive with the
+    # `math` extra this step requests.
+    from marin.rl.environments.tinker_environments.math_env import safe_grade  # noqa: PLC0415
+    from marin.rl.environments.tinker_environments.math_grading import extract_boxed  # noqa: PLC0415
 
     for item in items:
         try:

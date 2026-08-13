@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 
 
 def _load_gsm8k_task():
-    import lm_eval.tasks
-    from lm_eval.tasks import TaskManager
+    import lm_eval.tasks  # noqa: PLC0415  # optional dep: lm_eval
+    from lm_eval.tasks import TaskManager  # noqa: PLC0415  # optional dep: lm_eval
 
     return lm_eval.tasks.get_task_dict(
         [{"task": "gsm8k", "dataset_path": "openai/gsm8k"}],
@@ -70,7 +70,7 @@ class GSM8KTask:
     def make_prompts_step(self) -> ExecutorStep:
         return ExecutorStep(
             name="downstream_scaling/evals/prompts/gsm8k",
-            fn=remote(write_gsm8k_prompts, pip_dependency_groups=["eval"]),
+            fn=remote(write_gsm8k_prompts, pip_dependency_groups=["lm_eval"]),
             config=GSM8KPromptsConfig(
                 output_path=this_output_path(),
                 num_fewshot=versioned(self.config.num_fewshot),  # type: ignore[arg-type]
@@ -88,7 +88,7 @@ class GSM8KTask:
     ) -> ExecutorStep:
         return ExecutorStep(
             name=name,
-            fn=remote(grade_gsm8k, pip_dependency_groups=["eval"]),
+            fn=remote(grade_gsm8k, pip_dependency_groups=["lm_eval"]),
             config=GSM8KGradeConfig(
                 output_path=this_output_path(),
                 prompts_path=version_path(prompts_path),  # type: ignore[arg-type]
@@ -134,7 +134,7 @@ def write_gsm8k_prompts(config: GSM8KPromptsConfig) -> None:
 
 
 def _grade_gsm8k_shard(items, shard_info):
-    from lm_eval.api.instance import Instance
+    from lm_eval.api.instance import Instance  # noqa: PLC0415  # optional dep: lm_eval
 
     task = _load_gsm8k_task()
     filter_names = [f.name for f in task._filters]

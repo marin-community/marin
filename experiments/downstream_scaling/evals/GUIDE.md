@@ -21,7 +21,7 @@ framework only requires that the final completion step writes
 - `framework/schema.py`: artifact filenames, row types, and JSONL readers.
 - `tasks/`: task implementations that write prompts and grades.
 - `algorithms/`: completion-generation implementations.
-- `statistics/`: per-completion measurements over completion-algorithm outputs.
+- `measurements/`: per-completion measurements over completion-algorithm outputs.
 
 ## Top-Level API
 
@@ -128,7 +128,7 @@ Its returned step writes `statistics.jsonl.gz`.
 
 All artifacts are gzip-compressed JSONL files. `id` is the stable join key
 across prompts, completions, grades, and statistics. Readers in
-`framework/schema.py` and `statistics/schema.py` validate row shape and reject
+`framework/schema.py` and `measurements/schema.py` validate row shape and reject
 duplicate ids.
 
 ### `prompts.jsonl.gz`
@@ -250,13 +250,26 @@ Required shape:
 the statistic. Optional row-level `metadata` records statistic configuration
 such as model, side, and top-k width.
 
-`statistics/topk_logprobs.py` scores a recorded cross-tokenizer token path and
+`measurements/topk_logprobs.py` scores a recorded cross-tokenizer token path and
 stores top-k token ids and logprobs for every forced token, grouped by decision
-step. `statistics/entropy.py` exposes two equivalent entropy statistics:
+step. `measurements/entropy.py` exposes two equivalent entropy statistics:
 `TokenPathEntropy` reduces each decision boundary in the TPU worker, while
 `ChainedTokenPathEntropy` materializes the top-k statistic and reduces it in a
 CPU step. Both consume `token_paths.jsonl.gz` from the completion algorithm
 output and emit `{"entropy": [float, ...]}` per completion.
+
+`measurements/gate_hits.py` counts, per completion, how many recorded decision
+steps carried a signal strictly below a threshold, emitting
+`{"n_steps": int, "n_below": int}`. It reads the gated joint-decode sweeps'
+per-step signal (`kl` or `entropy`) back out of the same sidecar, so it needs no
+model and runs on CPU. Under those sweeps' default `ADVISOR_AT_OR_ABOVE` gate
+the strictly-below count is the decoder's share of the completion.
+
+`measurements/entropy_correlation.py` consumes decoder and advisor
+`TokenPathEntropy` outputs and emits `{"n_steps": int, "rho": float}` per
+completion, where `rho` is their Spearman correlation across decision
+boundaries. `rho` is `null` for series with fewer than two steps or a constant
+side. The reducer needs no model and runs on CPU.
 
 ## Versioning
 

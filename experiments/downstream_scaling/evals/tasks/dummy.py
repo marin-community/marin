@@ -54,7 +54,7 @@ class DummyTask:
     def make_prompts_step(self) -> ExecutorStep:
         return ExecutorStep(
             name="downstream_scaling/evals/prompts/dummy",
-            fn=remote(write_dummy_prompts, pip_dependency_groups=["eval"]),
+            fn=remote(write_dummy_prompts),
             config=DummyPromptsConfig(
                 output_path=this_output_path(),
                 n_prompts=versioned(self.config.n_prompts),  # type: ignore[arg-type]
@@ -71,7 +71,7 @@ class DummyTask:
     ) -> ExecutorStep:
         return ExecutorStep(
             name=name,
-            fn=remote(grade_dummy, pip_dependency_groups=["eval"]),
+            fn=remote(grade_dummy),
             config=DummyGradeConfig(
                 output_path=this_output_path(),
                 prompts_path=version_path(prompts_path),  # type: ignore[arg-type]

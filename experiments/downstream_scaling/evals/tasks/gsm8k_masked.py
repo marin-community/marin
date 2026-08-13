@@ -61,7 +61,7 @@ class MaskedGSM8KTask:
             fn=remote(
                 write_masked_gsm8k_prompts,
                 resources=ResourceConfig.with_cpu(cpu=1, ram="4g"),
-                pip_dependency_groups=["eval"],
+                pip_dependency_groups=["lm_eval"],
             ),
             config=MaskedGSM8KPromptsConfig(
                 output_path=this_output_path(),
