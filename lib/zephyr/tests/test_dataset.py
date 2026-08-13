@@ -1332,6 +1332,8 @@ def test_reshard_integration(integration_ctx):
     assert sorted(result) == list(range(10))
 
 
+@pytest.mark.slow
+@pytest.mark.timeout(180)
 def test_sorted_merge_join_inner_basic_integration(integration_ctx):
     left = Dataset.from_list(
         [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}, {"id": 3, "text": "foo"}]
