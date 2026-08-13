@@ -115,7 +115,7 @@ def _validate_agent_callbacks(agent_class: object, import_path: str) -> None:
         if not callable(method):
             raise ValueError(f"Harbor agent {import_path} does not define a callable {method_name}()")
         try:
-            inspect.signature(method).bind_partial(agent_class, **dict.fromkeys(keywords))
+            inspect.signature(method).bind(agent_class, **dict.fromkeys(keywords))
         except TypeError as exc:
             raise ValueError(
                 f"Harbor agent {import_path}.{method_name}() does not accept the keyword arguments "

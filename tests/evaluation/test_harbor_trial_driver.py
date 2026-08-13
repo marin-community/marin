@@ -215,6 +215,12 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     [
         ("_environment", "instruction, environment, context", "setup", "environment"),
         ("environment", "instruction, environment, _context", "run", "instruction, environment, context"),
+        (
+            "environment",
+            "instruction, environment, context, scratch_dir",
+            "run",
+            "instruction, environment, context",
+        ),
     ],
 )
 def test_preflight_rejects_agent_callback_keyword_mismatch(
