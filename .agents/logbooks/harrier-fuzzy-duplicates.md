@@ -1233,3 +1233,13 @@ author: Rafal Wojdyla
 - Error check: Short endpoint-list timeout waves occurred in both clusters and recovered without a job action. RNO still reports 38 shards at retry attempt one. No shard entered retry attempt two, and no service job became terminal.
 - Issue update: https://github.com/marin-community/marin/issues/8162#issuecomment-5282903873.
 - Next action: Continue the root, source, service, Zephyr, and output checks. Recover only a terminal in-scope job failure.
+
+### 2026-08-13 16:16 UTC - Replayed RNO service 404 after a port collision
+
+- Detection: RNO TEI service 404 entered the failed job state. Its only task reported `Job exceeded max_task_failures`.
+- Cause: TEI could not bind port 12808 on host `g53121e` because the address was in use. This matches the fixed-port collision recorded in https://echo.oa.dev/wiki/142.
+- Recovery: Reconstructed the exact stored batch request for service 404, verified `_callable.pkl` and `_callable_runner.py`, and replayed only that terminal service.
+- Validation: All 512 RNO service jobs returned to the running job state. The replacement task is building in the batch queue. The pool has 168 running tasks and 344 building tasks.
+- Pipeline state: The active RNO source continued from 1,700 to 1,708 of 4,136 shards with 32 live workers and zero dead workers. The retry state remains 38 shards at attempt one, with no attempt two.
+- Issue update: None. One service replay did not stop source progress and is not a major run update.
+- Next action: Continue root, source, service, Zephyr, and output checks. Watch for another fixed-port collision after batch admission.
