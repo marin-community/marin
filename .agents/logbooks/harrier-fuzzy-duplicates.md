@@ -1187,3 +1187,15 @@ author: Rafal Wojdyla
 - Error check: No endpoint-list timeout matched the RNO v4 logs after the single-source restart.
 - Incident state: The single-source mitigation is effective. Updated https://echo.oa.dev/wiki/141 and edited the existing issue update at https://github.com/marin-community/marin/issues/8162#issuecomment-5280678102.
 - Next action: Continue the root, source, service, and output checks. Watch for another endpoint-list timeout as batch TEI capacity changes.
+
+### 2026-08-13 14:00 UTC - Batch output passed 87 percent
+
+- Root health: The East and RNO roots remain running with zero failures and zero root preemptions.
+- Completed artifacts: East has 144 of 146 completed source artifacts. RNO has 57 of 146. The full run has 201 of 292 completed source artifacts.
+- Aggregate progress: A direct object count found 145,145 of 166,775 output shards, or 87.03%. There are 21,630 shards left. East has written 64,547 shards, and RNO has written 80,598 shards. Two hundred eight sources have output, and no Parquet path is unknown.
+- Output rate: The jobs wrote 1,095 shards between 13:35 UTC and 14:00 UTC. A simple rate estimate gives about 8.2 hours for the remaining shards. Source sizes and batch capacity can change this estimate.
+- East progress: The final two sources reached 10,170 of 14,843 shards and 6,183 of 14,285 shards. Each source has 32 live workers and zero dead workers.
+- RNO progress: The active source reached 602 of 4,136 shards with 32 live workers and zero dead workers. The RNO pool has 24 running TEI tasks and 488 building tasks at batch priority.
+- Error check: No endpoint-list timeout, shard retry, source failure, or root failure matched the current checks. TEI logs contain `no permits available` events during request pressure, but the output counter continues to increase.
+- Issue update: None. This is routine progress after the RNO control-plane mitigation.
+- Next action: Continue the root, source, service, and output checks. Recover only a terminal in-scope job failure.
