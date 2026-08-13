@@ -374,6 +374,7 @@ class ShardTask:
     tokens_path: str
     embed_path: str
     output_path: str
+    total_bytes: int
 
 
 @dataclass(frozen=True)
@@ -386,7 +387,19 @@ class Joined:
     token_rows: int  # rows read on the token side, before the chunk filter
     embed_rows: int  # rows on the embed side
     read_seconds: float
-    bytes_read: int
+
+    @property
+    def unmatched_embed(self) -> int:
+        """Embed rows the token side did not carry.
+
+        Containment (embed shard k is a subset of token shard k) was validated on
+        8 of 166,275 shard pairs, so the run measures it on all of them rather
+        than assuming it: every embedded document has a chunk-0 token row, so
+        this is zero unless the co-partitioning assumption fails somewhere
+        unsampled. Surfacing it as a number is what keeps a violation from
+        looking like a silently smaller output.
+        """
+        return self.embed_rows - len(self.doc_ids)
 
 
 def _ragged_to_padded(column: pa.ChunkedArray | pa.Array, max_tokens: int, vocab_size: int) -> np.ndarray:
@@ -487,7 +500,7 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, fs) -> Joined:
     if not id_blocks:
         empty_ids = np.empty((0, max_tokens), dtype=np.int32)
         empty_emb = np.empty((0, EMBED_DIM), dtype=np.float32)
-        return Joined(np.empty(0, dtype=object), empty_ids, empty_emb, token_rows, embed_rows, read_seconds, 0)
+        return Joined(np.empty(0, dtype=object), empty_ids, empty_emb, token_rows, embed_rows, read_seconds)
     return Joined(
         doc_ids=np.concatenate(id_blocks),
         ids=np.concatenate(token_blocks),
@@ -495,7 +508,6 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, fs) -> Joined:
         token_rows=token_rows,
         embed_rows=embed_rows,
         read_seconds=read_seconds,
-        bytes_read=0,
     )
 
 
@@ -556,22 +568,38 @@ def score_mode(args) -> dict:
             tokens_path=row["tokens_path"],
             embed_path=row["embed_path"],
             output_path=row["output_path"],
+            total_bytes=(row.get("tokens_bytes") or 0) + (row.get("embed_bytes") or 0),
         )
         for row in manifest.to_pylist()
-        # A token shard whose embed side is missing has no scorable documents: the
-        # embedding is a required forward input, so an inner join drops it anyway.
-        if row.get("embed_exists", True)
+        # A shard with no embedded documents has nothing to score: the embedding
+        # is a required forward input, so an inner join empties it anyway. A
+        # fully-deduped-out shard writes a zero-row parquet rather than no file,
+        # so this is a row count check, not an existence check. An unknown count
+        # keeps the shard -- the join is what decides, and dropping on a missing
+        # column would silently skip the whole corpus.
+        if row.get("embed_exists", True) and row.get("embed_rows") != 0
     ]
-    # Interleave rather than block-partition: consecutive manifest rows are shards
-    # of one source and so share a size profile, and a block slice would hand one
-    # worker an entire large source.
+    # Deal largest-first round-robin over manifest *rows*, not source_keys. Leaves
+    # range from 1 to 25,962 shards, so a per-leaf fan-out would hand one worker
+    # an entire large source; and shard sizes vary enough within a leaf that
+    # striding alone leaves the tail uneven. Sorting by bytes first makes every
+    # worker's total within a shard of every other's.
+    tasks.sort(key=lambda t: t.total_bytes, reverse=True)
     mine = tasks[args.worker :: args.num_workers]
     if args.limit:
         mine = mine[: args.limit]
-    logger.info("worker %d owns %d of %d shard tasks", args.worker, len(mine), len(tasks))
+    logger.info(
+        "worker %d owns %d of %d shard tasks (%.2f TB of %.2f TB)",
+        args.worker,
+        len(mine),
+        len(tasks),
+        sum(t.total_bytes for t in mine) / 1e12,
+        sum(t.total_bytes for t in tasks) / 1e12,
+    )
 
     done = 0
     docs = 0
+    unmatched_embed = 0
     token_rows = 0
     read_seconds = 0.0
     score_seconds = 0.0
@@ -598,6 +626,14 @@ def score_mode(args) -> dict:
                 pending.append(pool.submit(read, nxt))
             read_seconds += joined.read_seconds
             token_rows += joined.token_rows
+            if joined.unmatched_embed:
+                unmatched_embed += joined.unmatched_embed
+                logger.warning(
+                    "%s shard %d: %d embed rows absent from the token side; containment does not hold here",
+                    task.source_key,
+                    task.shard_index,
+                    joined.unmatched_embed,
+                )
             if not len(joined.doc_ids):
                 logger.warning("%s shard %d: no joined rows", task.source_key, task.shard_index)
                 continue
@@ -630,7 +666,9 @@ def score_mode(args) -> dict:
         "worker": args.worker,
         "shards": done,
         "docs": docs,
+        "unmatched_embed": unmatched_embed,
         "token_rows": token_rows,
+        "bytes": sum(t.total_bytes for t in mine),
         "seconds": elapsed,
         "docs_per_second": docs / max(elapsed, 1e-9),
         "read_seconds": read_seconds,
