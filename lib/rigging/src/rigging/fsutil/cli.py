@@ -182,6 +182,13 @@ def rm(url: str, recursive: bool) -> None:
         fs.rm(path)
         click.echo(url)
         return
+    if StoragePath(url).is_local:
+        if fs.info(path).get("islink"):
+            fs.rm_file(path)
+        else:
+            fs.rm(path, recursive=True)
+        click.echo(url)
+        return
 
     click.echo(f"Scanning {url} ...", err=True)
     entries = fs.find(path, detail=True)
@@ -200,8 +207,6 @@ def rm(url: str, recursive: bool) -> None:
                     removal.result()
                     progress.update(removals[removal])
     fs.invalidate_cache()
-    if StoragePath(url).is_local:
-        fs.rm(path, recursive=True)
     click.echo(url)
 
 

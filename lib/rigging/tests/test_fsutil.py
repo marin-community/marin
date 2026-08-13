@@ -67,11 +67,24 @@ def test_rm_requires_recursive_for_directories(tree):
     result = run(cli, ["rm", "-R", str(tree / "sub")])
     assert result.exit_code == 0, result.output
     assert not (tree / "sub").exists()
-    assert "Removing 1 objects" in result.output
 
     result = run(cli, ["rm", str(tree / "b.txt")])
     assert result.exit_code == 0, result.output
     assert not (tree / "b.txt").exists()
+
+
+def test_rm_recursive_unlinks_local_directory_symlink_without_deleting_target(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "keep.txt").write_text("keep")
+    link = tmp_path / "link"
+    link.symlink_to(target, target_is_directory=True)
+
+    result = CliRunner().invoke(cli, ["rm", "-R", str(link)])
+
+    assert result.exit_code == 0, result.output
+    assert not link.is_symlink()
+    assert (target / "keep.txt").read_text() == "keep"
 
 
 def test_rm_uses_s3_bulk_delete_batches(monkeypatch):

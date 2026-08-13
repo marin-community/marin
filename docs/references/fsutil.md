@@ -54,7 +54,7 @@ that touch its buckets; the rest keep working.
 | `du URL` | Total bytes and object count beneath a prefix |
 | `find PATTERN` | Paths matching a glob, e.g. `gs://marin-us-central2/x/**/*.json` |
 | `cp SRC DST [-r]` | Copy between any two locations, including across backends |
-| `rm URL [-r]` | Remove an object. `-r` or `-R` recursively removes a prefix with object-count progress |
+| `rm URL [-r]` | Remove an object. `-r` or `-R` recursively removes a prefix; remote prefixes show object-count progress |
 | `browse [URL]` | The interactive browser |
 
 `du` scans prefixes with up to 32 concurrent metadata-bearing listings. Recursive `rm`
