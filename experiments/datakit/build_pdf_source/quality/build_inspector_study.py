@@ -154,6 +154,50 @@ NULL_AGREEMENT = {
 # feature. ``ocr_reasons_by_page`` is carried whole, as a reason-to-page-count histogram.
 _PAGE_LIST_SIGNALS = ("pages_needing_ocr", "pages_with_tables", "pages_with_columns")
 
+_DTYPES = {bool: pl.Boolean, int: pl.Int64, float: pl.Float64, str: pl.String}
+
+# Every column a document's outcome can leave empty, typed rather than inferred. Polars reads a
+# column of nothing but nulls as ``Null``, so a shard in which every document succeeded would type
+# ``inspector_error`` differently from one in which any document failed, and the two shards would
+# not concatenate -- which is the whole point of writing 178 of them.
+_NULLABLE_SIGNALS = {
+    "inspector_error": pl.String,
+    "inspector_failed_op": pl.String,
+    "inspector_worker_signal": pl.String,
+    "inspector_worker_exit_code": pl.Int64,
+    "inspector_pdf_type": pl.String,
+    "inspector_ocr_reasons": pl.String,
+    "inspector_confidence": pl.Float64,
+    "inspector_page_count": pl.Int64,
+    "inspector_has_encoding_issues": pl.Boolean,
+    "inspector_has_title": pl.Boolean,
+    "inspector_library_milliseconds": pl.Int64,
+    "inspector_detect_is_complex_layout": pl.Boolean,
+    "inspector_extract_is_complex_layout": pl.Boolean,
+    "inspector_extracted_pages": pl.Int64,
+    "inspector_markdown_chars": pl.Int64,
+    **{f"inspector_{stage}_{signal}": pl.Int64 for stage in (DETECT, EXTRACT) for signal in _PAGE_LIST_SIGNALS},
+    **{
+        f"inspector_{stage}_{name}": pl.Float64
+        for stage in (DETECT, EXTRACT)
+        for name in ("milliseconds", "ms_per_page")
+    },
+}
+
+
+def output_schema() -> dict[str, pl.DataType]:
+    """The types of every column that can come back null, agreement columns included.
+
+    The agreement half is read off the metric rather than restated, so a column added there is
+    typed here without anyone remembering to.
+    """
+    schema = dict(_NULLABLE_SIGNALS)
+    for comparison in COMPARISONS:
+        measured = route_agreement.pages_agreement(["a b"], ["a b"], *comparison.routes)
+        schema.update({f"{comparison.prefix}_{column}": _DTYPES[type(value)] for column, value in measured.items()})
+    return schema
+
+
 _TASK_RESOURCES = ResourceConfig(cpu=2, ram="12g", disk="8g")
 _WORKER_RESOURCES = ResourceConfig(cpu=16, ram="96g", disk="64g")
 # Explicit, and not the 1 GB default: the coordinator holds shard, retry and shuffle state for every
@@ -396,7 +440,7 @@ def study_shard(work: tuple[int, str]) -> int:
 
     # Every row carries the columns its own outcome produced, so a failure class that first appears
     # late in a shard would be dropped entirely under Polars' default 100-row schema inference.
-    frame = pl.DataFrame(rows, strict=False, infer_schema_length=None)
+    frame = pl.DataFrame(rows, schema_overrides=output_schema(), strict=False, infer_schema_length=None)
     with fs.open(output, "wb") as stream:
         frame.write_parquet(stream, compression="zstd", compression_level=1)
     return len(rows)
