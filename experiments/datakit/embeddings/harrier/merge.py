@@ -158,8 +158,7 @@ def discover_source_pairs(
         fuzzy_source_key, normalized_path = _fuzzy_duplicate_source(fuzzy_duplicate_path)
         if deduplicated.source_key != fuzzy_source_key:
             raise ValueError(
-                f"Embedding source mismatch for {source_name}: "
-                f"{deduplicated.source_key!r} != {fuzzy_source_key!r}"
+                f"Embedding source mismatch for {source_name}: " f"{deduplicated.source_key!r} != {fuzzy_source_key!r}"
             )
         pairs.append(
             EmbeddingSourcePair(
