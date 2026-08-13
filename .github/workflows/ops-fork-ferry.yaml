@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       unit:
-        description: "single unit to refresh (tpu-vllm|evalchemy|harbor); empty runs all"
+        description: "single unit to refresh; empty runs all"
         required: false
         default: ""
 
