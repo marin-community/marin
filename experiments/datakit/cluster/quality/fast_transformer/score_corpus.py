@@ -238,19 +238,33 @@ def _leaf_artifacts(fs, root: str, threads: int) -> list[dict]:
     path components -- measured at over 20 minutes without returning.
     """
     base = root.removeprefix("s3://").rstrip("/")
+
+    def artifact(directory: str) -> dict | None:
+        try:
+            return json.loads(fs.cat(f"{directory.rstrip('/')}/.artifact.json"))
+        except Exception:
+            return None
+
     with ThreadPoolExecutor(max_workers=threads) as pool:
-        sources = fs.ls(base, detail=False)
-        leaves = [leaf for got in pool.map(lambda s: fs.ls(s, detail=False), sources) for leaf in got]
-        logger.info("%s: %d sources, %d leaves", root, len(sources), len(leaves))
-
-        def read(leaf: str) -> dict | None:
-            try:
-                return json.loads(fs.cat(f"{leaf.rstrip('/')}/.artifact.json"))
-            except Exception as exc:
-                logger.warning("unreadable artifact under %s: %s", leaf, exc)
-                return None
-
-        return [a for a in pool.map(read, leaves) if a]
+        # Leaf depth is not uniform: most leaves are `<source>/<subset>_<hash>`,
+        # but some sit directly under the stage root as `<subset>_<hash>`. Probe
+        # for the artifact at the first level and only descend where there is
+        # none, so a one-level source is not walked into its shard list (and a
+        # two-level one is not missed, which would silently drop it from the
+        # pairing rather than fail).
+        top = fs.ls(base, detail=False)
+        found = list(pool.map(artifact, top))
+        leaves = [a for a in found if a]
+        deeper = [d for d, a in zip(top, found, strict=True) if a is None]
+        nested = [
+            child
+            for got in pool.map(lambda d: fs.ls(d, detail=False), deeper)
+            for child in got
+            if not child.endswith(".parquet")
+        ]
+        leaves += [a for a in pool.map(artifact, nested) if a]
+    logger.info("%s: %d top entries, %d nested, %d leaf artifacts", root, len(top), len(nested), len(leaves))
+    return leaves
 
 
 def _leaf_rel(output_dir: str, marker: str) -> str:
