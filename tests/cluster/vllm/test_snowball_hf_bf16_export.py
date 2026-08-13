@@ -41,6 +41,7 @@ from marin.testing.inference.snowball_checkpoint import (
 )
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
+from tests.cluster.conftest import MARIN_GPU_CLUSTER
 
 PENDING_TIMEOUT = 5 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
@@ -141,7 +142,9 @@ def test_snowball_checkpoint_reproduces_persisted_vllm_bf16_export(marin_gpu_cli
         JobRequest(
             name=f"snowball-bf16-export-{uuid.uuid4().hex[:8]}",
             entrypoint=Entrypoint.from_callable(assert_checkpoint_reproduces_bf16_export),
-            resources=ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="512g", disk="256g"),
+            resources=ResourceConfig.with_gpu(
+                "H100", count=8, cpu=64, ram="512g", disk="256g", target_cluster=MARIN_GPU_CLUSTER
+            ),
             environment=create_environment(extras=["gpu"], sync_packages=["marin-core", "marin-levanter"]),
             # These e2es are manually triggered and highly interactive, so they use production priority.
             # Routine or automated workloads should not copy this priority.
