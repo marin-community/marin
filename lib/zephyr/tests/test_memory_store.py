@@ -3,8 +3,6 @@
 
 """Behavior tests for read-only Zephyr memory stores."""
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -14,7 +12,6 @@ import pyarrow.parquet as pq
 import pytest
 from fray.actor import ActorHandle, ActorUnavailableError
 from fray.local_backend import LocalClient
-from fray.types import ResourceConfig
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext, _require_resolvable_worker_handles
 from zephyr.memory_store import (
@@ -26,6 +23,7 @@ from zephyr.memory_store import (
     MemoryTableLookup,
     MemoryTableStatus,
 )
+from zephyr.testing.context import memory_store_context
 
 
 class _TestActorFuture:
@@ -78,19 +76,6 @@ def _parquet_pair(row: dict) -> tuple[tuple[int, str], str]:
     return (row["partition"], row["id"]), row["text"]
 
 
-@contextmanager
-def _store_context(client, tmp_path, *, max_workers: int = 2) -> Iterator[ZephyrContext]:
-    context = ZephyrContext(
-        client=client,
-        max_workers=max_workers,
-        resources=ResourceConfig(cpu=1, ram="256m"),
-        chunk_storage_prefix=str(tmp_path / "chunks"),
-        name="memory-store-test",
-    )
-    with context:
-        yield context
-
-
 def _load_store(
     context: ZephyrContext,
     dataset: Dataset,
@@ -128,7 +113,7 @@ def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(loca
     ]
     dataset = Dataset.from_list(partitions).flat_map(_partition_rows)
 
-    with _store_context(local_client, tmp_path) as context:
+    with memory_store_context(local_client, tmp_path) as context:
         store = _load_store(context, dataset)
 
         assert store.get_many([(3, "a"), (0, "b"), (2, "a"), (0, "b")]) == [
@@ -153,7 +138,7 @@ def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(loca
 def test_memory_store_rejects_hash_that_disagrees_with_existing_partition(local_client, tmp_path):
     dataset = Dataset.from_list([[((0, "a"), "value")], [((1, "b"), "value")]]).flat_map(_partition_rows)
 
-    with _store_context(local_client, tmp_path) as context:
+    with memory_store_context(local_client, tmp_path) as context:
         with pytest.raises(MemoryStorePartitionError):
             _load_store(context, dataset, hash_key=_wrong_key_partition)
 
@@ -162,7 +147,7 @@ def test_memory_store_rejects_duplicate_key_without_poisoning_worker(local_clien
     duplicate = Dataset.from_list([[((0, "same"), "first"), ((0, "same"), "second")]]).flat_map(_partition_rows)
     valid = Dataset.from_list([((0, "valid"), "value")])
 
-    with _store_context(local_client, tmp_path) as context:
+    with memory_store_context(local_client, tmp_path) as context:
         with pytest.raises(DuplicateMemoryStoreKey):
             _load_store(context, duplicate, name="duplicates")
 
@@ -174,7 +159,7 @@ def test_memory_store_multiple_tables_have_independent_lifetimes(local_client, t
     first_dataset = Dataset.from_list([((0, "key"), "first")])
     second_dataset = Dataset.from_list([((0, "key"), "second")])
 
-    with _store_context(local_client, tmp_path) as context:
+    with memory_store_context(local_client, tmp_path) as context:
         first = _load_store(context, first_dataset, name="first")
         second = _load_store(context, second_dataset, name="second")
 
@@ -205,7 +190,7 @@ def test_memory_store_pickle_round_trip_works_in_later_pipelines(local_client, t
     dataset = Dataset.from_files(str(parquet_dir / "*.parquet")).load_parquet().map(_parquet_pair)
     keys = [(3, "b"), (0, "a"), (2, "b"), (1, "a")]
 
-    with _store_context(local_client, tmp_path) as context:
+    with memory_store_context(local_client, tmp_path) as context:
         store = _load_store(context, dataset)
         restored = cloudpickle.loads(cloudpickle.dumps(store))
 
@@ -256,7 +241,7 @@ def test_memory_store_requires_an_entered_owning_context(local_client, tmp_path)
 def test_context_shutdown_makes_store_unavailable(local_client, tmp_path):
     dataset = Dataset.from_list([((0, "a"), "value")])
 
-    with _store_context(local_client, tmp_path) as context:
+    with memory_store_context(local_client, tmp_path) as context:
         store = _load_store(context, dataset, name="shutdown", recovery_timeout=0.01)
         assert store.get((0, "a")) == "value"
 
@@ -271,7 +256,7 @@ def test_memory_store_rejects_pipeline_with_shuffle(local_client, tmp_path):
         num_output_shards=1,
     )
 
-    with _store_context(local_client, tmp_path) as context:
+    with memory_store_context(local_client, tmp_path) as context:
         with pytest.raises(ValueError):
             _load_store(context, dataset, name="shuffled")
 

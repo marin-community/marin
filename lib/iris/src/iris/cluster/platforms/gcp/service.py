@@ -185,7 +185,7 @@ def validate_vm_create(request: VmCreateRequest, valid_zones: set[str]) -> None:
 
 
 class GcpService(Protocol):
-    """GCP operations implemented by the cloud and in-memory adapters."""
+    """Provision and inspect Iris compute resources through GCP semantics."""
 
     @property
     def mode(self) -> ServiceMode: ...

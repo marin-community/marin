@@ -5,13 +5,10 @@
 
 import contextvars
 import threading
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 
 import cloudpickle
 import pytest
-from fray.types import ResourceConfig
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import SentinelFile
@@ -19,6 +16,7 @@ from rigging.timing import Duration, ExponentialBackoff
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.memory_store import MemoryStorePartitionError
+from zephyr.testing.context import memory_store_context
 
 pytestmark = pytest.mark.requires_cluster
 
@@ -31,19 +29,6 @@ def _wrong_key_partition(key: tuple[int, str]) -> int:
     return key[0] + 1
 
 
-@contextmanager
-def _store_context(client, tmp_path, *, max_workers: int = 2) -> Iterator[ZephyrContext]:
-    context = ZephyrContext(
-        client=client,
-        max_workers=max_workers,
-        resources=ResourceConfig(cpu=1, ram="256m"),
-        chunk_storage_prefix=str(tmp_path / "chunks"),
-        name="memory-store-test",
-    )
-    with context:
-        yield context
-
-
 def _worker_task_id(context: ZephyrContext, actor_index: int) -> JobName:
     assert context._pool is not None
     worker_job_id = context._pool.coordinator.worker_job_id.remote().result(timeout=30.0)
@@ -53,7 +38,7 @@ def _worker_task_id(context: ZephyrContext, actor_index: int) -> JobName:
 def test_memory_store_invalid_input_does_not_restart_workers(iris_integration_client, tmp_path):
     dataset = Dataset.from_list([[((0, "a"), "value")], [((1, "b"), "value")]]).flat_map(_partition_rows)
 
-    with _store_context(iris_integration_client, tmp_path) as context:
+    with memory_store_context(iris_integration_client, tmp_path) as context:
         task_ids = [_worker_task_id(context, actor_index) for actor_index in range(2)]
         attempts_before = [iris_integration_client._iris.task_status(task_id).current_attempt_id for task_id in task_ids]
 
@@ -67,7 +52,7 @@ def test_memory_store_invalid_input_does_not_restart_workers(iris_integration_cl
 def test_memory_store_loads_and_serves_through_iris_actor_backend(iris_integration_client, tmp_path):
     dataset = Dataset.from_list([((0, "a"), "zero"), ((1, "a"), "one")])
 
-    with _store_context(iris_integration_client, tmp_path) as context:
+    with memory_store_context(iris_integration_client, tmp_path) as context:
         store = context.load_memory_store(dataset, name="documents", hash_key=lambda key: key[0])
         restored = cloudpickle.loads(cloudpickle.dumps(store))
         first = context.execute(Dataset.from_list([(1, "a"), (0, "a")]).map(restored.get))
@@ -90,7 +75,7 @@ def test_memory_store_recovers_partition_after_iris_preemption(iris_integration_
 
     dataset = Dataset.from_list([((0, "a"), "zero"), ((1, "a"), "one")]).map(delay_reload)
 
-    with _store_context(iris_integration_client, tmp_path) as context:
+    with memory_store_context(iris_integration_client, tmp_path) as context:
         store = context.load_memory_store(
             dataset,
             name="documents",

@@ -1166,7 +1166,6 @@ class IrisContext:
         )
 
 
-# Module-level ContextVar for the current iris context
 def iris_ctx() -> IrisContext:
     """Get the current IrisContext, raising if not in a job.
 

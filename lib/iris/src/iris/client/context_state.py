@@ -14,7 +14,6 @@ def current_context() -> object | None:
 
 
 def has_current_context() -> bool:
-    """Return whether an Iris context is already active."""
     return _current_context.get() is not None
 
 
@@ -24,5 +23,4 @@ def set_context(context: object) -> Token[object | None]:
 
 
 def reset_context(token: Token[object | None]) -> None:
-    """Restore the context state represented by ``token``."""
     _current_context.reset(token)

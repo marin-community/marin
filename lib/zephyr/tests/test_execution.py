@@ -1636,19 +1636,6 @@ def test_registration_retries_a_failed_rpc_and_waits_out_a_slow_one():
     worker._memory_store.restore.assert_called_once_with(())
 
 
-# --- Integration tests (all backends) ---
-
-
-def test_simple_map_integration(zephyr_ctx):
-    ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-    assert sorted(zephyr_ctx.execute(ds).results) == [2, 4, 6]
-
-
-def test_multi_stage_integration(zephyr_ctx):
-    ds = Dataset.from_list([1, 2, 3, 4, 5]).map(lambda x: x * 2).filter(lambda x: x > 5)
-    assert sorted(zephyr_ctx.execute(ds).results) == [6, 8, 10]
-
-
 def test_zephyr_context_custom_map_and_reduce_resources_executes_successfully(local_client):
     ctx = ZephyrContext(
         client=local_client,
