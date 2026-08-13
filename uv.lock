@@ -3615,6 +3615,7 @@ dependencies = [
 test = [
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [package.metadata]
@@ -3632,6 +3633,7 @@ requires-dist = [
 test = [
     { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]
