@@ -1090,3 +1090,16 @@ author: Rafal Wojdyla
 - Output safety: The write stage keeps `skip_existing=True`. A direct object count at 06:59 UTC found 115,640 of 166,775 output shards, or 69.34%. There are 51,135 shards left. East has 46,898 shards, RNO has 68,742 shards, 95 sources have output, and no Parquet path is unknown.
 - Issue update: Post one major update for the user-directed batch restart.
 - Next action: Watch batch preemptions, terminal service failures, all 16 active sources, and aggregate output growth.
+
+### 2026-08-13 08:00 UTC - Batch restart hourly checkpoint
+
+- Root health: Both batch roots remain running with zero failures and zero root preemptions after 70 minutes.
+- Completed artifacts: The final roots completed nine new source artifacts. East completed five, and RNO completed four. The full run has 100 of 292 completed source artifacts.
+- Source concurrency: East and RNO each have eight running source jobs. No source job is pending or failed.
+- Aggregate progress: A direct object count at 07:46 UTC found 119,853 of 166,775 output shards, or 71.87%. There are 46,922 shards left. East has 49,249 shards, RNO has 70,604 shards, 111 sources have output, and no Parquet path is unknown.
+- Output rate: The jobs wrote 3,149 shards between 07:11 UTC and 07:46 UTC.
+- Service state: All 256 East and 512 RNO service jobs remain active. East has 192 running service tasks and 64 building tasks. RNO has 112 running service tasks and 400 building tasks.
+- RNO service 025: The recovered service remains active in the batch queue. It has no second failure.
+- TEI health: East service logs show successful embedding requests. Short `no permits available` events occur during queue pressure, and later requests succeed.
+- Issue update: None. The user-directed restart update already contains the major state change.
+- Next action: Continue the root, source, service, Zephyr, and output checks. Recover only a terminal in-scope job failure.
