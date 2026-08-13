@@ -787,3 +787,33 @@ W&B: https://wandb.ai/marin-community/marin_moe/runs/mok-like-ab-mok-like-100-20
 - Both runs completed 100 finite exact-zero-drop rows. Each process reported exactly 19,200 forward and backward handlers, zero forward staging, exact staged-backward calls and bytes, slot zero only, maximum active slots one, and zero protocol, generation, reuse, or trim anomalies.
 - Candidate caveat: process-zero HBM peaked 5.73 GiB above the baseline W&B sample. The matched run still completed without device-memory errors, but the source of this sampling difference is not isolated.
 - Decision: the v15 healthy-path performance gate passes. Run one-rack and two-rack candidate seals before replacing the stable v12 branch. Keep the remaining concurrency limit explicit: cancellation while a healthy sibling is simultaneously resident has not been witnessed in one combined gate, although healthy same-executable overlap and one-failure/one-success isolation pass separately.
+
+### 2026-08-12 16:30 PT - V15 one-rack gate passes with the 176 GiB arena
+
+- Result: `/dlwh/mok-scale-011-v15-dropless-1rack-host176-25-20260812-1617-coord` and all 16 child tasks succeeded from candidate SHA `5c21f51d52879e100b862a10888e78f581a9c8f3`, with no failure, preemption, or retry. W&B finished with 25 finite exact-zero-drop rows. [W&B](https://wandb.ai/marin-community/marin_moe/runs/mok-scale-011-v15-dropless-1rack-host176-25-20260812-1617); [XProf](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fmok-scale-011-v15-dropless-1rack-host176-25-20260812-1617).
+- Performance: steps 10-24 averaged 309,026.654 tokens/s total, 4,828.541 tokens/s/GPU, 13.591985 seconds, and 22.588773% MFU. Weak-scale efficiency was 93.4657%, and throughput was 1.6184% below the matched v12 Scale010 result. Both the 80% scale gate and three-percent matched-version gate passed.
+- Memory and runtime: process-zero cgroup peak was 805.899 GiB, leaving 94.101 GiB below the 900 GiB pod limit. Every process reported exactly 4,800 forward and backward handlers, zero forward staging, exact staged-backward copies, slot zero only, maximum active slots one, and zero protocol, generation, reuse, or trim anomalies.
+- Decision: advance the unchanged v15 candidate to the 32-process, two-rack, 100-update seal.
+
+### 2026-08-12 17:05 PT - V15 two-rack 100-update seal passes
+
+- Source and command: clean pushed branch `codex/mok-confidence-v14` at `5c21f51d52879e100b862a10888e78f581a9c8f3`, native schema v15. The coordinator launched the following command with `WANDB_API_KEY` supplied but scrubbed here:
+
+  ```bash
+  .venv/bin/python -c 'import iris.cluster.platforms.k8s.service as service; from iris.cluster.platforms.types import find_free_port; service.find_free_port = lambda start=10000: find_free_port(); from iris.cli.main import main; main()' \
+    --config lib/iris/config/cw-us-east-08a.yaml job run --no-wait --enable-extra-resources \
+    --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 \
+    --job-name mok-scale-012-v15-dropless-2rack-host176-100-20260812-1632-coord \
+    -e WANDB_API_KEY '<redacted>' -e WANDB_PROJECT marin_moe -- \
+    .venv/bin/python -m experiments.grug.moe_hero_ep.launch_mok_like \
+      --run-id mok-scale-012-v15-dropless-2rack-host176-100-20260812-1632 \
+      --backend mok_like --num-steps 100 --num-nodes 32 \
+      --mok-like-preset promoted_dropless_v12 --version 2026.08.12 --run
+  ```
+
+- Result: the coordinator and all 32 training tasks succeeded with no failure, preemption, or retry. Placement was exactly two NVLink domains with 16 unique GB200 nodes each. W&B finished with 100 finite rows through final loss 4.60155 and exact zero drops on every row. [W&B](https://wandb.ai/marin-community/marin_moe/runs/mok-scale-012-v15-dropless-2rack-host176-100-20260812-1632); [XProf](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fmok-scale-012-v15-dropless-2rack-host176-100-20260812-1632).
+- Performance: steps 60-79 averaged 553,963.070 tokens/s total, 4,327.836 tokens/s/GPU, 15.143397 seconds, and 20.246386% MFU, or 83.7736% weak-scale efficiency. Steps 40-79 averaged 546,470.338 tokens/s, 4,269.300 tokens/s/GPU, 15.355065 seconds, and 19.972540% MFU, or 82.6405% efficiency. The two windows were 7.27% and 6.32% faster than the long v12 Scale009 run and both passed the 80% gate.
+- Runtime audit: every process reported exactly 19,200 forward and backward handlers. Forward staging was zero. Backward staged copies were exactly 76,800 calls and 30,964,029,849,600 bytes per process. Slot one was unused, maximum active slots was one, and protocol, generation, reuse, trim, and slot anomalies were zero across all 32 processes.
+- Memory: process-zero cgroup peak was 793.486 GiB, leaving 106.514 GiB below the 900 GiB pod limit. W&B RSS peaked at 792.397 GiB and all cgroup memory-event counters stayed zero.
+- Decision: promote this v15 snapshot and the 176 GiB pinned-host arena as the stable MoK branch. Synchronous failure closure, long stateful parity, matched healthy throughput, one-rack execution, and the two-rack 100-update seal pass. One combined gate remains unproven: cancellation while a healthy sibling is simultaneously resident in the other workspace slot. Healthy two-slot overlap and one-failure/one-success RunId isolation pass separately; do not claim the combined property without a generation-safe device-side overlap witness.
+- Incident record: [Echo wiki 137](https://echo.oa.dev/wiki/137) records the rank-local collective mismatch, JAX runtime-token cleanup failure, v15 response, and remaining failure-overlap limit.
