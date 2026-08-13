@@ -96,3 +96,4 @@ Validation so far:
 
 - Moved the evaluation archive contract to `marin.evaluation.archive`. Evaldash continues to copy the import-light Marin evaluation modules it needs into its image.
 - Removed the `marin-evalstore` workspace member, distribution, release artifact, isolated CI scope, and Docker install. The archive has no independent consumer outside Marin-owned evaluation workflows.
+- The Levanter recovery shard reproduced a race after the synthetic crash disabled core dumps: the child exited between the monitor's poll and deadman kill, so `SIGABRT` was mislabeled as a stall. Process-group termination now reports whether the supervisor actually sent a signal; the supervisor suite passed under two workers and the crash path passed 30 consecutive replays.
