@@ -39,10 +39,10 @@ TEST(GpuFfiRegistrationTest, RoutesExportedBundleThroughTypedPjrtApiOne) {
   args.function_name = "shuttle.gpu.executable_bundle.v1";
   args.function_name_size = std::char_traits<char>::length(args.function_name);
   args.api_version = 1;
-  args.handler_instantiate = bundle.instantiate;
-  args.handler_prepare = bundle.prepare;
-  args.handler_initialize = bundle.initialize;
-  args.handler_execute = bundle.execute;
+  args.handler_instantiate = reinterpret_cast<void *>(bundle.instantiate);
+  args.handler_prepare = reinterpret_cast<void *>(bundle.prepare);
+  args.handler_initialize = reinterpret_cast<void *>(bundle.initialize);
+  args.handler_execute = reinterpret_cast<void *>(bundle.execute);
 
   observation = {};
   ASSERT_EQ(registerWithFakePjrt(&args), nullptr);
