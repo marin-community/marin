@@ -267,7 +267,9 @@ def run_probe(*, expected_world_size: int, arena_bytes: int, iterations: int, ti
             raise RuntimeError(f"Fabric metadata gather was incomplete: {world_fabrics}")
         _validate_world_fabric([item for item in world_fabrics if item is not None])
         symm_mem.set_signal_pad_size(_DEFAULT_SIGNAL_PAD_BYTES)
-        symm_mem.set_backend("CUDA")
+        backend = str(symm_mem.get_backend(device))
+        if backend.upper() != "CUDA":
+            raise RuntimeError(f"Expected the CUDA symmetric-memory backend, got {backend!r}")
         arena = symm_mem.empty(arena_bytes, dtype=torch.uint8, device=device)
         handle = symm_mem.rendezvous(arena, group)
         if handle.world_size != rank.world_size or handle.rank != rank.global_rank:
@@ -321,7 +323,7 @@ def run_probe(*, expected_world_size: int, arena_bytes: int, iterations: int, ti
         _jax_device_round_trip(rank, expected=rank.global_rank + iterations + 1)
         result = ProbeResult(
             rank=rank,
-            backend=str(symm_mem.get_backend(device)),
+            backend=backend,
             arena_bytes=arena_bytes,
             iterations=iterations,
             peer_pointer_count=len(peer_pointers),
