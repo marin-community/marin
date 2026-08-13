@@ -8,12 +8,14 @@ import dataclasses
 import functools
 import logging
 import os
+import traceback
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 import equinox as eqx
+import fsspec
 import jax
 import jax.numpy as jnp
 import jmp
@@ -24,8 +26,10 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from iris.runtime.jax_init import XLA_AUTOTUNE_CACHE_MODE_ENV, XlaAutotuneCacheMode
 from jax._src import config as jax_config
+from rigging.filesystem.cluster_config import marin_prefix
 from jax.experimental import multihost_utils
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -1117,6 +1121,26 @@ def _make_train_step(
     return train_step
 
 
+def _write_fatal_traceback(config: GrugRunConfig) -> None:
+    """Persist this rank's traceback next to the run output.
+
+    Task stdout reaches us only through the log service, which has been dropping child-task bodies
+    under load. When it does, a failed run reports nothing but coordination-teardown noise and the
+    root cause is gone. Writing the traceback to durable storage keeps the diagnosis independent of
+    that path. Best effort by construction: this runs while an exception is already propagating, so
+    a failure to record must not replace the error it was trying to record.
+    """
+    try:
+        run_id = config.trainer.trainer.id
+        rank = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV, "0")
+        destination = f"{marin_prefix()}marin/grug/fatal-tracebacks/{run_id}/rank-{rank}.txt"
+        with fsspec.open(destination, "w") as handle:
+            handle.write(traceback.format_exc())
+        logger.info("Wrote fatal traceback to %s", destination)
+    except Exception:
+        logger.warning("Could not persist the fatal traceback", exc_info=True)
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
@@ -1408,6 +1432,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
             )
+            _write_fatal_traceback(config)
             raise
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
