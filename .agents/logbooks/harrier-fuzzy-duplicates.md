@@ -1312,3 +1312,12 @@ author: Rafal Wojdyla
 - Final smoke: `/rav/harrier-merge-smoke-v3-20260813` passed these checks on production inputs. `nsf_awards` verified 3 shards and 381,789 rows. `agenttrove` verified 43 shards and 781,076 rows.
 - Issue update: https://github.com/marin-community/marin/issues/8162#issuecomment-5287072480.
 - Next action: Continue the RNO root through completion. Run the same partition verification before the full merge.
+
+### 2026-08-13 22:52 UTC - RNO paused after East S3 write suspension
+
+- Failure: At 22:48 UTC, all RNO workers began to fail `CreateMultipartUpload` calls to `s3://marin-us-east-02a`. S3 returned HTTP 405 with `Account is write suspended for this availability zone` and asked for a capacity-quota check.
+- Effect: Embedding continued, but no new shard could seal. The coordinator remained at 2,052 of 3,679 shards for `nemotron_cc_v2-medium_high_quality` and re-queued each failed write.
+- Safe action: Stopped `/rav/harrier-fuzzy-dups-rno-p1-20260813-batch-max-v4` at 22:52 UTC to prevent repeated GPU work. All 162,969 completed output shards remain in place. East remains complete and verified.
+- Shared record: Echo entry 2635 records the storage suspension and safe stop.
+- Issue update: https://github.com/marin-community/marin/issues/8162#issuecomment-5287292405.
+- Next action: Use a small multipart write under a TTL prefix to probe the East bucket. Restart the RNO root from its existing output only after the write suspension clears.
