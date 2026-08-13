@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 
 def build_steps(base: str) -> list[StepSpec]:
+    base_path = StoragePath(base)
+
     # Filtered download — restrict to the sample/10BT subset so we don't pull
     # the entire fineweb-edu repo (TBs). Per-run isolated under $base/download.
     downloaded = download_hf_step(
@@ -48,7 +50,7 @@ def build_steps(base: str) -> list[StepSpec]:
         revision="87f0914",
         hf_urls_glob=["sample/10BT/*.parquet"],
         zephyr_max_parallelism=14,  # fineweb-edu sample/10BT has 14 parquet shards
-        override_output_path=f"{base}/download",
+        override_output_path=str(base_path / "download"),
     )
 
     # Normalize peaked at ~10 GB mem, 17 GB disk on 10BT; bump disk from default 10g.
@@ -57,7 +59,7 @@ def build_steps(base: str) -> list[StepSpec]:
         download=downloaded,
         relative_input_path="sample/10BT",
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="20g"),
-        override_output_path=f"{base}/normalize",
+        override_output_path=str(base_path / "normalize"),
     )
 
     # MinHash attrs: per-shard 1:1 from the normalized dataset. MinHash is
@@ -70,7 +72,7 @@ def build_steps(base: str) -> list[StepSpec]:
             output_path=output_path,
             worker_resources=ResourceConfig(cpu=5, ram="16g", disk="10g"),
         ),
-        override_output_path=f"{base}/minhash",
+        override_output_path=str(base_path / "minhash"),
     )
 
     # Fuzzy dups: connected components over the MinHash bucket graph.
@@ -86,7 +88,7 @@ def build_steps(base: str) -> list[StepSpec]:
             cc_max_iterations=3,
             worker_resources=ResourceConfig(cpu=1, ram="16g", disk="30g"),
         ),
-        override_output_path=f"{base}/fuzzy_dups",
+        override_output_path=str(base_path / "fuzzy_dups"),
     )
 
     consolidated = StepSpec(
@@ -112,7 +114,7 @@ def build_steps(base: str) -> list[StepSpec]:
             ],
             worker_resources=ResourceConfig(cpu=1, ram="8g"),
         ),
-        override_output_path=f"{base}/consolidate",
+        override_output_path=str(base_path / "consolidate"),
     )
 
     tokenized = StepSpec(
@@ -127,7 +129,7 @@ def build_steps(base: str) -> list[StepSpec]:
                 tokenizer="gpt2",
             )
         ),
-        override_output_path=f"{base}/tokens",
+        override_output_path=str(base_path / "tokens"),
     )
 
     return [downloaded, normalized, minhash, deduped, consolidated, tokenized]

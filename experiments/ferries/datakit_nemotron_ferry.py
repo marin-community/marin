@@ -76,6 +76,8 @@ def _verify_nemotron_quality_present(output_path: str) -> None:
 
 
 def build_steps(base: str) -> list[StepSpec]:
+    base_path = StoragePath(base)
+
     # Verify-only raw step. Uses an absolute override so it points at the
     # pre-staged dump regardless of MARIN_PREFIX.
     download = StepSpec(
@@ -97,7 +99,7 @@ def build_steps(base: str) -> list[StepSpec]:
         relative_input_path=f"{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_QUALITY_DIR}",
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="5g"),
         max_workers=512,
-        override_output_path=f"{base}/normalize",
+        override_output_path=str(base_path / "normalize"),
     )  # ~1,380 output shards
 
     minhash = StepSpec(
@@ -110,7 +112,7 @@ def build_steps(base: str) -> list[StepSpec]:
             map_task_resources=resources.scale(1 / 16),
             reduce_task_resources=resources.scale(3 / 16),
         ),
-        override_output_path=f"{base}/minhash",
+        override_output_path=str(base_path / "minhash"),
     )  # ~1,380 output shards
 
     deduped = StepSpec(
@@ -125,7 +127,7 @@ def build_steps(base: str) -> list[StepSpec]:
             map_task_resources=resources.scale(1 / 16),
             reduce_task_resources=resources.scale(3 / 16),
         ),
-        override_output_path=f"{base}/fuzzy_dups",
+        override_output_path=str(base_path / "fuzzy_dups"),
     )  # ~1,380 output shards
 
     consolidated = StepSpec(
@@ -149,7 +151,7 @@ def build_steps(base: str) -> list[StepSpec]:
             worker_resources=(resources := ResourceConfig(cpu=16, ram="32g", disk="16g")),
             map_task_resources=resources.scale(1 / 16),
         ),
-        override_output_path=f"{base}/consolidate",
+        override_output_path=str(base_path / "consolidate"),
     )  # ~1,380 output shards
 
     tokenized = StepSpec(
@@ -166,7 +168,7 @@ def build_steps(base: str) -> list[StepSpec]:
                 map_task_resources=resources.scale(1 / 16),
             )
         ),
-        override_output_path=f"{base}/tokens",
+        override_output_path=str(base_path / "tokens"),
     )  # ~1,380 output shards
 
     return [download, normalized, minhash, deduped, consolidated, tokenized]
