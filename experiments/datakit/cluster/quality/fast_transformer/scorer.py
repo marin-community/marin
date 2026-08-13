@@ -66,8 +66,13 @@ class PooledScorer:
         model = eqx.tree_deserialise_leaves(model_path, template)
         return cls(model=model, remap=remap, tokenizer_name=meta["tokenizer"], max_tokens=meta["max_tokens"])
 
-    def score(self, texts: list[str], batch_size: int = 256) -> np.ndarray:
-        """Quality score in ``[0, 1]`` per document."""
+    def score(self, texts: list[str], batch_size: int = 256, doc_embed: np.ndarray | None = None) -> np.ndarray:
+        """Quality score in ``[0, 1]`` per document.
+
+        ``doc_embed`` carries one document-embedding row per text and is required by
+        a fusion scorer (one whose config declares ``doc_embed_dim``); the forward
+        pass fails without it rather than scoring text-only by accident.
+        """
         out = np.empty(len(texts), dtype=np.float32)
         for start in range(0, len(texts), batch_size):
             chunk = texts[start : start + batch_size]
@@ -76,7 +81,8 @@ class PooledScorer:
             for i, row in enumerate(encoded):
                 mapped = [self.remap.get(t, UNK_ID) for t in row[: self.max_tokens]]
                 ids[i, : len(mapped)] = mapped
-            out[start : start + len(chunk)] = predict(self.model, ids)
+            rows = None if doc_embed is None else doc_embed[start : start + len(chunk)]
+            out[start : start + len(chunk)] = predict(self.model, ids, doc_embed=rows)
         return out
 
 
