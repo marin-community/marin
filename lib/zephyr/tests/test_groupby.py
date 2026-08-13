@@ -583,7 +583,7 @@ def test_group_by_combiner_sum(zephyr_ctx):
 # --- Integration tests (all backends) ---
 
 
-def test_deduplicate_basic_integration(integration_ctx):
+def test_deduplicate_basic_integration(zephyr_ctx):
     data = [
         {"id": 1, "val": "a"},
         {"id": 2, "val": "b"},
@@ -594,13 +594,13 @@ def test_deduplicate_basic_integration(integration_ctx):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = integration_ctx.execute(ds).results
+    results = zephyr_ctx.execute(ds).results
     assert len(results) == 3
     ids = sorted([r["id"] for r in results])
     assert ids == [1, 2, 3]
 
 
-def test_group_by_combiner_integration(integration_ctx):
+def test_group_by_combiner_integration(zephyr_ctx):
     data = [
         {"key": "a", "id": 1},
         {"key": "a", "id": 1},
@@ -633,7 +633,7 @@ def test_group_by_combiner_integration(integration_ctx):
         combiner=dedup_combiner,
     )
 
-    results = sorted(integration_ctx.execute(ds).results, key=lambda x: x["key"])
+    results = sorted(zephyr_ctx.execute(ds).results, key=lambda x: x["key"])
     assert results == [
         {"key": "a", "ids": [1, 2]},
         {"key": "b", "ids": [3, 4]},

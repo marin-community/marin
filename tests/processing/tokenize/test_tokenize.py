@@ -17,7 +17,7 @@ from marin.processing.tokenize.tokenize import (
     tokenize,
 )
 from zephyr.dataset import FileEntry
-from zephyr.readers import InputFileSpec
+from zephyr.input_file import InputFileSpec
 
 # Dummy values for other required TokenizeConfig fields
 DUMMY_CACHE_PATH = "/dummy/cache"

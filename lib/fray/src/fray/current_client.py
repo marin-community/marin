@@ -1,23 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Current-client resolution for fray.
-
-Holds the ContextVar and the two helpers that select which backend to use at
-runtime.  Kept separate from fray.client so that fray.client (protocols and
-exceptions) does not transitively import fray.iris_backend or
-fray.local_backend, which would form a circular dependency.
-"""
+"""Resolve the active Fray client."""
 
 import contextlib
 import contextvars
 import logging
+import os
 from collections.abc import Generator
 
-from iris.client.client import get_iris_ctx
+from iris.client.context_state import has_current_context
 
 from fray.client import Client
-from fray.iris_backend import FrayIrisClient
 from fray.local_backend import LocalClient
 
 logger = logging.getLogger(__name__)
@@ -38,8 +32,18 @@ def current_client() -> Client:
         logger.info("current_client: using explicitly set client")
         return client
 
-    ctx = get_iris_ctx()
+    ctx = None
+    if has_current_context() or os.environ.get("IRIS_TASK_ID"):
+        # Iris is an optional Fray backend. Import its client only inside an Iris
+        # context, where it is needed to resolve the concrete client.
+        from iris.client.client import get_iris_ctx  # noqa: PLC0415
+
+        ctx = get_iris_ctx()
     if ctx is not None:
+        if ctx.client is None:
+            raise RuntimeError("Iris context has no client")
+        from fray.iris_backend import FrayIrisClient  # noqa: PLC0415
+
         logger.info("current_client: using Iris backend (auto-detected)")
         return FrayIrisClient.from_iris_client(ctx.client)
 

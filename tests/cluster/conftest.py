@@ -33,7 +33,7 @@ from fray.current_client import set_current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import JobRequest, JobStatus
 from iris.cli.connect import connect_controller
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import wait_for_condition

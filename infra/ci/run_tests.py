@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+import ast
 import os
 import shlex
 import subprocess
@@ -32,6 +33,9 @@ DEFAULT_BASE_REFS: tuple[str, ...] = ("origin/HEAD", "origin/main", "main")
 LOCAL_SAFE_MARKERS = (
     "not slow and not integration and not data_integration and not cluster "
     "and not requires_cluster and not docker and not manual and not torch"
+)
+LOCAL_EXCLUDED_MODULE_MARKERS = frozenset(
+    {"slow", "integration", "data_integration", "cluster", "requires_cluster", "docker", "manual", "torch"}
 )
 MAX_DISPLAYED_TEST_PATHS = 5
 HALIAX_CPU_DEVICE_COUNT = 8
@@ -84,6 +88,49 @@ class PytestLane:
     invocation: PytestInvocation
     workers: int
     jax_cpu_devices: int
+
+
+def _module_pytest_markers(path: Path) -> frozenset[str]:
+    """Return statically declared module-level ``pytestmark`` names."""
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
+    markers: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or not any(
+            isinstance(target, ast.Name) and target.id == "pytestmark" for target in node.targets
+        ):
+            continue
+        for child in ast.walk(node.value):
+            if (
+                isinstance(child, ast.Attribute)
+                and isinstance(child.value, ast.Attribute)
+                and isinstance(child.value.value, ast.Name)
+                and child.value.value.id == "pytest"
+                and child.value.attr == "mark"
+            ):
+                markers.add(child.attr)
+    return frozenset(markers)
+
+
+def omit_locally_excluded_modules(invocation: PytestInvocation | None, repo_root: Path) -> PytestInvocation | None:
+    """Drop files whose module marker makes every test ineligible for the safe lane."""
+    if invocation is None:
+        return None
+
+    packages = []
+    for package in invocation.packages:
+        paths = tuple(
+            path
+            for path in package.test_paths
+            if not (
+                (candidate := repo_root / path).is_file()
+                and _module_pytest_markers(candidate) & LOCAL_EXCLUDED_MODULE_MARKERS
+            )
+        )
+        if paths:
+            packages.append(replace(package, test_paths=paths))
+    if not packages:
+        return None
+    return replace(invocation, packages=tuple(packages))
 
 
 def _run_git(args: list[str], repo_root: Path) -> subprocess.CompletedProcess[str]:
@@ -353,7 +400,7 @@ def run(argv: list[str] | None = None) -> int:
         base_ref = args.base_ref or default_base_ref(repo_root)
         diff = worktree_diff(base_ref, repo_root)
         selection = select_local_tests(list(diff.changed_files), repo_root)
-        invocation = local_invocation(selection)
+        invocation = omit_locally_excluded_modules(local_invocation(selection), repo_root)
     except LocalTestError as error:
         parser.error(str(error))
 

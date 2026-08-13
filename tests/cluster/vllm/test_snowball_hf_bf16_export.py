@@ -26,7 +26,7 @@ import pytest
 import safetensors
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from haliax.partitioning import set_mesh
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.rpc import job_pb2
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import validate_single_name_config
