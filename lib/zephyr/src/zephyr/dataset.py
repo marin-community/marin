@@ -915,7 +915,8 @@ class Dataset(Generic[T]):
         returns a ``pl.DataFrame``. It runs through Polars ``map_groups`` before
         the merged frame is collected. A two-argument reducer receives
         ``(key, iterator_of_items)`` and returns a single result or an iterator
-        of results; those items are plain dict rows after scatter.
+        of results. Columnar inputs become plain dict rows; Python inputs are
+        restored to their original objects.
 
         ``key`` / ``sort_by`` must match the item shape:
 
