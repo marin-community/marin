@@ -24,3 +24,8 @@ dev = [{ include-group = "test" }]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/evalstore"]
+
+[tool.pytest.ini_options]
+timeout = 60
+timeout_method = "thread"
+addopts = "--durations=10 -v"

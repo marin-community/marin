@@ -89,3 +89,4 @@ Validation so far:
 - Registered Evalstore as a workspace test scope and moved the archive contract roundtrip into a package-owned suite, so package metadata changes select a real test leg.
 - Evalstore: 1 passed; CI selector: 39 passed; root evaluation archive: 24 passed.
 - `./infra/pre-commit.py --changed-files --fix`: all gates passed.
+- The first isolated CI leg inherited the repository-root Marin pytest plugin. Added a package-local pytest configuration so Evalstore remains independently testable without taking a reverse dependency on `marin-core`.
