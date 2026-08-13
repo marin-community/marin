@@ -54,7 +54,7 @@ _TEI_ENDPOINT_SHARED_KEY = "harrier_tei_endpoint_name"
 QUANT_RANGE = 0.3
 QUANT_SCALE: float = QUANT_RANGE / 127
 
-_EMBEDDING_SCHEMA = pa.schema(
+EMBEDDING_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string()),
         pa.field("embedding", pa.list_(pa.int8(), HARRIER_DIM)),
@@ -250,7 +250,7 @@ def embed_source(
     dataset = (
         documents.window(batch_size)
         .map_shard(_embed_shard)
-        .write_parquet(_output_path, schema=_EMBEDDING_SCHEMA, skip_existing=True)
+        .write_parquet(_output_path, schema=EMBEDDING_SCHEMA, skip_existing=True)
     )
     resources = worker_resources or ResourceConfig.with_cpu(cpu=1, ram="16g", disk="16g")
     context = ZephyrContext(

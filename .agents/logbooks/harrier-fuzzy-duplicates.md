@@ -1291,3 +1291,24 @@ author: Rafal Wojdyla
 - Shared record: Echo entry 2613 records the service replay. The fixed-port incident remains at https://echo.oa.dev/wiki/142.
 - Issue update: None. Both recoveries were automatic or limited to one service, and neither stopped RNO output.
 - Next action: Let the East retry seal its final source and root. Continue RNO source, service, worker, and output checks.
+
+### 2026-08-13 22:07 UTC - Two-source merge smoke passed
+
+- Test scope: Merged the completed production inputs for `nsf_awards` and `agenttrove`. The output uses the two-day TTL prefix `s3://marin-us-east-02a/tmp/ttl=2d/harrier-merge-smoke/`. No full production merge was launched.
+- First result: The first smoke run failed safely because the old and backfill inputs overlap on some IDs. A full input scan found 2 overlapping IDs in `nsf_awards` and 24 in `agenttrove`. The normalized data contains each ID once, and removal of the overlap gives its exact ID sequence.
+- Merge rule: The revised merge keeps the old embedding when both inputs contain the same ID. It counts and removes the backfill copy. It then requires the complete output ID sequence to equal the matching normalized shard.
+- Successful run: `/rav/harrier-merge-smoke-v2-20260813` wrote 3 of 3 `nsf_awards` shards with 381,789 rows and 43 of 43 `agenttrove` shards with 781,076 rows.
+- Read-back check: `/rav/harrier-merge-verify-nsf-20260813` and `/rav/harrier-merge-verify-agenttrove-20260813` read the written Parquet files. Both checks confirmed the shard names, canonical schema, row counts, exact normalized ID order, and exact embedding rows from the two input datasets.
+- Shared record: Echo entry 2627 records the smoke result.
+- Issue update: None. This test is not a major backfill checkpoint.
+- Next action: Finish the merge change checks. Continue to monitor the East and RNO backfill roots. Do not launch the full merge until the backfill is complete and verified.
+
+### 2026-08-13 22:22 UTC - East partition completed and passed shard verification
+
+- Root result: `/rav/harrier-fuzzy-dups-east-p0-20260813-batch-max-v2` succeeded.
+- Source artifacts: All 146 expected East source artifacts have `SUCCESS` status. No source is missing, and no source has more than one completed artifact.
+- Shard verification: A direct East-region check compared each output artifact with its normalized source. All 77,248 expected Parquet shard names are present. There are no missing or extra shards.
+- Merge verification: The merge now reopens its output and checks the exact shard names, canonical embedding schema, row count for each shard, total row count, and complete ID order against normalized data.
+- Final smoke: `/rav/harrier-merge-smoke-v3-20260813` passed these checks on production inputs. `nsf_awards` verified 3 shards and 381,789 rows. `agenttrove` verified 43 shards and 781,076 rows.
+- Issue update: https://github.com/marin-community/marin/issues/8162#issuecomment-5287072480.
+- Next action: Continue the RNO root through completion. Run the same partition verification before the full merge.
