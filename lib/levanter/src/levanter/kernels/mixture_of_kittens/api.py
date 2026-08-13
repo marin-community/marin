@@ -13,7 +13,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug._moe.common import _CHECKPOINT_MOE_OUTPUT, MoeImplementation
 from levanter.grug.grug_moe import moe_mlp
 from levanter.grug.sharding import _batch_spec_from_x, _reshard_for_shard_map
-from levanter.kernels.mixture_of_kittens.config import _DEVICES_PER_NODE, MokLikeConfig
+from levanter.kernels.mixture_of_kittens.config import _DEVICES_PER_NODE, MokLikeConfig, MokLikeWorkspaceTransport
 from levanter.kernels.mixture_of_kittens.source import SUPPORTED_NUM_DEVICES
 from levanter.kernels.mixture_of_kittens.ffi import (
     MokLikeForwardContext,
@@ -87,6 +87,7 @@ def validate_mok_like_inputs(
 def _validate_topology(
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh,
     num_devices: int = _NUM_DEVICES,
+    workspace_transport: MokLikeWorkspaceTransport = MokLikeWorkspaceTransport.IN_PROCESS_PEER,
 ) -> None:
     """Check the mesh against the expert-group size the adapter was built for.
 
@@ -101,6 +102,15 @@ def _validate_topology(
         raise ValueError(f"num_devices must be one of {supported}, got {num_devices!r}")
     if mesh.empty or int(mesh.shape.get(_EXPERT_AXIS, 1)) != num_devices:
         raise ValueError(f"Mixture-of-Kittens requires an expert axis of size {num_devices}")
+    if workspace_transport.crosses_processes:
+        # One rank per process: the group is assembled from imported fabric arenas, so this
+        # process owns a single device no matter how wide the expert axis is.
+        if jax.local_device_count() != 1:
+            raise ValueError(
+                f"Mixture-of-Kittens under {workspace_transport.value} places one rank per "
+                f"process, so each process must see exactly 1 GPU, got {jax.local_device_count()}"
+            )
+        return
     if num_devices <= _DEVICES_PER_NODE:
         if jax.local_device_count() != num_devices:
             raise ValueError(
@@ -127,7 +137,7 @@ def _fused_forward_with_context(
     config: MokLikeConfig,
     collective_id: int,
 ) -> tuple[jax.Array, jax.Array, MokLikeForwardContext]:
-    _validate_topology(mesh, config.num_devices)
+    _validate_topology(mesh, config.num_devices, config.workspace_transport)
     batch_spec = _batch_spec_from_x(x, mesh)
     expert_weight_spec = P(_EXPERT_AXIS, None, None)
     shared_weight_spec = P(None, None)
@@ -288,7 +298,7 @@ def _fused_backward(
     config: MokLikeConfig,
     collective_id: int,
 ) -> tuple[jax.Array, ...]:
-    _validate_topology(mesh, config.num_devices)
+    _validate_topology(mesh, config.num_devices, config.workspace_transport)
     batch_spec = _batch_spec_from_x(x, mesh)
     expert_weight_spec = P(_EXPERT_AXIS, None, None)
     shared_weight_spec = P(None, None)
