@@ -253,7 +253,6 @@ class _FilterStats:
 class _SurvivingDocument:
     cluster: int
     quality: int
-    document_id: str
     input_ids: np.ndarray
 
 
@@ -400,7 +399,6 @@ def _iter_surviving_docs(
         yield _SurvivingDocument(
             cluster=int(cluster_vals[position]),
             quality=int(quality_buckets[position]),
-            document_id=doc_id,
             input_ids=ids,
         )
     if doc_idx != n_decon:
