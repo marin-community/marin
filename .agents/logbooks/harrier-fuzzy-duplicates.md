@@ -1179,3 +1179,11 @@ author: Rafal Wojdyla
 - RNO service admission: The v4 root requests all 512 batch TEI services. Thirty-two TEI tasks are running, and 480 are in the build state.
 - Published correction: Edited the existing issue update at https://github.com/marin-community/marin/issues/8162#issuecomment-5280678102 and updated https://echo.oa.dev/wiki/141.
 - Next action: Verify the first new RNO Parquet shard, then continue root, source, service, and output checks.
+
+### 2026-08-13 13:08 UTC - RNO output recovery verified
+
+- Output proof: A direct S3 check found 430 Parquet shards for the active high-quality Nemotron source, up from its 416 checkpoint shards.
+- Inference proof: TEI service logs showed successful embedding requests across the 32 admitted RNO GPUs. Request times ranged from tens of milliseconds to about 1.4 seconds in the checked sample.
+- Error check: No endpoint-list timeout matched the RNO v4 logs after the single-source restart.
+- Incident state: The single-source mitigation is effective. Updated https://echo.oa.dev/wiki/141 and edited the existing issue update at https://github.com/marin-community/marin/issues/8162#issuecomment-5280678102.
+- Next action: Continue the root, source, service, and output checks. Watch for another endpoint-list timeout as batch TEI capacity changes.
