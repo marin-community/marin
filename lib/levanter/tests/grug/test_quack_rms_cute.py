@@ -137,8 +137,6 @@ def test_rms_gated_norm_reverse_matches_reference():
     inverse_rms = jax.lax.rsqrt(jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1) + _NORM_EPS)
     normalized = (x.astype(jnp.float32) * inverse_rms[:, None] * norm_weight).astype(jnp.bfloat16)
     gate_preactivation = jnp.einsum("td,dr->tr", normalized, w_down)
-    gate_hidden = jax.nn.silu(gate_preactivation)
-    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
 
     actual = quack_rms_cute.quack_rms_gated_norm_reverse(
         output_cotangent,
@@ -148,7 +146,6 @@ def test_rms_gated_norm_reverse_matches_reference():
         w_up,
         inverse_rms,
         gate_preactivation,
-        gate,
     )
     expected = exact_rms_gated_norm_selective_reverse_reference(
         output_cotangent,
@@ -158,7 +155,6 @@ def test_rms_gated_norm_reverse_matches_reference():
         w_up,
         inverse_rms,
         gate_preactivation,
-        gate,
     )
 
     for label, actual_value, expected_value in zip(

@@ -335,7 +335,6 @@ def _rms_gated_norm_reverse_kernel(
     w_up_ref,
     inverse_rms_ref,
     gate_preactivation_ref,
-    gate_ref,
     norm_weight_zero_ref,
     w_down_zero_ref,
     w_up_zero_ref,
@@ -368,8 +367,11 @@ def _rms_gated_norm_reverse_kernel(
         norm_weight = plgpu.load(norm_weight_ref.at[span_d]).astype(jnp.float32)
         normalized = (x * inverse_rms[:, None] * norm_weight[None, :]).astype(jnp.bfloat16)
         w_up = plgpu.load(w_up_ref.at[span_r, span_d])
-        gate = plgpu.load(gate_ref.at[span_m, span_d])
+        gate_preactivation_up = pl.dot(gate_hidden, w_up).astype(jnp.bfloat16)
+        gate = jax.nn.sigmoid(gate_preactivation_up.astype(jnp.float32)).astype(jnp.bfloat16)
         gate_accumulator = _gate_accumulator_tile(output_cotangent, normalized, gate)
+        direct = (output_cotangent * gate).astype(jnp.bfloat16)
+        plgpu.store(x_cotangent_ref.at[span_m, span_d], direct)
         w_up_partial = pl.dot(gate_hidden.T, gate_accumulator)
         plgpu.atomic_add(w_up_cotangent_ref, (span_r, span_d), w_up_partial)
         return accumulator + pl.dot(gate_accumulator, w_up.T)
@@ -390,10 +392,9 @@ def _rms_gated_norm_reverse_kernel(
         w_down_partial = pl.dot(normalized.T, gate_preactivation_cotangent)
         plgpu.atomic_add(w_down_cotangent_ref, (span_d, span_r), w_down_partial)
         low_rank = pl.dot(gate_preactivation_cotangent, w_down.T).astype(jnp.bfloat16)
-        output_cotangent = plgpu.load(output_cotangent_ref.at[span_m, span_d])
-        gate = plgpu.load(gate_ref.at[span_m, span_d])
-        direct = (output_cotangent * gate).astype(jnp.bfloat16)
+        direct = plgpu.load(x_cotangent_ref.at[span_m, span_d])
         unweighted = (low_rank + direct).astype(jnp.bfloat16)
+        plgpu.store(x_cotangent_ref.at[span_m, span_d], unweighted)
         x_hat = x * inverse_rms[:, None]
         weighted = unweighted.astype(jnp.float32) * norm_weight[None, :]
         norm_weight_partial = jnp.sum(unweighted.astype(jnp.float32) * x_hat, axis=0)
@@ -406,11 +407,7 @@ def _rms_gated_norm_reverse_kernel(
     def output_body(i, _):
         start_d = i * block_d
         span_d = pl.ds(start_d, block_d)
-        w_down = plgpu.load(w_down_ref.at[span_d, pl.ds(0, w_down_ref.shape[1])])
-        low_rank = pl.dot(gate_preactivation_cotangent, w_down.T).astype(jnp.bfloat16)
-        output_cotangent = plgpu.load(output_cotangent_ref.at[span_m, span_d])
-        gate = plgpu.load(gate_ref.at[span_m, span_d])
-        unweighted = (low_rank + (output_cotangent * gate).astype(jnp.bfloat16)).astype(jnp.bfloat16)
+        unweighted = plgpu.load(x_cotangent_ref.at[span_m, span_d])
         x = plgpu.load(x_ref.at[span_m, span_d]).astype(jnp.float32)
         x_hat = x * inverse_rms[:, None]
         norm_weight = plgpu.load(norm_weight_ref.at[span_d]).astype(jnp.float32)
@@ -452,9 +449,9 @@ def _rms_gated_norm_reverse_call(rows: int, hidden_dim: int, rank: int, dtype):
             bf16((hidden_dim, rank), jnp.float32),
             bf16((rank, hidden_dim), jnp.float32),
         ),
-        in_specs=(pl.no_block_spec,) * 11,
+        in_specs=(pl.no_block_spec,) * 10,
         out_specs=(pl.no_block_spec,) * 4,
-        input_output_aliases={8: 1, 9: 2, 10: 3},
+        input_output_aliases={7: 1, 8: 2, 9: 3},
         grid=(pl.cdiv(rows, block_m),),
         compiler_params=plgpu.CompilerParams(num_warps=8, num_stages=2),
         cost_estimate=cost,
@@ -470,7 +467,6 @@ def quack_rms_gated_norm_reverse(
     w_up: jax.Array,
     inverse_rms: jax.Array,
     gate_preactivation: jax.Array,
-    gate: jax.Array,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     """Reverse RMSNorm-GatedNorm behind one device-local custom-call boundary."""
     if output_cotangent.ndim != 2:
@@ -485,9 +481,9 @@ def quack_rms_gated_norm_reverse(
         raise ValueError("RMS reverse inputs have inconsistent dimensions")
     if w_up.shape != (rank, hidden_dim):
         raise ValueError("GatedNorm weight dimensions do not agree")
-    if gate_preactivation.shape != (rows, rank) or gate.shape != (rows, hidden_dim):
+    if gate_preactivation.shape != (rows, rank):
         raise ValueError("retained GatedNorm residual dimensions do not agree")
-    dtypes = {value.dtype for value in (output_cotangent, x, w_down, w_up, gate_preactivation, gate)}
+    dtypes = {value.dtype for value in (output_cotangent, x, w_down, w_up, gate_preactivation)}
     if dtypes != {jnp.dtype(jnp.bfloat16)}:
         raise ValueError(f"gate-SiLU reverse requires matching BF16 inputs, got {sorted(map(str, dtypes))}")
     if inverse_rms.dtype != jnp.float32:
@@ -508,7 +504,6 @@ def quack_rms_gated_norm_reverse(
         w_up,
         inverse_rms,
         gate_preactivation,
-        gate,
         jnp.zeros(norm_weight.shape, dtype=jnp.float32),
         jnp.zeros(w_down.shape, dtype=jnp.float32),
         jnp.zeros(w_up.shape, dtype=jnp.float32),

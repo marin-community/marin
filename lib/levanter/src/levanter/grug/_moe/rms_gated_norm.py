@@ -37,7 +37,7 @@ class RmsGatedNormResiduals(NamedTuple):
 
 
 class RmsGatedNormSelectiveResiduals(NamedTuple):
-    """Values retained to avoid repeating the gate projections in the fused reverse."""
+    """Low-rank forward value retained to avoid repeating the down projection."""
 
     x: jax.Array
     norm_weight: jax.Array
@@ -45,7 +45,6 @@ class RmsGatedNormSelectiveResiduals(NamedTuple):
     w_up: jax.Array
     inverse_rms: jax.Array
     gate_preactivation: jax.Array
-    gate: jax.Array
 
 
 class GatedNormUpCotangents(NamedTuple):
@@ -247,11 +246,11 @@ def exact_rms_gated_norm_selective_reverse_reference(
     w_up: jax.Array,
     inverse_rms: jax.Array,
     gate_preactivation: jax.Array,
-    gate: jax.Array,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-    """Reverse from the full-width gate and low-rank preactivation retained by the forward."""
+    """Reverse from the low-rank preactivation retained by the forward."""
     normalized = (x.astype(jnp.float32) * inverse_rms[:, None] * norm_weight).astype(x.dtype)
     gate_hidden = jax.nn.silu(gate_preactivation)
+    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
     return exact_rms_gated_norm_reverse_reference(
         output_cotangent,
         normalized,
@@ -333,7 +332,6 @@ def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
         w_up=w_up,
         inverse_rms=residuals.inverse_rms,
         gate_preactivation=residuals.gate_preactivation,
-        gate=residuals.gate,
     )
 
 
@@ -352,7 +350,6 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         residuals.w_up,
         residuals.inverse_rms,
         residuals.gate_preactivation,
-        residuals.gate,
     )
     x_cotangent = x_cotangent.reshape(x.shape)
     # The parameters enter replicated, so their cotangents must be reduced over the axes the
