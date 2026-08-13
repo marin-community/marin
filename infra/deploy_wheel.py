@@ -34,6 +34,7 @@ Usage:
 import argparse
 import hashlib
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -54,7 +55,11 @@ ARCH_BY_TRIPLE = {
     "x86_64-unknown-linux-gnu": "x86_64",
     "aarch64-unknown-linux-gnu": "aarch64",
 }
-HOST_ARCH = "x86_64"
+# Our arch name for the machine running this script, or None on an unknown host.
+# Only the host-arch wheel can be import-validated locally.
+HOST_ARCH = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}.get(
+    platform.machine().lower()
+)
 RELEASE_TITLE = "Dev native wheels"
 RELEASE_NOTES = (
     "Auto-managed bucket of development native (Rust) wheels published by "
