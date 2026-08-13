@@ -619,6 +619,11 @@ class KueueTopology(_Config):
 class KueueConfig(_Config):
     cluster_queue: str = ""  # setting this ENABLES Kueue gang admission
     topologies: dict[str, KueueTopology] = Field(default_factory=dict)  # group_by -> topo
+    # Node label accelerator-free Pods softly prefer, so Kueue packs them rather than spreading
+    # them across domains that gangs need whole. Empty leaves them unconstrained. Must name a
+    # level of the Topology bound to this cluster's ResourceFlavor -- Kueue rejects a workload
+    # whose topology request names an absent level, which would strand every CPU Pod here.
+    cpu_pack_topology: str = ""
 
 
 class KubernetesProviderConfig(_Config):

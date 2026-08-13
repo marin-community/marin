@@ -498,6 +498,11 @@ class PodConfig:
     # coscheduling group_by -> KueueTopologyBinding. Defaults to CoreWeave
     # conventions; a group_by with no entry carries no topology annotation.
     kueue_topologies: dict[str, KueueTopologyBinding] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
+    # Node label accelerator-free Pods softly prefer, so Kueue packs them instead of holing the
+    # domains gangs need whole. Empty leaves them unconstrained (the default: naming a level the
+    # cluster's bound Topology lacks makes Kueue reject every CPU Pod). Set per cluster via
+    # kubernetes_provider.kueue.cpu_pack_topology.
+    cpu_pack_topology: str = ""
     # PriorityBand -> Kubernetes PriorityClass name. Sets spec.priorityClassName.
     # UNSPECIFIED is treated as INTERACTIVE. Defaults to the iris-{band} classes
     # Iris creates at startup; override via kubernetes_provider.priority_classes.
@@ -945,11 +950,27 @@ def _build_pod_manifest(
         # A non-coscheduled GPU pod has no gang to colocate, so ask only for the
         # finest, always-satisfiable level as a soft preference.
         metadata["annotations"][_KUEUE_PREFERRED_TOPOLOGY] = _KUEUE_SINGLE_POD_TOPOLOGY
-    else:
-        # Accelerator-free Pods remain in TAS without requesting colocation. This
-        # records their per-node CPU usage in the same flavor as GPU gangs, so a
-        # higher-priority gang can simulate reclaiming it before topology fit.
+    elif has_accelerator or not config.cpu_pack_topology:
+        # Accelerator-free Pods (and standalone TPU Pods, which have no NVLink hierarchy to
+        # pack into) remain in TAS without requesting colocation. This records their per-node
+        # CPU usage in the same flavor as GPU gangs, so a higher-priority gang can simulate
+        # reclaiming it before topology fit.
         metadata["annotations"][_KUEUE_UNCONSTRAINED_TOPOLOGY] = "true"
+    else:
+        # Same TAS accounting as above, plus a soft domain preference. Unconstrained resolves to
+        # the topology's lowest level (hostname), so Kueue decides placement per node and never
+        # scores domains -- and a domain holed by one CPU Pod can no longer host a gang that
+        # hard-binds to it. Naming a level makes Kueue score domains and take the one whose
+        # leftover capacity, counted in copies of this Pod, is smallest among those that fit.
+        #
+        # That approximates "already occupied" rather than measuring it, and CPU NodePools share
+        # one synthetic value per multinode level (nodepool_manifests.CPU_TOPOLOGY_NODE_LABELS),
+        # so the whole CPU pool is scored as a single domain against individual racks. It packs
+        # Pods only accelerator nodes can hold; it does not by itself keep small CPU Pods off
+        # idle racks. Preferred, never required: a Pod that does not fit here falls back to
+        # coarser levels instead of pending. The level must exist in the Topology bound to the
+        # flavor, which is why it is configured per cluster rather than inferred.
+        metadata["annotations"][_KUEUE_PREFERRED_TOPOLOGY] = config.cpu_pack_topology
 
     # Native log-shipping sidecar: ships the task container's node-side CRI log
     # file to finelog. As an initContainer with restartPolicy: Always it is

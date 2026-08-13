@@ -2189,6 +2189,27 @@ def test_make_task_backend_requires_kueue_for_k8s_backend():
         make_task_backend(config, unreachable_grace=Duration.from_seconds(1))
 
 
+def test_cpu_pack_topology_defaults_off_and_is_plumbed_when_set():
+    """The pack level must reach PodConfig from cluster config, and must stay empty when unset:
+    it names a Topology level, and a cluster whose flavor lacks that level rejects every CPU Pod.
+    Only clusters binding a Topology that has the level may opt in."""
+    unset = make_task_backend(
+        IrisClusterConfig(kubernetes_provider=KubernetesProviderConfig(kueue=KueueConfig(cluster_queue="iris-cq"))),
+        unreachable_grace=Duration.from_seconds(1),
+    )
+    assert unset.pods.cpu_pack_topology == ""
+
+    configured = make_task_backend(
+        IrisClusterConfig(
+            kubernetes_provider=KubernetesProviderConfig(
+                kueue=KueueConfig(cluster_queue="iris-cq", cpu_pack_topology="ds.coreweave.com/nvlink.domain")
+            )
+        ),
+        unreachable_grace=Duration.from_seconds(1),
+    )
+    assert configured.pods.cpu_pack_topology == "ds.coreweave.com/nvlink.domain"
+
+
 def test_k8s_backend_uses_canonical_default_task_image():
     config = IrisClusterConfig(
         defaults=DefaultsConfig(worker=WorkerConfig(default_task_image="registry.example/iris-task:abc1234")),

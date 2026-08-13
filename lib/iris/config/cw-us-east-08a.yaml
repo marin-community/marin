@@ -141,6 +141,11 @@ kubernetes_provider:
     # Pulumi owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor;
     # Iris reconciles the namespaced LocalQueue bound to it at controller start.
     cluster_queue: iris-cq
+    # Gangs hard-bind to one nvlink.domain, so a domain holed by a single CPU Pod can no longer
+    # host one. Pack accelerator-free Pods at that level instead of letting them spread. Safe to
+    # name here only because this cluster binds multinode-nvlink-ib, which has the level; the
+    # H100 clusters bind `infiniband`, which does not, and must leave this unset.
+    cpu_pack_topology: ds.coreweave.com/nvlink.domain
   # CoreWeave's node health checker runs preemptible (priority -1) GPU
   # verification pods on idle nodes. Kueue TAS counts them as fixed node usage
   # and cannot preempt non-Kueue pods, so gangs queue behind every NHC sweep;

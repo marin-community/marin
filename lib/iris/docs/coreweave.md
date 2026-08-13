@@ -154,10 +154,23 @@ that release with an ad hoc cluster-wide install.
 
 All Iris Pods use the topology-aware `cw-tas` ResourceFlavor. Its
 `iris.kueue=true` selector covers every Iris-managed NodePool. Accelerator-free
-Pods request unconstrained TAS, so Kueue records their per-node CPU reservations
-in the same flavor as GPU gangs. `preemption.withinClusterQueue: LowerPriority`
-can then remove a lower-priority CPU Workload from the topology snapshot before
-retrying a blocked GPU gang's fit.
+Pods request TAS, so Kueue records their per-node CPU reservations in the same
+flavor as GPU gangs. `preemption.withinClusterQueue: LowerPriority` can then
+remove a lower-priority CPU Workload from the topology snapshot before retrying
+a blocked GPU gang's fit.
+
+By default that request is unconstrained, which Kueue resolves to the Topology's
+lowest level (hostname): placement is decided per node, so nothing keeps CPU
+Pods off the domains gangs hard-bind to, and a domain holed by one CPU Pod can
+no longer host such a gang
+([#8247](https://github.com/marin-community/marin/issues/8247)). Setting
+`kubernetes_provider.kueue.cpu_pack_topology` to a node label sends a soft
+preference for that level instead, so Kueue scores domains and packs. The label
+**must** be a level of the Topology bound to the flavor — Kueue rejects a
+workload whose topology request names an absent level, which would leave every
+CPU Pod on the cluster unschedulable. Only `cw-us-east-08a` sets it today
+(`ds.coreweave.com/nvlink.domain`, a level of `multinode-nvlink-ib`); the H100
+clusters bind `infiniband`, which has no such level, and leave it unset.
 
 Each Iris band has three Kueue admission tiers. The controller reconciles the
 nine `WorkloadPriorityClass` objects at startup.
@@ -215,8 +228,16 @@ requests exclude CPU nodes without an additional selector.
 Kueue requires every node in a TAS flavor to carry every level in the referenced
 Topology. CoreWeave supplies the physical hierarchy on accelerator nodes. Iris
 labels CPU NodePools with a synthetic `iris-cpu-only` fabric, superpod,
-leafgroup, and NVLink domain so unconstrained TAS can assign them at the hostname
-level. The synthetic values do not advertise GPU or RDMA resources.
+leafgroup, and NVLink domain so TAS can assign them at the hostname level. The
+synthetic values do not advertise GPU or RDMA resources.
+
+Because that synthetic value is shared, every CPU NodePool collapses into a
+single domain at each multinode level. Under `cpu_pack_topology` the whole CPU
+pool is therefore scored as one domain against individual racks, and Kueue's
+best-fit picks the smallest domain that still fits: once the pool's aggregate
+free capacity exceeds a rack's, an idle rack is the smaller domain and wins.
+The preference reliably packs CPU Pods that only accelerator nodes can hold; it
+does not by itself keep small CPU Pods off idle racks.
 
 This layout replaces the selectorless, non-TAS `cw-cpu` flavor that caused
 [#7916](https://github.com/marin-community/marin/issues/7916). Kueue v0.18 could

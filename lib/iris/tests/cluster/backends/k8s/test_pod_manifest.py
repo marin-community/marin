@@ -16,6 +16,7 @@ from iris.cluster.backends.k8s.tasks import (
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import (
+    CW_LABEL_NVLINK_DOMAIN,
     NVL72_GPUS_PER_NODE,
     RACK_SIZE,
     SCHEDULABLE_RACK_NODES,
@@ -40,6 +41,7 @@ KUEUE_QUEUE_NAME = "kueue.x-k8s.io/queue-name"
 KUEUE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-required-topology"
 KUEUE_SLICE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-slice-required-topology"
 KUEUE_SLICE_SIZE = "kueue.x-k8s.io/podset-slice-size"
+KUEUE_UNCONSTRAINED_TOPOLOGY = "kueue.x-k8s.io/podset-unconstrained-topology"
 LABEL_JOB_ID = "iris.job_id"
 LABEL_TASK_HASH = "iris.task_hash"
 LABEL_TASK_ID = "iris.task_id"
@@ -56,6 +58,7 @@ _KUEUE_QUEUE_NAME = KUEUE_QUEUE_NAME
 _KUEUE_REQUIRED_TOPOLOGY = KUEUE_REQUIRED_TOPOLOGY
 _KUEUE_SLICE_REQUIRED_TOPOLOGY = KUEUE_SLICE_REQUIRED_TOPOLOGY
 _KUEUE_SLICE_SIZE = KUEUE_SLICE_SIZE
+_KUEUE_UNCONSTRAINED_TOPOLOGY = KUEUE_UNCONSTRAINED_TOPOLOGY
 _LABEL_JOB_ID = LABEL_JOB_ID
 _LABEL_TASK_HASH = LABEL_TASK_HASH
 
@@ -1600,11 +1603,59 @@ def test_single_pod_gpu_job_routed_through_kueue():
     assert _KUEUE_POD_GROUP_TOTAL not in annotations
 
 
-def test_single_pod_cpu_job_uses_unconstrained_topology():
-    """CPU work uses TAS so Kueue can reclaim its accelerator-node capacity."""
+def test_cpu_job_is_unconstrained_when_no_pack_level_is_configured():
+    """CPU work uses TAS so Kueue can reclaim its accelerator-node capacity. Without a configured
+    level it stays unconstrained: naming a level absent from the flavor's Topology makes Kueue
+    reject the workload, so this cannot be inferred from the coscheduling bindings."""
     manifest = _build_pod_manifest(make_run_req("/cpu-job/task/0", num_tasks=1), pod_config(local_queue="iris-lq"))
-    assert manifest["metadata"]["annotations"]["kueue.x-k8s.io/podset-unconstrained-topology"] == "true"
+    annotations = manifest["metadata"]["annotations"]
+    assert annotations[_KUEUE_UNCONSTRAINED_TOPOLOGY] == "true"
+    assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
     assert "nodeSelector" not in manifest["spec"]
+
+
+def test_cpu_job_prefers_the_configured_pack_level():
+    """A configured level becomes a soft preference, so Kueue scores domains instead of placing
+    per-node and packs CPU work rather than holing the domains gangs hard-bind to."""
+    manifest = _build_pod_manifest(
+        make_run_req("/cpu-job/task/0", num_tasks=1),
+        pod_config(local_queue="iris-lq", cpu_pack_topology=CW_LABEL_NVLINK_DOMAIN),
+    )
+    annotations = manifest["metadata"]["annotations"]
+    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == CW_LABEL_NVLINK_DOMAIN
+    # Preferred, never required: a CPU Pod falls back to coarser levels instead of pending.
+    assert _KUEUE_REQUIRED_TOPOLOGY not in annotations
+    assert _KUEUE_UNCONSTRAINED_TOPOLOGY not in annotations
+
+
+def test_standalone_tpu_job_ignores_the_pack_level():
+    """A TPU Pod is not accelerator-free and has no NVLink hierarchy to pack into, so it keeps
+    the unconstrained request even where a pack level is configured."""
+    req = make_run_req("/tpu-job/task/0", num_tasks=1)
+    req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
+    annotations = _build_pod_manifest(req, pod_config(local_queue="iris-lq", cpu_pack_topology=CW_LABEL_NVLINK_DOMAIN))[
+        "metadata"
+    ]["annotations"]
+    assert annotations[_KUEUE_UNCONSTRAINED_TOPOLOGY] == "true"
+    assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
+
+
+def test_configured_pack_level_does_not_leak_into_accelerator_requests():
+    """A configured pack level must not reach Pods that carry their own topology request. A GPU
+    Pod would lose its finest-level hint to a coarser domain, and a gang would gain a whole-PodSet
+    preference competing with the hard binding it already has."""
+    config = pod_config(local_queue="iris-lq", cpu_pack_topology="rack.example.com/hall")
+
+    gpu_req = make_run_req("/gpu-job/task/0", num_tasks=1)
+    gpu_req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
+    gpu_annotations = _build_pod_manifest(gpu_req, config)["metadata"]["annotations"]
+    assert gpu_annotations[_KUEUE_PREFERRED_TOPOLOGY] == "kubernetes.io/hostname"
+
+    gang_annotations = _build_pod_manifest(
+        _cosched_req("/job/task/0", num_tasks=SCHEDULABLE_RACK_NODES, group_by="nvlink.domain"), config
+    )["metadata"]["annotations"]
+    assert gang_annotations[_KUEUE_REQUIRED_TOPOLOGY] == CW_LABEL_NVLINK_DOMAIN
+    assert _KUEUE_PREFERRED_TOPOLOGY not in gang_annotations
 
 
 def test_kueue_topologies_override_config():

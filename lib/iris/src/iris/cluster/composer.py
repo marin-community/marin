@@ -133,6 +133,7 @@ def make_task_backend(
                 env_secret_name=env_secret_name,
                 local_queue=local_queue,
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
+                cpu_pack_topology=kp.kueue.cpu_pack_topology,
                 priority_class_names=pod_priority_classes,
             ),
             preempt_namespaces=list(kp.preempt_namespaces),
