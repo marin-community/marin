@@ -33,6 +33,7 @@ Usage:
 
 import argparse
 import hashlib
+import json
 import os
 import platform
 import re
@@ -182,9 +183,19 @@ def ensure_release(repo: str, tag: str) -> None:
 
 def upload_assets(repo: str, tag: str, paths: list[Path]) -> None:
     subprocess.run(
-        ["gh", "release", "upload", tag, *(str(path) for path in paths), "--repo", repo, "--clobber"],
+        ["gh", "release", "upload", tag, *(str(path) for path in paths), "--repo", repo],
         check=True,
     )
+
+
+def existing_asset_names(repo: str, tag: str) -> set[str]:
+    result = subprocess.run(
+        ["gh", "release", "view", tag, "--repo", repo, "--json", "assets"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return {asset["name"] for asset in json.loads(result.stdout).get("assets", [])}
 
 
 def asset_url(repo: str, tag: str, name: str) -> str:
@@ -222,8 +233,9 @@ def print_recipe(build: pr.NativeBuild, version: str, url: str) -> None:
     print(f"Published {distribution} {version}")
     print(f"  find-links index: {url}")
     print("=" * 78)
-    print("\nConsume from an Iris job (fray EnvConfig) — no repo edit, no relock:")
-    print("    EnvConfig(")
+    print("\nConsume from an Iris job (fray) — no repo edit, no relock:")
+    print("    from fray.types import create_environment")
+    print("    create_environment(")
     print(f'        env_vars={{"UV_FIND_LINKS": "{url}"}},')
     print(f'        pip_packages=["{pin}"],')
     print("    )")
@@ -277,10 +289,21 @@ def main() -> None:
             return
 
         ensure_release(args.repo, args.tag)
-        upload_assets(args.repo, args.tag, wheels)
-        index_path = dist_dir / index_name(names)
-        index_path.write_text(render_index(args.repo, args.tag, names))
-        upload_assets(args.repo, args.tag, [index_path])
+        # Asset names are content-addressed (wheels by source-hash version, index
+        # by wheel set), so a present name already holds equivalent bytes. Skip it
+        # instead of clobbering: a failed re-upload must never delete an asset a
+        # pinned job still installs from.
+        present = existing_asset_names(args.repo, args.tag)
+        pending = [wheel for wheel in wheels if wheel.name not in present]
+        if index_name(names) not in present:
+            index_path = dist_dir / index_name(names)
+            index_path.write_text(render_index(args.repo, args.tag, names))
+            pending.append(index_path)
+        if pending:
+            upload_assets(args.repo, args.tag, pending)
+            print("Uploaded:", *(path.name for path in pending), sep="\n  ")
+        else:
+            print("All assets already present; nothing to upload.")
         print_recipe(build, version, url)
 
 
