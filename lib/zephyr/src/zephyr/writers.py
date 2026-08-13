@@ -39,7 +39,7 @@ DEFAULT_TARGET_BUFFER_BYTES = 64 * 1024 * 1024  # 64 MB
 _MICRO_BATCH_SIZE = 8
 
 # Number of items per intermediate pickle chunk between non-scatter stages.
-# Used by ``_write_pickle_chunks`` in execution.py.
+# Used by ``_write_pickle_chunks`` in stage_io.py.
 INTERMEDIATE_CHUNK_SIZE = 100_000
 
 

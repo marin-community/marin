@@ -33,8 +33,8 @@ from marin.processing.tokenize.attributes import TokenizedAttrData
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
 logger = logging.getLogger(__name__)

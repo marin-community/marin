@@ -45,8 +45,8 @@ from marin.execution.artifact import write_artifact
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, marin_temp_bucket
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import ZephyrContext
 from zephyr.readers import InputFileSpec, load_parquet_batch
 from zephyr.runners import InlineRunner
 from zephyr.worker_context import zephyr_worker_ctx

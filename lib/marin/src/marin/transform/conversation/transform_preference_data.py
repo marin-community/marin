@@ -20,8 +20,8 @@ import draccus
 from datasets import get_dataset_config_info
 from marin.utils import is_path_like
 from rigging.filesystem import StoragePath
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.writers import write_jsonl_file
 
 from .preference_data_adapters import PreferenceTransformAdapter, get_preference_adapter

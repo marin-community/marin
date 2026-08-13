@@ -17,8 +17,8 @@ from collections.abc import Iterable
 import requests
 from rigging.filesystem import StoragePath, atomic_rename, open_url, prefix_join
 from tqdm_loggable.auto import tqdm
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.readers import load_jsonl
 
 from marin.execution.step_spec import StepSpec

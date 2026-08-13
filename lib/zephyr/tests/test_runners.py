@@ -14,9 +14,10 @@ from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
 from fray.types import ResourceConfig
 from zephyr import counters, runners
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext, ZephyrWorkerError
 from zephyr.runners import InlineRunner, SubprocessRunner
+from zephyr.stage_io import ZephyrWorkerError
 from zephyr.stats import (
     ZEPHYR_STAGE_STATS_NAMESPACE,
     ZEPHYR_WORKER_STATS_NAMESPACE,

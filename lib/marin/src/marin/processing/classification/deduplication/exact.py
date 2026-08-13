@@ -11,8 +11,8 @@ import pyarrow as pa
 from fray.types import ResourceConfig
 from rigging.filesystem import rebase_file_path
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.readers import DEFAULT_FILE_PATH_COLUMN
 from zephyr.writers import write_parquet_file
 

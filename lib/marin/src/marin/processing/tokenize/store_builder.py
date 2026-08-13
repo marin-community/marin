@@ -37,8 +37,8 @@ from levanter.store.cache import (
 )
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, format_shard_path
-from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
 from marin.datakit.source_key import DatakitArtifactPath

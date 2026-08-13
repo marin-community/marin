@@ -40,8 +40,8 @@ from fray.cluster import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from rigging.filesystem import StoragePath, open_url
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
-from zephyr.execution import ZephyrContext
 from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, load_file
 from zephyr.runners import InlineRunner
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file

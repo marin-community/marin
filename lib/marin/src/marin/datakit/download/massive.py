@@ -25,8 +25,8 @@ import tempfile
 
 from fray.types import ResourceConfig
 from rigging.filesystem import StoragePath, atomic_rename, open_url
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.http_session import build_retrying_session
