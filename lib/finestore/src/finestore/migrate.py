@@ -160,12 +160,9 @@ def migrate_v1(root: str) -> CommitToken:
         except ConditionalWriteError:
             pass
 
-    existing_head = head_object.read()
-    assert existing_head is not None
-    head = HeadMetadata.model_validate_json(existing_head.data)
-    manifest = Manifest.model_validate_json(StoragePath(head.manifest_path).read_bytes())
-    if (manifest.commit_id, manifest.sequence) != (head.commit_id, head.sequence):
-        raise ValueError(f"prepared HEAD at {root!r} does not match its manifest")
+    token = read_snapshot(layout).token
+    if token is None:
+        raise ValueError(f"format-v2 archive at {root!r} has no committed HEAD")
 
     try:
         archive_object.write(ArchiveMetadata().model_dump_json().encode(), expected_version=archive.version)
@@ -180,6 +177,4 @@ def migrate_v1(root: str) -> CommitToken:
             return token
         raise RuntimeError(f"archive at {root!r} changed during format migration") from exc
 
-    token = read_snapshot(layout).token
-    assert token is not None
     return token
