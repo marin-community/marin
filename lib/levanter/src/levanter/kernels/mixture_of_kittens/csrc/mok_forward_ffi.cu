@@ -951,8 +951,16 @@ class RuntimeManager {
       InvocationPhase phase,
       std::optional<ForwardXRegistration> forward_x = std::nullopt,
       std::optional<BackwardPeerRegistration> backward_peer = std::nullopt) {
+    // A rank is an index on the expert axis, not a device ordinal. In-process the two coincide
+    // because one process owns ranks 0..kNumDevices-1 on the matching CUDA devices. Under the
+    // fabric transport they cannot: at EP64 the axis runs 0..63 while every node's ordinals run
+    // 0..3, so the rank has to come from the identity this process was initialized with.
     int rank = -1;
-    ThrowOnCuda(cudaGetDevice(&rank), "cudaGetDevice(acquire workspace)");
+    if (arena_mode_) {
+      rank = local_rank_;
+    } else {
+      ThrowOnCuda(cudaGetDevice(&rank), "cudaGetDevice(acquire workspace)");
+    }
     if (rank < 0 || rank >= kNumDevices) {
       throw std::runtime_error("No Mixture-of-Kittens runtime exists for the current GPU");
     }
@@ -1160,13 +1168,19 @@ class RuntimeManager {
     if (!initialized_) {
       throw std::runtime_error("Mixture-of-Kittens runtime is not initialized");
     }
-    int device = -1;
-    ThrowOnCuda(cudaGetDevice(&device), "cudaGetDevice(current)");
-    if (device < 0 || device >= static_cast<int>(runtimes_.size()) || slot < 0 || slot >= workspace_slots_ ||
-        runtimes_[device][slot] == nullptr) {
+    // Same rank-versus-ordinal split as Acquire: under the fabric transport this process holds one
+    // rank's runtime, indexed by its expert-axis position rather than by the CUDA device it sits on.
+    int index = -1;
+    if (arena_mode_) {
+      index = local_rank_;
+    } else {
+      ThrowOnCuda(cudaGetDevice(&index), "cudaGetDevice(current)");
+    }
+    if (index < 0 || index >= static_cast<int>(runtimes_.size()) || slot < 0 || slot >= workspace_slots_ ||
+        runtimes_[index][slot] == nullptr) {
       throw std::runtime_error("No Mixture-of-Kittens runtime exists for the current GPU");
     }
-    return *runtimes_[device][slot];
+    return *runtimes_[index][slot];
   }
 
  private:
