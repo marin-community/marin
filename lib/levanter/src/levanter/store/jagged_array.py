@@ -612,7 +612,6 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
             pass
 
     # TODO: groups?
-    # TODO: set chunk sizes
     try:
         if spec.get("kvstore", {}).get("path", "").startswith("memory://"):
             raise ValueError("No kvstore specified in spec, cannot open TensorStore")
@@ -621,11 +620,6 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
             dtype=jnp.dtype(dtype).name,
             shape=[2**54, *shape[1:]],
             **open_kwargs,
-            # chunk_layout=ts.ChunkLayout(
-            #     read_chunk_shape=[DEFAULT_CHUNK_SIZE, *shape[1:]],
-            #     write_chunk_shape=[DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]
-            # ),
-            # compression={"codec": "zstd", "compression_level": 5},
             **mode_config,
         ).result()
     except ValueError as e:
@@ -650,17 +644,11 @@ async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
             pass
 
     # TODO: groups?
-    # TODO: set chunk sizes
     return await ts.open(
         spec,
         dtype=jnp.dtype(dtype).name,
         shape=[2**54, *shape[1:]],
         **open_kwargs,
-        # chunk_layout=ts.ChunkLayout(
-        #     read_chunk_shape=[DEFAULT_CHUNK_SIZE, *shape[1:]],
-        #     write_chunk_shape=[DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]
-        # ),
-        # compression={"codec": "zstd", "compression_level": 5},
         **mode_config,
     )
 
