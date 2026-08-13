@@ -14,9 +14,19 @@ def _apply_logit_soft_cap(logits: Float[Array, "B V"], logit_soft_cap: Optional[
     return jnp.tanh(logits / logit_soft_cap) * logit_soft_cap
 
 
-def _logit_state_dtype(dtype: Optional[jnp.dtype]) -> jnp.dtype:
-    """Dtype the logits and the logsumexp carry are held in, defaulting to float32."""
-    return jnp.dtype(dtype) if dtype is not None else jnp.dtype(jnp.float32)
+def _logit_accum_dtype(x: Float[Array, "B H"], w: Float[Array, "H V"]) -> jnp.dtype:
+    """Accumulate dtype for the logit matmul: float32, widened to operands that are wider.
+
+    Float32 keeps bfloat16 and float16 operands from rounding the logits. Widening is for
+    float64 operands under `jax_enable_x64`, which would otherwise accumulate more narrowly
+    than the caller's own inputs.
+    """
+    return jnp.promote_types(jnp.float32, jnp.result_type(x.dtype, w.dtype))
+
+
+def _logit_state_dtype(dtype: Optional[jnp.dtype], x: Float[Array, "B H"], w: Float[Array, "H V"]) -> jnp.dtype:
+    """Dtype the logits and the logsumexp carry are held in."""
+    return jnp.dtype(dtype) if dtype is not None else _logit_accum_dtype(x, w)
 
 
 def _logits(
@@ -26,17 +36,17 @@ def _logits(
     dtype: Optional[jnp.dtype],
     precision: jax.lax.PrecisionLike,
 ) -> Float[Array, "B V"]:
-    """Logits accumulated in float32, then narrowed to `dtype`."""
+    """Logits accumulated per `_logit_accum_dtype`, then narrowed to `dtype`."""
     logits = jax.lax.dot_general(
         x,
         w,
         (((1,), (0,)), ((), ())),
         precision=precision,
         # Every caller must accumulate identically: the streaming backward divides by the
-        # forward's lse, and `exp(logits - lse)` exponentiates any disagreement. Dropping this
-        # lets a bfloat16 x @ w emit bfloat16 logits, where a half-ulp gap of ~8 at magnitude
-        # 4000 inflates the peak probability by e^8.
-        preferred_element_type=jnp.float32,
+        # forward's lse, and `exp(logits - lse)` exponentiates any disagreement. Leaving this
+        # to default lets a bfloat16 x @ w emit bfloat16 logits, where a half-ulp gap of ~8 at
+        # magnitude 4000 inflates the peak probability by e^8.
+        preferred_element_type=_logit_accum_dtype(x, w),
     )
     if dtype is not None:
         logits = logits.astype(dtype)
@@ -99,7 +109,7 @@ def linear_softmax_cross_entropy_loss_streaming(
 
     b_dim = x.shape[0]
     v_dim = w.shape[1]
-    out_dtype = _logit_state_dtype(dtype)
+    out_dtype = _logit_state_dtype(dtype, x, w)
 
     pad = (-v_dim) % block_size
     if pad:
