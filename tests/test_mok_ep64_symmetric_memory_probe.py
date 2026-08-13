@@ -112,6 +112,7 @@ def test_probe_request_uses_one_process_per_gpu_and_no_retries(num_nodes: int):
     assert request.max_task_failures == 0
     assert request.environment is not None
     assert request.environment.extras == ["gpu"]
+    assert request.environment.env_vars["GLOO_SOCKET_IFNAME"] == "eth0"
     assert request.environment.env_vars["TORCH_SYMM_MEM_DISABLE_MULTICAST"] == "1"
     assert request.environment.env_vars["TORCH_SYMMMEM_IMPLICIT_POOL"] == "0"
     callable_entrypoint = request.entrypoint.callable_entrypoint
