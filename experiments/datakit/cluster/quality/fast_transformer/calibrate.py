@@ -178,7 +178,7 @@ def per_type_knots(raw: np.ndarray, levels: np.ndarray, types: np.ndarray, *, mi
     return knots
 
 
-def _parity_ratio(buckets: np.ndarray, types: np.ndarray) -> float:
+def parity_ratio(buckets: np.ndarray, types: np.ndarray) -> float:
     """Widest-to-narrowest top-bucket share across types; 1.0 is perfect parity.
 
     ``other`` is excluded. The rubric defines it as the residual bin — what is left
@@ -220,8 +220,8 @@ def _report_classifier_cost(raw: np.ndarray, levels: np.ndarray, predicted: np.n
     logger.info(
         "parity ratio (lower is better): %.2fx with predicted types, %.2fx with oracle types; "
         "classifier agrees with the oracle on %.1f%% of documents",
-        _parity_ratio(predicted_buckets, predicted),
-        _parity_ratio(true_buckets, true_types),
+        parity_ratio(predicted_buckets, predicted),
+        parity_ratio(true_buckets, true_types),
         100 * float((predicted == true_types).mean()),
     )
 
