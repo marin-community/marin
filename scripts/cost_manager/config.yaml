@@ -96,6 +96,9 @@ providers:
   # from its usage metric and the public $0.06/GiB-month hot-storage rate.
   - name: coreweave
     enabled: true
+    # Activate after this GitHub Actions secret contains a token with the
+    # Observability Viewer role. An unset secret skips this provider.
+    enabled_env: COREWEAVE_API_TOKEN
     prometheus_url: https://observe.coreweave.com
     api_token_env: COREWEAVE_API_TOKEN
     step_seconds: 3600

@@ -3,20 +3,44 @@
 
 import datetime as dt
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
+from typing import Any
 
 import pytest
 
+from scripts.cost_manager import run as cost_manager_run
 from scripts.cost_manager.backends import coreweave
-from scripts.cost_manager.cost_event import CostFetchError, DateWindow, cost_event
+from scripts.cost_manager.cost_event import CostEvent, CostFetchError, DateWindow, cost_event
 from scripts.cost_manager.slack_alert import AlertMetric, evaluate_alerts, parse_alert_rules
 
 GIB = 1024**3
 TIB = 1024**4
 HOT_STORAGE_GIB_HOUR_RATE = 0.06 / 730
+
+
+def test_provider_enabled_env_controls_activation(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider_name = "test-provider"
+    token_env = "TEST_PROVIDER_TOKEN"
+    calls: list[str] = []
+
+    def fetch(config: Mapping[str, Any], _window: DateWindow) -> list[CostEvent]:
+        calls.append(config["name"])
+        return []
+
+    monkeypatch.setitem(cost_manager_run.BACKENDS, provider_name, fetch)
+    provider = {"name": provider_name, "enabled": True, "enabled_env": token_env}
+    window = DateWindow.trailing(1, today=dt.date(2026, 8, 13))
+
+    monkeypatch.delenv(token_env, raising=False)
+    assert cost_manager_run._run_backends([provider], window, set()) == ([], [])
+    assert calls == []
+
+    monkeypatch.setenv(token_env, "token")
+    assert cost_manager_run._run_backends([provider], window, set()) == ([], [])
+    assert calls == [provider_name]
 
 
 @contextmanager

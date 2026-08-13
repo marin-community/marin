@@ -115,6 +115,13 @@ def _run_backends(
         if not provider_cfg.get("enabled", False):
             logger.info("Skipping disabled provider %s", name)
             continue
+        enabled_env = provider_cfg.get("enabled_env")
+        if enabled_env is not None:
+            if not isinstance(enabled_env, str) or not enabled_env or enabled_env.strip() != enabled_env:
+                raise ValueError(f"provider {name}: enabled_env must be a nonempty environment variable name")
+            if not os.environ.get(enabled_env):
+                logger.info("Skipping provider %s because %s is unset", name, enabled_env)
+                continue
         fetcher = BACKENDS.get(name)
         if fetcher is None:
             logger.error("Unknown provider %r (known: %s)", name, ", ".join(sorted(BACKENDS)))

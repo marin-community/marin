@@ -78,8 +78,9 @@ jobs:
 
       - name: Fetch and record costs
         env:
-          # Provider credentials (see scripts/cost_manager/README.md). Missing
-          # keys fail only their own provider; the rest still record.
+          # Provider credentials (see scripts/cost_manager/README.md). CoreWeave
+          # stays inactive while its token is unset. Other missing keys fail
+          # only their own provider; the rest still record.
           OPENAI_ADMIN_KEY: ${{ secrets.OPENAI_ADMIN_KEY }}
           ANTHROPIC_ADMIN_KEY: ${{ secrets.ANTHROPIC_ADMIN_KEY }}
           COREWEAVE_API_TOKEN: ${{ secrets.COREWEAVE_API_TOKEN }}
