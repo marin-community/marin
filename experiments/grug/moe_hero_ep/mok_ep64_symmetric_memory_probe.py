@@ -23,6 +23,7 @@ from iris.hooks.multigpu import (
 )
 from iris.runtime.jax_init import initialize_jax
 from levanter.utils.jax_utils import multihost_broadcast_sync
+from rigging.network import interface_for_ipv4
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +227,12 @@ def run_probe(*, expected_world_size: int, arena_bytes: int, iterations: int, ti
     os.environ["LOCAL_RANK"] = str(rank.local_device_id)
     initialize_jax()
     _jax_device_round_trip(rank, expected=rank.global_rank + 1)
+    job_info = get_job_info()
+    if job_info is None:
+        raise RuntimeError("EP64 probe requires Iris job metadata")
+    gloo_interface = interface_for_ipv4(job_info.advertise_host)
+    os.environ["GLOO_SOCKET_IFNAME"] = gloo_interface
+    logger.info("Gloo metadata group uses interface %s for %s", gloo_interface, job_info.advertise_host)
 
     import torch  # noqa: PLC0415  # optional GPU dependency, imported only by the live probe
     import torch.distributed as dist  # noqa: PLC0415
