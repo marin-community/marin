@@ -445,10 +445,42 @@ match the pinned ordinary-JAX H100 output bitwise and pass the frozen
 independent-reference contract. Failure stops the slice. It does not authorize
 post-observation reduction or PTX tuning under the same subject identity.
 
+## Implemented non-device boundary
+
+Pipeline ABI 10 now implements this exact compiler, transport, and CUDA FFI
+boundary for the BF16 `2048x4096` SOURCE_ORDERED forward graph. The compiler
+emits 19 source-derived PTX modules, serializes transport schema 2 with device,
+invocation, and bundle schemas 3, 3, and 2, replaces the closed region with one
+API-version-4 `shuttle.gpu.executable_bundle.v1` custom call, and erases every
+Shuttle sidecar. The CUDA-only handler implements Instantiate, Prepare,
+Initialize, and Execute and validates all eight emitted backend attributes.
+The pinned JAX patch links the handler only into `cuda_plugin_extension` and
+adds it to that extension's `ffi_handlers()` result.
+
+Native tests pass 41 targets and the Shuttle Python suite passes 362 tests.
+The lifecycle test independently decodes all 19 modules, uses synthetic device
+addresses without allocating the 192 MiB temporary census, checks allocation
+failure and per-execution ownership, compares every loaded PTX slice and launch
+record, and runs two prepared executions concurrently. A second
+source-derived epsilon variant reaches different PTX bytes through the same
+handler target. Historical ABI 9 Host evidence stays versioned and fails
+closed against current ABI 10 options.
+
+The real CUDA plugin cannot be built on the available Darwin arm64 host. The
+exact JAX 0.10.1 build analyzes 270 packages and 11,586 targets, then XLA's
+CUDA stub rules select
+`NOT_IMPLEMENTED_FOR_THIS_PLATFORM_OR_ARCHITECTURE` for `cublas`, `cudart`,
+and `cupti` stub generation. No `cuda_plugin_extension` artifact is produced.
+No local `ptxas` or CUDA SDK is installed, so PTX assembly and the rebuilt
+extension-to-PJRT registration test remain unexecuted. Resume on a supported
+Linux CUDA build host with the pinned JAX/XLA checkout; do not interpret the
+native fake-executor evidence as PTX assembly, CUDA registration, numerical,
+performance, or H100 acceptance.
+
 ## Acceptance boundary
 
-This design assigns owners and version boundaries using the checked-in ABI 9
-CPU bundle and pinned JAX/XLA APIs. It changes no Target 1 status, cell, gate,
-or evidence record. Static PTX tests, fake executors, rebuilt CUDA plugin
-registration, and persistent-cache tests remain implementation gates. Only a
+The implemented boundary changes no Target 1 status, cell, gate, or evidence
+record. Compiler, transport, and fake-executor lifecycle gates are green.
+PTX assembly, rebuilt CUDA plugin registration, persistent-cache reuse through
+that plugin, and every real-device gate remain blocked or unexecuted. Only a
 separately reviewed and authorized device run can supply H100 evidence.

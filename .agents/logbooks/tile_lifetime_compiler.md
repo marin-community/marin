@@ -4635,3 +4635,39 @@ author: dlwh
   sufficient.
 - No code, hardware, upload, launch, performance claim, or scorecard state
   changed during this audit.
+
+### 2026-08-13 - TLTC-MLIR-016 ABI 10 GPU non-device boundary
+
+- Pipeline ABI 10 implements the exact BF16 `2048x4096` SOURCE_ORDERED forward
+  GPU slice. The compiler emits 19 source-derived SM90 PTX modules, transport
+  schema 2 with device/invocation/bundle schemas 3/3/2, and one
+  `shuttle.gpu.executable_bundle.v1` API-version-4 custom call. Backward,
+  composed, FAST, other shapes, and other capabilities fail the closed
+  selector.
+- The CUDA-only typed-FFI handler owns immutable decoded transport at
+  Instantiate, 18 execution-scoped allocations totaling 201,416,716 bytes at
+  Prepare, a mutexed per-executor 19-kernel cache at Initialize, and ordered
+  stream enqueue at Execute. It validates the eight compiler-emitted backend
+  attributes, device projection, alignment, non-aliasing, dependencies,
+  launch geometry, and fixed entry symbol without workload, name, or digest
+  dispatch.
+- Independent review returned GO on exact local tip
+  `eb8b48927766d84ea12b2e0583c43fb2103e73d4`. Native gates pass 41/41,
+  Shuttle Python passes 362/362, all-files precommit passes, and the pinned JAX
+  0.10.1 CUDA-plugin patch applies cleanly. The lifecycle gate checks all four
+  stages, failure unwinding, two concurrent Prepare states, and two distinct
+  source-derived PTX payloads through one target.
+- A real `cuda_plugin_extension` build is blocked on the available Darwin
+  arm64 host. The pinned build analyzed 270 packages and 11,586 targets before
+  XLA's CUDA stub rules selected
+  `NOT_IMPLEMENTED_FOR_THIS_PLATFORM_OR_ARCHITECTURE` for `cublas`, `cudart`,
+  and `cupti`. No extension was produced. No local `ptxas` or CUDA SDK exists,
+  and nothing was installed or downloaded.
+- The next non-device action is a pinned Linux CUDA build that runs the real
+  `cuda_plugin_extension.ffi_handlers()` to fake-PJRT registration gate and
+  assembles every PTX slice with `ptxas -arch=sm_90`. H100 execution still
+  requires separate authorization. Target 1 cells, launch readiness,
+  numerical acceptance, performance, and scorecard state remain unchanged.
+- ABI 10 is now assigned to this GPU boundary. The future large VJP Fold design
+  recorded in TLTC-MLIR-015 must use ABI 11 or later if its semantic proof
+  closes; the earlier ABI 10 suggestion is historical and not reusable.
