@@ -97,6 +97,17 @@ def _leaf_rel(output_dir: str, root_marker: str) -> str:
     return rel
 
 
+def _sidecars(root: str) -> list[str]:
+    """Glob leaf ``.artifact.json`` at both nesting depths.
+
+    Most sources nest as ``<source>/<subset>_<hash>``, but a source with no subsets sits
+    flat at ``<source>_<hash>``. Globbing only the nested depth silently drops the flat
+    leaves, which is a whole slice of the corpus rather than an edge case.
+    """
+    fs = _fs()
+    return sorted(set(fs.glob(f"{root}/*/.artifact.json")) | set(fs.glob(f"{root}/*/*/.artifact.json")))
+
+
 def _read_artifact(path: str) -> tuple[str, dict | None]:
     try:
         return path, json.loads(_fs().cat(path))
@@ -107,10 +118,9 @@ def _read_artifact(path: str) -> tuple[str, dict | None]:
 
 def discover() -> tuple[list[dict], dict]:
     """Pair Nemotron tokenize leaves with harrier embed leaves on ``result.source_key``."""
-    fs = _fs()
     t0 = time.monotonic()
-    tok_sidecars = fs.glob(f"{TOKENIZE_ROOT}/*/*/.artifact.json")
-    emb_sidecars = fs.glob(f"{EMBED_ROOT}/*/*/.artifact.json")
+    tok_sidecars = _sidecars(TOKENIZE_ROOT)
+    emb_sidecars = _sidecars(EMBED_ROOT)
     logger.info(
         "globbed %d tokenize + %d embed sidecars in %.1fs",
         len(tok_sidecars),
@@ -163,12 +173,17 @@ def discover() -> tuple[list[dict], dict]:
         embed_dir = harrier[key]["embed_dir"]
         tok_rel = _leaf_rel(tokens_dir, "datakit/tokenize/")
         emb_rel = _leaf_rel(embed_dir, "datakit/embed/harrier/")
-        source, tok_leaf = tok_rel.split("/", 1)
+        # Nested leaf: <source>/<subset>_<hash>. Flat leaf: <source>_<hash>, no subset.
+        if "/" in tok_rel:
+            source, tok_leaf = tok_rel.split("/", 1)
+            subset = tok_leaf.rsplit("_", 1)[0]
+        else:
+            source, subset = tok_rel.rsplit("_", 1)[0], ""
         pairs.append(
             {
                 "source_key": key,
                 "source": source,
-                "subset": tok_leaf.rsplit("_", 1)[0],
+                "subset": subset,
                 "tokens_rel": tok_rel,
                 "embed_rel": emb_rel,
                 "tokens_dir": tokens_dir,
