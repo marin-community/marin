@@ -1,0 +1,128 @@
+name: "Ops - Infrastructure drift"
+
+# Weekly check that live GCP infrastructure still matches infra/pulumi, in the two ways it can
+# diverge:
+#
+#   iam-drift     — live IAM bindings that Pulumi never declared. Every grant in iam_data.yaml is
+#                   non-authoritative, so a binding nobody imported is invisible to Pulumi
+#                   entirely; this re-enumerates the live surface and diffs it against the config.
+#   stack-refresh — resources Pulumi does track whose deployed state was edited out of band. A
+#                   plain `pulumi preview` compares the program against the state file and never
+#                   asks GCP what is deployed, so it cannot see these; previewing with --refresh
+#                   reconciles against the live provider and covers every resource in state,
+#                   including ones added later.
+#
+# Both read as the same read-only pulumi-ci account the preview workflow uses, and both report to
+# their own sticky GitHub issue rather than only failing a check.
+
+on:
+  schedule:
+    - cron: '0 12 * * 1'
+  workflow_dispatch: {}
+
+concurrency:
+  group: ops-drift
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PULUMI_CI_SERVICE_ACCOUNT: pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
+  PULUMI_CI_PROJECT: hai-gcp-models
+
+jobs:
+  iam-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PULUMI_CI_PROJECT }}
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Sync the iac venv
+        run: uv sync --package marin-iac --extra deploy --frozen
+
+      - name: Ensure the iam-drift label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh label create iam-drift --color B60205 --description "GCP IAM drift outside Pulumi" --force
+
+      - name: Scan for IAM drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          uv run --package marin-iac --extra deploy --frozen python infra/pulumi/iam_drift.py \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+  # Only the GCP stack for now: the CoreWeave stacks additionally need the CW kubeconfig and a
+  # Helm repo for TraefikAddon's chart resolution (see ops-iac-preview.yaml), so extending this
+  # to them means porting those steps too.
+  stack-refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Refresh and preview marin
+        uses: ./.github/actions/pulumi-preview
+        with:
+          stack: marin
+          work-dir: infra/pulumi
+          service-account: ${{ env.PULUMI_CI_SERVICE_ACCOUNT }}
+          gcp-project-id: ${{ env.PULUMI_CI_PROJECT }}
+          refresh: "true"
+
+  stack-drift:
+    # always(): a stack whose refreshed preview failed still uploads an artifact, and the report
+    # is what surfaces that as an error row rather than a silently skipped job.
+    if: always()
+    needs: [stack-refresh]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Download refresh artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: iac-preview-*
+          path: iac-previews
+          merge-multiple: false
+
+      - name: Ensure the stack-drift label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh label create stack-drift --color B60205 --description "Pulumi state diverges from live infrastructure" --force
+
+      - name: Report stack drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          uv run --package marin-iac --frozen python infra/pulumi/stack_drift.py \
+            --previews-dir iac-previews \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

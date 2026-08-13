@@ -23,6 +23,13 @@ inputs:
   config-map:
     description: 'Optional config to apply before preview, as JSON: {"key": {"value": "v", "secret": false}}.'
     default: ""
+  refresh:
+    description: >-
+      Refresh each resource from the live provider before diffing ("true"/"false"). A plain
+      preview compares the program against the state file only, so it cannot see an out-of-band
+      edit to a resource Pulumi already tracks; refreshing makes those show up. Read-only either
+      way — preview never writes the checkpoint.
+    default: "false"
 
 runs:
   using: composite
@@ -65,6 +72,7 @@ runs:
         WORK_DIR: ${{ inputs.work-dir }}
         STACK: ${{ inputs.stack }}
         CONFIG_MAP: ${{ inputs.config-map }}
+        REFRESH: ${{ inputs.refresh }}
         OUT_DIR: ${{ github.workspace }}/iac-preview-out
       run: |
         set -uo pipefail
@@ -95,7 +103,13 @@ runs:
               fi
             done <<<"$config_tsv"
           fi
-          pulumi -C "$WORK_DIR" preview --diff --color never
+          # --refresh reconciles every resource against the live provider first, so the diff
+          # covers out-of-band edits and not just program-vs-state changes.
+          refresh_args=()
+          if [[ "$REFRESH" == "true" ]]; then
+            refresh_args+=(--refresh)
+          fi
+          pulumi -C "$WORK_DIR" preview --diff --color never "${refresh_args[@]}"
         ) >"$OUT_DIR/raw.txt" 2>&1
         preview_exit=$?
 

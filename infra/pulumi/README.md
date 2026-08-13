@@ -260,32 +260,59 @@ write) access in [`infra/permissions`](../permissions/README.md).
 Adapting this to another Pulumi project means a new thin workflow that triggers on that
 project's paths and calls `./.github/actions/pulumi-preview` with its own `stack`/`work-dir`.
 
-## IAM drift scan
+## Drift detection
 
-Every grant in `iam_data.py` is a non-authoritative `*IAMMember`, so `pulumi preview` only
-detects drift on bindings already in Pulumi state — a grant nobody told the program about (a
-newly enabled API's service agent, a hand-run `gcloud ... add-iam-policy-binding`, an expanded
-role on an existing member) lands invisibly. `.github/workflows/ops-iam-drift.yaml` runs weekly
-(and on `workflow_dispatch`), re-enumerates the live IAM surface `iam_data.py` covers, and files
-what diverges on one sticky GitHub issue labelled `iam-drift`.
+`.github/workflows/ops-drift.yaml` runs weekly (and on `workflow_dispatch`). Live infrastructure
+diverges from Pulumi in two independent ways, so the workflow carries one job for each. Both read
+as the read-only `pulumi-ci` account and report to their own sticky GitHub issue rather than only
+failing a check; each issue updates in place, and a re-check finding the same drift matches the
+fingerprint its body embeds and re-notifies no one.
 
-- `iac.gcp.iam_live` reads each resource's live `getIamPolicy` as the same read-only `pulumi-ci`
-  account the preview uses; `iac.gcp.iam_scan` diffs it against `iam_data.py` and classifies:
-  undeclared bindings (new service agents included), broad roles (`roles/owner`, `roles/editor`,
-  `roles/iam.securityAdmin`) bound outside config, and service agents whose backing API looks
-  disabled. Run it by hand with
+Note what the PR preview does *not* cover: `pulumi preview` compares the program against the
+state file and never asks GCP what is deployed. A green preview means "the code matches what we
+recorded", not "the code matches reality".
+
+### Resources Pulumi tracks (`stack-refresh`/`stack-drift` jobs)
+
+Previewing with `--refresh` reconciles each resource against the live provider first, so
+out-of-band edits to anything in the stack's state show up — a permission added to a custom role,
+a retargeted static IP, a changed repository setting. This needs no per-resource code and covers
+new resources automatically once they are in state. Findings land on the `stack-drift` issue.
+
+- The refresh reuses `.github/actions/pulumi-preview` with `refresh: true`, so its output is
+  ANSI-stripped and has human `user:` principals redacted before anything is published.
+  `iac.stack_drift` renders the report; `infra/pulumi/stack_drift.py --no-github` prints it.
+- The fingerprint hashes each stack's severity and operation counts, deliberately not the diff
+  text: a refreshed diff carries provider-side `etag` churn that would otherwise re-notify on
+  drift that has not moved.
+- Only the `marin` stack today. The CoreWeave stacks also need the CW kubeconfig and the Helm
+  repo that `TraefikAddon`'s chart resolution depends on (see `ops-iac-preview.yaml`); extending
+  the job to them means porting those steps.
+- A failed refresh exits non-zero (red job) while ordinary drift exits zero and files the issue.
+
+### Bindings Pulumi never declared (`iam-drift` job)
+
+A refresh only reconciles resources already in state, so it cannot see a live IAM binding nobody
+imported — and because every grant in `iam_data.yaml` is a non-authoritative `*IAMMember`, that
+is exactly where IAM drifts: a newly enabled API's service agent, a hand-run
+`gcloud ... add-iam-policy-binding`, an expanded role on an existing member. This job
+re-enumerates the live IAM surface instead of diffing state.
+
+- `iac.gcp.iam_live` reads each resource's live `getIamPolicy`; `iac.gcp.iam_scan` diffs it
+  against `iam_data.yaml` and classifies: undeclared bindings (new service agents included),
+  broad roles (`roles/owner`, `roles/editor`, `roles/iam.securityAdmin`) bound outside config,
+  and service agents whose backing API looks disabled. Run it by hand with
   `uv run --package marin-iac --extra deploy python infra/pulumi/iam_drift.py --no-github`.
-- The issue updates in place: a re-scan finding the same drift matches the fingerprint the body
-  embeds and re-notifies no one; new or changed drift rewrites the body; a clean scan comments
-  and closes.
-- **Human `user:` grants are not diffed.** They are KMS-encrypted in `iam_data.py`, and the scan
-  runs without decrypt access, so a plaintext live email can't be matched to its ciphertext.
+- **Human `user:` grants are not diffed.** They are KMS-encrypted in `iam_data.yaml`, and the
+  scan runs without decrypt access, so a plaintext live email can't be matched to its ciphertext.
   Diffing them would need decrypt on the marin-iac state key — deliberately out of scope for a
   read-only scan. Extending the scan to humans is the way to close that gap.
 - The orphaned-agent check needs `serviceusage.services.list`, which `marinGcpResourcePreviewer`
   does not yet grant; without it the scan logs a warning and skips that check while still
   reporting undeclared and broad bindings. Add the permission to the role (and `pulumi up`) to
   turn it on.
+- Role *definitions* are not checked here — only bindings. A custom role whose permission list
+  grows out of band is caught by the refresh job above, not this one.
 
 ## Unsupported
 
