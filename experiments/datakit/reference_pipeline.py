@@ -112,10 +112,9 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyVerificationStoreConfig,
     VerifiedFuzzyDupsAttrData,
-    verify_fuzzy_dups,
+    verify_fuzzy_dups_step,
 )
 from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
@@ -807,28 +806,16 @@ def reference_datakit_steps(
         ready_timeout=1_800,
         lookup_batch_size=128,
     )
-    verified_dedup = StepSpec(
+    verified_dedup = verify_fuzzy_dups_step(
         name="datakit/verify_fuzzy_dups",
-        deps=[*sources.values(), *(stages["minhash"] for stages in per_source.values()), dedup],
-        hash_attrs={
-            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
-            "verification": verification_params.model_dump(mode="json"),
-            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
-        },
-        fn=lambda op: verify_fuzzy_dups(
-            normalized_sources={name: read_artifact(step.output_path, NormalizedData) for name, step in sources.items()},
-            minhash_sources={
-                name: read_artifact(stages["minhash"].output_path, MinHashAttrData)
-                for name, stages in per_source.items()
-            },
-            candidates=read_artifact(dedup.output_path, FuzzyDupsAttrData),
-            output_path=op,
-            verification_params=verification_params,
-            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
-            store_config=verification_store_config,
-            max_workers=scale.pool.n_workers,
-            worker_resources=scale.pool.worker,
-        ),
+        normalized_steps=sources,
+        minhash_steps={name: stages["minhash"] for name, stages in per_source.items()},
+        candidates_step=dedup,
+        verification_params=verification_params,
+        local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+        store_config=verification_store_config,
+        max_workers=scale.pool.n_workers,
+        worker_resources=scale.pool.worker,
     )
 
     # ---- Final store: attribute join + per-bucket Levanter cache ---------------
