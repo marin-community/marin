@@ -4,10 +4,12 @@
 """Tests for deduplicate and group_by operations."""
 import hashlib
 
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from zephyr.dataset import Dataset
+from zephyr.expr import col
 from zephyr.writers import infer_arrow_schema
 
 
@@ -125,6 +127,27 @@ def test_group_by_sum(zephyr_ctx):
     assert results[0] == {"cat": "A", "sum": 4}  # 1 + 3
     assert results[1] == {"cat": "B", "sum": 7}  # 2 + 5
     assert results[2] == {"cat": "C", "sum": 4}
+
+
+def test_group_by_dataframe_reducer(zephyr_ctx):
+    def sum_group(group: pl.DataFrame) -> pl.DataFrame:
+        return group.select("cat", pl.col("val").sum().alias("total")).head(1)
+
+    ds = Dataset.from_list(
+        [
+            pl.DataFrame(
+                {
+                    "cat": ["A", "B", "A", "B"],
+                    "rank": [2, 2, 1, 1],
+                    "val": [3, 20, 1, 10],
+                }
+            )
+        ]
+    ).group_by(key=col("cat"), sort_by=col("rank"), reducer=sum_group)
+
+    results = pl.concat(zephyr_ctx.execute(ds).results).sort("cat")
+
+    assert results.to_dicts() == [{"cat": "A", "total": 4}, {"cat": "B", "total": 30}]
 
 
 def test_group_by_list(zephyr_ctx):

@@ -156,6 +156,10 @@ def _cc_records_to_attrs(batch: pa.RecordBatch) -> pl.DataFrame:
     )
 
 
+def _dataframe_rows(frame: pl.DataFrame) -> Iterator[dict]:
+    yield from frame.iter_rows(named=True)
+
+
 def _emit_bucket_records(entries: list[CopartitionedShard]) -> Iterator[dict]:
     """For each (bucket, id) pair across all attr shards in *entries*, emit a routing record."""
     for entry in entries:
@@ -191,38 +195,35 @@ def _make_per_shard_writer(counter_prefix: str):
     in this closure and re-pickled per ``pull_task`` RPC.
     """
 
-    def aggregate(file_idx: int, records: Iterator[dict]) -> dict:
+    def aggregate(records: pl.DataFrame) -> pl.DataFrame:
+        file_idx = records.item(0, "file_idx")
         entries: list[CopartitionedShard] = zephyr_worker_ctx().get_shared(_SHARED_ENTRIES_KEY)
         entry = entries[file_idx]
 
-        cluster_members = 0
-        canonicals = 0
+        cluster_members = records.filter(~pl.col("is_singleton")).select(
+            "id",
+            pl.col("component_id").alias("dup_cluster_id"),
+            pl.col("is_canonical").alias("is_cluster_canonical"),
+        )
+        singleton_count = records.height - cluster_members.height
+        canonical_count = int(cluster_members["is_cluster_canonical"].sum())
+        if singleton_count:
+            counters.pipeline.update_counter(f"{counter_prefix}/singletons_skipped", singleton_count)
+        if cluster_members.height:
+            counters.pipeline.update_counter(f"{counter_prefix}/cluster_members", cluster_members.height)
+        if canonical_count:
+            counters.pipeline.update_counter(f"{counter_prefix}/canonicals", canonical_count)
 
-        def cluster_member_rows():
-            nonlocal cluster_members, canonicals
-            for record in records:
-                if record["is_singleton"]:
-                    counters.pipeline.update_counter(f"{counter_prefix}/singletons_skipped", 1)
-                    continue
-                cluster_members += 1
-                counters.pipeline.update_counter(f"{counter_prefix}/cluster_members", 1)
-                if record["is_canonical"]:
-                    canonicals += 1
-                    counters.pipeline.update_counter(f"{counter_prefix}/canonicals", 1)
-                yield {
-                    "id": record["id"],
-                    "dup_cluster_id": record["component_id"],
-                    "is_cluster_canonical": record["is_canonical"],
-                }
-
-        result = write_parquet_file(cluster_member_rows(), entry.output_path)
-        return {
-            **result,
-            "file_idx": file_idx,
-            "source_tag": entry.source_tag,
-            "cluster_members": cluster_members,
-            "canonicals": canonicals,
-        }
+        result = write_parquet_file(cluster_members.to_arrow().to_batches(), entry.output_path)
+        return pl.DataFrame(
+            {
+                **{key: [value] for key, value in result.items()},
+                "file_idx": [file_idx],
+                "source_tag": [entry.source_tag],
+                "cluster_members": [cluster_members.height],
+                "canonicals": [canonical_count],
+            }
+        )
 
     return aggregate
 
@@ -361,6 +362,7 @@ def compute_fuzzy_dups_attrs(
             sort_by=col("id"),
             reducer=aggregator,
         )
+        .flat_map(_dataframe_rows)
     )
 
     outcome = ctx.execute(

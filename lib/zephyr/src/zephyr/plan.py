@@ -163,22 +163,6 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
         yield from fn(item)
 
 
-def _reduce_gen(
-    shard: ScatterReader,
-    key: Callable | ColumnExpr,
-    reducer_fn: Callable,
-    external_sort_dir: str,
-) -> Iterator:
-    row_key = key.evaluate if isinstance(key, ColumnExpr) else key
-    merged = shard.merge_sorted_chunks(external_sort_dir)
-    for group_key, grouped in groupby(merged, key=row_key):
-        result = reducer_fn(group_key, grouped)
-        if isinstance(result, Iterator):
-            yield from result
-        else:
-            yield result
-
-
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
     for item in stream:
         yield {k: item[k] for k in columns if k in item}
@@ -798,7 +782,7 @@ def run_stage(
                 # reads all sidecars in parallel and filters for its target.
                 scatter_paths = list(shard)
                 shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
-            stream = _reduce_gen(shard, op.key, op.reducer_fn, external_sort_dir)
+            stream = shard.merge_sorted_chunks(external_sort_dir, op.key, op.reducer_fn)
             op_index += 1
 
         elif isinstance(op, Fold):

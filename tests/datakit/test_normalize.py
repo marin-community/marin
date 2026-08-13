@@ -14,7 +14,7 @@ import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit import normalize as normalize_mod
-from marin.datakit.normalize import NORMALIZED_DATA_VERSION, NormalizedData, generate_id, normalize_to_parquet
+from marin.datakit.normalize import NORMALIZED_DATA_VERSION, DedupMode, NormalizedData, generate_id, normalize_to_parquet
 from marin.execution.artifact import ArtifactRecord, read_artifact, write_artifact, write_record
 
 
@@ -342,11 +342,37 @@ def test_exact_dedup(tmp_path: Path, write_jsonl_gz):
     ]
     write_jsonl_gz(input_dir / "data.jsonl.gz", records)
 
-    normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+    result = normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
 
     results = _read_all_parquet(output_dir)
+    duplicates = [
+        row for path in (output_dir / "outputs" / "dups").glob("*.parquet") for row in pq.read_table(path).to_pylist()
+    ]
     assert {r["text"] for r in results} == {"Duplicate text", "Unique text"}
     assert len(results) == 2
+    assert len(duplicates) == 1
+    assert {r["source"] for r in results + duplicates} == {"file1", "file2", "file3"}
+    assert result.counters["normalize/unique_records_out"] == 2
+    assert result.counters["normalize/duplicate_records_out"] == 1
+
+
+def test_dedup_none_keeps_duplicate_records(tmp_path: Path, write_jsonl_gz):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    write_jsonl_gz(
+        input_dir / "data.jsonl.gz",
+        [{"text": "same", "source": "a"}, {"text": "same", "source": "b"}],
+    )
+
+    result = normalize_to_parquet(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        dedup_mode=DedupMode.NONE,
+    )
+
+    assert {record["source"] for record in _read_all_parquet(output_dir)} == {"a", "b"}
+    assert result.counters["normalize/unique_records_out"] == 2
+    assert result.counters["normalize/duplicate_records_out"] == 0
 
 
 def test_whitespace_compaction(tmp_path: Path, write_jsonl_gz):

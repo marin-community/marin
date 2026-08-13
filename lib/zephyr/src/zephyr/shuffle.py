@@ -13,6 +13,7 @@ group by key. Accepts Python items or columnar batches (``pl.DataFrame`` /
 import concurrent.futures
 import functools
 import gc
+import inspect
 import io
 import logging
 import math
@@ -20,6 +21,7 @@ import os
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from itertools import groupby
 from typing import Any, overload
 from urllib.parse import urlparse
 
@@ -443,18 +445,59 @@ class ScatterReader:
     def total_chunks(self) -> int:
         return sum(len(chunks) for _, chunks in self._files)
 
-    def merge_sorted_chunks(self, external_sort_dir: str) -> Iterator[Any]:
-        """Merge sorted chunks using k-way merge, yielding items in global sort order.
+    def merge_sorted_chunks(
+        self,
+        external_sort_dir: str,
+        key: Callable | ColumnExpr,
+        reducer: Callable,
+    ) -> Iterator[Any]:
+        """Merge sorted chunks and reduce each key group.
 
         Each chunk file is assumed to be sorted by ``_SORT_KEY_COL`` (key plus optional
-        secondary sort). Performs a k-way merge across all chunks.
+        secondary sort). A one-argument reducer receives each group as a
+        :class:`polars.DataFrame`; a two-argument reducer keeps the existing
+        ``(key, Iterator[items])`` contract.
+
         Args:
             external_sort_dir: If set and the shard exceeds the memory budget,
                 spill intermediate runs.
+            key: Group key extractor used by Python-item reducers.
+            reducer: One-argument DataFrame reducer or two-argument Python-item reducer.
 
         Yields:
-            Deserialized Python items in merged sort order.
+            DataFrame batches from a DataFrame reducer, or Python reducer results.
         """
+
+        reducer_signature = inspect.signature(reducer)
+
+        def accepts_positional_args(count: int) -> bool:
+            try:
+                reducer_signature.bind(*([None] * count))
+                return True
+            except TypeError:
+                return False
+
+        dataframe_reducer = accepts_positional_args(1) and not accepts_positional_args(2)
+        if dataframe_reducer and not isinstance(key, ColumnExpr):
+            raise TypeError("DataFrame group_by reducers require key=zephyr.expr.col(...)")
+
+        worker_context = _worker_ctx_var.get()
+
+        def apply_dataframe_reducer(group: pl.DataFrame) -> pl.DataFrame:
+            token = _worker_ctx_var.set(worker_context)
+            try:
+                result = reducer(group.drop(_SORT_KEY_COL))
+                if not isinstance(result, pl.DataFrame):
+                    raise TypeError(f"DataFrame group_by reducer returned {type(result).__name__}, expected DataFrame")
+                return result
+            finally:
+                _worker_ctx_var.reset(token)
+
+        def reduce_dataframe_groups(merged: pl.LazyFrame) -> pl.LazyFrame:
+            return merged.group_by(
+                pl.col(_SORT_KEY_COL).struct.field("key").set_sorted(),
+                maintain_order=True,
+            ).map_groups(apply_dataframe_reducer, schema=None)
 
         with pl.Config() as polars_config:
             polars_config.set_streaming_chunk_size(_POLARS_STREAMING_CHUNK_SIZE)
@@ -467,9 +510,9 @@ class ScatterReader:
             # flight), using the exact per-shard payload bytes recorded in the
             # sidecars — no row-count estimation.
             estimated_merge_memory_bytes = self.shard_payload_bytes
-            # Overhead per row in the Polars DataFrame plus the deserialized Python object.
-            # Future Polars-only processing would remove the Python overhead.
-            overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
+            overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD
+            if not dataframe_reducer:
+                overhead *= _SCATTER_READ_PYTHON_ROW_OVERHEAD
             memory_bytes = _task_memory_bytes()
 
             if estimated_merge_memory_bytes * overhead > memory_bytes * _SCATTER_READ_MEMORY_FRACTION:
@@ -492,6 +535,7 @@ class ScatterReader:
                     fan_in=fan_in,
                     max_merge_fan_in=_EXTERNAL_SORT_MAX_MERGE_FAN_IN,
                     shard=self._target_shard,
+                    transform=reduce_dataframe_groups if dataframe_reducer else None,
                 )
 
             else:
@@ -502,10 +546,23 @@ class ScatterReader:
                     humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
                     humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
                 )
-                batches = pl.merge_sorted(self.get_frames(), key=_SORT_KEY_COL).collect_batches()
+                merged = pl.merge_sorted(self.get_frames(), key=_SORT_KEY_COL)
+                if dataframe_reducer:
+                    merged = reduce_dataframe_groups(merged)
+                batches = merged.collect_batches()
 
-            for batch in batches:
-                yield from _dataframe_to_items(batch)
+            if dataframe_reducer:
+                yield from batches
+                return
+
+            row_key = key.evaluate if isinstance(key, ColumnExpr) else key
+            items = (item for batch in batches for item in _dataframe_to_items(batch))
+            for group_key, grouped in groupby(items, key=row_key):
+                result = reducer(group_key, grouped)
+                if isinstance(result, Iterator):
+                    yield from result
+                else:
+                    yield result
 
 
 # ---------------------------------------------------------------------------

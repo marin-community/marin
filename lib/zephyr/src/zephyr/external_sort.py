@@ -13,7 +13,7 @@ count. The function deletes all run files after completion or an error.
 """
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import NamedTuple
 
 import polars as pl
@@ -36,6 +36,7 @@ def external_sort_merge(
     fan_in: int,
     max_merge_fan_in: int,
     shard: int,
+    transform: Callable[[pl.LazyFrame], pl.LazyFrame] | None = None,
 ) -> Iterator[pl.DataFrame]:
     """Merge sorted LazyFrames with a bounded external sort.
 
@@ -55,6 +56,8 @@ def external_sort_merge(
             during pass 1. Callers typically use ``ceil(sqrt(n_chunks))``.
         max_merge_fan_in: Maximum run files in all later merges.
         shard: Target shard id for log messages only.
+        transform: Optional lazy transformation applied to the final merge
+            before it is collected into batches.
 
     Yields:
         :class:`polars.DataFrame` batches in global merged sort order.
@@ -127,6 +130,8 @@ def external_sort_merge(
 
         logger.info("[shard %d] External sort: final merge of %d run files", shard, len(runs))
         merged = pl.merge_sorted([pl.scan_parquet(run.url) for run in runs], key=sort_key)
+        if transform is not None:
+            merged = transform(merged)
         yield from merged.collect_batches()
     finally:
         if spill_files:
