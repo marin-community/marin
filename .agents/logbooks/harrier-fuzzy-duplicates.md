@@ -1050,3 +1050,13 @@ author: Rafal Wojdyla
 - Active progress: East Nemotron medium-quality reached 2,720 of 14,843 shards. RNO Dolma4PDFs reached 2,284 of 8,683 shards. Both sources have 32 live workers and no dead workers.
 - Issue update: Post one major update for the stable capacity recovery and terminal-service repair.
 - Next action: Watch service 092 for capacity or a terminal state. Continue the regular root, source, service, and error checks.
+
+### 2026-08-13 05:32 UTC - Routine health check
+
+- Root health: Both roots remain running with zero failures and zero preemptions.
+- East progress: `nemotron_cc_v2-medium_quality_edb2d9ae` reached 3,165 of 14,843 output shards with 32 live workers and no dead workers.
+- RNO progress: `dolma4pdfs_75504c36` reached 3,070 of 8,683 output shards with 32 live workers and no dead workers.
+- Service capacity: East has 96 running TEI services. RNO has 95 running services and one building service. Neither pool has a failed service.
+- Error check: No retry, rate-limit, connection, memory, dead-worker, or missing-file error matched either active source log.
+- Issue update: None. There is no major run-state change.
+- Next action: Continue the regular root, source, service, and error checks.
