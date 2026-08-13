@@ -366,13 +366,11 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         residuals.norm_weight,
         residuals.inverse_rms,
     ).reshape(x.shape)
-    # The parameters enter replicated, so their cotangents must be reduced over the axes the
-    # tokens are sharded across. shard_map defaults to check_vma=True, which suppresses the
-    # transpose's own defensive psum and requires the reduction here.
-    norm_weight_cotangent = jax.lax.psum(norm_weight_cotangent, axis_name=batch_axes)
-    w_down_cotangent = jax.lax.psum(w_down_cotangent, axis_name=batch_axes)
-    w_up_cotangent = jax.lax.psum(up_reverse.w_up, axis_name=batch_axes)
-    return x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent
+    # ``check_vma=False`` below permits the opaque CuTe dx to cross the custom-VJP boundary
+    # without its varying-manual-axis annotation. The shard_map transpose owns the replicated
+    # parameter reductions in this mode; reducing here as well would multiply them by the mesh
+    # size.
+    return x_cotangent, norm_weight_cotangent, w_down_cotangent, up_reverse.w_up
 
 
 _fused.defvjp(_fused_fwd, _fused_bwd)
@@ -413,4 +411,5 @@ def rms_gated_norm(
         mesh=get_abstract_mesh(),
         in_specs=(P(batch_axes, None, None), P(None), P(None, None), P(None, None)),
         out_specs=P(batch_axes, None, None),
+        check_vma=False,
     )(x, norm_weight, w_down, w_up)
