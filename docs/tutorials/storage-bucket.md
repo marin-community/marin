@@ -23,7 +23,7 @@ For the storage class, decide between:
 - **Standard**: Lowest latency and predictable performance; slightly higher cost but ideal if training jobs read/write checkpoints frequently.
 - **Autoclass**: Google automatically moves objects to colder tiers if they sit idle, which can cut storage costs but occasionally delays reads when objects are thawed. Use this if you mostly archive checkpoints and don't mind rare rehydration pauses.
 
-Marin rejects an explicit GCS `MARIN_PREFIX` on `iris job run` unless the job is pinned to the bucket's region. Training jobs also check configured GCS paths against their compute region, but it is best to avoid that situation entirely.
+Marin will attempt to prevent cross-region egress by raising an error in training jobs that write to a different region than the compute, but it's best to avoid that situation entirely.
 
 !!! warning
     Avoid multi-region buckets (e.g., `us` or `us-west`) because they incur higher costs and have more complex performance characteristics. Single-region buckets are cheaper and more predictable for Marin workloads.
@@ -143,8 +143,7 @@ The Iris CLI loads this `env` section when run from that directory. Direct SDK
 submissions and commands run from another directory do not load it. A GCS
 `MARIN_PREFIX` in this file also overrides the CoreWeave storage default. Omit
 it from checkouts that submit CoreWeave jobs, or set it only on the GCP job that
-needs it. GCP submissions from this checkout must pass a matching `--region` or
-`--zone`; see [the Iris launch check](../explanations/marin-prefix.md#gcs-region-checks-for-iris-jobs).
+needs it.
 
 ## Ongoing Hygiene Checklist
 

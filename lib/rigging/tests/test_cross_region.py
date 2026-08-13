@@ -14,8 +14,8 @@ from rigging.filesystem.cross_region import (
     TransferBudget,
     TransferBudgetExceeded,
     _bucket_from_gcs_url,
+    _regions_match,
     record_transfer,
-    regions_match,
 )
 
 
@@ -82,7 +82,7 @@ def test_transfer_budget_exceeded_round_trips_through_pickle():
 
 
 # ---------------------------------------------------------------------------
-# regions_match tests
+# _regions_match tests
 # ---------------------------------------------------------------------------
 
 
@@ -102,7 +102,7 @@ def test_transfer_budget_exceeded_round_trips_through_pickle():
     ],
 )
 def test_regions_match(vm_region, bucket_location, expected):
-    assert regions_match(vm_region, bucket_location) is expected
+    assert _regions_match(vm_region, bucket_location) is expected
 
 
 # ---------------------------------------------------------------------------

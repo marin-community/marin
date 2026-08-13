@@ -21,17 +21,13 @@ import humanfriendly
 import yaml
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rigging import telemetry
 from rigging.credentials import ClientCredentials
-from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV, get_bucket_location, regions_match
-from rigging.telemetry.serialization import EventBody
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
 from iris.cli.connect import iris_client_for_ctx, require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
-from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
     Constraint,
@@ -39,7 +35,6 @@ from iris.cluster.constraints import (
     WellKnownAttribute,
     availability_constraint,
     device_variant_constraint,
-    extract_placement_requirements,
     get_device_variant,
     infer_preemptible_constraint,
     preemptible_constraint,
@@ -71,9 +66,6 @@ from iris.rpc.proto_display import (
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
-
-MARIN_PREFIX_ENV = "MARIN_PREFIX"
-CROSS_REGION_OVERRIDE_EVENT = "iris.job.cross_region_override"
 
 # Default page size for `iris job list`. The server sorts by submission date
 # descending, so this fetches the most recent jobs rather than walking the whole
@@ -223,101 +215,6 @@ def add_standard_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
             result[key] = os.environ[key]
 
     return result
-
-
-def _placement_regions(regions: tuple[str, ...] | None, zone: str | None) -> tuple[str, ...]:
-    requested = list(regions or ())
-    if zone:
-        requested.append(zone.rsplit("-", 1)[0])
-
-    job_info = get_job_info()
-    if job_info is None:
-        return tuple(dict.fromkeys(requested))
-
-    inherited = extract_placement_requirements(job_info.constraints)
-    if not regions:
-        if inherited.required_regions:
-            requested.extend(sorted(inherited.required_regions))
-        elif job_info.worker_region:
-            requested.append(job_info.worker_region)
-    if not zone and inherited.required_zones:
-        requested.extend(sorted(parent_zone.rsplit("-", 1)[0] for parent_zone in inherited.required_zones))
-    return tuple(dict.fromkeys(requested))
-
-
-def _record_cross_region_override(
-    prefix: str,
-    bucket_region: str | None,
-    requested_regions: tuple[str, ...],
-    source: str,
-) -> None:
-    requested = ", ".join(requested_regions) if requested_regions else "unconstrained"
-    resolved_bucket_region = bucket_region or "unresolved"
-    logger.warning(
-        "Allowing explicit MARIN_PREFIX=%s with bucket region %s and requested regions %s because %s is set",
-        prefix,
-        resolved_bucket_region,
-        requested,
-        source,
-    )
-    telemetry.event(
-        CROSS_REGION_OVERRIDE_EVENT,
-        EventBody(
-            {
-                "marin_prefix": prefix,
-                "bucket_region": resolved_bucket_region,
-                "requested_regions": requested,
-                "override_source": source,
-            }
-        ),
-    )
-
-
-def _validate_marin_prefix_placement(
-    env_vars: dict[str, str],
-    regions: tuple[str, ...] | None,
-    zone: str | None,
-) -> None:
-    """Validate an explicitly configured GCS prefix against job placement."""
-    job_info = get_job_info()
-    effective_env_vars = {**(job_info.env if job_info else {}), **env_vars}
-    prefix = effective_env_vars.get(MARIN_PREFIX_ENV)
-    if not prefix or not prefix.startswith("gs://"):
-        return
-
-    requested_regions = _placement_regions(regions, zone)
-    override_source = MARIN_CROSS_REGION_OVERRIDE_ENV
-    override = bool(effective_env_vars.get(MARIN_CROSS_REGION_OVERRIDE_ENV))
-
-    if not requested_regions:
-        if override:
-            _record_cross_region_override(prefix, None, requested_regions, override_source)
-            return
-        raise click.UsageError(
-            f"{MARIN_PREFIX_ENV} explicitly selects {prefix}, but this job has no placement constraint. "
-            "Pass --region or --zone so Iris cannot place it in another region. To accept cross-region "
-            "traffic, pass --allow-cross-region."
-        )
-
-    try:
-        bucket_region = get_bucket_location(prefix)
-    except Exception as exc:
-        if override:
-            _record_cross_region_override(prefix, None, requested_regions, override_source)
-            return
-        raise click.ClickException(f"Could not determine the GCS bucket region for {MARIN_PREFIX_ENV}={prefix}") from exc
-
-    if override:
-        _record_cross_region_override(prefix, bucket_region, requested_regions, override_source)
-        return
-
-    mismatched_regions = [region for region in requested_regions if not regions_match(region, bucket_region)]
-    if mismatched_regions:
-        raise click.UsageError(
-            f"{MARIN_PREFIX_ENV}={prefix} is in {bucket_region}, but the job can run in "
-            f"{', '.join(mismatched_regions)}. Use matching --region/--zone values, or pass "
-            "--allow-cross-region to accept the transfer costs."
-        )
 
 
 KNOWN_GPU_VARIANTS: frozenset[str] = frozenset(
@@ -1022,14 +919,6 @@ Examples:
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
 @click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
 @click.option(
-    "--allow-cross-region",
-    is_flag=True,
-    help=(
-        "Allow an explicit GCS MARIN_PREFIX outside the requested placement. This also sets "
-        "MARIN_I_WILL_PAY_FOR_ALL_FEES=1 for the submitted job."
-    ),
-)
-@click.option(
     "--target-cluster",
     type=str,
     default=None,
@@ -1122,7 +1011,6 @@ def run(
     timeout: int,
     region: tuple[str, ...],
     zone: str | None,
-    allow_cross_region: bool,
     target_cluster: str | None,
     extra: tuple[str, ...],
     sync_package: tuple[str, ...],
@@ -1162,9 +1050,6 @@ def run(
         )
 
     env_vars_dict = load_env_vars(env_vars)
-    if allow_cross_region:
-        env_vars_dict[MARIN_CROSS_REGION_OVERRIDE_ENV] = "1"
-    _validate_marin_prefix_placement(env_vars_dict, region or None, zone)
 
     try:
         exit_code = run_iris_job(
