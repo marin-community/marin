@@ -236,7 +236,6 @@ def _build_inputs(tmp_path):
 
 
 def _read_bucket_tokens(bucket_root: str) -> list[np.ndarray]:
-    """Read every document through a bucket's merged tree cache."""
     cache = TreeCache.load(bucket_root, EXEMPLAR)
     return [np.asarray(doc["input_ids"]) for doc in cache]
 

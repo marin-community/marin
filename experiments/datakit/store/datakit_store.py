@@ -49,7 +49,7 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import (
 from marin.processing.tokenize._core import CHUNK_INDEX_FIELD
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, atomic_rename, marin_temp_bucket
+from rigging.filesystem import StoragePath, atomic_rename, marin_temp_bucket, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo, format_shard_path
 from zephyr.execution import ZephyrContext
@@ -430,7 +430,7 @@ def _spill_source_shard(
 
 
 def _task_sidecar_path(output_path: str, shard: ShardInfo) -> str:
-    pattern = f"{output_path.rstrip('/')}/_done/shard-{{shard:05d}}-of-{{total:05d}}.json"
+    pattern = prefix_join(output_path, "_done/shard-{shard:05d}-of-{total:05d}.json")
     return format_shard_path(pattern, shard.shard_idx, shard.total_shards)
 
 
@@ -526,8 +526,8 @@ def _partition_and_write_task(
 
         def write_one(key: tuple[int, int]) -> _TaskBucketStat:
             cluster, quality = key
-            bucket_root = f"{output_path.rstrip('/')}/cluster={cluster}/quality={quality}"
-            pattern = f"{bucket_root}/part-{{shard:05d}}-of-{{total:05d}}-attempt-{attempt}"
+            bucket_root = prefix_join(output_path, f"cluster={cluster}/quality={quality}")
+            pattern = prefix_join(bucket_root, f"part-{{shard:05d}}-of-{{total:05d}}-attempt-{attempt}")
             cache_path = format_shard_path(pattern, shard.shard_idx, shard.total_shards)
             if local_spill_processes:
                 ledger = write_bucket_cache_from_spills(cache_path, spill_runs[key])
@@ -600,11 +600,10 @@ def _merge_per_bucket_ledgers(
         by_bucket[(s.cluster, s.quality)].append(s)
 
     metadata = CacheMetadata.empty()
-    base_path = output_path.rstrip("/")
     buckets: list[BucketCacheStats] = []
     for key in sorted(by_bucket):
         cluster, quality = key
-        bucket_root = f"{base_path}/cluster={cluster}/quality={quality}"
+        bucket_root = prefix_join(output_path, f"cluster={cluster}/quality={quality}")
         task_parts = sorted(by_bucket[key], key=lambda s: (s.task, s.path))
         shard_paths = [s.path for s in task_parts]
         shard_ledgers = [
@@ -661,11 +660,7 @@ def build_clustered_store(
     local_spill_processes: int = DEFAULT_LOCAL_SPILL_PROCESSES,
     zephyr_context: ZephyrContext | None = None,
 ) -> ClusteredStoreData:
-    """Build per-bucket caches with one task-local partition pass.
-
-    Each map task writes at most one cache under every populated ``(cluster,
-    quality)`` bucket. The driver only merges those cache ledgers; no document
-    payload enters a Zephyr shuffle.
+    """Build materialized caches for each populated ``(cluster, quality)`` bucket.
 
     Args:
         shards_per_task: Consecutive source shards per map task when

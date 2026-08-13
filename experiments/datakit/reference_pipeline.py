@@ -165,7 +165,12 @@ from experiments.datakit.reports.normalize import normalize_report
 from experiments.datakit.reports.quality import quality_report
 from experiments.datakit.reports.store import store_report
 from experiments.datakit.reports.tokenize import tokenize_report
-from experiments.datakit.store.datakit_store import ClusteredStoreData, build_clustered_store
+from experiments.datakit.store.datakit_store import (
+    DEFAULT_INPUT_READ_THREADS,
+    DEFAULT_PARALLEL_BUCKET_WRITES,
+    ClusteredStoreData,
+    build_clustered_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -275,9 +280,9 @@ class StoreConfig:
 
     shards_per_task: int = 1
     task_count: int | None = 192
-    input_read_threads: int = 16
+    input_read_threads: int = DEFAULT_INPUT_READ_THREADS
     local_spill_processes: int = 32
-    max_parallel_bucket_writes: int = 4
+    max_parallel_bucket_writes: int = DEFAULT_PARALLEL_BUCKET_WRITES
     worker: ResourceConfig = field(
         default_factory=lambda: ResourceConfig(cpu=96, ram="700g", disk="900g", preemptible=False)
     )

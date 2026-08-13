@@ -10,6 +10,7 @@ from collections.abc import Iterator, Sequence
 import numpy as np
 from levanter.store.cache import CacheLedger, CacheMetadata
 from levanter.store.jagged_array import DEFAULT_WRITE_CHUNK_SIZE, JaggedArrayStore
+from rigging.filesystem import prefix_join
 
 
 @dataclasses.dataclass(frozen=True)
@@ -89,7 +90,7 @@ def _write_store(
         raise ValueError(f"max_pending_commits must be positive, got {max_pending_commits}")
 
     store = JaggedArrayStore.open(
-        f"{cache_dir.rstrip('/')}/input_ids",
+        prefix_join(cache_dir, "input_ids"),
         mode="w",
         item_rank=1,
         dtype=np.int32,
@@ -138,7 +139,7 @@ def write_bucket_cache(
     write_chunk_elements: int = DEFAULT_WRITE_CHUNK_SIZE,
     max_pending_commits: int = 4,
 ) -> CacheLedger:
-    """Write one `input_ids` cache without revisiting a TensorStore write shard."""
+    """Write documents to a materialized ``input_ids`` cache."""
     if not documents:
         raise ValueError("write_bucket_cache requires at least one document")
 
@@ -163,7 +164,7 @@ def write_bucket_cache_from_spills(
     write_chunk_elements: int = DEFAULT_WRITE_CHUNK_SIZE,
     max_pending_commits: int = 4,
 ) -> CacheLedger:
-    """Finalize append-only local bucket runs into one aligned TensorStore cache."""
+    """Write local bucket runs to a materialized ``input_ids`` cache."""
     if not runs:
         raise ValueError("write_bucket_cache_from_spills requires at least one run")
 
