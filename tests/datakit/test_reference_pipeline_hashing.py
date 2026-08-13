@@ -21,7 +21,6 @@ from experiments.datakit import reference_pipeline
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
     PoolConfig,
-    StoreConfig,
     reference_datakit_steps,
     zephyr_datakit_steps,
 )
@@ -90,23 +89,23 @@ def test_store_hash_tracks_content_not_resources():
     # cluster_view is read by the store fn and NOT captured by any dep -> must re-key.
     cv = dataclasses.replace(SMOKE_SCALE.cluster, cluster_view=16)
     changed = _build(scale=dataclasses.replace(SMOKE_SCALE, cluster=cv)).output_buckets.hash_id
-    layout = dataclasses.replace(SMOKE_SCALE.store, default_subshards=2)
+    layout = dataclasses.replace(SMOKE_SCALE.store, task_count=2)
     relaid = _build(scale=dataclasses.replace(SMOKE_SCALE, store=layout)).output_buckets.hash_id
     # The worker fleet is execution policy -> must NOT re-key.
     pool = dataclasses.replace(SMOKE_SCALE, pool=PoolConfig(n_workers=999))
     resourced = _build(scale=pool).output_buckets.hash_id
-    execution = StoreConfig(
-        shards_per_task=99,
-        reduce_shards=7,
-        target_tokens_per_subshard=SMOKE_SCALE.store.target_tokens_per_subshard,
-        max_subshards=SMOKE_SCALE.store.max_subshards,
-        default_subshards=SMOKE_SCALE.store.default_subshards,
-    )
+    execution = dataclasses.replace(SMOKE_SCALE.store, max_parallel_bucket_writes=1)
     rescheduled = _build(scale=dataclasses.replace(SMOKE_SCALE, store=execution)).output_buckets.hash_id
+    spill_execution = dataclasses.replace(SMOKE_SCALE.store, local_spill_processes=2)
+    respilled = _build(scale=dataclasses.replace(SMOKE_SCALE, store=spill_execution)).output_buckets.hash_id
+    store_worker = dataclasses.replace(SMOKE_SCALE.store, worker=PoolConfig().worker)
+    resized = _build(scale=dataclasses.replace(SMOKE_SCALE, store=store_worker)).output_buckets.hash_id
     assert changed != base
     assert relaid != base
     assert resourced == base
     assert rescheduled == base
+    assert respilled == base
+    assert resized == base
 
 
 def test_minhash_params_rekey_minhash_and_dedup():
