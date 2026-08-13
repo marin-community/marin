@@ -451,15 +451,17 @@ def _ragged_to_padded(column: pa.ChunkedArray | pa.Array, max_tokens: int, vocab
     return np.where(mask, compact, PAD_ID).astype(np.int32)
 
 
-def _embedding_int8(column: pa.ChunkedArray | pa.Array, rows: int) -> np.ndarray:
-    """The stored int8[1024] embedding rows, undecoded.
+def gather_embeddings(array: pa.Array, positions: np.ndarray) -> np.ndarray:
+    """Rows ``positions`` of an int8[1024] arrow column, as normalized float32.
 
-    Kept int8 for the life of the shard and widened only per block: the whole
-    embed side is resident while its token side streams, and float32 would make
-    that 11 GB on the largest shard instead of 2.7 GB.
+    The embed side stays in its arrow buffer for the life of the shard and only
+    the joined rows are ever materialized. Converting the whole column to numpy
+    up front doubled peak memory -- the arrow table plus an equal-sized copy,
+    5.5 GB on the largest shard -- and 24 workers doing that at once is what
+    SIGKILLed the first attempt at this run.
     """
-    array = column.combine_chunks() if isinstance(column, pa.ChunkedArray) else column
-    return array.flatten().to_numpy(zero_copy_only=False).reshape(rows, EMBED_DIM)
+    rows = array.take(pa.array(positions)).flatten().to_numpy(zero_copy_only=False)
+    return normalize_embeddings(rows.reshape(len(positions), EMBED_DIM))
 
 
 def normalize_embeddings(rows: np.ndarray) -> np.ndarray:
@@ -496,8 +498,8 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
         embed_table = pq.ParquetFile(raw).read(columns=["id", "embedding"])
     embed_rows = embed_table.num_rows
     embed_ids = embed_table.column("id").to_numpy(zero_copy_only=False)
-    embeddings = _embedding_int8(embed_table.column("embedding"), embed_rows)
-    del embed_table
+    embed_column = embed_table.column("embedding")
+    embed_column = embed_column.combine_chunks() if isinstance(embed_column, pa.ChunkedArray) else embed_column
 
     id_blocks: list[np.ndarray] = []
     token_blocks: list[np.ndarray] = []
@@ -511,7 +513,7 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
         block = Block(
             doc_ids=np.concatenate(id_blocks),
             ids=np.concatenate(token_blocks),
-            embedding=normalize_embeddings(np.concatenate(embed_blocks)),
+            embedding=gather_embeddings(embed_column, np.concatenate(embed_blocks)),
         )
         id_blocks, token_blocks, embed_blocks, pending = [], [], [], 0
         return block
@@ -538,7 +540,8 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
             id_blocks.append(doc_ids[keep])
             matched = batch.column("input_ids").take(pa.array(first[keep]))
             token_blocks.append(_ragged_to_padded(matched, max_tokens, vocab_size))
-            embed_blocks.append(embeddings[position[keep]])
+            # Positions, not rows: the gather happens once per block.
+            embed_blocks.append(position[keep])
             pending += len(keep)
             matched_total += len(keep)
             if pending >= block_docs:
