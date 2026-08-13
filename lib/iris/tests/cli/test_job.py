@@ -109,6 +109,43 @@ def test_job_run_accepts_unconstrained_placement_with_cluster_metadata(recorded_
     assert len(recorded_job_submissions) == 1
 
 
+@pytest.fixture
+def recorded_bundle_exclude(monkeypatch):
+    """Capture the ``bundle_exclude`` passed to ``IrisClient.remote`` by ``iris job run``."""
+    captured: dict[str, object] = {}
+
+    class FakeJob:
+        job_id = JobName.from_wire("/test-user/test-job")
+
+    class FakeClient:
+        def submit(self, **kwargs):
+            return FakeJob()
+
+    def fake_remote(*args, **kwargs):
+        captured["bundle_exclude"] = kwargs.get("bundle_exclude")
+        return FakeClient()
+
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", fake_remote)
+    return captured
+
+
+def test_exclude_options_become_one_or_ed_bundle_regex(recorded_bundle_exclude):
+    # Repeated --exclude flags are OR'd; each pattern anchors independently, so grouping
+    # them wrong (e.g. bare alternation) would let one pattern's anchor bind the other.
+    result = _run_cli(["--exclude", r"^docs/", "--exclude", r"^data/"])
+    assert result.exit_code == 0, result.output
+    pattern = recorded_bundle_exclude["bundle_exclude"]
+    assert pattern.search("docs/guide.md")
+    assert pattern.search("data/big.csv")
+    assert not pattern.search("src/main.py")
+
+
+def test_no_exclude_leaves_bundle_exclude_unset(recorded_bundle_exclude):
+    result = _run_cli([])
+    assert result.exit_code == 0, result.output
+    assert recorded_bundle_exclude["bundle_exclude"] is None
+
+
 # ---------------------------------------------------------------------------
 # Executor heuristic tests (mirrors the logic in run_iris_job)
 # ---------------------------------------------------------------------------
@@ -246,7 +283,7 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
             captured.update(kwargs)
             return FakeJob()
 
-    def fake_remote(controller_url, *, workspace, credentials=None):
+    def fake_remote(controller_url, *, workspace, credentials=None, bundle_exclude=None):
         captured["controller_url"] = controller_url
         captured["workspace"] = workspace
         captured["credentials"] = credentials
