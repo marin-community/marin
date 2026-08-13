@@ -413,8 +413,4 @@ def rms_gated_norm(
         mesh=get_abstract_mesh(),
         in_specs=(P(batch_axes, None, None), P(None), P(None, None), P(None, None)),
         out_specs=P(batch_axes, None, None),
-        # Pallas clears the VMA annotation on aliased outputs. This boundary is device-local and
-        # all cross-device parameter reductions are explicit below, so disabling the redundant
-        # nested check avoids a false custom-VJP type mismatch without changing collectives.
-        check_vma=False,
     )(x, norm_weight, w_down, w_up)
