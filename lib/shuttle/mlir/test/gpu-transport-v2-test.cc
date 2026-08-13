@@ -598,6 +598,10 @@ xla::ffi::CallFrame callFrame(llvm::ArrayRef<uint8_t> transport,
   attributes.Insert("bundle_sha256", transportDigest.str());
   attributes.Insert("bundle_size", static_cast<int64_t>(transport.size()));
   attributes.Insert("transport_schema_version", int64_t{2});
+  attributes.Insert("device_schema_version", int64_t{3});
+  attributes.Insert("invocation_abi_schema_version", int64_t{3});
+  attributes.Insert("bundle_schema_version", int64_t{2});
+  attributes.Insert("completion", std::string("stream_ordered"));
   builder.AddAttributes(attributes.Build());
   return builder.Build();
 }
