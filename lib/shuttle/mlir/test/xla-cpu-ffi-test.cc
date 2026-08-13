@@ -91,14 +91,16 @@ std::string readText(llvm::StringRef name) {
 }
 
 llvm::SmallVector<uint8_t> fixtureBundle(llvm::StringRef boundary,
-                                         bool fast = false) {
+                                         bool fast = false,
+                                         llvm::StringRef shapeId =
+                                             "81928ab3539c0f03") {
   mlir::DialectRegistry registry;
   mlir::stablehlo::registerAllDialects(registry);
   registry.insert<mlir::arith::ArithDialect, mlir::func::FuncDialect,
                   mlir::math::MathDialect, mlir::shuttle::ShuttleDialect>();
   mlir::MLIRContext context(registry);
   std::string name =
-      ("jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-" + boundary + ".mlir")
+      ("jax-0.10.1-bf16-row_fold_scale_" + shapeId + "-" + boundary + ".mlir")
           .str();
   mlir::OwningOpRef<mlir::ModuleOp> module =
       mlir::parseSourceString<mlir::ModuleOp>(readText(name), &context);
@@ -211,6 +213,41 @@ compileCall(xla::LocalClient *client, llvm::ArrayRef<uint8_t> bundle,
   return CompiledCall{std::move(executables.front())};
 }
 
+absl::StatusOr<CompiledCall>
+compileLargeForwardCall(xla::LocalClient *client,
+                        llvm::ArrayRef<uint8_t> bundle) {
+  xla::Shape matrix = xla::ShapeUtil::MakeShapeWithDenseLayout(
+      xla::BF16, {2048, 4096}, {1, 0});
+  xla::Shape vector =
+      xla::ShapeUtil::MakeShapeWithDenseLayout(xla::BF16, {4096}, {0});
+  xla::XlaBuilder builder("shuttle_cpu_ffi_forward_2048x4096");
+  xla::XlaOp input = xla::Parameter(&builder, 0, matrix, "x");
+  xla::XlaOp scale = xla::Parameter(&builder, 1, vector, "gamma");
+  std::string backendConfig =
+      "{bundle_bytes = \"" + escapedMlirString(bundle) +
+      "\", bundle_sha256 = \"" +
+      mlir::shuttle::cpuExecutableBundleDigest(bundle) +
+      "\", bundle_size = " + std::to_string(bundle.size()) +
+      " : i64, transport_schema_version = 1 : i64}";
+  xla::CustomCall(&builder, "shuttle.cpu.executable_bundle.v3",
+                  {input, scale}, matrix, backendConfig,
+                  /*has_side_effect=*/false,
+                  /*output_operand_aliasing=*/{}, /*literal=*/nullptr,
+                  xla::CustomCallSchedule::SCHEDULE_NONE,
+                  xla::CustomCallApiVersion::API_VERSION_TYPED_FFI);
+  TF_ASSIGN_OR_RETURN(auto computation, builder.Build());
+  xla::ExecutableBuildOptions buildOptions;
+  buildOptions.set_device_ordinal(0);
+  const xla::Shape *argumentLayouts[] = {&matrix, &vector};
+  TF_ASSIGN_OR_RETURN(
+      std::vector<std::unique_ptr<xla::LocalExecutable>> executables,
+      client->Compile(computation, argumentLayouts, buildOptions));
+  if (executables.size() != 1) {
+    return absl::InternalError("expected one Host executable");
+  }
+  return CompiledCall{std::move(executables.front())};
+}
+
 absl::StatusOr<CompiledCall> compileVjpCall(xla::LocalClient *client,
                                             llvm::ArrayRef<uint8_t> bundle,
                                             llvm::StringRef boundary,
@@ -272,6 +309,29 @@ xla::Literal scaleLiteral() {
   auto values = literal.data<uint16_t>();
   for (size_t index = 0; index < values.size(); ++index) {
     values[index] = toBf16(0.75f + static_cast<float>(index) / 32.0f);
+  }
+  return literal;
+}
+
+xla::Literal largeInputLiteral() {
+  xla::Literal literal = xla::Literal::CreateFromShape(
+      xla::ShapeUtil::MakeShapeWithDenseLayout(xla::BF16, {2048, 4096},
+                                               {1, 0}));
+  auto values = literal.data<uint16_t>();
+  for (size_t index = 0; index < values.size(); ++index) {
+    values[index] =
+        toBf16(-0.75f + static_cast<float>((index * 17) % 257) / 128.0f);
+  }
+  return literal;
+}
+
+xla::Literal largeScaleLiteral() {
+  xla::Literal literal = xla::Literal::CreateFromShape(
+      xla::ShapeUtil::MakeShapeWithDenseLayout(xla::BF16, {4096}, {0}));
+  auto values = literal.data<uint16_t>();
+  for (size_t index = 0; index < values.size(); ++index) {
+    values[index] =
+        toBf16(0.5f + static_cast<float>((index * 5) % 193) / 128.0f);
   }
   return literal;
 }
@@ -668,6 +728,39 @@ TEST(XlaCpuFfiTest, SharedCompiledExecutableRunsConcurrently) {
   EXPECT_NE(*firstResult, *secondResult);
   EXPECT_EQ(*firstResult, runDirect(bytes, firstInput, firstScale));
   EXPECT_EQ(*secondResult, runDirect(bytes, secondInput, secondScale));
+}
+
+TEST(XlaCpuFfiTest, V3TargetExecutesRepresentativeForwardLikeRawBundle) {
+  ASSERT_TRUE(
+      xla::ffi::FindHandler("shuttle.cpu.executable_bundle.v3", "Host").ok());
+  llvm::SmallVector<uint8_t> bytes =
+      fixtureBundle("forward", false, "44d152ecc3e9ff18");
+  ASSERT_FALSE(bytes.empty());
+  auto loaded = mlir::shuttle::CpuExecutable::Load(bytes);
+  ASSERT_TRUE(loaded.ok()) << loaded.status();
+  TF_ASSERT_OK_AND_ASSIGN(xla::LocalClient * client, hostClient());
+  TF_ASSERT_OK_AND_ASSIGN(CompiledCall call,
+                          compileLargeForwardCall(client, bytes));
+  xla::Literal input = largeInputLiteral();
+  xla::Literal scale = largeScaleLiteral();
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::vector<uint16_t> host,
+      runCompiled(client, call.executable.get(), input, scale));
+
+  std::vector<uint16_t> raw(host.size());
+  std::array<mlir::shuttle::CpuExternalBuffer, 3> buffers{{
+      {0, llvm::MutableArrayRef<uint8_t>(
+              reinterpret_cast<uint8_t *>(input.data<uint16_t>().data()),
+              input.size_bytes())},
+      {1, llvm::MutableArrayRef<uint8_t>(
+              reinterpret_cast<uint8_t *>(scale.data<uint16_t>().data()),
+              scale.size_bytes())},
+      {20, llvm::MutableArrayRef<uint8_t>(
+               reinterpret_cast<uint8_t *>(raw.data()),
+               raw.size() * sizeof(uint16_t))},
+  }};
+  ASSERT_TRUE((*loaded)->Execute(buffers).ok());
+  EXPECT_EQ(host, raw);
 }
 
 } // namespace

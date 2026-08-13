@@ -18,13 +18,13 @@
 namespace {
 
 constexpr char kSourceOrderedOptions[] =
-    R"json({"execution_mode":"stablehlo_round_trip","numerics":"source_ordered","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion","maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}})json";
+    R"json({"execution_mode":"stablehlo_round_trip","numerics":"source_ordered","pipeline_abi_version":9,"schema_version":1,"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion","maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}})json";
 constexpr char kFastOptions[] =
-    R"json({"execution_mode":"stablehlo_round_trip","numerics":"fast","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
+    R"json({"execution_mode":"stablehlo_round_trip","numerics":"fast","pipeline_abi_version":9,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json";
 constexpr char kCpuExecutableBundleOptions[] =
-    R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion","maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}})json";
+    R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":9,"schema_version":1,"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion","maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}})json";
 constexpr char kCpuExecutableBundleFastOptions[] =
-    R"json({"execution_mode":"cpu_executable_bundle","numerics":"fast","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion","maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}})json";
+    R"json({"execution_mode":"cpu_executable_bundle","numerics":"fast","pipeline_abi_version":9,"schema_version":1,"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion","maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}})json";
 constexpr char kProgram[] = R"mlir(
 module {
   func.func @main(%arg0: tensor<7xf32>) -> tensor<7xf32> {
@@ -56,7 +56,7 @@ TEST(ShuttleXlaOptionsTest, ParsesCanonicalPythonWireFormat) {
   mlir::shuttle::ShuttlePipelineIdentity sourceIdentity =
       mlir::shuttle::shuttlePipelineIdentity(*source);
   EXPECT_EQ(sourceIdentity.policyDigest,
-            "beb31276720f877399cf9a4358613703bcf97d0be25da4d38d0cbd12c37c5cca");
+            "b30b7e9d56ffd6f1e723acbbc85d0fe7ef36d376d25c2eb49fcd248289e1254f");
   EXPECT_EQ(sourceIdentity.tuningDigest,
             "ae69cb474b1ddc91067687e7351ee27afe4e3b0814ae59e310a42bec5911326f");
 
@@ -122,11 +122,11 @@ TEST(ShuttleXlaOptionsTest, RejectsInvalidOrNoncanonicalWireFormats) {
 }
 
 TEST(ShuttleXlaOptionsTest, RejectsPreviousPipelineAbiForBothCpuPolicies) {
-  constexpr const char *abi7Options[] = {
-      R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":7,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
-      R"json({"execution_mode":"cpu_executable_bundle","numerics":"fast","pipeline_abi_version":7,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
+  constexpr const char *abi8Options[] = {
+      R"json({"execution_mode":"cpu_executable_bundle","numerics":"source_ordered","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
+      R"json({"execution_mode":"cpu_executable_bundle","numerics":"fast","pipeline_abi_version":8,"schema_version":1,"tuning":{"cluster_shape":[],"materialization":"automatic","maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}})json",
   };
-  for (const char *serialized : abi7Options) {
+  for (const char *serialized : abi8Options) {
     EXPECT_EQ(mlir::shuttle::parseShuttleXlaOptions(serialized)
                   .status()
                   .code(),

@@ -292,6 +292,27 @@ cc_test(
 )
 
 cc_test(
+    name = "abi9_large_forward_runtime_test",
+    srcs = ["test/abi9-large-forward-runtime-test.cc"],
+    data = ["test/Inputs/jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-forward.mlir"],
+    deps = [
+        ":ShuttleCpuBytecode",
+        ":ShuttleDialect",
+        ":ShuttlePasses",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MathDialect",
+        "@llvm-project//mlir:Parser",
+        "@llvm-project//mlir:Pass",
+        "@stablehlo//:register",
+        "@bazel_tools//tools/cpp/runfiles",
+    ],
+)
+
+cc_test(
     name = "observer_test_bridge_test",
     srcs = ["test/observer-test-bridge-test.cc"],
     deps = [
@@ -381,6 +402,7 @@ cc_test(
         "test/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-backward.mlir",
         "test/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-composed.mlir",
         "test/Inputs/jax-0.10.1-bf16-row_fold_scale_81928ab3539c0f03-forward.mlir",
+        "test/Inputs/jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-forward.mlir",
     ],
     deps = [
         ":ShuttleCpuBytecode",

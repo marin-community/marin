@@ -32,7 +32,7 @@ def test_compiler_options_have_canonical_closed_wire_format() -> None:
         "xla_shuttle_enable": True,
         "xla_shuttle_options": (
             '{"execution_mode":"stablehlo_round_trip","numerics":"source_ordered",'
-            '"pipeline_abi_version":8,"schema_version":1,'
+            '"pipeline_abi_version":9,"schema_version":1,'
             '"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion",'
             '"maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}}'
         ),
@@ -43,7 +43,7 @@ def test_compiler_options_have_canonical_closed_wire_format() -> None:
             numerics=Numerics.SOURCE_ORDERED,
             tuning=_tuning(),
         )
-        == "beb31276720f877399cf9a4358613703bcf97d0be25da4d38d0cbd12c37c5cca"
+        == "b30b7e9d56ffd6f1e723acbbc85d0fe7ef36d376d25c2eb49fcd248289e1254f"
     )
 
 
@@ -111,13 +111,13 @@ def test_cpu_executable_mode_has_distinct_source_ordered_and_fast_cache_identiti
 
     assert source_ordered["xla_shuttle_options"] == (
         '{"execution_mode":"cpu_executable_bundle","numerics":"source_ordered",'
-        '"pipeline_abi_version":8,"schema_version":1,'
+        '"pipeline_abi_version":9,"schema_version":1,'
         '"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion",'
         '"maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}}'
     )
     assert fast["xla_shuttle_options"] == (
         '{"execution_mode":"cpu_executable_bundle","numerics":"fast",'
-        '"pipeline_abi_version":8,"schema_version":1,'
+        '"pipeline_abi_version":9,"schema_version":1,'
         '"tuning":{"cluster_shape":[2,1,1],"materialization":"prefer_fusion",'
         '"maximum_candidates":16,"pipeline_stages":3,"tile_sizes":[64,128]}}'
     )
@@ -127,7 +127,7 @@ def test_cpu_executable_mode_has_distinct_source_ordered_and_fast_cache_identiti
             numerics=Numerics.SOURCE_ORDERED,
             tuning=_tuning(),
         )
-        == "d402a2697bfce67ca42c465d9a4ee54d6f4455d766dd2593e33708be22ebe5a9"
+        == "fc1454ea02ec42063fcb9b61410f399883f94e5958d3781eeb24ad15e3183547"
     )
     assert (
         options_digest(
@@ -135,7 +135,7 @@ def test_cpu_executable_mode_has_distinct_source_ordered_and_fast_cache_identiti
             numerics=Numerics.FAST,
             tuning=_tuning(),
         )
-        == "c87f644b9a75ed992c064f8a20601489b02fe66dd3f8a083b9ec86a0b85171f9"
+        == "58ebe25244b1b175baad78e962f1cd5734f3b290973a3e7a3ec7719d1a92142a"
     )
 
 
@@ -155,7 +155,7 @@ def test_empty_shape_hints_leave_physical_search_unconstrained() -> None:
 
     assert options["xla_shuttle_options"] == (
         '{"execution_mode":"stablehlo_round_trip","numerics":"fast",'
-        '"pipeline_abi_version":8,"schema_version":1,'
+        '"pipeline_abi_version":9,"schema_version":1,'
         '"tuning":{"cluster_shape":[],"materialization":"automatic",'
         '"maximum_candidates":1,"pipeline_stages":1,"tile_sizes":[]}}'
     )
