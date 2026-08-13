@@ -84,6 +84,11 @@ class CostEvent:
     currency: str
     # AmountKind value; str because finelog cannot serialize a StrEnum directly.
     amount_kind: str
+    # Provider region for resources that expose a location dimension.
+    region: str | None = None
+    # Provider usage gauge for the day. Cost-only APIs leave this empty.
+    usage_amount: float | None = None
+    usage_unit: str | None = None
     # When this row was produced. The runner stamps every row of a run with one
     # value so a single fetch is one atomic snapshot for latest-wins reads.
     collected_ts: dt.datetime | None = None
@@ -139,6 +144,9 @@ def cost_event(
     cost: float,
     currency: str = "USD",
     amount_kind: AmountKind = AmountKind.BILLED,
+    region: str | None = None,
+    usage_amount: float | None = None,
+    usage_unit: str | None = None,
 ) -> CostEvent:
     """Build a :class:`CostEvent` for ``day``; ``collected_ts`` is stamped later."""
     return CostEvent(
@@ -150,6 +158,9 @@ def cost_event(
         cost=float(cost),
         currency=currency,
         amount_kind=str(amount_kind),
+        region=region,
+        usage_amount=float(usage_amount) if usage_amount is not None else None,
+        usage_unit=usage_unit,
     )
 
 

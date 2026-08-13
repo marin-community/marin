@@ -345,6 +345,24 @@ def test_accelerators_dashboard_shows_sm_and_temperature_distributions():
     assert "name = 'gpu_temperature_celsius'" in temperature_sql[0]
 
 
+def test_storage_dashboard_shows_latest_coreweave_bucket_bytes():
+    dashboard = _stitched_dashboards()["storage.json"]
+    (panel,) = _all_panels(dashboard)
+    (sql,) = _panel_sql(dashboard)
+
+    assert panel["type"] == "timeseries"
+    assert panel["fieldConfig"]["defaults"]["unit"] == "bytes"
+    assert panel["datasource"]["uid"] == "finelog-marin"
+    assert 'FROM "cost.events"' in sql
+    assert "provider = 'coreweave'" in sql
+    assert "category = 'storage'" in sql
+    assert "usage_unit = 'bytes'" in sql
+    assert "PARTITION BY usage_date, provider, category, region, detail ORDER BY seq DESC" in sql
+    for source in ("home.json", "infra.json"):
+        (link,) = [link for link in _stitched_dashboards()[source]["links"] if link["url"] == "/d/marin-storage"]
+        assert not link["keepTime"]
+
+
 def test_clusters_dashboard_shows_finelog_pods_storage_and_events():
     targets = [
         target for panel in _all_panels(_stitched_dashboards()["clusters.json"]) for target in panel.get("targets", [])
