@@ -379,7 +379,9 @@ def pages_agreement(reference_pages: list[str], candidate_pages: list[str], refe
     return result
 
 
-def document_agreement(docling_text: str, docling_offsets, ocr_text: str, ocr_offsets) -> dict:
+def document_agreement(
+    docling_text: str, docling_offsets: list[int] | None, ocr_text: str, ocr_offsets: list[int] | None
+) -> dict:
     """The Docling-versus-VLM pair, from each route's stored text and its own page offsets."""
     return pages_agreement(split_pages(ocr_text, ocr_offsets), split_pages(docling_text, docling_offsets), VLM, DOCLING)
 

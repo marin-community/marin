@@ -13,8 +13,8 @@ question that cost buys, which is whether what it reads is *the same document*.
 
 Four things per document:
 
-* **the classification signals**, from ``detect_pdf_bytes`` -- the candidate routing features for
-  Stage 2. Deliberately not ``classify_pdf_bytes``, which Stage 0 timed: that entry point returns
+* **the classification signals**, from ``detect_pdf_bytes`` -- the candidate features a router
+  would decide on. Deliberately not ``classify_pdf_bytes``, which the probe timed: that entry returns
   four of the nine signals and does not expose ``has_encoding_issues``, ``is_complex_layout``,
   ``pages_with_tables`` or ``pages_with_columns``, so it is not the call a router would make.
   Detect's own copies of those four turn out to be constant over all 100,000 documents --
@@ -27,7 +27,8 @@ Four things per document:
   :mod:`~experiments.datakit.build_pdf_source.quality.route_agreement` exactly as the
   Docling-versus-VLM numbers were, so the two routes are directly comparable.
 * **agreement against Docling**, the mutual cheap-route signal: two cheap routes that fail the same
-  documents cannot cover for each other, and Stage 3 needs to know whether they do.
+  documents cannot cover for each other, and whether they do decides whether a router can treat
+  them as alternatives or has to send the overlap to the VLM regardless.
 * **the failure taxonomy as columns**, one outcome per document with its error text. A native
   extension's failure rate is a result, not a log line.
 
@@ -70,11 +71,8 @@ from collections import Counter
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-import fsspec
 import polars as pl
 from fray.types import ResourceConfig
-from rigging.filesystem import StoragePath
-from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 from zephyr import counters
 from zephyr.dataset import Dataset
@@ -82,6 +80,7 @@ from zephyr.execution import ZephyrContext
 from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.build_pdf_source.quality import route_agreement
+from experiments.datakit.build_pdf_source.quality.build_route_study import shards, storage
 from experiments.datakit.build_pdf_source.quality.probe_pdf_inspector import (
     WORKER_FLAG,
     Outcome,
@@ -92,9 +91,9 @@ from experiments.datakit.build_pdf_source.quality.probe_pdf_inspector import (
 
 logger = logging.getLogger(__name__)
 
-BUCKET = "marin-us-east-02a"
-SAMPLE_PREFIX = f"s3://{BUCKET}/marin/data/pdf_quality/cc_focus_2026_22_sample100k"
-OUTPUT_PREFIX = f"s3://{BUCKET}/marin/data/pdf_quality/cc_focus_2026_22_inspector_study"
+# The sample and its shard listing come from the study this one extends, so both tables are built
+# over the same shards in the same order and their part files line up.
+OUTPUT_PREFIX = "s3://marin-us-east-02a/marin/data/pdf_quality/cc_focus_2026_22_inspector_study"
 
 MODULE_NAME = "experiments.datakit.build_pdf_source.quality.build_inspector_study"
 STUDY_OP = "study"
@@ -213,11 +212,6 @@ _MAX_WORKERS = 23
 _HEARTBEAT_TIMEOUT = 30 * 60
 
 
-def storage() -> fsspec.AbstractFileSystem:
-    configure_coreweave_s3()
-    return fsspec.filesystem("s3")
-
-
 # ---------------------------------------------------------------------------
 # Worker: the library, in a process the task is willing to lose
 # ---------------------------------------------------------------------------
@@ -307,8 +301,9 @@ def worker_main() -> None:
 def registered_domain(url: str | None) -> str:
     """The host of a URL, which is the unit near-duplicate documents cluster in.
 
-    Stage 2's comparison has to be domain-disjoint -- the crawl holds ~9.8% exact-duplicate PDFs and
-    many more near-duplicates from the same publisher -- and the study table carries only the URL.
+    Any comparison over this table has to be domain-disjoint -- the crawl holds ~9.8%
+    exact-duplicate PDFs and many more near-duplicates from the same publisher, so splitting by row
+    leaks -- and the route study carries the URL but not the host derived from it.
     Same derivation as :func:`train_route_model.registered_domain`, resolved here so the split key
     travels with the row.
     """
@@ -448,13 +443,6 @@ def study_shard(work: tuple[int, str]) -> int:
     with fs.open(output, "wb") as stream:
         frame.write_parquet(stream, compression="zstd", compression_level=1)
     return len(rows)
-
-
-def shards() -> list[tuple[int, str]]:
-    paths = sorted(str(path) for path in StoragePath(f"{SAMPLE_PREFIX}/*.parquet").glob())
-    if not paths:
-        raise FileNotFoundError(f"no sample shards under {SAMPLE_PREFIX}")
-    return list(enumerate(paths))
 
 
 def main() -> None:
