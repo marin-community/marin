@@ -28,12 +28,12 @@ from quack.epi_ops import (
     ColVecReduce,
     RowVecLoad,
     TileLoad,
+    TileStore,
     colvec_reduce_accumulate,
     vec_multiply,
 )
 from quack.gemm_act import GemmActMixin
 from quack.gemm_dact import GemmDActSm100
-from quack.gemm_default_epi import GemmDefaultEpiMixin
 from quack.gemm_sm100 import GemmSm100
 from quack.gemm_tvm_ffi_utils import make_scheduler_args
 from quack.rounding import RoundingMode
@@ -76,8 +76,10 @@ class _GemmRmsBackwardMixin(GemmActMixin):
     _epi_ops = (  # pyrefly: ignore[bad-override-mutable-attribute]
         RowVecLoad("mNormWeight"),
         ColVecLoad("mInverseRms"),
+        TileLoad("mDirectCotangent"),
         TileLoad("mX"),
         ColVecReduce("mRowDotPartial"),
+        TileStore("mAuxOut"),
     )
     _extra_param_fields = ()
 
@@ -85,12 +87,17 @@ class _GemmRmsBackwardMixin(GemmActMixin):
     class EpilogueArguments(NamedTuple):  # pyrefly: ignore[bad-override]
         mNormWeight: cute.Tensor | None = None
         mInverseRms: cute.Tensor | None = None
+        mDirectCotangent: cute.Tensor | None = None
         mX: cute.Tensor | None = None
         mRowDotPartial: cute.Tensor | None = None
+        mAuxOut: cute.Tensor | None = None
         rounding_mode: cutlass.Constexpr[int] = RoundingMode.RN
 
     def epi_to_underlying_arguments(self, args, *, loc=None, ip=None):
         self.rounding_mode = args.rounding_mode
+        self.aux_out_dtype = args.mAuxOut.element_type
+        self.aux_out_layout = cutlass.utils.LayoutEnum.from_tensor(args.mAuxOut)
+        self.cta_tile_shape_aux_out_mn = self.cta_tile_shape_mnk[:2]
         values = self._epi_ops_to_params_dict(args)
         return self.EpilogueParams(**values)
 
@@ -98,23 +105,26 @@ class _GemmRmsBackwardMixin(GemmActMixin):
     def epi_visit_subtile(self, params, epi_loop_tensors, tRS_rD, tRS_rC=None):
         tDrNormWeight = epi_loop_tensors.get("mNormWeight")
         tDrInverseRms = epi_loop_tensors.get("mInverseRms")
+        tRS_rDirectCotangent = epi_loop_tensors.get("mDirectCotangent")
         tRS_rX = epi_loop_tensors.get("mX")
         tDrRowDot = epi_loop_tensors.get("mRowDotPartial")
 
-        GemmDefaultEpiMixin.epi_visit_subtile(self, params, epi_loop_tensors, tRS_rD, tRS_rC)
         tRS_rUnweightedCotangent = cute.make_rmem_tensor_like(tRS_rD, self.a_dtype)
         tRS_rUnweightedCotangent.store(tRS_rD.load().to(self.a_dtype))
+        tRS_rUnweightedCotangent.store(tRS_rUnweightedCotangent.load() + tRS_rDirectCotangent.load())
+        tRS_rD.store(tRS_rUnweightedCotangent.load().to(tRS_rD.element_type))
 
         tRS_rXHat = cute.make_rmem_tensor_like(tRS_rD)
         for i in cutlass.range(cute.size(tRS_rXHat), unroll_full=True):
             tRS_rXHat[i] = tRS_rX[i].to(tRS_rD.element_type) * tDrInverseRms[i]
 
+        tRS_rUnweightedCotangent = cute.make_rmem_tensor_like(tRS_rD)
+        tRS_rUnweightedCotangent.store(tRS_rD.load())
         vec_multiply(self, tRS_rD, None, tDrNormWeight)
         tRS_rRowDotProduct = cute.make_rmem_tensor_like(tRS_rD)
         tRS_rRowDotProduct.store(tRS_rD.load() * tRS_rXHat.load())
         colvec_reduce_accumulate(self, tDrRowDot, tRS_rRowDotProduct)
-        tRS_rD.store(tRS_rUnweightedCotangent.load().to(tRS_rD.element_type))
-        return ()
+        return (tRS_rUnweightedCotangent,)
 
 
 class _GemmRmsBackwardSm100(_GemmRmsBackwardMixin, GemmSm100):  # pyrefly: ignore[inconsistent-inheritance]
@@ -122,7 +132,7 @@ class _GemmRmsBackwardSm100(_GemmRmsBackwardMixin, GemmSm100):  # pyrefly: ignor
 
 
 @cute_launcher_factory
-def _build_aliased_backward_producer_launcher(
+def _build_backward_producer_launcher(
     *,
     a_dtype: type[cutlass.Numeric],
     tile_mn: tuple[int, int],
@@ -130,17 +140,18 @@ def _build_aliased_backward_producer_launcher(
     max_active_clusters: int,
     max_swizzle: int,
 ):
-    """Build the producer with ``direct`` serving as its output buffer."""
+    """Build the CODA backward producer GEMM and its row partials."""
 
     @cute.jit
     def launcher(
         stream,
         mGatePreactivationCotangent,
         mWDown,
-        mDirectAndUnweightedCotangent,
+        mDirectCotangent,
         mX,
         mNormWeight,
         mInverseRms,
+        mUnweightedCotangent,
         mRowDotPartial,
     ):
         gemm = _GemmRmsBackwardSm100(
@@ -154,15 +165,17 @@ def _build_aliased_backward_producer_launcher(
         epilogue = _GemmRmsBackwardMixin.EpilogueArguments(
             mNormWeight=mNormWeight,
             mInverseRms=mInverseRms,
+            mDirectCotangent=mDirectCotangent,
             mX=mX,
             mRowDotPartial=mRowDotPartial,
+            mAuxOut=mUnweightedCotangent,
         )
         scheduler = make_scheduler_args(max_active_clusters, max_swizzle, None)
         gemm(
             mGatePreactivationCotangent,
             mWDown,
-            mDirectAndUnweightedCotangent,
-            mDirectAndUnweightedCotangent,
+            None,
+            None,
             epilogue,
             scheduler,
             None,
@@ -248,7 +261,7 @@ def quack_coda_rms_backward_producer(
 
     _, tile_n = tile_mn
     hidden_tiles = (hidden_dim + tile_n - 1) // tile_n
-    launcher = _build_aliased_backward_producer_launcher(
+    launcher = _build_backward_producer_launcher(
         a_dtype=_cute_dtype(gate_preactivation_cotangent.dtype),
         tile_mn=tile_mn,
         cluster_mnk=cluster_mnk,
@@ -271,7 +284,6 @@ def quack_coda_rms_backward_producer(
         output_shape_dtype=output_shape_dtype,
         input_spec=(a_spec, w_down_spec, matrix_spec, matrix_spec, vector_spec, vector_spec),
         output_spec=(matrix_spec, partial_spec),
-        input_output_aliases={2: 0},
         use_static_tensors=False,
     )
     unweighted_cotangent, row_dot_partial = call(
