@@ -1158,3 +1158,15 @@ author: Rafal Wojdyla
 - Incident record: https://echo.oa.dev/wiki/141.
 - Issue update: https://github.com/marin-community/marin/issues/8162#issuecomment-5280478157.
 - Next action: Confirm all 512 RNO service jobs become active, then confirm four source jobs resume shard progress without a new endpoint-list timeout storm.
+
+### 2026-08-13 12:55 UTC - RNO resumed with one source
+
+- Four-source result: `/rav/harrier-fuzzy-dups-rno-p1-20260813-batch-max-v3` reproduced the synchronized endpoint-list timeout wave before it completed a new shard. The root was stopped.
+- Final RNO root: `/rav/harrier-fuzzy-dups-rno-p1-20260813-batch-max-v4`.
+- Final RNO command: `uv run iris --cluster marin job run --no-wait --target-cluster cw-rno2a --job-name harrier-fuzzy-dups-rno-p1-20260813-batch-max-v4 --priority batch --cpu 2 --memory 8GB --disk 16GB --enable-extra-resources --extra datakit -e MARIN_PREFIX s3://marin-us-east-02a/marin -- python -m experiments.datakit.embeddings.harrier.run --document-set fuzzy_duplicates --partition-index 1 --partition-count 2 --tei-instances 512 --max-concurrent 1`.
+- Capacity choice: The root still requests all 512 RNO TEI service jobs. One source starts as many as 32 Zephyr workers, and each worker starts as many as 16 TEI requests. One source can therefore issue as many as 512 concurrent TEI requests with fewer endpoint-list calls.
+- Validation: The active high-quality Nemotron source resumed from 416 shards and reached 608 of 4,136. All 32 Zephyr workers were alive, and no endpoint-list timeout matched the replacement logs.
+- Service admission: At validation time, 32 TEI tasks were running and 480 were in the build state at batch priority.
+- Incident update: https://echo.oa.dev/wiki/141.
+- Issue update: https://github.com/marin-community/marin/issues/8162#issuecomment-5280678102.
+- Next action: Keep the one-source RNO root running. Watch shard rate, endpoint-list warnings, batch service admission, and both root states.
