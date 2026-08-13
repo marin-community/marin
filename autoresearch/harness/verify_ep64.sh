@@ -10,7 +10,6 @@ cd "$REPO"
 
 SIZE="${AR_SIZE:-d1024}"                 # 1-rack rungs only: d768|d1024|d1536 (d2048 needs 4 racks — excluded)
 FLAVOR="${AR_FLAVOR:-ep}"                # hero EP arm: fixed_all_to_all, E192 top-4, latent d/2, CF from template
-PPT="${AR_PPT:-4}"                       # JAX processes per node; 4 = per-GPU (loop default since 2026-08-12)
 NUM_STEPS="${AR_NUM_STEPS:-1000}"
 DROP_BUDGET="${AR_DROP_BUDGET:-0.02}"   # user constraint: trained-router-regime drop rate <= 2%
 DROP_WINDOW="${AR_DROP_WINDOW:-50}"      # mirror the ladder's "Drop % (last 50)"
@@ -42,7 +41,7 @@ echo "submitting ${RUN_ID} (${SIZE}/${FLAVOR}, ${NUM_STEPS} steps, port ${PORT})
   -e IRIS_USER mwittmann -e IRIS_PORT_JAX "$PORT" \
   -- python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
      --run-id "$RUN_ID" --size "$SIZE" --flavor "$FLAVOR" \
-     --num-steps "$NUM_STEPS" --processes-per-task "$PPT" --steps-per-eval 100000 \
+     --num-steps "$NUM_STEPS" --steps-per-eval 100000 \
      --version "$(date +%Y.%m.%d)" --run >&2
 
 # --- Poll to terminal state, then score (single number on the last line).
