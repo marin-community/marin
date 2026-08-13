@@ -61,6 +61,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from iris.cluster.client.job_info import get_job_info
+from marin.datakit.source_key import datakit_source_path
 from rigging.filesystem import StoragePath, open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
@@ -76,6 +77,7 @@ MODULE = "experiments.datakit.cluster.quality.fast_transformer.score_corpus"
 
 EMBED_DIM = 1024
 NEMOTRON_CORPUS_TOKENIZER = "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16"
+SPLIT = "train"
 TOKENIZE_ROOT = "s3://marin-us-east-02a/marin/datakit/tokenize"
 EMBED_ROOT = "s3://marin-us-east-02a/marin/datakit/embed/harrier"
 DEFAULT_OUT_ROOT = "s3://marin-us-east-02a/marin/datakit/quality-scores"
@@ -290,20 +292,29 @@ def manifest_mode(args) -> dict:
     """
     fs = fsspec.filesystem("s3")
     tokenize, embed = {}, {}
-    # Not every leaf artifact carries a result: a stage that failed or is still
-    # running writes one without `source_key`, and reading it as a pair would
-    # either crash or silently pair the wrong directories.
+    # The two stages spell their result differently: tokenize is per-split
+    # (`source_keys`/`output_dirs` keyed by split), embed is single-output
+    # (`source_key`/`output_dir`). Both store paths with MARIN_PREFIX stripped,
+    # so every directory is resolved back before use. A leaf whose stage failed
+    # or is still running has no result at all and is skipped rather than paired
+    # against the wrong directory.
     for art in _leaf_artifacts(fs, TOKENIZE_ROOT, args.discovery_threads):
         cfg, res = art.get("config") or {}, art.get("result") or {}
-        train = (res.get("output_dirs") or {}).get("train")
-        if cfg.get("tokenizer") == NEMOTRON_CORPUS_TOKENIZER and res.get("source_key") and train:
-            tokenize[res["source_key"]] = train
+        source_key = (res.get("source_keys") or {}).get(SPLIT)
+        train = (res.get("output_dirs") or {}).get(SPLIT)
+        if cfg.get("tokenizer") == NEMOTRON_CORPUS_TOKENIZER and source_key and train:
+            tokenize[source_key] = datakit_source_path(train)
     for art in _leaf_artifacts(fs, EMBED_ROOT, args.discovery_threads):
         res = art.get("result") or {}
         if res.get("source_key") and res.get("output_dir"):
-            embed[res["source_key"]] = res["output_dir"]
+            embed[res["source_key"]] = datakit_source_path(res["output_dir"])
     shared = sorted(set(tokenize) & set(embed))
     logger.info("nemotron leaves=%d harrier leaves=%d paired=%d", len(tokenize), len(embed), len(shared))
+    if not shared:
+        raise ValueError(
+            f"no source_key pairs between {len(tokenize)} nemotron tokenize leaves and "
+            f"{len(embed)} harrier embed leaves; the artifact schema likely moved"
+        )
 
     def leaf_rows(source_key: str) -> list[dict]:
         tok_dir, emb_dir = tokenize[source_key].rstrip("/"), embed[source_key].rstrip("/")
