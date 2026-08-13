@@ -1072,3 +1072,21 @@ author: Rafal Wojdyla
 - Active progress: East Nemotron medium-quality reached 4,094 of 14,843 shards. RNO Dolma4PDFs reached 4,696 of 8,683 shards. Both sources have 32 live workers and no dead workers.
 - Issue update: Post one major update for the full-capacity recovery.
 - Next action: Continue the regular root, source, service, and error checks.
+
+### 2026-08-13 07:03 UTC - Relaunched at batch cluster maxima
+
+- User direction: Stop both interactive roots and restart the same deterministic partitions at batch priority with the maximum H100 request in each target cluster.
+- Stopped roots: `/rav/harrier-fuzzy-dups-east-p0-20260811-v3` and `/rav/harrier-fuzzy-dups-rno-p1-20260811-v3` were stopped at 06:40 UTC. All 96 TEI descendants in each region became inactive.
+- Maximum request: The cluster backend reported 256 total H100s in East and 512 total H100s in RNO. The final jobs request those full counts.
+- Final east root: `/rav/harrier-fuzzy-dups-east-p0-20260813-batch-max-v2`.
+- Final RNO root: `/rav/harrier-fuzzy-dups-rno-p1-20260813-batch-max-v2`.
+- East command: `uv run iris --cluster marin job run --no-wait --target-cluster cw-us-east-02a --job-name harrier-fuzzy-dups-east-p0-20260813-batch-max-v2 --priority batch --cpu 2 --memory 8GB --disk 16GB --enable-extra-resources --extra datakit -e MARIN_PREFIX s3://marin-us-east-02a/marin -- python -m experiments.datakit.embeddings.harrier.run --document-set fuzzy_duplicates --partition-index 0 --partition-count 2 --tei-instances 256 --max-concurrent 8`.
+- RNO command: `uv run iris --cluster marin job run --no-wait --target-cluster cw-rno2a --job-name harrier-fuzzy-dups-rno-p1-20260813-batch-max-v2 --priority batch --cpu 2 --memory 8GB --disk 16GB --enable-extra-resources --extra datakit -e MARIN_PREFIX s3://marin-us-east-02a/marin -- python -m experiments.datakit.embeddings.harrier.run --document-set fuzzy_duplicates --partition-index 1 --partition-count 2 --tei-instances 512 --max-concurrent 8`.
+- Launch correction: The first batch replacements requested the program default of 128 TEI services per region. They were stopped when the cluster maxima were confirmed, and the final roots above replaced them.
+- Root health: Both final roots stayed running with zero failures and zero root preemptions for more than ten minutes.
+- Service state: All 256 East and 512 RNO service jobs are active at batch priority. At 06:57 UTC, East had 192 running service tasks and 64 building tasks. At 07:02 UTC, RNO had 104 running service tasks and 408 building tasks. Batch capacity can yield to higher-priority work.
+- RNO service repair: Service 025 failed once because port 12050 was in use. Its exact batch request and stored callable files were replayed. The replacement is active in the batch queue with zero failures.
+- Source concurrency: East and RNO each have eight running source jobs, with no pending or failed source job. Visible Zephyr coordinators have 32 live workers and no dead worker.
+- Output safety: The write stage keeps `skip_existing=True`. A direct object count at 06:59 UTC found 115,640 of 166,775 output shards, or 69.34%. There are 51,135 shards left. East has 46,898 shards, RNO has 68,742 shards, 95 sources have output, and no Parquet path is unknown.
+- Issue update: Post one major update for the user-directed batch restart.
+- Next action: Watch batch preemptions, terminal service failures, all 16 active sources, and aggregate output growth.
