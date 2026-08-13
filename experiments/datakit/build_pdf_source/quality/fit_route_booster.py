@@ -120,7 +120,7 @@ def main() -> None:
 
     # Evaluate first, on documents from domains the model never saw, and take the round count from
     # that fit so the shipped model is not trained for longer than the evaluated one.
-    split = split_by(frame, "domain")
+    split = split_by(frame, "domain", "docling_ok")
     evaluated = fit(split, features)
     rounds = evaluated.best_iteration + 1
     held_out = route_frontier(

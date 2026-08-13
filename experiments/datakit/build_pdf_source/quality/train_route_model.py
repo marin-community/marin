@@ -66,26 +66,36 @@ def registered_domain(url: str | None) -> str:
 
 @dataclass(frozen=True)
 class Split:
-    """A content-disjoint train/test split of the study table."""
+    """A content-disjoint train/test split of the study table.
+
+    The label column travels with the split rather than being assumed, because the same machinery
+    evaluates routers for more than one cheap route and each has its own agreement label.
+    """
 
     train: pl.DataFrame
     test: pl.DataFrame
     key: str
+    label: str
 
     def describe(self) -> str:
         return (
-            f"{self.key}-disjoint split: {self.train.height} train / {self.test.height} test, "
-            f"positive rate {self.train['docling_ok'].mean():.3f} / {self.test['docling_ok'].mean():.3f}"
+            f"{self.key}-disjoint split on {self.label}: {self.train.height} train / {self.test.height} test, "
+            f"positive rate {self.train[self.label].mean():.3f} / {self.test[self.label].mean():.3f}"
         )
 
 
-def split_by(frame: pl.DataFrame, key: str, seed: int = SPLIT_SEED) -> Split:
-    """Split so that no value of *key* appears on both sides."""
-    values = frame[key].unique().to_list()
+def split_by(frame: pl.DataFrame, key: str, label: str, seed: int = SPLIT_SEED) -> Split:
+    """Split so that no value of *key* appears on both sides.
+
+    The key values are sorted before they are permuted: ``unique`` returns them in hash order, so
+    without the sort the same frame and the same seed produce a different held-out set on every
+    run, and two models evaluated in one process are scored on different documents.
+    """
+    values = sorted(frame[key].unique().to_list())
     rng = np.random.default_rng(seed)
     held_out = set(rng.permutation(values)[: int(len(values) * TEST_FRACTION)].tolist())
     mask = frame[key].is_in(list(held_out))
-    return Split(train=frame.filter(~mask), test=frame.filter(mask), key=key)
+    return Split(train=frame.filter(~mask), test=frame.filter(mask), key=key, label=label)
 
 
 def matrix(frame: pl.DataFrame, features: list[str]) -> np.ndarray:
@@ -94,12 +104,10 @@ def matrix(frame: pl.DataFrame, features: list[str]) -> np.ndarray:
 
 def fit(split: Split, features: list[str]) -> xgb.Booster:
     """Train the candidate, holding out part of the training side to stop early."""
-    inner = split_by(split.train, split.key, seed=SPLIT_SEED + 1)
-    train = xgb.DMatrix(
-        matrix(inner.train, features), label=inner.train["docling_ok"].to_numpy(), feature_names=features
-    )
+    inner = split_by(split.train, split.key, split.label, seed=SPLIT_SEED + 1)
+    train = xgb.DMatrix(matrix(inner.train, features), label=inner.train[split.label].to_numpy(), feature_names=features)
     validation = xgb.DMatrix(
-        matrix(inner.test, features), label=inner.test["docling_ok"].to_numpy(), feature_names=features
+        matrix(inner.test, features), label=inner.test[split.label].to_numpy(), feature_names=features
     )
     return xgb.train(
         BOOSTER_PARAMS,
