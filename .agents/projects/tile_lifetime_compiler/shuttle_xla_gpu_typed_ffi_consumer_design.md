@@ -309,9 +309,9 @@ stages.
 Instantiate validates all eight backend attributes, size, and SHA-256; loads
 the canonical bundle; and validates its closed external projection. Its
 immutable state owns the transport bytes, digest, decoded executable, and
-operand/result projections for the compiled call site's lifetime. The runtime
-decoder produces plain immutable C++ records and does not retain an MLIR
-context, compiler operation, diagnostic engine, or source-side plan.
+operand/result projections for the compiled call site's lifetime. The decoded
+tensor types retain an owned MLIR context. Runtime state retains no compiler
+operation, diagnostic engine, or source-side plan.
 
 Prepare obtains XLA's device allocator and device ordinal from the execution
 context. It allocates one distinct device buffer for each of the 18 temporary
