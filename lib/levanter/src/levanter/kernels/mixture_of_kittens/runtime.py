@@ -460,27 +460,38 @@ def validate_mok_like_mesh_topology(mesh: jax.sharding.Mesh) -> None:
         )
 
 
-def _validate_topology(mesh: jax.sharding.Mesh, num_devices: int = _NUM_DEVICES) -> None:
+def _validate_topology(
+    mesh: jax.sharding.Mesh,
+    num_devices: int = _NUM_DEVICES,
+    workspace_transport: MokLikeWorkspaceTransport = MokLikeWorkspaceTransport.IN_PROCESS_PEER,
+) -> None:
     """Check local devices against the expert-group size the adapter was built for.
 
-    A group at or below one node's device count must be owned entirely by this
-    process, so its size and the local device count have to agree. A wider group
-    spans hosts, where each process contributes only its own GPUs, so only the
-    per-process device count is checked and the process-local mesh layout rule
-    does not apply.
+    The expected local device count follows the transport, not the group size. Under the
+    process-local peer transport the whole group is reached through one process's peer-access
+    table, so the process has to own every rank in it. Under the fabric transport each process
+    allocates and exports one rank's arena, so a group of ``num_devices`` ranks is assembled from
+    that many processes and each one sees a single device.
     """
 
     devices = jax.local_devices()
-    expected_local = min(num_devices, _DEVICES_PER_NODE)
-    if len(devices) != expected_local:
-        raise RuntimeError(
-            f"mok_like at {num_devices} ranks requires exactly {expected_local} "
-            f"visible local GPUs, found {len(devices)} devices"
-        )
+    if workspace_transport.crosses_processes:
+        if len(devices) != 1:
+            raise RuntimeError(
+                f"mok_like under {workspace_transport.value} places one rank per process, so each "
+                f"process must see exactly 1 GPU, found {len(devices)} devices"
+            )
+    else:
+        expected_local = min(num_devices, _DEVICES_PER_NODE)
+        if len(devices) != expected_local:
+            raise RuntimeError(
+                f"mok_like at {num_devices} ranks requires exactly {expected_local} "
+                f"visible local GPUs, found {len(devices)} devices"
+            )
     non_cuda = tuple(device.platform for device in devices if device.platform != "gpu")
     if non_cuda:
         raise RuntimeError(f"mok_like requires CUDA devices, found platforms={non_cuda}")
-    if num_devices <= _DEVICES_PER_NODE:
+    if num_devices <= _DEVICES_PER_NODE and not workspace_transport.crosses_processes:
         validate_mok_like_mesh_topology(mesh)
 
 
@@ -557,7 +568,7 @@ def initialize_mok_like_runtime(
         raise ValueError("workspace_slots must be an integer from 1 through 2")
     if num_tokens % 256 != 0 or hidden_dim % 256 != 0:
         raise ValueError("num_tokens and hidden_dim must be divisible by 256")
-    _validate_topology(mesh, build_config.num_devices)
+    _validate_topology(mesh, build_config.num_devices, workspace_transport)
     mok_source_root(build_config)
     require_mok_like_available(build_config)
     cuda_driver, library, library_path = load_native_library(build_config)
