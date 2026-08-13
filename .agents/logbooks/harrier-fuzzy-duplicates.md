@@ -1027,3 +1027,14 @@ author: Rafal Wojdyla
 - Error check: No retry, rate-limit, connection, memory, dead-worker, or missing-file error matched either active source log.
 - Issue update: None. There is no major run-state change.
 - Next action: Continue the regular root, source, service, and error checks.
+
+### 2026-08-13 03:07 UTC - RNO TEI capacity fell to 80
+
+- Root health: Both roots remain running with zero failures and zero preemptions.
+- RNO service event: A preemption wave moved 16 TEI services from the running state to the build state. Healthy RNO capacity fell from 96 to 80 services and stayed there for ten minutes. No TEI service failed.
+- Service retries: The RNO TEI pool now has 185 total preemptions, an increase of 24 since the 02:30 UTC check. Services 083 and 092 each have nine preemptions and remain below the limit.
+- RNO progress: `finepdfs-spa_latn_6fe75099` reached 1,311 of 1,409 output shards with 32 live workers and no dead workers. No retry, connection, rate-limit, memory, or missing-file error matched its log after the capacity loss.
+- East progress: `nemotron_cc_v2-medium_quality_edb2d9ae` reached 869 of 14,843 output shards with 32 live workers and no dead workers.
+- Decision: Keep both roots running. The surviving RNO pool remains healthy, and the source continues to write output.
+- Issue update: Post one major update for the sustained RNO capacity loss.
+- Next action: Watch the 16 building services and recover only a terminal service. Watch Spanish FinePDF through completion.
