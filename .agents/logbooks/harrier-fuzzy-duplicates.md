@@ -992,3 +992,15 @@ author: Rafal Wojdyla
 - Service capacity: RNO has 88 running TEI services and eight services in the build state. No TEI service job failed.
 - Issue update: Post one major update for the automatic coordinator recovery.
 - Next action: Watch USPTO through completion and confirm that later sources start without another coordinator preemption.
+
+### 2026-08-13 01:13 UTC - RNO service recovered and USPTO completed
+
+- Root health: Both roots remain running with zero failures and zero preemptions. East has 46 completed source artifacts, and RNO has 35. The full run has 81 of 292 completed source artifacts.
+- RNO service event: A preemption wave reduced the healthy TEI pool from 88 to 80 services. Fifteen services returned to the build queue. Service 030 then failed when TEI could not bind fixed port 12252 because the address was in use.
+- Service recovery: Service 030 was resubmitted with the original callable data and fixed ports 12252 and 12253. It is in the interactive build queue. RNO has 80 running services, 16 building services, and zero failed services.
+- RNO result: `cp/uspto_97add1bd` completed all 551 output shards. Closed TEI connections caused retry-one events during the final wave. All affected shards completed, and no retry-two or retry-three event occurred.
+- RNO progress: `cp/youtube_54df62a2` then completed all 25 output shards. `finepdfs-arb_arab_603af2a3` started next.
+- East progress: `nemotron_cc_v2-high_quality_synthetic_ea28c25e` reached 6,664 of 8,778 output shards with 32 live workers and no dead workers at 01:10 UTC.
+- Aggregate progress: A direct object count found 99,918 of 166,775 output shards, or 59.91%. There are 66,857 shards left. East has written 40,574 shards, and RNO has written 59,344 shards.
+- Issue update: Posted the major RNO service recovery and USPTO completion update at https://github.com/marin-community/marin/issues/8162#issuecomment-5274704587.
+- Next action: Watch the 16 queued RNO services, both active sources, and all source or root failure counters.
