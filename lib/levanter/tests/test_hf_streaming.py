@@ -16,7 +16,7 @@ import pytest
 
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.llama import LlamaConfig
-from levanter.testing.helpers import use_test_mesh
+from levanter.testing.helpers import skip_if_no_torch, use_test_mesh
 
 
 # Small models for fast tests
@@ -75,6 +75,7 @@ def _get_cached_model_files(cache_dir: str) -> list[str]:
 
 
 @pytest.mark.slow
+@skip_if_no_torch
 @pytest.mark.parametrize("model_id,config,min_params", SMALL_HF_MODELS)
 def test_load_hf_model_streaming(model_id: str, config, min_params: int):
     """Test loading HF models via streaming."""
@@ -91,6 +92,7 @@ def test_load_hf_model_streaming(model_id: str, config, min_params: int):
 
 
 @pytest.mark.slow
+@skip_if_no_torch
 @pytest.mark.parametrize("model_id,config,min_params", SMALL_HF_MODELS)
 def test_hf_streaming_does_not_use_cache(model_id: str, config, min_params: int):
     """Verify that streaming loads do not populate the HF cache.

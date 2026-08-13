@@ -20,7 +20,7 @@ def test_download_and_tokenize(tmp_path):
 
     dl = download_hf_step(
         "datakit/download",
-        hf_dataset_id="wikitext",
+        hf_dataset_id="Salesforce/wikitext",
         revision="main",
         hf_urls_glob=["wikitext-2-v1/test-*.parquet"],
         override_output_path=str(tmp_path / "raw"),

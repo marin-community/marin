@@ -247,9 +247,10 @@ def tokenize_batches_with_id(
 ) -> Iterator[dict]:
     """Tokenize batches and yield ``{id, chunk_index, input_ids, ...}`` rows.
 
-    A document yields one row with ``chunk_index == 0``, unless its token count is
-    above :data:`MAX_TOKENS_PER_RECORD`. Such a document yields several adjacent
-    rows that share its ``id``, in ``chunk_index`` order — see
+    Empty documents are dropped. A non-empty document yields one row with
+    ``chunk_index == 0``, unless its token count is above
+    :data:`MAX_TOKENS_PER_RECORD`. Such a document yields several adjacent rows
+    that share its ``id``, in ``chunk_index`` order — see
     :func:`split_oversized_token_record`.
 
     Each input record must already carry ``id`` (apply :func:`attach_id` upstream).
@@ -283,6 +284,10 @@ def tokenize_batches_with_id(
     for batch in batches:
         batch_count += 1
         records = processor(batch)
+        empty_docs = sum(len(record.get("input_ids", [])) == 0 for record in records)
+        if empty_docs:
+            counters.pipeline.update_counter("tokenize/empty_docs", empty_docs)
+            records = [record for record in records if len(record.get("input_ids", [])) > 0]
         batch_token_count = sum(len(record.get("input_ids", [])) for record in records)
         counters.pipeline.update_counter("tokenize/docs_out", len(records))
         counters.pipeline.update_counter("tokenize/tokens_out", batch_token_count)
