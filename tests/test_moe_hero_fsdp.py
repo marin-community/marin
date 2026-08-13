@@ -213,7 +213,7 @@ def test_fused_reverse_matches_stock_autodiff_end_to_end(cpu_mesh, monkeypatch, 
     monkeypatch.setattr(
         rgn,
         "_backward_kernels",
-        lambda: rgn.exact_rms_gated_norm_recompute_reverse_reference,
+        lambda: rgn.exact_rms_gated_norm_selective_reverse_reference,
     )
     inputs = _norm_inputs(dtype)
     # The fused path reshards its input to the batch spec, so feed both paths an already-sharded

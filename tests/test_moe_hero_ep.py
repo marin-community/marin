@@ -756,11 +756,7 @@ def test_fused_reverse_matches_stock_autodiff(monkeypatch, dtype, tolerance):
     monkeypatch.setattr(
         rgn,
         "_backward_kernels",
-        lambda: (
-            rgn.exact_silu_backward_reference,
-            rgn.exact_rms_backward_partials_reference,
-            rgn.exact_rms_backward_recompute_consumer_reference,
-        ),
+        lambda: rgn.exact_rms_gated_norm_selective_reverse_reference,
     )
     with set_mesh(_rms_gated_norm_mesh()):
         inputs = _rms_gated_norm_inputs(dtype)
