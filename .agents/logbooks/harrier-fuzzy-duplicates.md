@@ -1209,3 +1209,15 @@ author: Rafal Wojdyla
 - Decision: Keep the RNO root in the batch queue. A restart cannot create GPU capacity and would add another endpoint-pool transition.
 - Issue update: Post one major update for the full RNO capacity loss.
 - Next action: Watch for RNO task admission. When capacity returns, confirm that the eight retried shards complete and that no endpoint-list timeout returns.
+
+### 2026-08-13 14:49 UTC - RNO capacity and terminal services recovered
+
+- Capacity recovery: Kueue admitted 80 RNO TEI tasks. The other 432 tasks remain in the batch queue. This state stayed stable for more than ten minutes.
+- Service failures: Services 055, 061, 064, 070, 077, and 090 failed after admission because their fixed ports were in use. The failures occurred on three hosts.
+- Service recovery: The six terminal jobs were replayed with their original batch requests and stored `_callable.pkl` and `_callable_runner.py` files. All 512 service jobs returned to the running job state. The six replacements are in the batch queue.
+- Pipeline recovery: The active RNO source advanced from 638 to 798 of 4,136 output shards. It has 32 live workers and zero dead workers.
+- Retry state: Thirty-eight shards entered retry attempt one during the endpoint loss. No shard entered retry attempt two, and the retry count stayed unchanged during the recovery check.
+- East state: The East sources reached 11,118 of 14,843 shards and 7,185 of 14,285 shards. Each source has 32 live workers and zero dead workers.
+- Incident record: https://echo.oa.dev/wiki/142.
+- Issue update: Post one major update for the stable capacity and service recovery.
+- Next action: Continue the root, source, service, and output checks. Watch the six queued replacements and the RNO retry depth.
