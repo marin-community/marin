@@ -1,9 +1,10 @@
 # Shuttle XLA GPU typed-FFI consumer design
 
-Status: design only for the exact BF16 `2048x4096` forward
-`SOURCE_ORDERED` boundary at Marin commit
-`146862564aec6e93ff55de92b8a84727f55a9a04`. No GPU executable, CUDA plugin,
-H100 run, numerical result, performance result, or scorecard evidence exists.
+Status: the exact BF16 `2048x4096` forward `SOURCE_ORDERED` compiler,
+transport, and CUDA typed-FFI lifecycle are implemented under pipeline ABI 10.
+Native fake-executor gates pass. The real CUDA plugin is not built, and no PTX
+assembly, H100 run, numerical result, performance result, or scorecard evidence
+exists.
 
 ## Decision
 
@@ -305,15 +306,14 @@ architecture. Static reasoning and CPU parity do not establish H100 parity.
 The CUDA handler bundle has instantiate, Prepare, Initialize, and Execute
 stages.
 
-Instantiate copies the four backend attributes, validates size and SHA-256,
+Instantiate copies the eight backend attributes, validates size and SHA-256,
 decodes and canonically reserializes the bundle, validates the external
 projection against the null-data FFI prototype, and checks that the target
 capability is CUDA 9.0. Its immutable state owns the transport bytes, decoded
 schemas, PTX slices, launch records, and binding projection for the compiled
-call site's lifetime. The only mutable member is a mutex-protected vector of
-loaded kernels keyed by `stream_executor::StreamExecutor*` and entry ordinal.
-The runtime decoder produces plain immutable C++ records and does not retain an
-MLIR context, compiler operation, diagnostic engine, or source-side plan.
+call site's lifetime. The runtime decoder produces plain immutable C++ records
+and does not retain an MLIR context, compiler operation, diagnostic engine, or
+source-side plan.
 
 Prepare obtains XLA's device allocator and device ordinal from the execution
 context. It allocates one distinct device buffer for each of the 18 temporary
@@ -323,12 +323,11 @@ slots and returns execution-scoped state owning the resulting
 different Prepare state and cannot share a temporary address. Destruction
 occurs only after XLA reports that execution is complete.
 
-Initialize receives the real stream. For each entry not loaded for that
-stream's executor, it constructs an owning CUDA PTX `KernelLoaderSpec` with the
-fixed symbol and exact arity, calls `StreamExecutor::LoadKernel`, and stores the
-kernel under the mutex. The cache is safe for concurrent initialization on
-multiple executors. Loaded kernels live with instantiate state, not with an
-invocation.
+Initialize receives the real stream. It constructs an owning CUDA PTX
+`KernelLoaderSpec` with the fixed symbol and exact arity for each entry, calls
+`StreamExecutor::LoadKernel`, and returns initialization-scoped state owning
+all 19 kernels. Separate Initialize calls own separate kernel objects; the
+handler does not implement a per-executor kernel cache.
 
 Execute rechecks exact backend attributes against copied state, validates the
 three external device views, and constructs a 21-slot address table from those
@@ -366,7 +365,7 @@ slices, and exact backend attributes. Loaded kernels and device temporary
 allocations are runtime state and are never serialized. If instantiate state
 has no serializer, XLA omits it; executable deserialization invokes Instantiate
 again from the embedded canonical attributes. Each execution creates fresh
-Prepare state and Initialize reloads kernels for an executor when needed.
+Prepare state, and each Initialize call loads 19 kernels into its own state.
 
 JAX's persistent compilation-cache lookup precedes the Shuttle module
 transform. `execution_mode = gpu_executable_bundle` and
@@ -427,7 +426,8 @@ Pinned-XLA gates compile the handler bundle through the CUDA PJRT registration
 path, inspect `cuda_plugin_extension.ffi_handlers()`, instantiate from a valid
 and corrupt golden transport, round-trip the custom-call thunk proto without
 serializing loaded state, and run concurrent fake-executor lifecycle tests that
-prove per-executor kernel caching and per-execution temporary ownership.
+prove initialization-scoped kernel ownership and per-execution temporary
+ownership.
 The rebuilt artifacts record SHA-256 for `_jax`, `cuda_plugin_extension`, the
 CUDA PJRT plugin, the CUDA plugin wheel, and the canonical transport.
 

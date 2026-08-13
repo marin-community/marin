@@ -4646,7 +4646,7 @@ author: dlwh
   selector.
 - The CUDA-only typed-FFI handler owns immutable decoded transport at
   Instantiate, 18 execution-scoped allocations totaling 201,416,716 bytes at
-  Prepare, a mutexed per-executor 19-kernel cache at Initialize, and ordered
+  Prepare, 19 initialization-scoped loaded kernels at Initialize, and ordered
   stream enqueue at Execute. It validates the eight compiler-emitted backend
   attributes, device projection, alignment, non-aliasing, dependencies,
   launch geometry, and fixed entry symbol without workload, name, or digest
