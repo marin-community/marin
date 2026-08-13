@@ -30,8 +30,11 @@ All paths resolve against ``MARIN_PREFIX``. The hero data currently lives on
 CoreWeave, so read it with ``MARIN_PREFIX=s3://marin-us-east-02a/marin``.
 """
 
+import contextlib
 import json
+import os
 import pathlib
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from typing import NoReturn
 
@@ -39,9 +42,10 @@ from levanter.tokenizers import TokenizerBackend
 from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import tokenize_attributes_step
-from rigging.filesystem import marin_prefix
 
 from experiments.datakit.reference_pipeline import select_sources, zephyr_datakit_steps
+
+_MARIN_PREFIX_ENV = "MARIN_PREFIX"
 
 MANIFEST_PATH = pathlib.Path(__file__).with_name("hero_data_paths.json")
 
@@ -175,21 +179,38 @@ def all_paths() -> dict[str, str]:
     return paths
 
 
-def write_manifest() -> dict[str, str]:
-    """Rewrite :data:`MANIFEST_PATH` from the paths current code resolves.
+@contextlib.contextmanager
+def _pinned_prefix(prefix: str) -> Iterator[None]:
+    """Bind ``MARIN_PREFIX`` for the block.
 
-    Must run under :data:`MANIFEST_PREFIX`, because not every source hashes
-    independently of the prefix. Entries are stored relative to it. Returns what
-    it wrote.
+    ``DataConfig.resolved_root`` gives the environment variable precedence over
+    every other source, including ``use_data_config``, so this is what it takes
+    to pin the prefix for code that reads it lazily.
     """
-    prefix = marin_prefix().rstrip("/")
-    if prefix != MANIFEST_PREFIX:
-        raise ValueError(f"regenerate the manifest with MARIN_PREFIX={MANIFEST_PREFIX}, got {prefix!r}")
+    previous = os.environ.get(_MARIN_PREFIX_ENV)
+    os.environ[_MARIN_PREFIX_ENV] = prefix
+    try:
+        yield
+    finally:
+        if previous is None:
+            del os.environ[_MARIN_PREFIX_ENV]
+        else:
+            os.environ[_MARIN_PREFIX_ENV] = previous
 
-    relative = {key: path.removeprefix(f"{prefix}/") for key, path in all_paths().items()}
+
+def write_manifest() -> dict[str, str]:
+    """Rewrite :data:`MANIFEST_PATH` with the paths as they resolve on CoreWeave.
+
+    Pins :data:`MANIFEST_PREFIX` rather than reading the caller's, so the file is
+    the same whatever the ambient config. Entries are stored relative to it.
+    Returns what it wrote.
+    """
+    with _pinned_prefix(MANIFEST_PREFIX):
+        relative = {key: path.removeprefix(f"{MANIFEST_PREFIX}/") for key, path in all_paths().items()}
+
     escaped = sorted(key for key, path in relative.items() if "://" in path)
     if escaped:
-        raise ValueError(f"paths outside {prefix} cannot be stored relative: {escaped}")
+        raise ValueError(f"paths outside {MANIFEST_PREFIX} cannot be stored relative: {escaped}")
 
     MANIFEST_PATH.write_text(json.dumps(relative, indent=1, sort_keys=True) + "\n")
     return relative
