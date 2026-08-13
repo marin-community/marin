@@ -1085,7 +1085,18 @@ class RuntimeManager {
       throw std::runtime_error(state->error);
     }
     if (phase == InvocationPhase::kForward) {
-      if (!forward_x.has_value() || forward_x->pointer == nullptr || forward_x->size_bytes == 0) {
+      // The peer-visible x region was sized from the num_tokens this runtime was initialized
+      // with. Nothing downstream re-checks that the invocation's token count still fits, so a
+      // larger one runs off the end of the arena and faults with an illegal address, destroying
+      // the context. Compare the two while the sizes are still on the host.
+      const size_t x_capacity_bytes =
+          static_cast<size_t>(num_tokens_) * static_cast<size_t>(hidden_dim_) * sizeof(uint16_t);
+      if (forward_x.has_value() && forward_x->size_bytes > x_capacity_bytes) {
+        state->error = "Mixture-of-Kittens forward x buffer (" + std::to_string(forward_x->size_bytes) +
+                       " bytes) exceeds the workspace sized for " + std::to_string(num_tokens_) +
+                       " tokens x " + std::to_string(hidden_dim_) + " hidden (" +
+                       std::to_string(x_capacity_bytes) + " bytes)";
+      } else if (!forward_x.has_value() || forward_x->pointer == nullptr || forward_x->size_bytes == 0) {
         state->error = "Mixture-of-Kittens forward received an invalid XLA x buffer registration";
       } else {
         if (state->forward_x_mask == 0) {
