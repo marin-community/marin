@@ -1221,3 +1221,15 @@ author: Rafal Wojdyla
 - Incident record: https://echo.oa.dev/wiki/142.
 - Issue update: Post one major update for the stable capacity and service recovery.
 - Next action: Continue the root, source, service, and output checks. Watch the six queued replacements and the RNO retry depth.
+
+### 2026-08-13 15:54 UTC - Output passed 90 percent
+
+- Root health: The East and RNO roots remain running with zero root failures. No current source job has failed.
+- Completed artifacts: East has 144 of 146 sealed source artifacts. RNO has 57 of 146. The full run has 201 of 292 sealed source artifacts.
+- Aggregate progress: A direct object count found 150,128 of 166,775 output shards, or 90.02%. There are 16,647 shards left. East has written 68,632 shards, and RNO has written 81,496 shards. Two hundred eight sources have output, and no Parquet path is unknown.
+- Output rate: The jobs wrote 2,357 shards from 15:00 UTC to 15:54 UTC. A constant-rate estimate gives about 6.4 hours for the remaining shards, or about 22:15 UTC. Batch preemption and source size can change this estimate.
+- Active stages: The East sources reached 12,202 of 14,843 shards and 8,324 of 14,285 shards. The RNO source reached 1,510 of 4,136 shards. Each stage has 32 live workers and zero dead workers.
+- Service admission: East has 184 running TEI tasks and 72 building tasks. RNO has 168 running TEI tasks and 344 building tasks. All 256 East service jobs and all 512 RNO service jobs remain in the running job state.
+- Error check: Short endpoint-list timeout waves occurred in both clusters and recovered without a job action. RNO still reports 38 shards at retry attempt one. No shard entered retry attempt two, and no service job became terminal.
+- Issue update: https://github.com/marin-community/marin/issues/8162#issuecomment-5282903873.
+- Next action: Continue the root, source, service, Zephyr, and output checks. Recover only a terminal in-scope job failure.
