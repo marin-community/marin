@@ -118,8 +118,8 @@ def report_fit(name: str, raw: np.ndarray, levels: np.ndarray, types: np.ndarray
 
 def sample_corpus_scores(manifest: str, num_shards: int, seed: int) -> np.ndarray:
     """Scores read from a random sample of the written score shards."""
-    table = read_manifest(manifest)
-    paths = table.column("output_path").to_pylist()
+    frame = read_manifest(manifest)
+    paths = frame.get_column("output_path").to_list()
     order = np.random.default_rng(seed).permutation(len(paths))
     got: list[np.ndarray] = []
     read = 0

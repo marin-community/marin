@@ -67,6 +67,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 from iris.cluster.client.job_info import get_job_info
@@ -114,12 +115,12 @@ HOLD_SOURCES: frozenset[str] = frozenset()
 
 # Rows per arrow record batch when streaming a token shard. The token side is the
 # expanded one (a long document occupies several adjacent rows), so this is rows,
-# not documents.
+# not documents. The token side stays on pyarrow's `iter_batches` because it is the
+# side that has to be consumed incrementally: one shard's dense token array reaches
+# 16.5 GB, and this polars build exposes no batched parquet reader
+# (`read_parquet_batched` and `LazyFrame.collect_iter` are both absent), so a polars
+# read of a token shard would have to materialize it whole.
 READ_BATCH = 4096
-# Rows per arrow record batch when reading the embed side. 65,536 x 1024 int8
-# values stays two orders of magnitude below arrow's int32 list-offset limit,
-# which a whole-column read of the largest shard exceeds outright.
-EMBED_READ_BATCH = 65_536
 # Documents per forward. HBM never exceeded 1.2 GB at any batch size measured --
 # XLA fuses the table gather into the pooling -- so this is sized for dispatch
 # amortization rather than against a memory ceiling. Passed to `predict`
@@ -389,10 +390,9 @@ def manifest_mode(args) -> dict:
     with ThreadPoolExecutor(max_workers=args.footer_threads) as pool:
         for row, count in zip(rows, pool.map(embed_rows, rows), strict=True):
             row["embed_rows"] = count
-    table = pa.table({c: [r[c] for r in rows] for c in rows[0]})
     path = f"{args.manifest.rstrip('/')}/manifest.parquet"
     with open_url(path, "wb") as fh:
-        pq.write_table(table, fh)
+        pl.DataFrame(rows).write_parquet(fh)
     result = {
         "manifest": path,
         "tasks": len(rows),
@@ -408,16 +408,16 @@ def manifest_mode(args) -> dict:
     return result
 
 
-def read_manifest(manifest: str) -> pa.Table:
+def read_manifest(manifest: str) -> pl.DataFrame:
     root = manifest.rstrip("/")
     shards = sorted(str(p) for p in StoragePath(f"{root}/*.parquet").glob())
     if not shards:
         raise ValueError(f"no manifest parquet under {root}")
-    tables = []
+    frames = []
     for shard in shards:
         with StoragePath(shard).open("rb") as fh:
-            tables.append(pq.ParquetFile(fh).read())
-    return pa.concat_tables(tables, promote_options="default")
+            frames.append(pl.read_parquet(fh))
+    return pl.concat(frames, how="vertical_relaxed")
 
 
 # ---------------------------------------------------------------------------
@@ -504,27 +504,18 @@ def _ragged_to_padded(column: pa.ChunkedArray | pa.Array, max_tokens: int, vocab
 
 
 def read_one_embed_shard(path: str, fs) -> tuple[np.ndarray, np.ndarray]:
-    """One shard's ``(ids, int8[n, 1024] embeddings)``, read in batches.
+    """One shard's ``(ids, int8[n, 1024] embeddings)``.
 
-    Batched rather than one ``read()`` because arrow indexes a list column's
-    values with int32: the largest shards hold 2,682,446 documents, whose
-    flattened embedding column is 2.75e9 elements against a 2^31-1 limit, and a
-    whole-column read fails with "List index overflow". Rows land directly in a
-    preallocated array, so the int8 side is never copied twice.
+    Read through polars, which types the column as a fixed-width ``Array`` rather
+    than a variable-length list. That has no offsets buffer, so the int32 offset
+    ceiling that made a whole-column pyarrow read of the largest shards fail with
+    "List index overflow" -- 2,682,446 documents is 2.75e9 values against 2^31-1 --
+    does not apply, and ``to_numpy`` hands back a contiguous ``[n, 1024]`` block
+    with no reshape and no second copy.
     """
     with fs.open(path, "rb", cache_type="none") as raw:
-        parquet = pq.ParquetFile(raw)
-        rows = parquet.metadata.num_rows
-        embeddings = np.empty((rows, EMBED_DIM), dtype=np.int8)
-        ids: list[np.ndarray] = []
-        at = 0
-        for batch in parquet.iter_batches(batch_size=EMBED_READ_BATCH, columns=["id", "embedding"]):
-            n = batch.num_rows
-            ids.append(batch.column("id").to_numpy(zero_copy_only=False))
-            flat = batch.column("embedding").flatten().to_numpy(zero_copy_only=False)
-            embeddings[at : at + n] = flat.reshape(n, EMBED_DIM)
-            at += n
-    return (np.concatenate(ids) if ids else np.empty(0, dtype=object)), embeddings
+        frame = pl.read_parquet(raw, columns=["id", "embedding"])
+    return frame.get_column("id").to_numpy(), frame.get_column("embedding").to_numpy()
 
 
 def read_embed_side(paths: tuple[str, ...], fs) -> tuple[np.ndarray, np.ndarray]:
@@ -665,16 +656,16 @@ def write_scores(path: str, doc_ids: np.ndarray, scores: np.ndarray, model_tag: 
     and the score keeps the write cheap and leaves it trivially re-joinable by
     ``id`` against any other attribute over the same corpus.
     """
-    table = pa.table(
+    frame = pl.DataFrame(
         {
-            "id": pa.array(doc_ids, type=pa.string()),
-            "score": pa.array(scores, type=pa.float32()),
-            "model": pa.array([model_tag] * len(doc_ids), type=pa.string()),
+            "id": pl.Series(doc_ids, dtype=pl.String),
+            "score": pl.Series(scores, dtype=pl.Float32),
+            "model": pl.Series([model_tag] * len(doc_ids), dtype=pl.String),
         }
     )
     with fs.open(path, "wb") as out:
-        pq.write_table(table, out, compression="zstd")
-    return table.num_rows
+        frame.write_parquet(out, compression="zstd")
+    return frame.height
 
 
 def score_mode(args) -> dict:
@@ -703,7 +694,7 @@ def score_mode(args) -> dict:
             output_path=row["output_path"],
             total_bytes=(row.get("tokens_bytes") or 0) + (row.get("embed_bytes") or 0),
         )
-        for row in manifest.to_pylist()
+        for row in manifest.to_dicts()
         # A shard with no embedded documents has nothing to score: the embedding is
         # a required forward input, so an inner join empties it anyway. A shard
         # whose documents were all dedup-dropped still writes a zero-row parquet on
@@ -851,9 +842,8 @@ def read_score_shard(path: str, fs) -> tuple[np.ndarray, set[str]] | None:
     if not fs.exists(path):
         return None
     with fs.open(path, "rb", cache_type="none") as raw:
-        table = pq.ParquetFile(raw).read(columns=["score", "model"])
-    scores = table.column("score").combine_chunks().to_numpy(zero_copy_only=False)
-    return scores, set(table.column("model").unique().to_pylist())
+        frame = pl.read_parquet(raw, columns=["score", "model"])
+    return frame.get_column("score").to_numpy(), set(frame.get_column("model").unique().to_list())
 
 
 def verify_mode(args) -> dict:
@@ -867,7 +857,7 @@ def verify_mode(args) -> dict:
     join that did not complete.
     """
     fs = fsspec.filesystem("s3")
-    rows = [r for r in read_manifest(args.manifest).to_pylist() if r["source"] == args.source]
+    rows = [r for r in read_manifest(args.manifest).to_dicts() if r["source"] == args.source]
     if not rows:
         raise ValueError(f"no manifest rows for source {args.source!r}")
     rows.sort(key=lambda r: r["shard_index"])

@@ -57,7 +57,7 @@ def main() -> None:
     configure_coreweave_s3()
     fs = fsspec.filesystem("s3")
 
-    rows = read_manifest(args.manifest).to_pylist()
+    rows = read_manifest(args.manifest).to_dicts()
     rows = [r for r in rows if r.get("embed_rows")]
     wanted = args.sources or ["penfever-traces", "safety_pt"]
     picked: list[dict] = []

@@ -68,7 +68,7 @@ def main() -> None:
     configure_coreweave_s3()
 
     manifest = read_manifest(args.manifest)
-    sources = sorted(set(manifest.column("source").to_pylist()))
+    sources = sorted(set(manifest.get_column("source").to_list()))
     logger.info("verifying %d sources from %s", len(sources), args.manifest)
 
     def one(source: str) -> dict:

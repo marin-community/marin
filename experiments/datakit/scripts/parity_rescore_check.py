@@ -65,7 +65,7 @@ def main() -> None:
     configure_coreweave_s3()
     fs = fsspec.filesystem("s3")
 
-    rows = [r for r in read_manifest(args.manifest).to_pylist() if 0 < (r.get("embed_rows") or 0) <= args.max_embed_rows]
+    rows = [r for r in read_manifest(args.manifest).to_dicts() if 0 < (r.get("embed_rows") or 0) <= args.max_embed_rows]
     if not rows:
         raise ValueError("no manifest rows small enough to rescore")
     rows.sort(key=lambda r: (r["source"], r["shard_index"]))
