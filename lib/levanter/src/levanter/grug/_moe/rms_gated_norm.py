@@ -367,9 +367,10 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         residuals.inverse_rms,
     ).reshape(x.shape)
     # ``check_vma=False`` below permits the opaque CuTe dx to cross the custom-VJP boundary
-    # without its varying-manual-axis annotation. The shard_map transpose owns the replicated
-    # parameter reductions in this mode; reducing here as well would multiply them by the mesh
-    # size.
+    # without its varying-manual-axis annotation. The JAX contraction gradients retain enough
+    # provenance for shard_map's transpose to reduce replicated inputs. The norm-gain partial
+    # crosses a CuTe boundary and does not, so reduce only that result explicitly.
+    norm_weight_cotangent = jax.lax.psum(norm_weight_cotangent, axis_name=batch_axes)
     return x_cotangent, norm_weight_cotangent, w_down_cotangent, up_reverse.w_up
 
 
