@@ -48,6 +48,7 @@ MAX_TOKENS_PER_RECORD = 16 * 1024 * 1024
 # Zero-based position of a row inside its source document. See
 # :func:`split_oversized_token_record` for the contract.
 CHUNK_INDEX_FIELD = "chunk_index"
+INPUT_IDS_FIELD = "input_ids"
 
 _TOKENIZE_EXTENSIONS = ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet"]
 
@@ -223,7 +224,7 @@ def split_oversized_token_record(
     if max_tokens <= 0:
         raise ValueError(f"max_tokens must be positive, got {max_tokens}")
 
-    input_ids = record.get("input_ids", [])
+    input_ids = record.get(INPUT_IDS_FIELD, [])
     num_tokens = len(input_ids)
     if num_tokens <= max_tokens:
         yield {**record, CHUNK_INDEX_FIELD: 0}
@@ -284,18 +285,18 @@ def tokenize_batches_with_id(
     for batch in batches:
         batch_count += 1
         records = processor(batch)
-        empty_docs = sum(len(record["input_ids"]) == 0 for record in records)
+        empty_docs = sum(len(record[INPUT_IDS_FIELD]) == 0 for record in records)
         if empty_docs:
             counters.pipeline.update_counter("tokenize/empty_docs", empty_docs)
-            records = [record for record in records if len(record["input_ids"]) > 0]
-        batch_token_count = sum(len(record["input_ids"]) for record in records)
+            records = [record for record in records if len(record[INPUT_IDS_FIELD]) > 0]
+        batch_token_count = sum(len(record[INPUT_IDS_FIELD]) for record in records)
         counters.pipeline.update_counter("tokenize/docs_out", len(records))
         counters.pipeline.update_counter("tokenize/tokens_out", batch_token_count)
         record_count += len(records)
         token_count += batch_token_count
         oversized = 0
         for record in records:
-            num_tokens = len(record.get("input_ids", []))
+            num_tokens = len(record.get(INPUT_IDS_FIELD, []))
             if num_tokens > MAX_TOKENS_PER_RECORD:
                 oversized += 1
                 logger.warning(
