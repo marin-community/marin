@@ -11,26 +11,24 @@ import re
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from functools import cache
+from functools import cache, partial
 
 os.environ["MARIN_PREFIX"] = "s3://marin-us-east-02a/marin"
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.parquet as pq
-import xxhash
 from fray.types import ResourceConfig
-from marin.execution.artifact import read_artifact, read_record, write_artifact
+from marin.execution.artifact import read_artifact, write_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import TokenizedAttrData, tokenize_attributes_step
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, marin_temp_bucket, open_url
 from rigging.log_setup import configure_logging
 from zephyr import counters
-from zephyr.dataset import Dataset
+from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
-from zephyr.writers import write_parquet_file
+from zephyr.readers import InputFileSpec, load_file
 
 from experiments.datakit.cluster.domain.v0.assign import _get_index
 from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
@@ -58,18 +56,16 @@ MARIN_PREFIX = "s3://marin-us-east-02a/marin"
 SAMPLE_ROOT = f"{MARIN_PREFIX}/datakit/sample_10pct_91269634"
 MAIN_HARRIER_ROOT = f"{MARIN_PREFIX}/datakit/embed/harrier"
 FUZZY_HARRIER_ROOT = f"{MARIN_PREFIX}/datakit/embed/harrier-fuzzy-duplicates"
-OUTPUT_ROOT = f"{MARIN_PREFIX}/datakit/samples/sample_10pct_91269634-harrier-two-tokenizers-clusters-quality-v1"
+OUTPUT_ROOT = f"{MARIN_PREFIX}/datakit/samples/sample_10pct_91269634-harrier-two-tokenizers-clusters-quality-v2"
 PREFLIGHT_OUTPUT = f"{OUTPUT_ROOT}/preflight.json"
 CLUSTER_ROOT = f"{MARIN_PREFIX}/datakit/cluster/domain/v1/harrier-all-sources-10m/train_fe81b456"
 NEMOTRON_TOKENIZER = "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16"
 NEMOTRON_TOKENIZER_REVISION = "624ba927cfbef0427354998700de3d51173c8c04"
-TOKENIZED_ARTIFACT_VERSION = 3
+NEMOTRON_TOKENIZED_ARTIFACT_VERSION = 3
+MARIN_TOKENIZED_ARTIFACT_VERSION = 2
 QUALITY_MODEL_VERSION = "pooled-junkgate2"
 QUALITY_MODEL_SUFFIX = "/datakit/models/quality/pooled_junkgate2"
-JOIN_SHARDS = 16_384
-MATERIALIZE_SHARDS = 8_192
 MAX_WORKERS = 2_048
-READ_BATCH_ROWS = 1_024
 OUTPUT_BATCH_ROWS = 65_536
 METADATA_WORKERS = 64
 WORKER_RESOURCES = ResourceConfig.with_cpu(cpu=4, ram="64g", disk="100g")
@@ -88,7 +84,7 @@ logger = logging.getLogger(__name__)
 
 
 class HarrierTokenSampleData(BaseModel):
-    version: str = "v1"
+    version: str = "v2"
     output_dir: str
     sample_root: str
     main_harrier_root: str
@@ -115,15 +111,21 @@ class SampleFile:
 
 
 @dataclass(frozen=True)
-class EmbeddingIdFile:
+class CoPartition:
     source: str
-    path: str
+    basename: str
+    sample_path: str
+    schema_path: str
+    main_path: str | None
+    fuzzy_path: str | None
+    nemotron_path: str | None
+    marin_path: str | None
+    quality_path: str | None
 
 
 @dataclass(frozen=True)
 class InputPlan:
     sample_files: tuple[SampleFile, ...]
-    embedding_files: tuple[EmbeddingIdFile, ...]
     main_dirs: dict[str, str]
     fuzzy_dirs: dict[str, str]
     nemotron_dirs: dict[str, str]
@@ -207,37 +209,6 @@ def _token_dirs(sources: list[str], tokenizer: str, revision: str, artifact_vers
         return {source: directory for source, directory in pool.map(resolve, sources) if directory is not None}
 
 
-def _sample_token_dirs(sources: list[str], tokenizer: str) -> dict[str, str]:
-    candidates: dict[str, list[str]] = {source: [] for source in sources}
-    sample_marker = "datakit/sample_10pct_91269634/"
-    source_suffix = "/outputs/main"
-    for record_path in StoragePath(f"{MARIN_PREFIX}/datakit/tokenize/**/.artifact.json").glob():
-        directory = str(record_path).removesuffix("/.artifact.json")
-        record = read_record(directory)
-        if record is None or not isinstance(record.result, dict):
-            continue
-        payload = record.result
-        output_dirs = payload.get("output_dirs")
-        source_keys = payload.get("source_keys")
-        if (
-            payload.get("tokenizer") != tokenizer
-            or not isinstance(output_dirs, dict)
-            or "train" not in output_dirs
-            or not isinstance(source_keys, dict)
-        ):
-            continue
-        source_key = str(source_keys.get("train", ""))
-        if sample_marker not in source_key or not source_key.endswith(source_suffix):
-            continue
-        source = source_key.split(sample_marker, 1)[1].removesuffix(source_suffix)
-        if source in candidates:
-            candidates[source].append(f"{directory}/train")
-    duplicates = {source: paths for source, paths in candidates.items() if len(paths) > 1}
-    if duplicates:
-        raise ValueError(f"Multiple sample-specific {tokenizer} caches: {duplicates}")
-    return {source: paths[0] for source, paths in candidates.items() if paths}
-
-
 def _quality_dirs(sources: list[str]) -> dict[str, str]:
     artifact_paths = _quality_output_dirs(sources, MARIN_PREFIX)
 
@@ -275,23 +246,20 @@ def input_plan(selected_sources: tuple[str, ...] = ()) -> InputPlan:
         sources,
         NEMOTRON_TOKENIZER,
         NEMOTRON_TOKENIZER_REVISION,
-        TOKENIZED_ARTIFACT_VERSION,
+        NEMOTRON_TOKENIZED_ARTIFACT_VERSION,
     )
-    marin_dirs = _sample_token_dirs(sources, MARIN_TOKENIZER)
+    marin_dirs = _token_dirs(
+        sources,
+        MARIN_TOKENIZER,
+        MARIN_TOKENIZER_REVISION,
+        MARIN_TOKENIZED_ARTIFACT_VERSION,
+    )
     quality_dirs = _quality_dirs(sources)
     sample_files = tuple(
         SampleFile(source, path) for source, paths in sorted(sample_by_source.items()) for path in paths
     )
-    embedding_files = tuple(
-        EmbeddingIdFile(source, path)
-        for source in sources
-        for directory in (main_dirs[source], fuzzy_dirs.get(source))
-        if directory is not None
-        for path in sorted(str(item) for item in StoragePath(f"{directory}/*.parquet").glob())
-    )
     return InputPlan(
         sample_files=sample_files,
-        embedding_files=embedding_files,
         main_dirs=main_dirs,
         fuzzy_dirs=fuzzy_dirs,
         nemotron_dirs=nemotron_dirs,
@@ -320,6 +288,10 @@ def preflight() -> None:
     if missing_cluster_files:
         raise FileNotFoundError(f"Missing cluster files at {CLUSTER_ROOT}: {missing_cluster_files}")
     plan = input_plan()
+    partitions = co_partitions(plan)
+    partitions_by_source: dict[str, list[CoPartition]] = {}
+    for partition in partitions:
+        partitions_by_source.setdefault(partition.source, []).append(partition)
     sample_by_source: dict[str, list[str]] = {}
     for item in plan.sample_files:
         sample_by_source.setdefault(item.source, []).append(item.path)
@@ -328,14 +300,18 @@ def preflight() -> None:
 
     source_stats = []
     for source, sample_paths in sorted(sample_by_source.items()):
-        sample_by_basename = {os.path.basename(path): path for path in sample_paths}
         main_basenames = _basenames(plan.main_dirs[source])
         fuzzy_basenames = _basenames(plan.fuzzy_dirs[source]) if source in plan.fuzzy_dirs else set()
         nemotron_basenames = _basenames(plan.nemotron_dirs.get(source))
         marin_basenames = _basenames(plan.marin_dirs.get(source))
-        quality_basenames = _basenames(plan.quality_dirs.get(source))
-        current_basenames = main_basenames | fuzzy_basenames
-        aligned_sample = set(sample_by_basename) & current_basenames & nemotron_basenames & marin_basenames
+        source_partitions = partitions_by_source[source]
+        aligned_sample = [
+            partition
+            for partition in source_partitions
+            if (partition.main_path is not None or partition.fuzzy_path is not None)
+            and partition.nemotron_path is not None
+            and partition.marin_path is not None
+        ]
         source_stats.append(
             {
                 "source": source,
@@ -345,11 +321,13 @@ def preflight() -> None:
                 "fuzzy_shards": len(fuzzy_basenames),
                 "nemotron_shards": len(nemotron_basenames),
                 "marin_shards": len(marin_basenames),
-                "current_shards_missing_nemotron": len(current_basenames - nemotron_basenames),
-                "current_shards_missing_marin": len(current_basenames - marin_basenames),
-                "current_shards_missing_quality": len(current_basenames - quality_basenames),
+                "current_shards_missing_nemotron": sum(
+                    partition.nemotron_path is None for partition in source_partitions
+                ),
+                "current_shards_missing_marin": sum(partition.marin_path is None for partition in source_partitions),
+                "current_shards_missing_quality": sum(partition.quality_path is None for partition in source_partitions),
                 "aligned_sample_shards": len(aligned_sample),
-                "aligned_sample_rows": sum(sample_rows_by_path[sample_by_basename[name]] for name in aligned_sample),
+                "aligned_sample_rows": sum(sample_rows_by_path[partition.sample_path] for partition in aligned_sample),
             }
         )
     sample_rows = sum(int(stat["sample_rows"]) for stat in source_stats)
@@ -367,7 +345,7 @@ def preflight() -> None:
         "marin_tokenizer_revision": MARIN_TOKENIZER_REVISION,
         "sample_rows": sample_rows,
         "sample_shards": len(plan.sample_files),
-        "embedding_shards": len(plan.embedding_files),
+        "embedding_shards": sum(int(stat["main_shards"]) + int(stat["fuzzy_shards"]) for stat in source_stats),
         "source_count": len(source_stats),
         "fuzzy_source_count": len(plan.fuzzy_dirs),
         "nemotron_source_count": len(plan.nemotron_dirs),
@@ -383,185 +361,108 @@ def preflight() -> None:
     print(json.dumps({key: value for key, value in payload.items() if key != "source_stats"}, indent=2, sort_keys=True))
 
 
-def join_key(source: str, document_id: str) -> bytes:
-    return xxhash.xxh3_128_digest(f"{source}\0{document_id}".encode())
+def _attribute_path(paths: tuple[str, ...], shard_index: int) -> str | None:
+    if shard_index >= len(paths):
+        return None
+    return paths[shard_index]
 
 
-def _sample_ids(spec: SampleFile) -> Iterator[dict]:
-    row_index = 0
-    with StoragePath(spec.path).open("rb") as file:
-        parquet = pq.ParquetFile(file)
-        for batch in parquet.iter_batches(batch_size=8_192, columns=["id"]):
-            for document_id in pc.cast(batch["id"], pa.string()).to_pylist():
-                yield {
-                    "join_key": join_key(spec.source, document_id),
-                    "source": spec.source,
-                    "id": document_id,
-                    "sample_path": spec.path,
-                    "row_index": row_index,
-                }
-                row_index += 1
-
-
-def _embedding_ids(spec: EmbeddingIdFile) -> Iterator[dict]:
-    basename = os.path.basename(spec.path)
-    with StoragePath(spec.path).open("rb") as file:
-        parquet = pq.ParquetFile(file)
-        for batch in parquet.iter_batches(batch_size=8_192, columns=["id"]):
-            for document_id in pc.cast(batch["id"], pa.string()).to_pylist():
-                yield {
-                    "join_key": join_key(spec.source, document_id),
-                    "source": spec.source,
-                    "id": document_id,
-                    "basename": basename,
-                }
-
-
-def _keep_all(_key: bytes, items: Iterator[dict]) -> Iterator[dict]:
-    yield from items
-
-
-def _keep_first(_key: bytes, items: Iterator[dict]) -> dict:
-    return next(items)
-
-
-def _combine_sample_embedding(sample: dict | None, embedding: dict | None) -> dict:
-    if sample is None or embedding is None:
-        raise ValueError("Inner join received a missing side")
-    if sample["source"] != embedding["source"] or sample["id"] != embedding["id"]:
-        raise ValueError("Hashed join key collision")
-    return {
-        "source": sample["source"],
-        "id": sample["id"],
-        "sample_path": sample["sample_path"],
-        "row_index": sample["row_index"],
-        "basename": embedding["basename"],
+def co_partitions(plan: InputPlan) -> tuple[CoPartition, ...]:
+    inventories = {
+        (source, kind): (
+            tuple(sorted(str(path) for path in StoragePath(f"{directory}/*.parquet").glob()))
+            if directory is not None
+            else ()
+        )
+        for source in plan.schema_paths
+        for kind, directory in (
+            ("main", plan.main_dirs.get(source)),
+            ("fuzzy", plan.fuzzy_dirs.get(source)),
+            ("nemotron", plan.nemotron_dirs.get(source)),
+            ("marin", plan.marin_dirs.get(source)),
+            ("quality", plan.quality_dirs.get(source)),
+        )
     }
+    partitions = []
+    sample_by_source: dict[str, list[SampleFile]] = {}
+    for sample in plan.sample_files:
+        sample_by_source.setdefault(sample.source, []).append(sample)
+    for source, samples in sorted(sample_by_source.items()):
+        for shard_index, sample in enumerate(sorted(samples, key=lambda item: item.path)):
+            paths = {
+                kind: _attribute_path(inventories[source, kind], shard_index)
+                for kind in ("main", "fuzzy", "nemotron", "marin", "quality")
+            }
+            if paths["main"] is None and paths["fuzzy"] is None:
+                raise ValueError(f"No co-partitioned Harrier shard for {source} shard {shard_index}")
+            partitions.append(
+                CoPartition(
+                    source=source,
+                    basename=os.path.basename(sample.path),
+                    sample_path=sample.path,
+                    schema_path=plan.schema_paths[source],
+                    main_path=paths["main"],
+                    fuzzy_path=paths["fuzzy"],
+                    nemotron_path=paths["nemotron"],
+                    marin_path=paths["marin"],
+                    quality_path=paths["quality"],
+                )
+            )
+    return tuple(partitions)
 
 
-def _attach_sample_records(
-    key: tuple[str, str],
-    items: Iterator[dict],
-    *,
-    marin_dirs: dict[str, str],
-) -> Iterator[dict]:
-    source, sample_path = key
-    basename = os.path.basename(sample_path)
-    marin_path = f"{marin_dirs[source].rstrip('/')}/{basename}" if source in marin_dirs else None
-    if marin_path is not None and not StoragePath(marin_path).exists():
-        marin_path = None
-    marin = RowCursor(marin_path, "input_ids")
-    targets = iter(items)
-    target = next(targets, None)
-    row_offset = 0
-    try:
-        with StoragePath(sample_path).open("rb") as file:
-            parquet = pq.ParquetFile(file)
-            for batch in parquet.iter_batches(batch_size=READ_BATCH_ROWS):
-                records = batch.to_pylist()
-                row_limit = row_offset + len(records)
-                while target is not None and target["row_index"] < row_limit:
-                    if target["row_index"] < row_offset:
-                        raise ValueError(f"Unsorted sample row indices for {sample_path}")
-                    if target["source"] != source or target["sample_path"] != sample_path:
-                        raise ValueError(f"Sample locator differs from group key for {sample_path}")
-                    record = records[target["row_index"] - row_offset]
-                    if str(record["id"]) != target["id"]:
-                        raise ValueError(f"Sample ID differs at row {target['row_index']} in {sample_path}")
-                    token_id, input_ids = marin.value(target["row_index"])
-                    if token_id is not None and token_id != target["id"]:
-                        raise ValueError(f"Marin token ID differs at row {target['row_index']} in {marin_path}")
-                    yield {
-                        "source": source,
-                        "id": target["id"],
-                        "record": record,
-                        "basename": target["basename"],
-                        "marin_input_ids": input_ids,
-                    }
-                    target = next(targets, None)
-                row_offset = row_limit
-    finally:
-        marin.close()
-    if target is not None:
-        raise ValueError(f"Sample row {target['row_index']} is outside {sample_path}")
+def _load_sample(partition: CoPartition) -> Iterator[dict]:
+    for record in load_file(partition.sample_path):
+        yield {"id": str(record["id"]), "record": record, "schema_path": partition.schema_path}
 
 
-def _parquet_batches(path: str, columns: list[str]) -> Iterator[pa.Table]:
-    with StoragePath(path).open("rb") as file:
-        parquet = pq.ParquetFile(file)
-        for batch in parquet.iter_batches(batch_size=READ_BATCH_ROWS, columns=columns):
-            yield pa.Table.from_batches([batch])
+def _load_attribute(partition: CoPartition, path_field: str, columns: list[str], value_field: str) -> Iterator[dict]:
+    path = getattr(partition, path_field)
+    if path is None:
+        return
+    for record in load_file(InputFileSpec(path=path, columns=columns)):
+        yield {"id": str(record["id"]), value_field: record[value_field]}
 
 
-class RowCursor:
-    def __init__(self, path: str | None, column: str):
-        self.batches = _parquet_batches(path, ["id", column]) if path is not None else iter(())
-        self.column = column
-        self.current: pa.Table | None = None
-        self.offset = 0
-
-    def value(self, row_index: int) -> tuple[str | None, list[int] | None]:
-        while self.current is None or row_index >= self.offset + len(self.current):
-            if self.current is not None:
-                self.offset += len(self.current)
-            self.current = next(self.batches, None)
-            if self.current is None:
-                return None, None
-        if row_index < self.offset:
-            raise ValueError(f"Row index {row_index} precedes cursor offset {self.offset}")
-        local_index = row_index - self.offset
-        document_id = pc.cast(self.current["id"].combine_chunks(), pa.string())[local_index].as_py()
-        return document_id, self.current[self.column].combine_chunks()[local_index].as_py()
-
-    def close(self) -> None:
-        close = getattr(self.batches, "close", None)
-        if close is not None:
-            close()
+def _load_tokens(partition: CoPartition, path_field: str) -> Iterator[dict]:
+    path = getattr(partition, path_field)
+    if path is None:
+        return
+    yield from load_file(InputFileSpec(path=path, columns=["id", "chunk_index", "input_ids"]))
 
 
-class MatchCursor:
-    def __init__(self, path: str | None, columns: list[str]):
-        self.batches = _parquet_batches(path, columns) if path is not None else iter(())
-        self.current: pa.Table | None = None
-
-    def matches(self, target_ids: pa.Array) -> list[pa.Table]:
-        minimum = target_ids[0].as_py()
-        maximum = target_ids[-1].as_py()
-        matches = []
-        while True:
-            if self.current is None:
-                self.current = next(self.batches, None)
-            if self.current is None:
-                return matches
-            ids = pc.cast(self.current["id"].combine_chunks(), pa.string())
-            first = ids[0].as_py()
-            last = ids[-1].as_py()
-            if last < minimum:
-                self.current = None
-                continue
-            if first > maximum:
-                return matches
-            mask = pc.is_in(ids, value_set=target_ids)
-            if pc.any(mask).as_py():
-                matches.append(self.current.filter(mask))
-            if last <= maximum:
-                self.current = None
-                continue
-            return matches
-
-    def close(self) -> None:
-        close = getattr(self.batches, "close", None)
-        if close is not None:
-            close()
+def _coalesce_tokens(items: Iterator[dict], _shard: ShardInfo) -> Iterator[dict]:
+    current_id = None
+    input_ids = []
+    next_chunk = 0
+    for item in items:
+        document_id = str(item["id"])
+        if document_id != current_id:
+            if current_id is not None:
+                yield {"id": current_id, "input_ids": input_ids}
+            current_id = document_id
+            input_ids = []
+            next_chunk = 0
+        if int(item.get("chunk_index", next_chunk)) != next_chunk:
+            raise ValueError(f"Non-contiguous token chunks for {document_id}")
+        input_ids.extend(item["input_ids"])
+        next_chunk += 1
+    if current_id is not None:
+        yield {"id": current_id, "input_ids": input_ids}
 
 
-def _tables_column(tables: list[pa.Table], target_ids: pa.Array, column: str, column_type: pa.DataType) -> pa.Array:
-    if not tables:
-        return pa.nulls(len(target_ids), type=column_type)
-    table = pa.concat_tables(tables)
-    ids = pc.cast(table["id"].combine_chunks(), pa.string())
-    indices = pc.index_in(target_ids, value_set=ids)
-    return pc.cast(pc.take(table[column].combine_chunks(), indices), column_type)
+def _attach_embedding(left: dict | None, right: dict | None, origin: str) -> dict:
+    if left is None:
+        raise ValueError("Embedding join received no sample row")
+    if left.get("embedding") is None and right is not None:
+        return {**left, "embedding": right["embedding"], "embedding_origin": origin}
+    return left
+
+
+def _attach_value(left: dict | None, right: dict | None, source_field: str, output_field: str) -> dict:
+    if left is None:
+        raise ValueError("Attribute join received no sample row")
+    return {**left, output_field: None if right is None else right[source_field]}
 
 
 def _cluster_columns(embeddings: pa.Array, cluster_root: str) -> tuple[pa.Array, pa.Array, pa.Array]:
@@ -575,17 +476,6 @@ def _cluster_columns(embeddings: pa.Array, cluster_root: str) -> tuple[pa.Array,
     distance = distances[:, 0].astype(np.float32, copy=False)
     domain = context["lookups"][40][fine]
     return pa.array(fine), pa.array(distance), pa.array(domain)
-
-
-def _record_chunks(items: Iterator[dict]) -> Iterator[list[dict]]:
-    chunk: list[dict] = []
-    for item in items:
-        if chunk and len(chunk) >= OUTPUT_BATCH_ROWS and item["id"] != chunk[-1]["id"]:
-            yield chunk
-            chunk = []
-        chunk.append(item)
-    if chunk:
-        yield chunk
 
 
 @cache
@@ -616,228 +506,135 @@ def _output_schema(sample_schema: pa.Schema, cluster_root: str = CLUSTER_ROOT) -
     return pa.schema([*sample_schema, *APPENDED_FIELDS], metadata=metadata)
 
 
-def _existing_result(path: str, source: str, basename: str) -> dict | None:
-    output = StoragePath(path)
-    if not output.exists():
-        return None
-    with output.open("rb") as file:
-        parquet = pq.ParquetFile(file)
-        rows = parquet.metadata.num_rows
-        if parquet.schema_arrow.names[-len(APPENDED_FIELDS) :] != [field.name for field in APPENDED_FIELDS]:
-            raise ValueError(f"Incomplete existing output at {path}")
-        missing = {}
-        for name in ("nemotron_input_ids", "marin_input_ids", "quality_score_pooled_junkgate2"):
-            index = parquet.schema_arrow.get_field_index(name)
-            missing[name] = sum(
-                parquet.metadata.row_group(row_group).column(index).statistics.null_count
-                for row_group in range(parquet.num_row_groups)
-            )
-    return {
-        "source": source,
-        "basename": basename,
-        "rows": rows,
-        "missing_nemotron": missing["nemotron_input_ids"],
-        "missing_marin": missing["marin_input_ids"],
-        "missing_quality": missing["quality_score_pooled_junkgate2"],
-        "reused": True,
-    }
-
-
-def _materialize_group(
-    key: tuple[str, str],
-    items: Iterator[dict],
-    *,
-    main_dirs: dict[str, str],
-    fuzzy_dirs: dict[str, str],
-    nemotron_dirs: dict[str, str],
-    quality_dirs: dict[str, str],
-    schema_paths: dict[str, str],
-    output_root: str,
-    cluster_root: str = CLUSTER_ROOT,
-) -> dict:
-    source, basename = key
-    output_path = f"{output_root.rstrip('/')}/{source}/{basename}"
-    if existing := _existing_result(output_path, source, basename):
-        return existing
-
-    main_path = f"{main_dirs[source].rstrip('/')}/{basename}"
-    if not StoragePath(main_path).exists():
-        main_path = None
-    main = MatchCursor(main_path, ["id", "embedding"])
-    fuzzy_path = f"{fuzzy_dirs[source].rstrip('/')}/{basename}" if source in fuzzy_dirs else None
-    if fuzzy_path is not None and not StoragePath(fuzzy_path).exists():
-        fuzzy_path = None
-    fuzzy = MatchCursor(fuzzy_path, ["id", "embedding"])
-    nemotron_path = f"{nemotron_dirs[source].rstrip('/')}/{basename}" if source in nemotron_dirs else None
-    if nemotron_path is not None and not StoragePath(nemotron_path).exists():
-        nemotron_path = None
-    nemotron = MatchCursor(nemotron_path, ["id", "input_ids"])
-    quality_path = f"{quality_dirs[source].rstrip('/')}/{basename}" if source in quality_dirs else None
-    if quality_path is not None and not StoragePath(quality_path).exists():
-        quality_path = None
-    quality = MatchCursor(quality_path, ["id", "score"])
-    sample_schema = _source_schema(schema_paths[source])
+def _assign_batch(items: list[dict], cluster_root: str) -> Iterator[pa.RecordBatch]:
+    embeddings = pa.array([item["embedding"] for item in items], type=pa.list_(pa.int8(), HARRIER_DIM))
+    cluster_5000, dist_5000, domain_id = _cluster_columns(embeddings, cluster_root)
+    quality_scores = pa.array(
+        [item["quality_score_pooled_junkgate2"] for item in items],
+        type=pa.float64(),
+    )
+    nemotron_ids = pa.array([item["nemotron_input_ids"] for item in items], type=pa.list_(pa.int32()))
+    marin_ids = pa.array([item["marin_input_ids"] for item in items], type=pa.list_(pa.int32()))
+    sample_schema = _source_schema(items[0]["schema_path"])
     schema = _output_schema(sample_schema, cluster_root)
-    stats = {
-        "rows": 0,
-        "main": 0,
-        "fuzzy": 0,
-        "missing_nemotron": 0,
-        "missing_marin": 0,
-        "missing_quality": 0,
-    }
+    sample_table = pa.Table.from_pylist([item["record"] for item in items], schema=sample_schema)
+    table = pa.Table.from_arrays(
+        [
+            *sample_table.columns,
+            embeddings,
+            cluster_5000,
+            dist_5000,
+            domain_id,
+            quality_scores,
+            nemotron_ids,
+            marin_ids,
+        ],
+        schema=schema,
+    )
+    origins = [item["embedding_origin"] for item in items]
+    counters.pipeline.update_counter("harrier_tokens/rows", len(items))
+    counters.pipeline.update_counter("harrier_tokens/main_embeddings", origins.count("main"))
+    counters.pipeline.update_counter("harrier_tokens/fuzzy_embeddings", origins.count("fuzzy"))
+    counters.pipeline.update_counter("harrier_tokens/missing_nemotron", nemotron_ids.null_count)
+    counters.pipeline.update_counter("harrier_tokens/missing_marin", marin_ids.null_count)
+    counters.pipeline.update_counter("harrier_tokens/missing_quality", quality_scores.null_count)
+    yield from table.to_batches()
 
-    def output_batches() -> Iterator[pa.RecordBatch]:
-        try:
-            for chunk in _record_chunks(items):
-                target_ids = pa.array([item["id"] for item in chunk], type=pa.string())
-                main_tables = main.matches(target_ids)
-                fuzzy_tables = fuzzy.matches(target_ids)
-                main_embeddings = _tables_column(
-                    main_tables,
-                    target_ids,
-                    "embedding",
-                    pa.list_(pa.int8(), HARRIER_DIM),
-                )
-                fuzzy_embeddings = _tables_column(
-                    fuzzy_tables,
-                    target_ids,
-                    "embedding",
-                    pa.list_(pa.int8(), HARRIER_DIM),
-                )
-                embeddings = pc.coalesce(main_embeddings, fuzzy_embeddings)
-                if embeddings.null_count:
-                    raise ValueError(f"Missing {embeddings.null_count} embeddings for {source}/{basename}")
-                main_ids = (
-                    pc.cast(pa.concat_tables(main_tables)["id"].combine_chunks(), pa.string())
-                    if main_tables
-                    else pa.array([], type=pa.string())
-                )
-                fuzzy_ids = (
-                    pc.cast(pa.concat_tables(fuzzy_tables)["id"].combine_chunks(), pa.string())
-                    if fuzzy_tables
-                    else pa.array([], type=pa.string())
-                )
-                main_matches = pc.is_in(target_ids, value_set=main_ids)
-                fuzzy_matches = pc.is_in(target_ids, value_set=fuzzy_ids)
-                fuzzy_fallback_matches = pc.and_(pc.invert(main_matches), fuzzy_matches)
-                cluster_5000, dist_5000, domain_id = _cluster_columns(embeddings, cluster_root)
-                quality_scores = _tables_column(
-                    quality.matches(target_ids),
-                    target_ids,
-                    "score",
-                    pa.float64(),
-                )
-                nemotron_ids = _tables_column(
-                    nemotron.matches(target_ids),
-                    target_ids,
-                    "input_ids",
-                    pa.list_(pa.int32()),
-                )
-                marin_ids = pa.array([item["marin_input_ids"] for item in chunk], type=pa.list_(pa.int32()))
-                sample_table = pa.Table.from_pylist([item["record"] for item in chunk], schema=sample_schema)
-                table = pa.Table.from_arrays(
-                    [
-                        *sample_table.columns,
-                        embeddings,
-                        cluster_5000,
-                        dist_5000,
-                        domain_id,
-                        quality_scores,
-                        nemotron_ids,
-                        marin_ids,
-                    ],
-                    schema=schema,
-                )
-                stats["rows"] += len(chunk)
-                stats["main"] += int(pc.sum(pc.cast(main_matches, pa.int64())).as_py())
-                stats["fuzzy"] += int(pc.sum(pc.cast(fuzzy_fallback_matches, pa.int64())).as_py())
-                stats["missing_nemotron"] += nemotron_ids.null_count
-                stats["missing_marin"] += marin_ids.null_count
-                stats["missing_quality"] += quality_scores.null_count
-                yield from table.to_batches()
-        finally:
-            main.close()
-            fuzzy.close()
-            nemotron.close()
-            quality.close()
 
-    result = write_parquet_file(output_batches(), output_path, schema=schema)
-    if int(result["count"]) != stats["rows"]:
-        raise ValueError(f"Writer count differs for {output_path}")
-    counters.pipeline.update_counter("harrier_tokens/rows", stats["rows"])
-    counters.pipeline.update_counter("harrier_tokens/main_embeddings", stats["main"])
-    counters.pipeline.update_counter("harrier_tokens/fuzzy_embeddings", stats["fuzzy"])
-    counters.pipeline.update_counter("harrier_tokens/missing_nemotron", stats["missing_nemotron"])
-    counters.pipeline.update_counter("harrier_tokens/missing_marin", stats["missing_marin"])
-    counters.pipeline.update_counter("harrier_tokens/missing_quality", stats["missing_quality"])
-    return {"source": source, "basename": basename, **stats, "reused": False}
+def _materialize_dataset(
+    partitions: tuple[CoPartition, ...],
+    output_root: str,
+    cluster_root: str,
+) -> Dataset[str]:
+    source = Dataset.from_list(list(partitions))
+    sample = source.flat_map(_load_sample)
+    main = source.flat_map(
+        partial(_load_attribute, path_field="main_path", columns=["id", "embedding"], value_field="embedding")
+    )
+    fuzzy = source.flat_map(
+        partial(_load_attribute, path_field="fuzzy_path", columns=["id", "embedding"], value_field="embedding")
+    )
+    nemotron = source.flat_map(partial(_load_tokens, path_field="nemotron_path")).map_shard(_coalesce_tokens)
+    marin = source.flat_map(partial(_load_tokens, path_field="marin_path")).map_shard(_coalesce_tokens)
+    quality = source.flat_map(
+        partial(_load_attribute, path_field="quality_path", columns=["id", "score"], value_field="score")
+    )
+    records = (
+        sample.sorted_merge_join(
+            main,
+            left_key=lambda item: item["id"],
+            right_key=lambda item: item["id"],
+            combiner=partial(_attach_embedding, origin="main"),
+            how="left",
+        )
+        .sorted_merge_join(
+            fuzzy,
+            left_key=lambda item: item["id"],
+            right_key=lambda item: item["id"],
+            combiner=partial(_attach_embedding, origin="fuzzy"),
+            how="left",
+        )
+        .filter(lambda item: item.get("embedding") is not None)
+    )
+    records = (
+        records.sorted_merge_join(
+            quality,
+            left_key=lambda item: item["id"],
+            right_key=lambda item: item["id"],
+            combiner=partial(
+                _attach_value,
+                source_field="score",
+                output_field="quality_score_pooled_junkgate2",
+            ),
+            how="left",
+        )
+        .sorted_merge_join(
+            nemotron,
+            left_key=lambda item: item["id"],
+            right_key=lambda item: item["id"],
+            combiner=partial(_attach_value, source_field="input_ids", output_field="nemotron_input_ids"),
+            how="left",
+        )
+        .sorted_merge_join(
+            marin,
+            left_key=lambda item: item["id"],
+            right_key=lambda item: item["id"],
+            combiner=partial(_attach_value, source_field="input_ids", output_field="marin_input_ids"),
+            how="left",
+        )
+    )
+    output_paths = tuple(f"{output_root.rstrip('/')}/{part.source}/{part.basename}" for part in partitions)
+
+    def output_path(shard_idx: int, total_shards: int, paths: tuple[str, ...] = output_paths) -> str:
+        if total_shards != len(paths):
+            raise ValueError(f"Expected {len(paths)} co-partitions, got {total_shards}")
+        return paths[shard_idx]
+
+    dataset = (
+        records.window(OUTPUT_BATCH_ROWS)
+        .flat_map(partial(_assign_batch, cluster_root=cluster_root))
+        .write_parquet(output_path, skip_existing=True)
+    )
+    return dataset
 
 
 def materialize(
     output_root: str,
-    join_shards: int,
-    materialize_shards: int,
     max_workers: int,
     selected_sources: tuple[str, ...] = (),
 ) -> None:
     plan = input_plan(selected_sources)
-    sample = (
-        Dataset.from_list(list(plan.sample_files))
-        .flat_map(_sample_ids)
-        .group_by(
-            key=lambda item: item["join_key"],
-            reducer=_keep_all,
-            num_output_shards=join_shards,
-        )
-    )
-    embeddings = (
-        Dataset.from_list(list(plan.embedding_files))
-        .flat_map(_embedding_ids)
-        .group_by(
-            key=lambda item: item["join_key"],
-            reducer=_keep_first,
-            num_output_shards=join_shards,
-        )
-    )
-    matched = sample.sorted_merge_join(
-        embeddings,
-        left_key=lambda item: item["join_key"],
-        right_key=lambda item: item["join_key"],
-        combiner=_combine_sample_embedding,
-        how="inner",
-    )
-    records = matched.group_by(
-        key=lambda item: (item["source"], item["sample_path"]),
-        sort_by=lambda item: item["row_index"],
-        reducer=lambda key, items: _attach_sample_records(key, items, marin_dirs=plan.marin_dirs),
-        num_output_shards=join_shards,
-    )
-    dataset = records.group_by(
-        key=lambda item: (item["source"], item["basename"]),
-        sort_by=lambda item: item["id"],
-        reducer=lambda key, items: _materialize_group(
-            key,
-            items,
-            main_dirs=plan.main_dirs,
-            fuzzy_dirs=plan.fuzzy_dirs,
-            nemotron_dirs=plan.nemotron_dirs,
-            quality_dirs=plan.quality_dirs,
-            schema_paths=plan.schema_paths,
-            output_root=output_root,
-        ),
-        num_output_shards=materialize_shards,
-    )
+    partitions = co_partitions(plan)
+    dataset = _materialize_dataset(partitions, output_root, CLUSTER_ROOT)
     StoragePath(output_root).mkdirs()
     context = ZephyrContext(
         resources=WORKER_RESOURCES,
         coordinator_resources=COORDINATOR_RESOURCES,
-        max_workers=max_workers,
+        max_workers=min(max_workers, len(partitions)),
         chunk_storage_prefix=marin_temp_bucket(ttl_days=1, prefix="harrier-token-join", source_prefix=output_root),
         name="materialize-10pct-harrier-clusters-quality-nemotron",
     )
     outcome = context.execute(dataset, verbose=True, map_task_resources=WORKER_RESOURCES)
-    reused = [result for result in outcome.results if result["reused"]]
     artifact = HarrierTokenSampleData(
         output_dir=output_root,
         sample_root=SAMPLE_ROOT,
@@ -849,13 +646,13 @@ def materialize(
         nemotron_tokenizer_revision=NEMOTRON_TOKENIZER_REVISION,
         marin_tokenizer=MARIN_TOKENIZER,
         marin_tokenizer_revision=MARIN_TOKENIZER_REVISION,
-        rows=sum(int(result["rows"]) for result in outcome.results),
-        missing_nemotron_rows=sum(int(result["missing_nemotron"]) for result in outcome.results),
-        missing_marin_rows=sum(int(result["missing_marin"]) for result in outcome.results),
-        missing_quality_rows=sum(int(result["missing_quality"]) for result in outcome.results),
-        sources=len({result["source"] for result in outcome.results}),
+        rows=int(outcome.counters.get("harrier_tokens/rows", 0)),
+        missing_nemotron_rows=int(outcome.counters.get("harrier_tokens/missing_nemotron", 0)),
+        missing_marin_rows=int(outcome.counters.get("harrier_tokens/missing_marin", 0)),
+        missing_quality_rows=int(outcome.counters.get("harrier_tokens/missing_quality", 0)),
+        sources=len({partition.source for partition in partitions}),
         shards=len(outcome.results),
-        counters={**dict(outcome.counters), "reused_shards": len(reused)},
+        counters=dict(outcome.counters),
     )
     write_artifact(artifact, output_root)
     print(artifact.model_dump_json(indent=2))
@@ -889,8 +686,6 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("preflight", "materialize", "validate"), default="preflight")
     parser.add_argument("--output", default=OUTPUT_ROOT)
-    parser.add_argument("--join-shards", type=int, default=JOIN_SHARDS)
-    parser.add_argument("--materialize-shards", type=int, default=MATERIALIZE_SHARDS)
     parser.add_argument("--max-workers", type=int, default=MAX_WORKERS)
     parser.add_argument("--source", action="append", default=[])
     args = parser.parse_args()
@@ -898,7 +693,7 @@ def main() -> None:
     if args.mode == "preflight":
         preflight()
     elif args.mode == "materialize":
-        materialize(args.output, args.join_shards, args.materialize_shards, args.max_workers, tuple(args.source))
+        materialize(args.output, args.max_workers, tuple(args.source))
     else:
         validate(args.output)
 

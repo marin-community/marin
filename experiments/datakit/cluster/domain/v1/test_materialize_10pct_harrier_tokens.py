@@ -4,79 +4,100 @@
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
+from zephyr.execution import ZephyrContext
 
 from experiments.datakit.cluster.domain.v1 import materialize_10pct_harrier_tokens
 from experiments.datakit.embeddings.harrier.pipeline import HARRIER_DIM
 
 
-def test_attach_sample_records_uses_row_locators(tmp_path):
-    path = tmp_path / "sample.parquet"
-    token_dir = tmp_path / "tokens"
-    token_dir.mkdir()
-    pq.write_table(pa.table({"id": ["a", "b", "c"], "text": ["alpha", "beta", "gamma"]}), path)
-    pq.write_table(
-        pa.table({"id": ["a", "b", "c"], "input_ids": pa.array([[1], [2], [3]], type=pa.list_(pa.int32()))}),
-        token_dir / path.name,
-    )
-    items = iter(
-        [
-            {"source": "example", "id": "a", "sample_path": str(path), "row_index": 0, "basename": "x"},
-            {"source": "example", "id": "c", "sample_path": str(path), "row_index": 2, "basename": "y"},
-        ]
-    )
-
-    records = list(
-        materialize_10pct_harrier_tokens._attach_sample_records(
-            ("example", str(path)), items, marin_dirs={"example": str(token_dir)}
-        )
-    )
-
-    assert records == [
-        {
-            "source": "example",
-            "id": "a",
-            "record": {"id": "a", "text": "alpha"},
-            "basename": "x",
-            "marin_input_ids": [1],
-        },
-        {
-            "source": "example",
-            "id": "c",
-            "record": {"id": "c", "text": "gamma"},
-            "basename": "y",
-            "marin_input_ids": [3],
-        },
-    ]
-
-
-def test_materialize_group_coalesces_embeddings_and_left_joins_attributes(tmp_path, monkeypatch):
-    source = "example"
-    basename = "part.parquet"
-    sample_dir = tmp_path / "sample"
-    main_dir = tmp_path / "main"
-    fuzzy_dir = tmp_path / "fuzzy"
-    nemotron_dir = tmp_path / "nemotron"
-    quality_dir = tmp_path / "quality"
-    output_dir = tmp_path / "output"
-    for directory in (sample_dir, main_dir, fuzzy_dir, nemotron_dir, quality_dir):
+def test_co_partitions_aligns_renumbered_sample_shards_by_source_order(tmp_path):
+    directories = {name: tmp_path / name for name in ("sample", "main", "nemotron", "marin", "quality")}
+    for directory in directories.values():
         directory.mkdir()
+    sample_paths = [directories["sample"] / f"part-{index:05d}-of-00002.parquet" for index in range(2)]
+    original_paths = {
+        name: [directories[name] / f"part-{index:05d}-of-00010.parquet" for index in range(3)]
+        for name in ("main", "nemotron", "quality")
+    }
+    marin_paths = [directories["marin"] / path.name for path in sample_paths]
+    for path in [*sample_paths, *marin_paths, *(path for paths in original_paths.values() for path in paths)]:
+        path.touch()
+    plan = materialize_10pct_harrier_tokens.InputPlan(
+        sample_files=tuple(materialize_10pct_harrier_tokens.SampleFile("example", str(path)) for path in sample_paths),
+        main_dirs={"example": str(directories["main"])},
+        fuzzy_dirs={},
+        nemotron_dirs={"example": str(directories["nemotron"])},
+        marin_dirs={"example": str(directories["marin"])},
+        quality_dirs={"example": str(directories["quality"])},
+        schema_paths={"example": str(sample_paths[0])},
+    )
 
-    sample = pa.table({"id": ["a", "b"], "text": ["alpha", "beta"]})
-    pq.write_table(sample, sample_dir / basename)
+    partitions = materialize_10pct_harrier_tokens.co_partitions(plan)
+
+    assert [partition.main_path for partition in partitions] == [str(path) for path in original_paths["main"][:2]]
+    assert [partition.marin_path for partition in partitions] == [str(path) for path in marin_paths]
+
+
+def test_materialize_dataset_joins_co_partitions_and_concatenates_token_chunks(tmp_path, monkeypatch):
+    basename = "part.parquet"
+    sample_path = tmp_path / "sample" / basename
+    main_path = tmp_path / "main" / basename
+    fuzzy_path = tmp_path / "fuzzy" / basename
+    nemotron_path = tmp_path / "nemotron" / basename
+    marin_path = tmp_path / "marin" / basename
+    quality_path = tmp_path / "quality" / basename
+    output_root = tmp_path / "output"
+    for path in (sample_path, main_path, fuzzy_path, nemotron_path, marin_path, quality_path):
+        path.parent.mkdir()
+
+    pq.write_table(
+        pa.table({"id": ["a", "b", "c"], "text": ["alpha", "beta", "gamma"]}),
+        sample_path,
+    )
     embedding_type = pa.list_(pa.int8(), HARRIER_DIM)
     pq.write_table(
         pa.table({"id": ["a"], "embedding": pa.array([[1] * HARRIER_DIM], type=embedding_type)}),
-        main_dir / basename,
+        main_path,
     )
     pq.write_table(
-        pa.table({"id": ["a", "b"], "embedding": pa.array([[9] * HARRIER_DIM, [2] * HARRIER_DIM], type=embedding_type)}),
-        fuzzy_dir / basename,
+        pa.table(
+            {
+                "id": ["a", "b"],
+                "embedding": pa.array([[9] * HARRIER_DIM, [2] * HARRIER_DIM], type=embedding_type),
+            }
+        ),
+        fuzzy_path,
+    )
+    token_schema = pa.schema(
+        [
+            pa.field("id", pa.string()),
+            pa.field("chunk_index", pa.int32()),
+            pa.field("input_ids", pa.list_(pa.int32())),
+        ]
     )
     pq.write_table(
-        pa.table({"id": ["a", "b"], "input_ids": pa.array([[10, 11], [12]], type=pa.list_(pa.int32()))}),
-        nemotron_dir / basename,
+        pa.Table.from_pylist(
+            [
+                {"id": "a", "chunk_index": 0, "input_ids": [10, 11]},
+                {"id": "a", "chunk_index": 1, "input_ids": [12]},
+                {"id": "b", "chunk_index": 0, "input_ids": [13]},
+            ],
+            schema=token_schema,
+        ),
+        nemotron_path,
     )
-    pq.write_table(pa.table({"id": ["b"], "score": [0.75]}), quality_dir / basename)
+    pq.write_table(
+        pa.table(
+            {
+                "id": ["a", "b", "b"],
+                "input_ids": pa.array([[20], [21], [22, 23]], type=pa.list_(pa.int32())),
+            }
+        ),
+        marin_path,
+    )
+    pq.write_table(pa.table({"id": ["b"], "score": [0.75]}), quality_path)
 
     class Index:
         def search(self, embeddings, _neighbors):
@@ -88,54 +109,41 @@ def test_materialize_group_coalesces_embeddings_and_left_joins_attributes(tmp_pa
         "_get_index",
         lambda _centroids, _lookups: {"index": Index(), "lookups": {40: np.asarray([7, 8], dtype=np.int32)}},
     )
-    items = iter(
-        [
-            {
-                "source": source,
-                "id": "a",
-                "record": {"id": "a", "text": "alpha"},
-                "basename": basename,
-                "marin_input_ids": [20],
-            },
-            {
-                "source": source,
-                "id": "b",
-                "record": {"id": "b", "text": "beta"},
-                "basename": basename,
-                "marin_input_ids": None,
-            },
-        ]
+    partition = materialize_10pct_harrier_tokens.CoPartition(
+        source="example",
+        basename=basename,
+        sample_path=str(sample_path),
+        schema_path=str(sample_path),
+        main_path=str(main_path),
+        fuzzy_path=str(fuzzy_path),
+        nemotron_path=str(nemotron_path),
+        marin_path=str(marin_path),
+        quality_path=str(quality_path),
     )
-
-    stats = materialize_10pct_harrier_tokens._materialize_group(
-        (source, basename),
-        items,
-        main_dirs={source: str(main_dir)},
-        fuzzy_dirs={source: str(fuzzy_dir)},
-        nemotron_dirs={source: str(nemotron_dir)},
-        quality_dirs={source: str(quality_dir)},
-        schema_paths={source: str(sample_dir / basename)},
-        output_root=str(output_dir),
-        cluster_root="cluster",
+    dataset = materialize_10pct_harrier_tokens._materialize_dataset(
+        (partition,),
+        str(output_root),
+        "cluster",
     )
+    client = LocalClient()
+    context = ZephyrContext(
+        client=client,
+        resources=ResourceConfig(cpu=1, ram="1g"),
+        max_workers=1,
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="test-materialize-copartitioned",
+    )
+    try:
+        context.execute(dataset)
+    finally:
+        context.shutdown()
+        client.shutdown(wait=True)
 
-    result = pq.read_table(output_dir / source / basename)
+    result = pq.read_table(output_root / "example" / basename)
     assert result["id"].to_pylist() == ["a", "b"]
     assert result["embedding"].to_pylist() == [[1] * HARRIER_DIM, [2] * HARRIER_DIM]
     assert result["cluster_5000"].to_pylist() == [0, 1]
-    assert result["dist_5000"].to_pylist() == [0.0, 0.0]
     assert result["domain_id"].to_pylist() == [7, 8]
     assert result["quality_score_pooled_junkgate2"].to_pylist() == [None, 0.75]
-    assert result["nemotron_input_ids"].to_pylist() == [[10, 11], [12]]
-    assert result["marin_input_ids"].to_pylist() == [[20], None]
-    assert stats == {
-        "source": source,
-        "basename": basename,
-        "rows": 2,
-        "main": 1,
-        "fuzzy": 1,
-        "missing_nemotron": 0,
-        "missing_marin": 1,
-        "missing_quality": 1,
-        "reused": False,
-    }
+    assert result["nemotron_input_ids"].to_pylist() == [[10, 11, 12], [13]]
+    assert result["marin_input_ids"].to_pylist() == [[20], [21, 22, 23]]
