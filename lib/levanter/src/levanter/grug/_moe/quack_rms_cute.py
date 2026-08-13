@@ -49,9 +49,9 @@ _MATRIX_MODE = (1, 2, 0)
 _MATRIX_DIVISIBILITY = (1, 1, 8)
 _VECTOR_DIVISIBILITY = (1, 4)
 _SM100_MULTIPROCESSORS = 148
-_GATE_REVERSE_BLOCK_M = 64
 _GATE_REVERSE_BLOCK_N = 32
-_GATE_REVERSE_BLOCK_K = 32
+_RMS_REVERSE_BLOCK_M = 64
+_RMS_REVERSE_BLOCK_D = 64
 
 
 def _max_active_clusters(cluster_mnk: tuple[int, int, int]) -> int:
@@ -327,72 +327,98 @@ def _gate_accumulator_tile(output_cotangent, normalized, gate):
     return (gate_cotangent * sigmoid_cotangent).astype(jnp.bfloat16)
 
 
-def _gate_silu_preactivation_kernel(
-    output_cotangent_ref,
-    normalized_ref,
-    gate_ref,
-    w_up_ref,
-    preactivation_ref,
-    output_ref,
-    *,
-    block_m: int,
-    block_n: int,
-    block_k: int,
-):
-    """Stream the full-width gate reverse into ``gate_accumulator @ w_up.T``."""
-    start_m = pl.program_id(0) * block_m
-    start_n = pl.program_id(1) * block_n
-    span_m = pl.ds(start_m, block_m)
-    span_n = pl.ds(start_n, block_n)
-    acc = jnp.zeros((block_m, block_n), dtype=jnp.float32)
-
-    def body(i, acc):
-        start_k = i * block_k
-        span_k = pl.ds(start_k, block_k)
-        output_cotangent = plgpu.load(output_cotangent_ref.at[span_m, span_k])
-        normalized = plgpu.load(normalized_ref.at[span_m, span_k])
-        gate = plgpu.load(gate_ref.at[span_m, span_k])
-        w_up = plgpu.load(w_up_ref.at[span_n, span_k])
-        gate_accumulator = _gate_accumulator_tile(output_cotangent, normalized, gate)
-        return acc + pl.dot(gate_accumulator, w_up.T)
-
-    acc = jax.lax.fori_loop(0, pl.cdiv(w_up_ref.shape[1], block_k), body, acc)
-    preactivation = plgpu.load(preactivation_ref.at[span_m, span_n])
-    sigmoid = jax.nn.sigmoid(preactivation.astype(jnp.float32))
-    silu_derivative = sigmoid * (1 + preactivation.astype(jnp.float32) * (1 - sigmoid))
-    plgpu.store(output_ref.at[span_m, span_n], (acc * silu_derivative).astype(output_ref.dtype))
-
-
-def _gate_w_up_kernel(
+def _rms_gated_norm_reverse_kernel(
     output_cotangent_ref,
     normalized_ref,
     gate_ref,
     gate_hidden_ref,
-    output_ref,
+    preactivation_ref,
+    w_up_ref,
+    w_down_ref,
+    x_ref,
+    norm_weight_ref,
+    inverse_rms_ref,
+    norm_weight_zero_ref,
+    w_down_zero_ref,
+    w_up_zero_ref,
+    x_cotangent_ref,
+    norm_weight_cotangent_ref,
+    w_down_cotangent_ref,
+    w_up_cotangent_ref,
     *,
     block_m: int,
-    block_n: int,
-    block_k: int,
+    block_d: int,
 ):
-    """Stream the full-width gate reverse into ``gate_hidden.T @ gate_accumulator``."""
-    start_m = pl.program_id(0) * block_m
-    start_n = pl.program_id(1) * block_n
+    """Reverse one row tile and atomically accumulate all replicated parameter gradients."""
+    del norm_weight_zero_ref, w_down_zero_ref, w_up_zero_ref
+    row_tile = pl.program_id(0)
+    start_m = row_tile * block_m
     span_m = pl.ds(start_m, block_m)
-    span_n = pl.ds(start_n, block_n)
-    acc = jnp.zeros((block_m, block_n), dtype=jnp.float32)
+    rank = preactivation_ref.shape[1]
+    span_r = pl.ds(0, rank)
+    gate_hidden = plgpu.load(gate_hidden_ref.at[span_m, span_r])
+    preactivation = plgpu.load(preactivation_ref.at[span_m, span_r])
+    gate_preactivation_cotangent = jnp.zeros((block_m, rank), dtype=jnp.float32)
 
-    def body(i, acc):
-        start_k = i * block_k
-        span_k = pl.ds(start_k, block_k)
-        gate_hidden = plgpu.load(gate_hidden_ref.at[span_k, span_m])
-        output_cotangent = plgpu.load(output_cotangent_ref.at[span_k, span_n])
-        normalized = plgpu.load(normalized_ref.at[span_k, span_n])
-        gate = plgpu.load(gate_ref.at[span_k, span_n])
+    def gate_body(i, accumulator):
+        start_d = i * block_d
+        span_d = pl.ds(start_d, block_d)
+        output_cotangent = plgpu.load(output_cotangent_ref.at[span_m, span_d])
+        normalized = plgpu.load(normalized_ref.at[span_m, span_d])
+        gate = plgpu.load(gate_ref.at[span_m, span_d])
+        w_up = plgpu.load(w_up_ref.at[span_r, span_d])
         gate_accumulator = _gate_accumulator_tile(output_cotangent, normalized, gate)
-        return acc + pl.dot(gate_hidden.T, gate_accumulator)
+        w_up_partial = pl.dot(gate_hidden.T, gate_accumulator)
+        plgpu.atomic_add(w_up_cotangent_ref, (span_r, span_d), w_up_partial)
+        return accumulator + pl.dot(gate_accumulator, w_up.T)
 
-    acc = jax.lax.fori_loop(0, pl.cdiv(gate_hidden_ref.shape[0], block_k), body, acc)
-    plgpu.store(output_ref.at[span_m, span_n], acc.astype(output_ref.dtype))
+    hidden_tiles = pl.cdiv(normalized_ref.shape[1], block_d)
+    gate_preactivation_cotangent = jax.lax.fori_loop(0, hidden_tiles, gate_body, gate_preactivation_cotangent)
+    sigmoid = jax.nn.sigmoid(preactivation.astype(jnp.float32))
+    silu_derivative = sigmoid * (1 + preactivation.astype(jnp.float32) * (1 - sigmoid))
+    gate_preactivation_cotangent = (gate_preactivation_cotangent * silu_derivative).astype(jnp.bfloat16)
+    inverse_rms = plgpu.load(inverse_rms_ref.at[span_m]).astype(jnp.float32)
+    row_dot = jnp.zeros((block_m,), dtype=jnp.float32)
+
+    def rms_partials_body(i, row_dot):
+        start_d = i * block_d
+        span_d = pl.ds(start_d, block_d)
+        w_down = plgpu.load(w_down_ref.at[span_d, span_r])
+        normalized = plgpu.load(normalized_ref.at[span_m, span_d])
+        w_down_partial = pl.dot(normalized.T, gate_preactivation_cotangent)
+        plgpu.atomic_add(w_down_cotangent_ref, (span_d, span_r), w_down_partial)
+        low_rank = pl.dot(gate_preactivation_cotangent, w_down.T).astype(jnp.bfloat16)
+        output_cotangent = plgpu.load(output_cotangent_ref.at[span_m, span_d])
+        gate = plgpu.load(gate_ref.at[span_m, span_d])
+        direct = (output_cotangent * gate).astype(jnp.bfloat16)
+        unweighted = (low_rank + direct).astype(jnp.bfloat16)
+        x = plgpu.load(x_ref.at[span_m, span_d]).astype(jnp.float32)
+        x_hat = x * inverse_rms[:, None]
+        norm_weight = plgpu.load(norm_weight_ref.at[span_d]).astype(jnp.float32)
+        weighted = unweighted.astype(jnp.float32) * norm_weight[None, :]
+        norm_weight_partial = jnp.sum(unweighted.astype(jnp.float32) * x_hat, axis=0)
+        plgpu.atomic_add(norm_weight_cotangent_ref, span_d, norm_weight_partial)
+        return row_dot + jnp.sum(weighted * x_hat, axis=1)
+
+    row_dot = jax.lax.fori_loop(0, hidden_tiles, rms_partials_body, row_dot)
+    row_mean = row_dot / x_ref.shape[1]
+
+    def output_body(i, _):
+        start_d = i * block_d
+        span_d = pl.ds(start_d, block_d)
+        w_down = plgpu.load(w_down_ref.at[span_d, pl.ds(0, w_down_ref.shape[1])])
+        low_rank = pl.dot(gate_preactivation_cotangent, w_down.T).astype(jnp.bfloat16)
+        output_cotangent = plgpu.load(output_cotangent_ref.at[span_m, span_d])
+        gate = plgpu.load(gate_ref.at[span_m, span_d])
+        unweighted = (low_rank + (output_cotangent * gate).astype(jnp.bfloat16)).astype(jnp.bfloat16)
+        x = plgpu.load(x_ref.at[span_m, span_d]).astype(jnp.float32)
+        x_hat = x * inverse_rms[:, None]
+        norm_weight = plgpu.load(norm_weight_ref.at[span_d]).astype(jnp.float32)
+        weighted = unweighted.astype(jnp.float32) * norm_weight[None, :]
+        x_cotangent = (weighted - x_hat * row_mean[:, None]) * inverse_rms[:, None]
+        plgpu.store(x_cotangent_ref.at[span_m, span_d], x_cotangent.astype(x_cotangent_ref.dtype))
+
+    jax.lax.fori_loop(0, hidden_tiles, output_body, None)
 
 
 def _matrix_bytes(shape: tuple[int, int], dtype) -> int:
@@ -400,107 +426,103 @@ def _matrix_bytes(shape: tuple[int, int], dtype) -> int:
 
 
 @functools.lru_cache(maxsize=None)
-def _gate_silu_preactivation_call(rows: int, hidden_dim: int, rank: int, dtype):
-    block_m = _GATE_REVERSE_BLOCK_M
-    block_n = _GATE_REVERSE_BLOCK_N
-    block_k = _GATE_REVERSE_BLOCK_K
+def _rms_gated_norm_reverse_call(rows: int, hidden_dim: int, rank: int, dtype):
+    block_m = _RMS_REVERSE_BLOCK_M
+    block_d = _RMS_REVERSE_BLOCK_D
     cost = pl.CostEstimate(
-        flops=2 * rows * hidden_dim * rank + 8 * rows * hidden_dim + 8 * rows * rank,
+        flops=8 * rows * hidden_dim * rank + 24 * rows * hidden_dim + 8 * rows * rank,
         transcendentals=rows * rank,
         bytes_accessed=(
-            3 * _matrix_bytes((rows, hidden_dim), dtype)
-            + _matrix_bytes((rank, hidden_dim), dtype)
-            + 2 * _matrix_bytes((rows, rank), dtype)
+            5 * _matrix_bytes((rows, hidden_dim), dtype)
+            + 4 * _matrix_bytes((rows, rank), dtype)
+            + 4 * _matrix_bytes((rank, hidden_dim), dtype)
+            + 2 * _matrix_bytes((hidden_dim, rank), dtype)
         ),
     )
+    bf16 = jax.ShapeDtypeStruct
     return pl.pallas_call(
         functools.partial(
-            _gate_silu_preactivation_kernel,
+            _rms_gated_norm_reverse_kernel,
             block_m=block_m,
-            block_n=block_n,
-            block_k=block_k,
+            block_d=block_d,
         ),
-        out_shape=jax.ShapeDtypeStruct((rows, rank), dtype),
-        in_specs=(pl.no_block_spec,) * 5,
-        out_specs=pl.no_block_spec,
-        grid=(pl.cdiv(rows, block_m), pl.cdiv(rank, block_n)),
-        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=3),
+        out_shape=(
+            bf16((rows, hidden_dim), dtype),
+            bf16((hidden_dim,), jnp.float32),
+            bf16((hidden_dim, rank), jnp.float32),
+            bf16((rank, hidden_dim), jnp.float32),
+        ),
+        in_specs=(pl.no_block_spec,) * 13,
+        out_specs=(pl.no_block_spec,) * 4,
+        input_output_aliases={10: 1, 11: 2, 12: 3},
+        grid=(pl.cdiv(rows, block_m),),
+        compiler_params=plgpu.CompilerParams(num_warps=8, num_stages=2),
         cost_estimate=cost,
-        name="gate_silu_preactivation_reverse",
+        name="rms_gated_norm_reverse",
     )
 
 
-@functools.lru_cache(maxsize=None)
-def _gate_w_up_call(rows: int, hidden_dim: int, rank: int, dtype):
-    block_m = _GATE_REVERSE_BLOCK_N
-    block_n = 64
-    block_k = _GATE_REVERSE_BLOCK_K
-    cost = pl.CostEstimate(
-        flops=2 * rows * hidden_dim * rank + 8 * rows * hidden_dim,
-        transcendentals=0,
-        bytes_accessed=(
-            3 * _matrix_bytes((rows, hidden_dim), dtype)
-            + _matrix_bytes((rows, rank), dtype)
-            + _matrix_bytes((rank, hidden_dim), dtype)
-        ),
-    )
-    return pl.pallas_call(
-        functools.partial(
-            _gate_w_up_kernel,
-            block_m=block_m,
-            block_n=block_n,
-            block_k=block_k,
-        ),
-        out_shape=jax.ShapeDtypeStruct((rank, hidden_dim), dtype),
-        in_specs=(pl.no_block_spec,) * 4,
-        out_specs=pl.no_block_spec,
-        grid=(pl.cdiv(rank, block_m), pl.cdiv(hidden_dim, block_n)),
-        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=3),
-        cost_estimate=cost,
-        name="gate_w_up_reverse",
-    )
-
-
-def quack_gate_silu_reverse(
+def quack_rms_gated_norm_reverse(
     output_cotangent: jax.Array,
     normalized: jax.Array,
     gate: jax.Array,
     gate_hidden: jax.Array,
     w_up: jax.Array,
     preactivation: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
-    """Reverse the output gate and SiLU projection without materializing their full-width edge."""
+    w_down: jax.Array,
+    x: jax.Array,
+    norm_weight: jax.Array,
+    inverse_rms: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Reverse RMSNorm-GatedNorm behind one device-local custom-call boundary."""
     if output_cotangent.ndim != 2:
         raise ValueError(f"output_cotangent must be rank 2, got {output_cotangent.shape}")
     rows, hidden_dim = output_cotangent.shape
     if preactivation.ndim != 2:
         raise ValueError(f"preactivation must be rank 2, got {preactivation.shape}")
     rank = preactivation.shape[1]
-    if normalized.shape != (rows, hidden_dim) or gate.shape != (rows, hidden_dim):
-        raise ValueError("full-width gate reverse inputs must have matching shapes")
+    if normalized.shape != (rows, hidden_dim) or gate.shape != (rows, hidden_dim) or x.shape != (rows, hidden_dim):
+        raise ValueError("full-width reverse inputs must have matching shapes")
     if gate_hidden.shape != (rows, rank) or w_up.shape != (rank, hidden_dim) or preactivation.shape != (rows, rank):
         raise ValueError("low-rank gate reverse inputs have inconsistent dimensions")
-    dtypes = {value.dtype for value in (output_cotangent, normalized, gate, gate_hidden, w_up, preactivation)}
+    if w_down.shape != (hidden_dim, rank) or norm_weight.shape != (hidden_dim,) or inverse_rms.shape != (rows,):
+        raise ValueError("RMS reverse inputs have inconsistent dimensions")
+    dtypes = {
+        value.dtype for value in (output_cotangent, normalized, gate, gate_hidden, w_up, preactivation, w_down, x)
+    }
     if dtypes != {jnp.dtype(jnp.bfloat16)}:
         raise ValueError(f"gate-SiLU reverse requires matching BF16 inputs, got {sorted(map(str, dtypes))}")
-    divisors = (_GATE_REVERSE_BLOCK_M, 64, _GATE_REVERSE_BLOCK_N)
+    if inverse_rms.dtype != jnp.float32:
+        raise ValueError(f"inverse_rms must be float32, got {inverse_rms.dtype}")
+    divisors = (_RMS_REVERSE_BLOCK_M, _RMS_REVERSE_BLOCK_D, _GATE_REVERSE_BLOCK_N)
     if rows % divisors[0] or hidden_dim % divisors[1] or rank % divisors[2]:
         raise ValueError(
             "gate-SiLU reverse requires rows, hidden_dim, and rank divisible by "
             f"{divisors}, got {(rows, hidden_dim, rank)}"
         )
 
-    preactivation_call = _gate_silu_preactivation_call(rows, hidden_dim, rank, output_cotangent.dtype)
-    w_up_call = _gate_w_up_call(rows, hidden_dim, rank, output_cotangent.dtype)
-    preactivation_cotangent = preactivation_call(
+    call = _rms_gated_norm_reverse_call(rows, hidden_dim, rank, output_cotangent.dtype)
+    x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent = call(
         output_cotangent,
         normalized,
         gate,
-        w_up,
+        gate_hidden,
         preactivation,
+        w_up,
+        w_down,
+        x,
+        norm_weight,
+        inverse_rms,
+        jnp.zeros(norm_weight.shape, dtype=jnp.float32),
+        jnp.zeros(w_down.shape, dtype=jnp.float32),
+        jnp.zeros(w_up.shape, dtype=jnp.float32),
     )
-    w_up_cotangent = w_up_call(output_cotangent, normalized, gate, gate_hidden)
-    return preactivation_cotangent, w_up_cotangent
+    return (
+        x_cotangent,
+        norm_weight_cotangent.astype(norm_weight.dtype),
+        w_down_cotangent.astype(w_down.dtype),
+        w_up_cotangent.astype(w_up.dtype),
+    )
 
 
 def quack_coda_rms_backward_producer(

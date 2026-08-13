@@ -7,9 +7,9 @@ import jax
 import jax.numpy as jnp
 import pytest
 from levanter.grug._moe.rms_gated_norm import (
-    exact_gate_silu_reverse_reference,
     exact_rms_backward_partials_reference,
     exact_rms_backward_recompute_consumer_reference,
+    exact_rms_gated_norm_reverse_reference,
     exact_silu_backward_reference,
 )
 
@@ -124,7 +124,7 @@ def test_silu_backward_gemm_matches_reference():
     _assert_close(postactivation, expected_postactivation, tolerance=_BF16_TOLERANCE, label="postactivation")
 
 
-def test_gate_silu_reverse_matches_reference():
+def test_rms_gated_norm_reverse_matches_reference():
     _require_gpu()
 
     keys = jax.random.split(jax.random.key(31), 6)
@@ -135,27 +135,37 @@ def test_gate_silu_reverse_matches_reference():
     gate_hidden = jax.nn.silu(preactivation)
     w_up = (0.1 * jax.random.normal(keys[4], (_RANK, _HIDDEN_DIM), dtype=jnp.float32)).astype(jnp.bfloat16)
 
-    actual_preactivation, actual_w_up = quack_rms_cute.quack_gate_silu_reverse(
+    w_down = (0.1 * jax.random.normal(keys[5], (_HIDDEN_DIM, _RANK), dtype=jnp.float32)).astype(jnp.bfloat16)
+    x = jax.random.normal(jax.random.key(32), (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
+    norm_weight = jnp.ones((_HIDDEN_DIM,), dtype=jnp.bfloat16)
+    inverse_rms = jax.lax.rsqrt(jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1) + _NORM_EPS)
+
+    actual = quack_rms_cute.quack_rms_gated_norm_reverse(
         output_cotangent,
         normalized,
         gate,
         gate_hidden,
         w_up,
         preactivation,
+        w_down,
+        x,
+        norm_weight,
+        inverse_rms,
     )
-    expected_preactivation, expected_w_up = exact_gate_silu_reverse_reference(
+    expected = exact_rms_gated_norm_reverse_reference(
         output_cotangent,
         normalized,
         gate,
         gate_hidden,
         w_up,
         preactivation,
+        w_down,
+        x,
+        norm_weight,
+        inverse_rms,
     )
 
-    _assert_close(
-        actual_preactivation,
-        expected_preactivation,
-        tolerance=_BF16_TOLERANCE,
-        label="gate preactivation cotangent",
-    )
-    _assert_close(actual_w_up, expected_w_up, tolerance=_BF16_TOLERANCE, label="w_up cotangent")
+    for label, actual_value, expected_value in zip(
+        ("input", "norm weight", "w_down", "w_up"), actual, expected, strict=True
+    ):
+        _assert_close(actual_value, expected_value, tolerance=_BF16_TOLERANCE, label=label)

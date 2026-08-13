@@ -161,6 +161,47 @@ def exact_rms_backward_recompute_consumer_reference(
     return exact_rms_backward_consumer(unweighted_cotangent, row_dot, x, norm_weight, inverse_rms)
 
 
+def exact_rms_gated_norm_reverse_reference(
+    output_cotangent: jax.Array,
+    normalized: jax.Array,
+    gate: jax.Array,
+    gate_hidden: jax.Array,
+    w_up: jax.Array,
+    preactivation: jax.Array,
+    w_down: jax.Array,
+    x: jax.Array,
+    norm_weight: jax.Array,
+    inverse_rms: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Reference for the single-boundary device-local reverse."""
+    gate_preactivation_cotangent, w_up_cotangent = exact_gate_silu_reverse_reference(
+        output_cotangent, normalized, gate, gate_hidden, w_up, preactivation
+    )
+    w_down_cotangent = jnp.einsum("td,tr->dr", normalized, gate_preactivation_cotangent)
+    row_dot_partial, norm_weight_partial = exact_rms_backward_partials_reference(
+        gate_preactivation_cotangent,
+        w_down,
+        output_cotangent,
+        gate,
+        x,
+        norm_weight,
+        inverse_rms,
+    )
+    row_dot = jnp.sum(row_dot_partial, axis=-1)
+    norm_weight_cotangent = jnp.sum(norm_weight_partial, axis=0).astype(norm_weight.dtype)
+    x_cotangent = exact_rms_backward_recompute_consumer_reference(
+        gate_preactivation_cotangent,
+        w_down,
+        output_cotangent,
+        gate,
+        row_dot,
+        x,
+        norm_weight,
+        inverse_rms,
+    )
+    return x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent
+
+
 def rms_norm_with_inverse(x: jax.Array, weight: jax.Array, eps: float) -> tuple[jax.Array, jax.Array]:
     """Apply RMSNorm and return the per-row inverse RMS its reverse needs."""
     dtype = x.dtype
@@ -202,22 +243,14 @@ def _exact_forward(x, norm_weight, w_down, w_up, eps):
 
 
 def _backward_kernels():
-    """Return the three device-local kernels driving the fused reverse.
+    """Return the single device-local kernel driving the fused reverse.
 
     Imported lazily so the default XLA path never pulls in the optional SM100 dependency, and
     indirected through one function so CPU tests can substitute the pure-JAX references.
     """
-    from levanter.grug._moe.quack_rms_cute import (  # noqa: PLC0415
-        quack_coda_rms_backward_consumer,
-        quack_coda_rms_backward_producer,
-        quack_gate_silu_reverse,
-    )
+    from levanter.grug._moe.quack_rms_cute import quack_rms_gated_norm_reverse  # noqa: PLC0415
 
-    return (
-        quack_gate_silu_reverse,
-        quack_coda_rms_backward_producer,
-        quack_coda_rms_backward_consumer,
-    )
+    return quack_rms_gated_norm_reverse
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(4, 5))
@@ -232,42 +265,25 @@ def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
 
 
 def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
-    gate_silu_reverse, rms_backward_producer, rms_backward_consumer = _backward_kernels()
+    reverse = _backward_kernels()
 
     del eps
     x = residuals.x
     x_flat = x.reshape((-1, x.shape[-1]))
     output_cotangent = output_cotangent.reshape(residuals.normalized.shape)
-    gate_preactivation_cotangent, w_up_cotangent = gate_silu_reverse(
+    x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent = reverse(
         output_cotangent,
         residuals.normalized,
         residuals.gate,
         residuals.gate_hidden,
         residuals.w_up,
         residuals.gate_preactivation,
-    )
-    w_down_cotangent = jnp.einsum("td,tr->dr", residuals.normalized, gate_preactivation_cotangent)
-    row_dot_partial, norm_weight_partial = rms_backward_producer(
-        gate_preactivation_cotangent,
         residuals.w_down,
-        output_cotangent,
-        residuals.gate,
         x_flat,
         residuals.norm_weight,
         residuals.inverse_rms,
     )
-    row_dot = jnp.sum(row_dot_partial, axis=-1)
-    norm_weight_cotangent = jnp.sum(norm_weight_partial, axis=0).astype(residuals.norm_weight.dtype)
-    x_cotangent = rms_backward_consumer(
-        gate_preactivation_cotangent,
-        residuals.w_down,
-        output_cotangent,
-        residuals.gate,
-        row_dot,
-        x_flat,
-        residuals.norm_weight,
-        residuals.inverse_rms,
-    ).reshape(x.shape)
+    x_cotangent = x_cotangent.reshape(x.shape)
     # The parameters enter replicated, so their cotangents must be reduced over the axes the
     # tokens are sharded across. shard_map defaults to check_vma=True, which suppresses the
     # transpose's own defensive psum and requires the reduction here.
