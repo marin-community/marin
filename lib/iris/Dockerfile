@@ -134,15 +134,15 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Build against the committed root `uv.lock` (`--frozen`) so the image ships the
 # same pinned, tested dependency set as local dev and the rest of CI — no fresh
 # PyPI resolve that can float a transitive (e.g. protobuf) to an untested major.
-# marin-iris's closure is two workspace members built from source — marin-rigging
-# and marin-finelog (the pure-Python finelog client) — plus external/registry
+# marin-iris's closure is three workspace members built from source — marin-rigging,
+# marin-finestore, and marin-finelog (the pure-Python finelog client) — plus external/registry
 # deps (the native marin-finelog-server ships as a published wheel). It never
 # pulls the Rust-built members (marin-core, levanter, …), so `--package
 # marin-iris` never asks the toolchain-free slim base to build them.
 # uv must still discover every workspace member to map the lock, so copy each
-# member's pyproject.toml (metadata only) — but only iris+rigging+finelog install.
+# member's pyproject.toml (metadata only) — but only iris+rigging+finestore+finelog install.
 # The first sync uses `--no-install-workspace` to install just the external deps
-# (cached across source edits); the second builds iris+rigging+finelog from source.
+# (cached across source edits); the second builds iris and its workspace dependencies from source.
 # Metadata alone suffices even for marin-haliax's `dynamic = ["version"]`
 # (sourced from src/haliax/__about__.py): under --frozen, uv takes the version
 # from the lock and never invokes a non-installed member's build backend.
@@ -152,6 +152,7 @@ COPY lib/iris/rust/pyproject.toml lib/iris/rust/Cargo.toml lib/iris/rust/Cargo.l
     lib/iris/rust/iris_native.pyi ./lib/iris/rust/
 COPY lib/iris/rust/pyext/Cargo.toml ./lib/iris/rust/pyext/Cargo.toml
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
+COPY lib/finestore/pyproject.toml ./lib/finestore/pyproject.toml
 COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
 COPY lib/fray/pyproject.toml ./lib/fray/pyproject.toml
 COPY lib/haliax/pyproject.toml ./lib/haliax/pyproject.toml
@@ -162,11 +163,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --package marin-iris --no-install-workspace \
         --no-install-package marin-iris-native
 
-# Now copy full source for rigging, finelog, and iris, then install. rigging's
+# Now copy full source for rigging, finestore, finelog, and iris, then install. rigging's
 # wheel force-includes the repo-root config/ cluster YAMLs (-> rigging/clusters)
 # and finelog's force-includes lib/finelog/config/, so copy both: the editable
 # builds read them.
 COPY lib/rigging/src/ ./lib/rigging/src/
+COPY lib/finestore/src/ ./lib/finestore/src/
 COPY config/ ./config/
 COPY lib/finelog/src/ ./lib/finelog/src/
 COPY lib/finelog/config/ ./lib/finelog/config/

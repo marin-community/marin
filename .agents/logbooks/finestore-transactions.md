@@ -77,3 +77,9 @@ Validation so far:
 - Made the samples-v4 backup verify existing metadata and shard sizes before dropping the active table. Captured the S3 endpoint when constructing a conditional object and removed ambiguous path normalization.
 - `./infra/pre-commit.py --changed-files --fix`: all gates passed.
 - FineStore: 54 passed; evaluation archive/Harbor/migration selection: 47 passed; Iris JAX cache: 35 passed; Cutlass/Pallas cache: 16 passed; Rigging conditional-write/lock: 9 passed.
+
+### 2026-08-13 — Iris image packaging
+
+- CoreWeave smoke CI exposed that the Iris Docker context did not include the new FineStore workspace dependency. Added the FineStore manifest and source to the dependency stage and its context allowlist.
+- `docker buildx build --target deps --platform linux/amd64 -f lib/iris/Dockerfile .` completed, including the final `uv sync` that installed `marin-finestore` and the Iris native wheel.
+- The repository pre-commit and type-check gates pass after the packaging fix.
