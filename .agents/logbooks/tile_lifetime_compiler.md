@@ -4565,5 +4565,45 @@ author: dlwh
   execution differs from pinned JAX in 9,894 BF16 elements and exceeds the
   frozen mean-error limit. A future slice needs an explicit balanced
   leaf-order-preserving `cpu_bytecode_v2`, larger checked resource limits, and
-  a new device, transport, and pipeline version. GPU, performance, hardware,
-  and scorecard evidence remain absent.
+  a new device and pipeline version. GPU, performance, hardware, and scorecard
+  evidence remain absent.
+
+### 2026-08-12 - TLTC-MLIR-014 ABI 9 representative forward
+
+- Pipeline ABI 9 adds the exact BF16 `2048x4096` SOURCE_ORDERED Host-forward
+  boundary. Device schema 2 selects `cpu_bytecode_v2` with task magic
+  `SBC\x02`; the transport, invocation, and bundle schemas remain 1, 2, and 1.
+  The fixed typed-FFI target advances to
+  `shuttle.cpu.executable_bundle.v3`. Existing schema-1 bytecode and the
+  `7x13` SOURCE_ORDERED/FAST boundaries remain unchanged.
+- The large Fold uses a closed `adjacent_balanced_initializer_last`
+  realization: adjacent FP32 leaves combine level by level in ascending order,
+  then the zero initializer combines once with the root. This is the selected
+  `order_free=true` realization for this coordinate, not a claim that every
+  legal source reduction has the same bits. The former serial realization
+  differs from ordinary JAX in exactly 9,884 BF16 elements; the balanced result
+  matches bitwise with contract digest
+  `b9665bb7204c79fbedaa49e07062ed6a65436face5961f198d6223ba51828f6f`.
+- The closed executable has 19 tasks and 21 slots. Checked V2 limits admit at
+  most 8,388,608 elements per task, 32 MiB per slot, 256 MiB aggregate
+  temporaries, 67,129,347 aggregate task positions, and 16 KiB Fold scratch.
+  The exact no-reuse temporary census is 201,416,716 bytes. V1 retains its
+  prior limits. Dialect and runtime validation also require every V2 device to
+  remain SOURCE_ORDERED; a fully rehashed FAST-policy mutation fails closed.
+- Rebuilt JAX/jaxlib 0.10.1 ordinary JAX populated one immutable 3300-byte
+  cache entry with SHA-256
+  `286758498f8503cac88ffff8f6362e1d10d59f798507d95ca8e9cfba1709edc0`.
+  Reuse reported one public hit, emitted no observer events, and preserved the
+  bytes. Populate observed all 20 algebra tasks, no exclusions, and final
+  erasure. Both runs matched the ordinary-JAX digest above. The reviewed
+  `libjax_common.dylib` SHA-256 is
+  `a16a569139b60798dedd3f78bc9d6dd8ad70e1bc28900cbb7c5afc2596dab995`.
+- Canonical integration passes 46 native/XLA/MLIR targets and 361 Shuttle
+  Python tests. Independent review returned GO after rechecking V1 isolation,
+  resource mutations, real Host execution, cache reuse, and the V2 policy
+  binding. Measured local Host populate and reuse were 2.62 and 2.64 seconds,
+  with maximum RSS 449,363,968 and 437,682,176 bytes respectively; these are
+  functional evidence, not scorecard performance measurements.
+- Scope remains exact `2048x4096` SOURCE_ORDERED Host forward. Large backward,
+  composed, FAST, other shapes, GPU lowering, hardware execution, performance
+  acceptance, and scorecard promotion remain unsupported or blocked.
