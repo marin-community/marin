@@ -1279,3 +1279,15 @@ author: Rafal Wojdyla
 - Retry state: RNO still reports 38 shards at retry attempt one. No shard entered retry attempt two.
 - Issue update: None. One East source completion and a recoverable batch capacity reduction are not partition-level events.
 - Next action: Continue root, source, service, Zephyr, and output checks. Watch RNO capacity and recover only a terminal in-scope job failure.
+
+### 2026-08-13 21:01 UTC - Output passed 97 percent
+
+- Aggregate progress: A direct object count at 20:55 UTC found 161,869 of 166,775 output shards, or 97.06%. There are 4,906 shards left. East has written 77,248 shards, and RNO has written 84,621 shards. Two hundred eight sources have output, and no Parquet path is unknown.
+- Completed artifacts: East has 145 of 146 sealed source artifacts. RNO has 58 of 146. The full run has 203 of 292 sealed source artifacts.
+- East recovery: The final source completed its first write stage and shut down its coordinator at 20:38 UTC. The source pod was then preempted during cleanup. Its automatic retry scanned the join data and checked existing output, but the East root pod was preempted at 20:54 UTC. The root resumed on a new node and launched the final source again. The new join scan reached 3,821 of 14,285 shards with 32 live workers and zero dead workers.
+- East data safety: The output writer has `skip_existing=True`. Each retry checks the target file before it evaluates the embedding stream, so it does not embed an existing output shard again.
+- RNO progress: The active medium-high-quality Nemotron source reached 984 of 3,679 output shards with 32 live workers and zero dead workers.
+- RNO service recovery: Service 026 failed after two batch preemptions because TEI could not bind port 12052 on a reused node. Reconstructed its exact stored batch request, checked the dry run, and replayed only that service. All 512 service jobs are active again. At 20:54 UTC, 144 service tasks were running and 368 were building.
+- Shared record: Echo entry 2613 records the service replay. The fixed-port incident remains at https://echo.oa.dev/wiki/142.
+- Issue update: None. Both recoveries were automatic or limited to one service, and neither stopped RNO output.
+- Next action: Let the East retry seal its final source and root. Continue RNO source, service, worker, and output checks.
