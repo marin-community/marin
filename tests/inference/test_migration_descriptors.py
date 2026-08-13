@@ -6,7 +6,7 @@
 The descriptor is read by the refresh-fork skill, so a section for a nonexistent fork, a fork with
 no section, a pin pointing at the wrong source, a missing e2e, or a malformed field would silently
 misroute a migration. These checks pin the descriptor to the real fork layout: the isolated uv
-projects on disk and the vllm/tpu-forks.toml sections.
+projects on disk, the vllm/tpu-forks.toml sections, and the vllm/gpu-release.toml wheel pin.
 """
 
 import tomllib
@@ -42,13 +42,20 @@ def _tpu_fork_sections(root: Path) -> set[str]:
     return set(_load(_external_root(root) / "vllm" / "tpu-forks.toml"))
 
 
+def _release_pin_forks(root: Path) -> set[str]:
+    # The GPU vllm pin is a prebuilt-wheel release (gpu-release.toml), a second pin on the vllm fork
+    # distinct from its TPU source pin, so it has no tpu-forks.toml section. Name it from the release
+    # descriptor's presence.
+    return {"vllm-gpu"} if (_external_root(root) / "vllm" / "gpu-release.toml").exists() else set()
+
+
 def _descriptors(root: Path) -> dict:
     return _load(_external_root(root) / "migration.toml")
 
 
 def test_every_fork_has_exactly_one_descriptor():
     root = _root()
-    expected = _isolated_projects(root) | _tpu_fork_sections(root)
+    expected = _isolated_projects(root) | _tpu_fork_sections(root) | _release_pin_forks(root)
     assert set(_descriptors(root)) == expected
 
 
@@ -58,6 +65,10 @@ def test_pin_resolves_to_the_section_fork():
         pin = section["pin"]
         if pin == "isolated_project":
             assert (_external_root(root) / name / "pyproject.toml").exists(), f"{name}: no isolated project"
+            continue
+        if pin.startswith("release:"):
+            release = _load(_external_root(root) / pin.removeprefix("release:"))
+            assert release.get("release_tag") and release.get("source_commit"), f"{name}: release pin missing fields"
             continue
         rel, _, fragment = pin.removeprefix("descriptor:").partition("#")
         assert fragment == name, f"{name}: pin fragment {fragment!r} does not match the section name"
@@ -74,6 +85,8 @@ def test_fields_are_well_formed():
             assert fork in descriptors and path, f"{name}: derived_from must name a fork and path"
         # Every fork is our commits on an upstream, so every section names the repo it rebases onto.
         assert section.get("upstream"), f"{name}: rebasing onto upstream requires an upstream"
+        # Every pin names the fork branch it tracks; the refresh stages on "<branch>-next".
+        assert section.get("branch"), f"{name}: a pin must name the fork branch it tracks"
 
 
 def test_derived_forks_share_a_group():
