@@ -15,6 +15,8 @@ from iac.imports import ImportCatalog
 
 PROJECT = "example"
 PROJECT_NUMBER = "123456789"
+MARIN_BACKEND_SERVICE_ID = "2663834686758326555"
+ROUNDED_BACKEND_SERVICE_ID = 2663834686758326784
 
 
 def _args() -> GcpGclbIapArgs:
@@ -31,7 +33,7 @@ def _args() -> GcpGclbIapArgs:
                 zone="us-central1-a",
                 instance="iris-controller-marin",
                 ip_address="10.0.0.2",
-                backend_service_id="111",
+                backend_service_id=MARIN_BACKEND_SERVICE_ID,
                 network_tag="iris-marin-controller",
                 programmatic_clients=("desktop-client.apps.googleusercontent.com",),
             ),
@@ -81,7 +83,12 @@ def _record_gclb(monkeypatch) -> RecordedGclb:
             resource._type = resource_type
             resource._name = logical_name
             for output in ("id", "name", "self_link", "generated_id", "address"):
-                setattr(resource, output, logical_name)
+                value = (
+                    ROUNDED_BACKEND_SERVICE_ID
+                    if output == "generated_id" and resource_type == "gcp:compute/backendService:BackendService"
+                    else logical_name
+                )
+                setattr(resource, output, value)
             return resource
 
         return record
@@ -171,3 +178,10 @@ def test_gclb_catalogs_every_existing_leaf(monkeypatch) -> None:
     cataloged = {spec.identity.logical_name for spec in recording.imports.specs}
 
     assert cataloged == set(recording.inputs_by_name)
+
+
+def test_iap_settings_name_uses_exact_configured_backend_service_id(monkeypatch) -> None:
+    recording = _record_gclb(monkeypatch)
+    settings_name = recording.inputs_by_name["marin-iap-settings"]["name"]
+
+    assert settings_name == f"projects/{PROJECT_NUMBER}/iap_web/compute/services/{MARIN_BACKEND_SERVICE_ID}"

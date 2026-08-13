@@ -25,6 +25,8 @@ ARMOR_DEFAULT_PRIORITY = 2147483647
 LOAD_BALANCING_SCHEME = "EXTERNAL_MANAGED"
 BACKEND_BALANCING_MODE = "RATE"
 BACKEND_MAX_RATE_PER_ENDPOINT = 1000
+BACKEND_CONNECTION_DRAINING_TIMEOUT = 0
+HEALTH_CHECK_PORT_SPECIFICATION = "USE_FIXED_PORT"
 
 
 @dataclass(frozen=True)
@@ -188,7 +190,11 @@ def _neg_backend(
         timeout_sec=5,
         healthy_threshold=2,
         unhealthy_threshold=3,
-        http_health_check=gcp.compute.HealthCheckHttpHealthCheckArgs(port=port, request_path="/health"),
+        http_health_check=gcp.compute.HealthCheckHttpHealthCheckArgs(
+            port=port,
+            port_specification=HEALTH_CHECK_PORT_SPECIFICATION,
+            request_path="/health",
+        ),
         opts=context.options(),
     )
     context.register(
@@ -204,6 +210,7 @@ def _neg_backend(
         protocol="HTTP",
         port_name="http",
         timeout_sec=timeout,
+        connection_draining_timeout_sec=BACKEND_CONNECTION_DRAINING_TIMEOUT,
         load_balancing_scheme=LOAD_BALANCING_SCHEME,
         health_checks=health_check.id,
         backends=[
@@ -275,11 +282,7 @@ def _controller_backend(
             imports=context.imports,
         )
 
-    settings_import_name = f"projects/{args.project_number}/iap_web/compute/services/{controller.backend_service_id}"
-    settings_name = pulumi.Output.concat(
-        f"projects/{args.project_number}/iap_web/compute/services/",
-        backend.service.generated_id,
-    )
+    settings_name = f"projects/{args.project_number}/iap_web/compute/services/{controller.backend_service_id}"
     settings = gcp.iap.Settings(
         f"{controller.cluster}-iap-settings",
         name=settings_name,
@@ -299,7 +302,7 @@ def _controller_backend(
             ),
         ),
     )
-    context.register(settings, f"{settings_import_name}/iapSettings")
+    context.register(settings, f"{settings_name}/iapSettings")
 
     path_rules: tuple[gcp.compute.URLMapPathMatcherPathRuleArgs, ...] = ()
     if controller.token_proxy:
@@ -311,6 +314,7 @@ def _controller_backend(
             protocol="HTTP",
             port_name="http",
             timeout_sec=relay_timeout,
+            connection_draining_timeout_sec=BACKEND_CONNECTION_DRAINING_TIMEOUT,
             load_balancing_scheme=LOAD_BALANCING_SCHEME,
             health_checks=backend.health_check.id,
             backends=[

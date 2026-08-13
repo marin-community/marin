@@ -59,6 +59,9 @@ provisioning:
           domain: finelog.oa.dev
           # Public egress blocks of finelog forwarders; JWT auth still authenticates each push.
           sender_source_ranges: [192.112.160.0/20, 166.19.0.0/16]
+        - cluster: marin-dev
+          domain: finelog-dev.oa.dev
+          sender_source_ranges: [192.112.160.0/20]
 
 platform:
   label_prefix: marin
