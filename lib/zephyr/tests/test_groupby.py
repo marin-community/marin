@@ -446,9 +446,8 @@ def test_group_by_with_none_and_filter(zephyr_ctx):
 def test_group_by_shard_starting_with_none_item(zephyr_ctx):
     """A shard whose first item is ``None`` must still be scattered.
 
-    The scatter writer peeked at the stream with ``next(gen, None)``, so a shard
-    beginning with a legitimate ``None`` item looked exhausted and its entire
-    contents were dropped without error.
+    A peek that cannot distinguish a ``None`` item from an exhausted stream
+    reports the shard as empty and drops its contents without error.
     """
     ds = Dataset.from_list([None, None, 1]).group_by(
         key=lambda item: item is None,
