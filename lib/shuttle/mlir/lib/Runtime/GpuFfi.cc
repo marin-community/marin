@@ -158,9 +158,13 @@ externalAddresses(ffi::RemainingArgs arguments, ffi::RemainingRets results,
 
 absl::StatusOr<std::unique_ptr<InstantiateState>>
 instantiate(int64_t transportSchemaVersion, absl::string_view bundleBytes,
-            int64_t bundleSize, absl::string_view bundleSha256) {
+            int64_t bundleSize, absl::string_view bundleSha256,
+            int64_t deviceSchemaVersion, int64_t invocationAbiSchemaVersion,
+            int64_t bundleSchemaVersion, absl::string_view completion) {
   try {
-    if (transportSchemaVersion != 2 || bundleSize < 0 ||
+    if (transportSchemaVersion != 2 || deviceSchemaVersion != 3 ||
+        invocationAbiSchemaVersion != 3 || bundleSchemaVersion != 2 ||
+        completion != "stream_ordered" || bundleSize < 0 ||
         static_cast<size_t>(bundleSize) != bundleBytes.size() ||
         bundleBytes.size() > kMaximumGpuTransportBytes)
       return invalid("invalid Shuttle GPU executable transport metadata");
@@ -317,7 +321,11 @@ XLA_FFI_DEFINE_HANDLER(kInstantiate, instantiate,
                            .Attr<int64_t>("transport_schema_version")
                            .Attr<absl::string_view>("bundle_bytes")
                            .Attr<int64_t>("bundle_size")
-                           .Attr<absl::string_view>("bundle_sha256"));
+                           .Attr<absl::string_view>("bundle_sha256")
+                           .Attr<int64_t>("device_schema_version")
+                           .Attr<int64_t>("invocation_abi_schema_version")
+                           .Attr<int64_t>("bundle_schema_version")
+                           .Attr<absl::string_view>("completion"));
 
 XLA_FFI_DEFINE_HANDLER(kPrepare, prepare,
                        ffi::Ffi::BindPrepare()
