@@ -75,6 +75,10 @@ logger = logging.getLogger(__name__)
 MODULE = "experiments.datakit.cluster.quality.fast_transformer.score_corpus"
 
 EMBED_DIM = 1024
+NEMOTRON_CORPUS_TOKENIZER = "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16"
+TOKENIZE_ROOT = "s3://marin-us-east-02a/marin/datakit/tokenize"
+EMBED_ROOT = "s3://marin-us-east-02a/marin/datakit/embed/harrier"
+DEFAULT_OUT_ROOT = "s3://marin-us-east-02a/marin/datakit/quality-scores"
 DEFAULT_MODEL_DIR = "s3://marin-us-east-02a/marin/user/muchanem/quality_exp/nemotron_donor"
 DEFAULT_FOLDED_DIR = "s3://marin-us-east-02a/marin/user/muchanem/quality_scores_run/model/nemotron_88k_folded"
 DEFAULT_MANIFEST = "s3://marin-us-east-02a/marin/user/muchanem/quality_scores_run/manifest"
@@ -89,8 +93,13 @@ READ_BATCH = 4096
 # explicitly: a batch that changes shape between calls recompiles, and a
 # 256-vs-512 shape was measured at 2.12x in the forward.
 DEFAULT_BATCH = 32_768
-# Shard reads run ahead of the forward by this many shards.
-PREFETCH_SHARDS = 2
+# Shard reads run ahead of the forward by this many shards. Measured on one
+# H100: a single shard stream sustains ~54 MB/s (latency-bound, not bandwidth-
+# bound), the forward takes 6s against 40s of read, so concurrency here is what
+# sets throughput. Kept near the GIL knee -- the CPU study found ~4 readers
+# optimal per process and 64 readers *slower* than 4 -- because the way past
+# that wall is more processes, not more threads.
+DEFAULT_PREFETCH_SHARDS = 6
 # The fold is exact in principle; assert it on real rows rather than trust it.
 FOLD_PARITY_ROWS = 256
 FOLD_PARITY_TOLERANCE = 1e-5
@@ -218,6 +227,83 @@ def fold_mode(args) -> dict:
 # ---------------------------------------------------------------------------
 # manifest: pair the tokenize and embed leaves
 # ---------------------------------------------------------------------------
+
+
+def _leaf_artifacts(fs, root: str) -> list[dict]:
+    out = []
+    for key in fs.glob(f"{root.removeprefix('s3://')}/*/*/.artifact.json"):
+        try:
+            out.append(json.loads(fs.cat(key)))
+        except Exception as exc:
+            logger.warning("unreadable artifact %s: %s", key, exc)
+    return out
+
+
+def _leaf_rel(output_dir: str, marker: str) -> str:
+    """``<source>/<subset>_<hash>`` from a stage output dir.
+
+    Split on the stage marker rather than by counting path components: one
+    source_key carries an anomalous ``data/datakit/normalized/...`` prefix, so
+    positional parsing is wrong on it.
+    """
+    index = output_dir.find(marker)
+    if index < 0:
+        raise ValueError(f"{output_dir!r} does not contain {marker!r}")
+    return output_dir[index + len(marker) :].strip("/").removesuffix("/train")
+
+
+def manifest_mode(args) -> dict:
+    """Build the minimum manifest the scorer needs: paths and an existence flag.
+
+    STEP 1's ``build_quality_scores_manifest`` writes a richer artifact carrying
+    shard sizes and row counts for planning. This is the fallback that needs only
+    directory listings, so it costs two listings per leaf rather than a footer
+    read per shard, and is consumed by exactly the same reader.
+    """
+    fs = fsspec.filesystem("s3")
+    tokenize, embed = {}, {}
+    for art in _leaf_artifacts(fs, TOKENIZE_ROOT):
+        cfg, res = art.get("config") or {}, art.get("result") or {}
+        if cfg.get("tokenizer") == NEMOTRON_CORPUS_TOKENIZER:
+            tokenize[res["source_key"]] = res["output_dirs"]["train"]
+    for art in _leaf_artifacts(fs, EMBED_ROOT):
+        res = art.get("result") or {}
+        embed[res["source_key"]] = res["output_dir"]
+    shared = sorted(set(tokenize) & set(embed))
+    logger.info("nemotron leaves=%d harrier leaves=%d paired=%d", len(tokenize), len(embed), len(shared))
+
+    def leaf_rows(source_key: str) -> list[dict]:
+        tok_dir, emb_dir = tokenize[source_key].rstrip("/"), embed[source_key].rstrip("/")
+        tok = sorted(f"s3://{p}" for p in fs.glob(f"{tok_dir.removeprefix('s3://')}/*.parquet"))
+        emb = {p.rsplit("/", 1)[-1] for p in fs.glob(f"{emb_dir.removeprefix('s3://')}/*.parquet")}
+        leaf = _leaf_rel(tok_dir, "/datakit/tokenize/")
+        rows = []
+        for index, path in enumerate(tok):
+            base = path.rsplit("/", 1)[-1]
+            rows.append(
+                {
+                    "source_key": source_key,
+                    "shard_index": index,
+                    "num_shards": len(tok),
+                    "tokens_path": path,
+                    "embed_path": f"{emb_dir}/{base}",
+                    "output_path": f"{args.out_root.rstrip('/')}/{leaf}/{base}",
+                    "embed_exists": base in emb,
+                }
+            )
+        return rows
+
+    rows: list[dict] = []
+    with ThreadPoolExecutor(max_workers=args.discovery_threads) as pool:
+        for got in pool.map(leaf_rows, shared):
+            rows.extend(got)
+    missing = sum(1 for r in rows if not r["embed_exists"])
+    table = pa.table({c: [r[c] for r in rows] for c in rows[0]})
+    path = f"{args.manifest.rstrip('/')}/manifest.parquet"
+    with open_url(path, "wb") as fh:
+        pq.write_table(table, fh)
+    logger.info("wrote %s: %d tasks over %d sources (%d without embeds)", path, len(rows), len(shared), missing)
+    return {"manifest": path, "tasks": len(rows), "sources": len(shared), "missing_embed": missing}
 
 
 def read_manifest(manifest: str) -> pa.Table:
@@ -447,15 +533,15 @@ def score_mode(args) -> dict:
     def read(task: ShardTask) -> tuple[ShardTask, Joined]:
         return task, join_shard(task, scorer.max_tokens, vocab_size, fs)
 
-    with ThreadPoolExecutor(max_workers=PREFETCH_SHARDS) as pool:
+    with ThreadPoolExecutor(max_workers=args.prefetch) as pool:
         # Bounded prefetch. `pool.map` would submit every shard at once and hold
         # the whole slice's joined arrays in memory; this keeps at most
-        # PREFETCH_SHARDS reads in flight ahead of the forward.
+        # `prefetch` reads in flight ahead of the forward.
         pending: deque = deque()
         upcoming = iter(mine)
         for task in upcoming:
             pending.append(pool.submit(read, task))
-            if len(pending) >= PREFETCH_SHARDS:
+            if len(pending) >= args.prefetch:
                 break
         while pending:
             task, joined = pending.popleft().result()
@@ -553,6 +639,8 @@ def node_mode(args) -> dict:
             str(num_nodes * gpus),
             "--batch-size",
             str(args.batch_size),
+            "--prefetch",
+            str(args.prefetch),
             "--model-tag",
             args.model_tag,
         ]
@@ -576,12 +664,18 @@ def main() -> None:
     f.add_argument("--out-dir", default=DEFAULT_FOLDED_DIR)
     f.add_argument("--stem", default="nemotron_88k_folded")
 
+    m = sub.add_parser("manifest", help="build the minimum shard-task manifest from listings")
+    m.add_argument("--manifest", default=DEFAULT_MANIFEST)
+    m.add_argument("--out-root", default=DEFAULT_OUT_ROOT)
+    m.add_argument("--discovery-threads", type=int, default=48)
+
     s = sub.add_parser("score", help="score this worker's slice of the manifest")
     s.add_argument("--manifest", default=DEFAULT_MANIFEST)
     s.add_argument("--model-dir", default=DEFAULT_FOLDED_DIR)
     s.add_argument("--worker", type=int, required=True)
     s.add_argument("--num-workers", type=int, required=True)
     s.add_argument("--batch-size", type=int, default=DEFAULT_BATCH)
+    s.add_argument("--prefetch", type=int, default=DEFAULT_PREFETCH_SHARDS)
     s.add_argument("--model-tag", default="nemotron88k_v1")
     s.add_argument("--limit", type=int, default=0, help="cap shards per worker (smoke runs)")
 
@@ -592,13 +686,14 @@ def main() -> None:
     n.add_argument("--num-nodes", type=int, default=None, help="default: the Iris job's replica count")
     n.add_argument("--gpus-per-node", type=int, default=8)
     n.add_argument("--batch-size", type=int, default=DEFAULT_BATCH)
+    n.add_argument("--prefetch", type=int, default=DEFAULT_PREFETCH_SHARDS)
     n.add_argument("--model-tag", default="nemotron88k_v1")
     n.add_argument("--limit", type=int, default=0)
 
     args = p.parse_args()
     configure_logging(logging.INFO)
     configure_coreweave_s3()
-    modes = {"fold": fold_mode, "score": score_mode, "node": node_mode}
+    modes = {"fold": fold_mode, "manifest": manifest_mode, "score": score_mode, "node": node_mode}
     result = modes[args.mode](args)
     logger.info("%s result: %s", args.mode, json.dumps(result, default=str))
 
