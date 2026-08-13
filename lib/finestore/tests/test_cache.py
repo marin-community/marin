@@ -3,9 +3,8 @@
 
 import finestore.cache as cache_module
 from finestore.admin import drop_table
-from finestore.cache import PersistentKvCache, flush_background_writes
+from finestore.cache import PersistentKvCache
 from finestore.layout import BLOBS_TABLE
-from finestore.reader import ReadView
 
 
 def test_persistent_cache_round_trips_and_supersedes_named_bytes(tmp_path):
@@ -51,24 +50,9 @@ def test_cache_root_resolves_lazily():
     assert calls == []
 
 
-def test_remote_cache_burst_uses_one_level_zero_transaction(tmp_path):
-    cache = PersistentKvCache.at(str(tmp_path / "cache"))
-    cache._remote_pending = {"kernel-a": b"one", "kernel-b": b"two"}
-    cache._remote_write_scheduled = True
-
-    cache._drain_remote_writes()
-
-    view = ReadView(str(tmp_path / "cache"))
-    assert len(view.list_shards(BLOBS_TABLE)) == 1
-    assert view.read_blob("kernel-a") == b"one"
-    assert view.read_blob("kernel-b") == b"two"
-    cache.close()
-
-
 def test_prefix_cache_uses_region_local_fine_store(tmp_path, monkeypatch):
     monkeypatch.setattr(cache_module, "marin_temp_bucket", lambda _ttl, prefix: str(tmp_path / prefix))
     cache = PersistentKvCache.for_prefix("cutlass-kernels")
     cache.store("kernel", b"value")
-    flush_background_writes()
     cache.close()
     assert PersistentKvCache.for_prefix("cutlass-kernels").load("kernel") == b"value"

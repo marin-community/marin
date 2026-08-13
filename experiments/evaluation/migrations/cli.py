@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import click
 from evalstore.archive import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION
 from finestore.migrate import migrate_v1
-from finestore.reader import CompositeReader
+from finestore.reader import ReadView
 from marin.evaluation.lm_eval_samples import (
     export_lm_eval_samples,
     preserved_sample_sources,
@@ -41,7 +41,7 @@ def cli() -> None:
 
 # One worker holds a run's whole sample file in memory while normalizing it, and the largest are a
 # few hundred megabytes, so this trades throughput against a bounded footprint on a CPU node.
-_DEFAULT_BACKFILL_WORKERS = 8
+_DEFAULT_SWEEP_WORKERS = 8
 
 
 @dataclass(frozen=True)
@@ -62,7 +62,7 @@ class SweepOutcome:
 )
 @click.option(
     "--workers",
-    default=_DEFAULT_BACKFILL_WORKERS,
+    default=_DEFAULT_SWEEP_WORKERS,
     show_default=True,
     help="Sealed archives to migrate concurrently.",
 )
@@ -87,7 +87,7 @@ def _upgrade_one(results_path: str) -> SweepOutcome:
 )
 @click.option(
     "--workers",
-    default=_DEFAULT_BACKFILL_WORKERS,
+    default=_DEFAULT_SWEEP_WORKERS,
     show_default=True,
     help="Archives to export concurrently. Each holds one run's sample file in memory.",
 )
@@ -111,7 +111,7 @@ def _resolve_prefixes(prefixes: tuple[str, ...], results_paths: tuple[str, ...])
 
 def _backfill_one(results_path: str) -> SweepOutcome:
     """Export one archive unless a completed export already brought it to the current contract."""
-    reader = CompositeReader(results_path)
+    reader = ReadView(results_path)
     # The version alone is stamped as soon as the new table is created, so an export that died
     # partway would read as current and never be retried. The seal is what says it finished.
     if reader.schema_version(ARCHIVE_SAMPLES_TABLE) == SCHEMA_VERSION and reader.is_sealed():
@@ -171,7 +171,7 @@ def _sweep_archives(runs_by_path: dict[str, list[str]], workers: int, work: Call
 )
 @click.option(
     "--workers",
-    default=_DEFAULT_BACKFILL_WORKERS,
+    default=_DEFAULT_SWEEP_WORKERS,
     show_default=True,
     help="Archives to rebuild concurrently. Each holds one run's sample file in memory.",
 )

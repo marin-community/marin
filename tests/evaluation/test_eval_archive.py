@@ -20,7 +20,7 @@ from evalstore.archive import (
     write_sample_parquet,
 )
 from finestore.admin import set_table_metadata
-from finestore.reader import CompositeReader
+from finestore.reader import ReadView
 from fsspec.core import url_to_fs
 from marin.evaluation.lm_eval_samples import (
     export_lm_eval_samples,
@@ -138,7 +138,7 @@ def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):
 
     assert export_lm_eval_samples(str(results)).samples == 1
 
-    table = CompositeReader(str(results)).scan("samples")
+    table = ReadView(str(results)).scan("samples")
     assert table is not None
     [row] = table.to_pylist(maps_as_pydicts="strict")
     sample = sample_from_archive_row(row)
@@ -184,7 +184,7 @@ def test_each_extraction_filter_keeps_its_own_sample(tmp_path):
 
     assert export_lm_eval_samples(str(results)).samples == 2
 
-    rows = CompositeReader(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    rows = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert len(rows) == 2
     by_filter = {row["filter"]: sample_from_archive_row(row) for row in rows}
     assert set(by_filter) == {"strict-match", "flexible-extract"}
@@ -200,7 +200,7 @@ def test_sample_metrics_exclude_the_row_format_stamp(tmp_path):
     _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4")])
     export_lm_eval_samples(str(results))
 
-    [row] = CompositeReader(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    [row] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert sample_from_archive_row(row).metrics == {"exact_match": 1.0}
 
 
@@ -212,13 +212,13 @@ def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
     (results / "gsm8k_5shot" / "model" / "results_20260807.json").write_text(json.dumps({"results": {}}))
     assert export_lm_eval_samples(str(results)).samples == 2
 
-    reader = CompositeReader(str(results))
+    reader = ReadView(str(results))
     blob = reader.read_blob(f"sources/{source.relative_to(results)}")
     assert blob == source.read_bytes()
 
     source.unlink()
     assert rebuild_lm_eval_samples(str(results)) == 2
-    assert CompositeReader(str(results)).scan("samples").num_rows == 2
+    assert ReadView(str(results)).scan("samples").num_rows == 2
 
 
 def test_export_preserves_every_artifact_the_harness_left(tmp_path):
@@ -234,7 +234,7 @@ def test_export_preserves_every_artifact_the_harness_left(tmp_path):
 
     export_lm_eval_samples(str(results))
 
-    preserved = {name for name in CompositeReader(str(results)).keys("blobs") for name in [name[0]]}
+    preserved = {name for name in ReadView(str(results)).keys("blobs") for name in [name[0]]}
     for relative in run_artifacts(str(results)):
         assert f"sources/{relative}" in preserved, relative
     assert any(".resume" in name for name in preserved)
@@ -289,11 +289,11 @@ def test_export_refuses_an_archive_written_under_an_older_contract(tmp_path):
 
     with pytest.raises(ValueError, match="schema v3"):
         export_lm_eval_samples(str(results))
-    assert CompositeReader(str(results)).scan("samples").num_rows == 2
+    assert ReadView(str(results)).scan("samples").num_rows == 2
 
 
 def _stamp_schema_version(results, version: int) -> None:
-    reader = CompositeReader(str(results))
+    reader = ReadView(str(results))
     metadata = reader.table_metadata("samples").model_copy(update={"schema_version": version})
     set_table_metadata(str(results), "samples", metadata)
 
@@ -323,7 +323,7 @@ def test_export_leaves_an_archive_it_has_no_source_for(tmp_path):
     _harbor_archive(results, version=3)
 
     assert export_lm_eval_samples(str(results)).samples == 0
-    assert CompositeReader(str(results)).scan("samples").num_rows == 1
+    assert ReadView(str(results)).scan("samples").num_rows == 1
 
 
 def test_a_retried_evaluation_indexes_only_the_published_tree(tmp_path):
@@ -338,7 +338,7 @@ def test_a_retried_evaluation_indexes_only_the_published_tree(tmp_path):
 
     assert export_lm_eval_samples(str(results)).samples == 1
 
-    [row] = CompositeReader(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    [row] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert sample_from_archive_row(row).output == "4"
     # The retry is still recoverable: it is preserved even though it produced no row.
     assert any("tmpp90h6r1d" in name for name in preserved_sample_sources(str(results)))
@@ -434,11 +434,11 @@ def test_writing_to_a_sealed_archive_clears_its_seal(tmp_path):
     store.add_sample(_mcq("1", correct=True))
     store.seal()
     store.close()
-    assert CompositeReader(root).is_sealed()
+    assert ReadView(root).is_sealed()
 
     reopened = EvaluationStore.open(root, writer_id="evalchemy")
     try:
-        assert not CompositeReader(root).is_sealed()
+        assert not ReadView(root).is_sealed()
     finally:
         reopened.close()
 
@@ -525,7 +525,7 @@ def test_migrate_legacy_run_into_archive(tmp_path):
     assert archive_sample_count(results) == 2
 
     # The migrated agentic sample points at a finestore:// trajectory the archive resolves.
-    reader = CompositeReader(results)
+    reader = ReadView(results)
     agentic_row = reader.point("samples", task="aime", doc_id="prob-1", trial_id="trial-7")
     assert agentic_row is not None
     uri = agentic_row["trajectory_uri"]

@@ -32,7 +32,7 @@ from evalstore.archive import (
     primary_metric,
     sample_from_archive_row,
 )
-from finestore.reader import CompositeReader
+from finestore.reader import ReadView
 from fsspec.core import url_to_fs
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem import StoragePath
@@ -169,7 +169,7 @@ def _archive_discovery(results_path: str) -> tuple[int, tuple[str, ...]]:
     cached = _discovery_cache.get(results_path)
     if cached is not None:
         return cached
-    reader = CompositeReader(results_path)
+    reader = ReadView(results_path)
     shard_count = len(reader.list_shards(ARCHIVE_SAMPLES_TABLE))
     tasks: tuple[str, ...] = ()
     if shard_count:
@@ -187,7 +187,7 @@ def _archive_task_table(results_path: str, task: str) -> pa.Table:
     cached = _table_cache.get(key)
     if cached is not None:
         return cached
-    table = CompositeReader(results_path).scan(ARCHIVE_SAMPLES_TABLE, where=[("task", "==", task)])
+    table = ReadView(results_path).scan(ARCHIVE_SAMPLES_TABLE, where=[("task", "==", task)])
     if table is None:
         table = pa.table({})
     _table_cache.put(key, table)
@@ -418,7 +418,7 @@ def _artifact_within_results(results_path: str, uri: str) -> bool:
 def _resolve_archive_artifact(results_path: str, uri: str, max_bytes: int) -> ArtifactResponse:
     """Resolve a ``finestore://`` trajectory reference to decoded text from the run's blobs table."""
     try:
-        raw = CompositeReader(results_path).resolve(uri)
+        raw = ReadView(results_path).resolve(uri)
     except Exception as exc:
         logger.info("archive artifact resolve failed for %s: %s", uri, exc)
         return _unavailable_artifact(uri, f"{type(exc).__name__}: {exc}"[:400])

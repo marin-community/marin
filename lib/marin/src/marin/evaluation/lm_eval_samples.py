@@ -41,7 +41,7 @@ from evalstore.archive import (
     primary_metric,
 )
 from finestore.layout import ARCHIVE_FILE, BLOBS_TABLE, HEAD_FILE
-from finestore.reader import CompositeReader
+from finestore.reader import ReadView
 from rigging.filesystem import StoragePath, factory, prefix_join
 
 from marin.evaluation.records import TaskCoverage
@@ -457,7 +457,7 @@ def require_current_samples(out_path: str) -> None:
     ones a writer adds now rather than collapsing against them. Removing them is a migration's job,
     not a writer's.
     """
-    stored_version = CompositeReader(out_path).schema_version(ARCHIVE_SAMPLES_TABLE)
+    stored_version = ReadView(out_path).schema_version(ARCHIVE_SAMPLES_TABLE)
     if stored_version is None or stored_version == SCHEMA_VERSION:
         return
     raise ValueError(
@@ -497,7 +497,7 @@ def preserved_sample_sources(out_path: str) -> tuple[str, ...]:
     return tuple(
         sorted(
             key[0]
-            for key in CompositeReader(out_path).keys(BLOBS_TABLE)
+            for key in ReadView(out_path).keys(BLOBS_TABLE)
             if isinstance(key[0], str)
             and key[0].startswith(f"{SOURCES_PREFIX}/")
             and key[0].endswith(".jsonl")
@@ -515,7 +515,7 @@ def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int
     collapse against themselves, so nothing is deleted; an archive at an older contract raises, and
     one preserving no sources raises too.
     """
-    reader = CompositeReader(out_path)
+    reader = ReadView(out_path)
     names = preserved_sample_sources(out_path)
     if not names:
         raise FileNotFoundError(f"archive at {out_path!r} preserves no sample sources to rebuild from")

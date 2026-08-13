@@ -59,6 +59,11 @@ class TableReplacement:
 
 
 @dataclass(frozen=True)
+class ClearSeal:
+    """Remove the current seal marker as part of a commit."""
+
+
+@dataclass(frozen=True)
 class CommitDelta:
     """The changes one manifest commit applies atomically."""
 
@@ -66,8 +71,7 @@ class CommitDelta:
     replacements: dict[str, TableReplacement] = field(default_factory=dict)
     metadata_updates: dict[str, str] = field(default_factory=dict)
     removals: frozenset[str] = frozenset()
-    seal: SealMarker | None = None
-    clear_seal: bool = False
+    seal_update: SealMarker | ClearSeal | None = None
 
 
 def _empty_manifest() -> Manifest:
@@ -94,12 +98,12 @@ def initialize_archive(layout: FineStoreLayout) -> ArchiveMetadata:
     return found
 
 
-def validate_archive(layout: FineStoreLayout) -> ArchiveMetadata:
-    """Read and validate an existing archive marker."""
+def validate_archive(layout: FineStoreLayout) -> ArchiveMetadata | None:
+    """Read and validate the archive marker, returning ``None`` when it is absent."""
     try:
         data = StoragePath(layout.archive_path).read_bytes()
     except FileNotFoundError:
-        return ArchiveMetadata()
+        return None
     found = ArchiveMetadata.model_validate_json(data)
     if found.format_version != FORMAT_VERSION:
         raise ValueError(
@@ -189,10 +193,10 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
         tables.pop(name, None)
 
     sealed = base.sealed
-    if delta.clear_seal:
+    if isinstance(delta.seal_update, ClearSeal):
         sealed = None
-    if delta.seal is not None:
-        sealed = delta.seal
+    elif delta.seal_update is not None:
+        sealed = delta.seal_update
     return Manifest(
         commit_id=uuid.uuid4().hex,
         parent_commit_id=None if base.commit_id == _ROOT_COMMIT_ID else base.commit_id,

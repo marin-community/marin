@@ -68,3 +68,12 @@ Validation so far:
 
 - Removed two implementation-coupled tests during the pre-PR test-quality pass and corrected stale generation/listing/deletion prose. The final FineStore suite is 54 passing tests.
 - `uv lock --check` and `git diff --check` pass after the final cleanup.
+
+### 2026-08-13 — advisory review follow-up
+
+- Replaced the historical reader alias at every call site with `ReadView` and removed the compatibility class.
+- Enforced the transaction payload bound, represented seal changes as one explicit state transition, and shared the versioned row merge between reads and compaction.
+- Scoped background cache executors to each cache instance and made close wait for its queued writes without a timeout.
+- Made the samples-v4 backup verify existing metadata and shard sizes before dropping the active table. Captured the S3 endpoint when constructing a conditional object and removed ambiguous path normalization.
+- `./infra/pre-commit.py --changed-files --fix`: all gates passed.
+- FineStore: 54 passed; evaluation archive/Harbor/migration selection: 47 passed; Iris JAX cache: 35 passed; Cutlass/Pallas cache: 16 passed; Rigging conditional-write/lock: 9 passed.

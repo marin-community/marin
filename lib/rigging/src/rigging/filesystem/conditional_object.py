@@ -153,6 +153,7 @@ class S3ConditionalObject:
     """An S3 object using ETags as compare-and-swap versions."""
 
     path: str
+    endpoint_url: str | None = None
 
     @staticmethod
     @functools.cache
@@ -171,7 +172,7 @@ class S3ConditionalObject:
     def read(self) -> VersionedBytes | None:
         bucket, key = self._parts()
         try:
-            response = self._client(self._endpoint_url()).get_object(Bucket=bucket, Key=key)
+            response = self._client(self.endpoint_url).get_object(Bucket=bucket, Key=key)
         except ClientError as exc:
             if exc.response["Error"]["Code"] in ("NoSuchKey", "404"):
                 return None
@@ -179,7 +180,7 @@ class S3ConditionalObject:
         return VersionedBytes(data=response["Body"].read(), version=response["ETag"])
 
     def write(self, data: bytes, *, expected_version: str | None) -> str:
-        client = self._client(self._endpoint_url())
+        client = self._client(self.endpoint_url)
         bucket, key = self._parts()
         condition = {"IfNoneMatch": "*"} if expected_version is None else {"IfMatch": expected_version}
         try:
@@ -195,10 +196,6 @@ class S3ConditionalObject:
             raise
         return response["ETag"]
 
-    @staticmethod
-    def _endpoint_url() -> str | None:
-        return os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL")
-
 
 def conditional_object(path: str) -> ConditionalObject:
     """Return the conditional object implementation for ``path``.
@@ -212,5 +209,6 @@ def conditional_object(path: str) -> ConditionalObject:
     if parsed.scheme == "gs":
         return GcsConditionalObject(path)
     if parsed.scheme == "s3":
-        return S3ConditionalObject(path)
+        endpoint_url = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL")
+        return S3ConditionalObject(path, endpoint_url=endpoint_url)
     raise UnsupportedConditionalWrite(f"conditional writes are not supported for {parsed.scheme!r} paths")

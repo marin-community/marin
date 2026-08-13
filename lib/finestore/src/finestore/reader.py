@@ -9,6 +9,7 @@ import heapq
 import itertools
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -24,7 +25,6 @@ from finestore.layout import (
     COMMIT_COLUMN,
     GEN_COLUMN,
     SEQ_COLUMN,
-    ArchiveMetadata,
     CommitToken,
     FineStoreLayout,
     SealMarker,
@@ -35,6 +35,25 @@ from finestore.layout import (
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 _STREAM_BATCH_ROWS = 16_384
+
+
+@dataclass(frozen=True)
+class VersionedRow:
+    """One row tagged with its key and manifest ordering coordinates."""
+
+    key: tuple
+    commit_sequence: int
+    sequence: int
+    generation: int
+    row: dict
+
+
+@dataclass(frozen=True)
+class MergedRow:
+    """The winning row for one key and the number of older rows it replaced."""
+
+    row: dict
+    superseded: int
 
 
 def _build_filter(where: list[tuple[str, str, object]] | None) -> pds.Expression | None:
@@ -50,14 +69,62 @@ def _build_filter(where: list[tuple[str, str, object]] | None) -> pds.Expression
     return expr
 
 
+def iter_shard_rows(
+    shard: Shard,
+    unified: pa.Schema,
+    primary_key: tuple[str, ...],
+    pa_fs,
+    columns: list[str] | None = None,
+    where: list[tuple[str, str, object]] | None = None,
+) -> Iterator[VersionedRow]:
+    """Yield rows from one shard in primary-key order with version coordinates."""
+    dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
+    if shard.primary_key_sorted:
+        batches = dataset.scanner(
+            columns=columns,
+            filter=_build_filter(where),
+            use_threads=False,
+            batch_size=_STREAM_BATCH_ROWS,
+        ).to_batches()
+    else:
+        source = dataset.to_table(columns=columns, filter=_build_filter(where))
+        sort_columns = [(name, "ascending") for name in primary_key if name in source.column_names]
+        batches = source.sort_by(sort_columns).to_batches(max_chunksize=_STREAM_BATCH_ROWS)
+    for batch in batches:
+        for row in batch.to_pylist():
+            commit_sequence = row.get(COMMIT_COLUMN)
+            if commit_sequence is None:
+                commit_sequence = shard.commit_sequence
+            row[COMMIT_COLUMN] = commit_sequence
+            key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
+            yield VersionedRow(
+                key=key,
+                commit_sequence=commit_sequence,
+                sequence=row.get(SEQ_COLUMN) or 0,
+                generation=shard.generation,
+                row=row,
+            )
+
+
+def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[MergedRow]:
+    """Merge sorted shard streams and retain the newest row for each key."""
+    merged = heapq.merge(*streams, key=lambda item: item.key)
+    for _key, group in itertools.groupby(merged, key=lambda item: item.key):
+        items = list(group)
+        winner = max(items, key=lambda item: (item.commit_sequence, item.sequence, item.generation))
+        yield MergedRow(row=winner.row, superseded=len(items) - 1)
+
+
 class ReadView:
     """A read-only archive view pinned to one commit token."""
 
     def __init__(self, root: str, snapshot: ArchiveSnapshot | None = None) -> None:
-        self.root = root.rstrip("/")
+        self.root = root
         self._layout = FineStoreLayout(self.root)
-        validate_archive(self._layout)
+        archive_metadata = validate_archive(self._layout)
         self._snapshot = snapshot or read_snapshot(self._layout)
+        if archive_metadata is None and self._snapshot.token is not None:
+            raise ValueError(f"archive at {self.root} has HEAD but no format marker")
         self._meta_cache: dict[str, TableMetadata] = {}
 
     @property
@@ -82,6 +149,7 @@ class ReadView:
         return tuple(sorted(self._snapshot.manifest.tables))
 
     def schema_version(self, table: str) -> int | None:
+        """Return the table schema version, or ``None`` when it has no active shards."""
         state = self._snapshot.manifest.tables.get(table)
         if state is None or not state.shards:
             return None
@@ -98,10 +166,6 @@ class ReadView:
         self._meta_cache[table] = metadata
         return metadata
 
-    def archive_metadata(self) -> ArchiveMetadata:
-        """Return the archive format metadata."""
-        return validate_archive(self._layout)
-
     def is_sealed(self) -> bool:
         return self._snapshot.manifest.sealed is not None
 
@@ -116,7 +180,7 @@ class ReadView:
         columns: Sequence[str] | None = None,
         where: list[tuple[str, str, object]] | None = None,
     ) -> pa.Table | None:
-        """Read and deduplicate a table from exactly this view's manifest paths."""
+        """Read this view's deduplicated table, or ``None`` when it has no active shards."""
         shards = self.list_shards(table)
         if not shards:
             return None
@@ -163,12 +227,7 @@ class ReadView:
         columns: Sequence[str] | None = None,
         where: list[tuple[str, str, object]] | None = None,
     ) -> Iterator[dict]:
-        """Stream deduplicated rows from this view in primary-key order.
-
-        New level-zero and compacted shards are stored in primary-key order. A shard
-        imported from a legacy layout is sorted individually before merging, bounding
-        memory by that source shard instead of the full table.
-        """
+        """Yield deduplicated rows from this view in primary-key order."""
         shards = self.list_shards(table)
         if not shards:
             return
@@ -183,43 +242,12 @@ class ReadView:
             filter_columns = {name for name, _operator, _value in where or []}
             needed = set(columns) | set(primary_key) | filter_columns | {SEQ_COLUMN, COMMIT_COLUMN}
             read_columns = [name for name in unified.names if name in needed]
-        streams = [self._shard_rows(shard, unified, primary_key, pa_fs, read_columns, where) for shard in shards]
-        merged = heapq.merge(*streams, key=lambda item: item[0])
-        for _key, group in itertools.groupby(merged, key=lambda item: item[0]):
-            row = max(group, key=lambda item: (item[1], item[2], item[3]))[4]
+        streams = [iter_shard_rows(shard, unified, primary_key, pa_fs, read_columns, where) for shard in shards]
+        for merged in merge_deduplicated_rows(streams):
+            row = merged.row
             if columns is not None:
                 row = {name: row[name] for name in columns if name in row}
             yield row
-
-    @staticmethod
-    def _shard_rows(
-        shard: Shard,
-        unified: pa.Schema,
-        primary_key: tuple[str, ...],
-        pa_fs,
-        columns: list[str] | None,
-        where: list[tuple[str, str, object]] | None,
-    ) -> Iterator[tuple[tuple, int, int, int, dict]]:
-        dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
-        if shard.primary_key_sorted:
-            batches = dataset.scanner(
-                columns=columns,
-                filter=_build_filter(where),
-                use_threads=False,
-                batch_size=_STREAM_BATCH_ROWS,
-            ).to_batches()
-        else:
-            source = dataset.to_table(columns=columns, filter=_build_filter(where))
-            sort_columns = [(name, "ascending") for name in primary_key if name in source.column_names]
-            batches = source.sort_by(sort_columns).to_batches(max_chunksize=_STREAM_BATCH_ROWS)
-        for batch in batches:
-            for row in batch.to_pylist():
-                commit_sequence = row.get(COMMIT_COLUMN)
-                if commit_sequence is None:
-                    commit_sequence = shard.commit_sequence
-                row[COMMIT_COLUMN] = commit_sequence
-                key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
-                yield key, commit_sequence, row.get(SEQ_COLUMN) or 0, shard.generation, row
 
     def point(self, table: str, **keys) -> dict | None:
         result = self.scan(table, where=[(key, "==", value) for key, value in keys.items()])
@@ -228,6 +256,7 @@ class ReadView:
         return result.slice(0, 1).to_pylist()[0]
 
     def max_seq(self, table: str) -> int:
+        """Return the greatest sequence in active shards, or ``-1`` when there are none."""
         shards = self.list_shards(table)
         return max((shard.max_seq for shard in shards), default=-1)
 
@@ -260,10 +289,6 @@ class ReadView:
     def list_shards(self, table: str) -> list[Shard]:
         state = self._snapshot.manifest.tables.get(table)
         return [] if state is None else list(state.shards)
-
-
-class CompositeReader(ReadView):
-    """The historical reader name, now backed by one immutable manifest snapshot."""
 
 
 def _deduplicate(table: pa.Table, primary_key: tuple[str, ...]) -> pa.Table:

@@ -17,7 +17,7 @@ import logging
 
 from evalstore.archive import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION, SampleKind
 from finestore.admin import drop_table as drop_manifest_table
-from finestore.reader import CompositeReader
+from finestore.reader import ReadView
 from rigging.filesystem import StoragePath, factory, prefix_join
 
 from experiments.evaluation.migrations.archive_backup import superseded_samples_prefix
@@ -32,7 +32,7 @@ def copy_table(root: str, table: str, destination: str) -> int:
     the destination is left alone: the earliest snapshot is the pristine one, and a resumed
     migration must not write over it.
     """
-    reader = CompositeReader(root)
+    reader = ReadView(root)
     shards = reader.list_shards(table)
     if not shards:
         return 0
@@ -41,13 +41,21 @@ def copy_table(root: str, table: str, destination: str) -> int:
     destination_path.mkdirs()
     copied = 0
     metadata_target = destination_path / "_schema.json"
-    if not metadata_target.exists():
-        metadata_target.write_text(reader.table_metadata(table).model_dump_json(indent=2))
+    metadata_bytes = reader.table_metadata(table).model_dump_json(indent=2).encode()
+    if metadata_target.exists():
+        if metadata_target.read_bytes() != metadata_bytes:
+            raise ValueError(f"existing table metadata backup does not match {table!r} at {root}")
+    else:
+        metadata_target.write_bytes(metadata_bytes)
         copied += 1
     for shard in shards:
         source_fs, source = factory.url_to_fs(shard.path)
         _, target = factory.url_to_fs(prefix_join(destination, StoragePath(shard.path).name))
         if destination_fs.exists(target):
+            written = destination_fs.info(target)["size"]
+            expected = source_fs.info(source)["size"]
+            if written != expected:
+                raise OSError(f"existing copy of {source} is {written} bytes, expected {expected}")
             continue
         with source_fs.open(source, "rb") as source_handle, destination_fs.open(target, "wb") as writer:
             writer.write(source_handle.read())
@@ -61,8 +69,8 @@ def copy_table(root: str, table: str, destination: str) -> int:
 
 
 def drop_table(root: str, table: str) -> int:
-    """Remove ``table`` from the next manifest while retaining its immutable objects."""
-    shards = CompositeReader(root).list_shards(table)
+    """Remove a table from the next manifest and return its active shard count."""
+    shards = ReadView(root).list_shards(table)
     if not shards:
         return 0
     drop_manifest_table(root, table)
@@ -99,7 +107,7 @@ def replace_stale_samples(results_path: str) -> int | None:
     ``None`` means the table was already current and nothing was touched. Refuses a table holding
     agentic samples, which come from Harbor and no lm-eval source can regenerate.
     """
-    reader = CompositeReader(results_path)
+    reader = ReadView(results_path)
     stored_version = reader.schema_version(ARCHIVE_SAMPLES_TABLE)
     if stored_version is None or stored_version == SCHEMA_VERSION:
         return None

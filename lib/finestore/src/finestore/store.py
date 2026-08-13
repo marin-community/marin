@@ -17,7 +17,7 @@ from typing import Protocol
 
 import pyarrow as pa
 
-from finestore.commit import CommitCoordinator, CommitDelta, TableAddition, initialize_archive, write_schema
+from finestore.commit import ClearSeal, CommitCoordinator, CommitDelta, TableAddition, initialize_archive, write_schema
 from finestore.layout import (
     BLOB_NAME_COLUMN,
     BLOBS_TABLE,
@@ -47,6 +47,10 @@ def _default_writer_id() -> str:
 
 class PrimaryKeyConflict(ValueError):
     """Two rows in one writer session share a key but have different payloads."""
+
+
+class TransactionTooLarge(ValueError):
+    """A transaction exceeded its configured in-memory byte limit."""
 
 
 def _row_digest(row: Mapping[str, object]) -> bytes:
@@ -116,7 +120,7 @@ class DataStore:
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
         compaction_shards: int = DEFAULT_COMPACTION_SHARDS,
     ) -> None:
-        self.root = root.rstrip("/")
+        self.root = root
         self._layout = FineStoreLayout(self.root)
         initialize_archive(self._layout)
         self._commits = CommitCoordinator(self._layout)
@@ -133,7 +137,7 @@ class DataStore:
         self._closed = False
         snapshot = self._commits.snapshot()
         if snapshot.manifest.sealed is not None:
-            self._commits.commit(CommitDelta(clear_seal=True), base=snapshot)
+            self._commits.commit(CommitDelta(seal_update=ClearSeal()), base=snapshot)
             logger.info("FineStore reopened sealed archive %s for writing", self.root)
         self._thread = threading.Thread(target=self._run, name="finestore-maintenance", daemon=True)
         self._thread.start()
@@ -185,13 +189,9 @@ class DataStore:
             return table
 
     def write_object(self, name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> str:
-        """Buffer one named byte object in the reserved blob table."""
+        """Buffer one named byte object and return its ``finestore://`` URI."""
         self._blob_table().append(self._blob_row(name, data, metadata))
         return build_uri(BLOBS_TABLE, name)
-
-    def lookup(self, name: str) -> bytes | None:
-        """Read a named byte object from the current committed view."""
-        return self.read_view().read_blob(name)
 
     def _blob_table(self) -> DataTable:
         return self._tables.get(BLOBS_TABLE) or self.table(
@@ -211,13 +211,16 @@ class DataStore:
         """Pin a snapshot using one HEAD read."""
         return ReadView(self.root)
 
-    def transaction(self) -> Transaction:
-        """Create a bounded in-memory multi-table transaction."""
+    def transaction(self, *, max_bytes: int | None = None) -> Transaction:
+        """Create a transaction bounded by ``max_bytes`` of estimated payload data."""
         self.raise_if_failed()
-        return Transaction(self)
+        transaction_limit = self._max_buffer_bytes if max_bytes is None else max_bytes
+        if transaction_limit <= 0:
+            raise ValueError("max_bytes must be positive")
+        return Transaction(self, max_bytes=transaction_limit)
 
     def flush(self) -> CommitToken | None:
-        """Commit all currently buffered tables with one HEAD update."""
+        """Commit all buffers with one HEAD update, or return ``None`` when empty."""
         self.raise_if_failed()
         return self._flush_tables(list(self._tables.values()))
 
@@ -237,7 +240,7 @@ class DataStore:
                     table.name: TableAddition(metadata_path=table.metadata_path, shards=(table._write(pending),))
                     for table, pending in claimed.items()
                 }
-                return self._commits.commit(CommitDelta(additions=additions, clear_seal=True))
+                return self._commits.commit(CommitDelta(additions=additions, seal_update=ClearSeal()))
             except BaseException:
                 for table, pending in claimed.items():
                     table._restore(pending)
@@ -258,7 +261,7 @@ class DataStore:
                 if snapshot.token is None:
                     return self._commits.commit(CommitDelta())
                 return snapshot.token
-            return self._commits.commit(CommitDelta(additions=additions, clear_seal=True))
+            return self._commits.commit(CommitDelta(additions=additions, seal_update=ClearSeal()))
 
     def compact(self, table: str):
         """Logically compact one table against the current manifest."""
@@ -286,7 +289,7 @@ class DataStore:
             result = self.compact(name)
             if result.superseded:
                 superseded[name] = result.superseded
-        return self._commits.commit(CommitDelta(seal=SealMarker(writer=self.writer_id, superseded=superseded)))
+        return self._commits.commit(CommitDelta(seal_update=SealMarker(writer=self.writer_id, superseded=superseded)))
 
     def close(self) -> None:
         if self._closed:
@@ -342,11 +345,13 @@ class TransactionTable:
 class Transaction:
     """A bounded set of rows and objects published through one commit token."""
 
-    def __init__(self, store: DataStore) -> None:
+    def __init__(self, store: DataStore, *, max_bytes: int) -> None:
         self._store = store
         self._base = store.read_view()
         self._rows: dict[str, list[dict]] = {}
         self._objects: dict[str, bytes] = {}
+        self._max_bytes = max_bytes
+        self._estimated_bytes = 0
         self._closed = False
         self.token: CommitToken | None = None
 
@@ -358,13 +363,19 @@ class Transaction:
     def _add(self, name: str, row: dict) -> None:
         if self._closed:
             raise RuntimeError("transaction is closed")
-        self._rows.setdefault(name, []).append(dict(row))
+        copied = dict(row)
+        estimated_bytes = _estimate_bytes(copied)
+        if self._estimated_bytes + estimated_bytes > self._max_bytes:
+            raise TransactionTooLarge(f"transaction payload exceeds {self._max_bytes} bytes; commit a smaller batch")
+        self._estimated_bytes += estimated_bytes
+        self._rows.setdefault(name, []).append(copied)
 
     def write_object(self, name: str, data: bytes, metadata: Mapping[str, object] | None = None) -> str:
+        """Buffer one named byte object and return its ``finestore://`` URI."""
         if self._closed:
             raise RuntimeError("transaction is closed")
         self._store._blob_table()
-        self._rows.setdefault(BLOBS_TABLE, []).append(self._store._blob_row(name, data, metadata))
+        self._add(BLOBS_TABLE, self._store._blob_row(name, data, metadata))
         self._objects[name] = data
         return build_uri(BLOBS_TABLE, name)
 

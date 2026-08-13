@@ -54,8 +54,7 @@ token = view.token
 ```
 
 A view pins one manifest. Commits and compactions that happen afterward do not change
-its results. Create a new view to observe a newer token. `CompositeReader` remains the
-reader class used by existing call sites and has the same snapshot behavior.
+its results. Create a new view to observe a newer token.
 
 `scan` supports column projection and `==`, `!=`, and `in` filters. FineStore unifies
 compatible Parquet schemas across active shards and keeps the row from the latest

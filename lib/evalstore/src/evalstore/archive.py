@@ -36,11 +36,10 @@ from enum import StrEnum
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from pydantic import BaseModel
-from rigging.filesystem import prefix_join
-
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
+from pydantic import BaseModel
+from rigging.filesystem import prefix_join
 
 logger = logging.getLogger(__name__)
 
@@ -354,7 +353,7 @@ class EvaluationStore:
     """One eval run's finestore archive: a ``samples`` table (the :class:`EvalSample` contract), a
     ``steps`` table (flattened agentic trajectories), and raw trajectories held as blobs and
     referenced by a ``finestore://`` URI. A caller adds samples and trajectories through this wrapper
-    without handling the individual tables; reads go through ``CompositeReader`` over the same root.
+    without handling the individual tables; reads go through ``ReadView`` over the same root.
     """
 
     def __init__(self, store: DataStore) -> None:

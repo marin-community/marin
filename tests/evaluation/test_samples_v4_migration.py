@@ -11,7 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 from evalstore.archive import ARCHIVE_SAMPLES_TABLE, EvalSample, EvaluationStore, Grading, SampleKind
 from finestore.admin import set_table_metadata
-from finestore.reader import CompositeReader
+from finestore.reader import ReadView
 from rigging.filesystem import StoragePath
 
 from experiments.evaluation.migrations.samples_v4 import (
@@ -46,7 +46,7 @@ def _agentic(doc_id: str) -> EvalSample:
 
 
 def _stamp_schema_version(results, version: int) -> None:
-    reader = CompositeReader(str(results))
+    reader = ReadView(str(results))
     metadata = reader.table_metadata(ARCHIVE_SAMPLES_TABLE).model_copy(update={"schema_version": version})
     set_table_metadata(str(results), ARCHIVE_SAMPLES_TABLE, metadata)
 
@@ -60,7 +60,7 @@ def test_replacing_a_table_preserves_it_outside_the_run_first(tmp_path):
 
     replace_table(str(results), ARCHIVE_SAMPLES_TABLE, str(destination))
 
-    assert CompositeReader(str(results)).scan(ARCHIVE_SAMPLES_TABLE) is None
+    assert ReadView(str(results)).scan(ARCHIVE_SAMPLES_TABLE) is None
     assert (destination / "_schema.json").exists()
     assert list(destination.rglob("*.parquet"))
 
@@ -78,28 +78,28 @@ def test_a_preserved_table_still_holds_the_dropped_rows(tmp_path):
     assert sorted(preserved["doc_id"].to_pylist()) == ["1", "2"]
 
 
-def test_an_existing_snapshot_is_never_overwritten(tmp_path):
-    # The first snapshot is the pristine one. A resumed or repeated replace must not put a degraded
-    # table on top of it.
+def test_a_mismatched_existing_snapshot_aborts_before_drop(tmp_path):
     results = tmp_path / "run" / "results"
     _archive(results, [_generation("1")])
     destination = tmp_path / "backup-v3"
     destination.mkdir()
     (destination / "_schema.json").write_text('{"sentinel": true}')
 
-    copy_table(str(results), ARCHIVE_SAMPLES_TABLE, str(destination))
+    with pytest.raises(ValueError, match="metadata backup"):
+        replace_table(str(results), ARCHIVE_SAMPLES_TABLE, str(destination))
 
     assert json.loads((destination / "_schema.json").read_text()) == {"sentinel": True}
+    assert ReadView(str(results)).scan(ARCHIVE_SAMPLES_TABLE) is not None
 
 
 def test_dropping_a_table_only_changes_logical_visibility(tmp_path):
     results = tmp_path / "run" / "results"
     _archive(results, [_generation("1")])
 
-    shard_path = CompositeReader(str(results)).list_shards(ARCHIVE_SAMPLES_TABLE)[0].path
+    shard_path = ReadView(str(results)).list_shards(ARCHIVE_SAMPLES_TABLE)[0].path
 
     assert drop_table(str(results), ARCHIVE_SAMPLES_TABLE) == 1
-    assert CompositeReader(str(results)).scan(ARCHIVE_SAMPLES_TABLE) is None
+    assert ReadView(str(results)).scan(ARCHIVE_SAMPLES_TABLE) is None
     assert StoragePath(shard_path).exists()
 
 
@@ -120,7 +120,7 @@ def test_replace_refuses_a_table_holding_samples_it_cannot_regenerate(tmp_path):
 
     with pytest.raises(ValueError, match="agentic"):
         replace_stale_samples(str(results))
-    assert CompositeReader(str(results)).scan(ARCHIVE_SAMPLES_TABLE).num_rows == 1
+    assert ReadView(str(results)).scan(ARCHIVE_SAMPLES_TABLE).num_rows == 1
 
 
 def test_an_archive_already_at_the_current_contract_is_left_alone(tmp_path):
@@ -128,4 +128,4 @@ def test_an_archive_already_at_the_current_contract_is_left_alone(tmp_path):
     _archive(results, [_generation("1")])
 
     assert replace_stale_samples(str(results)) is None
-    assert CompositeReader(str(results)).scan(ARCHIVE_SAMPLES_TABLE).num_rows == 1
+    assert ReadView(str(results)).scan(ARCHIVE_SAMPLES_TABLE).num_rows == 1

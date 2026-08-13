@@ -9,9 +9,8 @@ import atexit
 import logging
 import pathlib
 import threading
-from collections.abc import Callable
 
-from rigging.filesystem import StoragePath, atomic_rename
+from rigging.filesystem import atomic_rename
 
 from finestore.layout import BLOB_NAME_COLUMN, BLOBS_TABLE
 from finestore.reader import ReadView
@@ -32,7 +31,7 @@ def _safe_relative(name: str) -> pathlib.PurePosixPath:
 
 
 def fetch_file_set(root: str, local: str) -> set[str]:
-    """Materialize the file set from one pinned commit into ``local``."""
+    """Materialize one pinned file set and return the relative paths fetched."""
     destination = pathlib.Path(local)
     destination.mkdir(parents=True, exist_ok=True)
     fetched = set()
@@ -51,14 +50,14 @@ class FineStoreDirectory:
 
     def __init__(
         self,
-        root: str | Callable[[], str],
+        root: str,
         local: str,
         *,
         flush_interval: float = DEFAULT_SYNC_INTERVAL,
         max_transaction_bytes: int = DEFAULT_TRANSACTION_BYTES,
         max_transaction_files: int = DEFAULT_TRANSACTION_FILES,
     ) -> None:
-        self._root = root() if callable(root) else root
+        self._root = root
         self._local = pathlib.Path(local)
         self._local.mkdir(parents=True, exist_ok=True)
         self._known = fetch_file_set(self._root, local)
@@ -74,7 +73,7 @@ class FineStoreDirectory:
         atexit.register(self.close)
 
     def flush(self) -> None:
-        """Publish files added since the last successful commit as one transaction."""
+        """Publish files added since the last successful sync in bounded transactions."""
         with self._flush_lock:
             present = {path.relative_to(self._local).as_posix() for path in self._local.rglob("*") if path.is_file()}
             pending = sorted(present - self._known)
@@ -85,8 +84,7 @@ class FineStoreDirectory:
             for relative in pending:
                 data = (self._local / relative).read_bytes()
                 if batch and (
-                    batch_bytes + len(data) > self._max_transaction_bytes
-                    or len(batch) >= self._max_transaction_files
+                    batch_bytes + len(data) > self._max_transaction_bytes or len(batch) >= self._max_transaction_files
                 ):
                     self._commit(batch)
                     self._known.update(name for name, _data in batch)

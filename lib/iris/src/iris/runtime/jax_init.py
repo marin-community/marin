@@ -194,7 +194,7 @@ def _file_set_cache_root(prefix: str) -> str | None:
 
 
 def sync_file_set_cache(prefix: str, local: str) -> FineStoreDirectory | None:
-    """Start a FineStore-backed directory synchronizer for one build."""
+    """Start a file-set synchronizer, or return ``None`` when remote caching is unavailable."""
     root = _file_set_cache_root(prefix)
     if root is None:
         return None

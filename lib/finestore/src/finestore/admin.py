@@ -11,7 +11,7 @@ from finestore.layout import CommitToken, FineStoreLayout, TableMetadata
 
 def set_table_metadata(root: str, table: str, metadata: TableMetadata) -> CommitToken:
     """Replace one table's logical metadata without changing its visible shards."""
-    layout = FineStoreLayout(root.rstrip("/"))
+    layout = FineStoreLayout(root)
     coordinator = CommitCoordinator(layout)
     metadata_path = write_schema(layout, metadata)
     return coordinator.commit(CommitDelta(metadata_updates={table: metadata_path}))
@@ -19,5 +19,5 @@ def set_table_metadata(root: str, table: str, metadata: TableMetadata) -> Commit
 
 def drop_table(root: str, table: str) -> CommitToken:
     """Remove a table from the next manifest while retaining its immutable objects."""
-    layout = FineStoreLayout(root.rstrip("/"))
+    layout = FineStoreLayout(root)
     return CommitCoordinator(layout).commit(CommitDelta(removals=frozenset({table})))

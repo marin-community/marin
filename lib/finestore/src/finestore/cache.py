@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import atexit
 import logging
 import threading
 from collections.abc import Callable
@@ -18,46 +17,10 @@ from finestore.reader import ReadView
 from finestore.store import DataStore
 
 _CACHE_TTL_DAYS = 30
-_EXIT_FLUSH_TIMEOUT = 10.0
 _MAX_TRANSACTION_BYTES = 100 * 1024 * 1024
 _MAX_TRANSACTION_OBJECTS = 65_536
 
-_background_lock = threading.Lock()
-_background_executor: ThreadPoolExecutor | None = None
-_pending_writes: set[Future] = set()
-
 logger = logging.getLogger(__name__)
-
-
-def _submit_background_write(write: Callable[[], None]) -> None:
-    global _background_executor
-    with _background_lock:
-        if _background_executor is None:
-            _background_executor = ThreadPoolExecutor(1, thread_name_prefix="finestore-cache-write")
-            atexit.register(_drain_pending_writes)
-        future = _background_executor.submit(write)
-        _pending_writes.add(future)
-    future.add_done_callback(_forget_pending_write)
-
-
-def _forget_pending_write(future: Future) -> None:
-    with _background_lock:
-        _pending_writes.discard(future)
-    error = future.exception()
-    if error is not None:
-        logger.warning("FineStore cache write failed: %s", error)
-
-
-def _drain_pending_writes() -> None:
-    flush_background_writes(_EXIT_FLUSH_TIMEOUT)
-
-
-def flush_background_writes(timeout: float | None = None) -> None:
-    """Wait for queued remote cache commits."""
-    with _background_lock:
-        pending = list(_pending_writes)
-    if pending:
-        wait_for_futures(pending, timeout=timeout)
 
 
 class PersistentKvCache:
@@ -72,6 +35,9 @@ class PersistentKvCache:
         self._memory: dict[str, bytes] = {}
         self._remote_pending: dict[str, bytes] = {}
         self._remote_write_scheduled = False
+        self._background_lock = threading.Lock()
+        self._background_executor: ThreadPoolExecutor | None = None
+        self._pending_writes: set[Future] = set()
 
     @classmethod
     def at(cls, root: str) -> PersistentKvCache:
@@ -121,7 +87,12 @@ class PersistentKvCache:
 
     def close(self) -> None:
         """Close the lazy writer after its explicit commits have completed."""
-        flush_background_writes()
+        self._flush_background_writes()
+        with self._background_lock:
+            executor = self._background_executor
+            self._background_executor = None
+        if executor is not None:
+            executor.shutdown(wait=True)
         with self._root_lock:
             if self._store is not None:
                 self._store.close()
@@ -157,7 +128,30 @@ class PersistentKvCache:
             if self._remote_write_scheduled:
                 return
             self._remote_write_scheduled = True
-        _submit_background_write(self._drain_remote_writes)
+        self._submit_background_write(self._drain_remote_writes)
+
+    def _submit_background_write(self, write: Callable[[], None]) -> None:
+        with self._background_lock:
+            if self._background_executor is None:
+                self._background_executor = ThreadPoolExecutor(1, thread_name_prefix="finestore-cache-write")
+            future = self._background_executor.submit(write)
+            self._pending_writes.add(future)
+        future.add_done_callback(self._forget_pending_write)
+
+    def _forget_pending_write(self, future: Future) -> None:
+        with self._background_lock:
+            self._pending_writes.discard(future)
+        error = future.exception()
+        if error is not None:
+            logger.warning("FineStore cache write failed: %s", error)
+
+    def _flush_background_writes(self) -> None:
+        while True:
+            with self._background_lock:
+                pending = list(self._pending_writes)
+            if not pending:
+                return
+            wait_for_futures(pending)
 
     def _drain_remote_writes(self) -> None:
         """Publish every queued burst as a bounded multi-object transaction."""
@@ -167,8 +161,7 @@ class PersistentKvCache:
                 selected_bytes = 0
                 for key, value in self._remote_pending.items():
                     if selected and (
-                        len(selected) >= _MAX_TRANSACTION_OBJECTS
-                        or selected_bytes + len(value) > _MAX_TRANSACTION_BYTES
+                        len(selected) >= _MAX_TRANSACTION_OBJECTS or selected_bytes + len(value) > _MAX_TRANSACTION_BYTES
                     ):
                         break
                     selected.append(key)
@@ -188,5 +181,5 @@ class PersistentKvCache:
                     if retry:
                         self._remote_write_scheduled = True
                 if retry:
-                    _submit_background_write(self._drain_remote_writes)
+                    self._submit_background_write(self._drain_remote_writes)
                 raise

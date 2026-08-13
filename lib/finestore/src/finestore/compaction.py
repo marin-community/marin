@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-import heapq
-import itertools
 import logging
 import uuid
 from collections.abc import Iterator
@@ -14,21 +12,19 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import pyarrow as pa
-import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 from pyarrow.fs import FSSpecHandler, PyFileSystem
 from rigging.filesystem import factory
 
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import COMMIT_COLUMN, SEQ_COLUMN, CommitToken, FineStoreLayout, Shard
-from finestore.reader import ReadView
+from finestore.reader import ReadView, iter_shard_rows, merge_deduplicated_rows
 from finestore.shard_writer import ROW_GROUP_ROWS, ShardWriter
 
 logger = logging.getLogger(__name__)
 
 _COMPACTOR = "compactor"
 _COMPACT_BATCH_ROWS = ROW_GROUP_ROWS
-_MergeItem = tuple[tuple, int, int, int, dict]
 
 
 class CompactionCoordinator(Protocol):
@@ -37,49 +33,12 @@ class CompactionCoordinator(Protocol):
     def commit(self, delta: CommitDelta, *, base: ArchiveSnapshot | None = None) -> CommitToken: ...
 
 
-def _key_tuple(row: dict, primary_key: tuple[str, ...]) -> tuple:
-    return tuple((row.get(name) is None, row.get(name)) for name in primary_key)
-
-
-def _shard_rows(shard: Shard, unified: pa.Schema, primary_key: tuple[str, ...], pa_fs) -> Iterator[_MergeItem]:
-    dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
-    if not shard.primary_key_sorted:
-        table = dataset.to_table()
-        sort_columns = [(name, "ascending") for name in primary_key if name in unified.names]
-        if sort_columns:
-            table = table.sort_by(sort_columns)
-        batches = table.to_batches()
-    else:
-        batches = dataset.scanner(use_threads=False).to_batches()
-    for batch in batches:
-        for row in batch.to_pylist():
-            commit_sequence = row.get(COMMIT_COLUMN)
-            if commit_sequence is None:
-                commit_sequence = shard.commit_sequence
-            row[COMMIT_COLUMN] = commit_sequence
-            yield (
-                _key_tuple(row, primary_key),
-                commit_sequence,
-                row.get(SEQ_COLUMN) or 0,
-                shard.generation,
-                row,
-            )
-
-
 @dataclass(frozen=True)
 class CompactionResult:
     """Rows written and duplicate inputs superseded by one compaction."""
 
     written: int
     superseded: int = 0
-
-
-def _merge_dedup(streams: list[Iterator[_MergeItem]], counter: list[int]) -> Iterator[dict]:
-    merged = heapq.merge(*streams, key=lambda item: item[0])
-    for _key, group in itertools.groupby(merged, key=lambda item: item[0]):
-        items = list(group)
-        counter[0] += len(items) - 1
-        yield max(items, key=lambda item: (item[1], item[2], item[3]))[4]
 
 
 def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None = None) -> CompactionResult:
@@ -107,7 +66,14 @@ def compact(root: str, table: str, *, coordinator: CompactionCoordinator | None 
         unified = unified.append(pa.field(COMMIT_COLUMN, pa.int64()))
 
     superseded = [0]
-    survivors = _merge_dedup([_shard_rows(shard, unified, primary_key, pa_fs) for shard in shards], superseded)
+    merged_rows = merge_deduplicated_rows([iter_shard_rows(shard, unified, primary_key, pa_fs) for shard in shards])
+
+    def survivor_rows() -> Iterator[dict]:
+        for merged in merged_rows:
+            superseded[0] += merged.superseded
+            yield merged.row
+
+    survivors = survivor_rows()
     first = next(survivors, None)
     if first is None:
         return CompactionResult(written=0)

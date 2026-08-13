@@ -18,12 +18,12 @@ from finestore.layout import (
     OnConflict,
 )
 from finestore.migrate import migrate_v1
-from finestore.reader import CompositeReader
-from finestore.store import DataStore, DataTable, PrimaryKeyConflict
+from finestore.reader import ReadView
+from finestore.store import DataStore, DataTable, PrimaryKeyConflict, TransactionTooLarge
 from rigging.filesystem import StoragePath
 
 
-def _rows(reader: CompositeReader, table: str, **kwargs) -> list[dict]:
+def _rows(reader: ReadView, table: str, **kwargs) -> list[dict]:
     result = reader.scan(table, **kwargs)
     return [] if result is None else result.to_pylist()
 
@@ -36,7 +36,7 @@ def test_round_trip_and_projection(tmp_path):
         samples.append({"task": "arc", "doc_id": "2", "correct": False, "logprobs": [0.3]})
         store.flush()
 
-    reader = CompositeReader(root)
+    reader = ReadView(root)
     rows = _rows(reader, "samples")
     assert {(r["task"], r["doc_id"]) for r in rows} == {("arc", "1"), ("arc", "2")}
 
@@ -52,10 +52,10 @@ def test_point_lookup(tmp_path):
         table.extend([{"task": "arc", "doc_id": str(i), "score": float(i)} for i in range(5)])
         store.flush()
 
-    row = CompositeReader(root).point("samples", task="arc", doc_id="3")
+    row = ReadView(root).point("samples", task="arc", doc_id="3")
     assert row is not None
     assert row["score"] == 3.0
-    assert CompositeReader(root).point("samples", task="arc", doc_id="99") is None
+    assert ReadView(root).point("samples", task="arc", doc_id="99") is None
 
 
 def test_iter_rows_streams_latest_values_in_primary_key_order(tmp_path):
@@ -67,7 +67,7 @@ def test_iter_rows_streams_latest_values_in_primary_key_order(tmp_path):
         table.append({"doc_id": "a", "score": 3})
         store.flush()
 
-    assert list(CompositeReader(root).iter_rows("samples", columns=["doc_id", "score"])) == [
+    assert list(ReadView(root).iter_rows("samples", columns=["doc_id", "score"])) == [
         {"doc_id": "a", "score": 3},
         {"doc_id": "b", "score": 1},
     ]
@@ -83,7 +83,7 @@ def test_supersede_keeps_latest_seq(tmp_path):
         table.append({"task": "arc", "doc_id": "1", "score": 2.0})
         store.flush()
 
-    rows = _rows(CompositeReader(root), "samples")
+    rows = _rows(ReadView(root), "samples")
     assert len(rows) == 1
     assert rows[0]["score"] == 2.0
 
@@ -99,7 +99,7 @@ def test_conflicting_primary_key_raises(tmp_path):
         # The rejected row never entered the buffer, so the accepted one is intact.
         store.flush()
 
-    rows = _rows(CompositeReader(root), "samples")
+    rows = _rows(ReadView(root), "samples")
     assert [row["score"] for row in rows] == [0.0]
 
 
@@ -113,7 +113,7 @@ def test_identical_redelivery_is_not_a_conflict(tmp_path):
         table.append({"task": "arc", "doc_id": "1", "score": 1.0})
         store.flush()
 
-    rows = _rows(CompositeReader(root), "samples")
+    rows = _rows(ReadView(root), "samples")
     assert len(rows) == 1
 
 
@@ -138,7 +138,7 @@ def test_seal_records_superseded_rows(tmp_path):
         table.append({"task": "arc", "doc_id": "1", "score": 2.0})
         store.seal()
 
-    marker = CompositeReader(root).seal_marker()
+    marker = ReadView(root).seal_marker()
     assert marker is not None
     assert marker.superseded["samples"] == 1
 
@@ -154,7 +154,7 @@ def test_multi_writer_compose(tmp_path):
         tb.append({"task": "arc", "doc_id": "b", "score": 2.0})
         b.flush()
 
-    rows = _rows(CompositeReader(root), "samples")
+    rows = _rows(ReadView(root), "samples")
     assert {r["doc_id"] for r in rows} == {"a", "b"}
 
 
@@ -165,11 +165,11 @@ def test_later_commit_prevents_compaction_shadowing(tmp_path):
     with DataStore.open(root, writer_id="w1") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 1.0})
     compact(root, "samples")
-    assert CompositeReader(root).list_shards("samples")[0].generation == 1
+    assert ReadView(root).list_shards("samples")[0].generation == 1
 
     with DataStore.open(root, writer_id="w2") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 2.0})
-    rows = _rows(CompositeReader(root), "samples")
+    rows = _rows(ReadView(root), "samples")
     assert len(rows) == 1
     assert rows[0]["score"] == 2.0
 
@@ -184,7 +184,7 @@ def test_keys_lists_deduped_primary_keys(tmp_path):
         store.flush()
         table.append({"task": "arc", "doc_id": "1"})
         store.flush()
-    reader = CompositeReader(root)
+    reader = ReadView(root)
     assert reader.keys("samples") == {("arc", "1"), ("arc", "2")}
     assert reader.keys("does-not-exist") == set()
 
@@ -233,7 +233,7 @@ def test_large_flush_splits_into_prunable_row_groups(tmp_path, monkeypatch):
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": f"{i:03d}"} for i in range(7)])
         store.flush()
-    shard = CompositeReader(root).list_shards("samples")[0].path
+    shard = ReadView(root).list_shards("samples")[0].path
     metadata = pq.ParquetFile(shard).metadata
     assert metadata.num_rows == 7
     assert metadata.num_row_groups == 4  # ceil(7 / 2)
@@ -250,7 +250,7 @@ def test_schema_evolution_null_promotes_missing_column(tmp_path):
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "2", "difficulty": 3})
         store.flush()
 
-    result = CompositeReader(root).scan("samples")
+    result = ReadView(root).scan("samples")
     assert "difficulty" in result.column_names
     by_doc = {r["doc_id"]: r["difficulty"] for r in result.to_pylist()}
     assert by_doc == {"1": None, "2": 3}
@@ -264,7 +264,7 @@ def test_empty_dict_column_is_writable(tmp_path):
         table = store.table("samples", primary_key=("task", "doc_id"))
         table.append({"task": "arc", "doc_id": "1", "metrics": {}})
         store.flush()
-    rows = _rows(CompositeReader(root), "samples")
+    rows = _rows(ReadView(root), "samples")
     assert rows[0]["doc_id"] == "1"
 
 
@@ -275,8 +275,8 @@ def test_blob_write_and_resolve(tmp_path):
         uri = store.write_object("traj/t1.json", payload, {"task": "arc"})
         store.flush()
     assert uri == "finestore://blobs/traj/t1.json"
-    assert CompositeReader(root).resolve(uri) == payload
-    assert CompositeReader(root).read_blob("missing") is None
+    assert ReadView(root).resolve(uri) == payload
+    assert ReadView(root).read_blob("missing") is None
 
 
 def test_blob_rewrite_supersedes_by_name(tmp_path):
@@ -287,7 +287,7 @@ def test_blob_rewrite_supersedes_by_name(tmp_path):
         uri = store.write_object("t1.json", b"first")
         store.write_object("t1.json", b"second")
         store.flush()
-    assert CompositeReader(root).resolve(uri) == b"second"
+    assert ReadView(root).resolve(uri) == b"second"
 
 
 def test_compaction_replaces_sources_logically_and_retains_objects(tmp_path):
@@ -298,16 +298,16 @@ def test_compaction_replaces_sources_logically_and_retains_objects(tmp_path):
             table.append({"task": "arc", "doc_id": str(i)})
             store.flush()  # three separate level-0 shards
 
-    before = CompositeReader(root).list_shards("samples")
+    before = ReadView(root).list_shards("samples")
     assert len(before) == 3
 
     assert compact(root, "samples").written == 3
 
-    after = CompositeReader(root).list_shards("samples")
+    after = ReadView(root).list_shards("samples")
     assert len(after) == 1
     assert after[0].generation == 1
     assert all(StoragePath(shard.path).exists() for shard in before)
-    rows = _rows(CompositeReader(root), "samples")
+    rows = _rows(ReadView(root), "samples")
     assert {r["doc_id"] for r in rows} == {"0", "1", "2"}
 
 
@@ -318,10 +318,10 @@ def test_read_view_remains_valid_after_compaction(tmp_path):
         table.extend([{"task": "arc", "doc_id": str(i)} for i in range(4)])
         store.flush()
 
-    pinned = CompositeReader(root)
+    pinned = ReadView(root)
     compact(root, "samples")
     assert {s.generation for s in pinned.list_shards("samples")} == {0}
-    assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {1}
+    assert {s.generation for s in ReadView(root).list_shards("samples")} == {1}
     assert {row["doc_id"] for row in _rows(pinned, "samples")} == {"0", "1", "2", "3"}
 
 
@@ -334,11 +334,11 @@ def test_recompaction_merges_all_generations(tmp_path):
         table.extend([{"task": "arc", "doc_id": str(i), "score": float(i)} for i in range(4)])
         store.flush()
     compact(root, "samples")
-    assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {1}
+    assert {s.generation for s in ReadView(root).list_shards("samples")} == {1}
 
     assert compact(root, "samples").written == 4
-    assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {2}
-    rows = {r["doc_id"]: r["score"] for r in _rows(CompositeReader(root), "samples")}
+    assert {s.generation for s in ReadView(root).list_shards("samples")} == {2}
+    rows = {r["doc_id"]: r["score"] for r in _rows(ReadView(root), "samples")}
     assert rows == {"0": 0.0, "1": 1.0, "2": 2.0, "3": 3.0}
 
 
@@ -354,7 +354,7 @@ def test_compaction_unifies_evolved_schema(tmp_path):
         store.flush()
 
     compact(root, "samples")
-    rows = {r["doc_id"]: (r.get("a"), r.get("b")) for r in _rows(CompositeReader(root), "samples")}
+    rows = {r["doc_id"]: (r.get("a"), r.get("b")) for r in _rows(ReadView(root), "samples")}
     assert rows == {"1": (1, None), "2": (None, 2)}
 
 
@@ -377,8 +377,8 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
         store.flush()
 
     assert compact(root, "samples").written == 10
-    assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {2}
-    rows = {r["doc_id"]: r["score"] for r in _rows(CompositeReader(root), "samples")}
+    assert {s.generation for s in ReadView(root).list_shards("samples")} == {2}
+    rows = {r["doc_id"]: r["score"] for r in _rows(ReadView(root), "samples")}
     assert rows == {f"{i:03d}": float(i) for i in range(10)}
 
 
@@ -396,11 +396,11 @@ def test_typed_on_disk_metadata(tmp_path):
     archive = ArchiveMetadata.model_validate_json(StoragePath(layout.archive_path).read_text())
     assert archive.format_version == FORMAT_VERSION
 
-    table_meta = CompositeReader(root).table_metadata("samples")
+    table_meta = ReadView(root).table_metadata("samples")
     assert table_meta.primary_key == ("task", "doc_id")
     assert table_meta.schema_version == 3
 
-    seal = CompositeReader(root).seal_marker()
+    seal = ReadView(root).seal_marker()
     assert seal is not None
     assert seal.writer == "w1"
 
@@ -416,18 +416,18 @@ def test_reader_refuses_a_future_format(tmp_path):
         ArchiveMetadata(format_version=FORMAT_VERSION + 1).model_dump_json()
     )
     with pytest.raises(ValueError, match="format"):
-        CompositeReader(root).scan("samples")
+        ReadView(root).scan("samples")
 
 
 def test_seal_marker(tmp_path):
     root = str(tmp_path / "run")
-    reader = CompositeReader(root)
+    reader = ReadView(root)
     with DataStore.open(root, writer_id="w1") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         assert not reader.is_sealed()
         store.seal()
     assert not reader.is_sealed()
-    assert CompositeReader(root).is_sealed()
+    assert ReadView(root).is_sealed()
 
 
 def test_seal_compacts_each_table_to_one_generation(tmp_path):
@@ -441,12 +441,10 @@ def test_seal_compacts_each_table_to_one_generation(tmp_path):
         store.flush()
         table.append({"task": "arc", "doc_id": "1", "score": 2.0})
         store.seal()
-    shards = CompositeReader(root).list_shards("samples")
+    shards = ReadView(root).list_shards("samples")
     assert len(shards) == 1
     assert shards[0].generation == 1
-    assert CompositeReader(root).scan("samples", columns=["doc_id", "score"]).to_pylist() == [
-        {"doc_id": "1", "score": 2.0}
-    ]
+    assert ReadView(root).scan("samples", columns=["doc_id", "score"]).to_pylist() == [{"doc_id": "1", "score": 2.0}]
 
 
 def test_seal_compacts_tables_not_registered_by_the_sealing_writer(tmp_path):
@@ -461,7 +459,7 @@ def test_seal_compacts_tables_not_registered_by_the_sealing_writer(tmp_path):
     with DataStore.open(root, writer_id="sealer", flush_interval=3600) as store:
         store.seal()
 
-    view = CompositeReader(root)
+    view = ReadView(root)
     assert view.table_names() == ("history",)
     assert len(view.list_shards("history")) == 1
 
@@ -471,7 +469,7 @@ def test_reader_none_for_absent_table(tmp_path):
     with DataStore.open(root, writer_id="w1") as store:
         store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         store.flush()
-    assert CompositeReader(root).scan("does-not-exist") is None
+    assert ReadView(root).scan("does-not-exist") is None
 
 
 def test_single_table_flush_is_independent(tmp_path):
@@ -484,8 +482,8 @@ def test_single_table_flush_is_independent(tmp_path):
         samples.append({"task": "arc", "doc_id": "1"})
         steps.append({"task": "arc", "step_id": 0})
         samples.flush()
-        assert len(CompositeReader(root).list_shards("samples")) == 1
-        assert CompositeReader(root).scan("steps") is None
+        assert len(ReadView(root).list_shards("samples")) == 1
+        assert ReadView(root).scan("steps") is None
 
 
 def test_table_returns_shared_handle(tmp_path):
@@ -499,7 +497,7 @@ def test_table_returns_shared_handle(tmp_path):
         first.append({"task": "arc", "doc_id": "1"})
         second.append({"task": "arc", "doc_id": "2"})
         store.flush()
-    rows = _rows(CompositeReader(root), "samples")
+    rows = _rows(ReadView(root), "samples")
     assert {r["doc_id"] for r in rows} == {"1", "2"}
 
 
@@ -529,7 +527,7 @@ def test_explicit_schema_pins_types_and_rejects_mismatch(tmp_path):
             {"task": "arc", "doc_id": "2", "count": 5}
         )
         store.flush()
-    result = CompositeReader(root).scan("samples", columns=["task", "doc_id", "count"])
+    result = ReadView(root).scan("samples", columns=["task", "doc_id", "count"])
     assert result.schema.field("count").type == pa.int64()
     assert result.to_pylist() == [{"task": "arc", "doc_id": "2", "count": 5}]
 
@@ -543,12 +541,12 @@ def test_transaction_publishes_tables_and_objects_with_one_token(tmp_path):
             transaction.table("purchases").add({"order_id": "o1", "amount": 12})
             uri = transaction.write_object("receipts/o1", b"paid")
             assert transaction.lookup("receipts/o1") == b"paid"
-            assert CompositeReader(root).scan("purchases") is None
+            assert ReadView(root).scan("purchases") is None
 
         assert transaction.token is not None
         assert before.scan("purchases") is None
         assert before.resolve(uri) is None
-        after = CompositeReader(root)
+        after = ReadView(root)
         assert after.token == transaction.token
         assert after.point("purchases", order_id="o1")["amount"] == 12
         assert after.resolve(uri) == b"paid"
@@ -564,9 +562,19 @@ def test_transaction_exception_publishes_nothing(tmp_path):
                 transaction.write_object("receipts/o1", b"paid")
                 raise RuntimeError("abort")
 
-        view = CompositeReader(root)
+        view = ReadView(root)
         assert view.scan("purchases") is None
         assert view.read_blob("receipts/o1") is None
+
+
+def test_transaction_rejects_payload_above_its_bound(tmp_path):
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        with pytest.raises(TransactionTooLarge, match="smaller batch"):
+            with store.transaction(max_bytes=16) as transaction:
+                transaction.write_object("receipt", b"payload")
+
+        assert ReadView(root).read_blob("receipt") is None
 
 
 def test_transaction_lookup_is_pinned_to_its_starting_commit(tmp_path):
@@ -599,14 +607,14 @@ def test_failed_multi_table_flush_restores_every_buffer(tmp_path, monkeypatch):
         monkeypatch.setattr("finestore.store.write_table", fail_second_write)
         with pytest.raises(OSError, match="injected"):
             store.flush()
-        assert CompositeReader(root).scan("purchases") is None
-        assert CompositeReader(root).scan("refunds") is None
+        assert ReadView(root).scan("purchases") is None
+        assert ReadView(root).scan("refunds") is None
 
         monkeypatch.setattr("finestore.store.write_table", real_write)
         token = store.flush()
         assert token is not None
-        assert CompositeReader(root).point("purchases", order_id="o1") is not None
-        assert CompositeReader(root).point("refunds", refund_id="r1") is not None
+        assert ReadView(root).point("purchases", order_id="o1") is not None
+        assert ReadView(root).point("refunds", refund_id="r1") is not None
 
 
 def test_maintenance_compacts_after_shard_threshold(tmp_path):
@@ -616,10 +624,10 @@ def test_maintenance_compacts_after_shard_threshold(tmp_path):
         for index in range(3):
             table.append({"doc_id": str(index)})
             store.flush()
-        assert len(CompositeReader(root).list_shards("samples")) == 3
+        assert len(ReadView(root).list_shards("samples")) == 3
 
         store.maintain()
-        shards = CompositeReader(root).list_shards("samples")
+        shards = ReadView(root).list_shards("samples")
         assert len(shards) == 1
         assert shards[0].generation == 1
 
@@ -643,7 +651,7 @@ def test_compaction_losing_an_input_race_is_a_benign_noop(tmp_path):
             raise CommitConflict("inputs changed")
 
     assert compact(root, "samples", coordinator=LosingCoordinator()).written == 0
-    assert len(CompositeReader(root).list_shards("samples")) == 2
+    assert len(ReadView(root).list_shards("samples")) == 2
 
 
 def test_migrate_v1_publishes_existing_shards_through_head(tmp_path):
@@ -661,7 +669,7 @@ def test_migrate_v1_publishes_existing_shards_through_head(tmp_path):
     )
 
     token = migrate_v1(root.as_uri())
-    view = CompositeReader(str(root))
+    view = ReadView(str(root))
     assert view.token == token
     assert view.is_sealed()
     assert view.schema_version("samples") == 3

@@ -118,14 +118,12 @@ def _legacy_shards(root: StoragePath, table: str) -> tuple[Shard, ...]:
 
 
 def migrate_v1(root: str) -> CommitToken:
-    """Convert one sealed v1 archive to a v2 manifest without rewriting its Parquet shards.
+    """Upgrade one sealed, quiescent v1 archive without copying its Parquet payloads.
 
-    The archive must be quiescent and sealed. Schema objects, the initial manifest, and ``HEAD``
-    are prepared first; the conditional replacement of ``_archive.json`` is the final publication
-    step. Legacy shards, schema files, and ``SEALED`` are retained as unreachable source objects.
-    Re-running a completed migration returns the current commit token.
+    Returns the initial v2 commit token, or the current token when the archive was already
+    migrated. The operation is safe to retry after an interrupted attempt.
     """
-    root_path = StoragePath(root.rstrip("/"))
+    root_path = StoragePath(root)
     layout = FineStoreLayout(str(root_path))
     archive_object = conditional_object(layout.archive_path)
     archive = archive_object.read()
@@ -173,7 +171,10 @@ def migrate_v1(root: str) -> CommitToken:
         archive_object.write(ArchiveMetadata().model_dump_json().encode(), expected_version=archive.version)
     except ConditionalWriteError as exc:
         current = archive_object.read()
-        if current is not None and _LegacyArchiveMetadata.model_validate_json(current.data).format_version == FORMAT_VERSION:
+        if (
+            current is not None
+            and _LegacyArchiveMetadata.model_validate_json(current.data).format_version == FORMAT_VERSION
+        ):
             token = read_snapshot(layout).token
             assert token is not None
             return token
