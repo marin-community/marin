@@ -164,6 +164,15 @@ def fold_donor(model: FastTransformer) -> FastTransformer:
     return cast(FastTransformer, eqx.tree_at(lambda m: [getattr(m, n) for n in names], template, values))
 
 
+def rss_bytes() -> int:
+    """This process's resident set, for sizing the worker pool against the cap."""
+    with open("/proc/self/status") as fh:
+        for line in fh:
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) * 1024
+    raise ValueError("no VmRSS: line in /proc/self/status")
+
+
 def verify_vocab(remap: dict[int, int]) -> int:
     """Assert the remap is the full-vocab identity offset and return the vocab size.
 
@@ -593,6 +602,7 @@ def score_mode(args) -> dict:
     fs = fsspec.filesystem("s3")
     scorer = load_folded_scorer(args.model_dir)
     vocab_size = scorer.model.config.vocab_size
+    logger.info("worker %d rss after model load: %.2f GB", args.worker, rss_bytes() / 1e9)
     logger.info(
         "worker %d/%d: model max_tokens=%d devices=%s batch=%d",
         args.worker,
@@ -631,12 +641,13 @@ def score_mode(args) -> dict:
     if args.limit:
         mine = mine[: args.limit]
     logger.info(
-        "worker %d owns %d of %d shard tasks (%.2f TB of %.2f TB)",
+        "worker %d owns %d of %d shard tasks (%.2f TB of %.2f TB), rss %.2f GB",
         args.worker,
         len(mine),
         len(tasks),
         sum(t.total_bytes for t in mine) / 1e12,
         sum(t.total_bytes for t in tasks) / 1e12,
+        rss_bytes() / 1e9,
     )
 
     done = 0
@@ -715,7 +726,8 @@ def score_mode(args) -> dict:
         if done % 25 == 0 or done == len(mine):
             elapsed = time.monotonic() - started
             logger.info(
-                "worker %d: %d/%d shards, %d docs, %.0f docs/s (read %.0fs score %.0fs write %.0fs of %.0fs)",
+                "worker %d: %d/%d shards, %d docs, %.0f docs/s "
+                "(read %.0fs score %.0fs write %.0fs of %.0fs, rss %.1f GB)",
                 args.worker,
                 done,
                 len(mine),
@@ -725,6 +737,7 @@ def score_mode(args) -> dict:
                 score_seconds,
                 write_seconds,
                 elapsed,
+                rss_bytes() / 1e9,
             )
 
     elapsed = time.monotonic() - started
