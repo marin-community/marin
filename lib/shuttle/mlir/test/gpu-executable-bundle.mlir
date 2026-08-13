@@ -12,11 +12,11 @@
 // CALL-COUNT-1: stablehlo.custom_call @shuttle.gpu.executable_bundle.v1
 // CALL-SAME: api_version = 4 : i32
 // CALL-SAME: backend_config = {bundle_bytes = "SHUTGPU\00
-// CALL-SAME: transport_schema_version = 2 : i64
 // CALL-SAME: bundle_schema_version = 2 : i64
+// CALL-SAME: completion = "stream_ordered"
 // CALL-SAME: device_schema_version = 3 : i64
 // CALL-SAME: invocation_abi_schema_version = 3 : i64
-// CALL-SAME: completion = "stream_ordered"
+// CALL-SAME: transport_schema_version = 2 : i64
 // CALL-NOT: loaded_kernel
 // CALL-NOT: temporary_address
 // CALL-NOT: executor_state
