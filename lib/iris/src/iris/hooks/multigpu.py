@@ -12,6 +12,7 @@ stamps on each child; :mod:`iris.runtime.jax_init` and
 :mod:`iris.hooks.nsys_main` read it.
 """
 
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -72,6 +73,14 @@ class MultiGpuHook:
         ]
 
 
+# Wrapper prepended to each supervised child, taken from the environment.
+#
+# A per-GPU gang cannot be debugged from outside: tools like compute-sanitizer and nsys have to
+# wrap the ranks themselves. Reading it here keeps that reachable from a launch without a code
+# change, and costs nothing when unset.
+IRIS_MULTIGPU_CHILD_WRAPPER_ENV = "IRIS_MULTIGPU_CHILD_WRAPPER"
+
+
 def build_multigpu_hook(resources: ResourceSpec, processes_per_task: int) -> MultiGpuHook:
     """Build the hook for *processes_per_task* processes over the job's GPUs.
 
@@ -84,4 +93,8 @@ def build_multigpu_hook(resources: ResourceSpec, processes_per_task: int) -> Mul
         raise ValueError("processes_per_task > 1 requires a GPU device")
     if gpu_count % processes_per_task != 0:
         raise ValueError(f"processes_per_task ({processes_per_task}) must divide the GPU count ({gpu_count})")
-    return MultiGpuHook(nproc=processes_per_task, devices_per_proc=gpu_count // processes_per_task)
+    return MultiGpuHook(
+        nproc=processes_per_task,
+        devices_per_proc=gpu_count // processes_per_task,
+        wrap_child=os.environ.get(IRIS_MULTIGPU_CHILD_WRAPPER_ENV) or None,
+    )
