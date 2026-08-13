@@ -197,6 +197,7 @@ class GrugModel:
     checkpoint_keep: list[dict] | None = None
     wandb_tags: Sequence[str] = ()
     wandb_group: str | None = None
+    wandb_mode: str | None = None
 
     def tokenizer_cache_key(self) -> str:
         return self.tokenizer_path
@@ -229,6 +230,7 @@ class GrugModel:
             project=spec.wandb_project,
             tags=list(self.wandb_tags),
             group=self.wandb_group,
+            mode=self.wandb_mode,
             name=run_id,
         )
         return GrugMoeSFTConfig(
