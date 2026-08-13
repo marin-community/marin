@@ -59,6 +59,7 @@ HF_REVISION = "de656ef7cc7c84ceb9892c75a77347d9003c1273"
 # Short prefix used in the cache directory so a revision bump produces a fresh
 # cache key without invalidating prior versions.
 HF_REVISION_SHORT = HF_REVISION[:7]
+FUZZY_VERIFICATION_MAX_OUTPUT_SHARDS = 128
 FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=1_800,
     ready_timeout=1_800,
@@ -128,6 +129,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             verification_params=verification_params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
             store_config=FUZZY_VERIFICATION_STORE_CONFIG,
+            max_output_shards=FUZZY_VERIFICATION_MAX_OUTPUT_SHARDS,
         ),
         override_output_path=prefix_join(ttl_base, "verify_fuzzy_dups"),
     )

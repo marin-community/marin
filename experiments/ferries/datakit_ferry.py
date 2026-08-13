@@ -46,6 +46,7 @@ from rigging.timing import log_time
 
 logger = logging.getLogger(__name__)
 
+FUZZY_VERIFICATION_MAX_OUTPUT_SHARDS = 128
 FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=1_800,
     ready_timeout=1_800,
@@ -122,6 +123,7 @@ def build_steps(base: str) -> list[StepSpec]:
             verification_params=verification_params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
             store_config=FUZZY_VERIFICATION_STORE_CONFIG,
+            max_output_shards=FUZZY_VERIFICATION_MAX_OUTPUT_SHARDS,
             worker_resources=ResourceConfig(cpu=2, ram="16g", disk="30g"),
         ),
         override_output_path=prefix_join(base, "verify_fuzzy_dups"),

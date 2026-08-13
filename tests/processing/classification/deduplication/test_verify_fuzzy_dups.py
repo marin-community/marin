@@ -51,7 +51,7 @@ TEST_STORE_CONFIG = FuzzyVerificationStoreConfig(
     ready_timeout=30,
     lookup_batch_size=2,
 )
-verify_fuzzy_dups = partial(_verify_fuzzy_dups, store_config=TEST_STORE_CONFIG)
+verify_fuzzy_dups = partial(_verify_fuzzy_dups, store_config=TEST_STORE_CONFIG, max_output_shards=1)
 
 
 def test_parquet_rows_converts_only_the_row_it_yields(tmp_path, monkeypatch):

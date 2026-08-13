@@ -884,6 +884,7 @@ def verify_fuzzy_dups(
     verification_params: FuzzyVerificationParams,
     local_representative_params: LocalRepresentativeParams,
     store_config: FuzzyVerificationStoreConfig,
+    max_output_shards: int,
     max_workers: int | None = None,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
@@ -909,6 +910,9 @@ def verify_fuzzy_dups(
     shards = layout.shards
     if not shards:
         raise ValueError("verify_fuzzy_dups found no normalized Parquet shards")
+    if max_output_shards < 1:
+        raise ValueError("max_output_shards must be at least 1")
+    num_output_shards = min(max_output_shards, len(shards))
 
     resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk=VERIFICATION_WORKER_SCRATCH)
     # The document store loads onto the worker pool, which must know its size,
@@ -952,11 +956,13 @@ def verify_fuzzy_dups(
                     document_store,
                     store_config.lookup_batch_size,
                 ),
+                num_output_shards=num_output_shards,
             )
             .group_by(
                 key=lambda record: record["file_idx"],
                 sort_by=lambda record: record["id"],
                 reducer=_write_verified_shard,
+                num_output_shards=num_output_shards,
             )
         )
         outcome = ctx.execute(
@@ -1008,6 +1014,7 @@ def verify_fuzzy_dups_step(
     verification_params: FuzzyVerificationParams,
     local_representative_params: LocalRepresentativeParams,
     store_config: FuzzyVerificationStoreConfig,
+    max_output_shards: int,
     max_workers: int | None = None,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
@@ -1037,6 +1044,7 @@ def verify_fuzzy_dups_step(
             verification_params=verification_params,
             local_representative_params=local_representative_params,
             store_config=store_config,
+            max_output_shards=max_output_shards,
             max_workers=max_workers,
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
@@ -1047,6 +1055,7 @@ def verify_fuzzy_dups_step(
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
             "verification": verification_params.model_dump(mode="json"),
             "local_representatives": local_representative_params.model_dump(mode="json"),
+            "max_output_shards": max_output_shards,
         },
         override_output_path=override_output_path,
     )

@@ -19,6 +19,7 @@ Submit the target in the CoreWeave data region::
             --worker-ram 864GB --worker-disk 16g \
             --task-cpu 1 --task-ram 2GB --task-disk 1g \
             --coordinator-cpu 2 --coordinator-ram 8GB \
+            --max-output-shards 4096 \
             --recovery-timeout 1800 --ready-timeout 28800
 
 Add ``--dry-run`` to read the cache state without job submission.
@@ -67,6 +68,7 @@ DEFAULT_RECOVERY_TIMEOUT = 1_800
 DEFAULT_READY_TIMEOUT = 1_800
 DEFAULT_LOOKUP_BATCH_SIZE = 128
 DEFAULT_LOAD_CONCURRENCY = 1
+DEFAULT_MAX_OUTPUT_SHARDS = 4_096
 DEFAULT_TASK_CPU = 1.0
 DEFAULT_TASK_RAM = "2GB"
 DEFAULT_TASK_DISK = "1g"
@@ -88,6 +90,7 @@ def build_fuzzy_validation_step(
     store_config: FuzzyVerificationStoreConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
     task_resources: ResourceConfig | None = None,
+    max_output_shards: int = DEFAULT_MAX_OUTPUT_SHARDS,
 ) -> StepSpec:
     """Build the fuzzy-validation terminal and its Datakit dependencies."""
     if store_config is None:
@@ -105,6 +108,7 @@ def build_fuzzy_validation_step(
         verification_params=FuzzyVerificationParams(),
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
         store_config=store_config,
+        max_output_shards=max_output_shards,
         max_workers=scale.pool.n_workers,
         worker_resources=scale.pool.worker,
         coordinator_resources=coordinator_resources,
@@ -127,6 +131,7 @@ def build_repacked_fuzzy_validation_step(
     store_config: FuzzyVerificationStoreConfig,
     coordinator_resources: ResourceConfig,
     task_resources: ResourceConfig,
+    max_output_shards: int = DEFAULT_MAX_OUTPUT_SHARDS,
     repack_max_workers: int = DEFAULT_REPACK_MAX_WORKERS,
     repack_worker_resources: ResourceConfig = DEFAULT_REPACK_WORKER,
 ) -> StepSpec:
@@ -167,6 +172,7 @@ def build_repacked_fuzzy_validation_step(
         verification_params=FuzzyVerificationParams(),
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
         store_config=store_config,
+        max_output_shards=max_output_shards,
         max_workers=validation_scale.pool.n_workers,
         worker_resources=validation_scale.pool.worker,
         coordinator_resources=coordinator_resources,
@@ -244,6 +250,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ready-timeout", type=int, default=DEFAULT_READY_TIMEOUT)
     parser.add_argument("--lookup-batch-size", type=int, default=DEFAULT_LOOKUP_BATCH_SIZE)
     parser.add_argument("--load-concurrency", type=int, default=DEFAULT_LOAD_CONCURRENCY)
+    parser.add_argument("--max-output-shards", type=int, default=DEFAULT_MAX_OUTPUT_SHARDS)
     parser.add_argument("--max-concurrent", type=int, default=8)
     parser.add_argument("--reuse-legacy-focus-candidates", action="store_true")
     parser.add_argument("--production-output", action="store_true")
@@ -306,6 +313,7 @@ def main(argv: list[str] | None = None) -> None:
             store_config=store_config,
             coordinator_resources=coordinator_resources,
             task_resources=task_resources,
+            max_output_shards=args.max_output_shards,
         )
         logger.info("Repack output prefix: %s", repack_output_path_prefix)
         logger.info("Validation output prefix: %s", validation_output_path_prefix)
@@ -316,6 +324,7 @@ def main(argv: list[str] | None = None) -> None:
             store_config=store_config,
             coordinator_resources=coordinator_resources,
             task_resources=task_resources,
+            max_output_shards=args.max_output_shards,
         )
     logger.info("Fuzzy-validation target: %s", target.output_path)
     StepRunner().run([target], dry_run=args.dry_run, max_concurrent=args.max_concurrent)
