@@ -306,14 +306,12 @@ architecture. Static reasoning and CPU parity do not establish H100 parity.
 The CUDA handler bundle has instantiate, Prepare, Initialize, and Execute
 stages.
 
-Instantiate copies the eight backend attributes, validates size and SHA-256,
-decodes and canonically reserializes the bundle, validates the external
-projection against the null-data FFI prototype, and checks that the target
-capability is CUDA 9.0. Its immutable state owns the transport bytes, decoded
-schemas, PTX slices, launch records, and binding projection for the compiled
-call site's lifetime. The runtime decoder produces plain immutable C++ records
-and does not retain an MLIR context, compiler operation, diagnostic engine, or
-source-side plan.
+Instantiate validates all eight backend attributes, size, and SHA-256; loads
+the canonical bundle; and validates its closed external projection. Its
+immutable state owns the transport bytes, digest, decoded executable, and
+operand/result projections for the compiled call site's lifetime. The runtime
+decoder produces plain immutable C++ records and does not retain an MLIR
+context, compiler operation, diagnostic engine, or source-side plan.
 
 Prepare obtains XLA's device allocator and device ordinal from the execution
 context. It allocates one distinct device buffer for each of the 18 temporary
@@ -323,17 +321,18 @@ slots and returns execution-scoped state owning the resulting
 different Prepare state and cannot share a temporary address. Destruction
 occurs only after XLA reports that execution is complete.
 
-Initialize receives the real stream. It constructs an owning CUDA PTX
-`KernelLoaderSpec` with the fixed symbol and exact arity for each entry, calls
+Initialize receives the real stream and compute capability. It rejects any
+target other than CUDA 9.0, constructs an owning CUDA PTX `KernelLoaderSpec`
+with the fixed symbol and exact arity for each entry, calls
 `StreamExecutor::LoadKernel`, and returns initialization-scoped state owning
 all 19 kernels. Separate Initialize calls own separate kernel objects; the
 handler does not implement a per-executor kernel cache.
 
-Execute rechecks exact backend attributes against copied state, validates the
-three external device views, and constructs a 21-slot address table from those
-views and Prepare state. It walks entries in ordinal order, confirms each
-dependency is earlier and enqueued, constructs kernel arguments from the
-entry's ordered input buffers followed by output buffers, and calls XLA's
+Execute validates the three external device views and constructs a 21-slot
+address table from those views and Prepare state. Dependency closure and
+topological entry order have already been validated by `GpuExecutable::Load`.
+Execute walks those entries in ordinal order, constructs kernel arguments from
+the entry's ordered input buffers followed by output buffers, and calls XLA's
 `ExecuteKernelOnStream` on the supplied stream. It performs no host
 dereference, allocation, file access, module load, device synchronization,
 stream creation, CUDA event creation, fallback, or semantic state mutation.
