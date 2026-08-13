@@ -26,9 +26,10 @@ from experiments.datakit.embeddings.harrier.pipeline import (
     stage_harrier,
 )
 from experiments.datakit.embeddings.harrier.tei import tei_service_pool
+from experiments.datakit.hero_data import FUZZY_DUPS_ID
 from experiments.datakit.reference_pipeline import select_sources
 
-DEDUP_ID = "dedup_709f5997"
+DEDUP_ID = FUZZY_DUPS_ID
 DEDUP_PATH = datakit_source_path(f"datakit/{DEDUP_ID}")
 WORKERS_PER_SOURCE = 32
 MAX_CONCURRENT = 8

@@ -38,7 +38,7 @@ from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import tokenize_attributes_step
 
-from experiments.datakit.reference_pipeline import zephyr_datakit_steps
+from experiments.datakit.reference_pipeline import select_sources, zephyr_datakit_steps
 
 
 @dataclass(frozen=True)
@@ -65,11 +65,12 @@ NEMOTRON_TOKENIZER = TokenizerPin(
 # source whose outputs sit at the current version, under either tokenizer.
 _ARTIFACT_VERSION_OVERRIDES = {"common-crawl-focus-2026-22": 4}
 
-# Pinned dedup runs, relative to MARIN_PREFIX. Both cover all 292 registered
-# sources. Both key the focus crawl under its pre-#8111 extraction, so their
-# attributes do not join against today's normalize for that one source.
-_EXACT_DUPS_PATH = "datakit/global_exact_dedup_af4c6c3e"
-_FUZZY_DUPS_PATH = "datakit/dedup_709f5997"
+# Pinned dedup runs. Both cover all 292 registered sources, and both key the
+# focus crawl under its pre-#8111 extraction, so their attributes do not join
+# against today's normalize for that one source. Exported because consumers
+# also hash the run id into their own steps.
+EXACT_DUPS_ID = "global_exact_dedup_af4c6c3e"
+FUZZY_DUPS_ID = "dedup_709f5997"
 
 
 def _refuse_to_run(output_path: str) -> NoReturn:
@@ -81,8 +82,17 @@ def _refuse_to_run(output_path: str) -> NoReturn:
 
 
 def _frozen_step(name: str, path: str) -> StepSpec:
-    """A step pinned to ``path`` that raises if a runner tries to execute it."""
+    """A step pinned to a relative ``path`` that raises if a runner executes it."""
     return StepSpec(name=name, override_output_path=path, fn=_refuse_to_run)
+
+
+def _read_only(step: StepSpec) -> StepSpec:
+    """The same step, stripped of its ability to run.
+
+    Keeps the original identity, so ``output_path`` still resolves
+    ``marin_prefix()`` lazily the way the pipeline does.
+    """
+    return replace(step, fn=_refuse_to_run)
 
 
 def source_names() -> list[str]:
@@ -91,15 +101,12 @@ def source_names() -> list[str]:
 
 
 def _normalize_step(source: str) -> StepSpec:
-    sources = all_sources()
-    if source not in sources:
-        raise KeyError(f"Unknown Datakit source {source!r}. Known sources: {', '.join(source_names())}")
-    return sources[source].normalized
+    return select_sources([source])[source]
 
 
 def normalized(source: str) -> StepSpec:
     """Return the normalized dataset for ``source``, as current code resolves it."""
-    return _frozen_step(f"hero/normalized/{source}", _normalize_step(source).output_path)
+    return _read_only(_normalize_step(source))
 
 
 def tokenized(source: str, tokenizer: TokenizerPin = NEMOTRON_TOKENIZER) -> StepSpec:
@@ -112,21 +119,20 @@ def tokenized(source: str, tokenizer: TokenizerPin = NEMOTRON_TOKENIZER) -> Step
         tokenizer_revision=tokenizer.revision,
     )
     version = _ARTIFACT_VERSION_OVERRIDES.get(source, tokenizer.artifact_version)
-    pinned = replace(step, hash_attrs={**step.hash_attrs, "artifact_version": version})
-    return _frozen_step(f"hero/tokenize/{source}", pinned.output_path)
+    return _read_only(replace(step, hash_attrs={**step.hash_attrs, "artifact_version": version}))
 
 
 def minhash(source: str) -> StepSpec:
     """Return the MinHash signatures for ``source``, keyed off its normalized output."""
     steps = zephyr_datakit_steps({source: _normalize_step(source)})
-    return _frozen_step(f"hero/minhash/{source}", steps.minhash[source].output_path)
+    return _read_only(steps.minhash[source])
 
 
 def exact_dups() -> StepSpec:
     """Return the pinned global exact-duplicate attributes covering every source."""
-    return _frozen_step("hero/exact_dups", _EXACT_DUPS_PATH)
+    return _frozen_step("hero/exact_dups", f"datakit/{EXACT_DUPS_ID}")
 
 
 def fuzzy_dups() -> StepSpec:
     """Return the pinned fuzzy-duplicate attributes covering every source."""
-    return _frozen_step("hero/fuzzy_dups", _FUZZY_DUPS_PATH)
+    return _frozen_step("hero/fuzzy_dups", f"datakit/{FUZZY_DUPS_ID}")
