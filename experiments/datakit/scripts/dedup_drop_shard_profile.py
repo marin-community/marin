@@ -11,6 +11,10 @@ normalized shard ``k``, and both sides share shard count and basename. ``--verif
 that framing by reading the ``id`` column of a few shard pairs before the corpus-wide arithmetic
 is trusted.
 
+The score side is always re-read live -- listed and footer-counted -- rather than taken from the
+stage, because a source rescored after the audit keeps stale counts there. The normalized and
+embed sides come from the stage; no rescore touches them, so the dedup arithmetic is unaffected.
+
 What this adds on top of the staged counts:
 
 * the shard-level concentration curve and Gini of the 4.30B dropped documents, which decides
@@ -30,6 +34,7 @@ import json
 import logging
 import math
 import random
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
@@ -45,6 +50,8 @@ BUCKET = "marin-us-east-02a"
 PREFIX = f"{BUCKET}/marin"
 AUDIT_ROOT = f"{PREFIX}/user/muchanem/quality_scores_audit"
 STAGE_ROOT = f"{AUDIT_ROOT}/_leaf_stage"
+AUDIT_PER_SOURCE_URL = f"{AUDIT_ROOT}/per_source.parquet"
+SCORES_ROOT = f"{PREFIX}/datakit/quality-scores"
 
 RUN_ROOT = f"{PREFIX}/user/muchanem/quality_scores_merge_profile"
 PER_SHARD_URL = f"{RUN_ROOT}/per_shard.parquet"
@@ -58,7 +65,10 @@ DUPLICATE_ID_SOURCE = "common_crawl_focus_2026_22"
 SPREAD_SOURCES = ("swe-zero-12m", "nemotron_cc_v2/medium_quality")
 QUANTILES = (0.01, 0.05, 0.10, 0.25, 0.50)
 LIST_THREADS = 64
+FOOTER_THREADS = 64
 VERIFY_PAIRS = 6
+
+PART_RE = re.compile(r"part-(\d+)-of-(\d+)\.parquet$")
 
 
 def _fs():
@@ -86,6 +96,55 @@ def _list_sizes(directory: str) -> dict[str, int]:
     except FileNotFoundError:
         return {}
     return {k: int(v.get("size") or 0) for k, v in found.items() if k.endswith(".parquet")}
+
+
+def _parquet_rows(url: str) -> int:
+    """Row count from a parquet footer; -1 if the footer cannot be read."""
+    try:
+        with _fs().open(url, "rb") as fh:
+            return pq.ParquetFile(fh).metadata.num_rows
+    except Exception as exc:
+        logger.warning("footer read failed %s: %s", url, exc)
+        return -1
+
+
+def live_scores(source_keys: dict[str, str]) -> pl.DataFrame:
+    """List and footer-count the score dataset as it exists now, per ``(source_key, shard)``.
+
+    The audit's staged counts are a snapshot: a source rescored after that snapshot keeps its
+    stale row counts and file set. Scores are therefore always re-read live here, while the
+    normalized and embed sides -- which no rescore touches -- come from the stage.
+    """
+    dirs = {key: f"{SCORES_ROOT}/{leaf}" for key, leaf in source_keys.items()}
+    with ThreadPoolExecutor(max_workers=LIST_THREADS) as pool:
+        listings = dict(zip(dirs, pool.map(_list_sizes, dirs.values()), strict=True))
+
+    paths, keys, sizes = [], [], []
+    for key, listing in listings.items():
+        for path, size in sorted(listing.items()):
+            paths.append(path)
+            keys.append(key)
+            sizes.append(size)
+    logger.info("listed %d live score objects across %d dirs", len(paths), len(dirs))
+
+    with ThreadPoolExecutor(max_workers=FOOTER_THREADS) as pool:
+        rows = list(pool.map(_parquet_rows, paths))
+    return pl.DataFrame(
+        {
+            "source_key": keys,
+            "score_path": paths,
+            "score_bytes": sizes,
+            "score_rows": rows,
+            "shard_index": [int(m.group(1)) if (m := PART_RE.search(p)) else -1 for p in paths],
+        },
+        schema={
+            "source_key": pl.String,
+            "score_path": pl.String,
+            "score_bytes": pl.Int64,
+            "score_rows": pl.Int64,
+            "shard_index": pl.Int64,
+        },
+    )
 
 
 def verify_filter_framing(per_shard: pl.DataFrame, stage: pl.DataFrame, seed: int) -> list[dict]:
@@ -183,30 +242,26 @@ def source_spread(per_shard: pl.DataFrame, source: str) -> dict:
     }
 
 
-def build_per_shard(stage: pl.DataFrame, sizes: dict[str, int]) -> pl.DataFrame:
-    """One row per (source, shard_index) with row counts, drop, and score-file bytes."""
+def build_per_shard(stage: pl.DataFrame, scores: pl.DataFrame) -> pl.DataFrame:
+    """One row per (source, shard_index): stage row counts joined to the live score side."""
     counts = (
-        stage.filter(pl.col("shard_index") >= 0)
+        stage.filter((pl.col("shard_index") >= 0) & pl.col("side").is_in(["normalized", "embed"]))
         .pivot(on="side", index=["source_key", "shard_index"], values="rows", aggregate_function="sum")
         .fill_null(0)
     )
-    score_paths = stage.filter(pl.col("side") == "scores").select(
-        "source_key", "shard_index", pl.col("path").alias("score_path")
-    )
-    size_df = pl.DataFrame(
-        {"score_path": list(sizes.keys()), "score_bytes": list(sizes.values())},
-        schema={"score_path": pl.String, "score_bytes": pl.Int64},
-    )
     return (
-        counts.join(score_paths, on=["source_key", "shard_index"], how="left")
-        .join(size_df, on="score_path", how="left")
+        counts.join(scores, on=["source_key", "shard_index"], how="full", coalesce=True)
         .with_columns(
+            pl.col("normalized").fill_null(0),
+            pl.col("embed").fill_null(0),
             pl.col("score_bytes").fill_null(0),
+            pl.col("score_rows").fill_null(0),
+        )
+        .with_columns(
             (pl.col("normalized") - pl.col("embed")).alias("dropped"),
             pl.col("source_key").map_elements(_short, return_dtype=pl.String).alias("source"),
         )
-        .rename({"normalized": "normalized_rows", "embed": "embed_rows", "scores": "score_rows"})
-        .drop("tokens")
+        .rename({"normalized": "normalized_rows", "embed": "embed_rows"})
         .sort("source_key", "shard_index")
     )
 
@@ -235,6 +290,11 @@ def summarize(per_shard: pl.DataFrame, label: str) -> dict:
         "score_files_touched_frac": touched_with_file.height / max(1, with_score_file.height),
         "score_bytes_touched": int(touched_with_file["score_bytes"].sum()),
         "shards_with_drops_but_no_score_file": touched.height - touched_with_file.height,
+        "score_footer_failures": int((per_shard["score_rows"] < 0).sum()),
+        "score_files_with_zero_rows": int(with_score_file.filter(pl.col("score_rows") == 0).height),
+        "shards_where_scores_below_embed": int(
+            with_score_file.filter(pl.col("score_rows") < pl.col("embed_rows")).height
+        ),
         "gini_of_drops_over_shards": gini(dropped),
         "concentration": concentration(dropped),
         "drops_in_zero_drop_shards_share": 0.0,
@@ -257,13 +317,20 @@ def main() -> None:
         stage = pl.concat(list(pool.map(_read_stage, stage_files)))
     logger.info("stage rows=%d in %.1fs", stage.height, time.monotonic() - t0)
 
-    score_dirs = sorted({p.rsplit("/", 1)[0] for p in stage.filter(pl.col("side") == "scores")["path"].to_list()})
-    t1 = time.monotonic()
-    with ThreadPoolExecutor(max_workers=LIST_THREADS) as pool:
-        sizes = {k: v for d in pool.map(_list_sizes, score_dirs) for k, v in d.items()}
-    logger.info("sized %d score objects over %d dirs in %.1fs", len(sizes), len(score_dirs), time.monotonic() - t1)
+    with fs.open(AUDIT_PER_SOURCE_URL, "rb") as fh:
+        audit = pl.read_parquet(fh)
+    leaves = dict(zip(audit["source_key"].to_list(), audit["tokens_leaf"].to_list(), strict=True))
 
-    per_shard = build_per_shard(stage, sizes)
+    t1 = time.monotonic()
+    scores = live_scores(leaves)
+    logger.info(
+        "live score sweep: %d files, %d rows in %.1fs",
+        scores.height,
+        int(scores.filter(pl.col("score_rows") > 0)["score_rows"].sum()),
+        time.monotonic() - t1,
+    )
+
+    per_shard = build_per_shard(stage, scores)
     logger.info("per-shard rows=%d", per_shard.height)
 
     verification = verify_filter_framing(per_shard, stage, args.seed)
@@ -290,7 +357,32 @@ def main() -> None:
     near_zero = per_source.filter(pl.col("drop_rate") < args.near_zero_rate)
     fully_clean = per_source.filter(pl.col("shards_with_drops") == 0)
 
+    stage_scores = stage.filter(pl.col("side") == "scores")
+    stage_by_source = stage_scores.group_by("source_key").agg(
+        pl.len().alias("stage_files"), pl.col("rows").sum().alias("stage_rows")
+    )
+    live_by_source = scores.group_by("source_key").agg(
+        pl.len().alias("live_files"), pl.col("score_rows").sum().alias("live_rows")
+    )
+    moved = (
+        stage_by_source.join(live_by_source, on="source_key", how="full", coalesce=True)
+        .fill_null(0)
+        .filter((pl.col("stage_files") != pl.col("live_files")) | (pl.col("stage_rows") != pl.col("live_rows")))
+        .with_columns(pl.col("source_key").map_elements(_short, return_dtype=pl.String).alias("source"))
+        .sort("source")
+    )
+
     report = {
+        "score_side_freshness": {
+            "note": "scores re-read live; normalized/embed come from the audit stage and no rescore touches them",
+            "stage_files": stage_scores.height,
+            "stage_rows": int(stage_scores["rows"].sum()),
+            "live_files": scores.height,
+            "live_rows": int(scores.filter(pl.col("score_rows") > 0)["score_rows"].sum()),
+            "sources_changed_since_stage": (
+                moved.select("source", "stage_files", "live_files", "stage_rows", "live_rows").to_dicts()
+            ),
+        },
         "verification": verification,
         "corpus_excluding_duplicate_id_source": summarize(clean, "corpus_excl_outlier"),
         "corpus_including_duplicate_id_source": summarize(per_shard, "corpus_all"),
