@@ -422,6 +422,39 @@ def _matrix_bytes(shape: tuple[int, int], dtype) -> int:
     return math.prod(shape) * jnp.dtype(dtype).itemsize
 
 
+def _manual_axis_identity_kernel(input_ref, output_ref, *, block_m: int, block_d: int):
+    span_m = pl.ds(pl.program_id(0) * block_m, block_m)
+    span_d = pl.ds(pl.program_id(1) * block_d, block_d)
+    plgpu.store(output_ref.at[span_m, span_d], plgpu.load(input_ref.at[span_m, span_d]))
+
+
+@functools.lru_cache(maxsize=None)
+def _manual_axis_identity_call(rows: int, hidden_dim: int, dtype, manual_axis_type):
+    block_m = _RMS_REVERSE_BLOCK_M
+    block_d = _RMS_REVERSE_BLOCK_D
+    output_shape = jax.ShapeDtypeStruct(
+        (rows, hidden_dim),
+        dtype,
+        manual_axis_type=manual_axis_type,
+    )
+    block_spec = pl.BlockSpec((block_m, block_d), lambda i, j: (i, j))
+    return pl.pallas_call(
+        functools.partial(_manual_axis_identity_kernel, block_m=block_m, block_d=block_d),
+        out_shape=output_shape,
+        in_specs=(block_spec,),
+        out_specs=block_spec,
+        input_output_aliases={0: 0},
+        grid=(pl.cdiv(rows, block_m), pl.cdiv(hidden_dim, block_d)),
+        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=1),
+        cost_estimate=pl.CostEstimate(
+            flops=0,
+            transcendentals=0,
+            bytes_accessed=2 * _matrix_bytes((rows, hidden_dim), dtype),
+        ),
+        name="rms_dx_manual_axis_identity",
+    )
+
+
 @functools.lru_cache(maxsize=None)
 def _rms_gated_norm_reverse_call(rows: int, hidden_dim: int, rank: int, dtype):
     block_m = _RMS_REVERSE_BLOCK_M
@@ -681,7 +714,7 @@ def quack_coda_rms_backward_consumer(
         use_static_tensors=False,
     )
     row_mean = row_dot / hidden_dim
-    return call(
+    x_cotangent = call(
         gate_preactivation_cotangent[None, :, :],
         w_down[None, :, :],
         output_cotangent[None, :, :],
@@ -691,6 +724,13 @@ def quack_coda_rms_backward_consumer(
         norm_weight[None, :],
         inverse_rms[None, :],
     )[0]
+    restore_type = _manual_axis_identity_call(
+        rows,
+        hidden_dim,
+        x.dtype,
+        jax.typeof(x).manual_axis_type,
+    )
+    return restore_type(x_cotangent)
 
 
 def quack_silu_backward_gemm(
