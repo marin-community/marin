@@ -72,6 +72,7 @@ MAX_STEP_CONCURRENCY = 20
 _SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 _EXACT_DUPS_MAX_PARALLELISM = 128
 _FUZZY_DUPS_MAX_PARALLELISM = 128
+_FUZZY_VERIFICATION_MAX_OUTPUT_SHARDS = 128
 _EXACT_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _FUZZY_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
@@ -166,6 +167,7 @@ def _fuzzy_verification_step(
             verification_params=params,
             local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
             store_config=_FUZZY_VERIFICATION_STORE_CONFIG,
+            max_output_shards=_FUZZY_VERIFICATION_MAX_OUTPUT_SHARDS,
             worker_resources=_FUZZY_VERIFICATION_WORKER_RESOURCES,
         ),
     )
