@@ -535,6 +535,12 @@ def build_small_run(
     help="Token budget per active parameter, sizing the step count (issue #8062 specifies 750).",
 )
 @click.option(
+    "--num-steps",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Run exactly this many steps, bypassing --tokens-per-active-param (benchmark runs).",
+)
+@click.option(
     "--watch-interval",
     type=click.IntRange(min=0),
     default=10,
@@ -571,6 +577,7 @@ def main(
     qb_histogram: bool,
     qb_hist_bins: int,
     tokens_per_active_param: int,
+    num_steps: int | None,
     watch_interval: int,
     dp_racks: int,
     steps_per_eval: int,
@@ -590,6 +597,7 @@ def main(
         qb_use_histogram=qb_histogram,
         qb_hist_bins=qb_hist_bins,
         tokens_per_active_param=tokens_per_active_param,
+        num_train_steps_override=num_steps,
         watch_interval=watch_interval,
         dp_racks=dp_racks,
         steps_per_eval=steps_per_eval,
