@@ -1117,3 +1117,16 @@ author: Rafal Wojdyla
 - Restart status note: The root logs show `previous status: FAILED` for sources from the stopped interactive roots. The final roots use force-run mode and start those sources. Current source failures remain zero.
 - Issue update: None. This is routine progress after the batch restart.
 - Next action: Continue the root, source, service, Zephyr, and output checks. Recover only a terminal in-scope job failure.
+
+### 2026-08-13 11:14 UTC - Batch output passed 82 percent
+
+- Root health: Both batch roots remain running. Their waiter sessions have no terminal output.
+- Completed artifacts: The final roots completed 104 new source artifacts. East completed 97, and RNO completed seven. With the artifacts from the stopped roots, East has 144 of 146 artifacts and RNO has 51 of 146 artifacts. The full run has 195 of 292 completed source artifacts.
+- Source concurrency: East has two running source jobs, and RNO has eight. No source job is pending or failed.
+- Aggregate progress: A direct object count at 11:12 UTC found 137,266 of 166,775 output shards, or 82.30%. There are 29,509 shards left. East has 57,950 shards, RNO has 79,316 shards, 203 sources have output, and no Parquet path is unknown.
+- Output rate: The jobs wrote 7,722 shards between 09:31 UTC and 11:12 UTC. A simple rate estimate gives 6.4 hours for the remaining shards. Source sizes and batch capacity can change this estimate.
+- Resume evidence: The completed Dolma4PDFs stage reported 5,036 skipped partitions and 3,647 processed shards. These counts sum to its 8,683 partitions and show that the restart skipped its existing output.
+- Service state: All 256 East and 512 RNO service jobs remain active. East has 192 running service tasks and 64 building tasks. RNO has 112 running service tasks and 400 building tasks.
+- Zephyr health: The checked coordinators have 32 live workers and zero dead workers. One RNO source reported five shards at retry attempt one. No retry attempt two is present.
+- Issue update: None. This is routine progress after the batch restart.
+- Next action: Watch the final two East sources, the eight active RNO sources, service state, and output growth. Recover only a terminal in-scope job failure.
