@@ -167,6 +167,7 @@ def initialize_local_arena(
     hidden_dim: int,
     top_k: int,
     workspace_slots: int,
+    device_ordinal: int,
 ) -> np.ndarray:
     """Allocate this process's symmetric arena and return its exported handles.
 
@@ -186,11 +187,14 @@ def initialize_local_arena(
         ctypes.c_int,
         ctypes.c_int,
         ctypes.c_int,
+        ctypes.c_int,
         ctypes.POINTER(ctypes.c_ubyte),
     ]
     function.restype = ctypes.c_int
     buffer = out.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
-    status = function(rank, num_devices, num_tokens, hidden_dim, top_k, workspace_slots, buffer)
+    status = function(
+        rank, num_devices, num_tokens, hidden_dim, top_k, workspace_slots, device_ordinal, buffer
+    )
     if status != 0:
         raise RuntimeError(_native_last_error(library, "MoK-like local arena allocation failed"))
     return out
@@ -526,6 +530,9 @@ def _initialize_fabric_arena(
         )
 
     rank = jax.process_index()
+    # The CUDA runtime enumerates every GPU on the node regardless of this process's JAX slice,
+    # so the arena has to be told which ordinal it owns rather than inferring it from a count.
+    local_device = jax.local_devices()[0]
     local_handles = initialize_local_arena(
         library,
         rank=rank,
@@ -534,6 +541,7 @@ def _initialize_fabric_arena(
         hidden_dim=hidden_dim,
         top_k=top_k,
         workspace_slots=workspace_slots,
+        device_ordinal=local_device.local_hardware_id,
     )
 
     # process_allgather stacks along a new leading axis ordered by process index,

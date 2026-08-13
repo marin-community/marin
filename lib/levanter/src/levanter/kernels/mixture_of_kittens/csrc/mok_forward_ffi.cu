@@ -385,7 +385,7 @@ class RuntimeManager {
   // on other hosts. `out_handles` receives `workspace_slots` blobs of
   // `kFabricHandleBytes`, which the caller gathers across the expert axis.
   void InitLocalArena(int rank, int num_devices, int num_tokens, int hidden_dim, int top_k,
-                      int workspace_slots, unsigned char* out_handles) {
+                      int workspace_slots, int device_ordinal, unsigned char* out_handles) {
     std::unique_lock<std::mutex> lock(mu_);
     const bool maintenance_finished =
         cv_.wait_for(lock, kWorkspaceAcquireTimeout, [&] { return !maintenance_; });
@@ -409,14 +409,15 @@ class RuntimeManager {
     if (workspace_slots <= 0 || workspace_slots > kMaxWorkspaceSlots) {
       throw std::runtime_error("Mixture-of-Kittens workspace slots must be one or two");
     }
-    // Every process must see exactly one device: the peer pointer table is built
-    // from imported fabric mappings, not from local device switching.
-    int visible_devices = 0;
-    ThrowOnCuda(cudaGetDeviceCount(&visible_devices), "cudaGetDeviceCount");
-    if (visible_devices != 1) {
-      throw std::runtime_error(
-          "Mixture-of-Kittens fabric transport requires one visible GPU per process");
+    // Bind to the device the caller owns. cudaGetDeviceCount cannot stand in for this:
+    // JAX restricts a process to its slice through jax_cuda_visible_devices, which does not
+    // touch CUDA_VISIBLE_DEVICES, so the CUDA runtime still enumerates every GPU on the node.
+    int device_count = 0;
+    ThrowOnCuda(cudaGetDeviceCount(&device_count), "cudaGetDeviceCount");
+    if (device_ordinal < 0 || device_ordinal >= device_count) {
+      throw std::runtime_error("Mixture-of-Kittens device ordinal is outside the visible range");
     }
+    ThrowOnCuda(cudaSetDevice(device_ordinal), "cudaSetDevice");
     int device = 0;
     ThrowOnCuda(cudaGetDevice(&device), "cudaGetDevice(arena)");
     if (!mok_fabric::FabricHandlesSupported(device)) {
@@ -2521,13 +2522,14 @@ extern "C" int levanter_mok_init_local_arena(
     int hidden_dim,
     int top_k,
     int workspace_slots,
+    int device_ordinal,
     unsigned char* out_handles) {
   try {
     if (out_handles == nullptr) {
       throw std::runtime_error("out_handles must not be null");
     }
     RuntimeManager::Instance().InitLocalArena(rank, num_devices, num_tokens, hidden_dim, top_k,
-                                              workspace_slots, out_handles);
+                                              workspace_slots, device_ordinal, out_handles);
     SetLastError("");
     return 0;
   } catch (const std::exception& exc) {

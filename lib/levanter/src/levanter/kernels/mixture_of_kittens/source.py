@@ -5,8 +5,12 @@
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
+import os
 import shutil
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -105,20 +109,42 @@ def source_is_clean(root: Path) -> bool | None:
     return not result.stdout.strip()
 
 
+@contextlib.contextmanager
+def _source_lock(root: Path) -> Iterator[None]:
+    """Serialize source materialization across every process on this host.
+
+    One process per GPU means several processes reach an unpopulated source root at once. Without
+    this, `git clone` creates the directory immediately, so the losers see `root.exists()` and go
+    straight to validating a half-written tree.
+    """
+    root.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = root.with_name(f"{root.name}.lock")
+    with open(lock_path, "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def _clone_source(root: Path) -> None:
     if shutil.which("git") is None:
         raise RuntimeError("git is required to get the pinned Mixture-of-Kittens source")
     root.parent.mkdir(parents=True, exist_ok=True)
+    # Clone aside and rename into place so an interrupted clone cannot leave a tree that later
+    # passes the exists() check while missing files.
+    staging = root.with_name(f"{root.name}.staging.{os.getpid()}")
+    shutil.rmtree(staging, ignore_errors=True)
     subprocess.run(
-        ["git", "clone", "--filter=blob:none", "--no-checkout", MOK_REPOSITORY, str(root)],
+        ["git", "clone", "--filter=blob:none", "--no-checkout", MOK_REPOSITORY, str(staging)],
         check=True,
     )
-    subprocess.run(["git", "-C", str(root), "checkout", "--detach", MOK_KNOWN_GOOD_COMMIT], check=True)
+    subprocess.run(["git", "-C", str(staging), "checkout", "--detach", MOK_KNOWN_GOOD_COMMIT], check=True)
     subprocess.run(
         [
             "git",
             "-C",
-            str(root),
+            str(staging),
             "submodule",
             "update",
             "--init",
@@ -128,18 +154,20 @@ def _clone_source(root: Path) -> None:
         ],
         check=True,
     )
+    os.rename(staging, root)
 
 
 def mok_source_root(config: MokLikeBuildConfig) -> Path:
     """Materialize and validate the explicitly configured pinned source."""
 
     root = config.resolved_source_root
-    if not root.exists():
-        if not config.clone_if_missing:
-            raise RuntimeError(
-                f"MoK-like source does not exist at {root}; provide it or set clone_if_missing=True explicitly"
-            )
-        _clone_source(root)
+    with _source_lock(root):
+        if not root.exists():
+            if not config.clone_if_missing:
+                raise RuntimeError(
+                    f"MoK-like source does not exist at {root}; provide it or set clone_if_missing=True explicitly"
+                )
+            _clone_source(root)
 
     missing = missing_source_files(root)
     if missing:
