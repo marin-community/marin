@@ -15,13 +15,14 @@ import sys
 import threading
 import zipfile
 from collections.abc import Iterator
+from importlib.metadata import Distribution
 from pathlib import Path
 
 import marin.inference.vllm_server as vllm_server
 import pytest
 from marin.external_dependencies import VLLM_GPU_RELEASE, VllmGpuWheel
 from marin.inference.vllm_release import vllm_gpu_wheel_for_architecture, vllm_gpu_wheel_provenance
-from marin.inference.vllm_wheel_entrypoint import installed_wheel_url_matches
+from marin.inference.vllm_wheel_entrypoint import _core_extension_module, installed_wheel_url_matches
 
 VERSION = VLLM_GPU_RELEASE.version
 H100_WHEEL = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, "x86_64")
@@ -43,14 +44,14 @@ def _provenance(wheel: VllmGpuWheel) -> dict[str, object]:
     return json.loads(json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel))))
 
 
-def _write_vllm_package(root: Path) -> None:
+def _write_vllm_package(root: Path, extension_stem: str = "_C_stable_libtorch") -> None:
     """Write an importable ``vllm`` package whose CLI records the argv it was handed."""
     package = root / "vllm"
     cli = package / "entrypoints" / "cli"
     cli.mkdir(parents=True)
     for init_file in (package / "__init__.py", package / "entrypoints" / "__init__.py", cli / "__init__.py"):
         init_file.write_text("")
-    (package / "_C_stable_libtorch.py").write_text("EXTENSION_SENTINEL = True\n")
+    (package / f"{extension_stem}.py").write_text("EXTENSION_SENTINEL = True\n")
     (cli / "main.py").write_text(
         "import json\n"
         "import os\n"
@@ -67,13 +68,24 @@ def _write_installed_wheel(
     *,
     direct_url: dict[str, object],
     compute_capability: tuple[int, int],
+    extension_stem: str = "_C_stable_libtorch",
 ) -> None:
     """Write what ``uvx`` leaves behind: the package, its PEP 610 record, and an importable torch."""
-    _write_vllm_package(root)
+    _write_vllm_package(root, extension_stem)
     metadata = root / f"vllm-{VERSION}.dist-info"
     metadata.mkdir()
     (metadata / "METADATA").write_text(f"Metadata-Version: 2.4\nName: vllm\nVersion: {VERSION}\n")
     (metadata / "direct_url.json").write_text(json.dumps(direct_url))
+    # RECORD is where startup discovers the core extension's name, so the fake must carry one.
+    record_paths = (
+        "vllm/__init__.py",
+        f"vllm/{extension_stem}.py",
+        "vllm/entrypoints/__init__.py",
+        "vllm/entrypoints/cli/__init__.py",
+        "vllm/entrypoints/cli/main.py",
+        f"vllm-{VERSION}.dist-info/RECORD",
+    )
+    (metadata / "RECORD").write_text("".join(f"{path},,\n" for path in record_paths))
     (root / "torch.py").write_text(
         f"class cuda:\n    @staticmethod\n    def get_device_capability(): return {compute_capability!r}\n"
     )
@@ -86,6 +98,7 @@ def _run_entrypoint(
     direct_url: dict[str, object] | None = None,
     compute_capability: tuple[int, int] = (9, 0),
     python_path: tuple[Path, ...] = (),
+    extension_stem: str = "_C_stable_libtorch",
 ):
     install_root = tmp_path / "install"
     install_root.mkdir()
@@ -93,6 +106,7 @@ def _run_entrypoint(
         install_root,
         direct_url=_uvx_direct_url(wheel.url) if direct_url is None else direct_url,
         compute_capability=compute_capability,
+        extension_stem=extension_stem,
     )
     command = vllm_server.IsolatedCudaVllm(source=vllm_server.VllmType.MARIN_FORK).command()
     bootstrap_index = command.index("-c")
@@ -209,6 +223,61 @@ def test_wheel_entrypoint_verifies_extension_and_records_provenance(tmp_path, wh
         "compute_capability": f"{compute_capability[0]}.{compute_capability[1]}",
         "extension_path": str(tmp_path / "install" / "vllm" / "_C_stable_libtorch.py"),
     }
+    assert json.loads(marker.read_text()) == ["serve", "test/model"]
+
+
+def _distribution_with_files(root: Path, record_paths: tuple[str, ...]) -> Distribution:
+    """A ``Distribution`` backed by real files under ``root`` (``Distribution.files`` drops missing ones)."""
+    for relative in record_paths:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+    record = "".join(f"{path},,\n" for path in record_paths)
+
+    class _Distribution(Distribution):
+        def read_text(self, filename: str) -> str | None:
+            return record if filename == "RECORD" else None
+
+        def locate_file(self, path):
+            return root / path
+
+    return _Distribution()
+
+
+def test_core_extension_module_selects_the_c_family_and_ignores_siblings(tmp_path):
+    distribution = _distribution_with_files(
+        tmp_path,
+        ("vllm/__init__.py", "vllm/_C_stable_libtorch.abi3.so", "vllm/_moe_C.abi3.so", "vllm/_C.pyi"),
+    )
+    assert _core_extension_module(distribution) == "vllm._C_stable_libtorch"
+
+
+@pytest.mark.parametrize(
+    "record_paths",
+    [
+        ("vllm/__init__.py",),  # a python-only/source install ships no compiled core
+        ("vllm/_C.abi3.so", "vllm/_C_stable_libtorch.abi3.so"),  # ambiguous: two cores
+    ],
+    ids=["none", "ambiguous"],
+)
+def test_core_extension_module_rejects_zero_or_multiple_cores(tmp_path, record_paths):
+    with pytest.raises(RuntimeError, match="core"):
+        _core_extension_module(_distribution_with_files(tmp_path, record_paths))
+
+
+@pytest.mark.parametrize("extension_stem", ["_C", "_C_stable_libtorch", "_C_next_abi"])
+def test_wheel_entrypoint_discovers_the_core_extension_by_shape_not_name(tmp_path, extension_stem):
+    """Whatever name a toolchain gives the core ``_C`` extension, startup finds it from the wheel's RECORD."""
+    result, marker = _run_entrypoint(tmp_path, extension_stem=extension_stem)
+
+    assert result.returncode == 0, result.stderr
+    verified = next(
+        json.loads(payload)
+        for line in result.stdout.splitlines()
+        for sentinel, _, payload in (line.partition("="),)
+        if sentinel == "MARIN_VLLM_WHEEL_VERIFIED"
+    )
+    assert verified["extension_path"] == str(tmp_path / "install" / "vllm" / f"{extension_stem}.py")
     assert json.loads(marker.read_text()) == ["serve", "test/model"]
 
 
