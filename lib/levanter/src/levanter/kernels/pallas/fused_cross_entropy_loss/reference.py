@@ -15,11 +15,7 @@ def _apply_logit_soft_cap(logits: Float[Array, "B V"], logit_soft_cap: Optional[
 
 
 def _logit_state_dtype(dtype: Optional[jnp.dtype]) -> jnp.dtype:
-    """Dtype the logits and the logsumexp carry are held in.
-
-    Float32 when the caller does not name one, matching the accumulate dtype the streaming
-    backward in `xla.py` uses. See `_logits` for why the two must agree.
-    """
+    """Dtype the logits and the logsumexp carry are held in, defaulting to float32."""
     return jnp.dtype(dtype) if dtype is not None else jnp.dtype(jnp.float32)
 
 
@@ -30,19 +26,16 @@ def _logits(
     dtype: Optional[jnp.dtype],
     precision: jax.lax.PrecisionLike,
 ) -> Float[Array, "B V"]:
-    """Logits accumulated in float32, then narrowed to `dtype`.
-
-    `preferred_element_type` is required, not optional. Without it a bfloat16 `x @ w` emits
-    bfloat16 logits, so the forward would round the logits while the streaming backward
-    recomputes them in float32 (`xla.py`). The backward's `probs = exp(logits - lse)` then
-    exponentiates the gap between the two logit sets: at bf16 logit magnitude 4000 a half-ulp
-    gap of ~8 inflates the peak probability by e^8, and the gradient with it.
-    """
+    """Logits accumulated in float32, then narrowed to `dtype`."""
     logits = jax.lax.dot_general(
         x,
         w,
         (((1,), (0,)), ((), ())),
         precision=precision,
+        # Every caller must accumulate identically: the streaming backward divides by the
+        # forward's lse, and `exp(logits - lse)` exponentiates any disagreement. Dropping this
+        # lets a bfloat16 x @ w emit bfloat16 logits, where a half-ulp gap of ~8 at magnitude
+        # 4000 inflates the peak probability by e^8.
         preferred_element_type=jnp.float32,
     )
     if dtype is not None:

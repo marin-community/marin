@@ -11,6 +11,7 @@ from jaxtyping import Array, Float, Int
 from .config import BlockSizes
 from .reference import (
     _logit_state_dtype,
+    _logits,
     linear_softmax_cross_entropy_loss_reference,
     linear_softmax_cross_entropy_loss_streaming,
 )
@@ -295,15 +296,9 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
             dout_loss_block = jax.lax.dynamic_slice(dout_loss, (batch_start,), (batch_block_size,))
             dout_lse_block = jax.lax.dynamic_slice(dout_lse, (batch_start,), (batch_block_size,))
 
-            logits = jax.lax.dot_general(
-                x_block,
-                w_block,
-                (((1,), (0,)), ((), ())),
-                precision=precision,
-                preferred_element_type=jnp.float32,
-            )
-            if dtype is not None:
-                logits = logits.astype(dtype)
+            # Same helper as the forward: `probs` below divides by the forward's lse, so the two
+            # logit computations have to stay identical.
+            logits = _logits(x_block, w_block, dtype=dtype, precision=precision)
 
             cap_deriv = jnp.asarray(1.0, dtype=logits.dtype)
             if logit_soft_cap is not None:
