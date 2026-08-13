@@ -4,7 +4,7 @@
 """Datakit smoke ferry: end-to-end download → normalize → dedup → consolidate → tokenize.
 
 Runs against the FineWeb-Edu ``sample/10BT`` subset using the StepSpec DAG runner.
-Output paths are placed under ``$MARIN_PREFIX/datakit-smoke/$SMOKE_RUN_ID/...``.
+Output paths are placed under a region-local one-day temp prefix.
 """
 
 import json
@@ -53,8 +53,8 @@ FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
 )
 
 
-def build_steps(run_id: str) -> list[StepSpec]:
-    base = f"datakit-smoke/{run_id}"
+def build_steps(base: str) -> list[StepSpec]:
+    base_path = StoragePath(base)
 
     # Filtered download — restrict to the sample/10BT subset so we don't pull
     # the entire fineweb-edu repo (TBs). Per-run isolated under $base/download.
@@ -64,7 +64,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         revision="87f0914",
         hf_urls_glob=["sample/10BT/*.parquet"],
         zephyr_max_parallelism=14,  # fineweb-edu sample/10BT has 14 parquet shards
-        override_output_path=f"{base}/download",
+        override_output_path=str(base_path / "download"),
     )
 
     # Normalize peaked at ~10 GB mem, 17 GB disk on 10BT; bump disk from default 10g.
@@ -73,7 +73,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         download=downloaded,
         relative_input_path="sample/10BT",
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="20g"),
-        override_output_path=f"{base}/normalize",
+        override_output_path=str(base_path / "normalize"),
     )
 
     # MinHash attrs: per-shard 1:1 from the normalized dataset. MinHash is
@@ -86,7 +86,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             output_path=output_path,
             worker_resources=ResourceConfig(cpu=5, ram="16g", disk="10g"),
         ),
-        override_output_path=f"{base}/minhash",
+        override_output_path=str(base_path / "minhash"),
     )
 
     # Fuzzy dups: connected components over the MinHash bucket graph.
@@ -102,7 +102,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             cc_max_iterations=3,
             worker_resources=ResourceConfig(cpu=1, ram="16g", disk="30g"),
         ),
-        override_output_path=f"{base}/fuzzy_dups",
+        override_output_path=str(base_path / "fuzzy_dups"),
     )
 
     verification_params = FuzzyVerificationParams()
@@ -147,7 +147,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
             ],
             worker_resources=ResourceConfig(cpu=1, ram="8g"),
         ),
-        override_output_path=f"{base}/consolidate",
+        override_output_path=str(base_path / "consolidate"),
     )
 
     tokenized = StepSpec(
@@ -162,7 +162,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
                 tokenizer="gpt2",
             )
         ),
-        override_output_path=f"{base}/tokens",
+        override_output_path=str(base_path / "tokens"),
     )
 
     return [downloaded, normalized, minhash, candidates, verified, consolidated, tokenized]
@@ -180,17 +180,14 @@ def _write_status(status: str, marin_prefix: str) -> None:
 
 def main() -> None:
     configure_logging()
-    if not os.environ.get("MARIN_PREFIX"):
-        os.environ["MARIN_PREFIX"] = marin_temp_bucket(ttl_days=1)
-
-    marin_prefix = os.environ["MARIN_PREFIX"]
-    logger.info("MARIN_PREFIX defaulted to %s", marin_prefix)
     run_id = os.environ["SMOKE_RUN_ID"]
+    output_prefix = marin_temp_bucket(ttl_days=1, prefix=f"datakit-smoke/{run_id}")
+    logger.info("Output prefix: %s", output_prefix)
 
-    _write_status("running", marin_prefix)
+    _write_status("running", output_prefix)
     with log_time("Datakit ferry total wall time"):
-        StepRunner().run(build_steps(run_id))
-    _write_status("succeeded", marin_prefix)
+        StepRunner().run(build_steps(output_prefix))
+    _write_status("succeeded", output_prefix)
 
 
 if __name__ == "__main__":

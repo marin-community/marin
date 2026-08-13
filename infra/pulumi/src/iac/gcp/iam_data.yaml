@@ -815,6 +815,7 @@ project_grants:
 - role: projects/hai-gcp-models/roles/marinGcpResourcePreviewer
   members:
   - serviceAccount:pulumi-ci@hai-gcp-models.iam.gserviceaccount.com
+  - principal: human-070
 - role: projects/hai-gcp-models/roles/marinIapIamManager
   members:
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com

@@ -21,6 +21,16 @@ IRIS_PRIORITY_CLASS_PRODUCTION = "iris-production"
 IRIS_PRIORITY_CLASS_INTERACTIVE = "iris-interactive"
 IRIS_PRIORITY_CLASS_BATCH = "iris-batch"
 
+# Stable pod metadata shared by the Kubernetes backend and node agent. Labels
+# support API selection; the annotation retains the full task id because label
+# values are limited to 63 characters.
+IRIS_MANAGED_LABEL = "iris.managed"
+IRIS_RUNTIME_LABEL = "iris.runtime"
+IRIS_KUBERNETES_RUNTIME = "iris-kubernetes"
+IRIS_TASK_ID_ANNOTATION = "iris.task_id"
+IRIS_ATTEMPT_ID_LABEL = "iris.attempt_id"
+IRIS_TASK_CONTAINER_NAME = "task"
+
 # Canonical (name, value, preemptionPolicy) for every PriorityClass Iris owns.
 # Single source of truth: the controller applies all of them at startup and the
 # Kueue installer reuses the iris-system entry so the manager is pinned to the
@@ -178,14 +188,6 @@ class ExecResult:
     returncode: int
     stdout: str
     stderr: str
-
-
-@dataclass(frozen=True)
-class PodResourceUsage:
-    """CPU and memory usage for a single pod."""
-
-    cpu_millicores: int
-    memory_bytes: int
 
 
 def parse_k8s_quantity(val: str) -> int:
