@@ -258,6 +258,13 @@ def test_pod_name_preserves_attempt_suffix_with_long_task_id():
     assert name_999.endswith("-999")
 
 
+def test_pod_annotation_preserves_full_task_id_for_node_metrics():
+    task_id = "/power/" + "long-coordinator-name-" * 8 + "/workers/0"
+    manifest = _build_pod_manifest(make_run_req(task_id), pod_config())
+
+    assert manifest["metadata"]["annotations"][LABEL_TASK_ID] == task_id
+
+
 def test_pod_name_different_tasks_never_collide():
     task_a = JobName.from_wire("/a" * 40 + "-suffix-1")
     task_b = JobName.from_wire("/a" * 40 + "-suffix-2")

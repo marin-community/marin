@@ -26,7 +26,6 @@ from iris.cluster.platforms.k8s.types import (
     KubectlError,
     KubectlLogLine,
     KubectlLogResult,
-    PodResourceUsage,
     parse_k8s_quantity,
 )
 from iris.cluster.service_mode import ServiceMode
@@ -266,7 +265,7 @@ class InMemoryK8sService:
         self._exec_responses: dict[str, list[ExecResult]] = {}
         self._file_contents: dict[tuple[str, str], bytes] = {}  # (pod_name, path) -> data
         self._rm_files_calls: list[tuple[str, list[str]]] = []
-        self._top_pod_overrides: dict[str, PodResourceUsage | None] = {}
+        self._node_resource_metrics: dict[str, str] = {}
         self._log_watermarks: dict[str, int] = {}  # pod_name -> bytes consumed
 
         # Pods living outside the service's own namespace, keyed by
@@ -540,9 +539,8 @@ class InMemoryK8sService:
         """Pre-populate file content readable via read_file."""
         self._file_contents[(pod_name, path)] = data
 
-    def set_top_pod(self, pod_name: str, result: PodResourceUsage | None) -> None:
-        """Configure a pod's reported resource usage (None = metrics absent)."""
-        self._top_pod_overrides[pod_name] = result
+    def set_node_resource_metrics(self, node_name: str, text: str) -> None:
+        self._node_resource_metrics[node_name] = text
 
     def seed_resource(self, resource: K8sResource, name: str, manifest: dict) -> None:
         """Directly insert a resource into the in-memory store for test setup.
@@ -796,26 +794,9 @@ class InMemoryK8sService:
                 results.append(event)
         return results
 
-    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]:
-        self._check_failure("top_pods")
-        plural = K8sResource.PODS.plural
-        usage: dict[str, PodResourceUsage] = {}
-        for (stored_plural, name), manifest in self._resources.items():
-            if stored_plural != plural:
-                continue
-            if labels:
-                res_labels = manifest.get("metadata", {}).get("labels", {})
-                if not all(res_labels.get(k) == v for k, v in labels.items()):
-                    continue
-            usage[name] = PodResourceUsage(cpu_millicores=100, memory_bytes=256 * 1024 * 1024)
-        # Per-pod overrides win regardless of the label scope; a None override
-        # means "metrics absent" and drops the pod from the result.
-        for name, override in self._top_pod_overrides.items():
-            if override is None:
-                usage.pop(name, None)
-            else:
-                usage[name] = override
-        return usage
+    def node_resource_metrics(self, node_name: str) -> str:
+        self._check_failure("node_resource_metrics")
+        return self._node_resource_metrics.get(node_name, "")
 
     def read_file(
         self,

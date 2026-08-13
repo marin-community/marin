@@ -103,6 +103,9 @@ class ScriptedTaskBackend:
     def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
         return None
 
+    def runtime_image(self, requested_image: str) -> str:
+        return requested_image
+
     def status(self) -> controller_pb2.Controller.BackendStatus:
         return controller_pb2.Controller.BackendStatus()
 
