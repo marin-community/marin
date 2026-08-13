@@ -48,6 +48,18 @@ _MODEL_ARCHIVE_NAME = "model.tar"
 _MODEL_DIRECTORY_NAME = "model"
 _TEI_ENDPOINT_SHARED_KEY = "harrier_tei_endpoint_name"
 
+
+def harrier_hash_attrs(dedup: str) -> dict[str, str | int]:
+    """Return the artifact identity for a Harrier embedding step."""
+    return {
+        "dedup": dedup,
+        "model": HARRIER_REPO,
+        "revision": HARRIER_REVISION,
+        "batch_size": DEFAULT_BATCH_SIZE,
+        "v": EMBEDDING_ATTR_DATA_VERSION,
+    }
+
+
 # A sweep over 9,733 completed Harrier embeddings sampled across 100 shards of
 # datakit/samples/harrier-50m found mean cosine 0.99976, minimum cosine 0.99909,
 # and 0.00012% coordinate clipping at +/-0.3.

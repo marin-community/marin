@@ -6,7 +6,8 @@
 Every Datakit stage writes to a content-addressed path, so reading one back
 normally means knowing which artifact version, tokenizer pin and upstream hash
 produced it. This module holds that knowledge in one place: callers name a
-source and a stage, and get a :class:`StepSpec` pointing at the data.
+source and a stage, and get a :class:`StepSpec` pointing at the data, including
+the Harrier embeddings.
 
 Every accessor returns a step that points at data which already exists and
 refuses to execute. Pass one to :func:`marin.execution.artifact.read_artifact`,
@@ -43,6 +44,7 @@ from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import tokenize_attributes_step
 
+from experiments.datakit.embeddings.harrier.pipeline import harrier_hash_attrs
 from experiments.datakit.reference_pipeline import select_sources, zephyr_datakit_steps
 
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
@@ -158,6 +160,16 @@ def fuzzy_dups() -> StepSpec:
     return _frozen_step("hero/fuzzy_dups", f"datakit/{FUZZY_DUPS_ID}")
 
 
+def harrier(source: str) -> StepSpec:
+    """Return the Harrier embeddings for ``source``."""
+    return StepSpec(
+        name=f"datakit/embed/harrier/{source}",
+        deps=[_normalize_step(source)],
+        hash_attrs=harrier_hash_attrs(FUZZY_DUPS_ID),
+        fn=_refuse_to_run,
+    )
+
+
 def all_paths() -> dict[str, str]:
     """Every hero data path, keyed ``<stage>/<source>`` for the per-source stages.
 
@@ -176,6 +188,7 @@ def all_paths() -> dict[str, str]:
         paths[f"minhash/{source}"] = _read_only(minhash_steps[source]).output_path
         paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
         paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
+        paths[f"harrier/{source}"] = harrier(source).output_path
     return paths
 
 
