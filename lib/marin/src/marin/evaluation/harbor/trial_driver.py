@@ -102,15 +102,15 @@ def _resolve_import_path(import_path: str, label: str) -> object:
         raise ValueError(f"Harbor {label} import path could not be resolved") from exc
 
 
-_AGENT_CALLBACK_KEYWORDS = {
-    "setup": ("environment",),
-    "run": ("instruction", "environment", "context"),
-}
+_AGENT_CALLBACK_KEYWORDS = (
+    ("setup", ("environment",)),
+    ("run", ("instruction", "environment", "context")),
+)
 
 
 def _validate_agent_callbacks(agent_class: object, import_path: str) -> None:
     """Validate the keyword callbacks used by upstream Harbor's trial runner."""
-    for method_name, keywords in _AGENT_CALLBACK_KEYWORDS.items():
+    for method_name, keywords in _AGENT_CALLBACK_KEYWORDS:
         method = getattr(agent_class, method_name, None)
         if not callable(method):
             raise ValueError(f"Harbor agent {import_path} does not define a callable {method_name}()")

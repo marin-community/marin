@@ -251,10 +251,8 @@ def test_preflight_rejects_agent_callback_keyword_mismatch(
 
     assert completed.returncode == 2
     assert completed.stdout == ""
-    assert (
-        f"{callback}() does not accept the keyword arguments upstream Harbor calls it with ({keywords})"
-        in completed.stderr
-    )
+    assert f"keyword_mismatched_agent:KeywordMismatchedAgent.{callback}()" in completed.stderr
+    assert all(keyword in completed.stderr for keyword in keywords.split(", "))
 
 
 def test_single_turn_aime_agent_grades_length_finished_response(tmp_path):
