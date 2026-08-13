@@ -4535,3 +4535,35 @@ author: dlwh
 - Scope remains exact `7x13` SOURCE_ORDERED Host forward, backward, and
   composed. FAST, other shapes, GPU lowering, performance evidence, hardware
   execution, and scorecard promotion remain unsupported or blocked.
+
+### 2026-08-12 - TLTC-MLIR-013 ABI 8 identity FAST
+
+- Pipeline ABI 8 admits FAST for the exact `7x13` Host forward, backward, and
+  composed boundaries. The typed-FFI target remains
+  `shuttle.cpu.executable_bundle.v2`; device, invocation, bundle, and transport
+  schemas and the runtime handler are unchanged.
+- FAST is identity-only in this slice. SOURCE_ORDERED and FAST generated CPU
+  bytecode is byte-identical for every boundary, while policy-bound
+  materialization, schedule, device, invocation, bundle, transport, observer,
+  and cache identities remain distinct. Any future nonidentity rewrite needs a
+  new numerical contract and version boundary.
+- The CPU-bundle pipeline has a separate strict observer validator for its two
+  phases, `algebra_coverage` and `final_erasure`. It requires one invocation,
+  exact policy/options/tuning identity, full coverage with no exclusions, and
+  the policy-bound erasure fingerprint. The existing three-phase StableHLO
+  round-trip validator is unchanged.
+- Rebuilt JAX/jaxlib 0.10.1 populated six distinct cache entries for three
+  boundaries and two policies with zero hits. A separate reuse process reported
+  six hits, emitted no Shuttle events, and left every cache byte unchanged. All
+  six BF16 outputs matched disabled ordinary JAX bitwise. The rebuilt
+  `libjax_common.dylib` SHA-256 is
+  `212b9373f77fd4c7280be41d8f18f1cfa0f1c404db3a90fc4f8acb5620e348b9`.
+- Canonical integration passes 44 native targets and 356 Shuttle Python tests.
+  Independent review replayed 40 native targets and 52 focused Python tests;
+  13 observer corruptions failed closed. Review returned GO.
+- The `2048x4096` Host path remains stopped at design. Current serial Fold
+  execution differs from pinned JAX in 9,894 BF16 elements and exceeds the
+  frozen mean-error limit. A future slice needs an explicit balanced
+  leaf-order-preserving `cpu_bytecode_v2`, larger checked resource limits, and
+  a new device, transport, and pipeline version. GPU, performance, hardware,
+  and scorecard evidence remain absent.
