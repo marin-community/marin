@@ -659,7 +659,14 @@ def quack_coda_rms_backward_consumer(
     vector_spec = tensor_spec(divisibility=_VECTOR_DIVISIBILITY, static=False)
     call = cutlass_call(
         launcher,
-        output_shape_dtype=jax.ShapeDtypeStruct((1, rows, hidden_dim), x.dtype),
+        output_shape_dtype=jax.ShapeDtypeStruct(
+            (1, rows, hidden_dim),
+            x.dtype,
+            # CuTe custom calls do not infer shard_map's varying-manual-axis annotation from
+            # their operands. The RMS input cotangent must carry the same annotation as x for
+            # the enclosing custom VJP transpose contract.
+            manual_axis_type=jax.typeof(x).manual_axis_type,
+        ),
         input_spec=(
             matrix_spec,
             matrix_spec,
