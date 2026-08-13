@@ -1168,11 +1168,13 @@ class RuntimeManager {
     if (!initialized_) {
       throw std::runtime_error("Mixture-of-Kittens runtime is not initialized");
     }
-    // Same rank-versus-ordinal split as Acquire: under the fabric transport this process holds one
-    // rank's runtime, indexed by its expert-axis position rather than by the CUDA device it sits on.
+    // Storage index, which is not the rank. In-process, runtimes_ is indexed by CUDA device and
+    // the two coincide. Under the fabric transport the process holds exactly one rank's runtime in
+    // a one-element vector, so the entry is at 0 while the rank itself may be anywhere on the
+    // expert axis -- indexing by local_rank_ here would run off the end for every rank but 0.
     int index = -1;
     if (arena_mode_) {
-      index = local_rank_;
+      index = 0;
     } else {
       ThrowOnCuda(cudaGetDevice(&index), "cudaGetDevice(current)");
     }
