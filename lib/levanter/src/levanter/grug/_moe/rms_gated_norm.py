@@ -57,6 +57,18 @@ def exact_gated_norm_up_reverse(
     return GatedNormUpCotangents(direct_cotangent, gate_accumulator_cotangent, w_up_cotangent)
 
 
+def exact_gated_norm_up_reverse_kernel(
+    output_cotangent: jax.Array,
+    normalized: jax.Array,
+    gate: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Reference for the aliased output-gate reverse kernel."""
+    direct_cotangent = output_cotangent * gate
+    gate_cotangent = output_cotangent * normalized
+    gate_accumulator_cotangent = gate_cotangent * (gate * (1 - gate))
+    return direct_cotangent, gate_accumulator_cotangent
+
+
 def exact_silu_backward_reference(
     output_cotangent: jax.Array,
     w_up: jax.Array,
@@ -160,10 +172,16 @@ def _backward_kernels():
     from levanter.grug._moe.quack_rms_cute import (  # noqa: PLC0415
         quack_coda_rms_backward_consumer,
         quack_coda_rms_backward_producer,
+        quack_gated_norm_up_reverse,
         quack_silu_backward_gemm,
     )
 
-    return quack_silu_backward_gemm, quack_coda_rms_backward_producer, quack_coda_rms_backward_consumer
+    return (
+        quack_gated_norm_up_reverse,
+        quack_silu_backward_gemm,
+        quack_coda_rms_backward_producer,
+        quack_coda_rms_backward_consumer,
+    )
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(4, 5))
@@ -178,20 +196,20 @@ def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
 
 
 def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
-    silu_backward, rms_backward_producer, rms_backward_consumer = _backward_kernels()
+    gated_norm_up_reverse, silu_backward, rms_backward_producer, rms_backward_consumer = _backward_kernels()
 
     del eps
     x = residuals.x
     x_flat = x.reshape((-1, x.shape[-1]))
-    up_reverse = exact_gated_norm_up_reverse(output_cotangent, residuals)
-    gate_preactivation_cotangent, _ = silu_backward(
-        up_reverse.gate_accumulator, residuals.w_up, residuals.gate_preactivation
-    )
+    output_cotangent = output_cotangent.reshape(residuals.normalized.shape)
+    direct_cotangent, gate_accumulator = gated_norm_up_reverse(output_cotangent, residuals.normalized, residuals.gate)
+    w_up_cotangent = jnp.einsum("tr,td->rd", residuals.gate_hidden, gate_accumulator)
+    gate_preactivation_cotangent, _ = silu_backward(gate_accumulator, residuals.w_up, residuals.gate_preactivation)
     w_down_cotangent = jnp.einsum("td,tr->dr", residuals.normalized, gate_preactivation_cotangent)
     unweighted_cotangent, row_dot_partial = rms_backward_producer(
         gate_preactivation_cotangent,
         residuals.w_down,
-        up_reverse.direct,
+        direct_cotangent,
         x_flat,
         residuals.norm_weight,
         residuals.inverse_rms,
@@ -214,7 +232,7 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     # transpose's own defensive psum and requires the reduction here.
     norm_weight_cotangent = jax.lax.psum(norm_weight_cotangent, axis_name=batch_axes)
     w_down_cotangent = jax.lax.psum(w_down_cotangent, axis_name=batch_axes)
-    w_up_cotangent = jax.lax.psum(up_reverse.w_up, axis_name=batch_axes)
+    w_up_cotangent = jax.lax.psum(w_up_cotangent, axis_name=batch_axes)
     return x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent
 
 

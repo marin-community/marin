@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 from levanter.grug._moe.rms_gated_norm import (
+    exact_gated_norm_up_reverse_kernel,
     exact_rms_backward_consumer,
     exact_rms_backward_producer_reference,
     exact_silu_backward_reference,
@@ -99,6 +100,27 @@ def test_backward_consumer_matches_reference():
     )
 
     _assert_close(actual, expected, tolerance=_BF16_TOLERANCE, label="input cotangent")
+
+
+def test_gated_norm_up_reverse_matches_reference():
+    _require_gpu()
+
+    keys = jax.random.split(jax.random.key(31), 3)
+    output_cotangent = jax.random.normal(keys[0], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
+    normalized = jax.random.normal(keys[1], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
+    gate = jax.nn.sigmoid(jax.random.normal(keys[2], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16))
+    expected_direct, expected_gate_accumulator = exact_gated_norm_up_reverse_kernel(output_cotangent, normalized, gate)
+    actual_direct, actual_gate_accumulator = quack_rms_cute.quack_gated_norm_up_reverse(
+        output_cotangent, normalized, gate
+    )
+
+    _assert_close(actual_direct, expected_direct, tolerance=_BF16_TOLERANCE, label="direct cotangent")
+    _assert_close(
+        actual_gate_accumulator,
+        expected_gate_accumulator,
+        tolerance=_BF16_TOLERANCE,
+        label="gate accumulator",
+    )
 
 
 def test_backward_producer_rejects_non_float32_inverse_rms():

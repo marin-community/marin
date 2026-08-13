@@ -51,6 +51,8 @@ _MATRIX_DIVISIBILITY = (1, 1, 8)
 _VECTOR_DIVISIBILITY = (1, 4)
 _CONSUMER_BLOCK_M = 128
 _CONSUMER_BLOCK_N = 128
+_GATE_REVERSE_BLOCK_M = 128
+_GATE_REVERSE_BLOCK_N = 128
 _SM100_MULTIPROCESSORS = 148
 
 
@@ -296,6 +298,54 @@ def quack_coda_rms_backward_producer(
         inverse_rms[None, :],
     )
     return unweighted_cotangent[0], row_dot_partial[0]
+
+
+def _gated_norm_up_reverse_kernel(output_cotangent_ref, normalized_ref, gate_ref, direct_ref, gate_accumulator_ref):
+    output_cotangent = plgpu.load(output_cotangent_ref)
+    normalized = plgpu.load(normalized_ref)
+    gate = plgpu.load(gate_ref)
+    direct = output_cotangent * gate
+    gate_cotangent = output_cotangent * normalized
+    gate_accumulator = gate_cotangent * (gate * (1 - gate))
+    plgpu.store(direct_ref, direct)
+    plgpu.store(gate_accumulator_ref, gate_accumulator)
+
+
+@functools.lru_cache(maxsize=None)
+def _gated_norm_up_reverse_call(rows: int, hidden_dim: int, dtype):
+    shape = jax.ShapeDtypeStruct((rows, hidden_dim), dtype)
+    block = (_GATE_REVERSE_BLOCK_M, _GATE_REVERSE_BLOCK_N)
+    spec = pl.BlockSpec(block, lambda i, j: (i, j))
+    return pl.pallas_call(
+        _gated_norm_up_reverse_kernel,
+        out_shape=(shape, shape),
+        in_specs=(spec, spec, spec),
+        out_specs=(spec, spec),
+        grid=(pl.cdiv(rows, block[0]), pl.cdiv(hidden_dim, block[1])),
+        input_output_aliases={0: 1},
+        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=2),
+        name="gated_norm_up_reverse",
+    )
+
+
+def quack_gated_norm_up_reverse(
+    output_cotangent: jax.Array,
+    normalized: jax.Array,
+    gate: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Emit ``direct`` while overwriting the output cotangent with the gate cotangent."""
+    if (
+        output_cotangent.ndim != 2
+        or normalized.shape != output_cotangent.shape
+        or gate.shape != output_cotangent.shape
+    ):
+        raise ValueError("output_cotangent, normalized, and gate must be matching rank-2 arrays")
+    if not (output_cotangent.dtype == normalized.dtype == gate.dtype == jnp.bfloat16):
+        raise ValueError("GatedNorm up reverse requires matching BF16 tensors")
+    rows, hidden_dim = output_cotangent.shape
+    if rows % _GATE_REVERSE_BLOCK_M != 0 or hidden_dim % _GATE_REVERSE_BLOCK_N != 0:
+        raise ValueError("GatedNorm up reverse dimensions must be multiples of 128")
+    return _gated_norm_up_reverse_call(rows, hidden_dim, output_cotangent.dtype)(output_cotangent, normalized, gate)
 
 
 def _rms_backward_consumer_kernel(
