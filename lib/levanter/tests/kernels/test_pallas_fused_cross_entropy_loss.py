@@ -948,9 +948,17 @@ def test_batched_xla_full_vocab_b_tiled_forward_matches_reference():
 
 
 def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
+    """Gradient algebra of the b-tiled backward, against autodiff through the dense reference.
+
+    Both sides are pinned to HIGHEST because they contract in different orders. Under the
+    default precision, TF32 on GPU rounds the two paths apart by ~5e-4 while float32 inputs
+    imply a ~1e-7 answer, which failed this test's 1e-5 tolerance on every TF32 device. That
+    measured matmul rounding rather than the algebra under test; HIGHEST measures the algebra.
+    """
     if jax.default_backend() == "tpu":
         pytest.skip("batched_xla custom backward helper is covered by CPU/GPU precision paths")
 
+    precision = jax.lax.Precision.HIGHEST
     key = jax.random.PRNGKey(43)
     key_x, key_w, key_y, key_loss, key_lse = jax.random.split(key, 5)
     x = jax.random.normal(key_x, (7, 5), dtype=jnp.float32)
@@ -959,7 +967,9 @@ def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
     g_loss = jax.random.normal(key_loss, (7,), dtype=jnp.float32)
     g_lse = jax.random.normal(key_lse, (7,), dtype=jnp.float32)
 
-    _, lse = linear_softmax_cross_entropy_loss_reference(x, y, w, dtype=jnp.float32, logit_soft_cap=1.7)
+    _, lse = linear_softmax_cross_entropy_loss_reference(
+        x, y, w, dtype=jnp.float32, logit_soft_cap=1.7, precision=precision
+    )
 
     def reference_cotangent_loss(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
         loss, logsumexp = linear_softmax_cross_entropy_loss_reference(
@@ -968,6 +978,7 @@ def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
             w_raw,
             dtype=jnp.float32,
             logit_soft_cap=1.7,
+            precision=precision,
         )
         return jnp.sum(loss * g_loss + logsumexp * g_lse)
 
@@ -981,7 +992,7 @@ def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
         g_lse,
         b_block_size=4,
         logit_soft_cap=1.7,
-        precision=None,
+        precision=precision,
     )
 
     np.testing.assert_allclose(actual_x, expected_x, rtol=1e-5, atol=1e-5)
