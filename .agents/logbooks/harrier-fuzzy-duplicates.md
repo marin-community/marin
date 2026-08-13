@@ -1255,3 +1255,15 @@ author: Rafal Wojdyla
 - Retry state: RNO still reports 38 shards at retry attempt one. No shard entered retry attempt two.
 - Issue update: None. This is a routine checkpoint after the 90-percent issue update.
 - Next action: Continue root, source, service, Zephyr, and output checks. Recover only a terminal in-scope job failure.
+
+### 2026-08-13 18:15 UTC - Output passed 93 percent
+
+- Root health: The East and RNO roots remain running with zero root failures. No current source job has failed.
+- Completed artifacts: East has 144 of 146 sealed source artifacts. RNO has 57 of 146. The full run has 201 of 292 sealed source artifacts.
+- Aggregate progress: A direct object count found 156,361 of 166,775 output shards, or 93.76%. There are 10,414 shards left. East has written 73,128 shards, and RNO has written 83,233 shards. Two hundred eight sources have output, and no Parquet path is unknown.
+- Output rate: The jobs wrote 1,477 shards from 17:45 UTC to 18:15 UTC. A constant-rate estimate gives about 3.5 hours for the remaining shards, or about 21:45 UTC. Batch preemption and source size can change this estimate.
+- Active stages: The East sources reached 14,314 of 14,843 shards and 10,541 of 14,285 shards. The RNO source reached 3,174 of 4,136 shards. Each stage has 32 live workers and zero dead workers.
+- Service admission: East has 192 running TEI tasks and 64 building tasks. RNO has 184 running TEI tasks and 328 building tasks. All 256 East service jobs and all 512 RNO service jobs remain in the running job state.
+- Retry state: RNO still reports 38 shards at retry attempt one. No shard entered retry attempt two.
+- Issue update: None. This is a routine checkpoint after the 90-percent issue update.
+- Next action: Continue root, source, service, Zephyr, and output checks. Recover only a terminal in-scope job failure.
