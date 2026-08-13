@@ -6,31 +6,26 @@
 
 from __future__ import annotations
 
-import functools
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
-from jax.experimental import pallas as pl
-from jax.experimental.pallas import triton as plgpu
-from jax.sharding import ManualAxisType
 
 import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from levanter.grug._moe.quack_moe_cute import _cute_dtype
-from levanter.grug._moe.rms_gated_norm import exact_rms_backward_consumer
-from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 from quack.activation import dact_fn_map
 from quack.cute_dsl_utils import mlir_namedtuple
 from quack.epi_ops import (
     ColVecLoad,
     ColVecReduce,
     RowVecLoad,
+    RowVecReduce,
     TileLoad,
-    TileStore,
     colvec_reduce_accumulate,
+    rowvec_reduce_accumulate,
     vec_multiply,
 )
 from quack.gemm_act import GemmActMixin
@@ -49,10 +44,6 @@ _FALLBACK_MAX_ACTIVE_CLUSTERS = 148
 _MATRIX_MODE = (1, 2, 0)
 _MATRIX_DIVISIBILITY = (1, 1, 8)
 _VECTOR_DIVISIBILITY = (1, 4)
-_CONSUMER_BLOCK_M = 128
-_CONSUMER_BLOCK_N = 128
-_GATE_REVERSE_BLOCK_M = 128
-_GATE_REVERSE_BLOCK_N = 128
 _SM100_MULTIPROCESSORS = 148
 
 
@@ -73,16 +64,17 @@ def _max_active_clusters(cluster_mnk: tuple[int, int, int]) -> int:
     return _SM100_MULTIPROCESSORS // cluster_size
 
 
-class _GemmRmsBackwardMixin(GemmActMixin):
-    """CuTe epilogue that returns an unweighted cotangent and RMS row partials."""
+class _GemmRmsBackwardPartialsMixin(GemmActMixin):
+    """CuTe epilogue that emits only RMS row and norm-gain partials."""
 
     _epi_ops = (  # pyrefly: ignore[bad-override-mutable-attribute]
         RowVecLoad("mNormWeight"),
         ColVecLoad("mInverseRms"),
-        TileLoad("mDirectCotangent"),
+        TileLoad("mOutputCotangent"),
+        TileLoad("mGate"),
         TileLoad("mX"),
         ColVecReduce("mRowDotPartial"),
-        TileStore("mAuxOut"),
+        RowVecReduce("mNormWeightPartial"),
     )
     _extra_param_fields = ()
 
@@ -90,17 +82,15 @@ class _GemmRmsBackwardMixin(GemmActMixin):
     class EpilogueArguments(NamedTuple):  # pyrefly: ignore[bad-override]
         mNormWeight: cute.Tensor | None = None
         mInverseRms: cute.Tensor | None = None
-        mDirectCotangent: cute.Tensor | None = None
+        mOutputCotangent: cute.Tensor | None = None
+        mGate: cute.Tensor | None = None
         mX: cute.Tensor | None = None
         mRowDotPartial: cute.Tensor | None = None
-        mAuxOut: cute.Tensor | None = None
+        mNormWeightPartial: cute.Tensor | None = None
         rounding_mode: cutlass.Constexpr[int] = RoundingMode.RN
 
     def epi_to_underlying_arguments(self, args, *, loc=None, ip=None):
         self.rounding_mode = args.rounding_mode
-        self.aux_out_dtype = args.mAuxOut.element_type
-        self.aux_out_layout = cutlass.utils.LayoutEnum.from_tensor(args.mAuxOut)
-        self.cta_tile_shape_aux_out_mn = self.cta_tile_shape_mnk[:2]
         values = self._epi_ops_to_params_dict(args)
         return self.EpilogueParams(**values)
 
@@ -108,12 +98,16 @@ class _GemmRmsBackwardMixin(GemmActMixin):
     def epi_visit_subtile(self, params, epi_loop_tensors, tRS_rD, tRS_rC=None):
         tDrNormWeight = epi_loop_tensors.get("mNormWeight")
         tDrInverseRms = epi_loop_tensors.get("mInverseRms")
-        tRS_rDirectCotangent = epi_loop_tensors.get("mDirectCotangent")
+        tRS_rOutputCotangent = epi_loop_tensors.get("mOutputCotangent")
+        tRS_rGate = epi_loop_tensors.get("mGate")
         tRS_rX = epi_loop_tensors.get("mX")
         tDrRowDot = epi_loop_tensors.get("mRowDotPartial")
+        tDrNormWeightPartial = epi_loop_tensors.get("mNormWeightPartial")
 
         tRS_rUnweightedCotangent = cute.make_rmem_tensor_like(tRS_rD, self.a_dtype)
         tRS_rUnweightedCotangent.store(tRS_rD.load().to(self.a_dtype))
+        tRS_rDirectCotangent = cute.make_rmem_tensor_like(tRS_rD, self.a_dtype)
+        tRS_rDirectCotangent.store(tRS_rOutputCotangent.load() * tRS_rGate.load())
         tRS_rUnweightedCotangent.store(tRS_rUnweightedCotangent.load() + tRS_rDirectCotangent.load())
         tRS_rD.store(tRS_rUnweightedCotangent.load().to(tRS_rD.element_type))
 
@@ -121,16 +115,19 @@ class _GemmRmsBackwardMixin(GemmActMixin):
         for i in cutlass.range(cute.size(tRS_rXHat), unroll_full=True):
             tRS_rXHat[i] = tRS_rX[i].to(tRS_rD.element_type) * tDrInverseRms[i]
 
-        tRS_rUnweightedCotangent = cute.make_rmem_tensor_like(tRS_rD)
-        tRS_rUnweightedCotangent.store(tRS_rD.load())
+        tRS_rNormWeightProduct = cute.make_rmem_tensor_like(tRS_rD)
+        tRS_rNormWeightProduct.store(tRS_rD.load() * tRS_rXHat.load())
+        rowvec_reduce_accumulate(self, tDrNormWeightPartial, tRS_rNormWeightProduct)
         vec_multiply(self, tRS_rD, None, tDrNormWeight)
         tRS_rRowDotProduct = cute.make_rmem_tensor_like(tRS_rD)
         tRS_rRowDotProduct.store(tRS_rD.load() * tRS_rXHat.load())
         colvec_reduce_accumulate(self, tDrRowDot, tRS_rRowDotProduct)
-        return (tRS_rUnweightedCotangent,)
+        return ()
 
 
-class _GemmRmsBackwardSm100(_GemmRmsBackwardMixin, GemmSm100):  # pyrefly: ignore[inconsistent-inheritance]
+class _GemmRmsBackwardPartialsSm100(  # pyrefly: ignore[inconsistent-inheritance]
+    _GemmRmsBackwardPartialsMixin, GemmSm100
+):
     pass
 
 
@@ -150,14 +147,15 @@ def _build_backward_producer_launcher(
         stream,
         mGatePreactivationCotangent,
         mWDown,
-        mDirectCotangent,
+        mOutputCotangent,
+        mGate,
         mX,
         mNormWeight,
         mInverseRms,
-        mUnweightedCotangent,
         mRowDotPartial,
+        mNormWeightPartial,
     ):
-        gemm = _GemmRmsBackwardSm100(
+        gemm = _GemmRmsBackwardPartialsSm100(
             _ACCUMULATOR_DTYPE,
             a_dtype,
             tile_mn,
@@ -165,13 +163,14 @@ def _build_backward_producer_launcher(
             gather_A=False,
             use_clc_persistence=False,
         )
-        epilogue = _GemmRmsBackwardMixin.EpilogueArguments(
+        epilogue = _GemmRmsBackwardPartialsMixin.EpilogueArguments(
             mNormWeight=mNormWeight,
             mInverseRms=mInverseRms,
-            mDirectCotangent=mDirectCotangent,
+            mOutputCotangent=mOutputCotangent,
+            mGate=mGate,
             mX=mX,
             mRowDotPartial=mRowDotPartial,
-            mAuxOut=mUnweightedCotangent,
+            mNormWeightPartial=mNormWeightPartial,
         )
         scheduler = make_scheduler_args(max_active_clusters, max_swizzle, None)
         gemm(
@@ -184,6 +183,105 @@ def _build_backward_producer_launcher(
             None,
             stream,
         )
+
+    return launcher
+
+
+class _GemmRmsBackwardConsumerMixin(GemmActMixin):
+    """Recompute the low-rank product and emit final RMS input cotangents."""
+
+    _epi_ops = (  # pyrefly: ignore[bad-override-mutable-attribute]
+        RowVecLoad("mNormWeight"),
+        ColVecLoad("mInverseRms"),
+        ColVecLoad("mRowMean"),
+        TileLoad("mOutputCotangent"),
+        TileLoad("mGate"),
+        TileLoad("mX"),
+    )
+    _extra_param_fields = ()
+
+    @mlir_namedtuple
+    class EpilogueArguments(NamedTuple):  # pyrefly: ignore[bad-override]
+        mNormWeight: cute.Tensor | None = None
+        mInverseRms: cute.Tensor | None = None
+        mRowMean: cute.Tensor | None = None
+        mOutputCotangent: cute.Tensor | None = None
+        mGate: cute.Tensor | None = None
+        mX: cute.Tensor | None = None
+        rounding_mode: cutlass.Constexpr[int] = RoundingMode.RN
+
+    def epi_to_underlying_arguments(self, args, *, loc=None, ip=None):
+        self.rounding_mode = args.rounding_mode
+        return self.EpilogueParams(**self._epi_ops_to_params_dict(args))
+
+    @cute.jit
+    def epi_visit_subtile(self, params, epi_loop_tensors, tRS_rD, tRS_rC=None):
+        tDrNormWeight = epi_loop_tensors.get("mNormWeight")
+        tDrInverseRms = epi_loop_tensors.get("mInverseRms")
+        tDrRowMean = epi_loop_tensors.get("mRowMean")
+        tRS_rOutputCotangent = epi_loop_tensors.get("mOutputCotangent")
+        tRS_rGate = epi_loop_tensors.get("mGate")
+        tRS_rX = epi_loop_tensors.get("mX")
+
+        tRS_rUnweightedCotangent = cute.make_rmem_tensor_like(tRS_rD, self.a_dtype)
+        tRS_rUnweightedCotangent.store(tRS_rD.load().to(self.a_dtype))
+        tRS_rDirectCotangent = cute.make_rmem_tensor_like(tRS_rD, self.a_dtype)
+        tRS_rDirectCotangent.store(tRS_rOutputCotangent.load() * tRS_rGate.load())
+        tRS_rUnweightedCotangent.store(tRS_rUnweightedCotangent.load() + tRS_rDirectCotangent.load())
+
+        for i in cutlass.range(cute.size(tRS_rD), unroll_full=True):
+            x_hat = tRS_rX[i].to(tRS_rD.element_type) * tDrInverseRms[i]
+            weighted = tRS_rUnweightedCotangent[i].to(tRS_rD.element_type) * tDrNormWeight[i]
+            tRS_rD[i] = (weighted - x_hat * tDrRowMean[i]) * tDrInverseRms[i]
+        return ()
+
+
+class _GemmRmsBackwardConsumerSm100(  # pyrefly: ignore[inconsistent-inheritance]
+    _GemmRmsBackwardConsumerMixin, GemmSm100
+):
+    pass
+
+
+@cute_launcher_factory
+def _build_backward_consumer_launcher(
+    *,
+    a_dtype: type[cutlass.Numeric],
+    tile_mn: tuple[int, int],
+    cluster_mnk: tuple[int, int, int],
+    max_active_clusters: int,
+    max_swizzle: int,
+):
+    @cute.jit
+    def launcher(
+        stream,
+        mGatePreactivationCotangent,
+        mWDown,
+        mOutputCotangent,
+        mGate,
+        mRowMean,
+        mX,
+        mNormWeight,
+        mInverseRms,
+        mDx,
+    ):
+        gemm = _GemmRmsBackwardConsumerSm100(
+            _ACCUMULATOR_DTYPE,
+            a_dtype,
+            tile_mn,
+            cluster_mnk,
+            gather_A=False,
+            use_clc_persistence=False,
+        )
+        epilogue = _GemmRmsBackwardConsumerMixin.EpilogueArguments(
+            mNormWeight=mNormWeight,
+            mInverseRms=mInverseRms,
+            mRowMean=mRowMean,
+            mOutputCotangent=mOutputCotangent,
+            mGate=mGate,
+            mX=mX,
+        )
+        scheduler = make_scheduler_args(max_active_clusters, max_swizzle, None)
+        gemm(mGatePreactivationCotangent, mWDown, mDx, None, epilogue, scheduler, None, stream)
 
     return launcher
 
@@ -219,7 +317,8 @@ def _build_silu_backward_launcher(
 def quack_coda_rms_backward_producer(
     gate_preactivation_cotangent: jax.Array,
     w_down: jax.Array,
-    direct_cotangent: jax.Array,
+    output_cotangent: jax.Array,
+    gate: jax.Array,
     x: jax.Array,
     norm_weight: jax.Array,
     inverse_rms: jax.Array,
@@ -228,7 +327,7 @@ def quack_coda_rms_backward_producer(
     cluster_mnk: tuple[int, int, int] = _DEFAULT_BACKWARD_CLUSTER_MNK,
     max_swizzle: int = _DEFAULT_MAX_SWIZZLE,
 ) -> tuple[jax.Array, jax.Array]:
-    """Produce BF16 ``du`` and RMS-row partials.
+    """Produce only RMS row-dot and norm-gain partials.
 
     The canonical shapes are ``gate_preactivation_cotangent[M,R]``,
     ``w_down[D,R]``, full-width tensors ``[M,D]``, ``norm_weight[D]``, and
@@ -244,15 +343,20 @@ def quack_coda_rms_backward_producer(
     if w_rank != rank:
         raise ValueError(f"contracting dimensions differ: {rank} != {w_rank}")
     expected_full_shape = (rows, hidden_dim)
-    if direct_cotangent.shape != expected_full_shape or x.shape != expected_full_shape:
+    if (
+        output_cotangent.shape != expected_full_shape
+        or gate.shape != expected_full_shape
+        or x.shape != expected_full_shape
+    ):
         raise ValueError(
-            f"expected direct_cotangent and x shape {expected_full_shape}, got {direct_cotangent.shape} and {x.shape}"
+            f"expected full-width tensors with shape {expected_full_shape}, got "
+            f"{output_cotangent.shape}, {gate.shape}, and {x.shape}"
         )
     if norm_weight.shape != (hidden_dim,) or inverse_rms.shape != (rows,):
         raise ValueError(
             f"expected norm_weight[{hidden_dim}] and inverse_rms[{rows}], got {norm_weight.shape} and {inverse_rms.shape}"
         )
-    if not (gate_preactivation_cotangent.dtype == w_down.dtype == direct_cotangent.dtype == x.dtype):
+    if not (gate_preactivation_cotangent.dtype == w_down.dtype == output_cotangent.dtype == gate.dtype == x.dtype):
         raise ValueError("GEMM and full-width tensor inputs must have the same dtype")
     if x.dtype != jnp.bfloat16:
         raise ValueError(f"RMS backward producer requires BF16 inputs, got {x.dtype}")
@@ -262,7 +366,8 @@ def quack_coda_rms_backward_producer(
     if inverse_rms.dtype != jnp.float32:
         raise ValueError(f"inverse_rms must be float32, got {inverse_rms.dtype}")
 
-    _, tile_n = tile_mn
+    tile_m, tile_n = tile_mn
+    row_tiles = (rows + tile_m - 1) // tile_m
     hidden_tiles = (hidden_dim + tile_n - 1) // tile_n
     launcher = _build_backward_producer_launcher(
         a_dtype=_cute_dtype(gate_preactivation_cotangent.dtype),
@@ -279,162 +384,104 @@ def quack_coda_rms_backward_producer(
     vector_spec = tensor_spec(divisibility=_VECTOR_DIVISIBILITY, static=False)
     partial_spec = tensor_spec(divisibility=(1, 1, 1), static=False)
     output_shape_dtype = (
-        jax.ShapeDtypeStruct((1, rows, hidden_dim), x.dtype),
         jax.ShapeDtypeStruct((1, rows, hidden_tiles), jnp.float32),
+        jax.ShapeDtypeStruct((1, row_tiles, hidden_dim), jnp.float32),
     )
     call = cutlass_call(
         launcher,
         output_shape_dtype=output_shape_dtype,
-        input_spec=(a_spec, w_down_spec, matrix_spec, matrix_spec, vector_spec, vector_spec),
-        output_spec=(matrix_spec, partial_spec),
+        input_spec=(a_spec, w_down_spec, matrix_spec, matrix_spec, matrix_spec, vector_spec, vector_spec),
+        output_spec=(partial_spec, partial_spec),
         use_static_tensors=False,
     )
-    unweighted_cotangent, row_dot_partial = call(
+    row_dot_partial, norm_weight_partial = call(
         gate_preactivation_cotangent[None, :, :],
         w_down[None, :, :],
-        direct_cotangent[None, :, :],
+        output_cotangent[None, :, :],
+        gate[None, :, :],
         x[None, :, :],
         norm_weight[None, :],
         inverse_rms[None, :],
     )
-    return unweighted_cotangent[0], row_dot_partial[0]
-
-
-def _gated_norm_up_reverse_kernel(output_cotangent_ref, normalized_ref, gate_ref, direct_ref, gate_accumulator_ref):
-    output_cotangent = plgpu.load(output_cotangent_ref)
-    normalized = plgpu.load(normalized_ref)
-    gate = plgpu.load(gate_ref)
-    direct = output_cotangent * gate
-    gate_cotangent = output_cotangent * normalized
-    gate_accumulator = gate_cotangent * (gate * (1 - gate))
-    plgpu.store(direct_ref, direct)
-    plgpu.store(gate_accumulator_ref, gate_accumulator)
-
-
-@functools.lru_cache(maxsize=None)
-def _gated_norm_up_reverse_call(rows: int, hidden_dim: int, dtype):
-    shape = jax.ShapeDtypeStruct((rows, hidden_dim), dtype)
-    block = (_GATE_REVERSE_BLOCK_M, _GATE_REVERSE_BLOCK_N)
-    spec = pl.BlockSpec(block, lambda i, j: (i, j))
-    return pl.pallas_call(
-        _gated_norm_up_reverse_kernel,
-        out_shape=(shape, shape),
-        in_specs=(spec, spec, spec),
-        out_specs=(spec, spec),
-        grid=(pl.cdiv(rows, block[0]), pl.cdiv(hidden_dim, block[1])),
-        input_output_aliases={0: 1},
-        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=2),
-        name="gated_norm_up_reverse",
-    )
-
-
-def quack_gated_norm_up_reverse(
-    output_cotangent: jax.Array,
-    normalized: jax.Array,
-    gate: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
-    """Emit ``direct`` while overwriting the output cotangent with the gate cotangent."""
-    if (
-        output_cotangent.ndim != 2
-        or normalized.shape != output_cotangent.shape
-        or gate.shape != output_cotangent.shape
-    ):
-        raise ValueError("output_cotangent, normalized, and gate must be matching rank-2 arrays")
-    if not (output_cotangent.dtype == normalized.dtype == gate.dtype == jnp.bfloat16):
-        raise ValueError("GatedNorm up reverse requires matching BF16 tensors")
-    rows, hidden_dim = output_cotangent.shape
-    if rows % _GATE_REVERSE_BLOCK_M != 0 or hidden_dim % _GATE_REVERSE_BLOCK_N != 0:
-        raise ValueError("GatedNorm up reverse dimensions must be multiples of 128")
-    return _gated_norm_up_reverse_call(rows, hidden_dim, output_cotangent.dtype)(output_cotangent, normalized, gate)
-
-
-def _rms_backward_consumer_kernel(
-    unweighted_ref,
-    row_dot_ref,
-    x_ref,
-    norm_weight_ref,
-    inverse_rms_ref,
-    output_ref,
-):
-    unweighted = plgpu.load(unweighted_ref).astype(jnp.float32)
-    row_mean = plgpu.load(row_dot_ref).astype(jnp.float32)
-    x = plgpu.load(x_ref).astype(jnp.float32)
-    norm_weight = plgpu.load(norm_weight_ref).astype(jnp.float32)
-    inverse_rms = plgpu.load(inverse_rms_ref).astype(jnp.float32)
-    normalized_x = x * inverse_rms[:, None]
-    weighted_cotangent = unweighted * norm_weight[None, :]
-    output = (weighted_cotangent - normalized_x * row_mean[:, None]) * inverse_rms[:, None]
-    plgpu.store(output_ref, output.astype(output_ref.dtype))
-
-
-@functools.lru_cache(maxsize=None)
-def _rms_backward_consumer_call(rows: int, hidden_dim: int, dtype, norm_weight_dtype, manual_axis_type):
-    output_shape = jax.ShapeDtypeStruct((rows, hidden_dim), dtype, manual_axis_type=manual_axis_type)
-    input_shapes = (
-        output_shape,
-        jax.ShapeDtypeStruct((rows,), jnp.float32),
-        output_shape,
-        jax.ShapeDtypeStruct((hidden_dim,), norm_weight_dtype),
-        jax.ShapeDtypeStruct((rows,), jnp.float32),
-    )
-    body_cost = pl.estimate_cost(exact_rms_backward_consumer, *input_shapes)
-    cost_estimate = with_io_bytes_accessed(
-        body_cost,
-        kernel_inputs_specs=input_shapes,
-        kernel_outputs_specs=(output_shape,),
-    )
-    return pl.pallas_call(
-        _rms_backward_consumer_kernel,
-        out_shape=output_shape,
-        in_specs=(
-            pl.BlockSpec((_CONSUMER_BLOCK_M, _CONSUMER_BLOCK_N), lambda i, j: (i, j)),
-            pl.BlockSpec((_CONSUMER_BLOCK_M,), lambda i, j: (i,)),
-            pl.BlockSpec((_CONSUMER_BLOCK_M, _CONSUMER_BLOCK_N), lambda i, j: (i, j)),
-            pl.BlockSpec((_CONSUMER_BLOCK_N,), lambda i, j: (j,)),
-            pl.BlockSpec((_CONSUMER_BLOCK_M,), lambda i, j: (i,)),
-        ),
-        out_specs=pl.BlockSpec((_CONSUMER_BLOCK_M, _CONSUMER_BLOCK_N), lambda i, j: (i, j)),
-        grid=(pl.cdiv(rows, _CONSUMER_BLOCK_M), pl.cdiv(hidden_dim, _CONSUMER_BLOCK_N)),
-        input_output_aliases={0: 0},
-        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=2),
-        cost_estimate=cost_estimate,
-        name="rms_backward_consumer",
-    )
+    return row_dot_partial[0], norm_weight_partial[0]
 
 
 def quack_coda_rms_backward_consumer(
-    unweighted_cotangent: jax.Array,
+    gate_preactivation_cotangent: jax.Array,
+    w_down: jax.Array,
+    output_cotangent: jax.Array,
+    gate: jax.Array,
     row_dot: jax.Array,
     x: jax.Array,
     norm_weight: jax.Array,
     inverse_rms: jax.Array,
     *,
-    manual_axis_type: ManualAxisType | None = None,
+    tile_mn: tuple[int, int] = _DEFAULT_BACKWARD_TILE_MN,
+    cluster_mnk: tuple[int, int, int] = _DEFAULT_BACKWARD_CLUSTER_MNK,
+    max_swizzle: int = _DEFAULT_MAX_SWIZZLE,
 ) -> jax.Array:
-    """Overwrite ``unweighted_cotangent`` with the final RMS input cotangent.
-
-    This function is called inside the RMS-GatedNorm ``shard_map``; every argument is already
-    local to one device. The aliased input/output contract lets XLA reuse the producer buffer.
-    """
-    if unweighted_cotangent.ndim != 2 or x.shape != unweighted_cotangent.shape:
-        raise ValueError("unweighted_cotangent and x must be rank-2 arrays with matching shapes")
+    """Recompute the low-rank product and emit final RMS input cotangents."""
+    if gate_preactivation_cotangent.ndim != 2 or w_down.ndim != 2:
+        raise ValueError("gate_preactivation_cotangent and w_down must be rank-2")
+    rows, rank = gate_preactivation_cotangent.shape
+    hidden_dim, w_rank = w_down.shape
+    if rank != w_rank:
+        raise ValueError("RMS backward consumer contracting dimensions do not agree")
+    full_shape = (rows, hidden_dim)
+    if output_cotangent.shape != full_shape or gate.shape != full_shape or x.shape != full_shape:
+        raise ValueError("RMS backward consumer full-width dimensions do not agree")
     rows, hidden_dim = x.shape
     if row_dot.shape != (rows,) or inverse_rms.shape != (rows,) or norm_weight.shape != (hidden_dim,):
         raise ValueError("RMS backward consumer vector dimensions do not agree")
-    if unweighted_cotangent.dtype != x.dtype or x.dtype != jnp.bfloat16:
-        raise ValueError("RMS backward consumer requires matching BF16 full-width tensors")
+    if not (
+        gate_preactivation_cotangent.dtype
+        == w_down.dtype
+        == output_cotangent.dtype
+        == gate.dtype
+        == x.dtype
+        == jnp.bfloat16
+    ):
+        raise ValueError("RMS backward consumer requires matching BF16 tensors")
     if row_dot.dtype != jnp.float32 or inverse_rms.dtype != jnp.float32:
         raise ValueError("row_dot and inverse_rms must be float32")
-    if rows % _CONSUMER_BLOCK_M != 0 or hidden_dim % _CONSUMER_BLOCK_N != 0:
-        raise ValueError(
-            f"rows and hidden_dim must be multiples of {_CONSUMER_BLOCK_M} and {_CONSUMER_BLOCK_N}, "
-            f"got {rows} and {hidden_dim}"
-        )
-    if manual_axis_type is None:
-        manual_axis_type = jax.typeof(x).manual_axis_type
-    call = _rms_backward_consumer_call(rows, hidden_dim, x.dtype, norm_weight.dtype, manual_axis_type)
+
+    launcher = _build_backward_consumer_launcher(
+        a_dtype=_cute_dtype(x.dtype),
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        max_active_clusters=_max_active_clusters(cluster_mnk),
+        max_swizzle=max_swizzle,
+    )
+    tensor_spec = cjax.TensorSpec
+    matrix_spec = tensor_spec(mode=_MATRIX_MODE, divisibility=_MATRIX_DIVISIBILITY, static=False)
+    vector_spec = tensor_spec(divisibility=_VECTOR_DIVISIBILITY, static=False)
+    call = cutlass_call(
+        launcher,
+        output_shape_dtype=jax.ShapeDtypeStruct((1, rows, hidden_dim), x.dtype),
+        input_spec=(
+            matrix_spec,
+            matrix_spec,
+            matrix_spec,
+            matrix_spec,
+            vector_spec,
+            matrix_spec,
+            vector_spec,
+            vector_spec,
+        ),
+        output_spec=(matrix_spec,),
+        use_static_tensors=False,
+    )
     row_mean = row_dot / hidden_dim
-    return call(unweighted_cotangent, row_mean, x, norm_weight, inverse_rms)
+    return call(
+        gate_preactivation_cotangent[None, :, :],
+        w_down[None, :, :],
+        output_cotangent[None, :, :],
+        gate[None, :, :],
+        row_mean[None, :],
+        x[None, :, :],
+        norm_weight[None, :],
+        inverse_rms[None, :],
+    )[0]
 
 
 def quack_silu_backward_gemm(

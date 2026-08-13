@@ -15,7 +15,7 @@ from typing import Literal, NamedTuple
 import jax
 import jax.numpy as jnp
 from jax import shard_map
-from jax.sharding import ManualAxisType, PartitionSpec as P, get_abstract_mesh, reshard
+from jax.sharding import PartitionSpec as P, get_abstract_mesh, reshard
 
 from levanter.grug.sharding import _batch_axes
 
@@ -55,18 +55,6 @@ def exact_gated_norm_up_reverse(
     gate_accumulator_cotangent = gate_cotangent * (residuals.gate * (1 - residuals.gate))
     w_up_cotangent = jnp.einsum("tr,td->rd", residuals.gate_hidden, gate_accumulator_cotangent)
     return GatedNormUpCotangents(direct_cotangent, gate_accumulator_cotangent, w_up_cotangent)
-
-
-def exact_gated_norm_up_reverse_kernel(
-    output_cotangent: jax.Array,
-    normalized: jax.Array,
-    gate: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
-    """Reference for the aliased output-gate reverse kernel."""
-    direct_cotangent = output_cotangent * gate
-    gate_cotangent = output_cotangent * normalized
-    gate_accumulator_cotangent = gate_cotangent * (gate * (1 - gate))
-    return direct_cotangent, gate_accumulator_cotangent
 
 
 def exact_silu_backward_reference(
@@ -112,15 +100,49 @@ def exact_rms_backward_consumer(
     x: jax.Array,
     norm_weight: jax.Array,
     inverse_rms: jax.Array,
-    *,
-    manual_axis_type: ManualAxisType | None = None,
 ) -> jax.Array:
     """Apply the norm gain and reduced row scalar while emitting ``dx``."""
-    del manual_axis_type
     normalized_x = x.astype(jnp.float32) * inverse_rms[:, None]
     weighted_cotangent = unweighted_cotangent.astype(jnp.float32) * norm_weight
     row_mean = row_dot / x.shape[-1]
     return ((weighted_cotangent - normalized_x * row_mean[:, None]) * inverse_rms[:, None]).astype(x.dtype)
+
+
+def exact_rms_backward_partials_reference(
+    gate_preactivation_cotangent: jax.Array,
+    w_down: jax.Array,
+    output_cotangent: jax.Array,
+    gate: jax.Array,
+    x: jax.Array,
+    norm_weight: jax.Array,
+    inverse_rms: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Reference for row-dot and norm-gain partials without a full-width output."""
+    direct_cotangent = output_cotangent * gate
+    unweighted_cotangent, row_dot_partial = exact_rms_backward_producer_reference(
+        gate_preactivation_cotangent, w_down, direct_cotangent, x, norm_weight, inverse_rms
+    )
+    normalized_x = x.astype(jnp.float32) * inverse_rms[:, None]
+    norm_weight_partial = jnp.sum(unweighted_cotangent.astype(jnp.float32) * normalized_x, axis=0, keepdims=True)
+    return row_dot_partial, norm_weight_partial
+
+
+def exact_rms_backward_recompute_consumer_reference(
+    gate_preactivation_cotangent: jax.Array,
+    w_down: jax.Array,
+    output_cotangent: jax.Array,
+    gate: jax.Array,
+    row_dot: jax.Array,
+    x: jax.Array,
+    norm_weight: jax.Array,
+    inverse_rms: jax.Array,
+) -> jax.Array:
+    """Reference for the recomputing consumer that emits final ``dx`` directly."""
+    direct_cotangent = output_cotangent * gate
+    unweighted_cotangent, _ = exact_rms_backward_producer_reference(
+        gate_preactivation_cotangent, w_down, direct_cotangent, x, norm_weight, inverse_rms
+    )
+    return exact_rms_backward_consumer(unweighted_cotangent, row_dot, x, norm_weight, inverse_rms)
 
 
 def rms_norm_with_inverse(x: jax.Array, weight: jax.Array, eps: float) -> tuple[jax.Array, jax.Array]:
@@ -172,12 +194,10 @@ def _backward_kernels():
     from levanter.grug._moe.quack_rms_cute import (  # noqa: PLC0415
         quack_coda_rms_backward_consumer,
         quack_coda_rms_backward_producer,
-        quack_gated_norm_up_reverse,
         quack_silu_backward_gemm,
     )
 
     return (
-        quack_gated_norm_up_reverse,
         quack_silu_backward_gemm,
         quack_coda_rms_backward_producer,
         quack_coda_rms_backward_consumer,
@@ -196,36 +216,37 @@ def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
 
 
 def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
-    gated_norm_up_reverse, silu_backward, rms_backward_producer, rms_backward_consumer = _backward_kernels()
+    silu_backward, rms_backward_producer, rms_backward_consumer = _backward_kernels()
 
     del eps
     x = residuals.x
     x_flat = x.reshape((-1, x.shape[-1]))
     output_cotangent = output_cotangent.reshape(residuals.normalized.shape)
-    direct_cotangent, gate_accumulator = gated_norm_up_reverse(output_cotangent, residuals.normalized, residuals.gate)
+    gate_cotangent = output_cotangent * residuals.normalized
+    gate_accumulator = gate_cotangent * (residuals.gate * (1 - residuals.gate))
     w_up_cotangent = jnp.einsum("tr,td->rd", residuals.gate_hidden, gate_accumulator)
     gate_preactivation_cotangent, _ = silu_backward(gate_accumulator, residuals.w_up, residuals.gate_preactivation)
     w_down_cotangent = jnp.einsum("td,tr->dr", residuals.normalized, gate_preactivation_cotangent)
-    unweighted_cotangent, row_dot_partial = rms_backward_producer(
+    row_dot_partial, norm_weight_partial = rms_backward_producer(
         gate_preactivation_cotangent,
         residuals.w_down,
-        direct_cotangent,
+        output_cotangent,
+        residuals.gate,
         x_flat,
         residuals.norm_weight,
         residuals.inverse_rms,
     )
-    normalized_x = x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None]
     row_dot = jnp.sum(row_dot_partial, axis=-1)
-    norm_weight_cotangent = jnp.sum(unweighted_cotangent.astype(jnp.float32) * normalized_x, axis=0).astype(
-        residuals.norm_weight.dtype
-    )
+    norm_weight_cotangent = jnp.sum(norm_weight_partial, axis=0).astype(residuals.norm_weight.dtype)
     x_cotangent = rms_backward_consumer(
-        unweighted_cotangent,
+        gate_preactivation_cotangent,
+        residuals.w_down,
+        output_cotangent,
+        residuals.gate,
         row_dot,
         x_flat,
         residuals.norm_weight,
         residuals.inverse_rms,
-        manual_axis_type=ManualAxisType(varying=frozenset(batch_axes)),
     ).reshape(x.shape)
     # The parameters enter replicated, so their cotangents must be reduced over the axes the
     # tokens are sharded across. shard_map defaults to check_vma=True, which suppresses the

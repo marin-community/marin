@@ -7,9 +7,8 @@ import jax
 import jax.numpy as jnp
 import pytest
 from levanter.grug._moe.rms_gated_norm import (
-    exact_gated_norm_up_reverse_kernel,
-    exact_rms_backward_consumer,
-    exact_rms_backward_producer_reference,
+    exact_rms_backward_partials_reference,
+    exact_rms_backward_recompute_consumer_reference,
     exact_silu_backward_reference,
 )
 
@@ -42,48 +41,46 @@ def _assert_close(actual, expected, *, tolerance, label):
 
 
 def _producer_inputs():
-    keys = jax.random.split(jax.random.key(23), 4)
+    keys = jax.random.split(jax.random.key(23), 5)
     gate_preactivation_cotangent = jax.random.normal(keys[0], (_ROWS, _RANK), dtype=jnp.bfloat16)
     w_down = (0.1 * jax.random.normal(keys[1], (_HIDDEN_DIM, _RANK), dtype=jnp.float32)).astype(jnp.bfloat16)
-    direct_cotangent = jax.random.normal(keys[2], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
-    x = jax.random.normal(keys[3], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
+    output_cotangent = jax.random.normal(keys[2], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
+    gate = jax.nn.sigmoid(jax.random.normal(keys[3], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16))
+    x = jax.random.normal(keys[4], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
     norm_weight = jnp.ones((_HIDDEN_DIM,), dtype=jnp.bfloat16)
     inverse_rms = jax.lax.rsqrt(jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1) + _NORM_EPS)
-    return gate_preactivation_cotangent, w_down, direct_cotangent, x, norm_weight, inverse_rms
+    return gate_preactivation_cotangent, w_down, output_cotangent, gate, x, norm_weight, inverse_rms
 
 
 def test_backward_producer_matches_reference():
     _require_gpu()
 
     args = _producer_inputs()
-    _, w_down, _, x, norm_weight, inverse_rms = args
-    unweighted_cotangent, row_dot_partial = quack_rms_cute.quack_coda_rms_backward_producer(*args)
-    expected_unweighted, _ = exact_rms_backward_producer_reference(*args)
-
-    _assert_close(unweighted_cotangent, expected_unweighted, tolerance=_BF16_TOLERANCE, label="unweighted cotangent")
-
-    # Check the row reduction against the kernel's *own* unweighted cotangent so a GEMM rounding
-    # difference doesn't leak into the comparison. Feeding it as the direct term with a zero rank
-    # cotangent makes the reference's unweighted value identical by construction, leaving only the
-    # float32 reduction order (per-tile partials plus a host sum) to differ.
-    _, expected_row_dot_partial = exact_rms_backward_producer_reference(
-        jnp.zeros_like(args[0]), w_down, unweighted_cotangent, x, norm_weight, inverse_rms
-    )
+    row_dot_partial, norm_weight_partial = quack_rms_cute.quack_coda_rms_backward_producer(*args)
+    expected_row_dot_partial, expected_norm_weight_partial = exact_rms_backward_partials_reference(*args)
     _assert_close(
         jnp.sum(row_dot_partial, axis=-1),
         jnp.sum(expected_row_dot_partial, axis=-1),
         tolerance=_FLOAT32_TOLERANCE,
         label="row dot",
     )
+    _assert_close(
+        jnp.sum(norm_weight_partial, axis=0),
+        jnp.sum(expected_norm_weight_partial, axis=0),
+        tolerance=_FLOAT32_TOLERANCE,
+        label="norm weight",
+    )
 
 
 def test_backward_producer_row_partials_have_one_column_per_tile():
     _require_gpu()
 
-    _, row_dot_partial = quack_rms_cute.quack_coda_rms_backward_producer(*_producer_inputs())
+    row_dot_partial, norm_weight_partial = quack_rms_cute.quack_coda_rms_backward_producer(*_producer_inputs())
 
+    tile_m = quack_rms_cute._DEFAULT_BACKWARD_TILE_MN[0]
     tile_n = quack_rms_cute._DEFAULT_BACKWARD_TILE_MN[1]
     assert row_dot_partial.shape == (_ROWS, (_HIDDEN_DIM + tile_n - 1) // tile_n)
+    assert norm_weight_partial.shape == ((_ROWS + tile_m - 1) // tile_m, _HIDDEN_DIM)
     assert row_dot_partial.dtype == jnp.float32
 
 
@@ -91,36 +88,12 @@ def test_backward_consumer_matches_reference():
     _require_gpu()
 
     args = _producer_inputs()
-    _, _, _, x, norm_weight, inverse_rms = args
-    unweighted_cotangent, row_dot_partial = quack_rms_cute.quack_coda_rms_backward_producer(*args)
+    row_dot_partial, _ = quack_rms_cute.quack_coda_rms_backward_producer(*args)
     row_dot = jnp.sum(row_dot_partial, axis=-1)
-    expected = exact_rms_backward_consumer(unweighted_cotangent, row_dot, x, norm_weight, inverse_rms)
-    actual = quack_rms_cute.quack_coda_rms_backward_consumer(
-        unweighted_cotangent, row_dot, x, norm_weight, inverse_rms
-    )
+    expected = exact_rms_backward_recompute_consumer_reference(*args[:4], row_dot, *args[4:])
+    actual = quack_rms_cute.quack_coda_rms_backward_consumer(*args[:4], row_dot, *args[4:])
 
     _assert_close(actual, expected, tolerance=_BF16_TOLERANCE, label="input cotangent")
-
-
-def test_gated_norm_up_reverse_matches_reference():
-    _require_gpu()
-
-    keys = jax.random.split(jax.random.key(31), 3)
-    output_cotangent = jax.random.normal(keys[0], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
-    normalized = jax.random.normal(keys[1], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
-    gate = jax.nn.sigmoid(jax.random.normal(keys[2], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16))
-    expected_direct, expected_gate_accumulator = exact_gated_norm_up_reverse_kernel(output_cotangent, normalized, gate)
-    actual_direct, actual_gate_accumulator = quack_rms_cute.quack_gated_norm_up_reverse(
-        output_cotangent, normalized, gate
-    )
-
-    _assert_close(actual_direct, expected_direct, tolerance=_BF16_TOLERANCE, label="direct cotangent")
-    _assert_close(
-        actual_gate_accumulator,
-        expected_gate_accumulator,
-        tolerance=_BF16_TOLERANCE,
-        label="gate accumulator",
-    )
 
 
 def test_backward_producer_rejects_non_float32_inverse_rms():
