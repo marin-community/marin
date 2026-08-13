@@ -326,13 +326,13 @@ def _iter_surviving_docs(
             f"(decon={n_decon}, cluster={n_cluster}, quality={n_quality}) -- co-partitioning broken"
         )
     # Equal row counts don't imply equal ID order. Verify the dense tables align
-    # before routing positionally, then drop their ID arrays; the loop only needs
-    # tokenization IDs for the dedup lookup.
+    # before routing positionally, and retain one ID sequence to check tokenize.
     where = f"{spec['source_name']}/{spec['basename']}"
     if not pc.all(pc.equal(decon_ids, cluster_ids)).as_py():
         raise RuntimeError(f"{where}: decon/cluster id mismatch -- co-partitioning broken")
     if not pc.all(pc.equal(decon_ids, quality_ids)).as_py():
         raise RuntimeError(f"{where}: decon/quality id mismatch -- co-partitioning broken")
+    expected_ids = decon_ids.to_pylist()
     del decon_ids, cluster_ids, quality_ids
     exact_duplicates = _load_exact_duplicates(spec["exact_dedup"])
     verified_duplicates = _load_verified_duplicates(spec["dedup"])
@@ -351,6 +351,11 @@ def _iter_surviving_docs(
                 )
             n_in += 1
             position, doc_idx = doc_idx, doc_idx + 1
+            if doc_id != expected_ids[position]:
+                raise RuntimeError(
+                    f"{where}: tokenize/decon id mismatch at document {position}: "
+                    f"{doc_id!r} != {expected_ids[position]!r} -- co-partitioning broken"
+                )
             if contaminated[position]:
                 n_contaminated += 1
                 continue

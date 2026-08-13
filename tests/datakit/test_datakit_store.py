@@ -467,6 +467,29 @@ def test_store_rejects_dedup_source_set_mismatch(tmp_path, monkeypatch, label):
         )
 
 
+def test_store_rejects_reordered_tokenize_documents(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
+    tokenized_path = tmp_path / "tokenize" / SPLIT / "part-00000-of-00002.parquet"
+    table = pq.read_table(tokenized_path)
+    ids = table.column("id").to_pylist()
+    ids[0] = "wrong-id"
+    _write_parquet(str(tokenized_path), table.set_column(0, "id", pa.array(ids)))
+
+    with pytest.raises(RuntimeError, match="tokenize/decon id mismatch"):
+        build_clustered_store(
+            tokenize=tokenize,
+            decontam=decontam,
+            cluster_assign=cluster_assign,
+            quality=quality,
+            exact_dedup=exact_dedup,
+            dedup=dedup,
+            output_path=str(tmp_path / "store"),
+            cluster_view=CLUSTER_VIEW,
+            split=SPLIT,
+        )
+
+
 def test_tokenized_documents_regroup_chunks_and_reject_an_orphan(tmp_path):
     """Chunked rows rejoin into one document, and a chunk without its chunk 0 is an error.
 
