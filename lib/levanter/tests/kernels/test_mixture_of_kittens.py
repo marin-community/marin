@@ -24,7 +24,7 @@ from levanter.kernels.mixture_of_kittens import (
     validate_mok_like_expert_groups,
     validate_mok_like_inputs,
 )
-from levanter.kernels.mixture_of_kittens import availability, build as mok_build, runtime
+from levanter.kernels.mixture_of_kittens import availability, build as mok_build, runtime, source as mok_source
 from levanter.kernels.mixture_of_kittens.api import _failure_agreement_axes, _failure_outputs
 from levanter.kernels.mixture_of_kittens.collective_memory_probe import (
     collective_memory_ring_u32,
@@ -410,6 +410,33 @@ def test_preflight_is_read_only_for_a_missing_explicit_source(tmp_path: Path) ->
     assert any("does not exist" in error for error in status.errors)
     assert not source_root.exists()
     assert not (tmp_path / "cache").exists()
+
+
+def test_clone_source_publishes_only_a_complete_checkout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    root = tmp_path / "source"
+    clone_root: Path | None = None
+
+    def fake_run(command: list[str], *, check: bool, **_kwargs) -> SimpleNamespace:
+        nonlocal clone_root
+        assert check
+        if command[1] == "clone":
+            clone_root = Path(command[-1])
+            assert clone_root != root
+            clone_root.mkdir()
+            assert not root.exists()
+        else:
+            assert clone_root is not None
+            assert str(clone_root) in command
+            assert not root.exists()
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(mok_source.shutil, "which", lambda _name: "/usr/bin/git")
+    monkeypatch.setattr(mok_source.subprocess, "run", fake_run)
+
+    mok_source._clone_source(root)
+
+    assert root.is_dir()
+    assert clone_root is not None and not clone_root.exists()
 
 
 def test_preflight_rejects_non_cuda_13_build_packages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

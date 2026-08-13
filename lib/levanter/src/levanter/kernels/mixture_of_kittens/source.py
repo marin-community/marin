@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import uuid
+import fcntl
+import os
 from dataclasses import dataclass
 from pathlib import Path
-
 
 MOK_KNOWN_GOOD_COMMIT = "6438bf48f88094d305972fbe0fa6deba0f7d4d1a"
 MOK_REPOSITORY = "https://github.com/cursor/mixture-of-kittens.git"
@@ -101,25 +103,30 @@ def _clone_source(root: Path) -> None:
     if shutil.which("git") is None:
         raise RuntimeError("git is required to get the pinned Mixture-of-Kittens source")
     root.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["git", "clone", "--filter=blob:none", "--no-checkout", MOK_REPOSITORY, str(root)],
-        check=True,
-    )
-    subprocess.run(["git", "-C", str(root), "checkout", "--detach", MOK_KNOWN_GOOD_COMMIT], check=True)
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(root),
-            "submodule",
-            "update",
-            "--init",
-            "--depth",
-            "1",
-            "third_party/ThunderKittens",
-        ],
-        check=True,
-    )
+    temporary_root = root.with_name(f".{root.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        subprocess.run(
+            ["git", "clone", "--filter=blob:none", "--no-checkout", MOK_REPOSITORY, str(temporary_root)],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(temporary_root), "checkout", "--detach", MOK_KNOWN_GOOD_COMMIT], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(temporary_root),
+                "submodule",
+                "update",
+                "--init",
+                "--depth",
+                "1",
+                "third_party/ThunderKittens",
+            ],
+            check=True,
+        )
+        os.replace(temporary_root, root)
+    finally:
+        shutil.rmtree(temporary_root, ignore_errors=True)
 
 
 def mok_source_root(config: MokLikeBuildConfig) -> Path:
@@ -131,7 +138,12 @@ def mok_source_root(config: MokLikeBuildConfig) -> Path:
             raise RuntimeError(
                 f"MoK-like source does not exist at {root}; provide it or set clone_if_missing=True explicitly"
             )
-        _clone_source(root)
+        root.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = root.with_name(f".{root.name}.materialize.lock")
+        with lock_path.open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not root.exists():
+                _clone_source(root)
 
     missing = missing_source_files(root)
     if missing:
