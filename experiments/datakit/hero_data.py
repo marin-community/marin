@@ -82,8 +82,13 @@ def _refuse_to_run(output_path: str) -> NoReturn:
 
 
 def _frozen_step(name: str, path: str) -> StepSpec:
-    """A step pinned to a relative ``path`` that raises if a runner executes it."""
-    return StepSpec(name=name, override_output_path=path, fn=_refuse_to_run)
+    """A step pinned to a relative ``path`` that raises if a runner executes it.
+
+    ``hash_id`` ignores ``override_output_path``, and a dependent's cache key is
+    built from its deps' ``name_with_hash``. Carrying the pin in ``hash_attrs``
+    is what makes repointing one of these invalidate the steps that consumed it.
+    """
+    return StepSpec(name=name, override_output_path=path, hash_attrs={"path": path}, fn=_refuse_to_run)
 
 
 def _read_only(step: StepSpec) -> StepSpec:
