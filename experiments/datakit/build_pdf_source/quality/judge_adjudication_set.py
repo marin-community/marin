@@ -299,17 +299,28 @@ def _wilson(successes: int, total: int) -> tuple[float, float]:
 
 
 def tally_by(entries: dict, verdicts: dict[str, dict], key: str) -> dict[str, dict]:
-    """Verdicts grouped by one field of the key entry."""
+    """Verdicts grouped by one field of the key entry.
+
+    Each group reports its domain count beside its document count. Near-duplicates cluster by
+    publisher, so domains are the independent unit: RTL's 55 documents come from ~30 domains, and a
+    confidence interval computed on 55 would overstate what the stratum can support. The interval on
+    the document count is reported as the optimistic bound and the domain count sits next to it as
+    the number to believe.
+    """
     grouped: dict[str, Tally] = defaultdict(Tally)
+    domains: dict[str, set[str]] = defaultdict(set)
     for packet_id, result in verdicts.items():
         entry = entries[packet_id]
         verdict = result["verdict"]
-        grouped[str(entry[key])].add(unblind(entry, verdict), verdict["margin"] in DECISIVE_MARGINS)
+        name = str(entry[key])
+        grouped[name].add(unblind(entry, verdict), verdict["margin"] in DECISIVE_MARGINS)
+        domains[name].add(entry.get("domain", ""))
     output = {}
     for name, tally in sorted(grouped.items()):
         summary = tally.summary()
         low, high = _wilson(tally.inspector_over_docling, tally.pairs)
         summary["inspector_over_docling_ci95"] = [low, high]
+        summary["domains"] = len(domains[name])
         output[name] = summary
     return output
 
