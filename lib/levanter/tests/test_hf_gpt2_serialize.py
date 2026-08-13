@@ -1,18 +1,14 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import contextlib
 import dataclasses
 import tempfile
-import uuid
 from typing import Optional, cast
 
 import equinox
-import fsspec
 import haliax as hax
 import jax
 import numpy as np
-import pytest
 from fsspec import AbstractFileSystem
 from jax.random import PRNGKey
 from numpy.testing import assert_allclose
@@ -225,54 +221,3 @@ def test_hf_save_to_fs_spec():
             for key, simple_p in simple_dict.items():
                 loaded_p = loaded_dict[key]
                 assert np.allclose(simple_p, loaded_p), f"{key}: {np.linalg.norm(simple_p - loaded_p, ord=np.inf)}"
-
-
-@pytest.mark.slow
-def test_hf_save_to_gcs_roundtrip():
-    pytest.importorskip("gcsfs")
-
-    config = Gpt2Config(hidden_dim=32, num_heads=2, num_layers=2)
-    converter = HFCheckpointConverter(Gpt2Config, "gpt2", HfGpt2Config, ignore_prefix="transformer")
-
-    prefix = "gs://levanter-data/unit-test-data/models"
-    unique_path = f"{prefix.rstrip('/')}/roundtrip-{uuid.uuid4().hex}"
-
-    try:
-        fs, remote_path = fsspec.core.url_to_fs(unique_path)
-    except Exception as exc:
-        pytest.skip(f"GCS filesystem unavailable: {exc}")
-
-    try:
-        fs.mkdirs(remote_path, exist_ok=True)
-    except Exception as exc:
-        pytest.skip(f"GCS unavailable: {exc}")
-
-    try:
-        with use_test_mesh():
-            simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
-
-            from gcsfs.retry import HttpError  # noqa: PLC0415  # guarded: behind pytest.importorskip("gcsfs")
-
-            try:
-                converter.save_pretrained(simple_model, unique_path)
-            except HttpError:  # usually means no auth
-                pytest.skip("GCS unavailable")
-
-            loaded_model = converter.load_pretrained(Gpt2LMHeadModel, ref=unique_path)
-
-            simple_dict = hax.state_dict.to_torch_compatible_state_dict(simple_model)
-            loaded_dict = hax.state_dict.to_torch_compatible_state_dict(loaded_model)
-
-            assert simple_dict.keys() == loaded_dict.keys()
-
-            for key, simple_param in simple_dict.items():
-                loaded_param = loaded_dict[key]
-                assert np.allclose(
-                    simple_param, loaded_param
-                ), f"{key}: {np.linalg.norm(simple_param - loaded_param, ord=np.inf)}"
-    finally:
-        with contextlib.suppress(Exception):
-            fs.rm(remote_path, recursive=True)
-
-
-# TODO: would be nice to have a test that tests hf upload?

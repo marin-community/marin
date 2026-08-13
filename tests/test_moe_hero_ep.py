@@ -165,6 +165,34 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
 
 
+def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
+    # Per-GPU processes cannot profile: the per-process CUPTI sessions collide with
+    # each other and with the cluster's DCGM, and auto-PGLE's recompile path has
+    # wedged per-node gangs (#7344). Per-GPU runs therefore default PGLE off, while
+    # an explicit env setting still wins.
+    for name in train.HERO_EP_RUNTIME_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = SimpleNamespace(
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
+            watch_mode=train.WatchMode.INLINE,
+        ),
+        resources=object(),
+        processes_per_task=4,
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert os.environ["JAX_ENABLE_PGLE"] == "false"
+
+    monkeypatch.setenv("JAX_ENABLE_PGLE", "true")
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+    assert os.environ["JAX_ENABLE_PGLE"] == "true"
+
+
 def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
     monkeypatch.setenv("JAX_ENABLE_PGLE", "false")
     monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
