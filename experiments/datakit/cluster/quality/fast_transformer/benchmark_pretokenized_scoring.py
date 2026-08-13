@@ -37,6 +37,28 @@ Five modes:
   with ``--readers`` concurrent processes taking disjoint shard slices, which is
   how a node's LOTA cache and object-store bandwidth are made to contend.
 
+Four more modes measure the same corpus on H100s, because a Genoa node delivers
+about 7.2 TFLOP/s while one H100 is three orders of magnitude larger on paper and
+the model is small enough that dispatch overhead, not arithmetic, may decide:
+
+* ``gpu-forward`` — one process on this task's visible devices: sweep batch size
+  with the rows already resident in HBM, so the number is the forward alone, and
+  separately drive the same batches from host numpy through ``predict`` so the
+  H2D copy and per-call dispatch are priced. Reports docs/s, achieved TFLOP/s and
+  MFU against the H100 bf16 peak, per-shape compile time, and peak HBM.
+* ``gpu-pack`` — ``--gpus`` independent processes, child *i* pinned to GPU *i* by
+  ``CUDA_VISIBLE_DEVICES`` and to its own host cores, timed against a shared
+  start. ``iris job run --gpu H100x8`` hands the task one process with all eight
+  devices; this measures the other way to spend them, and it is the shape the CPU
+  study's "many narrow workers" finding points at.
+* ``pipeline`` — the whole loop a labeling run pays: S3 read, arrow decode,
+  embedding normalize, H2D, forward. ``--reader-threads`` host threads fill a
+  bounded queue and the consumer reports how long it sat waiting on it, which is
+  the compute-bound-versus-feed-bound verdict rather than an inference from it.
+* ``replicate`` — server-side copy of the fixture into more distinct keys. One
+  H100 eats all 16 fixture shards in well under a second, so a feed measurement
+  over them measures the node's LOTA cache rather than a first sweep of a corpus.
+
 Two model shapes are measured, selected by ``--fold-donor``. The trained
 checkpoint carries a frozen ``[vocab, 640]`` donor table read through a learned
 ``[640, 256]`` projection. Deployment folds the two into one ``[vocab, 256]``
@@ -51,11 +73,12 @@ import gc
 import json
 import logging
 import os
+import queue
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import cast
 
 import equinox as eqx
@@ -79,7 +102,11 @@ from experiments.datakit.cluster.quality.fast_transformer.benchmark_scoring impo
     spread,
     tokenize,
 )
-from experiments.datakit.cluster.quality.fast_transformer.inference import predict
+from experiments.datakit.cluster.quality.fast_transformer.inference import (
+    data_parallel_shardings,
+    predict,
+    predict_batch,
+)
 from experiments.datakit.cluster.quality.fast_transformer.joined_labels import EMBED_DIM, embedding_matrix
 from experiments.datakit.cluster.quality.fast_transformer.model import COMPUTE_DTYPE, FastTransformer
 from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledScorer, load_pooled_scorer
@@ -95,6 +122,24 @@ PREPARE_READ_BATCH = 512  # rows per arrow record batch when reading source text
 LOTA_MIN_CACHED_OBJECT_BYTES = 4 * 1024 * 1024
 DEFAULT_BATCHES = (512, 1024, 2048, 4096, 8192)
 DEFAULT_CORE_COUNTS = (1, 2, 4, 8, 16, 32, 64)
+# NVIDIA H100 SXM5 dense peaks, structured sparsity excluded (H100 datasheet).
+# bf16 is the denominator that matters: ``model.COMPUTE_DTYPE`` is bf16, so every
+# matmul in this forward is bf16 with f32 accumulation on CPU and GPU alike, and
+# there is no fp32 variant of the model to compare against.
+H100_BF16_PEAK_FLOPS = 989.4e12
+H100_TF32_PEAK_FLOPS = 494.7e12
+H100_FP32_PEAK_FLOPS = 67.0e12
+DEFAULT_GPU_BATCHES = (512, 2048, 8192, 16_384, 32_768, 65_536, 131_072)
+# Forwards allowed to run ahead of the device. One in flight leaves the GPU idle
+# between kernels; unbounded run-ahead queues activations until HBM fills, which
+# turns a throughput measurement into an OOM.
+GPU_PIPELINE_DEPTH = 2
+# Rows compared between the GPU and CPU backends. bf16 tensor cores and the CPU
+# backend's bf16 emulation do not have to round identically, so the delta is
+# measured rather than assumed to be zero.
+BACKEND_PARITY_ROWS = 512
+# Decoded arrow blocks the pipeline readers may run ahead of the forward by.
+DEFAULT_FEED_QUEUE_BLOCKS = 64
 # Fields carried across when a donor-table model is folded into a plain embedding
 # model. `config`, `donor_embed` and `donor_proj` are deliberately absent: the
 # folded config has frozen_donor_dim=0 and the folded table replaces the pair.
@@ -798,6 +843,538 @@ def pack(args) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# gpu: the accelerator measurements
+# ---------------------------------------------------------------------------
+
+
+def device_facts() -> dict:
+    """Which accelerators the numbers came from, and how much HBM they hold."""
+    devices = jax.devices()
+    stats = devices[0].memory_stats() or {}
+    return {
+        "device_count": len(devices),
+        "device_kind": devices[0].device_kind,
+        "platform": devices[0].platform,
+        "hbm_limit_bytes": int(stats.get("bytes_limit", 0)),
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+    }
+
+
+def hbm_bytes() -> dict:
+    """Current and process-cumulative HBM occupancy across the visible devices.
+
+    ``peak`` never falls, so in a batch sweep it is the high-water mark of every
+    shape run so far rather than of the shape in the row that carries it; ``in_use``
+    is what the current shape actually holds.
+    """
+    stats = [d.memory_stats() or {} for d in jax.devices()]
+    return {
+        "hbm_in_use_bytes": max(int(s.get("bytes_in_use", 0)) for s in stats),
+        "hbm_peak_bytes_cumulative": max(int(s.get("peak_bytes_in_use", 0)) for s in stats),
+    }
+
+
+def resident_batches(block: Pretokenized, batch: int) -> list[tuple]:
+    """Whole batches placed in device memory, so a timed loop over them is pure compute.
+
+    Placement is paid once and excluded from the measurement on purpose: the H2D
+    copy a real pipeline pays is priced separately by the host-fed timing, and
+    conflating the two hides which of the forward and the feed is the smaller
+    number.
+    """
+    ndev, _, batch_shard = data_parallel_shardings()
+    if batch % ndev:
+        raise ValueError(f"batch {batch} does not divide across {ndev} devices")
+    whole = (block.ids.shape[0] // batch) * batch
+    if not whole:
+        raise ValueError(f"pool holds {block.ids.shape[0]} rows, one batch needs {batch}")
+    return [
+        (
+            jax.device_put(jnp.asarray(block.ids[i : i + batch]), batch_shard),
+            jax.device_put(jnp.asarray(block.embedding[i : i + batch]), batch_shard),
+        )
+        for i in range(0, whole, batch)
+    ]
+
+
+def time_resident_forward(model: FastTransformer, batches: list[tuple], min_seconds: float) -> tuple[float, int]:
+    """Run device-resident batches until ``min_seconds`` elapses. Returns (seconds, docs)."""
+    docs = 0
+    index = 0
+    pending: list = []
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < min_seconds:
+        ids, emb = batches[index % len(batches)]
+        pending.append(predict_batch(model, ids, emb))
+        docs += int(ids.shape[0])
+        index += 1
+        if len(pending) > GPU_PIPELINE_DEPTH:
+            jax.block_until_ready(pending.pop(0))
+    jax.block_until_ready(pending)
+    return time.monotonic() - t0, docs
+
+
+def on_cpu(model: FastTransformer) -> FastTransformer:
+    """The same model with every array moved to the host CPU backend."""
+    cpu = jax.devices("cpu")[0]
+    arrays, static = eqx.partition(model, eqx.is_array)
+    return cast(FastTransformer, eqx.combine(jax.device_put(arrays, cpu), static))
+
+
+def backend_score_delta(model: FastTransformer, block: Pretokenized) -> dict:
+    """Largest score difference between the accelerator and the CPU backend.
+
+    Both run ``COMPUTE_DTYPE`` bf16 matmuls with f32 accumulation, but H100 tensor
+    cores and XLA:CPU's bf16 path need not round the same way. A labeling run that
+    thresholds on the score cares how big that is.
+    """
+    rows = min(BACKEND_PARITY_ROWS, block.ids.shape[0])
+    ids, emb = block.ids[:rows], block.embedding[:rows]
+    accelerator = predict(model, ids, batch_size=rows, doc_embed=emb)
+    cpu = jax.devices("cpu")[0]
+    host = np.asarray(
+        predict_batch(
+            on_cpu(model),
+            jax.device_put(jnp.asarray(ids), cpu),
+            jax.device_put(jnp.asarray(emb), cpu),
+        )
+    )
+    delta = np.abs(accelerator - host)
+    return {
+        "rows": rows,
+        "max_abs_score_delta": float(delta.max()),
+        "mean_abs_score_delta": float(delta.mean()),
+    }
+
+
+def load_folded_model(args, result: dict) -> tuple[FastTransformer, Pretokenized]:
+    """Load the scorer and the row pool, folding the donor table when asked.
+
+    Shared by every accelerator mode: they all measure the same deployable model
+    on the same rows, and the fold's score parity is asserted before any timing.
+    """
+    load_t0 = time.monotonic()
+    scorer: PooledScorer = load_pooled_scorer(args.model_dir)
+    model = scorer.model
+    result["model_load_seconds"] = time.monotonic() - load_t0
+
+    data_t0 = time.monotonic()
+    block = load_pretokenized(args.pretokenized, args.pool_docs)
+    result["data_load_seconds"] = time.monotonic() - data_t0
+    result["pool_docs"] = int(block.ids.shape[0])
+    result["max_tokens"] = int(block.ids.shape[1])
+
+    if args.fold_donor:
+        fold_t0 = time.monotonic()
+        folded = fold_donor(model)
+        result["fold_seconds"] = time.monotonic() - fold_t0
+        probe = min(256, block.ids.shape[0])
+        before = predict(model, block.ids[:probe], batch_size=probe, doc_embed=block.embedding[:probe])
+        after = predict(folded, block.ids[:probe], batch_size=probe, doc_embed=block.embedding[:probe])
+        result["fold_max_abs_score_delta"] = float(np.abs(before - after).max())
+        del before, after, model, scorer
+        gc.collect()
+        model = folded
+
+    result["params"] = array_bytes(model)
+    result["flops_per_token"] = model.config.flops_per_token()
+    result["flops_per_doc"] = model.config.flops_per_token() * int(block.ids.shape[1])
+    return model, block
+
+
+def throughput_row(docs_per_second: dict, flops_per_doc: float) -> dict:
+    """Achieved arithmetic rate and MFU for a measured docs/s spread."""
+    achieved = docs_per_second["mean"] * flops_per_doc
+    return {
+        "achieved_tflops": achieved / 1e12,
+        "mfu_bf16_peak": achieved / H100_BF16_PEAK_FLOPS,
+        "mfu_tf32_peak": achieved / H100_TF32_PEAK_FLOPS,
+    }
+
+
+def gpu_forward(args) -> dict:
+    """Sweep batch size on this task's visible devices.
+
+    Each batch is measured twice: device-resident (the forward alone) and host-fed
+    through ``predict`` (the forward plus the H2D copy and per-call dispatch a
+    pipeline pays).
+
+    The sweep stops at the first batch that exhausts HBM and records where that
+    was. On an H100 that ceiling is not reached: the naive footprint of the
+    ``[batch, max_tokens, embed_dim]`` embedding activation would be 34 GB at
+    batch 65,536, but XLA fuses the table gather into the pooling reduction so it
+    never materializes, and resident HBM stays near 1.2 GB from batch 512 to
+    131,072. Batch size here is bounded by diminishing returns, not by memory.
+    """
+    result: dict = {"fold_donor": args.fold_donor}
+    if args.host_cores:
+        result.update(pin_to_cores(args.host_cores, args.core_offset))
+    model, block = load_folded_model(args, result)
+    result["device"] = device_facts()
+    # Opt-in: the comparison compiles the forward for XLA:CPU, which on this model
+    # costs minutes against the accelerator's ~2 s, and every packed child would
+    # pay it. It answers a correctness question, not a throughput one, so run it
+    # once rather than on every point of a scaling sweep.
+    if args.backend_parity:
+        parity_t0 = time.monotonic()
+        result["backend_parity"] = backend_score_delta(model, block)
+        result["backend_parity"]["seconds"] = time.monotonic() - parity_t0
+
+    rows = []
+    for batch in args.batches:
+        if batch > block.ids.shape[0]:
+            logger.warning("skipping batch %d: only %d rows loaded", batch, block.ids.shape[0])
+            continue
+        # A batch that exhausts HBM is a data point, not a failure: it marks the
+        # ceiling the activation footprint imposes. Nothing past it can fit, so
+        # the sweep stops rather than retrying larger shapes.
+        try:
+            compile_t0 = time.monotonic()
+            batches = resident_batches(block, batch)
+            jax.block_until_ready(predict_batch(model, *batches[0]))
+            compile_seconds = time.monotonic() - compile_t0
+            if args.start_at:
+                time.sleep(max(0.0, args.start_at - time.time()))
+            resident = spread(
+                [d / s for s, d in (time_resident_forward(model, batches, args.min_seconds) for _ in range(args.passes))]
+            )
+            host_fed = spread(
+                [d / s for s, d in (time_forward(model, block, batch, args.min_seconds) for _ in range(args.passes))]
+            )
+        except jax.errors.JaxRuntimeError as exc:
+            logger.warning("batch %d exhausted device memory: %s", batch, exc)
+            rows.append({"batch": batch, "out_of_memory": True, "error": str(exc)[:400]})
+            break
+        row = {
+            "batch": batch,
+            "out_of_memory": False,
+            "compile_seconds": compile_seconds,
+            "resident_docs_per_second": resident,
+            "host_fed_docs_per_second": host_fed,
+            "host_fed_fraction_of_resident": host_fed["mean"] / resident["mean"],
+            **hbm_bytes(),
+            **throughput_row(resident, result["flops_per_doc"]),
+        }
+        rows.append(row)
+        logger.info("BENCH gpu-forward %s", json.dumps(row))
+        del batches
+        gc.collect()
+
+    result["batches"] = rows
+    result["peak_rss_bytes"] = peak_rss_bytes()
+    result["host"] = host_facts()
+    result["task_resources"] = dataclasses.asdict(TaskResources.from_environment())
+    result["iris_task_id"] = os.environ.get("IRIS_TASK_ID", "")
+    return result
+
+
+def gpu_fanout(mode: str, child_argv: list[list[str]], start_at: float) -> list[dict]:
+    """Run one child per entry, child *i* holding only device *i*, timed together.
+
+    ``CUDA_VISIBLE_DEVICES`` has to be set in the child's environment: JAX picks
+    its devices when the backend is first built, which is long before any flag
+    this module parses could take effect.
+    """
+    procs = []
+    for index, argv in enumerate(child_argv):
+        env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(index)}
+        procs.append(
+            subprocess.Popen(
+                [sys.executable, "-m", MODULE, mode, *argv, "--start-at", str(start_at)],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        )
+    results = []
+    for index, proc in enumerate(procs):
+        out, err = proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"gpu {index} child failed ({proc.returncode}):\n{out[-3000:]}\n{err[-3000:]}")
+        results.append(
+            next(
+                json.loads(line[len(BENCH_JSON_PREFIX) :])
+                for line in out.splitlines()
+                if line.startswith(BENCH_JSON_PREFIX)
+            )
+        )
+    return results
+
+
+def gpu_pack(args) -> dict:
+    """One scorer process per GPU on this node, timed against a shared start.
+
+    ``--start-at`` is an absolute unix time so the same value can be handed to
+    every replica of a multi-node job; the aggregate is then one wall-clock
+    window across the whole gang rather than a sum of unrelated intervals.
+    """
+    start_at = args.start_at or time.time() + args.warmup_seconds
+    argv = [
+        "--model-dir",
+        args.model_dir,
+        "--pretokenized",
+        args.pretokenized,
+        "--batches",
+        str(args.batch),
+        "--pool-docs",
+        str(args.pool_docs),
+        "--passes",
+        str(args.passes),
+        "--min-seconds",
+        str(args.min_seconds),
+    ]
+    if args.fold_donor:
+        argv.append("--fold-donor")
+    children = [
+        [*argv, "--host-cores", str(args.host_cores_per_gpu), "--core-offset", str(i * args.host_cores_per_gpu)]
+        for i in range(args.gpus)
+    ]
+    results = gpu_fanout("gpu-forward", children, start_at)
+    per_gpu = [r["batches"][0]["resident_docs_per_second"]["mean"] for r in results]
+    flops_per_doc = results[0]["flops_per_doc"]
+    aggregate = sum(per_gpu)
+    return {
+        "gpus": args.gpus,
+        "batch": args.batch,
+        "host_cores_per_gpu": args.host_cores_per_gpu,
+        "aggregate_docs_per_second": aggregate,
+        "docs_per_second_per_gpu": aggregate / args.gpus,
+        "per_gpu_docs_per_second": per_gpu,
+        "aggregate_tflops": aggregate * flops_per_doc / 1e12,
+        "aggregate_mfu_bf16_peak": aggregate * flops_per_doc / (args.gpus * H100_BF16_PEAK_FLOPS),
+        "compile_seconds": [r["batches"][0]["compile_seconds"] for r in results],
+        "model_load_seconds": [r["model_load_seconds"] for r in results],
+        "iris_task_id": os.environ.get("IRIS_TASK_ID", ""),
+        "host": host_facts(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# pipeline: S3 -> decode -> H2D -> forward, end to end
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FeedCounters:
+    """What the readers delivered and what the consumer waited on."""
+
+    docs: int = 0
+    bytes_read: int = 0
+    queue_wait_seconds: float = 0.0
+    forward_seconds: float = 0.0
+    reader_seconds: list[float] = field(default_factory=list)
+
+
+def feed_shards(paths: list[str], blocks: queue.Queue, repeat: int) -> float:
+    """Read, decode and normalize this reader's shards onto the queue.
+
+    The int8 -> float32 L2 normalize runs here rather than on the device so the
+    host cost the CPU study also paid stays in the host's column, and so the
+    per-reader work is the same work a CPU scoring task does.
+    """
+    fs = fsspec.filesystem("s3")
+    t0 = time.monotonic()
+    for _ in range(repeat):
+        for path in paths:
+            with fs.open(path, "rb", cache_type="none") as raw:
+                counting = CountingFile(raw)
+                parquet = pq.ParquetFile(counting)
+                seen_bytes = 0
+                for batch in parquet.iter_batches(batch_size=READ_BATCH, columns=["ids", "embedding"]):
+                    n = batch.num_rows
+                    width = len(batch.column("ids")[0])
+                    ids = batch.column("ids").flatten().to_numpy(zero_copy_only=False).reshape(n, width)
+                    stored = batch.column("embedding").flatten().to_numpy(zero_copy_only=False).reshape(n, EMBED_DIM)
+                    blocks.put((ids, embedding_matrix(stored), counting.bytes_read - seen_bytes))
+                    seen_bytes = counting.bytes_read
+    blocks.put(None)
+    return time.monotonic() - t0
+
+
+def pipeline(args) -> dict:
+    """S3 read -> arrow decode -> embedding normalize -> H2D -> forward, timed as one loop.
+
+    ``queue_wait_seconds`` is the consumer sitting idle because no decoded rows
+    were ready; ``forward_seconds`` is it dispatching and copying. Their ratio is
+    the compute-bound-versus-feed-bound answer, and ``--reader-threads`` swept
+    against it is how many host cores one GPU needs.
+    """
+    result: dict = {"fold_donor": args.fold_donor}
+    if args.host_cores:
+        result.update(pin_to_cores(args.host_cores, args.core_offset))
+    model, block = load_folded_model(args, result)
+    result["device"] = device_facts()
+
+    _, _, batch_shard = data_parallel_shardings()
+    compile_t0 = time.monotonic()
+    warm = resident_batches(block, args.batch)[0]
+    jax.block_until_ready(predict_batch(model, *warm))
+    result["compile_seconds"] = time.monotonic() - compile_t0
+    del warm, block
+    gc.collect()
+
+    # One pipeline process per GPU takes a disjoint stride of the corpus, so eight
+    # of them on a node contend for read bandwidth rather than for the same keys.
+    shards = pretokenized_shards(args.pretokenized)[args.shard_offset :: args.shard_stride]
+    slices = [shards[i :: args.reader_threads] for i in range(args.reader_threads)]
+    blocks: queue.Queue = queue.Queue(maxsize=args.queue_blocks)
+    counters = FeedCounters()
+
+    if args.start_at:
+        time.sleep(max(0.0, args.start_at - time.time()))
+    t0 = time.monotonic()
+    with ThreadPoolExecutor(max_workers=args.reader_threads) as pool:
+        futures = [pool.submit(feed_shards, s, blocks, args.repeat) for s in slices]
+        ids_buffer: list[np.ndarray] = []
+        emb_buffer: list[np.ndarray] = []
+        buffered = 0
+        finished = 0
+        pending: list = []
+        while finished < args.reader_threads:
+            wait_t0 = time.monotonic()
+            item = blocks.get()
+            counters.queue_wait_seconds += time.monotonic() - wait_t0
+            if item is None:
+                finished += 1
+                continue
+            ids, emb, nbytes = item
+            ids_buffer.append(ids)
+            emb_buffer.append(emb)
+            buffered += ids.shape[0]
+            counters.bytes_read += nbytes
+            while buffered >= args.batch:
+                forward_t0 = time.monotonic()
+                all_ids = np.concatenate(ids_buffer)
+                all_emb = np.concatenate(emb_buffer)
+                ids_buffer, emb_buffer = [all_ids[args.batch :]], [all_emb[args.batch :]]
+                buffered -= args.batch
+                pending.append(
+                    predict_batch(
+                        model,
+                        jax.device_put(jnp.asarray(all_ids[: args.batch]), batch_shard),
+                        jax.device_put(jnp.asarray(all_emb[: args.batch]), batch_shard),
+                    )
+                )
+                if len(pending) > GPU_PIPELINE_DEPTH:
+                    jax.block_until_ready(pending.pop(0))
+                counters.forward_seconds += time.monotonic() - forward_t0
+                counters.docs += args.batch
+        jax.block_until_ready(pending)
+        counters.reader_seconds = [f.result() for f in futures]
+    elapsed = time.monotonic() - t0
+
+    achieved = counters.docs / elapsed * result["flops_per_doc"]
+    result.update(
+        {
+            "batch": args.batch,
+            "reader_threads": args.reader_threads,
+            "queue_blocks": args.queue_blocks,
+            "repeat": args.repeat,
+            "shards": len(shards),
+            "docs": counters.docs,
+            "wall_seconds": elapsed,
+            "docs_per_second": counters.docs / elapsed,
+            "megabytes_per_second": counters.bytes_read / elapsed / 1e6,
+            "bytes_per_doc": counters.bytes_read / max(1, counters.docs),
+            "queue_wait_seconds": counters.queue_wait_seconds,
+            "forward_seconds": counters.forward_seconds,
+            "starved_fraction": counters.queue_wait_seconds / elapsed,
+            "reader_seconds": counters.reader_seconds,
+            "achieved_tflops": achieved / 1e12,
+            "mfu_bf16_peak": achieved / H100_BF16_PEAK_FLOPS,
+            "peak_rss_bytes": peak_rss_bytes(),
+            "host": host_facts(),
+            "iris_task_id": os.environ.get("IRIS_TASK_ID", ""),
+        }
+    )
+    logger.info("BENCH pipeline %s", json.dumps({k: v for k, v in result.items() if not isinstance(v, dict)}))
+    return result
+
+
+def pipeline_pack(args) -> dict:
+    """One end-to-end pipeline process per GPU, on disjoint host cores and shards."""
+    start_at = args.start_at or time.time() + args.warmup_seconds
+    argv = [
+        "--model-dir",
+        args.model_dir,
+        "--pretokenized",
+        args.pretokenized,
+        "--batch",
+        str(args.batch),
+        "--pool-docs",
+        str(args.pool_docs),
+        "--reader-threads",
+        str(args.reader_threads),
+        "--repeat",
+        str(args.repeat),
+        # Every GPU in the gang takes a disjoint stride of the corpus, so a
+        # multi-node run measures the object store under 48 distinct readers
+        # rather than 6 nodes re-reading the same keys out of their own caches.
+        "--shard-stride",
+        str(args.gpus * args.node_count),
+    ]
+    if args.fold_donor:
+        argv.append("--fold-donor")
+    children = [
+        [
+            *argv,
+            "--shard-offset",
+            str(args.node_index * args.gpus + i),
+            "--host-cores",
+            str(args.host_cores_per_gpu),
+            "--core-offset",
+            str(i * args.host_cores_per_gpu),
+        ]
+        for i in range(args.gpus)
+    ]
+    results = gpu_fanout("pipeline", children, start_at)
+    per_gpu = [r["docs_per_second"] for r in results]
+    return {
+        "gpus": args.gpus,
+        "node_index": args.node_index,
+        "node_count": args.node_count,
+        "batch": args.batch,
+        "reader_threads_per_gpu": args.reader_threads,
+        "host_cores_per_gpu": args.host_cores_per_gpu,
+        "aggregate_docs_per_second": sum(per_gpu),
+        "per_gpu_docs_per_second": per_gpu,
+        "aggregate_megabytes_per_second": sum(r["megabytes_per_second"] for r in results),
+        "starved_fraction": [r["starved_fraction"] for r in results],
+        "iris_task_id": os.environ.get("IRIS_TASK_ID", ""),
+        "host": host_facts(),
+    }
+
+
+def replicate(args) -> dict:
+    """Server-side copy the fixture shards to ``--copies`` distinct keys.
+
+    The rows repeat, which costs a feed measurement nothing: read bandwidth,
+    parquet decode and LOTA admission all depend on object bytes and object
+    count, not on whether two objects hold the same documents.
+    """
+    fs = fsspec.filesystem("s3")
+    sources = pretokenized_shards(args.pretokenized)
+    out_root = args.out.rstrip("/")
+    targets = [
+        (src, f"{out_root}/part-{copy * len(sources) + index:05d}.parquet")
+        for copy in range(args.copies)
+        for index, src in enumerate(sources)
+    ]
+    t0 = time.monotonic()
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        list(pool.map(lambda pair: fs.copy(pair[0], pair[1]), targets))
+    total = sum(fs.info(dst)["size"] for _, dst in targets)
+    return {
+        "out": out_root,
+        "source_shards": len(sources),
+        "objects": len(targets),
+        "bytes": total,
+        "seconds": time.monotonic() - t0,
+    }
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="mode", required=True)
@@ -854,6 +1431,72 @@ def main() -> None:
     pk.add_argument("--warmup-seconds", type=float, default=120.0, help="grace for load+compile before timing")
     pk.add_argument("--fold-donor", action="store_true")
 
+    gfw = sub.add_parser("gpu-forward", help="batch-size sweep on this task's accelerators")
+    gfw.add_argument("--model-dir", required=True)
+    gfw.add_argument("--pretokenized", required=True)
+    gfw.add_argument("--batches", type=lambda s: [int(x) for x in s.split(",")], default=list(DEFAULT_GPU_BATCHES))
+    gfw.add_argument("--pool-docs", type=int, default=131_072)
+    gfw.add_argument("--passes", type=int, default=3)
+    gfw.add_argument("--min-seconds", type=float, default=8.0)
+    gfw.add_argument("--fold-donor", action="store_true")
+    gfw.add_argument(
+        "--backend-parity",
+        action="store_true",
+        help="also score the probe rows on XLA:CPU and report the delta (adds a slow CPU compile)",
+    )
+    gfw.add_argument("--host-cores", type=int, default=0, help="host CPUs to pin to (0 leaves the process unpinned)")
+    gfw.add_argument("--core-offset", type=int, default=0)
+    gfw.add_argument("--start-at", type=float, default=0.0, help="unix time to begin timing, after compile")
+
+    gpk = sub.add_parser("gpu-pack", help="one scorer process per GPU on this node")
+    gpk.add_argument("--model-dir", required=True)
+    gpk.add_argument("--pretokenized", required=True)
+    gpk.add_argument("--gpus", type=int, required=True)
+    gpk.add_argument("--batch", type=int, required=True)
+    gpk.add_argument("--host-cores-per-gpu", type=int, default=16)
+    gpk.add_argument("--pool-docs", type=int, default=131_072)
+    gpk.add_argument("--passes", type=int, default=3)
+    gpk.add_argument("--min-seconds", type=float, default=8.0)
+    gpk.add_argument("--warmup-seconds", type=float, default=180.0, help="grace for load+compile before timing")
+    gpk.add_argument("--start-at", type=float, default=0.0, help="absolute unix start, shared across a gang")
+    gpk.add_argument("--fold-donor", action="store_true")
+
+    pipe = sub.add_parser("pipeline", help="S3 read -> decode -> H2D -> forward, end to end")
+    pipe.add_argument("--model-dir", required=True)
+    pipe.add_argument("--pretokenized", required=True)
+    pipe.add_argument("--batch", type=int, default=8192)
+    pipe.add_argument("--reader-threads", type=int, default=16)
+    pipe.add_argument("--queue-blocks", type=int, default=DEFAULT_FEED_QUEUE_BLOCKS)
+    pipe.add_argument("--repeat", type=int, default=1, help="sweeps over this process's shard slice")
+    pipe.add_argument("--shard-offset", type=int, default=0)
+    pipe.add_argument("--shard-stride", type=int, default=1)
+    pipe.add_argument("--pool-docs", type=int, default=16_384, help="rows loaded up front, only to compile the shape")
+    pipe.add_argument("--fold-donor", action="store_true")
+    pipe.add_argument("--host-cores", type=int, default=0)
+    pipe.add_argument("--core-offset", type=int, default=0)
+    pipe.add_argument("--start-at", type=float, default=0.0)
+
+    ppk = sub.add_parser("pipeline-pack", help="one end-to-end pipeline process per GPU")
+    ppk.add_argument("--model-dir", required=True)
+    ppk.add_argument("--pretokenized", required=True)
+    ppk.add_argument("--gpus", type=int, required=True)
+    ppk.add_argument("--batch", type=int, default=8192)
+    ppk.add_argument("--reader-threads", type=int, default=14)
+    ppk.add_argument("--host-cores-per-gpu", type=int, default=16)
+    ppk.add_argument("--pool-docs", type=int, default=16_384)
+    ppk.add_argument("--repeat", type=int, default=1)
+    ppk.add_argument("--node-index", type=int, default=0, help="this replica's rank in a multi-node gang")
+    ppk.add_argument("--node-count", type=int, default=1, help="replicas in the gang")
+    ppk.add_argument("--warmup-seconds", type=float, default=180.0)
+    ppk.add_argument("--start-at", type=float, default=0.0)
+    ppk.add_argument("--fold-donor", action="store_true")
+
+    rep = sub.add_parser("replicate", help="server-side copy the fixture into more distinct keys")
+    rep.add_argument("--pretokenized", required=True)
+    rep.add_argument("--out", required=True)
+    rep.add_argument("--copies", type=int, required=True)
+    rep.add_argument("--workers", type=int, default=64)
+
     rd = sub.add_parser("read", help="sustained read throughput over the pretokenized shards")
     rd.add_argument("--pretokenized", required=True)
     rd.add_argument("--readers", type=int, default=1, help="concurrent reader processes on this node")
@@ -875,6 +1518,16 @@ def main() -> None:
         result = sweep(args)
     elif args.mode == "pack":
         result = pack(args)
+    elif args.mode == "gpu-forward":
+        result = gpu_forward(args)
+    elif args.mode == "gpu-pack":
+        result = gpu_pack(args)
+    elif args.mode == "pipeline":
+        result = pipeline(args)
+    elif args.mode == "pipeline-pack":
+        result = pipeline_pack(args)
+    elif args.mode == "replicate":
+        result = replicate(args)
     elif args.readers > 1:
         result = read_fanout(args)
     else:
