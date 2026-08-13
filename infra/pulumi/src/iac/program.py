@@ -50,7 +50,9 @@ from iac.imports import NO_IMPORTS, ImportRegistrar
 from iac.nodepools import derive_nodepools
 
 DEFAULT_NAMESPACE = "iris"
-IAP_AUDIENCE = re.compile(r"^/projects/(?P<project_number>[0-9]+)/global/backendServices/(?P<backend_id>[0-9]+)$")
+IAP_AUDIENCE_PATTERN = re.compile(
+    r"^/projects/(?P<project_number>[0-9]+)/global/backendServices/(?P<backend_id>[0-9]+)$"
+)
 
 
 @dataclass(frozen=True)
@@ -209,7 +211,7 @@ def _iap_backend_identity(cluster: str, iris_config) -> _IapBackendIdentity:
     parsed_url = urlparse(iap.url)
     if parsed_url.scheme != "https" or not parsed_url.hostname or parsed_url.path not in ("", "/"):
         raise ValueError(f"cluster {cluster!r} auth.iap.url must be an HTTPS origin")
-    audience = IAP_AUDIENCE.fullmatch(iap.signed_header_audience)
+    audience = IAP_AUDIENCE_PATTERN.fullmatch(iap.signed_header_audience)
     if audience is None:
         raise ValueError(f"cluster {cluster!r} has an invalid auth.iap.signed_header_audience")
     desktop_client = iap.oauth_client_id or MARIN_DESKTOP_OAUTH_CLIENT.client_id
@@ -220,15 +222,6 @@ def _iap_backend_identity(cluster: str, iris_config) -> _IapBackendIdentity:
         backend_service_id=audience["backend_id"],
         programmatic_clients=programmatic_clients,
     )
-
-
-def _instance_ip(
-    *,
-    name: str,
-    project: str,
-    zone: str,
-) -> str:
-    return gcp_instance_internal_ip(name, project=project, zone=zone)
 
 
 def _build_gclb(
@@ -260,8 +253,8 @@ def _build_gclb(
                 domain=iap_identity.domain,
                 zone=controller_config.zone,
                 instance=instance,
-                ip_address=_instance_ip(
-                    name=instance,
+                ip_address=gcp_instance_internal_ip(
+                    instance,
                     project=project,
                     zone=controller_config.zone,
                 ),
@@ -296,8 +289,8 @@ def _build_gclb(
                 domain=finelog_spec.domain,
                 zone=deployment.zone,
                 instance=finelog_config.name,
-                ip_address=_instance_ip(
-                    name=finelog_config.name,
+                ip_address=gcp_instance_internal_ip(
+                    finelog_config.name,
                     project=project,
                     zone=deployment.zone,
                 ),
