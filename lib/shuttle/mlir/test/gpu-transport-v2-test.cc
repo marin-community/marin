@@ -378,26 +378,30 @@ struct BuiltBundle {
   mlir::OwningOpRef<mlir::ModuleOp> module;
 };
 
-std::unique_ptr<BuiltBundle> buildFixture() {
+std::optional<std::string> fixtureSource() {
   std::string error;
   auto runfiles = bazel::tools::cpp::runfiles::Runfiles::CreateForTest(&error);
   if (!runfiles)
-    return {};
+    return std::nullopt;
   std::ifstream input(runfiles->Rlocation(
       "shuttle_mlir/test/Inputs/"
       "jax-0.10.1-bf16-row_fold_scale_44d152ecc3e9ff18-forward.mlir"));
   std::ostringstream source;
   source << input.rdbuf();
   if (!input)
-    return {};
+    return std::nullopt;
+  return source.str();
+}
+
+std::unique_ptr<BuiltBundle> buildFixture(llvm::StringRef source) {
   mlir::DialectRegistry registry;
   mlir::stablehlo::registerAllDialects(registry);
   registry.insert<mlir::arith::ArithDialect, mlir::func::FuncDialect,
                   mlir::math::MathDialect, mlir::shuttle::ShuttleDialect>();
   auto result = std::make_unique<BuiltBundle>();
   result->context = std::make_unique<mlir::MLIRContext>(registry);
-  result->module = mlir::parseSourceString<mlir::ModuleOp>(
-      source.str(), result->context.get());
+  result->module =
+      mlir::parseSourceString<mlir::ModuleOp>(source, result->context.get());
   if (!result->module)
     return {};
   mlir::PassManager manager(result->context.get());
@@ -411,6 +415,27 @@ std::unique_ptr<BuiltBundle> buildFixture() {
   if (mlir::failed(manager.run(*result->module)))
     return {};
   return result;
+}
+
+std::unique_ptr<BuiltBundle> buildFixture() {
+  auto source = fixtureSource();
+  if (!source)
+    return {};
+  return buildFixture(*source);
+}
+
+std::unique_ptr<BuiltBundle> buildAlternateFixture() {
+  auto source = fixtureSource();
+  if (!source)
+    return {};
+  constexpr llvm::StringLiteral original = "9.99999974E-6";
+  constexpr llvm::StringLiteral replacement = "2.49999994E-6";
+  size_t position = source->find(original.str());
+  if (position == std::string::npos)
+    return {};
+  source->replace(position, original.size(), replacement.data(),
+                  replacement.size());
+  return buildFixture(*source);
 }
 
 TEST(GpuTransportV2Test, IndependentInlineDecoderMatchesPublicDescriptor) {
@@ -639,6 +664,14 @@ TEST(GpuTransportV2Test, ExportedFfiBundleOwnsEveryLifecycleStage) {
   auto frame = callFrame(*transport, transportDigest);
   auto decoded = decodeInlineSchema2(*transport);
   ASSERT_TRUE(decoded);
+  auto alternateBuilt = buildAlternateFixture();
+  ASSERT_TRUE(alternateBuilt);
+  auto alternateTransport =
+      mlir::shuttle::serializeGpuExecutableBundle(*alternateBuilt->module);
+  ASSERT_TRUE(mlir::succeeded(alternateTransport));
+  auto alternateDecoded = decodeInlineSchema2(*alternateTransport);
+  ASSERT_TRUE(alternateDecoded);
+  ASSERT_NE(decoded->code, alternateDecoded->code);
   XLA_FFI_Handler_Bundle handlers =
       mlir::shuttle::gpuExecutableBundleFfiHandlerBundle();
   ASSERT_NE(handlers.instantiate, nullptr);
@@ -654,7 +687,7 @@ TEST(GpuTransportV2Test, ExportedFfiBundleOwnsEveryLifecycleStage) {
   auto trace = std::make_shared<ExecutionTrace>();
   EXPECT_CALL(stream, parent()).WillRepeatedly(testing::Return(&executor));
   EXPECT_CALL(executor, LoadKernel(testing::_))
-      .Times(19)
+      .Times(38)
       .WillRepeatedly([trace](const stream_executor::KernelLoaderSpec &spec) {
         return recordLoadedKernel(spec, trace);
       });
@@ -747,7 +780,8 @@ TEST(GpuTransportV2Test, ExportedFfiBundleOwnsEveryLifecycleStage) {
   }
   // Independent allocators must yield distinct invocation-local addresses.
   EXPECT_NE(firstSlots.lookup(2), secondSlots.lookup(2));
-  llvm::SmallVector<int64_t> launchesPerOrdinal(19);
+  llvm::SmallVector<int64_t> firstLaunchesPerOrdinal(19);
+  llvm::SmallVector<int64_t> secondLaunchesPerOrdinal(19);
   {
     std::lock_guard lock(trace->mutex);
     ASSERT_EQ(trace->launches.size() - concurrentStart, 38);
@@ -767,13 +801,50 @@ TEST(GpuTransportV2Test, ExportedFfiBundleOwnsEveryLifecycleStage) {
               arguments.push_back(slots.lookup(slot));
             return arguments;
           };
-      EXPECT_TRUE(actual.arguments == expectedArguments(firstSlots) ||
-                  actual.arguments == expectedArguments(secondSlots));
-      ++launchesPerOrdinal[actual.ordinal];
+      auto firstArguments = expectedArguments(firstSlots);
+      auto secondArguments = expectedArguments(secondSlots);
+      ASSERT_NE(firstArguments, secondArguments);
+      bool usesFirstState = actual.arguments == firstArguments;
+      bool usesSecondState = actual.arguments == secondArguments;
+      EXPECT_NE(usesFirstState, usesSecondState);
+      if (usesFirstState)
+        ++firstLaunchesPerOrdinal[actual.ordinal];
+      if (usesSecondState)
+        ++secondLaunchesPerOrdinal[actual.ordinal];
     }
   }
-  EXPECT_TRUE(llvm::all_of(launchesPerOrdinal,
-                           [](int64_t count) { return count == 2; }));
+  EXPECT_TRUE(llvm::all_of(firstLaunchesPerOrdinal,
+                           [](int64_t count) { return count == 1; }));
+  EXPECT_TRUE(llvm::all_of(secondLaunchesPerOrdinal,
+                           [](int64_t count) { return count == 1; }));
+
+  auto alternateFrame =
+      callFrame(*alternateTransport,
+                mlir::shuttle::gpuExecutableBundleDigest(*alternateTransport));
+  xla::ffi::ExecutionState alternateInstantiateState;
+  xla::ffi::ExecutionState alternatePrepareState;
+  xla::ffi::ExecutionState alternateInitializeState;
+  SyntheticAllocator alternateAllocator(0x80000000);
+  xla::ffi::InvokeContext alternateContext = context;
+  alternateContext.backend_context = xla::ffi::InvokeContext::GpuContext{
+      &stream, &alternateAllocator, nullptr, nullptr, nullptr, nullptr,
+      nullptr, &capability};
+  alternateContext.state_context = {&alternateInstantiateState,
+                                    &alternatePrepareState,
+                                    &alternateInitializeState};
+  ASSERT_TRUE(xla::ffi::Invoke(xla::ffi::GetXlaFfiApi(), handlers.instantiate,
+                               alternateFrame, alternateContext,
+                               XLA_FFI_ExecutionStage_INSTANTIATE)
+                  .ok());
+  ASSERT_TRUE(xla::ffi::Invoke(xla::ffi::GetXlaFfiApi(), handlers.prepare,
+                               alternateFrame, alternateContext,
+                               XLA_FFI_ExecutionStage_PREPARE)
+                  .ok());
+  ASSERT_TRUE(xla::ffi::Invoke(xla::ffi::GetXlaFfiApi(), handlers.initialize,
+                               alternateFrame, alternateContext,
+                               XLA_FFI_ExecutionStage_INITIALIZE)
+                  .ok());
+  expectLoadedKernels(*alternateDecoded, *trace, decoded->launches.size());
 
   auto corrupt = callFrame(*transport, std::string(64, '0'));
   EXPECT_FALSE(xla::ffi::Invoke(xla::ffi::GetXlaFfiApi(), handlers.instantiate,
