@@ -841,7 +841,6 @@ def reference_datakit_steps(
             input_read_threads=scale.store.input_read_threads,
             local_spill_processes=scale.store.local_spill_processes,
             max_parallel_bucket_writes=scale.store.max_parallel_bucket_writes,
-            zephyr_context=zephyr_context,
         )
 
     store_deps: list[StepSpec] = []
