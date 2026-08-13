@@ -91,6 +91,10 @@ DEFAULT_MANIFEST = "s3://marin-us-east-02a/marin/user/muchanem/quality_scores_ru
 # expanded one (a long document occupies several adjacent rows), so this is rows,
 # not documents.
 READ_BATCH = 4096
+# Rows per arrow record batch when reading the embed side. 65,536 x 1024 int8
+# values stays two orders of magnitude below arrow's int32 list-offset limit,
+# which a whole-column read of the largest shard exceeds outright.
+EMBED_READ_BATCH = 65_536
 # Documents per forward. HBM never exceeded 1.2 GB at any batch size measured --
 # XLA fuses the table gather into the pooling -- so this is sized for dispatch
 # amortization rather than against a memory ceiling. Passed to `predict`
@@ -460,17 +464,28 @@ def _ragged_to_padded(column: pa.ChunkedArray | pa.Array, max_tokens: int, vocab
     return np.where(mask, compact, PAD_ID).astype(np.int32)
 
 
-def gather_embeddings(array: pa.Array, positions: np.ndarray) -> np.ndarray:
-    """Rows ``positions`` of an int8[1024] arrow column, as normalized float32.
+def read_embed_side(path: str, fs) -> tuple[np.ndarray, np.ndarray]:
+    """A shard's ``(ids, int8[n, 1024] embeddings)``, read in batches.
 
-    The embed side stays in its arrow buffer for the life of the shard and only
-    the joined rows are ever materialized. Converting the whole column to numpy
-    up front doubled peak memory -- the arrow table plus an equal-sized copy,
-    5.5 GB on the largest shard -- and 24 workers doing that at once is what
-    SIGKILLed the first attempt at this run.
+    Batched rather than one ``read()`` because arrow indexes a list column's
+    values with int32: the largest shards hold 2,682,446 documents, whose
+    flattened embedding column is 2.75e9 elements against a 2^31-1 limit, and a
+    whole-column read fails with "List index overflow". Rows land directly in a
+    preallocated array, so the int8 side is never copied twice.
     """
-    rows = array.take(pa.array(positions)).flatten().to_numpy(zero_copy_only=False)
-    return normalize_embeddings(rows.reshape(len(positions), EMBED_DIM))
+    with fs.open(path, "rb", cache_type="none") as raw:
+        parquet = pq.ParquetFile(raw)
+        rows = parquet.metadata.num_rows
+        embeddings = np.empty((rows, EMBED_DIM), dtype=np.int8)
+        ids: list[np.ndarray] = []
+        at = 0
+        for batch in parquet.iter_batches(batch_size=EMBED_READ_BATCH, columns=["id", "embedding"]):
+            n = batch.num_rows
+            ids.append(batch.column("id").to_numpy(zero_copy_only=False))
+            flat = batch.column("embedding").flatten().to_numpy(zero_copy_only=False)
+            embeddings[at : at + n] = flat.reshape(n, EMBED_DIM)
+            at += n
+    return (np.concatenate(ids) if ids else np.empty(0, dtype=object)), embeddings
 
 
 def normalize_embeddings(rows: np.ndarray) -> np.ndarray:
@@ -503,12 +518,8 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
     later chunks are dropped as soon as they are decoded.
     """
     t0 = time.monotonic()
-    with fs.open(task.embed_path, "rb", cache_type="none") as raw:
-        embed_table = pq.ParquetFile(raw).read(columns=["id", "embedding"])
-    embed_rows = embed_table.num_rows
-    embed_ids = embed_table.column("id").to_numpy(zero_copy_only=False)
-    embed_column = embed_table.column("embedding")
-    embed_column = embed_column.combine_chunks() if isinstance(embed_column, pa.ChunkedArray) else embed_column
+    embed_ids, embeddings = read_embed_side(task.embed_path, fs)
+    embed_rows = len(embed_ids)
 
     id_blocks: list[np.ndarray] = []
     token_blocks: list[np.ndarray] = []
@@ -522,7 +533,7 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
         block = Block(
             doc_ids=np.concatenate(id_blocks),
             ids=np.concatenate(token_blocks),
-            embedding=gather_embeddings(embed_column, np.concatenate(embed_blocks)),
+            embedding=normalize_embeddings(embeddings[np.concatenate(embed_blocks)]),
         )
         id_blocks, token_blocks, embed_blocks, pending = [], [], [], 0
         return block
