@@ -4607,3 +4607,31 @@ author: dlwh
 - Scope remains exact `2048x4096` SOURCE_ORDERED Host forward. Large backward,
   composed, FAST, other shapes, GPU lowering, hardware execution, performance
   acceptance, and scorecard promotion remain unsupported or blocked.
+
+### 2026-08-12 - TLTC-MLIR-015 representative VJP design stop
+
+- A read-only derivation from canonical `146862564a` confirms that the exact
+  `2048x4096` backward graph has 48 tasks, 51 slots, 537,083,940 temporary
+  bytes, and 167,821,321 aggregate task positions. Composed has 51 tasks, 54
+  slots, 604,192,804 temporary bytes, and 192,987,145 positions. Their derived
+  plan SHA-256 prefixes are `20272562` and `257fc000`.
+- Each graph has five Folds: two row reductions over `[2048,4096]`, one column
+  reduction over `[2048,4096]`, and one degenerate row and column reduction.
+  The current V2 parser, serial-tile policy, 256 MiB temporary cap, and
+  aggregate-work cap intentionally exclude this boundary. The existing 32 MiB
+  per-slot, 8,388,608-element per-task, and 16 KiB scratch limits suffice.
+- Applying ABI 9's `adjacent_balanced_initializer_last` realization to all five
+  Folds matches ordinary-JAX `dgamma`, but 815 of 8,388,608 BF16 `dx` elements
+  differ. Sequential and lane/chunk trees of widths 2 through 64 also miss;
+  the best tested variant differs in 745 elements. The accepted ordinary-JAX
+  `dx` and `dgamma` digests are `c420e7f0` and `2525afed`.
+- This is a numerical architecture stop, not a resource-only limitation.
+  Broadening V2 or selecting a reduction tree by task ordinal would violate
+  the generic boundary. A future slice first needs a name-erased V3 Fold
+  realization derived from reduction axis, domain, dtype, initializer policy,
+  and structural fusion context. If that proof closes, it should use device
+  schema 3, typed-FFI target v4, and pipeline ABI 10 while preserving transport
+  schema 1, invocation ABI 2, and bundle schema 1 where their fields remain
+  sufficient.
+- No code, hardware, upload, launch, performance claim, or scorecard state
+  changed during this audit.

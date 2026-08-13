@@ -16,27 +16,27 @@ blocked. The missing ordinary-JAX GPU path and unpinned oracle artifact still
 prevent acceptance. Historical `tile_lifetime` row-normalization results inform
 the physical decomposition, but cannot accept a Shuttle cell.
 
-## Local evidence checkpoint at `12608ff8de`
+## Local evidence checkpoint at `146862564a`
 
 The implementation inventory later in this document describes the original ABI
-4 design audit. It is historical. Pipeline ABI 5 now losslessly covers both
-shapes and all three JAX-owned boundaries under both policies. The current local
-evidence is:
+4 design audit. It is historical. Pipeline ABI 9 now has an ordinary-JAX Host
+consumer for the representative SOURCE_ORDERED forward boundary. The current
+local evidence is:
 
 | Shape | Boundary | Policy | Strongest local evidence | Remaining local executable gap |
 | --- | --- | --- | --- | --- |
-| `2048x4096` | forward | `source_ordered` | ABI 5 source coverage, analytic reference, local ordinary-JAX observation, materialization, and abstract schedule | The bounded CPU bundle rejects this shape; no XLA/runtime or accelerator consumer exists |
-| `2048x4096` | forward | `fast` | Same identity-round-trip evidence and abstract schedule; FAST still has source-equivalent semantics | No executed FAST consumer; no reviewed non-identity FAST numerical policy |
-| `2048x4096` | backward | `source_ordered` | ABI 5 source coverage plus analytic and local ordinary-JAX reference records | No reverse materialization, schedule, or executable consumer |
-| `2048x4096` | backward | `fast` | Same identity-round-trip evidence | No reverse executable consumer or reviewed non-identity FAST numerical policy |
-| `2048x4096` | composed | `source_ordered` | ABI 5 source coverage plus analytic and local ordinary-JAX reference records | No composed materialization, schedule, or executable consumer |
-| `2048x4096` | composed | `fast` | Same identity-round-trip evidence | No composed executable consumer or reviewed non-identity FAST numerical policy |
-| `7x13` | forward | `source_ordered` | The stripped synchronous CPU bytecode bundle executes and matches its independent finite reference; ABI 5 and analytic records also exist | The consumer is opt-in and outside ordinary JAX/XLA; it supplies no accelerator evidence |
-| `7x13` | forward | `fast` | ABI 5 identity round trip plus a structurally verified FAST bundle with a distinct policy fingerprint | No executed FAST consumer or reviewed non-identity FAST numerical policy |
-| `7x13` | backward | `source_ordered` | ABI 5 source coverage plus analytic and local ordinary-JAX reference records | No reverse materialization, schedule, or executable consumer |
-| `7x13` | backward | `fast` | Same identity-round-trip evidence | No reverse executable consumer or reviewed non-identity FAST numerical policy |
-| `7x13` | composed | `source_ordered` | ABI 5 source coverage plus analytic and local ordinary-JAX reference records | No composed materialization, schedule, or executable consumer |
-| `7x13` | composed | `fast` | Same identity-round-trip evidence | No composed executable consumer or reviewed non-identity FAST numerical policy |
+| `2048x4096` | forward | `source_ordered` | ABI 9 replaces the selected region with one typed-FFI Host call; rebuilt ordinary JAX matches the disabled baseline bitwise and reuses an immutable persistent-cache entry | No accelerator consumer or hardware evidence exists |
+| `2048x4096` | forward | `fast` | Source conversion and abstract planning retain identity semantics | ABI 9 rejects this policy; no executed consumer or reviewed nonidentity FAST numerical policy exists |
+| `2048x4096` | backward | `source_ordered` | Source conversion, independent reference, materialization, and schedule records exist | The current V2 Fold realization misses ordinary JAX in 815 BF16 `dx` elements; no executable consumer is admitted |
+| `2048x4096` | backward | `fast` | Source conversion and independent reference records exist | No accepted SOURCE_ORDERED realization, executable consumer, or reviewed nonidentity FAST policy exists |
+| `2048x4096` | composed | `source_ordered` | Source conversion, independent reference, materialization, and schedule records exist | It shares the backward Fold mismatch and has no executable consumer |
+| `2048x4096` | composed | `fast` | Source conversion and independent reference records exist | No accepted SOURCE_ORDERED realization, executable consumer, or reviewed nonidentity FAST policy exists |
+| `7x13` | forward | `source_ordered` | ABI 7 executes through ordinary JAX and the generic typed-FFI Host target with bitwise reference parity and cache reuse | No accelerator evidence exists |
+| `7x13` | forward | `fast` | ABI 8 executes the identity-FAST policy through the same Host target with a distinct policy and cache identity | No reviewed nonidentity FAST policy or accelerator evidence exists |
+| `7x13` | backward | `source_ordered` | ABI 7 executes the JAX-owned VJP boundary through ordinary JAX with bitwise reference parity and cache reuse | No accelerator evidence exists |
+| `7x13` | backward | `fast` | ABI 8 executes identity FAST through ordinary JAX with a distinct policy and cache identity | No reviewed nonidentity FAST policy or accelerator evidence exists |
+| `7x13` | composed | `source_ordered` | ABI 7 executes the composed boundary through ordinary JAX with bitwise reference parity and cache reuse | No accelerator evidence exists |
+| `7x13` | composed | `fast` | ABI 8 executes identity FAST through ordinary JAX with a distinct policy and cache identity | No reviewed nonidentity FAST policy or accelerator evidence exists |
 
 The independent binary64 reference has pinned inputs, output roles, digests,
 metrics, and local CPU ordinary-JAX observations for every shape and boundary.
@@ -383,10 +383,18 @@ has useful generic row/column Fold code and corrected H100 and GB200 timing
 artifacts. It imports StableHLO into Python objects and dispatches typed FFI
 outside the current Shuttle MLIR path. It is reference-only for this work.
 
-The proposed native XLA Host consumer is specified in the
+The native XLA Host consumer design is specified in the
 [`shuttle_xla_cpu_typed_ffi_consumer_design.md`](shuttle_xla_cpu_typed_ffi_consumer_design.md).
-Its first gate is only the `7x13` forward `SOURCE_ORDERED` fixture and does not
-close a representative, hardware, performance, or acceptance cell.
+The implemented boundary has advanced through the exact `7x13` six-cell matrix
+and the representative `2048x4096` SOURCE_ORDERED forward cell. These remain
+local Host architecture and numerical evidence, not accelerator, performance,
+or acceptance evidence.
+
+The next bounded CUDA ownership and execution contract is specified in
+[`shuttle_xla_gpu_typed_ffi_consumer_design.md`](shuttle_xla_gpu_typed_ffi_consumer_design.md).
+It preserves the representative forward schedule as 19 source-bound generated
+PTX entries with execution-scoped device temporaries. It is a design and test
+boundary only; it records no GPU or H100 execution.
 
 ## Smallest test-first sequence
 
