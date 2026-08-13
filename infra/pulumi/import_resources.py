@@ -35,6 +35,8 @@ from pulumi import automation as auto
 PULUMI_DIR = Path(__file__).resolve().parent
 REPOSITORY_ROOT = PULUMI_DIR.parents[1]
 CONFIRMATION_DIGEST_LENGTH = 12
+IMPORT_TEMP_DIRECTORY_PREFIX = "marin-iac-import-"
+GENERATED_MANIFEST_FILENAME = "generated.json"
 
 
 def _load_manifest(path: Path) -> ImportManifest:
@@ -83,8 +85,8 @@ def generate(stack_name: str, output_path: Path) -> None:
     """Generate the current create set and fill cataloged provider IDs."""
 
     output_path = _require_local_manifest(output_path, must_exist=False)
-    with tempfile.TemporaryDirectory(prefix="marin-iac-import-") as temp_directory:
-        generated_path = Path(temp_directory) / "generated.json"
+    with tempfile.TemporaryDirectory(prefix=IMPORT_TEMP_DIRECTORY_PREFIX) as temp_directory:
+        generated_path = Path(temp_directory) / GENERATED_MANIFEST_FILENAME
         manifest = _generate_manifest(stack_name, generated_path)
     write_import_manifest(output_path, manifest)
     _print_summary(import_manifest_summary(manifest))
@@ -100,8 +102,8 @@ def apply(stack_name: str, reviewed_path: Path) -> None:
 
     reviewed_path = _require_local_manifest(reviewed_path, must_exist=True)
     reviewed = _load_manifest(reviewed_path)
-    with tempfile.TemporaryDirectory(prefix="marin-iac-import-") as temp_directory:
-        generated_path = Path(temp_directory) / "generated.json"
+    with tempfile.TemporaryDirectory(prefix=IMPORT_TEMP_DIRECTORY_PREFIX) as temp_directory:
+        generated_path = Path(temp_directory) / GENERATED_MANIFEST_FILENAME
         current = _generate_manifest(stack_name, generated_path)
 
     summary = validate_reviewed_manifest(reviewed, current)

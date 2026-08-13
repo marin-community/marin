@@ -82,16 +82,24 @@ def test_resolve_import_manifest_leaves_uncataloged_create_for_operator_decision
 
 
 def test_validate_reviewed_manifest_accepts_unchanged_subset():
-    current = resolve_import_manifest(_generated_manifest(component_is_new=True), [_member_spec()])
+    current = resolve_import_manifest(_generated_manifest(), [_member_spec()])
+    current["resources"].append(
+        {
+            **current["resources"][0],
+            "name": "other_member",
+            "logicalName": "project-roles-viewer-serviceaccount-other-example-com",
+            "id": "hai-gcp-models roles/viewer serviceAccount:other@example.com",
+        }
+    )
     reviewed = {
         "nameTable": current["nameTable"],
-        "resources": current["resources"],
+        "resources": current["resources"][:1],
     }
 
     summary = validate_reviewed_manifest(reviewed, current)
 
     assert summary.imports_by_type == {IAM_MEMBER_TYPE: 1}
-    assert summary.component_count == 1
+    assert summary.component_count == 0
     assert summary.digest == import_manifest_summary(reviewed).digest
 
 
