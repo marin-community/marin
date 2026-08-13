@@ -71,6 +71,8 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 from iris.cluster.client.job_info import get_job_info
+from marin.datakit.normalize import NormalizedData
+from marin.execution.artifact import read_artifact
 from rigging.filesystem import StoragePath, open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
@@ -107,11 +109,26 @@ DEFAULT_CALIBRATION = f"{DEFAULT_FOLDED_DIR}/calib_bme.json"
 # A stage leaf is `<source>_<8 hex>`; the source part may itself hold slashes.
 LEAF_SUFFIX = re.compile(r"_[0-9a-f]{8}/?$")
 
-# Sources kept out of the manifest. Each entry needs a reason and a way out: a
-# held source is not scored at all, which is safer than scoring it against a leaf
-# chosen by guess, and the per-source output layout means adding one later costs
-# only that source's shards.
-HOLD_SOURCES: frozenset[str] = frozenset()
+# Sources kept out of the manifest, mapped to why. A held source is not scored at
+# all, which is safer than scoring it against a leaf chosen by guess, and the
+# per-source output layout means adding one back later costs only its own shards.
+#
+# The focus crawl is held on *shard geometry*, not on content. Its token side is
+# the 2026-08-12 normalize rerun (333 shards) while its embed leaves are the older
+# `ed4b8bc9` normalize (4,573 shards), and this scorer pairs the two sides by shard
+# basename. The basename intersection is empty, so every token shard would resolve
+# to no embedding at all. The embeddings do carry every id that is needed -- the
+# rerun was an exact-dedup split of identical text, 36,327,068 rows collapsing to
+# 22,010,234 distinct ids -- so nothing here is stale, and nothing about it is
+# visible to a row-count or artifact check. Repairing it needs a regrouping of one
+# side onto the other's partitioning, which is being decided separately.
+HOLD_SOURCES: dict[str, str] = {
+    "common-crawl-focus-2026-22": (
+        "token side is the 2026-08-12 normalize rerun (333 shards), embed side is the "
+        "ed4b8bc9 normalize (4,573 shards); the join pairs by shard basename and the "
+        "intersection is empty, so every document would silently resolve to no embedding"
+    )
+}
 
 # Rows per arrow record batch when streaming a token shard. The token side is the
 # expanded one (a long document occupies several adjacent rows), so this is rows,
@@ -326,14 +343,27 @@ def manifest_mode(args) -> dict:
     fs = fsspec.filesystem("s3")
     embed = _stage_leaves(fs, EMBED_ROOT, args.discovery_threads)
     embed_fuzzy = _stage_leaves(fs, EMBED_FUZZY_ROOT, args.discovery_threads)
-    sources = [s for s in hero_data.source_names() if s not in HOLD_SOURCES]
+    registered = hero_data.source_names()
+    sources = [s for s in registered if s not in HOLD_SOURCES]
     missing_embed = sorted(set(sources) - set(embed))
+
+    # Held sources are named and counted, never merely absent: a source that
+    # silently drops out of the manifest reads downstream as a corpus that never
+    # had it, which is the difference between "excluded" and "missing".
+    held = {}
+    for source, reason in HOLD_SOURCES.items():
+        if source not in registered:
+            raise ValueError(f"held source {source!r} is not registered; the hold is stale")
+        counters = read_artifact(hero_data.normalized(source).output_path, NormalizedData).counters
+        held[source] = {"reason": reason, "counters": counters}
+        logger.warning("HELD OUT of the score manifest: %s -- %s; normalize counters %s", source, reason, counters)
     logger.info(
-        "sources=%d dedup-leaves=%d fuzzy-leaves=%d held=%s no-embed=%s",
+        "sources=%d of %d registered (%d held) dedup-leaves=%d fuzzy-leaves=%d no-embed=%s",
         len(sources),
+        len(registered),
+        len(held),
         len(embed),
         len(embed_fuzzy),
-        sorted(HOLD_SOURCES),
         missing_embed,
     )
 
@@ -377,6 +407,22 @@ def manifest_mode(args) -> dict:
     if not rows:
         raise ValueError("no shard tasks discovered; the stage layout likely moved")
 
+    # A source whose token and embed sides were built from different normalize runs
+    # has disjoint shard basenames, so every one of its shards pairs with nothing.
+    # That is a geometry break, not an empty source, and it is invisible to row
+    # counts and artifact metadata -- left alone it lands in `unembedded_shards` and
+    # reads as coverage. Refuse the manifest instead, and name the source.
+    matched_by_source: dict[str, int] = {}
+    for row in rows:
+        matched_by_source[row["source"]] = matched_by_source.get(row["source"], 0) + row["embed_leaves"]
+    unpaired = sorted(s for s, matched in matched_by_source.items() if not matched and s in embed)
+    if unpaired:
+        raise ValueError(
+            f"{len(unpaired)} source(s) have an embed leaf but no shard basename in common with their "
+            f"token side, so every document would resolve to no embedding: {unpaired}. "
+            f"Hold them explicitly in HOLD_SOURCES or repartition one side."
+        )
+
     # Footer reads, once, here: `embed_rows` is what `verify` compares the written
     # score count against, and computing it at verify time would reread the embed
     # side of a leaf that has already been scored. Two range GETs per shard.
@@ -397,7 +443,8 @@ def manifest_mode(args) -> dict:
         "manifest": path,
         "tasks": len(rows),
         "sources": len(sources),
-        "held": sorted(HOLD_SOURCES),
+        "registered_sources": len(registered),
+        "held_sources": held,
         "sources_without_embed": missing_embed,
         "dedup_shards": sum(1 for r in rows if r["embed_leaves"] >= 1),
         "fuzzy_shards": sum(1 for r in rows if r["embed_leaves"] == 2),

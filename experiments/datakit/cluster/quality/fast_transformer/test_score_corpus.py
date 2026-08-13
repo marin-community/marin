@@ -17,8 +17,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from experiments.datakit import hero_data
 from experiments.datakit.cluster.quality.fast_transformer.score_corpus import (
     EMBED_DIM,
+    HOLD_SOURCES,
     ShardTask,
     join_shard,
     read_embed_side,
@@ -58,6 +60,26 @@ def write_tokens(path, records):
         }
     )
     pq.write_table(table, path)
+
+
+def test_the_focus_crawl_is_held_out_of_scoring():
+    """A hard exclusion, not a counter.
+
+    This source's token side (333 shards, the 2026-08-12 normalize rerun) and its
+    embed side (4,573 shards, the ed4b8bc9 normalize) share no shard basename, and
+    the join pairs by basename. Nothing about that is visible to a row count or an
+    artifact check: unheld, all 22,010,234 documents resolve to no embedding and
+    land in a counter that reads as coverage.
+    """
+    assert "common-crawl-focus-2026-22" in HOLD_SOURCES
+    assert HOLD_SOURCES["common-crawl-focus-2026-22"], "a hold must carry its reason"
+    assert "common-crawl-focus-2026-22" not in [s for s in hero_data.source_names() if s not in HOLD_SOURCES]
+
+
+def test_every_held_source_is_registered():
+    # A hold naming a source that no longer exists is a hold that silently stopped
+    # holding anything.
+    assert not set(HOLD_SOURCES) - set(hero_data.source_names())
 
 
 def test_read_embed_side_concatenates_leaves(tmp_path, fs):
