@@ -22,7 +22,7 @@ from levanter.grug._moe.quack_moe_cute import _cute_dtype
 from levanter.grug._moe.rms_gated_norm import exact_rms_backward_consumer
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 from quack.activation import dact_fn_map
-from quack.cute_dsl_utils import get_max_active_clusters, mlir_namedtuple
+from quack.cute_dsl_utils import mlir_namedtuple
 from quack.epi_ops import (
     ColVecLoad,
     ColVecReduce,
@@ -50,13 +50,24 @@ _MATRIX_DIVISIBILITY = (1, 1, 8)
 _VECTOR_DIVISIBILITY = (1, 4)
 _CONSUMER_BLOCK_M = 128
 _CONSUMER_BLOCK_N = 128
+_SM100_MULTIPROCESSORS = 148
 
 
 def _max_active_clusters(cluster_mnk: tuple[int, int, int]) -> int:
-    """Size the persistent grid from the live device, as the sibling QuACK bridges do."""
+    """Size the SM100 persistent grid without relying on PyTorch's CUDA runtime."""
     if jax.default_backend() == "cpu":
         return _FALLBACK_MAX_ACTIVE_CLUSTERS
-    return get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
+    device = jax.local_devices()[0]
+    compute_capability = getattr(device, "compute_capability", None)
+    if callable(compute_capability):
+        compute_capability = compute_capability()
+    if isinstance(compute_capability, str):
+        major, _, minor = compute_capability.partition(".")
+        compute_capability = (int(major), int(minor or 0))
+    if not isinstance(compute_capability, tuple) or compute_capability[:2] != (10, 0):
+        raise ValueError(f"RMS-GatedNorm CuTe kernels require SM100, got {device.device_kind} ({compute_capability})")
+    cluster_size = cluster_mnk[0] * cluster_mnk[1]
+    return _SM100_MULTIPROCESSORS // cluster_size
 
 
 class _GemmRmsBackwardMixin(GemmActMixin):
