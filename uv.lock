@@ -3716,11 +3716,35 @@ dependencies = [
     { name = "pydantic" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "marin-finestore", editable = "lib/finestore" },
     { name = "pyarrow", specifier = ">=23.0.0" },
     { name = "pydantic", specifier = ">=2.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+test = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]

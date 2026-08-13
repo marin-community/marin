@@ -14,5 +14,13 @@ dependencies = [
     "pydantic>=2.0",
 ]
 
+[dependency-groups]
+test = [
+    "pytest>=8.3.2",
+    "pytest-timeout",
+    "pytest-xdist",
+]
+dev = [{ include-group = "test" }]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/evalstore"]

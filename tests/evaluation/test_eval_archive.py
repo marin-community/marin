@@ -16,7 +16,6 @@ from evalstore.archive import (
     Grading,
     SampleKind,
     sample_from_archive_row,
-    sample_to_archive_row,
     write_sample_parquet,
 )
 from finestore.admin import set_table_metadata
@@ -57,26 +56,6 @@ def _mcq(doc_id: str, *, correct: bool) -> EvalSample:
         metrics={"acc": 1.0 if correct else 0.0},
         correct=correct,
     )
-
-
-def test_archive_row_round_trips_each_kind():
-    mcq = _mcq("1", correct=True)
-    generation = EvalSample(
-        task="gsm8k", doc_id="2", kind=SampleKind.GENERATION, prompt_text="2+2?", output="4", extracted="4"
-    )
-    agentic = EvalSample(
-        task="aime",
-        doc_id="3",
-        kind=SampleKind.AGENTIC,
-        trajectory_uri="finestore://blobs/t3/trajectory.json",
-        grading=Grading(method="harbor:verifier", metric="reward", score=1.0, passed=True),
-        metrics={"reward": 1.0},
-        correct=True,
-    )
-    for sample in (mcq, generation, agentic):
-        row = sample_to_archive_row(sample, trial_id="t")
-        assert row["trial_id"] == "t"
-        assert sample_from_archive_row(row) == sample
 
 
 def test_evaldash_reads_the_archive(tmp_path):

@@ -83,3 +83,9 @@ Validation so far:
 - CoreWeave smoke CI exposed that the Iris Docker context did not include the new FineStore workspace dependency. Added the FineStore manifest and source to the dependency stage and its context allowlist.
 - `docker buildx build --target deps --platform linux/amd64 -f lib/iris/Dockerfile .` completed, including the final `uv sync` that installed `marin-finestore` and the Iris native wheel.
 - The repository pre-commit and type-check gates pass after the packaging fix.
+
+### 2026-08-13 — Evalstore CI selection
+
+- Registered Evalstore as a workspace test scope and moved the archive contract roundtrip into a package-owned suite, so package metadata changes select a real test leg.
+- Evalstore: 1 passed; CI selector: 39 passed; root evaluation archive: 24 passed.
+- `./infra/pre-commit.py --changed-files --fix`: all gates passed.
