@@ -3,11 +3,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <future>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -33,6 +36,7 @@
 #include "xla/stream_executor/mock_stream.h"
 #include "xla/stream_executor/mock_stream_executor.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/SHA256.h"
@@ -49,11 +53,19 @@ public:
   uint32_t u32() { return integer<uint32_t>(); }
   uint64_t u64() { return integer<uint64_t>(); }
   int64_t i64() { return static_cast<int64_t>(u64()); }
-  llvm::StringRef text() {
-    auto value = take(u64());
+  llvm::StringRef text(uint64_t *payloadOffset = nullptr) {
+    uint64_t size = u64();
+    if (payloadOffset)
+      *payloadOffset = position();
+    auto value = take(size);
     return {reinterpret_cast<const char *>(value.data()), value.size()};
   }
-  llvm::ArrayRef<uint8_t> blob() { return take(u64()); }
+  llvm::ArrayRef<uint8_t> blob(uint64_t *payloadOffset = nullptr) {
+    uint64_t size = u64();
+    if (payloadOffset)
+      *payloadOffset = position();
+    return take(size);
+  }
   llvm::SmallVector<int64_t> integers() {
     uint64_t count = u64();
     if (count > 256) {
@@ -119,6 +131,14 @@ struct Decoded {
   llvm::SmallVector<uint8_t> code;
   llvm::SmallVector<mlir::shuttle::GpuLaunch> launches;
   int64_t slots = 0;
+  uint64_t deviceRootOffset = 0;
+  uint64_t deviceRootPayloadOffset = 0;
+  uint64_t deviceSuffixStart = 0;
+  uint64_t invocationStart = 0;
+  uint64_t bundleDeviceRootPayloadOffset = 0;
+  uint64_t bundleRootOffset = 0;
+  uint64_t bundleRootPayloadOffset = 0;
+  llvm::SmallVector<uint64_t> launchGridOffsets;
 };
 
 std::optional<Decoded> decodeInlineSchema2(llvm::ArrayRef<uint8_t> bytes) {
@@ -139,12 +159,14 @@ std::optional<Decoded> decodeInlineSchema2(llvm::ArrayRef<uint8_t> bytes) {
   if (code.size() > 8 * 1024 * 1024 || reader.text() != sha256(code))
     return std::nullopt;
   uint64_t deviceRootOffset = reader.position();
-  llvm::StringRef deviceRoot = reader.text();
+  uint64_t deviceRootPayloadOffset = 0;
+  llvm::StringRef deviceRoot = reader.text(&deviceRootPayloadOffset);
   uint64_t deviceSuffixStart = reader.position();
   if (!isDigest(deviceRoot) || reader.u64() != 19)
     return std::nullopt;
 
   llvm::SmallVector<mlir::shuttle::GpuLaunch> launches;
+  llvm::SmallVector<uint64_t> launchGridOffsets;
   int64_t nextOffset = 0;
   int64_t taskPositions = 0;
   for (int64_t ordinal = 0; ordinal < 19; ++ordinal) {
@@ -187,6 +209,7 @@ std::optional<Decoded> decodeInlineSchema2(llvm::ArrayRef<uint8_t> bytes) {
     if (codeDigest != sha256(slice))
       return std::nullopt;
     nextOffset += length;
+    uint64_t launchGridOffset = reader.position();
     std::array<uint64_t, 3> grid{reader.u32(), reader.u32(), reader.u32()};
     std::array<uint64_t, 3> block{reader.u16(), reader.u16(), reader.u16()};
     uint32_t shared = reader.u32();
@@ -194,9 +217,14 @@ std::optional<Decoded> decodeInlineSchema2(llvm::ArrayRef<uint8_t> bytes) {
         block[0] * block[1] * block[2] > 1024 || shared > 16 * 1024 ||
         reader.u16() != inputs.size() + outputs.size())
       return std::nullopt;
-    int64_t positions =
-        grid[0] * grid[1] * grid[2] * block[0] * block[1] * block[2];
-    if (positions > 67129347 || taskPositions > 67129347 - positions)
+    constexpr uint64_t maximumTaskPositions = 67129347;
+    uint64_t positions = 1;
+    for (uint64_t extent : llvm::concat<uint64_t>(grid, block)) {
+      if (extent > maximumTaskPositions / positions)
+        return std::nullopt;
+      positions *= extent;
+    }
+    if (positions > maximumTaskPositions - taskPositions)
       return std::nullopt;
     taskPositions += positions;
     mlir::shuttle::GpuLaunch launch;
@@ -211,12 +239,13 @@ std::optional<Decoded> decodeInlineSchema2(llvm::ArrayRef<uint8_t> bytes) {
     launch.outputSlots.assign(outputs.begin(), outputs.end());
     launch.dependencies.assign(dependencies.begin(), dependencies.end());
     launches.push_back(std::move(launch));
+    launchGridOffsets.push_back(launchGridOffset);
   }
   uint64_t invocationStart = reader.position();
   if (deviceRoot !=
-      sha256(bytes.slice(deviceStart, deviceRootOffset - deviceStart),
-             bytes.slice(deviceSuffixStart,
-                         invocationStart - deviceSuffixStart)))
+      sha256(
+          bytes.slice(deviceStart, deviceRootOffset - deviceStart),
+          bytes.slice(deviceSuffixStart, invocationStart - deviceSuffixStart)))
     return std::nullopt;
   if (!reader.ok() || nextOffset != code.size() || reader.i64() != 3 ||
       !isDigest(reader.text()) || reader.text() != schedule)
@@ -279,21 +308,69 @@ std::optional<Decoded> decodeInlineSchema2(llvm::ArrayRef<uint8_t> bytes) {
   }
   uint64_t bundleStart = reader.position();
   if (invocationRoot !=
-      sha256(bytes.slice(invocationStart,
-                         invocationRootOffset - invocationStart),
-             bytes.slice(invocationSuffixStart,
-                         bundleStart - invocationSuffixStart)))
+      sha256(
+          bytes.slice(invocationStart, invocationRootOffset - invocationStart),
+          bytes.slice(invocationSuffixStart,
+                      bundleStart - invocationSuffixStart)))
     return std::nullopt;
   if (temporaryBytes != 201416716 || scalarSlots != 3 || externalSlots != 3 ||
-      reader.i64() != 2 || reader.text() != schedule ||
-      reader.text() != deviceRoot || reader.text() != invocationRoot ||
-      reader.u8() != 1)
+      reader.i64() != 2 || reader.text() != schedule)
+    return std::nullopt;
+  uint64_t bundleDeviceRootPayloadOffset = 0;
+  if (reader.text(&bundleDeviceRootPayloadOffset) != deviceRoot ||
+      reader.text() != invocationRoot || reader.u8() != 1)
     return std::nullopt;
   uint64_t rootOffset = reader.position();
-  llvm::StringRef bundleRoot = reader.text();
+  uint64_t bundleRootPayloadOffset = 0;
+  llvm::StringRef bundleRoot = reader.text(&bundleRootPayloadOffset);
   if (!reader.done() || bundleRoot != sha256(bytes.take_front(rootOffset)))
     return std::nullopt;
-  return Decoded{llvm::SmallVector<uint8_t>(code), std::move(launches), 21};
+  return Decoded{llvm::SmallVector<uint8_t>(code),
+                 std::move(launches),
+                 21,
+                 deviceRootOffset,
+                 deviceRootPayloadOffset,
+                 deviceSuffixStart,
+                 invocationStart,
+                 bundleDeviceRootPayloadOffset,
+                 rootOffset,
+                 bundleRootPayloadOffset,
+                 std::move(launchGridOffsets)};
+}
+
+void writeU32(llvm::MutableArrayRef<uint8_t> bytes, uint64_t offset,
+              uint32_t value) {
+  for (unsigned byte = 0; byte < sizeof(value); ++byte)
+    bytes[offset + byte] = static_cast<uint8_t>(value >> (byte * 8));
+}
+
+void writeDigest(llvm::MutableArrayRef<uint8_t> bytes, uint64_t offset,
+                 llvm::StringRef digest) {
+  assert(digest.size() == 64);
+  llvm::copy(digest, bytes.begin() + offset);
+}
+
+void rehashDeviceAndBundle(llvm::MutableArrayRef<uint8_t> bytes,
+                           const Decoded &decoded) {
+  std::string deviceRoot =
+      sha256(bytes.slice(/*deviceStart=*/12, decoded.deviceRootOffset - 12),
+             bytes.slice(decoded.deviceSuffixStart,
+                         decoded.invocationStart - decoded.deviceSuffixStart));
+  writeDigest(bytes, decoded.deviceRootPayloadOffset, deviceRoot);
+  writeDigest(bytes, decoded.bundleDeviceRootPayloadOffset, deviceRoot);
+  writeDigest(bytes, decoded.bundleRootPayloadOffset,
+              sha256(bytes.take_front(decoded.bundleRootOffset)));
+}
+
+llvm::SmallVector<uint8_t> oversizedLaunchGrid(llvm::ArrayRef<uint8_t> bytes,
+                                               const Decoded &decoded) {
+  llvm::SmallVector<uint8_t> result(bytes);
+  uint64_t gridOffset = decoded.launchGridOffsets.front();
+  writeU32(result, gridOffset, uint32_t{1} << 31);
+  writeU32(result, gridOffset + 4, uint32_t{1} << 31);
+  writeU32(result, gridOffset + 8, 4);
+  rehashDeviceAndBundle(result, decoded);
+  return result;
 }
 
 struct BuiltBundle {
@@ -368,19 +445,24 @@ TEST(GpuTransportV2Test, IndependentInlineDecoderMatchesPublicDescriptor) {
   corruptRoot.back() ^= 1;
   EXPECT_FALSE(decodeInlineSchema2(corruptRoot));
   EXPECT_FALSE(mlir::shuttle::GpuExecutable::Load(corruptRoot).ok());
+
+  auto oversized = oversizedLaunchGrid(*bytes, *independent);
+  EXPECT_FALSE(decodeInlineSchema2(oversized));
+  EXPECT_FALSE(mlir::shuttle::GpuExecutable::Load(oversized).ok());
 }
 
 class SyntheticAllocator final
     : public stream_executor::DeviceAddressAllocator {
 public:
-  SyntheticAllocator() : DeviceAddressAllocator(nullptr) {}
+  explicit SyntheticAllocator(uintptr_t base = 0x10000000)
+      : DeviceAddressAllocator(nullptr), base(base) {}
 
   absl::StatusOr<stream_executor::ScopedDeviceAddress<uint8_t>>
   Allocate(int deviceOrdinal, uint64_t size, bool, int64_t) final {
     if (failAt && sizes.size() == *failAt)
       return absl::ResourceExhaustedError("synthetic allocation failure");
     sizes.push_back(size);
-    uintptr_t address = 0x10000000;
+    uintptr_t address = base;
     for (uint64_t previous : sizes)
       address += previous + 256;
     return stream_executor::ScopedDeviceAddress<uint8_t>(
@@ -399,35 +481,73 @@ public:
   llvm::SmallVector<uint64_t> sizes;
   int64_t deallocations = 0;
   std::optional<size_t> failAt;
+
+private:
+  uintptr_t base;
+};
+
+struct LoadedKernel {
+  std::string ptx;
+  std::string symbol;
+  size_t arity = 0;
+};
+
+struct KernelLaunch {
+  size_t ordinal = 0;
+  std::array<uint64_t, 3> grid;
+  std::array<uint64_t, 3> block;
+  uint64_t sharedMemoryBytes = 0;
+  llvm::SmallVector<uintptr_t> arguments;
+};
+
+struct ExecutionTrace {
+  std::mutex mutex;
+  llvm::SmallVector<LoadedKernel> loads;
+  llvm::SmallVector<KernelLaunch> launches;
+  std::atomic<int64_t> launchAttempts{0};
+  std::atomic<int64_t> failAt{-1};
 };
 
 class RecordingKernel final : public stream_executor::Kernel {
 public:
-  RecordingKernel(unsigned arity,
-                  std::shared_ptr<std::atomic<int64_t>> launches,
-                  std::shared_ptr<std::atomic<int64_t>> failAt)
-      : arity(arity), launches(std::move(launches)), failAt(std::move(failAt)) {
-  }
+  RecordingKernel(unsigned arity, size_t ordinal,
+                  std::shared_ptr<ExecutionTrace> trace)
+      : arity(arity), ordinal(ordinal), trace(std::move(trace)) {}
   unsigned Arity() const final { return arity; }
   absl::StatusOr<int32_t>
   GetMaxOccupiedBlocksPerCore(stream_executor::ThreadDim, size_t) const final {
     return 1;
   }
-  absl::Status Launch(const stream_executor::ThreadDim &,
-                      const stream_executor::BlockDim &,
+  absl::Status Launch(const stream_executor::ThreadDim &thread,
+                      const stream_executor::BlockDim &block,
                       const std::optional<stream_executor::ClusterDim> &,
                       stream_executor::Stream *,
-                      const stream_executor::KernelArgs &) final {
-    int64_t ordinal = launches->fetch_add(1);
-    if (failAt->load() == ordinal)
+                      const stream_executor::KernelArgs &args) final {
+    int64_t attempt = trace->launchAttempts.fetch_add(1);
+    if (trace->failAt.load() == attempt)
       return absl::InternalError("synthetic enqueue failure");
+    auto *packed =
+        stream_executor::DynCast<stream_executor::KernelArgsPackedArrayBase>(
+            &args);
+    KernelLaunch launch{ordinal,
+                        {block.x, block.y, block.z},
+                        {thread.x, thread.y, thread.z},
+                        args.number_of_shared_bytes(),
+                        {}};
+    for (const void *argument : packed->argument_addresses()) {
+      void *address = nullptr;
+      std::memcpy(&address, argument, sizeof(address));
+      launch.arguments.push_back(reinterpret_cast<uintptr_t>(address));
+    }
+    std::lock_guard lock(trace->mutex);
+    trace->launches.push_back(std::move(launch));
     return absl::OkStatus();
   }
 
 private:
   unsigned arity;
-  std::shared_ptr<std::atomic<int64_t>> launches;
-  std::shared_ptr<std::atomic<int64_t>> failAt;
+  size_t ordinal;
+  std::shared_ptr<ExecutionTrace> trace;
 };
 
 xla::ffi::CallFrame callFrame(llvm::ArrayRef<uint8_t> transport,
@@ -457,6 +577,58 @@ xla::ffi::CallFrame callFrame(llvm::ArrayRef<uint8_t> transport,
   return builder.Build();
 }
 
+std::unique_ptr<stream_executor::Kernel>
+recordLoadedKernel(const stream_executor::KernelLoaderSpec &spec,
+                   const std::shared_ptr<ExecutionTrace> &trace) {
+  auto ptx = spec.cuda_ptx_in_memory();
+  if (!ptx)
+    return nullptr;
+  size_t ordinal = 0;
+  {
+    std::lock_guard lock(trace->mutex);
+    ordinal = trace->loads.size();
+    trace->loads.push_back(
+        {std::string(ptx->ptx), spec.kernel_name(), spec.arity()});
+  }
+  return std::make_unique<RecordingKernel>(spec.arity(), ordinal, trace);
+}
+
+void expectLoadedKernels(const Decoded &decoded, const ExecutionTrace &trace,
+                         size_t start) {
+  ASSERT_GE(trace.loads.size(), start + decoded.launches.size());
+  for (size_t ordinal = 0; ordinal < decoded.launches.size(); ++ordinal) {
+    const auto &expected = decoded.launches[ordinal];
+    const auto &actual = trace.loads[start + ordinal];
+    EXPECT_EQ(llvm::StringRef(actual.ptx),
+              llvm::StringRef(reinterpret_cast<const char *>(
+                                  decoded.code.data() + expected.codeOffset),
+                              expected.codeLength));
+    EXPECT_EQ(actual.symbol, "shuttle_entry");
+    EXPECT_EQ(actual.arity,
+              expected.inputSlots.size() + expected.outputSlots.size());
+  }
+}
+
+void expectKernelLaunches(const Decoded &decoded, const ExecutionTrace &trace,
+                          size_t start,
+                          const llvm::DenseMap<int64_t, uintptr_t> &slots) {
+  ASSERT_GE(trace.launches.size(), start + decoded.launches.size());
+  for (size_t ordinal = 0; ordinal < decoded.launches.size(); ++ordinal) {
+    const auto &expected = decoded.launches[ordinal];
+    const auto &actual = trace.launches[start + ordinal];
+    EXPECT_EQ(actual.ordinal, ordinal);
+    EXPECT_EQ(actual.grid, expected.grid);
+    EXPECT_EQ(actual.block, expected.block);
+    EXPECT_EQ(actual.sharedMemoryBytes, expected.dynamicSharedMemoryBytes);
+    llvm::SmallVector<uintptr_t> expectedArguments;
+    for (int64_t slot : expected.inputSlots)
+      expectedArguments.push_back(slots.lookup(slot));
+    for (int64_t slot : expected.outputSlots)
+      expectedArguments.push_back(slots.lookup(slot));
+    EXPECT_EQ(actual.arguments, expectedArguments);
+  }
+}
+
 TEST(GpuTransportV2Test, ExportedFfiBundleOwnsEveryLifecycleStage) {
   auto built = buildFixture();
   ASSERT_TRUE(built);
@@ -465,6 +637,8 @@ TEST(GpuTransportV2Test, ExportedFfiBundleOwnsEveryLifecycleStage) {
   std::string transportDigest =
       mlir::shuttle::gpuExecutableBundleDigest(*transport);
   auto frame = callFrame(*transport, transportDigest);
+  auto decoded = decodeInlineSchema2(*transport);
+  ASSERT_TRUE(decoded);
   XLA_FFI_Handler_Bundle handlers =
       mlir::shuttle::gpuExecutableBundleFfiHandlerBundle();
   ASSERT_NE(handlers.instantiate, nullptr);
@@ -477,16 +651,13 @@ TEST(GpuTransportV2Test, ExportedFfiBundleOwnsEveryLifecycleStage) {
   stream_executor::MockStream stream;
   stream_executor::GpuComputeCapability capability{
       stream_executor::CudaComputeCapability{9, 0}};
-  auto launches = std::make_shared<std::atomic<int64_t>>(0);
-  auto failAt = std::make_shared<std::atomic<int64_t>>(-1);
+  auto trace = std::make_shared<ExecutionTrace>();
   EXPECT_CALL(stream, parent()).WillRepeatedly(testing::Return(&executor));
   EXPECT_CALL(executor, LoadKernel(testing::_))
       .Times(19)
-      .WillRepeatedly(
-          [launches, failAt](const stream_executor::KernelLoaderSpec &spec) {
-            return std::unique_ptr<stream_executor::Kernel>(
-                new RecordingKernel(spec.arity(), launches, failAt));
-          });
+      .WillRepeatedly([trace](const stream_executor::KernelLoaderSpec &spec) {
+        return recordLoadedKernel(spec, trace);
+      });
 
   xla::ffi::ExecutionState instantiateState;
   xla::ffi::ExecutionState prepareState;
@@ -511,20 +682,47 @@ TEST(GpuTransportV2Test, ExportedFfiBundleOwnsEveryLifecycleStage) {
                                frame, context,
                                XLA_FFI_ExecutionStage_INITIALIZE)
                   .ok());
+  expectLoadedKernels(*decoded, *trace, 0);
   ASSERT_TRUE(xla::ffi::Invoke(xla::ffi::GetXlaFfiApi(), handlers.execute,
                                frame, context, XLA_FFI_ExecutionStage_EXECUTE)
                   .ok());
-  EXPECT_EQ(launches->load(), 19);
+  EXPECT_EQ(trace->launchAttempts.load(), 19);
+  llvm::DenseMap<int64_t, uintptr_t> firstSlots{
+      {0, 0x40000000}, {1, 0x50000000}, {20, 0x60000000}};
+  ASSERT_EQ(allocator.sizes.size(), 18);
+  uintptr_t temporaryAddress = 0x10000000;
+  for (int64_t slot = 2; slot < 20; ++slot) {
+    temporaryAddress += allocator.sizes[slot - 2] + 256;
+    firstSlots[slot] = temporaryAddress;
+  }
+  expectKernelLaunches(*decoded, *trace, 0, firstSlots);
 
-  launches->store(0);
-  failAt->store(7);
+  trace->launchAttempts.store(0);
+  trace->failAt.store(7);
   EXPECT_FALSE(xla::ffi::Invoke(xla::ffi::GetXlaFfiApi(), handlers.execute,
                                 frame, context, XLA_FFI_ExecutionStage_EXECUTE)
                    .ok());
-  EXPECT_EQ(launches->load(), 8);
-  failAt->store(-1);
+  EXPECT_EQ(trace->launchAttempts.load(), 8);
+  trace->failAt.store(-1);
 
-  launches->store(0);
+  trace->launchAttempts.store(0);
+  SyntheticAllocator secondAllocator(0x70000000);
+  xla::ffi::ExecutionState secondPrepareState;
+  xla::ffi::InvokeContext secondContext = context;
+  secondContext.backend_context = xla::ffi::InvokeContext::GpuContext{
+      &stream, &secondAllocator, nullptr, nullptr,
+      nullptr, nullptr,          nullptr, &capability};
+  secondContext.state_context.prepare = &secondPrepareState;
+  ASSERT_TRUE(xla::ffi::Invoke(xla::ffi::GetXlaFfiApi(), handlers.prepare,
+                               frame, secondContext,
+                               XLA_FFI_ExecutionStage_PREPARE)
+                  .ok());
+  ASSERT_EQ(secondAllocator.sizes, allocator.sizes);
+  size_t concurrentStart = 0;
+  {
+    std::lock_guard lock(trace->mutex);
+    concurrentStart = trace->launches.size();
+  }
   auto firstFrame = frame.Copy();
   auto secondFrame = frame.Copy();
   auto first = std::async(std::launch::async, [&] {
@@ -534,12 +732,48 @@ TEST(GpuTransportV2Test, ExportedFfiBundleOwnsEveryLifecycleStage) {
   });
   auto second = std::async(std::launch::async, [&] {
     return xla::ffi::Invoke(xla::ffi::GetXlaFfiApi(), handlers.execute,
-                            secondFrame, context,
+                            secondFrame, secondContext,
                             XLA_FFI_ExecutionStage_EXECUTE);
   });
   EXPECT_TRUE(first.get().ok());
   EXPECT_TRUE(second.get().ok());
-  EXPECT_EQ(launches->load(), 38);
+  EXPECT_EQ(trace->launchAttempts.load(), 38);
+  llvm::DenseMap<int64_t, uintptr_t> secondSlots{
+      {0, 0x40000000}, {1, 0x50000000}, {20, 0x60000000}};
+  temporaryAddress = 0x70000000;
+  for (int64_t slot = 2; slot < 20; ++slot) {
+    temporaryAddress += secondAllocator.sizes[slot - 2] + 256;
+    secondSlots[slot] = temporaryAddress;
+  }
+  // Independent allocators must yield distinct invocation-local addresses.
+  EXPECT_NE(firstSlots.lookup(2), secondSlots.lookup(2));
+  llvm::SmallVector<int64_t> launchesPerOrdinal(19);
+  {
+    std::lock_guard lock(trace->mutex);
+    ASSERT_EQ(trace->launches.size() - concurrentStart, 38);
+    for (const auto &actual :
+         llvm::drop_begin(trace->launches, concurrentStart)) {
+      ASSERT_LT(actual.ordinal, decoded->launches.size());
+      const auto &expected = decoded->launches[actual.ordinal];
+      EXPECT_EQ(actual.grid, expected.grid);
+      EXPECT_EQ(actual.block, expected.block);
+      EXPECT_EQ(actual.sharedMemoryBytes, expected.dynamicSharedMemoryBytes);
+      auto expectedArguments =
+          [&](const llvm::DenseMap<int64_t, uintptr_t> &slots) {
+            llvm::SmallVector<uintptr_t> arguments;
+            for (int64_t slot : expected.inputSlots)
+              arguments.push_back(slots.lookup(slot));
+            for (int64_t slot : expected.outputSlots)
+              arguments.push_back(slots.lookup(slot));
+            return arguments;
+          };
+      EXPECT_TRUE(actual.arguments == expectedArguments(firstSlots) ||
+                  actual.arguments == expectedArguments(secondSlots));
+      ++launchesPerOrdinal[actual.ordinal];
+    }
+  }
+  EXPECT_TRUE(llvm::all_of(launchesPerOrdinal,
+                           [](int64_t count) { return count == 2; }));
 
   auto corrupt = callFrame(*transport, std::string(64, '0'));
   EXPECT_FALSE(xla::ffi::Invoke(xla::ffi::GetXlaFfiApi(), handlers.instantiate,

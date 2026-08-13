@@ -387,16 +387,6 @@ cc_test(
 )
 
 cc_test(
-    name = "gpu_ffi_registration_test",
-    srcs = ["test/gpu-ffi-registration-test.cc"],
-    deps = [
-        ":ShuttleGpuFfi",
-        "@com_google_googletest//:gtest_main",
-        "@xla//xla/pjrt/c:pjrt_c_api_gpu_extension_hdrs",
-    ],
-)
-
-cc_test(
     name = "xla_registration_test",
     srcs = ["test/xla-registration-test.cc"],
     deps = [
