@@ -229,14 +229,28 @@ def fold_mode(args) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _leaf_artifacts(fs, root: str) -> list[dict]:
-    out = []
-    for key in fs.glob(f"{root.removeprefix('s3://')}/*/*/.artifact.json"):
-        try:
-            out.append(json.loads(fs.cat(key)))
-        except Exception as exc:
-            logger.warning("unreadable artifact %s: %s", key, exc)
-    return out
+def _leaf_artifacts(fs, root: str, threads: int) -> list[dict]:
+    """Every ``<source>/<subset>_<hash>`` leaf's ``.artifact.json`` under a stage root.
+
+    Delimiter listings one level at a time rather than a recursive glob. The
+    tokenize tree holds on the order of a million parquet shards, and a
+    ``*/*/.artifact.json`` pattern makes s3fs walk all of them to match three
+    path components -- measured at over 20 minutes without returning.
+    """
+    base = root.removeprefix("s3://").rstrip("/")
+    with ThreadPoolExecutor(max_workers=threads) as pool:
+        sources = fs.ls(base, detail=False)
+        leaves = [leaf for got in pool.map(lambda s: fs.ls(s, detail=False), sources) for leaf in got]
+        logger.info("%s: %d sources, %d leaves", root, len(sources), len(leaves))
+
+        def read(leaf: str) -> dict | None:
+            try:
+                return json.loads(fs.cat(f"{leaf.rstrip('/')}/.artifact.json"))
+            except Exception as exc:
+                logger.warning("unreadable artifact under %s: %s", leaf, exc)
+                return None
+
+        return [a for a in pool.map(read, leaves) if a]
 
 
 def _leaf_rel(output_dir: str, marker: str) -> str:
@@ -262,13 +276,18 @@ def manifest_mode(args) -> dict:
     """
     fs = fsspec.filesystem("s3")
     tokenize, embed = {}, {}
-    for art in _leaf_artifacts(fs, TOKENIZE_ROOT):
+    # Not every leaf artifact carries a result: a stage that failed or is still
+    # running writes one without `source_key`, and reading it as a pair would
+    # either crash or silently pair the wrong directories.
+    for art in _leaf_artifacts(fs, TOKENIZE_ROOT, args.discovery_threads):
         cfg, res = art.get("config") or {}, art.get("result") or {}
-        if cfg.get("tokenizer") == NEMOTRON_CORPUS_TOKENIZER:
-            tokenize[res["source_key"]] = res["output_dirs"]["train"]
-    for art in _leaf_artifacts(fs, EMBED_ROOT):
+        train = (res.get("output_dirs") or {}).get("train")
+        if cfg.get("tokenizer") == NEMOTRON_CORPUS_TOKENIZER and res.get("source_key") and train:
+            tokenize[res["source_key"]] = train
+    for art in _leaf_artifacts(fs, EMBED_ROOT, args.discovery_threads):
         res = art.get("result") or {}
-        embed[res["source_key"]] = res["output_dir"]
+        if res.get("source_key") and res.get("output_dir"):
+            embed[res["source_key"]] = res["output_dir"]
     shared = sorted(set(tokenize) & set(embed))
     logger.info("nemotron leaves=%d harrier leaves=%d paired=%d", len(tokenize), len(embed), len(shared))
 
