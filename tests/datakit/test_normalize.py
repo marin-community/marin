@@ -7,11 +7,13 @@ import gzip
 import json
 from pathlib import Path
 
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from marin.datakit import normalize as normalize_mod
 from marin.datakit.normalize import NORMALIZED_DATA_VERSION, NormalizedData, generate_id, normalize_to_parquet
 from marin.execution.artifact import ArtifactRecord, read_artifact, write_artifact, write_record
 
@@ -383,3 +385,56 @@ def test_no_input_files_raises(tmp_path: Path):
 
     with pytest.raises(FileNotFoundError):
         normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+
+
+def test_iter_input_batches_widens_null_column_across_batches(tmp_path: Path, monkeypatch):
+    """Later batches may widen Null→Utf8 under vertical_relaxed; rows are kept."""
+    monkeypatch.setattr(normalize_mod, "_INPUT_BATCH_ROWS", 2)
+    path = tmp_path / "data.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "1", "text": None}),
+                json.dumps({"id": "2", "text": None}),
+                json.dumps({"id": "3", "text": "hello"}),
+            ]
+        )
+        + "\n"
+    )
+    frames = list(normalize_mod._iter_input_batches(str(path)))
+    assert len(frames) == 2
+    assert frames[1].schema["text"] == pl.String
+    assert frames[1]["text"].to_list() == ["hello"]
+
+
+def test_iter_input_batches_rejects_new_column_after_first_batch(tmp_path: Path, monkeypatch):
+    """A column that appears only after the first batch is a hard error."""
+    monkeypatch.setattr(normalize_mod, "_INPUT_BATCH_ROWS", 2)
+    path = tmp_path / "data.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "1"}),
+                json.dumps({"id": "2"}),
+                json.dumps({"id": "3", "text": "late"}),
+            ]
+        )
+        + "\n"
+    )
+    with pytest.raises(ValueError, match="Row structure changed after 2 rows"):
+        list(normalize_mod._iter_input_batches(str(path)))
+
+
+def test_align_dataframe_vertical_relaxed_widens_null_to_string():
+    first = pl.DataFrame({"a": [1], "b": [None]}, infer_schema_length=None)
+    second = pl.DataFrame({"a": [2], "b": ["x"]}, infer_schema_length=None)
+    aligned, schema = normalize_mod._align_dataframe_vertical_relaxed(second, first.schema)
+    assert schema["b"] == pl.String
+    assert aligned.schema == schema
+
+
+def test_align_dataframe_vertical_relaxed_rejects_new_column():
+    first = pl.DataFrame({"a": [1]})
+    second = pl.DataFrame({"a": [2], "b": [3]})
+    with pytest.raises(ValueError, match="column set mismatch"):
+        normalize_mod._align_dataframe_vertical_relaxed(second, first.schema)
