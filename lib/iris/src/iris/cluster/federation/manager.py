@@ -383,12 +383,7 @@ class FederationManager:
             peer.probe()
 
     def sync_once(self) -> None:
-        """Run one delivery pass followed by one status-sync pass per peer.
-
-        Tests and synchronous callers use this deterministic combined pass. The
-        background manager runs delivery and status sync independently so a slow
-        LaunchJob request cannot delay status updates. A no-op without a store.
-        """
+        """Deliver pending work and mirror one status batch from each peer."""
         if self._store is None or not self._peers:
             return
         with ThreadPoolExecutor(max_workers=len(self._peers), thread_name_prefix="federation-once") as executor:

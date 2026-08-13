@@ -143,7 +143,7 @@ class _LaunchConnection(_StubConnection):
             assert self.release.wait(timeout=5)
         return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
 
-    def federation_sync(self, request):
+    def federation_sync(self, _request):
         self.synced.set()
         return controller_pb2.Controller.FederationSyncResponse()
 
@@ -168,7 +168,7 @@ class _SelectiveLaunchConnection(_StubConnection):
             self.ready_launched.set()
         return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
 
-    def federation_sync(self, request):
+    def federation_sync(self, _request):
         self.synced.set()
         return controller_pb2.Controller.FederationSyncResponse()
 
@@ -187,11 +187,11 @@ class _PendingHandoffStore:
     def pending_cancels(self):
         return []
 
-    def read_cursor(self, peer_id: str) -> str:
+    def read_cursor(self, _peer_id: str) -> str:
         return ""
 
     def apply_sync_batch(self, peer_id, deltas, *, next_cursor, cursor_stale, endpoints):
-        pass
+        del peer_id, deltas, next_cursor, cursor_stale, endpoints
 
 
 def _peer(peer_id: str, connection: _StubConnection) -> FederationPeer:
