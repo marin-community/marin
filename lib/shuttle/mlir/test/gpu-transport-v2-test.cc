@@ -100,6 +100,14 @@ std::string sha256(llvm::ArrayRef<uint8_t> bytes) {
   return llvm::toHex(sha.final(), true);
 }
 
+std::string sha256(llvm::ArrayRef<uint8_t> prefix,
+                   llvm::ArrayRef<uint8_t> suffix) {
+  llvm::SHA256 sha;
+  sha.update(prefix);
+  sha.update(suffix);
+  return llvm::toHex(sha.final(), true);
+}
+
 bool isDigest(llvm::StringRef value) {
   return value.size() == 64 && llvm::all_of(value, [](char character) {
            return llvm::isDigit(character) ||
@@ -123,13 +131,16 @@ std::optional<Decoded> decodeInlineSchema2(llvm::ArrayRef<uint8_t> bytes) {
   if (reader.u32() != 2 || reader.i64() != 3 || reader.u8() != 2 ||
       reader.u8() != 0)
     return std::nullopt;
+  constexpr uint64_t deviceStart = 12;
   llvm::StringRef schedule = reader.text();
   if (!isDigest(schedule))
     return std::nullopt;
   auto code = reader.blob();
   if (code.size() > 8 * 1024 * 1024 || reader.text() != sha256(code))
     return std::nullopt;
+  uint64_t deviceRootOffset = reader.position();
   llvm::StringRef deviceRoot = reader.text();
+  uint64_t deviceSuffixStart = reader.position();
   if (!isDigest(deviceRoot) || reader.u64() != 19)
     return std::nullopt;
 
@@ -201,10 +212,18 @@ std::optional<Decoded> decodeInlineSchema2(llvm::ArrayRef<uint8_t> bytes) {
     launch.dependencies.assign(dependencies.begin(), dependencies.end());
     launches.push_back(std::move(launch));
   }
+  uint64_t invocationStart = reader.position();
+  if (deviceRoot !=
+      sha256(bytes.slice(deviceStart, deviceRootOffset - deviceStart),
+             bytes.slice(deviceSuffixStart,
+                         invocationStart - deviceSuffixStart)))
+    return std::nullopt;
   if (!reader.ok() || nextOffset != code.size() || reader.i64() != 3 ||
       !isDigest(reader.text()) || reader.text() != schedule)
     return std::nullopt;
+  uint64_t invocationRootOffset = reader.position();
   llvm::StringRef invocationRoot = reader.text();
+  uint64_t invocationSuffixStart = reader.position();
   if (!isDigest(invocationRoot) || reader.u64() != 21)
     return std::nullopt;
   int64_t temporaryBytes = 0;
@@ -258,6 +277,13 @@ std::optional<Decoded> decodeInlineSchema2(llvm::ArrayRef<uint8_t> bytes) {
         return std::nullopt;
     }
   }
+  uint64_t bundleStart = reader.position();
+  if (invocationRoot !=
+      sha256(bytes.slice(invocationStart,
+                         invocationRootOffset - invocationStart),
+             bytes.slice(invocationSuffixStart,
+                         bundleStart - invocationSuffixStart)))
+    return std::nullopt;
   if (temporaryBytes != 201416716 || scalarSlots != 3 || externalSlots != 3 ||
       reader.i64() != 2 || reader.text() != schedule ||
       reader.text() != deviceRoot || reader.text() != invocationRoot ||

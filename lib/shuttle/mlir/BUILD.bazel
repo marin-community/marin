@@ -378,6 +378,8 @@ cc_test(
         "@stablehlo//:register",
         "@xla//xla/ffi",
         "@xla//xla/ffi:ffi_api",
+        "@xla//xla/ffi:invoke",
+        "@xla//xla/stream_executor:device_address_allocator",
         "@xla//xla/stream_executor:mock_stream",
         "@xla//xla/stream_executor:mock_stream_executor",
         "@bazel_tools//tools/cpp/runfiles",

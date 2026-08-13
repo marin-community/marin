@@ -28,10 +28,14 @@ def main() -> None:
 
     module = load_extension(args.plugin_extension.resolve())
     handlers = module.ffi_handlers()
-    if set(handlers) != {TARGET}:
-        raise RuntimeError(f"unexpected CUDA typed-FFI targets: {sorted(handlers)}")
+    if TARGET not in handlers:
+        raise RuntimeError(f"missing Shuttle CUDA typed-FFI target: {sorted(handlers)}")
     bundle = handlers[TARGET]
-    if set(bundle) != set(STAGES) or any(bundle[stage] is None for stage in STAGES):
+    if set(bundle) != {*STAGES, "api_version", "traits"}:
+        raise RuntimeError("CUDA plugin exported an unknown Shuttle handler field")
+    if bundle["api_version"] != 1 or bundle["traits"] != 0:
+        raise RuntimeError("CUDA plugin exported the wrong Shuttle typed-FFI metadata")
+    if any(bundle[stage] is None for stage in STAGES):
         raise RuntimeError("CUDA plugin did not export one complete Shuttle handler bundle")
 
 
