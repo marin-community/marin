@@ -45,10 +45,18 @@ failure modes into observations rather than casualties:
     No reply within ``CALL_TIMEOUT``. The library exposes no deadline, page cap or byte cap of its
     own, so an unbounded document can only be bounded from outside.
 
-The worker sets ``RLIMIT_AS`` to ``MEMORY_LIMIT`` before importing the library, so a runaway
-expansion raises ``MemoryError`` in the child instead of inviting the kernel to kill whatever on the
-node happens to be largest. That is a measurement aid, not a Stage 1 recommendation: it converts an
-unbounded allocation into an attributable per-document failure.
+The worker sets **no** ``RLIMIT_AS``, deliberately. An address-space rlimit looks like the obvious
+way to turn a runaway expansion into an attributable ``MemoryError``, and an earlier revision of
+this probe set one at 8 GB. It made every measurement worthless: ``lopdf`` is built against
+``rayon``, and the rlimit made rayon's global thread pool fail to spawn, so 99.1% of calls came back
+as ``PanicException: The global thread pool has not been initialized`` without a single PDF being
+parsed. The container's own memory cgroup is the bound instead -- a runaway allocation gets the
+child killed by ``SIGKILL`` and lands in ``worker_died``, which is the observation Stage 1 needs
+anyway.
+
+That rayon dependency is itself a finding worth carrying forward: the library is internally
+parallel, so the wall-clock figures below are for a task with ``--cpu 8`` and do not divide by
+worker count the way a single-threaded extractor's would.
 
 The probe is deliberately **single-threaded and single-task**, which is the one place in this
 repository where scaling out would be wrong: the deliverable is a latency distribution, and
@@ -86,7 +94,6 @@ import logging
 import math
 import os
 import platform
-import resource
 import selectors
 import signal
 import subprocess
@@ -121,9 +128,10 @@ READ_COLUMNS = ("source_id", "url", "num_pages", "pdf")
 # this long is a hang for any practical purpose, and Docling's own ~1000 ms/page would put a
 # median-length crawl PDF at ~18 s.
 CALL_TIMEOUT = 30.0
-# Converts an unbounded expansion into an attributable MemoryError instead of an OOM kill.
-MEMORY_LIMIT = 8 * 1024**3
 READ_CHUNK = 1 << 16
+# Distinct failure messages to show per operation. Enough to see the shape of a taxonomy without
+# turning the job log into the dataset.
+ERROR_SAMPLES = 10
 
 
 class Op(StrEnum):
@@ -221,7 +229,6 @@ def worker_main() -> None:
     the process is gone.
     """
     faulthandler.enable()
-    resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT, MEMORY_LIMIT))
 
     import pdf_inspector  # noqa: PLC0415 - the whole point is to import it in the disposable process
 
@@ -433,12 +440,14 @@ def summarize(rows: list[dict]) -> None:
         fatal = [row for row in rows if row[f"{op}_outcome"] == Outcome.WORKER_DIED]
         for signal_name, count in Counter(row.get(f"{op}_worker_signal") for row in fatal).most_common():
             logger.info("%s: worker deaths by %s: %d", op, signal_name, count)
-        for row in [row for row in rows if row[f"{op}_outcome"] not in SURVIVED_OUTCOMES][:10]:
+        for row in [row for row in rows if row[f"{op}_outcome"] not in SURVIVED_OUTCOMES][:ERROR_SAMPLES]:
             logger.info("%s: fatal on %s (%d bytes): %s", op, row["url"], row["pdf_bytes"], row.get(f"{op}_error"))
-        for message, count in Counter(
-            row.get(f"{op}_error") for row in rows if row[f"{op}_outcome"] == Outcome.EXCEPTION
-        ).most_common(10):
-            logger.info("%s: exception x%d: %s", op, count, message)
+        # Every non-ok outcome, not just Outcome.EXCEPTION: an earlier revision histogrammed only
+        # exceptions, which hid a 99.1% panic rate behind a bare count and cost a full run to find.
+        for outcome in (Outcome.PANIC, Outcome.MEMORY, Outcome.EXCEPTION):
+            failed = [row for row in rows if row[f"{op}_outcome"] == outcome]
+            for message, count in Counter(row.get(f"{op}_error") for row in failed).most_common(ERROR_SAMPLES):
+                logger.info("%s: %s x%d: %s", op, outcome, count, message)
 
         good = [row for row in rows if row[f"{op}_outcome"] == Outcome.OK]
         if not good:
