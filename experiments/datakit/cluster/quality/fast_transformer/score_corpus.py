@@ -93,13 +93,13 @@ READ_BATCH = 4096
 # explicitly: a batch that changes shape between calls recompiles, and a
 # 256-vs-512 shape was measured at 2.12x in the forward.
 DEFAULT_BATCH = 32_768
-# Shard reads run ahead of the forward by this many shards. Measured on one
-# H100: a single shard stream sustains ~54 MB/s (latency-bound, not bandwidth-
-# bound), the forward takes 6s against 40s of read, so concurrency here is what
-# sets throughput. Kept near the GIL knee -- the CPU study found ~4 readers
-# optimal per process and 64 readers *slower* than 4 -- because the way past
-# that wall is more processes, not more threads.
-DEFAULT_PREFETCH_SHARDS = 6
+# Shard reads run ahead of the forward by this many shards. Two, because the
+# reader is CPU-bound in parquet decode rather than latency-bound: measured on
+# one H100 over the same four shards, depth 2 gave 24,553 docs/s while depth 6
+# gave 13,176, with the summed read time rising 40s -> 157s. Deeper prefetch
+# convoys on the GIL instead of overlapping, which is the same knee the CPU
+# study found. The way to more node throughput is more processes.
+DEFAULT_PREFETCH_SHARDS = 2
 # The fold is exact in principle; assert it on real rows rather than trust it.
 FOLD_PARITY_ROWS = 256
 FOLD_PARITY_TOLERANCE = 1e-5
@@ -639,13 +639,20 @@ def node_mode(args) -> dict:
     readers are in separate address spaces.
     """
     gpus = args.gpus_per_node
+    per_node = args.procs_per_node or gpus
     node_index, num_nodes = node_placement(args)
-    logger.info("node %d of %d, %d GPUs per node", node_index, num_nodes, gpus)
-    base = node_index * gpus
+    logger.info("node %d of %d, %d workers over %d GPUs", node_index, num_nodes, per_node, gpus)
+    base = node_index * per_node
     procs = []
-    for local in range(gpus):
+    for local in range(per_node):
         env = dict(os.environ)
-        env["CUDA_VISIBLE_DEVICES"] = str(local)
+        # More workers than GPUs on purpose. The forward is ~12% of a worker's
+        # wall time and the reader is CPU-bound, so a node's 128 vCPU are the
+        # scarce resource, not its 8 devices; workers share a device round-robin.
+        # HBM per worker is ~1.2 GB, so cap the preallocator rather than let the
+        # first worker on a device claim 75% of it and starve its co-tenants.
+        env["CUDA_VISIBLE_DEVICES"] = str(local % gpus)
+        env["XLA_PYTHON_CLIENT_MEM_FRACTION"] = f"{max(0.05, 0.7 / max(1, per_node // gpus)):.2f}"
         env["TOKENIZERS_PARALLELISM"] = "false"
         argv = [
             sys.executable,
@@ -659,7 +666,7 @@ def node_mode(args) -> dict:
             "--worker",
             str(base + local),
             "--num-workers",
-            str(num_nodes * gpus),
+            str(num_nodes * per_node),
             "--batch-size",
             str(args.batch_size),
             "--prefetch",
@@ -675,7 +682,7 @@ def node_mode(args) -> dict:
     failed = [i for i, c in enumerate(codes) if c != 0]
     if failed:
         raise RuntimeError(f"workers {failed} exited non-zero: {codes}")
-    return {"node_index": node_index, "workers": gpus, "exit_codes": codes}
+    return {"node_index": node_index, "workers": per_node, "exit_codes": codes}
 
 
 def main() -> None:
@@ -708,6 +715,9 @@ def main() -> None:
     n.add_argument("--node-index", type=int, default=None, help="default: this Iris replica's index")
     n.add_argument("--num-nodes", type=int, default=None, help="default: the Iris job's replica count")
     n.add_argument("--gpus-per-node", type=int, default=8)
+    n.add_argument(
+        "--procs-per-node", type=int, default=0, help="worker processes per node (default: one per GPU)"
+    )
     n.add_argument("--batch-size", type=int, default=DEFAULT_BATCH)
     n.add_argument("--prefetch", type=int, default=DEFAULT_PREFETCH_SHARDS)
     n.add_argument("--model-tag", default="nemotron88k_v1")
