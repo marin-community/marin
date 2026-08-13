@@ -366,7 +366,7 @@ def _rms_gated_norm_reverse_kernel(
 
     hidden_tiles = pl.cdiv(x_ref.shape[1], block_d)
     gate_preactivation = jax.lax.fori_loop(0, hidden_tiles, forward_down_body, gate_preactivation).astype(jnp.bfloat16)
-    gate_hidden = jax.nn.silu(gate_preactivation).astype(jnp.bfloat16)
+    gate_hidden = jax.nn.silu(gate_preactivation.astype(jnp.float32)).astype(jnp.bfloat16)
     gate_preactivation_cotangent = jnp.zeros((block_m, rank), dtype=jnp.float32)
 
     def gate_body(i, accumulator):
