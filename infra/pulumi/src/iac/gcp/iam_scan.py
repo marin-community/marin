@@ -1,16 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Diff live GCP IAM against what iam_data.py declares, to catch drift `pulumi preview` can't.
+"""Diff live GCP IAM against what iam_data.yaml declares, to catch drift `pulumi preview` can't.
 
-Every grant iam_data.py declares is a non-authoritative `*IAMMember`, so `pulumi preview` only
+Every grant iam_data.yaml declares is a non-authoritative `*IAMMember`, so `pulumi preview` only
 notices a live binding it already tracks in state. A grant nobody told Pulumi about — a newly
 enabled API's service agent, a hand-run `gcloud ... add-iam-policy-binding`, an expanded role on
 an existing member — lands invisibly. This module re-enumerates the live IAM surface and reports
 what diverges from the checked-in config.
 
 Scope: only non-human members are diffed. `user:<email>` principals are KMS-encrypted ciphertext
-in iam_data.py (this file's history is public) and are managed through the encrypted grant
+in iam_data.yaml (this file's history is public) and are managed through the encrypted grant
 workflow plus code review, so diffing them would need decrypt access this read-only scan
 deliberately does not hold. Service accounts, groups, and Google-managed service agents are plain
 strings on both sides and diff exactly.
@@ -66,7 +66,7 @@ _GCP_SA_PREFIX = "gcp-sa-"
 
 
 class Container(StrEnum):
-    """The kind of resource a binding sits on — the same six surfaces iam_data.py declares."""
+    """The kind of resource a binding sits on — the same six surfaces iam_data.yaml declares."""
 
     PROJECT = "project"
     KMS = "kms"
@@ -144,7 +144,7 @@ def declared_resources(
     artifact_repositories: Iterable[GcpArtifactRepositoryIam],
     service_accounts: Iterable[GcpServiceAccountIam],
 ) -> list[tuple[Container, str, tuple[GcpRoleGrant, ...]]]:
-    """The (container, resource-id, grants) for every resource iam_data.py declares IAM on. This
+    """The (container, resource-id, grants) for every resource iam_data.yaml declares IAM on. This
     is the one place resource identities are derived — both the declared-binding flatten and the
     live-read target list consume it, so a live binding and its declared counterpart can't drift
     apart on how a resource is named (e.g. `f"{location}/{repository}"` for a repo)."""
@@ -267,8 +267,8 @@ def render_markdown(findings: list[Finding], *, project: str, run_url: str | Non
         f"# GCP IAM drift on `{project}`",
         "",
         f"The scheduled scan found {len(findings)} binding(s) live in GCP that diverge from "
-        "`infra/pulumi/src/iac/gcp/iam_data.py`. These are non-authoritative grants, so "
-        "`pulumi preview` cannot see them; add each legitimate one to `iam_data.py` (or revoke "
+        "`infra/pulumi/src/iac/gcp/iam_data.yaml`. These are non-authoritative grants, so "
+        "`pulumi preview` cannot see them; add each legitimate one to `iam_data.yaml` (or revoke "
         "it in GCP) to clear this issue. Human `user:` grants are managed separately and are not "
         "diffed here.",
         "",

@@ -2,18 +2,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Scan live GCP IAM for drift from iam_data.py and file it as a GitHub issue for triage.
+"""Scan live GCP IAM for drift from iam_data.yaml and file it as a GitHub issue for triage.
 
     uv run --package marin-iac --extra deploy python infra/pulumi/iam_drift.py --no-github
     uv run --package marin-iac --extra deploy python infra/pulumi/iam_drift.py --run-url "$RUN_URL"
 
-Every grant iam_data.py declares is non-authoritative, so `pulumi preview` only detects drift on
-bindings already in Pulumi state. This re-enumerates the live IAM surface iam_data.py declares and
+Every grant iam_data.yaml declares is non-authoritative, so `pulumi preview` only detects drift on
+bindings already in Pulumi state. This re-enumerates the live IAM surface iam_data.yaml declares and
 reports what diverges: undeclared bindings (including new service agents and hand-run grants),
 broad roles bound outside config, and service agents whose backing API looks disabled. Findings
 land on one sticky GitHub issue that updates in place and closes when the drift clears.
 
-The scanned project is iam_data.py's own (`iac.gcp.iam_kms.PROJECT`); this scan is not
+The scanned project is iam_data.yaml's own (`iac.gcp.iam_kms.PROJECT`); this scan is not
 parameterizable to another project, since the KMS key and declared grants it diffs against are
 that project's. See `iac.gcp.iam_scan` for what is and isn't in scope (human `user:` grants are
 not diffed).
@@ -29,7 +29,7 @@ from pathlib import Path
 # Match __main__.py: Pulumi's src/ layout means `iac` needs src/ on the path when run directly.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from iac.gcp import iam_data
+from iac.gcp.iam_config import load_iam_config
 from iac.gcp.iam_kms import PROJECT, crypto_key_id
 from iac.gcp.iam_live import GcpIamReader, IamReader, iter_resources
 from iac.gcp.iam_scan import (
@@ -51,16 +51,17 @@ TITLE = "[iam-drift] GCP IAM drift outside Pulumi"
 
 
 def scan(reader: IamReader) -> list[Finding]:
-    """Enumerate the live IAM surface, diff it against iam_data.py, and return the findings."""
+    """Enumerate the live IAM surface, diff it against iam_data.yaml, and return the findings."""
+    config = load_iam_config()
     resources = declared_resources(
         PROJECT,
-        crypto_key_id(),
-        project_grants=iam_data.PROJECT_GRANTS,
-        kms_grants=iam_data.KMS_GRANTS,
-        secrets=iam_data.SECRETS,
-        buckets=iam_data.BUCKETS,
-        artifact_repositories=iam_data.ARTIFACT_REPOSITORIES,
-        service_accounts=iam_data.SERVICE_ACCOUNTS,
+        crypto_key_id(config),
+        project_grants=config.project_grants,
+        kms_grants=config.kms_grants,
+        secrets=config.secrets,
+        buckets=config.buckets,
+        artifact_repositories=config.artifact_repositories,
+        service_accounts=config.service_accounts,
     )
     live = [binding for target in iter_resources(resources) for binding in reader.bindings(target, PROJECT)]
     declared = declared_bindings(resources)

@@ -3,7 +3,7 @@
 
 """Read live GCP IAM policies for the drift scan (`iam_scan`).
 
-One authenticated session hits each API's `getIamPolicy` for exactly the resources iam_data.py
+One authenticated session hits each API's `getIamPolicy` for exactly the resources iam_data.yaml
 declares — the project, the KMS key, every secret, bucket, Artifact Registry repo, and service
 account — plus Service Usage for the enabled-API set the orphaned-agent check needs. Every
 permission required here is already in the `marinGcpResourcePreviewer` custom role the CI preview
@@ -30,7 +30,7 @@ _CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 
 @dataclass(frozen=True)
 class ResourceTarget:
-    """A resource to read a live IAM policy for, identified the same way iam_data.py declares it
+    """A resource to read a live IAM policy for, identified the same way iam_data.yaml declares it
     so the resulting `Binding.resource` diffs directly against the declared set."""
 
     container: Container
