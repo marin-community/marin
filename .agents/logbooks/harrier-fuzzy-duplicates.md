@@ -1038,3 +1038,15 @@ author: Rafal Wojdyla
 - Decision: Keep both roots running. The surviving RNO pool remains healthy, and the source continues to write output.
 - Issue update: Post one major update for the sustained RNO capacity loss.
 - Next action: Watch the 16 building services and recover only a terminal service. Watch Spanish FinePDF through completion.
+
+### 2026-08-13 05:04 UTC - RNO capacity recovered to 95 services
+
+- Root health: Both roots remain running with zero failures and zero preemptions. East has 47 completed source artifacts, and RNO has 44. The full run has 91 of 292 completed source artifacts.
+- Aggregate progress: A direct object count at 04:50 UTC found 110,609 of 166,775 output shards, or 66.32%. There are 56,166 shards left. East has written 45,078 shards, and RNO has written 65,531 shards. Ninety-three sources have output, and no Parquet path is unknown.
+- RNO results: Spanish FinePDF completed all 1,409 shards with 7,309,974 duplicate documents. Thai FinePDF completed all 110 shards with 159,172 duplicate documents. `dolma4pdfs_75504c36` started next.
+- Service event: Fifteen of the 16 queued RNO TEI services recovered. Service 090 then failed because TEI could not bind port 12372. The job had three preemptions before the port collision.
+- Service recovery: The original controller request and stored callable files were resubmitted for service 090. Its fixed ports remain 12372 and 12373. The local health check succeeded, and the service stayed running with zero failures and zero preemptions for ten minutes.
+- Service capacity: RNO has 95 running services, one building service, and zero failed services. Service 092 has nine preemptions and remains in the build state.
+- Active progress: East Nemotron medium-quality reached 2,720 of 14,843 shards. RNO Dolma4PDFs reached 2,284 of 8,683 shards. Both sources have 32 live workers and no dead workers.
+- Issue update: Post one major update for the stable capacity recovery and terminal-service repair.
+- Next action: Watch service 092 for capacity or a terminal state. Continue the regular root, source, service, and error checks.
