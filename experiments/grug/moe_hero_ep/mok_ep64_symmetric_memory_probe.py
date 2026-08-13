@@ -186,6 +186,22 @@ def _validate_world_fabric(fabrics: list[FabricEnvironment]) -> None:
         raise RuntimeError(f"Ranks do not share one NVLink clique ID: {sorted(clique_ids)}")
 
 
+def _device_phase_barrier(
+    *, torch: object, dist: object, group: object, handle: object, channel: int, timeout_ms: int
+) -> None:
+    """Align host progress before exercising the device-side fabric barrier.
+
+    The probe intentionally validates remote values from Python, whose hundreds of scalar reads at
+    EP64 can skew rank arrival by minutes. Production MoK does not use this host barrier; its fused
+    kernel publishes readiness directly on device.
+    """
+
+    torch.cuda.synchronize()  # type: ignore[attr-defined]
+    dist.barrier(group=group)  # type: ignore[attr-defined]
+    handle.barrier(channel=channel, timeout_ms=timeout_ms)  # type: ignore[attr-defined]
+    torch.cuda.synchronize()  # type: ignore[attr-defined]
+
+
 def _jax_device_round_trip(rank: ProbeRank, expected: int) -> None:
     import jax  # noqa: PLC0415  # optional GPU dependency, imported only by the live probe
     import jax.numpy as jnp  # noqa: PLC0415
@@ -291,7 +307,14 @@ def run_probe(*, expected_world_size: int, arena_bytes: int, iterations: int, ti
         barrier_timeout_ms = int(timeout * 1000)
         for iteration in range(iterations):
             arena.fill_(pattern_byte(rank.global_rank, iteration))
-            handle.barrier(channel=0, timeout_ms=barrier_timeout_ms)
+            _device_phase_barrier(
+                torch=torch,
+                dist=dist,
+                group=group,
+                handle=handle,
+                channel=0,
+                timeout_ms=barrier_timeout_ms,
+            )
             for peer, remote in enumerate(remote_tensors):
                 observed = [int(remote[offset].item()) for offset in offsets]
                 expected = pattern_byte(peer, iteration)
@@ -305,7 +328,14 @@ def run_probe(*, expected_world_size: int, arena_bytes: int, iterations: int, ti
             expected_write = pattern_byte(rank.global_rank, iteration + 101)
             for remote in remote_tensors:
                 remote[rank.global_rank] = expected_write
-            handle.barrier(channel=1, timeout_ms=barrier_timeout_ms)
+            _device_phase_barrier(
+                torch=torch,
+                dist=dist,
+                group=group,
+                handle=handle,
+                channel=1,
+                timeout_ms=barrier_timeout_ms,
+            )
             for source in range(rank.world_size):
                 observed = int(arena[source].item())
                 expected = pattern_byte(source, iteration + 101)
@@ -315,11 +345,23 @@ def run_probe(*, expected_world_size: int, arena_bytes: int, iterations: int, ti
                         f"expected {expected}, got {observed}"
                     )
                 remote_writes_checked += 1
-            handle.barrier(channel=0, timeout_ms=barrier_timeout_ms)
+            _device_phase_barrier(
+                torch=torch,
+                dist=dist,
+                group=group,
+                handle=handle,
+                channel=0,
+                timeout_ms=barrier_timeout_ms,
+            )
 
-        torch.cuda.synchronize(device)
-        handle.barrier(channel=1, timeout_ms=barrier_timeout_ms)
-        dist.barrier(group=group)
+        _device_phase_barrier(
+            torch=torch,
+            dist=dist,
+            group=group,
+            handle=handle,
+            channel=1,
+            timeout_ms=barrier_timeout_ms,
+        )
         _jax_device_round_trip(rank, expected=rank.global_rank + iterations + 1)
         result = ProbeResult(
             rank=rank,
