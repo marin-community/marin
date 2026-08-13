@@ -143,10 +143,6 @@ _RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
 # Extended resource name for NVIDIA GPUs in pod requests/limits.
 _GPU_RESOURCE = "nvidia.com/gpu"
 
-# Name of the task container in the pod. Exit-code/error extraction matches the
-# task status by this name rather than by position in containerStatuses.
-_TASK_CONTAINER_NAME = IRIS_TASK_CONTAINER_NAME
-
 # Native log-shipping sidecar (initContainer + restartPolicy: Always). It reads
 # the task container's CRI log file from the node and pushes to finelog, so the
 # controller never pulls pod logs through the apiserver.
@@ -1039,7 +1035,7 @@ def _task_container_status(pod: dict) -> dict | None:
     if not statuses:
         return None
     for status in statuses:
-        if status.get("name") == _TASK_CONTAINER_NAME:
+        if status.get("name") == IRIS_TASK_CONTAINER_NAME:
             return status
     return statuses[0]
 
@@ -2255,7 +2251,6 @@ class K8sTaskProvider:
         self.advertised = advertised
 
     def runtime_image(self, requested_image: str) -> str:
-        """Return the image selected for a Kubernetes task container."""
         return requested_image or self.pods.default_image
 
     def resource_capacity(self) -> dict[str, DeviceCapacity] | None:

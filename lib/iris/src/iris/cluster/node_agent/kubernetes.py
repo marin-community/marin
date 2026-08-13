@@ -35,6 +35,7 @@ from iris.cluster.platforms.k8s.types import (
     IRIS_TASK_CONTAINER_NAME,
     IRIS_TASK_ID_ANNOTATION,
     K8sResource,
+    KubectlError,
 )
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
 from iris.rpc import job_pb2
@@ -239,7 +240,7 @@ class TaskStatsCollector:
                 field_selector=f"spec.nodeName={self._node_name}",
             )
             resources = parse_kubelet_resource_metrics(self._kubectl.node_resource_metrics(self._node_name))
-        except Exception as error:
+        except KubectlError as error:
             logger.warning("task-resource collection failed for node %s: %s", self._node_name, error)
             return
 
@@ -728,10 +729,6 @@ def _log_service_endpoint(cluster_config: IrisClusterConfig) -> str:
     else:
         raise ValueError("node telemetry requires an external /system/log-server endpoint")
     return resolve_endpoint_uri(uri, metadata).rstrip("/")
-
-
-def _telemetry_endpoint(cluster_config: IrisClusterConfig) -> str:
-    return _log_service_endpoint(cluster_config) + TELEMETRY_ENDPOINT_PATH
 
 
 def _node_target(k8s: CloudK8sService, node_name: str) -> NodeTarget:

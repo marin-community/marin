@@ -540,7 +540,6 @@ class InMemoryK8sService:
         self._file_contents[(pod_name, path)] = data
 
     def set_node_resource_metrics(self, node_name: str, text: str) -> None:
-        """Configure kubelet resource metrics returned for a node."""
         self._node_resource_metrics[node_name] = text
 
     def seed_resource(self, resource: K8sResource, name: str, manifest: dict) -> None:

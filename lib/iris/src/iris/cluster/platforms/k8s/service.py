@@ -775,11 +775,16 @@ class CloudK8sService:
         """Return kubelet ``metrics/resource`` text for one node."""
         logger.debug("k8s: node resource metrics node=%s", node_name)
         with slow_log(logger, "node_resource_metrics", threshold_ms=_SLOW_THRESHOLD_MS):
-            return self._core_v1.connect_get_node_proxy_with_path(
-                name=node_name,
-                path="metrics/resource",
-                **self._request_timeout_kwargs(),
-            )
+            try:
+                return self._core_v1.connect_get_node_proxy_with_path(
+                    name=node_name,
+                    path="metrics/resource",
+                    **self._request_timeout_kwargs(),
+                )
+            except ApiException as error:
+                raise KubectlError(
+                    f"get nodes/{node_name}/proxy/metrics/resource failed ({error.status}): {error.reason}"
+                ) from error
 
     # -- port_forward (subprocess-based) -------------------------------------
 
