@@ -181,6 +181,10 @@ One of these ownership models must be selected before executable IR is useful:
 The bounded Host form of the second model is specified in the
 [`shuttle_xla_cpu_typed_ffi_consumer_design.md`](shuttle_xla_cpu_typed_ffi_consumer_design.md).
 That document is a design, not an implemented XLA path or acceptance claim.
+The proposed bounded CUDA form for the exact `2048x4096` forward
+`SOURCE_ORDERED` coordinate is specified separately in
+[`shuttle_xla_gpu_typed_ffi_consumer_design.md`](shuttle_xla_gpu_typed_ffi_consumer_design.md).
+It assigns a proposed runtime owner and adds no GPU or H100 evidence.
 
 The second model also needs a proof that replacing the StableHLO region with the
 call preserves source coverage and that compilation cache identity includes the
