@@ -76,6 +76,7 @@ with ZephyrContext(
         name="documents",
         hash_key=document_partition,
         recovery_timeout=900,
+        load_concurrency=4,
     )
     result = ctx.execute(Dataset.from_list(document_keys).map(document_store.get))
     document_store.destroy()
@@ -86,6 +87,10 @@ For `P` source shards, every key must already satisfy
 does not insert a shuffle. Readers and shard-local maps can load directly.
 Persist and reload the output of a shuffle, join, reshard, reduce, or write
 before constructing a store.
+
+Set `load_concurrency` to the maximum number of source partitions that one
+worker can read at once. Its default is `1`. Concurrent loads keep a private
+map for each active partition, then merge the maps into the worker's table.
 
 Keys must be hashable and unique. Keys, values, and the hash function must be
 picklable for remote calls; Python's salted `hash()` is not stable enough to

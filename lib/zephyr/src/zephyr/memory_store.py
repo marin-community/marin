@@ -7,7 +7,8 @@ import enum
 import logging
 import threading
 import time
-from collections.abc import Callable, Hashable, Sequence
+from collections.abc import Callable, Hashable, Iterator, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar, cast
 
@@ -102,6 +103,7 @@ class MemoryTableRegistration:
     plan: MemoryStorePlan
     hash_key: Callable[[Any], int] = field(repr=False)
     worker_count: int
+    load_concurrency: int
 
 
 class MemoryTableStatus(enum.StrEnum):
@@ -132,6 +134,36 @@ class _MemoryTableState:
     load_lock: threading.Lock = field(default_factory=threading.Lock)
     values: dict[Hashable, Any] | None = None
     stats: MemoryStoreActorStats | None = None
+
+
+def _load_partition(
+    registration: MemoryTableRegistration,
+    partition: int,
+    shard: list[Any],
+) -> tuple[int, dict[Hashable, Any]]:
+    context = StageContext(
+        shard=shard,
+        shard_idx=partition,
+        total_shards=registration.plan.num_source_partitions,
+    )
+    values: dict[Hashable, Any] = {}
+    for item in run_stage(context, list(registration.plan.operations)):
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise TypeError(
+                "memory-store Dataset must yield (key, value) tuples; "
+                f"partition {partition} yielded {type(item).__name__}"
+            )
+        key, value = item
+        actual_partition = _source_partition(registration.hash_key, key, registration.plan.num_source_partitions)
+        if actual_partition != partition:
+            raise MemoryStorePartitionError(
+                f"key {key!r} was in source partition {partition}, but hash_key routes it to "
+                f"partition {actual_partition}"
+            )
+        if key in values:
+            raise DuplicateMemoryStoreKey(f"duplicate memory-store key {key!r} in partition {partition}")
+        values[key] = value
+    return partition, values
 
 
 class MemoryStoreService:
@@ -177,30 +209,52 @@ class MemoryStoreService:
             if item.shard_idx in source_data:
                 source_data[item.shard_idx].append(item.data)
 
-        values: dict[Hashable, Any] = {}
-        for partition, shard in source_data.items():
-            context = StageContext(
-                shard=shard,
-                shard_idx=partition,
-                total_shards=plan.num_source_partitions,
+        partition_results: Iterator[tuple[int, dict[Hashable, Any]]]
+        if registration.load_concurrency == 1:
+            partition_results = (
+                _load_partition(registration, partition, shard) for partition, shard in source_data.items()
             )
-            for item in run_stage(context, list(plan.operations)):
-                if not isinstance(item, tuple) or len(item) != 2:
-                    raise TypeError(
-                        "memory-store Dataset must yield (key, value) tuples; "
-                        f"partition {partition} yielded {type(item).__name__}"
-                    )
-                key, value = item
-                actual_partition = _source_partition(registration.hash_key, key, plan.num_source_partitions)
-                if actual_partition != partition:
-                    raise MemoryStorePartitionError(
-                        f"key {key!r} was in source partition {partition}, but hash_key routes it to "
-                        f"partition {actual_partition}"
-                    )
+        else:
+            partition_results = self._load_partitions_concurrently(registration, source_data)
+
+        values: dict[Hashable, Any] = {}
+        for partition, partition_values in partition_results:
+            for key, value in partition_values.items():
                 if key in values:
                     raise DuplicateMemoryStoreKey(f"duplicate memory-store key {key!r} in partition {partition}")
                 values[key] = value
         return values, partitions
+
+    @staticmethod
+    def _load_partitions_concurrently(
+        registration: MemoryTableRegistration,
+        source_data: dict[int, list[Any]],
+    ) -> Iterator[tuple[int, dict[Hashable, Any]]]:
+        source_partitions = iter(source_data.items())
+        with ThreadPoolExecutor(
+            max_workers=registration.load_concurrency,
+            thread_name_prefix="memory-store-load",
+        ) as executor:
+            pending: set[Future[tuple[int, dict[Hashable, Any]]]] = set()
+
+            def submit_next() -> bool:
+                try:
+                    partition, shard = next(source_partitions)
+                except StopIteration:
+                    return False
+                pending.add(executor.submit(_load_partition, registration, partition, shard))
+                return True
+
+            for _ in range(registration.load_concurrency):
+                if not submit_next():
+                    break
+
+            while pending:
+                completed, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in completed:
+                    result = future.result()
+                    submit_next()
+                    yield result
 
     def load(self, registration: MemoryTableRegistration) -> MemoryStoreActorStats:
         """Load one table, or return its existing load statistics."""
