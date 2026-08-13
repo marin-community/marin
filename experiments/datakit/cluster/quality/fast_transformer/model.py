@@ -39,6 +39,9 @@ POOL_KINDS = ("mean", "max", "meanmaxmin", "attn")
 FINAL_POOLS = ("mean", "attn")
 NEG_INF = -1e30
 COMPUTE_DTYPE = jnp.bfloat16
+# Dtypes a config may name for the residual stream and the embedding table. Both
+# default to f32, which is what every trained checkpoint was fit with.
+NAMED_DTYPES = {"float32": jnp.float32, "bfloat16": jnp.bfloat16}
 
 # Knuth-style multiplicative mixing constants for the hashed-bigram side table.
 # They are part of the serialized model contract: a checkpoint hashed with these
@@ -91,6 +94,17 @@ class FastTransformerConfig:
     moe_experts: int = 0
     moe_expert_ratio: int = 1
     moe_top_k: int = 2
+    # Numerics, independent of the bf16 matmul inputs (which are always bf16 with
+    # f32 accumulation). ``stream_dtype`` is what a matmul hands back, and so the
+    # dtype of the residual stream, the layernorm output, GELU and the attention
+    # probabilities; layernorm *statistics*, both pooling reductions and the final
+    # head stay f32 at either setting. ``embed_dtype`` is the dtype of the token
+    # embedding table, and therefore of the gather every document pays; the window
+    # pooling upcasts to f32 regardless, so this trades table bytes for table
+    # rounding and nothing else. f32/f32 is what every checkpoint was trained
+    # with; bf16 is an inference-time choice that changes scores slightly.
+    stream_dtype: str = "float32"
+    embed_dtype: str = "float32"
 
     def __post_init__(self) -> None:
         if self.max_tokens % self.pool_window != 0:
@@ -108,6 +122,18 @@ class FastTransformerConfig:
                 raise ValueError("moe_experts requires doc_embed_dim > 0 (the router reads the document embedding)")
             if not 0 < self.moe_top_k <= self.moe_experts:
                 raise ValueError(f"moe_top_k={self.moe_top_k} must be in 1..moe_experts={self.moe_experts}")
+        for name in ("stream_dtype", "embed_dtype"):
+            value = getattr(self, name)
+            if value not in NAMED_DTYPES:
+                raise ValueError(f"{name}={value!r} not in {tuple(NAMED_DTYPES)}")
+
+    @property
+    def stream(self):
+        return NAMED_DTYPES[self.stream_dtype]
+
+    @property
+    def table(self):
+        return NAMED_DTYPES[self.embed_dtype]
 
     @property
     def num_super_tokens(self) -> int:
@@ -154,28 +180,33 @@ def _glorot(key: PRNGKeyArray, shape: tuple[int, ...]) -> Array:
     return jax.random.normal(key, shape) * math.sqrt(2.0 / (fan_in + fan_out))
 
 
-def _matmul(x: Array, w: Array) -> Array:
-    """``x @ w`` in bf16 (TPU MXU) with f32 accumulation/output."""
-    out = jnp.matmul(x.astype(COMPUTE_DTYPE), w.astype(COMPUTE_DTYPE), preferred_element_type=jnp.float32)
-    return out.astype(jnp.float32)
+def _matmul(x: Array, w: Array, out_dtype=jnp.float32) -> Array:
+    """``x @ w`` in bf16 (TPU MXU) with f32 accumulation, written out as ``out_dtype``.
+
+    The accumulator is f32 either way — ``out_dtype`` is the type the result is
+    *stored* as, so a bf16 stream costs one rounding at the write and no separate
+    convert pass over the largest tensor in the layer.
+    """
+    return jnp.matmul(x.astype(COMPUTE_DTYPE), w.astype(COMPUTE_DTYPE), preferred_element_type=out_dtype)
 
 
-def _expert_matmul(x: Array, w: Array) -> Array:
-    """Per-expert ``x @ w[e]`` in bf16 with f32 accumulation/output.
+def _expert_matmul(x: Array, w: Array, out_dtype=jnp.float32) -> Array:
+    """Per-expert ``x @ w[e]`` in bf16 with f32 accumulation, returned as ``out_dtype``.
 
     ``x`` is ``[b, s, d]`` (broadcast to every expert) or ``[b, E, s, d]``
     (already per-expert); ``w`` is ``[E, d, f]``; the result is ``[b, E, s, f]``.
     """
     if x.ndim == 3:
         x = x[:, None]  # [b, 1, s, d] broadcasts over the expert axis
-    out = jnp.matmul(x.astype(COMPUTE_DTYPE), w.astype(COMPUTE_DTYPE), preferred_element_type=jnp.float32)
-    return out.astype(jnp.float32)
+    return jnp.matmul(x.astype(COMPUTE_DTYPE), w.astype(COMPUTE_DTYPE), preferred_element_type=out_dtype)
 
 
 def _layer_norm(x: Array, gamma: Array, beta: Array) -> Array:
-    mu = x.mean(axis=-1, keepdims=True)
-    var = x.var(axis=-1, keepdims=True)
-    return (x - mu) * jax.lax.rsqrt(var + 1e-5) * gamma + beta
+    """Pre-norm in f32 statistics, handed back in ``x``'s dtype."""
+    f = x.astype(jnp.float32)
+    mu = f.mean(axis=-1, keepdims=True)
+    var = f.var(axis=-1, keepdims=True)
+    return ((f - mu) * jax.lax.rsqrt(var + 1e-5) * gamma + beta).astype(x.dtype)
 
 
 def _dropout(x: Array, p: float, key: PRNGKeyArray | None, inference: bool) -> Array:
@@ -270,6 +301,7 @@ class TransformerLayer(eqx.Module):
         inference: bool,
         dropout: float | None = None,
         doc_embed: Array | None = None,
+        stream_dtype=jnp.float32,
     ) -> Array:
         b, s, d = x.shape
         h, hd = self.num_heads, d // self.num_heads
@@ -283,22 +315,29 @@ class TransformerLayer(eqx.Module):
             ka, km, kx = jax.random.split(key, 3) if moe else (*jax.random.split(key), None)
 
         normed = _layer_norm(x, self.ln1_g, self.ln1_b)
-        qkv = _matmul(normed, self.wqkv).reshape(b, s, 3, h, hd)
+        qkv = _matmul(normed, self.wqkv, stream_dtype).reshape(b, s, 3, h, hd)
         q, k, v = qkv[:, :, 0], qkv[:, :, 1], qkv[:, :, 2]  # [b, s, h, hd]
-        scores = jnp.einsum("bqhd,bkhd->bhqk", q, k) / math.sqrt(hd)
+        # Scores and softmax stay f32 at either stream dtype: the masked rows use
+        # NEG_INF and the S x S tensor is small enough that its bytes do not matter.
+        scores = jnp.einsum("bqhd,bkhd->bhqk", q, k, preferred_element_type=jnp.float32) / math.sqrt(hd)
         scores = jnp.where(valid[:, None, None, :].astype(bool), scores, NEG_INF)
-        attn = jax.nn.softmax(scores, axis=-1)
-        ctx = jnp.einsum("bhqk,bkhd->bqhd", attn, v).reshape(b, s, d)
-        x = x + _dropout(_matmul(ctx, self.wo), p, ka, inference)
+        attn = jax.nn.softmax(scores, axis=-1).astype(stream_dtype)
+        ctx = jnp.einsum("bhqk,bkhd->bqhd", attn, v, preferred_element_type=stream_dtype).reshape(b, s, d)
+        x = x + _dropout(_matmul(ctx, self.wo, stream_dtype), p, ka, inference)
 
         normed = _layer_norm(x, self.ln2_g, self.ln2_b)
-        mlp = _matmul(jax.nn.gelu(_matmul(normed, self.w1)), self.w2)
+        mlp = _matmul(jax.nn.gelu(_matmul(normed, self.w1, stream_dtype)), self.w2, stream_dtype)
         x = x + _dropout(mlp, p, km, inference)
         if moe:
-            mix = self.expert_mixture(doc_embed)  # [b, E]
-            hidden = jax.nn.gelu(_expert_matmul(normed, self.expert_w1))  # [b, E, s, d_ff]
-            routed = jnp.einsum("be,besd->bsd", mix, _expert_matmul(hidden, self.expert_w2))
-            x = x + self.moe_gate * _dropout(routed, p, kx, inference)
+            mix = self.expert_mixture(doc_embed).astype(stream_dtype)  # [b, E]
+            hidden = jax.nn.gelu(_expert_matmul(normed, self.expert_w1, stream_dtype))  # [b, E, s, d_ff]
+            routed = jnp.einsum(
+                "be,besd->bsd",
+                mix,
+                _expert_matmul(hidden, self.expert_w2, stream_dtype),
+                preferred_element_type=jnp.float32,
+            ).astype(stream_dtype)
+            x = x + self.moe_gate.astype(stream_dtype) * _dropout(routed, p, kx, inference)
         return x
 
 
@@ -339,7 +378,7 @@ class FastTransformer(eqx.Module):
             self.donor_embed = jnp.zeros((config.vocab_size, config.frozen_donor_dim))
             self.donor_proj = _glorot(jax.random.fold_in(key, 8), (config.frozen_donor_dim, config.embed_dim))
         else:
-            self.embed = jax.random.normal(ke, (config.vocab_size, config.embed_dim)) * 0.02
+            self.embed = (jax.random.normal(ke, (config.vocab_size, config.embed_dim)) * 0.02).astype(config.table)
             self.donor_embed = None
             self.donor_proj = None
         # Zero init keeps the side table a no-op at the start of training; each
@@ -394,7 +433,10 @@ class FastTransformer(eqx.Module):
         cfg = self.config
         b = emb.shape[0]
         s, w, e = cfg.num_super_tokens, cfg.pool_window, cfg.embed_dim
-        wemb = emb.reshape(b, s, w, e)
+        # f32 regardless of the table dtype: a bf16 table is about halving the
+        # gather's bytes, not about summing 16 vectors in half precision. XLA fuses
+        # the convert into the reduction, so it costs no extra HBM traffic.
+        wemb = emb.reshape(b, s, w, e).astype(jnp.float32)
         wmask = mask.reshape(b, s, w)
         counts = wmask.sum(axis=2, keepdims=True)  # [b, s, 1]
         valid = (counts[..., 0] > 0).astype(jnp.float32)  # [b, s]
@@ -460,21 +502,30 @@ class FastTransformer(eqx.Module):
         if self.bigram_embed is not None:
             emb = emb + self._bigram_side(ids)
 
+        stream = cfg.stream
         pooled, valid = self._pool_windows(emb, mask)  # [b, s, pool_out], [b, s]
-        h = _matmul(pooled, self.proj_w) + self.proj_b + self.pos_embed  # [b, s, d]
+        h = _matmul(pooled, self.proj_w, stream) + self.proj_b.astype(stream) + self.pos_embed.astype(stream)
 
         doc_vec = None
         if doc_embed is not None:
-            doc_vec = _layer_norm(_matmul(doc_embed, self.doc_proj_w) + self.doc_proj_b, self.doc_ln_g, self.doc_ln_b)
+            projected = _matmul(doc_embed, self.doc_proj_w, stream) + self.doc_proj_b.astype(stream)
+            doc_vec = _layer_norm(projected, self.doc_ln_g, self.doc_ln_b)
             if cfg.doc_embed_super_token:
-                token = self.doc_gate * (doc_vec + self.doc_type_embed)  # [b, d]
+                token = self.doc_gate.astype(stream) * (doc_vec + self.doc_type_embed.astype(stream))  # [b, d]
                 h = jnp.concatenate([h, token[:, None, :]], axis=1)  # [b, s+1, d]
                 valid = jnp.concatenate([valid, jnp.ones((valid.shape[0], 1))], axis=1)
 
         n = cfg.num_layers
         layer_keys = [None] * n if key is None else list(jax.random.split(key, n)) if n else []
         for layer, lk in zip(self.layers, layer_keys, strict=True):
-            h = layer(h, valid, key=lk, inference=inference, doc_embed=doc_embed if cfg.moe_experts else None)
+            h = layer(
+                h,
+                valid,
+                key=lk,
+                inference=inference,
+                doc_embed=doc_embed if cfg.moe_experts else None,
+                stream_dtype=stream,
+            )
 
         if doc_vec is not None and cfg.doc_embed_super_token:
             # The doc token is a conditioning input the real tokens attend to, not
@@ -482,6 +533,10 @@ class FastTransformer(eqx.Module):
             # stays the only direct readout of the embedding.
             h, valid = h[:, : cfg.num_super_tokens], valid[:, : cfg.num_super_tokens]
 
+        # The final pool and the head stay f32 at either stream dtype: one reduction
+        # over S and one [d, 1] matmul are free, and the score is what gets
+        # thresholded.
+        h = h.astype(jnp.float32)
         if cfg.final_pool == "mean":
             pooled_doc = (h * valid[..., None]).sum(axis=1) / jnp.maximum(valid.sum(axis=1, keepdims=True), 1.0)
         else:  # attn pool over super-tokens

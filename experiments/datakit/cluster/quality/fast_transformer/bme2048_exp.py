@@ -26,6 +26,12 @@ What varies is only the supervision the trunk is pointed at:
   mapping is identical and only the sequence gets longer.
 * ``--filter`` — which suspect grades are dropped (:mod:`window_dataset`).
 
+Capacity is the other axis. ``--hidden-dim`` / ``--mlp-ratio`` widen the trunk;
+``--embed-dim`` widens the token embedding the frozen donor's 2048-d rows are
+projected into, which is the one compression that happens before any
+computation. Their defaults reproduce the 88k campaign's winning configuration,
+so an unflagged run is the control.
+
 Evaluation is the prior campaigns', unchanged: the seed-0 id-set holdout of the
 88k labels, reported through :func:`embed_exp.report_arm` (grouped Spearman
 under both oracle types and domain-MLP-predicted types, per-source stats,
@@ -66,7 +72,11 @@ from experiments.datakit.cluster.quality.fast_transformer.joined_labels import (
     embedding_matrix,
     load_joined,
 )
-from experiments.datakit.cluster.quality.fast_transformer.model import FastTransformer, FastTransformerConfig
+from experiments.datakit.cluster.quality.fast_transformer.model import (
+    FastTransformer,
+    FastTransformerConfig,
+    count_params,
+)
 from experiments.datakit.cluster.quality.fast_transformer.scaled_exp import (
     DEFAULT_DOMAIN_MLP,
     FUSED_88K_BASELINE_DIR,
@@ -109,6 +119,9 @@ COVERAGE_MAX_TOKENS = 4_096
 # 2048-token context quadruples the per-example activation, so the forward is
 # gradient-checkpointed there rather than at the deployed context.
 REMAT_ABOVE_TOKENS = 512
+# The 88k campaign's token-embedding width: the donor's 2048-d rows are projected
+# into it before pooling, so it is the model's input bottleneck.
+WINNER_EMBED_DIM = 256
 
 
 def window_target_from_begin(windows: dict[str, list]) -> tuple[np.ndarray, int]:
@@ -210,6 +223,15 @@ def main() -> None:
         "--max-tokens", type=int, default=512, help="model context; the grades describe 2048 tokens either way"
     )
     p.add_argument("--filter", choices=FILTERS, default="none", help="which suspect grades to drop before training")
+    p.add_argument("--hidden-dim", type=int, default=WINNER_TRUNK["hidden_dim"], help="trunk width")
+    p.add_argument("--num-heads", type=int, default=WINNER_TRUNK["num_heads"], help="attention heads")
+    p.add_argument("--mlp-ratio", type=int, default=WINNER_TRUNK["mlp_ratio"], help="trunk FFN expansion")
+    p.add_argument(
+        "--embed-dim",
+        type=int,
+        default=WINNER_EMBED_DIM,
+        help="token-embedding width the frozen donor rows are projected into",
+    )
     p.add_argument(
         "--baseline-model-dir", default=V3_BASELINE_DIR, help="text-only scorer re-anchored (bme path); '' skips"
     )
@@ -348,30 +370,47 @@ def main() -> None:
         max_tokens=args.max_tokens,
         dropout=0.1,
         final_pool="mean",
-        embed_dim=256,
+        embed_dim=args.embed_dim,
         pool_kind="meanmaxmin",
         doc_embed_dim=EMBED_DIM,
         doc_embed_super_token=True,
         frozen_donor_dim=donor.shape[1],
-        **WINNER_TRUNK,
+        hidden_dim=args.hidden_dim,
+        num_heads=args.num_heads,
+        mlp_ratio=args.mlp_ratio,
+        num_layers=WINNER_TRUNK["num_layers"],
+        pool_window=WINNER_TRUNK["pool_window"],
     )
     hp = TrainHParams(seed=TRAIN_SEED, remat=args.max_tokens > REMAT_ABOVE_TOKENS)
     if args.epochs is not None:
         hp = TrainHParams(seed=TRAIN_SEED, remat=hp.remat, epochs=args.epochs)
     model = FastTransformer(config, key=jr.PRNGKey(hp.seed))
     model, params_filter = apply_embed_treatment(model, config, "learned-proj", donor, remap)
+    # Three counts, because they answer different questions: what the optimizer
+    # sees, what the deployed artifact carries once the donor is folded through
+    # the projection, and how much sits outside any embedding table.
+    total = count_params(model)
+    frozen_donor = config.vocab_size * donor.shape[1]
+    donor_proj = donor.shape[1] * config.embed_dim
     logger.info(
-        "arm %s: vocab=%d context=%d super_tokens=%d trunk d=%d L=%d h=%d w=%d mlp=%d remat=%s (%.0fK flops/token)",
+        "ARM_CAPACITY %s: vocab=%d context=%d super_tokens=%d embed=%d pool_out=%d "
+        "trunk d=%d L=%d h=%d w=%d mlp=%d remat=%s; params trainable=%.2fM "
+        "deployed_table=%.2fM non_embedding=%.2fM; %.0fK flops/token",
         args.name,
         vocab,
         config.max_tokens,
         config.num_super_tokens,
+        config.embed_dim,
+        config.pool_out_dim,
         config.hidden_dim,
         config.num_layers,
         config.num_heads,
         config.pool_window,
         config.mlp_ratio,
         hp.remat,
+        (total - frozen_donor) / 1e6,
+        config.vocab_size * config.embed_dim / 1e6,
+        (total - frozen_donor - donor_proj) / 1e6,
         config.flops_per_token() / 1e3,
     )
 

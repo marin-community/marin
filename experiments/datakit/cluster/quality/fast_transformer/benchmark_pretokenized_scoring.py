@@ -46,6 +46,14 @@ the model is small enough that dispatch overhead, not arithmetic, may decide:
   separately drive the same batches from host numpy through ``predict`` so the
   H2D copy and per-call dispatch are priced. Reports docs/s, achieved TFLOP/s and
   MFU against the H100 bf16 peak, per-shape compile time, and peak HBM.
+* ``gpu-arms`` — the same device-resident sweep run for several candidate scorer
+  shapes at once, one arm per GPU, so a params-versus-throughput frontier comes
+  out of one node under one set of conditions. Arms are overrides on the deployed
+  folded config (``SCALEUP_ARMS``); the numerics ones keep the trained weights and
+  report their score delta, the shape ones run at random init because throughput
+  does not depend on the values. Each arm also reports XLA's own flops and
+  bytes-accessed for the compiled forward, which is what separates a
+  memory-bound trunk from a compute-bound one.
 * ``gpu-pack`` — ``--gpus`` independent processes, child *i* pinned to GPU *i* by
   ``CUDA_VISIBLE_DEVICES`` and to its own host cores, timed against a shared
   start. ``iris job run --gpu H100x8`` hands the task one process with all eight
@@ -90,7 +98,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from iris.env_resources import TaskResources
-from rigging.filesystem import StoragePath
+from rigging.filesystem import StoragePath, open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
 
@@ -129,6 +137,9 @@ DEFAULT_CORE_COUNTS = (1, 2, 4, 8, 16, 32, 64)
 H100_BF16_PEAK_FLOPS = 989.4e12
 H100_TF32_PEAK_FLOPS = 494.7e12
 H100_FP32_PEAK_FLOPS = 67.0e12
+# H100 SXM5 HBM3 peak. The ratio against the bf16 peak is the ~295 FLOP/byte ridge
+# an arithmetic intensity has to clear before the tensor cores can be the limit.
+H100_HBM_PEAK_BYTES_PER_SECOND = 3.35e12
 DEFAULT_GPU_BATCHES = (512, 2048, 8192, 16_384, 32_768, 65_536, 131_072)
 # Forwards allowed to run ahead of the device. One in flight leaves the GPU idle
 # between kernels; unbounded run-ahead queues activations until HBM fills, which
@@ -272,12 +283,145 @@ def fold_donor(model: FastTransformer) -> FastTransformer:
 
 
 def array_bytes(model: FastTransformer) -> dict:
-    """Resident parameter bytes, split into the embedding table and everything else."""
+    """Resident parameter counts and bytes, split into the embedding table and the trunk."""
     leaves = jax.tree_util.tree_leaves(cast(FastTransformer, eqx.filter(model, eqx.is_inexact_array)))
     embed = model.embed if model.embed is not None else model.donor_embed
     table = int(embed.size * embed.dtype.itemsize)
     total = sum(int(x.size * x.dtype.itemsize) for x in leaves)
-    return {"embedding_table_bytes": table, "params_total_bytes": total, "trunk_bytes": total - table}
+    total_params = sum(int(x.size) for x in leaves)
+    return {
+        "embedding_table_bytes": table,
+        "params_total_bytes": total,
+        "trunk_bytes": total - table,
+        "table_params": int(embed.size),
+        "params_total": total_params,
+        "trunk_params": total_params - int(embed.size),
+        "embedding_table_dtype": str(embed.dtype),
+    }
+
+
+# ---------------------------------------------------------------------------
+# scale-up arms: shape and numerics variants of the deployed trunk
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Arm:
+    """A candidate scorer shape, expressed as overrides on the deployed config.
+
+    ``xla_flags`` is appended to the child's ``XLA_FLAGS``; it has to travel in the
+    environment because XLA parses it when the GPU client is built, long before any
+    flag this module sees. Arms whose overrides leave every parameter shape
+    unchanged are measured with the *trained* weights transplanted in, so their
+    score delta against the deployed model is a real number; the rest are measured
+    with random weights of the same shape, which is a throughput question only.
+    """
+
+    name: str
+    overrides: dict
+    xla_flags: str = ""
+
+
+CUBLASLT = "--xla_gpu_enable_cublaslt=true"
+BF16_STREAM = {"stream_dtype": "bfloat16"}
+HEAD64 = {"num_heads": 6}  # hidden_dim 384 / 6 = 64, the width tensor cores want
+ARM0 = {**BF16_STREAM, **HEAD64}
+D512 = {"hidden_dim": 512, "num_heads": 8}  # head_dim 64 again at the wider trunk
+ARM_SEED = 0
+
+SCALEUP_ARMS = {
+    a.name: a
+    for a in (
+        Arm("baseline", {}),
+        Arm("a0a_bf16_stream", BF16_STREAM),
+        Arm("a0b_cublaslt", {}, CUBLASLT),
+        Arm("a0c_head64", HEAD64),
+        Arm("a0d_bf16_table", {"embed_dtype": "bfloat16"}),
+        Arm("a0_all", ARM0, CUBLASLT),
+        Arm("a0e_all_plus_table", {**ARM0, "embed_dtype": "bfloat16"}, CUBLASLT),
+        Arm("a1_d512", {**ARM0, **D512}, CUBLASLT),
+        Arm("a1_d512_fp32", D512),
+        Arm("a2_d512_mlp8", {**ARM0, **D512, "mlp_ratio": 8}, CUBLASLT),
+        Arm("a2_d512_mlp8_fp32", {**D512, "mlp_ratio": 8}),
+        Arm("a3_embed512", {**ARM0, "embed_dim": 512}, CUBLASLT),
+        Arm("a3_embed512_fp32", {"embed_dim": 512}),
+    )
+}
+
+
+def leaf_shapes(model: FastTransformer) -> list[tuple[int, ...]]:
+    return [x.shape for x in jax.tree_util.tree_leaves(eqx.filter(model, eqx.is_array))]
+
+
+def arm_model(trained: FastTransformer, arm: Arm) -> tuple[FastTransformer, bool]:
+    """The arm's model, and whether it carries the trained weights.
+
+    Shape-preserving arms (numerics switches, a head-count change) get the trained
+    arrays cast into the arm's dtypes, so the arm is the deployed scorer measured
+    differently rather than a different scorer. Shape-changing arms cannot, and are
+    built at random init: throughput does not depend on the values.
+    """
+    config = dataclasses.replace(trained.config, **arm.overrides)
+    template = FastTransformer(config, key=jr.PRNGKey(ARM_SEED))
+    if leaf_shapes(template) != leaf_shapes(trained):
+        return template, False
+    # Flattened rather than tree_mapped across the pair: the two trees carry
+    # different static configs, which makes them different pytree nodes even when
+    # every array in them lines up.
+    target, static = eqx.partition(template, eqx.is_array)
+    target_leaves, treedef = jax.tree_util.tree_flatten(target)
+    source_leaves = jax.tree_util.tree_leaves(eqx.filter(trained, eqx.is_array))
+    cast_in = jax.tree_util.tree_unflatten(
+        treedef, [src.astype(dst.dtype) for dst, src in zip(target_leaves, source_leaves, strict=True)]
+    )
+    return cast(FastTransformer, eqx.combine(cast_in, static)), True
+
+
+def arm_score_delta(baseline: FastTransformer, model: FastTransformer, block: Pretokenized) -> dict:
+    """Score spread between an arm and the deployed f32 model on the same real rows."""
+    rows = min(BACKEND_PARITY_ROWS, block.ids.shape[0])
+    ids, emb = block.ids[:rows], block.embedding[:rows]
+    before = predict(baseline, ids, batch_size=rows, doc_embed=emb)
+    after = predict(model, ids, batch_size=rows, doc_embed=emb)
+    delta = np.abs(before - after)
+    return {
+        "rows": rows,
+        "max_abs_score_delta": float(delta.max()),
+        "mean_abs_score_delta": float(delta.mean()),
+        "quantile_99_abs_score_delta": float(np.quantile(delta, 0.99)),
+    }
+
+
+def compiled_analysis(model: FastTransformer, ids, emb) -> dict:
+    """XLA's own view of one forward: flops, HBM bytes, and which gemm calls it emitted.
+
+    ``bytes accessed`` sums each op's operand and output bytes, so it counts a
+    tensor once per consumer and ignores cache reuse — an upper bound on HBM
+    traffic, and the number whose *ratio* between two arms says whether a change
+    moved bytes or only flops. The gemm-call census answers the fusion question
+    directly instead of by inference from a timing.
+    """
+    # A plain ``jax.jit`` closure rather than ``predict_batch.lower``: equinox's
+    # compiled wrapper does not forward the analysis methods.
+    arrays, static = eqx.partition(model, eqx.is_array)
+    lowered = jax.jit(lambda a, i, e: predict_batch(eqx.combine(a, static), i, e)).lower(arrays, ids, emb)
+    compiled = lowered.compile()
+    cost = compiled.cost_analysis()
+    cost = cost[0] if isinstance(cost, list) else cost
+    memory = compiled.memory_analysis()
+    text = compiled.as_text()
+    gemm_lines = [ln.strip()[:300] for ln in text.splitlines() if 'custom_call_target="__cublas' in ln]
+    return {
+        "xla_flops": float(cost.get("flops", 0.0)),
+        "xla_bytes_accessed": float(cost.get("bytes accessed", 0.0)),
+        "temp_size_bytes": int(getattr(memory, "temp_size_in_bytes", 0)),
+        "argument_size_bytes": int(getattr(memory, "argument_size_in_bytes", 0)),
+        "cublas_gemm_calls": sum(1 for ln in gemm_lines if "__cublas$gemm" in ln),
+        "cublaslt_matmul_calls": sum(1 for ln in gemm_lines if "__cublas$lt$matmul" in ln),
+        "gelu_epilogue_calls": sum(1 for ln in gemm_lines if "GELU" in ln),
+        "fusion_ops": sum(1 for ln in text.splitlines() if " fusion(" in ln),
+        "gemm_call_sample": gemm_lines[:6],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1012,6 +1156,26 @@ def gpu_forward(args) -> dict:
         result.update(pin_to_cores(args.host_cores, args.core_offset))
     model, block = load_folded_model(args, result)
     result["device"] = device_facts()
+
+    arm = SCALEUP_ARMS[args.arm]
+    result["arm"] = arm.name
+    result["arm_overrides"] = arm.overrides
+    result["xla_flags"] = os.environ.get("XLA_FLAGS", "")
+    if arm.overrides:
+        if not args.fold_donor:
+            raise ValueError("scale-up arms are defined on the folded deployment config; pass --fold-donor")
+        armed, trained_weights = arm_model(model, arm)
+        result["arm_carries_trained_weights"] = trained_weights
+        if trained_weights:
+            result["arm_score_delta"] = arm_score_delta(model, armed, block)
+        del model
+        gc.collect()
+        model = armed
+        result["params"] = array_bytes(model)
+        result["flops_per_token"] = model.config.flops_per_token()
+        result["flops_per_doc"] = model.config.flops_per_token() * int(block.ids.shape[1])
+    result["config"] = dataclasses.asdict(model.config)
+
     # Opt-in: the comparison compiles the forward for XLA:CPU, which on this model
     # costs minutes against the accelerator's ~2 s, and every packed child would
     # pay it. It answers a correctness question, not a throughput one, so run it
@@ -1034,6 +1198,9 @@ def gpu_forward(args) -> dict:
             batches = resident_batches(block, batch)
             jax.block_until_ready(predict_batch(model, *batches[0]))
             compile_seconds = time.monotonic() - compile_t0
+            if batch == args.hlo_batch:
+                result["hlo"] = compiled_analysis(model, *batches[0])
+                logger.info("BENCH gpu-forward-hlo %s", json.dumps(result["hlo"]))
             if args.start_at:
                 time.sleep(max(0.0, args.start_at - time.time()))
             resident = spread(
@@ -1069,16 +1236,19 @@ def gpu_forward(args) -> dict:
     return result
 
 
-def gpu_fanout(mode: str, child_argv: list[list[str]], start_at: float) -> list[dict]:
+def gpu_fanout(
+    mode: str, child_argv: list[list[str]], start_at: float, child_env: list[dict] | None = None
+) -> list[dict]:
     """Run one child per entry, child *i* holding only device *i*, timed together.
 
     ``CUDA_VISIBLE_DEVICES`` has to be set in the child's environment: JAX picks
     its devices when the backend is first built, which is long before any flag
-    this module parses could take effect.
+    this module parses could take effect. ``child_env`` carries anything else that
+    has to be in place that early, notably ``XLA_FLAGS``.
     """
     procs = []
     for index, argv in enumerate(child_argv):
-        env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(index)}
+        env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(index), **(child_env[index] if child_env else {})}
         procs.append(
             subprocess.Popen(
                 [sys.executable, "-m", MODULE, mode, *argv, "--start-at", str(start_at)],
@@ -1148,6 +1318,210 @@ def gpu_pack(args) -> dict:
         "model_load_seconds": [r["model_load_seconds"] for r in results],
         "iris_task_id": os.environ.get("IRIS_TASK_ID", ""),
         "host": host_facts(),
+    }
+
+
+def gemm_shapes(config, batch: int) -> list[tuple[str, int, int, int]]:
+    """The ``(name, m, k, n)`` of every matmul one forward runs, at ``batch`` documents."""
+    s = config.num_super_tokens + (1 if config.doc_embed_super_token else 0)
+    rows = batch * s
+    d = config.hidden_dim
+    return [
+        ("input_proj", batch * config.num_super_tokens, config.pool_out_dim, d),
+        ("qkv", rows, d, 3 * d),
+        ("attn_out", rows, d, d),
+        ("mlp_w1", rows, d, d * config.mlp_ratio),
+        ("mlp_w2", rows, d * config.mlp_ratio, d),
+    ]
+
+
+def time_gemm(m: int, k: int, n: int, out_dtype, min_seconds: float) -> dict:
+    """Steady-state TFLOP/s of one isolated bf16 gemm with f32 accumulation."""
+    key = jr.PRNGKey(0)
+    a = jr.normal(key, (m, k), dtype=COMPUTE_DTYPE)
+    b = jr.normal(jr.fold_in(key, 1), (k, n), dtype=COMPUTE_DTYPE)
+    fn = jax.jit(lambda x, y: jnp.matmul(x, y, preferred_element_type=jnp.float32).astype(out_dtype))
+    jax.block_until_ready(fn(a, b))
+    calls = 0
+    t0 = time.monotonic()
+    pending: list = []
+    while time.monotonic() - t0 < min_seconds:
+        pending.append(fn(a, b))
+        calls += 1
+        if len(pending) > GPU_PIPELINE_DEPTH:
+            jax.block_until_ready(pending.pop(0))
+    jax.block_until_ready(pending)
+    seconds = time.monotonic() - t0
+    flops = 2.0 * m * k * n * calls
+    del a, b
+    gc.collect()
+    return {
+        "m": m,
+        "k": k,
+        "n": n,
+        "calls": calls,
+        "seconds": seconds,
+        "tflops": flops / seconds / 1e12,
+        "mfu_bf16_peak": flops / seconds / H100_BF16_PEAK_FLOPS,
+    }
+
+
+def time_streaming_bandwidth(array_bytes_target: int, min_seconds: float) -> dict:
+    """Achieved HBM bandwidth of a read-modify-write over one large array."""
+    n = array_bytes_target // 4
+    x = jnp.full((n,), 1.0, dtype=jnp.float32)
+    fn = jax.jit(lambda a: a * 1.0000001)
+    jax.block_until_ready(fn(x))
+    calls = 0
+    t0 = time.monotonic()
+    pending: list = []
+    while time.monotonic() - t0 < min_seconds:
+        pending.append(fn(x))
+        calls += 1
+        if len(pending) > GPU_PIPELINE_DEPTH:
+            jax.block_until_ready(pending.pop(0))
+    jax.block_until_ready(pending)
+    seconds = time.monotonic() - t0
+    moved = 2.0 * n * 4 * calls  # one read and one write per element
+    del x
+    gc.collect()
+    return {"array_bytes": n * 4, "calls": calls, "seconds": seconds, "bytes_per_second": moved / seconds}
+
+
+def gpu_micro(args) -> dict:
+    """The two roofline endpoints this trunk is measured against, on this GPU.
+
+    The model's own matmuls, run in isolation with nothing between them, are the
+    throughput a perfectly fused forward of these shapes could reach; the
+    streaming bandwidth is what the memory system delivers when nothing else is
+    in the way. Together they say whether a low MFU is the shapes' fault or the
+    traffic between them.
+    """
+    scorer = load_pooled_scorer(args.model_dir)
+    config = dataclasses.replace(scorer.model.config, frozen_donor_dim=0)
+    del scorer
+    gc.collect()
+    result: dict = {
+        "device": device_facts(),
+        "batch": args.batch,
+        "streaming_bandwidth": time_streaming_bandwidth(args.array_bytes, args.min_seconds),
+        "h100_hbm3_peak_bytes_per_second": H100_HBM_PEAK_BYTES_PER_SECOND,
+    }
+    shapes: dict[str, list] = {}
+    for label, overrides in (("baseline", {}), ("a1_d512", D512), ("a2_d512_mlp8", {**D512, "mlp_ratio": 8})):
+        armed = dataclasses.replace(config, **overrides)
+        rows = []
+        for name, m, k, n in gemm_shapes(armed, args.batch):
+            for out_dtype in (jnp.float32, COMPUTE_DTYPE):
+                rows.append(
+                    {
+                        "gemm": name,
+                        "out_dtype": str(jnp.dtype(out_dtype)),
+                        **time_gemm(m, k, n, out_dtype, args.min_seconds),
+                    }
+                )
+            logger.info("BENCH gpu-micro %s %s", label, json.dumps(rows[-2:]))
+        shapes[label] = rows
+    result["gemms"] = shapes
+    result["streaming_bandwidth_fraction_of_peak"] = (
+        result["streaming_bandwidth"]["bytes_per_second"] / H100_HBM_PEAK_BYTES_PER_SECOND
+    )
+    result["host"] = host_facts()
+    return result
+
+
+def arm_frontier_row(arm_name: str, child: dict, baseline_docs_per_second: float | None) -> dict:
+    """One line of the params-versus-throughput frontier, at the arm's best batch."""
+    ran = [b for b in child["batches"] if not b["out_of_memory"]]
+    best = max(ran, key=lambda b: b["resident_docs_per_second"]["mean"]) if ran else {}
+    docs = best.get("resident_docs_per_second", {}).get("mean")
+    params = child["params"]
+    row = {
+        "arm": arm_name,
+        "best_batch": best.get("batch"),
+        "docs_per_second_per_gpu": docs,
+        "achieved_tflops": best.get("achieved_tflops"),
+        "mfu_bf16_peak": best.get("mfu_bf16_peak"),
+        "flops_per_doc": child["flops_per_doc"],
+        "trunk_params": params["trunk_params"],
+        "table_params": params["table_params"],
+        "table_bytes": params["embedding_table_bytes"],
+        "params_total_bytes": params["params_total_bytes"],
+        "peak_hbm_bytes": max((b["hbm_peak_bytes_cumulative"] for b in ran), default=0),
+        "host_fed_fraction_of_resident": best.get("host_fed_fraction_of_resident"),
+        "carries_trained_weights": child.get("arm_carries_trained_weights", True),
+        "score_delta": child.get("arm_score_delta"),
+        "hlo": child.get("hlo"),
+    }
+    if docs and baseline_docs_per_second:
+        row["slowdown_vs_baseline"] = baseline_docs_per_second / docs
+        row["holds_baseline_throughput"] = docs >= baseline_docs_per_second
+    return row
+
+
+def gpu_arms(args) -> dict:
+    """One arm per GPU on this node, in waves when there are more arms than GPUs.
+
+    Every arm is measured on the same node against the same row pool, so the
+    frontier is one comparison rather than a stack of unrelated runs. ``baseline``
+    belongs in the arm list: it is the control that says whether this node
+    reproduces the number the frontier is quoted against.
+    """
+    unknown = [a for a in args.arms if a not in SCALEUP_ARMS]
+    if unknown:
+        raise ValueError(f"unknown arms {unknown}; known: {sorted(SCALEUP_ARMS)}")
+    shared = [
+        "--model-dir",
+        args.model_dir,
+        "--pretokenized",
+        args.pretokenized,
+        "--batches",
+        ",".join(str(b) for b in args.batches),
+        "--pool-docs",
+        str(args.pool_docs),
+        "--passes",
+        str(args.passes),
+        "--min-seconds",
+        str(args.min_seconds),
+        "--hlo-batch",
+        str(args.hlo_batch),
+        "--fold-donor",
+    ]
+    results: dict[str, dict] = {}
+    waves = [args.arms[i : i + args.gpus] for i in range(0, len(args.arms), args.gpus)]
+    for wave_index, wave in enumerate(waves):
+        argv = [
+            [
+                *shared,
+                "--arm",
+                name,
+                "--host-cores",
+                str(args.host_cores_per_gpu),
+                "--core-offset",
+                str(i * args.host_cores_per_gpu),
+            ]
+            for i, name in enumerate(wave)
+        ]
+        env = [{"XLA_FLAGS": f"{os.environ.get('XLA_FLAGS', '')} {SCALEUP_ARMS[n].xla_flags}".strip()} for n in wave]
+        logger.info("arm wave %d/%d: %s", wave_index + 1, len(waves), wave)
+        start_at = time.time() + args.warmup_seconds
+        for name, child in zip(wave, gpu_fanout("gpu-forward", argv, start_at, env), strict=True):
+            results[name] = child
+            # The frontier row, not the child: a full child result carries every
+            # batch's spread and the HLO census, which does not survive a log line.
+            logger.info("BENCH gpu-arms-child %s", json.dumps(arm_frontier_row(name, child, None)))
+
+    baseline = results.get("baseline", {})
+    ran = [b for b in baseline.get("batches", []) if not b["out_of_memory"]]
+    baseline_docs = max((b["resident_docs_per_second"]["mean"] for b in ran), default=None)
+    return {
+        "arms": args.arms,
+        "batches": args.batches,
+        "baseline_docs_per_second_per_gpu": baseline_docs,
+        "frontier": [arm_frontier_row(n, results[n], baseline_docs) for n in args.arms],
+        "per_arm": results,
+        "host": host_facts(),
+        "iris_task_id": os.environ.get("IRIS_TASK_ID", ""),
     }
 
 
@@ -1447,6 +1821,27 @@ def main() -> None:
     gfw.add_argument("--host-cores", type=int, default=0, help="host CPUs to pin to (0 leaves the process unpinned)")
     gfw.add_argument("--core-offset", type=int, default=0)
     gfw.add_argument("--start-at", type=float, default=0.0, help="unix time to begin timing, after compile")
+    gfw.add_argument("--arm", default="baseline", choices=sorted(SCALEUP_ARMS), help="scale-up shape to measure")
+    gfw.add_argument("--hlo-batch", type=int, default=0, help="batch to run XLA cost/HLO analysis on (0 skips)")
+
+    arms = sub.add_parser("gpu-arms", help="one scale-up arm per GPU, on one node")
+    arms.add_argument("--model-dir", required=True)
+    arms.add_argument("--pretokenized", required=True)
+    arms.add_argument("--arms", type=lambda s: s.split(","), default=sorted(SCALEUP_ARMS))
+    arms.add_argument("--gpus", type=int, default=8)
+    arms.add_argument("--batches", type=lambda s: [int(x) for x in s.split(",")], default=list(DEFAULT_GPU_BATCHES))
+    arms.add_argument("--pool-docs", type=int, default=131_072)
+    arms.add_argument("--passes", type=int, default=3)
+    arms.add_argument("--min-seconds", type=float, default=8.0)
+    arms.add_argument("--hlo-batch", type=int, default=8192)
+    arms.add_argument("--host-cores-per-gpu", type=int, default=14)
+    arms.add_argument("--warmup-seconds", type=float, default=240.0)
+
+    micro = sub.add_parser("gpu-micro", help="isolated gemm and streaming-bandwidth roofline endpoints")
+    micro.add_argument("--model-dir", required=True)
+    micro.add_argument("--batch", type=int, default=8192, help="documents the gemm shapes are sized for")
+    micro.add_argument("--min-seconds", type=float, default=3.0)
+    micro.add_argument("--array-bytes", type=int, default=4 * 1024**3, help="working set of the bandwidth probe")
 
     gpk = sub.add_parser("gpu-pack", help="one scorer process per GPU on this node")
     gpk.add_argument("--model-dir", required=True)
@@ -1507,6 +1902,9 @@ def main() -> None:
     rd.add_argument("--prestage", action="store_true", help="warm LOTA over the slice before timing")
     rd.add_argument("--prestage-workers", type=int, default=32)
 
+    for parser in (arms, micro):
+        parser.add_argument("--out", default="", help="path to write the full result JSON to (logs truncate it)")
+
     args = p.parse_args()
     configure_logging(logging.INFO)
     configure_coreweave_s3()
@@ -1522,6 +1920,10 @@ def main() -> None:
         result = gpu_forward(args)
     elif args.mode == "gpu-pack":
         result = gpu_pack(args)
+    elif args.mode == "gpu-arms":
+        result = gpu_arms(args)
+    elif args.mode == "gpu-micro":
+        result = gpu_micro(args)
     elif args.mode == "pipeline":
         result = pipeline(args)
     elif args.mode == "pipeline-pack":
@@ -1532,6 +1934,10 @@ def main() -> None:
         result = read_fanout(args)
     else:
         result = read_stream(args)
+    if getattr(args, "out", ""):
+        with open_url(args.out, "w") as fh:
+            fh.write(json.dumps(result))
+        logger.info("wrote %s", args.out)
     print(BENCH_JSON_PREFIX + json.dumps(result))
 
 
