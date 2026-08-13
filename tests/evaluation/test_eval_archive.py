@@ -9,18 +9,19 @@ import json
 
 import pytest
 from click.testing import CliRunner
-from evalstore.archive import (
+from finestore.admin import set_table_metadata
+from finestore.reader import ReadView
+from fsspec.core import url_to_fs
+from marin.evaluation.archive import (
     Choice,
     EvalSample,
     EvaluationStore,
     Grading,
     SampleKind,
     sample_from_archive_row,
+    sample_to_archive_row,
     write_sample_parquet,
 )
-from finestore.admin import set_table_metadata
-from finestore.reader import ReadView
-from fsspec.core import url_to_fs
 from marin.evaluation.lm_eval_samples import (
     export_lm_eval_samples,
     preserved_sample_sources,
@@ -56,6 +57,25 @@ def _mcq(doc_id: str, *, correct: bool) -> EvalSample:
         metrics={"acc": 1.0 if correct else 0.0},
         correct=correct,
     )
+
+
+def test_archive_row_round_trips_each_sample_kind():
+    samples = (
+        _mcq("1", correct=True),
+        EvalSample(task="gsm8k", doc_id="2", kind=SampleKind.GENERATION, output="4", extracted="4"),
+        EvalSample(
+            task="aime",
+            doc_id="3",
+            kind=SampleKind.AGENTIC,
+            trajectory_uri="finestore://blobs/t3/trajectory.json",
+            grading=Grading(method="harbor:verifier", metric="reward", score=1.0, passed=True),
+        ),
+    )
+
+    for sample in samples:
+        row = sample_to_archive_row(sample, trial_id="t")
+        assert row["trial_id"] == "t"
+        assert sample_from_archive_row(row) == sample
 
 
 def test_evaldash_reads_the_archive(tmp_path):

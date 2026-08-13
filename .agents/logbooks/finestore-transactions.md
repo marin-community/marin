@@ -91,3 +91,8 @@ Validation so far:
 - `./infra/pre-commit.py --changed-files --fix`: all gates passed.
 - The first isolated CI leg inherited the repository-root Marin pytest plugin. Added a package-local pytest configuration so Evalstore remains independently testable without taking a reverse dependency on `marin-core`.
 - The selected Levanter suite exposed a repeated race between the fake trainer's `os.abort()` core dump and its three-second deadman. Disabled core dumps in that synthetic crash path so the test still observes `SIGABRT` without misclassifying core-dump latency as a stall.
+
+### 2026-08-13 — Evaluation ownership simplified
+
+- Moved the evaluation archive contract to `marin.evaluation.archive`. Evaldash continues to copy the import-light Marin evaluation modules it needs into its image.
+- Removed the `marin-evalstore` workspace member, distribution, release artifact, isolated CI scope, and Docker install. The archive has no independent consumer outside Marin-owned evaluation workflows.

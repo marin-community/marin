@@ -70,7 +70,7 @@ uv run python -m experiments.evaluation.migrations.cli upgrade-format --prefix g
 ```
 
 `backfill-samples` rewrites every run's per-sample parquets from its kept `samples_*.jsonl` sources --
-useful after a change to the contract in `evalstore.archive` (the parquet files are
+useful after a change to the contract in `marin.evaluation.archive` (the parquet files are
 regenerated in place; the source jsonl is untouched):
 
 ```bash
@@ -97,7 +97,7 @@ dashboard) without cluster access.
 Alongside the results tree, each task's individually-scored questions are exported as parquet:
 lm-eval runs with `--log_samples`, and the orchestrator converts every `samples_*.jsonl` into a
 parquet sibling (`marin.evaluation.lm_eval_samples` normalizes lm-eval's native row shape into
-`EvalSample`, the per-sample contract in `evalstore.archive`, with the parquet schema *being* the
+`EvalSample`, the per-sample contract in `marin.evaluation.archive`, with the parquet schema *being* the
 Pydantic model) -- load them with pandas/duckdb, or read them back with `EvalSample.model_validate`,
 to zoom into any run.
 

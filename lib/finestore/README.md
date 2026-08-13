@@ -140,6 +140,5 @@ one visibility protocol instead of carrying both models in every reader.
 ## Package boundary
 
 `marin-finestore` contains storage, transactions, read views, compaction, and generic
-cache adapters. Evaluation record types and `EvaluationStore` live in the separate
-import-light `marin-evalstore` package (`evalstore.archive`). FineStore has no
-evaluation or Marin pipeline dependency.
+cache adapters. Evaluation record types and `EvaluationStore` live in
+`marin.evaluation.archive`. FineStore has no evaluation or Marin pipeline dependency.

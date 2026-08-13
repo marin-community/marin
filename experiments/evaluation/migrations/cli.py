@@ -20,9 +20,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import click
-from evalstore.archive import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION
 from finestore.migrate import migrate_v1
 from finestore.reader import ReadView
+from marin.evaluation.archive import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION
 from marin.evaluation.lm_eval_samples import (
     export_lm_eval_samples,
     preserved_sample_sources,

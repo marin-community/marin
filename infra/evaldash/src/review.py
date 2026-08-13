@@ -20,7 +20,7 @@ import json
 import logging
 import os
 
-from evalstore.archive import EvalSample, SampleKind
+from marin.evaluation.archive import EvalSample, SampleKind
 from pydantic import BaseModel, ConfigDict
 
 from . import samples

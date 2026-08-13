@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Convert lm-eval's ``--log_samples`` output into the :mod:`evalstore.archive` contract.
+"""Convert lm-eval's ``--log_samples`` output into the :mod:`marin.evaluation.archive` contract.
 
 lm-eval (and evalchemy, which drives it) writes one ``samples_<task>_<timestamp>.jsonl`` row per
 evaluated question in its own native shape. This module normalizes those rows into
-:class:`~evalstore.archive.EvalSample` and exports them into the run's finestore archive, preserving
-each source file it read so the archive can be rebuilt from itself. ``evalstore.archive`` owns the
+:class:`~marin.evaluation.archive.EvalSample` and exports them into the run's finestore archive, preserving
+each source file it read so the archive can be rebuilt from itself. ``marin.evaluation.archive`` owns the
 contract and the archive tables; knowledge of lm-eval's row shape lives here.
 
 The same pass measures each task's coverage. lm-eval publishes no attempted-item count in its
@@ -24,7 +24,11 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
-from evalstore.archive import (
+from finestore.layout import ARCHIVE_FILE, BLOBS_TABLE, HEAD_FILE
+from finestore.reader import ReadView
+from rigging.filesystem import StoragePath, factory, prefix_join
+
+from marin.evaluation.archive import (
     ARCHIVE_SAMPLES_TABLE,
     ARCHIVE_STEPS_TABLE,
     SAMPLES_PREFIX,
@@ -40,10 +44,6 @@ from evalstore.archive import (
     primary_filter,
     primary_metric,
 )
-from finestore.layout import ARCHIVE_FILE, BLOBS_TABLE, HEAD_FILE
-from finestore.reader import ReadView
-from rigging.filesystem import StoragePath, factory, prefix_join
-
 from marin.evaluation.records import TaskCoverage
 
 logger = logging.getLogger(__name__)
@@ -314,7 +314,7 @@ def task_coverage(samples: Sequence[EvalSample]) -> TaskCoverage:
     A document that yielded no grading is counted as attempted but unscored, and one whose grader
     extracted no answer is counted as unanswered -- it scored, but on nothing the model actually
     supplied. A task scoring each document under several extraction filters holds one sample per
-    (document, filter); the tallies come from the filter :func:`~evalstore.archive.primary_filter`
+    (document, filter); the tallies come from the filter :func:`~marin.evaluation.archive.primary_filter`
     picks, which is the one the run's headline metric is also reported under.
     """
     graded: dict[str, list[EvalSample]] = {}

@@ -6,7 +6,7 @@
 The group launcher serves a model once and hands this runner an OpenAI endpoint; the runner points a
 Harbor agent at it (``hosted_vllm/<served-name>``), runs the dataset's trials on the configured
 sandbox environment, and normalizes each finished trial into the shared eval
-contract: one agentic :class:`~evalstore.archive.EvalSample` per task (its reward, its grading,
+contract: one agentic :class:`~marin.evaluation.archive.EvalSample` per task (its reward, its grading,
 and a reference to the saved trajectory) plus an aggregate this module's :class:`HarborResult` reads
 back for the record's metrics. Harbor writes each trial's ``result.json`` and trajectory straight to
 the durable output path as it finishes, so a completed trial survives a driver killed before the job
@@ -24,9 +24,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from evalstore.archive import EvalSample, EvaluationStore, Grading, SampleKind
 from rigging.filesystem import StoragePath, prefix_join
 
+from marin.evaluation.archive import EvalSample, EvaluationStore, Grading, SampleKind
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
     HarborBackendsUnavailable,

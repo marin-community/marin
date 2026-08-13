@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import logging
 
-from evalstore.archive import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION, SampleKind
 from finestore.admin import drop_table as drop_manifest_table
 from finestore.reader import ReadView
+from marin.evaluation.archive import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION, SampleKind
 from rigging.filesystem import StoragePath, factory, prefix_join
 
 from experiments.evaluation.migrations.archive_backup import superseded_samples_prefix

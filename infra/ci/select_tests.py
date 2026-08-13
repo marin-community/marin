@@ -41,7 +41,6 @@ SCOPES: tuple[str, ...] = (
     "dupekit",
     "finelog",
     "finestore",
-    "evalstore",
 )
 
 
@@ -84,7 +83,6 @@ UV_PACKAGE: dict[str, str] = {
     "dupekit": "marin-dupekit",
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
-    "evalstore": "marin-evalstore",
 }
 
 UV_EXTRAS: dict[str, list[str]] = {

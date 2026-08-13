@@ -9,9 +9,9 @@ import json
 
 import pyarrow.parquet as pq
 import pytest
-from evalstore.archive import ARCHIVE_SAMPLES_TABLE, EvalSample, EvaluationStore, Grading, SampleKind
 from finestore.admin import set_table_metadata
 from finestore.reader import ReadView
+from marin.evaluation.archive import ARCHIVE_SAMPLES_TABLE, EvalSample, EvaluationStore, Grading, SampleKind
 from rigging.filesystem import StoragePath
 
 from experiments.evaluation.migrations.samples_v4 import (
