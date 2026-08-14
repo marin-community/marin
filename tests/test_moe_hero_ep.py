@@ -754,17 +754,28 @@ def test_fused_reverse_matches_stock_autodiff(monkeypatch, dtype, tolerance):
     batch-axis reductions are exercised on CPU.
     """
 
-    def gate_silu_reverse(normalized, output_cotangent, w_up, silu_derivative, gate_hidden):
+    def reverse(output_cotangent, x, norm_weight, w_down, w_up, inverse_rms, silu_derivative, gate_hidden):
+        normalized = (x.astype(jnp.float32) * inverse_rms[:, None] * norm_weight).astype(x.dtype)
         gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
         gate_accumulator = output_cotangent * normalized * (gate * (1 - gate))
         gate_hidden_cotangent = jnp.einsum("td,rd->tr", gate_accumulator, w_up)
         w_up_cotangent = jnp.einsum("tr,td->rd", gate_hidden, gate_accumulator)
-        return output_cotangent * gate, gate_hidden_cotangent * silu_derivative, w_up_cotangent
+        gate_preactivation_cotangent = gate_hidden_cotangent * silu_derivative
+        w_down_cotangent = jnp.einsum("td,tr->dr", normalized, gate_preactivation_cotangent)
+        x_cotangent, norm_weight_cotangent = rgn.exact_rms_backward_fused_reference(
+            gate_preactivation_cotangent,
+            w_down,
+            output_cotangent * gate,
+            x,
+            norm_weight,
+            inverse_rms,
+        )
+        return x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent
 
     monkeypatch.setattr(
         rgn,
         "_backward_kernels",
-        lambda: (gate_silu_reverse, rgn.exact_rms_backward_fused_reference),
+        lambda: reverse,
     )
     with set_mesh(_rms_gated_norm_mesh()):
         inputs = _rms_gated_norm_inputs(dtype)

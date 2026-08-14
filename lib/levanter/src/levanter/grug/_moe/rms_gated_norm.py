@@ -37,14 +37,13 @@ class RmsGatedNormResiduals(NamedTuple):
 
 
 class RmsGatedNormSelectiveResiduals(NamedTuple):
-    """Low-rank preactivation retained to avoid repeating the down projection."""
+    """Forward inputs retained while low-rank activations are rematerialized."""
 
     x: jax.Array
     norm_weight: jax.Array
     w_down: jax.Array
     w_up: jax.Array
     inverse_rms: jax.Array
-    gate_preactivation: jax.Array
 
 
 class GatedNormUpCotangents(NamedTuple):
@@ -326,12 +325,9 @@ def _backward_kernels():
     Imported lazily so the default XLA path never pulls in the optional SM100 dependency, and
     indirected through one function so CPU tests can substitute the pure-JAX references.
     """
-    from levanter.grug._moe.quack_rms_cute import (  # noqa: PLC0415
-        quack_coda_gate_silu_reverse,
-        quack_coda_rms_backward_fused,
-    )
+    from levanter.grug._moe.quack_rms_cute import quack_rms_gated_norm_reverse  # noqa: PLC0415
 
-    return quack_coda_gate_silu_reverse, quack_coda_rms_backward_fused
+    return quack_rms_gated_norm_reverse
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(4, 5))
@@ -349,12 +345,11 @@ def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
         w_down=w_down,
         w_up=w_up,
         inverse_rms=residuals.inverse_rms,
-        gate_preactivation=residuals.gate_preactivation,
     )
 
 
 def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
-    gate_silu_reverse, rms_backward_fused = _backward_kernels()
+    reverse = _backward_kernels()
 
     del eps
     x = residuals.x
@@ -363,32 +358,29 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     normalized = (x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None] * residuals.norm_weight).astype(
         x_flat.dtype
     )
-    gate_hidden = jax.nn.silu(residuals.gate_preactivation)
+    gate_preactivation = jnp.einsum("td,dr->tr", normalized, residuals.w_down)
+    gate_hidden = jax.nn.silu(gate_preactivation)
     _, silu_derivative = jax.jvp(
         jax.nn.silu,
-        (residuals.gate_preactivation,),
-        (jnp.ones_like(residuals.gate_preactivation),),
+        (gate_preactivation,),
+        (jnp.ones_like(gate_preactivation),),
     )
-    direct_cotangent, gate_preactivation_cotangent, w_up_cotangent = gate_silu_reverse(
-        normalized,
+    x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent = reverse(
         output_cotangent,
+        x_flat,
+        residuals.norm_weight,
+        residuals.w_down,
         residuals.w_up,
+        residuals.inverse_rms,
         silu_derivative,
         gate_hidden,
     )
-    w_down_cotangent = jnp.einsum("td,tr->dr", normalized, gate_preactivation_cotangent)
-    x_cotangent, norm_weight_cotangent = rms_backward_fused(
-        gate_preactivation_cotangent,
-        residuals.w_down,
-        direct_cotangent,
-        x_flat,
-        residuals.norm_weight,
-        residuals.inverse_rms,
-    )
-    # Balance before the shard-map transpose sums the replicated norm-weight cotangent.
+    # Balance before the shard-map transpose sums the replicated parameter cotangents.
     norm_weight_cotangent = jax.lax.pmean(norm_weight_cotangent, axis_name=batch_axes).astype(
         residuals.norm_weight.dtype
     )
+    w_down_cotangent = jax.lax.pmean(w_down_cotangent, axis_name=batch_axes).astype(residuals.w_down.dtype)
+    w_up_cotangent = jax.lax.pmean(w_up_cotangent, axis_name=batch_axes).astype(residuals.w_up.dtype)
     x_cotangent = x_cotangent.reshape(x.shape)
     # ``check_vma=False`` below permits the opaque Pallas dx to cross the custom-VJP boundary
     # without its varying-manual-axis annotation. All parameter gradients stay in JAX, so the
