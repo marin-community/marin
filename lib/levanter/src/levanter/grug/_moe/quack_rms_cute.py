@@ -57,6 +57,8 @@ _SM100_MULTIPROCESSORS = 148
 _GATE_REVERSE_BLOCK_N = 32
 _RMS_REVERSE_BLOCK_M = 64
 _RMS_REVERSE_BLOCK_D = 64
+_RMS_FUSED_BLOCK_M = 128
+_RMS_FUSED_BLOCK_D = 128
 
 
 class _GateAccumulatorInplace:
@@ -748,13 +750,15 @@ def _rms_backward_fused_kernel(
     x_ref,
     norm_weight_ref,
     inverse_rms_ref,
+    norm_weight_zero_ref,
     x_cotangent_ref,
-    norm_weight_partial_ref,
+    norm_weight_cotangent_ref,
     *,
     block_m: int,
     block_d: int,
 ):
     """Form the RMS row scalar and consume it without exposing either intermediate."""
+    del norm_weight_zero_ref
     row_tile = pl.program_id(0)
     span_m = pl.ds(row_tile * block_m, block_m)
     rank = gate_preactivation_cotangent_ref.shape[1]
@@ -776,8 +780,9 @@ def _rms_backward_fused_kernel(
         normalized_x = x * inverse_rms[:, None]
         norm_weight = plgpu.load(norm_weight_ref.at[span_d]).astype(jnp.float32)
         weighted_cotangent = unweighted_cotangent.astype(jnp.float32) * norm_weight[None, :]
-        plgpu.store(
-            norm_weight_partial_ref.at[row_tile, span_d],
+        plgpu.atomic_add(
+            norm_weight_cotangent_ref,
+            span_d,
             jnp.sum(unweighted_cotangent.astype(jnp.float32) * normalized_x, axis=0),
         )
         return row_dot + jnp.sum(weighted_cotangent * normalized_x, axis=1)
@@ -800,19 +805,19 @@ def _rms_backward_fused_kernel(
 
 @functools.lru_cache(maxsize=None)
 def _rms_backward_fused_call(rows: int, hidden_dim: int, rank: int, dtype):
-    block_m = _RMS_REVERSE_BLOCK_M
-    block_d = _RMS_REVERSE_BLOCK_D
+    block_m = _RMS_FUSED_BLOCK_M
+    block_d = _RMS_FUSED_BLOCK_D
     return pl.pallas_call(
         functools.partial(_rms_backward_fused_kernel, block_m=block_m, block_d=block_d),
         out_shape=(
             jax.ShapeDtypeStruct((rows, hidden_dim), dtype),
-            jax.ShapeDtypeStruct((pl.cdiv(rows, block_m), hidden_dim), jnp.float32),
+            jax.ShapeDtypeStruct((hidden_dim,), jnp.float32),
         ),
-        in_specs=(pl.no_block_spec,) * 6,
+        in_specs=(pl.no_block_spec,) * 7,
         out_specs=(pl.no_block_spec,) * 2,
-        input_output_aliases={2: 0},
+        input_output_aliases={2: 0, 6: 1},
         grid=(pl.cdiv(rows, block_m),),
-        compiler_params=plgpu.CompilerParams(num_warps=8, num_stages=2),
+        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=2),
         cost_estimate=pl.CostEstimate(
             flops=2 * rows * hidden_dim * rank + 18 * rows * hidden_dim,
             transcendentals=0,
@@ -856,17 +861,17 @@ def quack_coda_rms_backward_fused(
         raise ValueError("RMS backward fused kernel requires BF16 matrix inputs")
     if inverse_rms.dtype != jnp.float32:
         raise ValueError("inverse_rms must be float32")
-    if rows % _RMS_REVERSE_BLOCK_M or hidden_dim % _RMS_REVERSE_BLOCK_D:
+    if rows % _RMS_FUSED_BLOCK_M or hidden_dim % _RMS_FUSED_BLOCK_D:
         raise ValueError("RMS backward dimensions must align with its tiles")
-    x_cotangent, norm_weight_partial = _rms_backward_fused_call(rows, hidden_dim, rank, x.dtype)(
+    return _rms_backward_fused_call(rows, hidden_dim, rank, x.dtype)(
         gate_preactivation_cotangent,
         w_down,
         direct_cotangent,
         x,
         norm_weight,
         inverse_rms,
+        jnp.zeros(norm_weight.shape, dtype=jnp.float32),
     )
-    return x_cotangent, jnp.sum(norm_weight_partial, axis=0)
 
 
 def _gate_accumulator_inplace_kernel(

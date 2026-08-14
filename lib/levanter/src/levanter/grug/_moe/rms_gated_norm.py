@@ -19,7 +19,7 @@ from jax.sharding import PartitionSpec as P, get_abstract_mesh, reshard
 
 from levanter.grug.sharding import _batch_axes
 
-RmsGatedNormImplementation = Literal["xla", "quack_coda_backward"]
+RmsGatedNormImplementation = Literal["xla", "quack_coda_backward", "quack_coda"]
 
 
 class RmsGatedNormResiduals(NamedTuple):
@@ -320,6 +320,35 @@ def _exact_forward(x, norm_weight, w_down, w_up, eps):
     return output.reshape(x.shape), residuals
 
 
+def _forward_kernel():
+    """Return the delayed-scale RMS down-projection kernel."""
+    from levanter.grug._moe.quack_rms_cute import quack_coda_rms_down_silu  # noqa: PLC0415
+
+    return quack_coda_rms_down_silu
+
+
+def _delayed_forward(x, norm_weight, w_down, w_up, eps):
+    """Move RMS scaling into the low-rank down-projection epilogue."""
+    x_flat = x.reshape((-1, x.shape[-1]))
+    x_float = x_flat.astype(jnp.float32)
+    inverse_rms = jax.lax.rsqrt(jnp.mean(jnp.square(x_float), axis=-1) + eps)
+    scaled_w_down = (norm_weight[:, None] * w_down).astype(w_down.dtype)
+    gate_preactivation, gate_hidden = _forward_kernel()(x_flat, scaled_w_down, inverse_rms)
+    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
+    normalized = (x_float * inverse_rms[:, None] * norm_weight).astype(x_flat.dtype)
+    output = normalized * gate.astype(normalized.dtype)
+    residuals = RmsGatedNormSelectiveResiduals(
+        x=x,
+        norm_weight=norm_weight,
+        w_down=w_down,
+        w_up=w_up,
+        inverse_rms=inverse_rms,
+        gate_preactivation=gate_preactivation,
+        gate_hidden=gate_hidden,
+    )
+    return output.reshape(x.shape), residuals
+
+
 def _backward_kernel():
     """Return the fused RMS reverse region.
 
@@ -397,6 +426,20 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
 _fused.defvjp(_fused_fwd, _fused_bwd)
 
 
+@partial(jax.custom_vjp, nondiff_argnums=(4, 5))
+def _fused_delayed(x, norm_weight, w_down, w_up, eps, batch_axes):
+    del batch_axes
+    return _delayed_forward(x, norm_weight, w_down, w_up, eps)[0]
+
+
+def _fused_delayed_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
+    del batch_axes
+    return _delayed_forward(x, norm_weight, w_down, w_up, eps)
+
+
+_fused_delayed.defvjp(_fused_delayed_fwd, _fused_bwd)
+
+
 def rms_gated_norm(
     x: jax.Array,
     *,
@@ -409,9 +452,10 @@ def rms_gated_norm(
     """Apply the RMSNorm-GatedNorm boundary with an explicit implementation.
 
     ``xla`` is the stock path. ``quack_coda_backward`` keeps that forward bit-identical and
-    replaces the reverse with the fused SM100 kernels.
+    replaces the reverse with the fused SM100 kernel. ``quack_coda`` also delays the forward
+    RMS row scale until the low-rank down-projection epilogue.
     """
-    if implementation not in ("xla", "quack_coda_backward"):
+    if implementation not in ("xla", "quack_coda_backward", "quack_coda"):
         raise ValueError(f"unsupported RMS-GatedNorm implementation {implementation!r}")
 
     norm_weight = reshard(norm_weight, P(None))
@@ -425,6 +469,8 @@ def rms_gated_norm(
     x = reshard(x, P(batch_axes))
 
     def _local(local_x, local_norm_weight, local_w_down, local_w_up):
+        if implementation == "quack_coda":
+            return _fused_delayed(local_x, local_norm_weight, local_w_down, local_w_up, eps, batch_axes)
         return _fused(local_x, local_norm_weight, local_w_down, local_w_up, eps, batch_axes)
 
     return shard_map(

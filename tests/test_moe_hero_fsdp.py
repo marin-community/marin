@@ -249,6 +249,37 @@ def test_fused_reverse_matches_stock_autodiff_end_to_end(cpu_mesh, monkeypatch, 
         )
 
 
+def test_delayed_forward_matches_reference(cpu_mesh, monkeypatch):
+    del cpu_mesh
+
+    def delayed_down(x, scaled_w_down, inverse_rms):
+        preactivation = (jnp.einsum("td,dr->tr", x, scaled_w_down) * inverse_rms[:, None]).astype(x.dtype)
+        return preactivation, jax.nn.silu(preactivation)
+
+    monkeypatch.setattr(rgn, "_forward_kernel", lambda: delayed_down)
+    inputs = _norm_inputs(jnp.bfloat16)
+    x = reshard(inputs.x, P(_BATCH_AXES))
+
+    actual = rms_gated_norm(
+        x,
+        norm_weight=inputs.norm_weight,
+        w_down=inputs.w_down,
+        w_up=inputs.w_up,
+        eps=_NORM_EPS,
+        implementation="quack_coda",
+    )
+
+    x_flat = x.reshape((-1, x.shape[-1]))
+    x_float = x_flat.astype(jnp.float32)
+    inverse_rms = jax.lax.rsqrt(jnp.mean(jnp.square(x_float), axis=-1) + _NORM_EPS)
+    scaled_w_down = (inputs.norm_weight[:, None] * inputs.w_down).astype(inputs.w_down.dtype)
+    _, gate_hidden = delayed_down(x_flat, scaled_w_down, inverse_rms)
+    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, inputs.w_up))
+    normalized = (x_float * inverse_rms[:, None] * inputs.norm_weight).astype(x.dtype)
+    expected = (normalized * gate.astype(normalized.dtype)).reshape(x.shape)
+    np.testing.assert_array_equal(actual, expected)
+
+
 def test_runtime_rms_implementation_is_not_serialized_in_hf_config():
     config = GrugModelConfig(
         vocab_size=257,
