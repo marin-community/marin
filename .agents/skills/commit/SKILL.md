@@ -250,8 +250,8 @@ Act on the event, read any feedback that arrived concurrently, then re-arm:
    and agent comment. Prefix agent-authored replies with `🤖` and resolve the
    thread. The default significant-comment filter ignores the authenticated
    user's comments, review-bot progress placeholders, clean verdicts, wrappers,
-   and Loom's exact
-   `Working on this in loom: <session URL>` acknowledgement.
+   Loom's exact `Working on this in loom: <session URL>` acknowledgement, and
+   Loom access-control replies addressed to a bot.
 4. **Timeout** — report the last statuses in the timeout payload and hand off.
    Do not replace the completed 12-hour block with manual polling.
 
