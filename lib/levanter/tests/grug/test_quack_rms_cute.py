@@ -155,7 +155,7 @@ def test_gate_silu_reverse_matches_reference():
     gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
 
     actual = quack_rms_cute.quack_coda_gate_silu_reverse(
-        normalized, output_cotangent, gate, w_up, silu_derivative, gate_hidden
+        normalized, output_cotangent, w_up, silu_derivative, gate_hidden
     )
     expected = exact_gate_silu_reverse_reference(
         output_cotangent,
