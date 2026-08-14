@@ -154,8 +154,15 @@ def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, scan_layers: i
                     raise RuntimeError("remat scan produced a non-finite activation gradient")
 
                 # The trainer differentiates the parameters, which is what puts the stacked `xs`
-                # leaves on the backward path rather than only the carry.
-                parameter_grads = jax.jit(eqx.filter_grad(remat_loss))(stacked.stacked, shared, tokens)
+                # leaves on the backward path rather than only the carry. Split the arrays off the
+                # module first: the static half carries the config, whose dict field is unhashable,
+                # so handing the whole module to filter_grad fails before it ever reaches the kernel.
+                diff_layers, static_layers = eqx.partition(stacked.stacked, eqx.is_inexact_array)
+
+                def parameter_loss(layers: MoEMLP, shared_expert: DenseMLP, x: jax.Array) -> jax.Array:
+                    return remat_loss(eqx.combine(layers, static_layers), shared_expert, x)
+
+                parameter_grads = jax.jit(jax.grad(parameter_loss))(diff_layers, shared, tokens)
                 parameter_leaves = [leaf for leaf in jax.tree.leaves(parameter_grads) if eqx.is_inexact_array(leaf)]
                 jax.block_until_ready(parameter_leaves)
                 parameter_finite = all(
