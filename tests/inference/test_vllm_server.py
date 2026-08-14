@@ -258,6 +258,7 @@ def test_linux_process_group_status_inspects_threads_of_dead_leader(tmp_path, mo
     (tasks / "102").mkdir()
     (tasks / "102" / "stat").write_text(f"102 (worker) S 1 {process_group_id}\n")
     monkeypatch.setattr(vllm_server, "_LINUX_PROC_ROOT", str(proc_root))
+    monkeypatch.setattr(vllm_server, "_HOST_PLATFORM", "linux")
 
     assert _linux_process_group_status(process_group_id) is _ProcessGroupStatus.HAS_LIVE_PROCESSES
 

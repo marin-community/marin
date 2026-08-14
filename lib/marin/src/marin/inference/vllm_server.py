@@ -91,6 +91,9 @@ _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 # libstreamer's read-fault text: startup is retried on this, and permanently failed on anything else.
 _RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
 _LINUX_PROC_ROOT = "/proc"
+# Captured at import so tests can drive the /proc parser on non-Linux hosts, as they already do for
+# _LINUX_PROC_ROOT.
+_HOST_PLATFORM = sys.platform
 _LINUX_DEAD_PROCESS_STATES = frozenset({"X", "Z"})
 _VLLM_METRICS_SERVICE = "vllm"
 _VLLM_METRIC_PREFIX = "vllm:"
@@ -476,7 +479,7 @@ class VllmServerHandle:
 
 def _linux_process_group_status(process_group_id: int) -> _ProcessGroupStatus:
     """Return the observable liveness state for a Linux process group."""
-    if sys.platform != "linux":
+    if _HOST_PLATFORM != "linux":
         return _ProcessGroupStatus.UNKNOWN
     try:
         entries = os.scandir(_LINUX_PROC_ROOT)
