@@ -41,6 +41,7 @@ from marin.processing.classification.deduplication.fuzzy_verification import (
     verify_candidate,
 )
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     VERIFICATION_WORKER_SCRATCH,
     FuzzyVerificationStoreConfig,
@@ -669,6 +670,7 @@ def main() -> None:
                 "minhash_collection": minhash_collection_path,
                 "verification": verification_params.model_dump(mode="json"),
                 "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+                "pipeline_shards_per_worker": DEFAULT_PIPELINE_SHARDS_PER_WORKER,
             },
             fn=lambda verified_output_path: _verify_existing_artifacts(
                 output_path=verified_output_path,

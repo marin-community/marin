@@ -40,6 +40,7 @@ from marin.processing.classification.deduplication.fuzzy_dups import (
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     VERIFICATION_WORKER_SCRATCH,
     VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
@@ -154,6 +155,7 @@ def _fuzzy_verification_step(
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
             "verification": params.model_dump(mode="json"),
             "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+            "pipeline_shards_per_worker": DEFAULT_PIPELINE_SHARDS_PER_WORKER,
         },
         fn=lambda output_path: verify_fuzzy_dups(
             normalized_sources={
