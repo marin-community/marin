@@ -186,6 +186,7 @@ def test_rms_gated_norm_reverse_matches_reference():
     gate_preactivation = jnp.einsum("td,dr->tr", normalized, w_down)
     gate_hidden = jax.nn.silu(gate_preactivation)
     _, silu_derivative = jax.jvp(jax.nn.silu, (gate_preactivation,), (jnp.ones_like(gate_preactivation),))
+    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
 
     actual = quack_rms_cute.quack_rms_gated_norm_reverse(
         output_cotangent,
@@ -194,6 +195,7 @@ def test_rms_gated_norm_reverse_matches_reference():
         w_down,
         w_up,
         inverse_rms,
+        gate,
         silu_derivative,
         gate_hidden,
     )
