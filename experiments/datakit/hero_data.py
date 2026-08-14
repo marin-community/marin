@@ -39,6 +39,7 @@ import os
 import pathlib
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
+from functools import cache
 from typing import NoReturn
 
 from levanter.tokenizers import TokenizerBackend
@@ -51,9 +52,24 @@ from experiments.datakit.reference_pipeline import select_sources, zephyr_dataki
 
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
 
-MANIFEST_PATH = pathlib.Path(__file__).with_name("hero_data_paths.json")
-HARRIER_PATHS_PATH = pathlib.Path(__file__).with_name("hero_data_emb_paths.json")
-HARRIER_PATHS: dict[str, str] = json.loads(HARRIER_PATHS_PATH.read_text())
+
+@cache
+def manifest_path() -> pathlib.Path:
+    """Return the path to the generated Hero Data manifest."""
+    return pathlib.Path(__file__).with_name("hero_data_paths.json")
+
+
+@cache
+def harrier_paths_path() -> pathlib.Path:
+    """Return the path to the complete Harrier path map."""
+    return pathlib.Path(__file__).with_name("hero_data_emb_paths.json")
+
+
+@cache
+def harrier_paths() -> dict[str, str]:
+    """Load the complete Harrier path map."""
+    return json.loads(harrier_paths_path().read_text())
+
 
 # The manifest records the paths as they resolve under the prefix that holds the
 # hero data. It is not region-independent: ``materialize_ghalogs_step`` hashes the
@@ -166,7 +182,7 @@ def fuzzy_dups() -> StepSpec:
 
 def harrier(source: str) -> str:
     """Return the fixed complete Harrier path for ``source``."""
-    return prefix_join(marin_prefix(), HARRIER_PATHS[source])
+    return prefix_join(marin_prefix(), harrier_paths()[source])
 
 
 def all_paths() -> dict[str, str]:
@@ -211,7 +227,7 @@ def _pinned_prefix(prefix: str) -> Iterator[None]:
 
 
 def write_manifest() -> dict[str, str]:
-    """Rewrite :data:`MANIFEST_PATH` with the paths as they resolve on CoreWeave.
+    """Rewrite :func:`manifest_path` with the paths as they resolve on CoreWeave.
 
     Pins :data:`MANIFEST_PREFIX` rather than reading the caller's, so the file is
     the same whatever the ambient config. Entries are stored relative to it.
@@ -224,10 +240,10 @@ def write_manifest() -> dict[str, str]:
     if escaped:
         raise ValueError(f"paths outside {MANIFEST_PREFIX} cannot be stored relative: {escaped}")
 
-    MANIFEST_PATH.write_text(json.dumps(relative, indent=1, sort_keys=True) + "\n")
+    manifest_path().write_text(json.dumps(relative, indent=1, sort_keys=True) + "\n")
     return relative
 
 
 if __name__ == "__main__":
     written = write_manifest()
-    print(f"wrote {len(written)} paths to {MANIFEST_PATH}")
+    print(f"wrote {len(written)} paths to {manifest_path()}")

@@ -18,8 +18,8 @@ import pytest
 from experiments.datakit import hero_data
 
 PREFIX = hero_data.MANIFEST_PREFIX
-MANIFEST = hero_data.MANIFEST_PATH
-EMBED_MANIFEST = hero_data.HARRIER_PATHS_PATH
+MANIFEST = hero_data.manifest_path()
+EMBED_MANIFEST = hero_data.harrier_paths_path()
 
 
 @pytest.fixture(autouse=True)
