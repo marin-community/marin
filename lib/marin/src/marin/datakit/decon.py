@@ -1426,7 +1426,7 @@ def _source_sample_shards(
 
     num_shards = min(DROP_SET_SHARDS_PER_SOURCE, len(ranges))
     if num_shards == 0:
-        return [{"source": source_name, "text_field": text_field, "ranges": []}]
+        return [{"sample_shard_id": f"{source_name}:0", "source": source_name, "text_field": text_field, "ranges": []}]
 
     buckets: list[list[dict[str, Any]]] = [[] for _ in range(num_shards)]
     bucket_rows = [0] * num_shards
@@ -1434,7 +1434,23 @@ def _source_sample_shards(
         bucket_index = min(range(num_shards), key=bucket_rows.__getitem__)
         buckets[bucket_index].append(sample_range)
         bucket_rows[bucket_index] += sample_range["row_count"]
-    return [{"source": source_name, "text_field": text_field, "ranges": bucket} for bucket in buckets]
+    return [
+        {
+            "sample_shard_id": f"{source_name}:{bucket_index}",
+            "source": source_name,
+            "text_field": text_field,
+            "ranges": bucket,
+        }
+        for bucket_index, bucket in enumerate(buckets)
+    ]
+
+
+def _materialize_sample_shard(sample_shard_id: str, items: Iterator[dict[str, Any]]) -> dict[str, Any]:
+    iterator = iter(items)
+    sample_shard = next(iterator)
+    if next(iterator, None) is not None:
+        raise ValueError(f"duplicate decontamination sample shard: {sample_shard_id}")
+    return sample_shard
 
 
 def _sample_drop_set_shard(
@@ -1446,7 +1462,11 @@ def _sample_drop_set_shard(
 ) -> Iterator[dict[str, Any]]:
     """Count matching eval features in one group of source row ranges."""
     bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
+    is_nonempty = False
     for sample_shard in sample_shards:
+        if not is_nonempty:
+            counters.pipeline.update_counter("decon_drop/nonempty_sampling_shards", 1)
+            is_nonempty = True
         local_counts: Counter[int] = Counter()
         global_counts: Counter[int] = Counter()
         local_documents = 0
@@ -1623,7 +1643,11 @@ def build_all_source_drop_sets(
                 global_sample_docs=global_sample_docs,
             )
         )
-        .reshard(DROP_SET_SHARDS_PER_SOURCE * len(sources))
+        .group_by(
+            key=lambda row: row["sample_shard_id"],
+            reducer=_materialize_sample_shard,
+            num_output_shards=DROP_SET_SHARDS_PER_SOURCE * len(sources),
+        )
         .map_shard(lambda items, shard: _sample_drop_set_shard(items, shard, bloom_path=bloom_path, ngram=ngram))
         .group_by(
             key=lambda row: row["source"],
