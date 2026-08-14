@@ -16,9 +16,12 @@ import pyarrow.parquet as pq
 import pytest
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import ArtifactRecord, write_artifact, write_record
+from zephyr.execution import ZephyrContext
+from zephyr.runners import InlineRunner
 
 from experiments.datakit.embeddings.harrier import tei, tei_client
 from experiments.datakit.embeddings.harrier.merge import (
+    MERGE_WORKER_RESOURCES,
     EmbeddingSourcePair,
     discover_source_pairs,
     merge_embedding_source,
@@ -110,16 +113,22 @@ def test_merge_embedding_source_preserves_repeated_ids_and_prefers_old_overlap(t
         row_group_size=2,
     )
 
-    artifact = merge_embedding_source(
-        output_path=str(output_dir),
-        source_name="source",
-        source_key="normalized/source/outputs/main",
-        normalized_path=str(normalized_dir),
-        deduplicated_path=str(deduplicated_dir),
-        fuzzy_duplicate_path=str(fuzzy_duplicate_dir),
+    context = ZephyrContext(
+        resources=MERGE_WORKER_RESOURCES,
         max_workers=2,
         chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="merge-harrier-test",
+        stage_runner_factory=InlineRunner,
     )
+    with context:
+        artifact = merge_embedding_source(
+            output_path=str(output_dir),
+            source_key="normalized/source/outputs/main",
+            normalized_path=str(normalized_dir),
+            deduplicated_path=str(deduplicated_dir),
+            fuzzy_duplicate_path=str(fuzzy_duplicate_dir),
+            zephyr_context=context,
+        )
 
     output_paths = sorted(output_dir.glob("*.parquet"))
     assert [path.name for path in output_paths] == [
@@ -142,6 +151,45 @@ def test_merge_embedding_source_preserves_repeated_ids_and_prefers_old_overlap(t
     assert artifact.counters["merge/overlapping_docs"] == 1
     assert artifact.counters["merge/verified_shards"] == 2
     assert artifact.counters["merge/verified_rows"] == 8
+
+
+def test_merge_embedding_sources_share_one_zephyr_pool(tmp_path, monkeypatch):
+    deduplicated_dir = tmp_path / "deduplicated"
+    fuzzy_duplicate_dir = tmp_path / "fuzzy-duplicates"
+    normalized_dir = tmp_path / "normalized"
+    _write_embedding_shard(deduplicated_dir / "part-00000.parquet", ["a"], [1])
+    _write_embedding_shard(fuzzy_duplicate_dir / "part-00000.parquet", ["b"], [2])
+    normalized_dir.mkdir()
+    pq.write_table(pa.table({"id": ["a", "b"]}), normalized_dir / "part-00000.parquet")
+
+    context = ZephyrContext(
+        resources=MERGE_WORKER_RESOURCES,
+        max_workers=1,
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="merge-harrier-test",
+        stage_runner_factory=InlineRunner,
+    )
+    started_contexts = []
+    original_start_pool = ZephyrContext._start_pool
+
+    def track_start_pool(self, worker_count, idle_policy):
+        started_contexts.append(self)
+        return original_start_pool(self, worker_count, idle_policy)
+
+    monkeypatch.setattr(ZephyrContext, "_start_pool", track_start_pool)
+    with context:
+        for source_name in ("first", "second"):
+            artifact = merge_embedding_source(
+                output_path=str(tmp_path / source_name),
+                source_key=f"normalized/{source_name}/outputs/main",
+                normalized_path=str(normalized_dir),
+                deduplicated_path=str(deduplicated_dir),
+                fuzzy_duplicate_path=str(fuzzy_duplicate_dir),
+                zephyr_context=context,
+            )
+            assert artifact.counters["merge/verified_shards"] == 1
+
+    assert started_contexts == [context]
 
 
 def test_discover_source_pairs_accepts_fuzzy_artifact_without_result(tmp_path):

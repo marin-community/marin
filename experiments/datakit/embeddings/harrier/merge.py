@@ -47,6 +47,9 @@ MERGED_PREFIX = "datakit/embed/harrier-all"
 MERGE_VERSION = 1
 WORKERS_PER_SOURCE = 32
 MAX_CONCURRENT = 8
+MAX_POOL_WORKERS = WORKERS_PER_SOURCE * MAX_CONCURRENT
+MERGE_WORKER_RESOURCES = ResourceConfig.with_cpu(cpu=1, ram="4g", disk="8g")
+MERGE_COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="4g", preemptible=False)
 
 
 @dataclass(frozen=True)
@@ -444,13 +447,11 @@ def _merge_embedding_shard(pairs: Iterator[EmbeddingShardPair], shard: ShardInfo
 def merge_embedding_source(
     *,
     output_path: str,
-    source_name: str,
     source_key: str,
     normalized_path: str,
     deduplicated_path: str,
     fuzzy_duplicate_path: str,
-    max_workers: int = WORKERS_PER_SOURCE,
-    chunk_storage_prefix: str | None = None,
+    zephyr_context: ZephyrContext,
 ) -> EmbeddingAttrData:
     """Stream one source and verify that its output follows normalized row order."""
     shard_pairs = _embedding_shard_pairs(normalized_path, deduplicated_path, fuzzy_duplicate_path)
@@ -464,16 +465,7 @@ def merge_embedding_source(
         .map_shard(_merge_embedding_shard)
         .write_parquet(_output_path, schema=EMBEDDING_SCHEMA, skip_existing=True)
     )
-    context = ZephyrContext(
-        resources=ResourceConfig.with_cpu(cpu=1, ram="4g", disk="8g"),
-        coordinator_resources=ResourceConfig(cpu=1, ram="4g", preemptible=False),
-        max_workers=min(max_workers, len(shard_pairs)),
-        chunk_storage_prefix=chunk_storage_prefix
-        or marin_temp_bucket(ttl_days=1, prefix="zephyr", source_prefix=output_path),
-        name=f"merge-harrier-{os.path.basename(source_name)[:32]}",
-        stage_runner_factory=InlineRunner,
-    )
-    outcome = context.execute(dataset, verbose=True)
+    outcome = zephyr_context.execute(dataset, verbose=True)
     verified_shards, verified_rows = verify_merged_output(output_path, normalized_path)
     outcome_counters = dict(outcome.counters)
     outcome_counters["merge/verified_shards"] = verified_shards
@@ -491,14 +483,20 @@ def merge_embedding_source(
     )
 
 
-def _merge_source(output_path: str, pair: EmbeddingSourcePair) -> EmbeddingAttrData:
+def _merge_source(
+    output_path: str,
+    pair: EmbeddingSourcePair,
+    zephyr_context: ZephyrContext | None,
+) -> EmbeddingAttrData:
+    if zephyr_context is None:
+        raise ValueError("A Zephyr context is required to run a Harrier merge source")
     return merge_embedding_source(
         output_path=output_path,
-        source_name=pair.source_name,
         source_key=pair.source_key,
         normalized_path=pair.normalized_path,
         deduplicated_path=pair.deduplicated_path,
         fuzzy_duplicate_path=pair.fuzzy_duplicate_path,
+        zephyr_context=zephyr_context,
     )
 
 
@@ -508,6 +506,7 @@ def build_steps(
     fuzzy_duplicate_prefix: str = FUZZY_DUPLICATE_PREFIX,
     output_prefix: str | None = None,
     source_names: list[str] | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> list[StepSpec]:
     """Build one merge step per selected source."""
     if source_names is None:
@@ -531,7 +530,7 @@ def build_steps(
                 "v": MERGE_VERSION,
             },
             fn=remote(
-                lambda output_path, source_pair=pair: _merge_source(output_path, source_pair),
+                lambda output_path, source_pair=pair: _merge_source(output_path, source_pair, zephyr_context),
                 resources=ResourceConfig(cpu=2, ram="8g", disk="8g"),
                 pip_dependency_groups=["datakit"],
             ),
@@ -551,25 +550,66 @@ def main() -> None:
     parser.add_argument("--fuzzy-duplicate-prefix", default=FUZZY_DUPLICATE_PREFIX)
     parser.add_argument("--output-prefix")
     parser.add_argument("--sources", help="Comma-separated source names. The default selects all sources.")
-    parser.add_argument("--max-concurrent", type=int, default=MAX_CONCURRENT)
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=MAX_CONCURRENT,
+        help="Maximum source steps and shared-pool pipelines that can run at one time.",
+    )
+    parser.add_argument(
+        "--pool-workers",
+        type=int,
+        help=f"Shared Zephyr workers. The default is {WORKERS_PER_SOURCE} per source, capped at {MAX_POOL_WORKERS}.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    source_names = None
-    if args.sources:
+    if args.max_concurrent < 1:
+        parser.error("--max-concurrent must be at least 1")
+    if args.pool_workers is not None and args.pool_workers < 1:
+        parser.error("--pool-workers must be at least 1")
+
+    source_names = list(select_sources())
+    if args.sources is not None:
         source_names = [source.strip() for source in args.sources.split(",") if source.strip()]
+        if not source_names:
+            parser.error("--sources must contain at least one source")
 
     configure_logging()
-    StepRunner().run(
-        build_steps(
+    if args.dry_run:
+        steps = build_steps(
             deduplicated_prefix=args.deduplicated_prefix,
             fuzzy_duplicate_prefix=args.fuzzy_duplicate_prefix,
             output_prefix=args.output_prefix,
             source_names=source_names,
+        )
+        StepRunner().run(steps, dry_run=True, max_concurrent=args.max_concurrent)
+        return
+
+    pool_workers = args.pool_workers or min(MAX_POOL_WORKERS, WORKERS_PER_SOURCE * len(source_names))
+    resolved_output_prefix = _resolved_prefix(args.output_prefix or MERGED_PREFIX)
+    zephyr_context = ZephyrContext(
+        name="merge-harrier",
+        resources=MERGE_WORKER_RESOURCES,
+        coordinator_resources=MERGE_COORDINATOR_RESOURCES,
+        max_workers=pool_workers,
+        max_concurrent_pipelines=args.max_concurrent * 2,
+        chunk_storage_prefix=marin_temp_bucket(
+            ttl_days=1,
+            prefix="zephyr",
+            source_prefix=resolved_output_prefix,
         ),
-        dry_run=args.dry_run,
-        max_concurrent=args.max_concurrent,
+        stage_runner_factory=InlineRunner,
     )
+    steps = build_steps(
+        deduplicated_prefix=args.deduplicated_prefix,
+        fuzzy_duplicate_prefix=args.fuzzy_duplicate_prefix,
+        output_prefix=args.output_prefix,
+        source_names=source_names,
+        zephyr_context=zephyr_context,
+    )
+    with zephyr_context:
+        StepRunner().run(steps, max_concurrent=args.max_concurrent)
 
 
 if __name__ == "__main__":
