@@ -214,7 +214,6 @@ def main(argv: list[str] | None = None) -> None:
             lookup_batch_size=128,
             shards_per_worker=1,
         ),
-        max_output_shards=args.max_workers,
         max_workers=args.max_workers,
         worker_resources=worker,
         coordinator_resources=ResourceConfig(cpu=1, ram="4g"),
