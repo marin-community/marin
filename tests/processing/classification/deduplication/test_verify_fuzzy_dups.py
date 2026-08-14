@@ -19,6 +19,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import MinHashA
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     FuzzyVerificationStoreConfig,
+    LargeClusterParams,
     LocalRepresentativeParams,
     VerificationShard,
     _candidate_documents,
@@ -273,6 +274,71 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
     assert verified.counters["dedup/fuzzy/verification/decision/retained_no_match"] == 1
     assert verified.counters["dedup/fuzzy/verification/comparison/containment_below_threshold"] == 1
     assert verified.sources[source_key].source_tag == "source_000"
+
+
+def test_verifier_splits_large_cluster_by_minhash_bucket(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    rows = []
+    candidate_rows = []
+    buckets_by_id = {}
+    for pair_index in range(3):
+        text = " ".join(f"pair-{pair_index}-token-{token_index}" for token_index in range(20))
+        bucket = f"pair-bucket-{pair_index}"
+        for copy_index in range(2):
+            document_id = f"pair-{pair_index}-{copy_index}"
+            rows.append({"id": document_id, "text": text})
+            candidate_rows.append(
+                {
+                    "id": document_id,
+                    "dup_cluster_id": "cluster-a",
+                    "is_cluster_canonical": pair_index == 0 and copy_index == 0,
+                }
+            )
+            buckets_by_id[document_id] = [bucket]
+
+    source_key, source = _write_source(
+        root=tmp_path,
+        name="source",
+        shards={"part-00000.parquet": rows},
+    )
+    candidates = _write_candidates(
+        root=tmp_path,
+        rows_by_source={source_key: {"part-00000.parquet": candidate_rows}},
+    )
+    minhash = _write_minhash(
+        root=tmp_path,
+        name="source",
+        source=source,
+        buckets_by_id=buckets_by_id,
+    )
+    large_cluster_params = LargeClusterParams(
+        maximum_members=3,
+        target_members_per_partition=2,
+        minimum_local_members=1,
+    )
+
+    verified = verify_fuzzy_dups(
+        normalized_sources={"source": source},
+        minhash_sources={"source": minhash},
+        candidates=candidates,
+        output_path=str(tmp_path / "verified"),
+        verification_params=FuzzyVerificationParams(),
+        local_representative_params=TEST_LOCAL_PARAMS,
+        large_cluster_params=large_cluster_params,
+    )
+
+    output_ids = [row["id"] for row in _output_rows(verified, source_key)]
+    assert len(output_ids) == 3
+    assert {document_id.rsplit("-", 1)[0] for document_id in output_ids} == {
+        "pair-0",
+        "pair-1",
+        "pair-2",
+    }
+    assert verified.large_clusters == large_cluster_params
+    assert verified.counters[f"{_COUNTER_PREFIX}/large_cluster/clusters"] == 1
+    assert verified.counters[f"{_COUNTER_PREFIX}/large_cluster/observed_members"] == 6
+    assert verified.counters[f"{_COUNTER_PREFIX}/large_cluster/upper_bound_members"] == 6
+    assert verified.counters[f"{_COUNTER_PREFIX}/large_cluster/partitions"] == 3
 
 
 def test_verifier_removes_a_member_that_contains_the_canonical(tmp_path, monkeypatch):

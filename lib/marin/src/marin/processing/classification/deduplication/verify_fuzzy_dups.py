@@ -16,6 +16,7 @@ from functools import partial
 from itertools import batched, chain, groupby
 from typing import Any
 
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import zstandard as zstd
@@ -26,6 +27,7 @@ from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
 from zephyr.memory_store import MemoryStore
+from zephyr.shard_keys import deterministic_hash
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -51,7 +53,7 @@ from marin.processing.classification.deduplication.fuzzy_verification import (
 
 logger = logging.getLogger(__name__)
 
-VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION = 3
+VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION = 4
 PERCENT_HISTOGRAM_METRICS = frozenset({"member_containment", "jaccard", "char_jaccard", "local_line_count_ratio"})
 SCORE_HISTOGRAM_MAX_PERCENT = 100
 UNIQUE_NGRAM_HISTOGRAM_OVERFLOW_BIN = 33
@@ -59,6 +61,7 @@ _COUNTER_PREFIX = "dedup/fuzzy/verification"
 _SHARED_SHARDS_KEY = "verified_fuzzy_dups_shards"
 _LOCAL_TOKEN_SEQUENCE_REJECTION = "local_token_sequence_differs"
 _LOCAL_LINE_COUNT_REJECTION = "local_line_count_ratio_below_threshold"
+_LARGE_CLUSTER_PARTITION_HASH_DOMAIN = "fuzzy-verification-large-cluster-partition-v1"
 # Bounds on the head scan that picks each cluster anchor. Cluster size is
 # heavily skewed - the p99 cluster holds 13 members - so a short head covers
 # effectively every cluster while a pathological one stays bounded.
@@ -127,6 +130,30 @@ REFERENCE_LOCAL_REPRESENTATIVE_PARAMS = LocalRepresentativeParams(
 )
 
 
+class LargeClusterParams(BaseModel):
+    """Bounds for finding and partitioning large candidate clusters."""
+
+    model_config = ConfigDict(frozen=True)
+
+    maximum_members: int = Field(ge=2)
+    target_members_per_partition: int = Field(ge=1)
+    minimum_local_members: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def target_fits_maximum(self) -> "LargeClusterParams":
+        """Reject a target that is larger than the maximum."""
+        if self.target_members_per_partition > self.maximum_members:
+            raise ValueError("target_members_per_partition cannot exceed maximum_members")
+        return self
+
+
+REFERENCE_LARGE_CLUSTER_PARAMS = LargeClusterParams(
+    maximum_members=1_000_000,
+    target_members_per_partition=500_000,
+    minimum_local_members=8,
+)
+
+
 class VerifiedFuzzyDupsPerSource(BaseModel):
     """Attribute output for one normalized source."""
 
@@ -140,6 +167,7 @@ class VerifiedFuzzyDupsAttrData(BaseModel):
     version: str = f"v{VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION}"
     verification: FuzzyVerificationParams
     local_representatives: LocalRepresentativeParams
+    large_clusters: LargeClusterParams
     sources: dict[str, VerifiedFuzzyDupsPerSource]
     counters: dict[str, int | float]
 
@@ -391,6 +419,53 @@ def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[st
             minhash = next(minhash_rows, None)
 
 
+def _local_cluster_counts(
+    shards: list[VerificationShard],
+    *,
+    minimum_local_members: int,
+) -> Iterator[dict[str, Any]]:
+    """Emit counts for clusters that repeat within one pipeline input shard."""
+    count_frames = []
+    for shard in shards:
+        if not StoragePath(shard.candidate_path).exists():
+            continue
+        with StoragePath(shard.candidate_path).open("rb") as stream:
+            cluster_ids = pq.read_table(stream, columns=["dup_cluster_id"])
+        count_frames.append(pl.from_arrow(cluster_ids).group_by("dup_cluster_id").len(name="members"))
+    if not count_frames:
+        return
+    cluster_counts = (
+        pl.concat(count_frames)
+        .group_by("dup_cluster_id")
+        .agg(pl.col("members").sum())
+        .filter(pl.col("members") >= minimum_local_members)
+    )
+    for row in cluster_counts.iter_rows(named=True):
+        yield {"dup_cluster_id": str(row["dup_cluster_id"]), "members": row["members"]}
+
+
+def _large_cluster_split(
+    cluster_id: str,
+    records: Iterator[dict[str, Any]],
+    *,
+    params: LargeClusterParams,
+    num_input_shards: int,
+) -> Iterator[dict[str, Any]]:
+    """Return a split factor when a cluster can exceed the configured maximum."""
+    observed_members = sum(record["members"] for record in records)
+    omitted_members_upper_bound = (params.minimum_local_members - 1) * num_input_shards
+    upper_bound_members = observed_members + omitted_members_upper_bound
+    if upper_bound_members <= params.maximum_members:
+        return
+    split_factor = (upper_bound_members + params.target_members_per_partition - 1) // params.target_members_per_partition
+    yield {
+        "dup_cluster_id": cluster_id,
+        "observed_members": observed_members,
+        "upper_bound_members": upper_bound_members,
+        "split_factor": split_factor,
+    }
+
+
 def _document_partition(positions: Mapping[int, int], key: tuple[int, str]) -> int:
     """Route a candidate document to its shard's position in this layout.
 
@@ -419,10 +494,17 @@ def _attach_document_text(
             yield {**record, "text": text}
 
 
-def _cluster_key(record: dict[str, Any]) -> tuple[str, str]:
+def _cluster_key(split_factors: Mapping[str, int], record: dict[str, Any]) -> tuple[str, str, int]:
     if record["kind"] == "sentinel":
-        return "sentinel", str(record["file_idx"])
-    return "cluster", record["dup_cluster_id"]
+        return "sentinel", str(record["file_idx"]), 0
+    cluster_id = record["dup_cluster_id"]
+    split_factor = split_factors.get(cluster_id, 1)
+    if split_factor == 1:
+        return "cluster", cluster_id, 0
+    buckets = record["buckets"]
+    partition_value = buckets[0] if buckets else record["id"]
+    partition = deterministic_hash((_LARGE_CLUSTER_PARTITION_HASH_DOMAIN, partition_value)) % split_factor
+    return "cluster", cluster_id, partition
 
 
 def _cluster_sort_key(record: dict[str, Any]) -> bytes:
@@ -677,7 +759,7 @@ def _make_cluster_verifier(
 ):
     """Build a reducer that uses bounded, retained local representatives."""
 
-    def verify(group_key: tuple[str, str], records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    def verify(group_key: tuple[str, str, int], records: Iterator[dict[str, Any]]) -> Iterator[dict[str, Any]]:
         first = next(records)
         if group_key[0] == "sentinel":
             if next(records, None) is not None:
@@ -1159,6 +1241,7 @@ def verify_fuzzy_dups(
     verification_params: FuzzyVerificationParams,
     local_representative_params: LocalRepresentativeParams,
     store_config: FuzzyVerificationStoreConfig,
+    large_cluster_params: LargeClusterParams = REFERENCE_LARGE_CLUSTER_PARAMS,
     max_workers: int | None = None,
     pipeline_shards_per_worker: int = DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     worker_resources: ResourceConfig | None = None,
@@ -1176,7 +1259,8 @@ def verify_fuzzy_dups(
 
     ``pipeline_shards_per_worker`` controls map and reduce parallelism without
     changing document-store partitioning. Each map task streams one or more
-    source shards.
+    source shards. A bounded count pass partitions candidate clusters that can
+    exceed ``large_cluster_params.maximum_members``.
     """
     verification_started = time.monotonic()
     if not normalized_sources:
@@ -1226,6 +1310,48 @@ def verify_fuzzy_dups(
 
     try:
         ctx.put(_SHARED_SHARDS_KEY, {shard.file_idx: shard for shard in shards})
+        cluster_scan_started = time.monotonic()
+        cluster_scan_outcome = ctx.execute(
+            Dataset.from_list(pipeline_shard_groups)
+            .flat_map(
+                partial(
+                    _local_cluster_counts,
+                    minimum_local_members=large_cluster_params.minimum_local_members,
+                )
+            )
+            .group_by(
+                key=lambda record: record["dup_cluster_id"],
+                reducer=partial(
+                    _large_cluster_split,
+                    params=large_cluster_params,
+                    num_input_shards=num_pipeline_shards,
+                ),
+                num_output_shards=min(num_pipeline_shards, max_workers),
+            ),
+            verbose=True,
+            map_task_resources=map_task_resources,
+            reduce_task_resources=reduce_task_resources,
+        )
+        cluster_scan_elapsed = time.monotonic() - cluster_scan_started
+        large_cluster_splits = sorted(
+            cluster_scan_outcome.results,
+            key=lambda record: (-record["upper_bound_members"], record["dup_cluster_id"]),
+        )
+        split_factors = {record["dup_cluster_id"]: record["split_factor"] for record in large_cluster_splits}
+        logger.info(
+            "Large-cluster scan found %d cluster(s) above %d members in %.2f seconds",
+            len(large_cluster_splits),
+            large_cluster_params.maximum_members,
+            cluster_scan_elapsed,
+        )
+        for record in large_cluster_splits[:10]:
+            logger.info(
+                "Splitting cluster %s into %d partitions (observed %d, upper bound %d)",
+                record["dup_cluster_id"],
+                record["split_factor"],
+                record["observed_members"],
+                record["upper_bound_members"],
+            )
         document_store = ctx.load_memory_store(
             Dataset.from_list(shard_groups).flat_map(_candidate_documents),
             name="fuzzy-verification-documents",
@@ -1239,7 +1365,7 @@ def verify_fuzzy_dups(
             Dataset.from_list(pipeline_shard_groups)
             .flat_map(_joined_cluster_members)
             .group_by(
-                key=_cluster_key,
+                key=partial(_cluster_key, split_factors),
                 sort_by=_cluster_sort_key,
                 reducer=_make_cluster_verifier(
                     verification_params,
@@ -1294,14 +1420,30 @@ def verify_fuzzy_dups(
     )
     output_counters[f"{_COUNTER_PREFIX}/pipeline/shards"] = num_pipeline_shards
     output_counters[f"{_COUNTER_PREFIX}/pipeline/source_shards"] = len(shards)
+    output_counters[f"{_COUNTER_PREFIX}/large_cluster/clusters"] = len(large_cluster_splits)
+    output_counters[f"{_COUNTER_PREFIX}/large_cluster/observed_members"] = sum(
+        record["observed_members"] for record in large_cluster_splits
+    )
+    output_counters[f"{_COUNTER_PREFIX}/large_cluster/upper_bound_members"] = sum(
+        record["upper_bound_members"] for record in large_cluster_splits
+    )
+    output_counters[f"{_COUNTER_PREFIX}/large_cluster/partitions"] = sum(
+        record["split_factor"] for record in large_cluster_splits
+    )
+    output_counters[f"{_COUNTER_PREFIX}/large_cluster/max_partitions"] = max(
+        (record["split_factor"] for record in large_cluster_splits),
+        default=0,
+    )
+    output_counters[f"{_COUNTER_PREFIX}/timing/large_cluster_scan_elapsed"] = cluster_scan_elapsed
     output_counters[f"{_COUNTER_PREFIX}/timing/pool_start_elapsed"] = pool_start_elapsed
     output_counters[f"{_COUNTER_PREFIX}/timing/pipeline_elapsed"] = pipeline_elapsed
     output_counters[f"{_COUNTER_PREFIX}/timing/pool_shutdown_elapsed"] = shutdown_elapsed
     output_counters[f"{_COUNTER_PREFIX}/timing/total_elapsed"] = total_elapsed
     logger.info(
-        "Fuzzy verification wall times: pool startup %.2f seconds, memory-store load %.2f seconds, "
-        "pipeline %.2f seconds, pool shutdown %.2f seconds, total %.2f seconds",
+        "Fuzzy verification wall times: pool startup %.2f seconds, large-cluster scan %.2f seconds, "
+        "memory-store load %.2f seconds, pipeline %.2f seconds, pool shutdown %.2f seconds, total %.2f seconds",
         pool_start_elapsed,
+        cluster_scan_elapsed,
         document_store.load_elapsed,
         pipeline_elapsed,
         shutdown_elapsed,
@@ -1316,6 +1458,7 @@ def verify_fuzzy_dups(
     return VerifiedFuzzyDupsAttrData(
         verification=verification_params,
         local_representatives=local_representative_params,
+        large_clusters=large_cluster_params,
         sources={
             source_key: VerifiedFuzzyDupsPerSource(
                 attr_dir=attr_dir,
@@ -1336,6 +1479,7 @@ def verify_fuzzy_dups_step(
     verification_params: FuzzyVerificationParams,
     local_representative_params: LocalRepresentativeParams,
     store_config: FuzzyVerificationStoreConfig,
+    large_cluster_params: LargeClusterParams = REFERENCE_LARGE_CLUSTER_PARAMS,
     pipeline_shards_per_worker: int = DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     max_workers: int | None = None,
     worker_resources: ResourceConfig | None = None,
@@ -1366,6 +1510,7 @@ def verify_fuzzy_dups_step(
             output_path=output_path,
             verification_params=verification_params,
             local_representative_params=local_representative_params,
+            large_cluster_params=large_cluster_params,
             store_config=store_config,
             pipeline_shards_per_worker=pipeline_shards_per_worker,
             max_workers=max_workers,
@@ -1379,6 +1524,7 @@ def verify_fuzzy_dups_step(
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
             "verification": verification_params.model_dump(mode="json"),
             "local_representatives": local_representative_params.model_dump(mode="json"),
+            "large_clusters": large_cluster_params.model_dump(mode="json"),
             "pipeline_shards_per_worker": pipeline_shards_per_worker,
         },
         override_output_path=override_output_path,
