@@ -105,6 +105,13 @@ ordinary sessions use the deployment-managed `default` profile, while workload
 and future GitHub Actions callers select the automation profile authorized by
 their federation mapping.
 
+The `default`, `github`, and `slack` profiles allowlist the repositories where
+interactive sessions may fall back to the `loom-oa-dev` GitHub App. Loom stamps
+only the session's current repository and brokers a short-lived installation
+token when the launching user has not stored a personal token. A personal token
+continues to take precedence. Keep these lists aligned with the repositories
+registered in production and the App's installations.
+
 The Pulumi declaration is authoritative at activation time. An unchanged
 profile keeps its database revision; a changed declaration overwrites the
 current row and advances the revision. UI or API edits persist only until the
