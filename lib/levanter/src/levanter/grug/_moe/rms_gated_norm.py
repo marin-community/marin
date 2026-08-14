@@ -37,13 +37,14 @@ class RmsGatedNormResiduals(NamedTuple):
 
 
 class RmsGatedNormSelectiveResiduals(NamedTuple):
-    """Forward inputs retained while low-rank activations are rematerialized."""
+    """Low-rank preactivation retained to avoid repeating the down projection."""
 
     x: jax.Array
     norm_weight: jax.Array
     w_down: jax.Array
     w_up: jax.Array
     inverse_rms: jax.Array
+    gate_preactivation: jax.Array
 
 
 class GatedNormUpCotangents(NamedTuple):
@@ -345,6 +346,7 @@ def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
         w_down=w_down,
         w_up=w_up,
         inverse_rms=residuals.inverse_rms,
+        gate_preactivation=residuals.gate_preactivation,
     )
 
 
@@ -355,15 +357,11 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     x = residuals.x
     x_flat = x.reshape((-1, x.shape[-1]))
     output_cotangent = output_cotangent.reshape(x_flat.shape)
-    normalized = (x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None] * residuals.norm_weight).astype(
-        x_flat.dtype
-    )
-    gate_preactivation = jnp.einsum("td,dr->tr", normalized, residuals.w_down)
-    gate_hidden = jax.nn.silu(gate_preactivation)
+    gate_hidden = jax.nn.silu(residuals.gate_preactivation)
     _, silu_derivative = jax.jvp(
         jax.nn.silu,
-        (gate_preactivation,),
-        (jnp.ones_like(gate_preactivation),),
+        (residuals.gate_preactivation,),
+        (jnp.ones_like(residuals.gate_preactivation),),
     )
     x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent = reverse(
         output_cotangent,
