@@ -19,10 +19,9 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import sanitize_job_name
-from marin.experiment.namespacing import user_owned_name
 from marin.external_dependencies import MARIN_SKYRL
-from marin.training.training import LevanterCheckpoint
-from rigging.filesystem import marin_temp_bucket, prefix_join
+from marin.training.training import LevanterCheckpoint, temporary_storage_base_path
+from rigging.filesystem import prefix_join
 
 _EXECUTION = "skyrl_execution"
 _LAUNCHER_PYTHON = "3.12"
@@ -327,7 +326,7 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
 
 def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[SkyRLModel]:
     """Build a versioned MarinSkyRL training artifact."""
-    step_name = user_owned_name(spec.name)
+    step_name = spec.name
     deps = tuple(
         dict.fromkeys(
             (
@@ -343,10 +342,10 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         if ctx.is_fingerprint:
             temporary_root = "<temporary_output_path>"
         else:
-            temporary_root = marin_temp_bucket(
+            temporary_root = temporary_storage_base_path(
+                ctx.output_path,
                 ttl_days=spec.retention.temporary_storage_ttl_days,
-                prefix=prefix_join(prefix_join(_TEMPORARY_OUTPUT_PREFIX, step_name), spec.version),
-                source_prefix=ctx.output_path,
+                category=_TEMPORARY_OUTPUT_PREFIX,
             )
         attempts_root = prefix_join(temporary_root, "attempts")
         output = SkyRLOutputPaths(

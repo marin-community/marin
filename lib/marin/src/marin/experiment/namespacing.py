@@ -6,10 +6,10 @@
 A mutable (``dev``) checkpoint addresses identity on ``{name}/dev`` alone, so two people
 iterating on the same experiment write to the same path and clobber each other — and a
 resumption checkpointer would resume from whichever run last touched it.
-:func:`user_namespaced_name` prefixes a *mutable* training step's name with
-``users/{username}/`` so each author gets an isolated scratch namespace. Fixed
-(calendar-versioned) checkpoints and all datasets keep their shared names, so published runs
-stay citable and the expensive multi-TB tokenized caches still cache-hit across users.
+:func:`user_owned_name` prefixes an artifact unconditionally when its output is
+owned by the caller. :func:`user_namespaced_name` applies that prefix only to
+mutable training steps. Fixed checkpoints and datasets otherwise keep their
+shared names, so published runs stay citable and tokenized caches remain shared.
 """
 
 from rigging.provenance import username_segment
