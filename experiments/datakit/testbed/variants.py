@@ -74,7 +74,10 @@ _FUZZY_DUPS_MAX_PARALLELISM = 128
 _EXACT_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _FUZZY_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
-_FUZZY_VERIFICATION_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
+# Verification reduces via zephyr's external sort, which spills run files to /tmp
+# and only deletes them once the merge finishes. Spill volume tracks shard size
+# rather than worker RAM, so scratch is requested explicitly here.
+_FUZZY_VERIFICATION_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="256g")
 _FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=1_800,
     ready_timeout=1_800,

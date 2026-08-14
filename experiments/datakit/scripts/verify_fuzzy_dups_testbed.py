@@ -61,8 +61,10 @@ DEFAULT_MAX_WORKERS = 64
 DEFAULT_MAX_CONCURRENT = 8
 DEFAULT_INSPECTION_LIMIT = 10_000
 TEXT_PREVIEW_CHARS = 500
-WORKER_RESOURCES = ResourceConfig(cpu=2, ram="64g", disk="8g")
-VERIFICATION_TASK_RESOURCES = ResourceConfig(cpu=2, ram="60g", disk="8g")
+# A single external-sort shard was measured holding 8 GiB of spill in /tmp, so the
+# worker's scratch request has to clear that with room for concurrent shards.
+WORKER_RESOURCES = ResourceConfig(cpu=2, ram="64g", disk="256g")
+VERIFICATION_TASK_RESOURCES = ResourceConfig(cpu=2, ram="60g", disk="256g")
 COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="16g", preemptible=False)
 STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=1_800,

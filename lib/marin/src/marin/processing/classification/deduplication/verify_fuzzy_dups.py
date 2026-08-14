@@ -804,7 +804,9 @@ def verify_fuzzy_dups(
     if not shards:
         raise ValueError("verify_fuzzy_dups found no normalized Parquet shards")
 
-    resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="16g")
+    # The reduce spills to /tmp through zephyr's external sort, and the run files
+    # live until the merge finishes, so scratch is sized well above worker RAM.
+    resources = worker_resources or ResourceConfig(cpu=2, ram="16g", disk="256g")
     # The document store loads onto the worker pool, which must know its size,
     # so an unset worker count falls back to one worker per shard.
     if max_workers is None:
