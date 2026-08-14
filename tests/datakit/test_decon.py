@@ -1581,6 +1581,7 @@ def test_all_source_drop_sets_parallel_sample_respects_document_limits(tmp_path:
         global_common_min_sources=1,
     )
     assert result.counters["decon_drop/sample_shards"] == 3
+    assert result.counters["decon_drop/nonempty_sampling_shards"] > 1
     assert result.counters["decon_drop/global_documents_sampled"] == 6
 
     marked = tmp_path / "marked"
