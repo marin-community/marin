@@ -24,8 +24,8 @@ unit: its sections refresh together on one run and re-pin in one PR (each still 
 onto its own base). Only the vllm/tpu-inference pair is grouped, because the TPU
 launcher installs both pins at once and vllm's TPU base derives from the tpu-inference
 release; splitting them could pin a mixed, unblessed stack. The vllm fork's GPU pin is
-not in that group — it tracks upstream head on its own `gpu` branch, independent of the
-`tpu` branch. The weekly `ops-fork-ferry` workflow sends Weaver one request per
+not in that group — it tracks upstream head on the fork's `main`, independent of the
+`tpu` branch that carries the TPU pin. The weekly `ops-fork-ferry` workflow sends Weaver one request per
 supported pin or group. That request names this skill and the forks to update; this
 file owns the migration procedure.
 
@@ -44,9 +44,9 @@ Read the target fork's section in `config/external/migration.toml`. It gives:
 - `pin` — where the resolved pin is recorded (`isolated_project` uv.lock,
   `descriptor:<path>#<section>` SHA, or `release:<path>` prebuilt wheel); drives the
   re-pin step.
-- `branch` — the fork branch this pin tracks (`main` for a single-pin fork; `gpu`/`tpu`
-  for the two-pin vllm fork). The refresh stages on `<branch>-next`; an admin promotes
-  that validated tip after reviewing the draft Marin PR.
+- `branch` — the fork branch this pin tracks (`main` for a single-pin fork and for the
+  vllm GPU pin; `tpu` for the vllm fork's TPU pin). The refresh stages on `<branch>-next`;
+  an admin promotes that validated tip after reviewing the draft Marin PR.
 - `e2e` — the Marin end-to-end that validates the refresh.
 - `blocker_assignee` — who owns the "can't migrate" issue.
 - `nuances` — constraints a human must respect (torch pins, known-good ceilings).
@@ -123,9 +123,10 @@ there is a newer upstream base to rebase onto.
 ## Rebase the overlay
 
 Branch from the selected base as `<branch>-next` (the pin's `branch` with a `-next`
-suffix: `gpu-next`, `tpu-next`, or `main-next` for a single-pin fork). This staging
-branch is disposable — a re-run force-updates it — and is distinct from the protected
-stable `<branch>`, which the unattended refresh leaves unchanged.
+suffix: `tpu-next` for the vllm TPU pin, `main-next` otherwise — single-pin forks and
+the vllm GPU pin both track `main`). This staging branch is disposable — a re-run
+force-updates it — and is distinct from the protected stable `<branch>`, which the
+unattended refresh leaves unchanged.
 
 Find the base our commits currently sit on: `old_base` is the descriptor's
 `upstream_base` (descriptor pins) or `git merge-base <fork>/<branch> upstream/HEAD`
@@ -203,13 +204,29 @@ the pin set here needs no change after that promotion.
   the two forks, so there are no `uv.lock` changes and `jax`/`jaxlib`/`libtpu`/`torch`
   come from the forks' own dependencies — do not touch `marin-core`, `marin-levanter`,
   or `marin-fray`.
-- `pin = release:<path>` (`vllm-gpu`): the pin is a prebuilt wheel, so push `gpu-next`
-  and build it through the fork's release pipeline — the candidate/release jobs compile
-  both arches and validate the exact wheel bytes on real GPUs. Set `gpu-release.toml`'s
-  `release_tag`, `source_commit`, `version`, `torch_backend`, and per-arch `url`+`sha256`
-  from the promoted manifest. A base that crosses a CUDA/torch or vLLM stable-ABI
-  boundary is a migration, not a bump: re-audit the wheel verifier and the fork's release
-  gate for the extension name (`vllm._C_stable_libtorch` on CUDA 13).
+- `pin = release:<path>` (`vllm-gpu`): the pin is a prebuilt wheel, so the refresh builds
+  and promotes one through the fork's own release pipeline, then re-pins from the promoted
+  manifest. Dispatching fork workflows needs `actions:write` on `marin-community/vllm`,
+  which the fork-ferry profile grants.
+  1. Push `main-next` to the fork.
+  2. Build the candidate on that ref:
+     `gh workflow run marin-gpu-candidate.yaml --repo marin-community/vllm --ref main-next`.
+     The workflow otherwise builds on `push: main`; dispatching on `main-next` compiles the
+     staged tip into both arches under a `marin-vllm-gpu-candidate-<sha>` prerelease.
+  3. Once the candidate prerelease exists, promote it:
+     `gh workflow run marin-gpu-release.yaml --repo marin-community/vllm --ref main-next -f candidate_tag=<tag>`.
+     The release job validates the exact wheel bytes on real GPUs and publishes an immutable
+     release carrying `marin-vllm-gpu-manifest.json`.
+  4. Download that manifest and re-pin — do not hand-edit `gpu-release.toml`:
+     `gh release download <release_tag> --repo marin-community/vllm --pattern marin-vllm-gpu-manifest.json`,
+     then `uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.json`.
+     The helper writes `gpu-release.toml` (release tag, source commit, version, torch backend,
+     per-arch url+sha256) and regenerates `external_dependencies.py`; it re-encodes the wheel
+     URLs the way the pin loader validates, which a hand copy gets wrong.
+
+  A base that crosses a CUDA/torch or vLLM stable-ABI boundary is a migration, not a bump:
+  re-audit the wheel verifier and the fork's release gate for the extension name
+  (`vllm._C_stable_libtorch` on CUDA 13).
 - `pin = isolated_project` (`evalchemy`, `harbor`, `MarinSkyRL`): the uv source follows
   the fork's `main`, so `main` is the stable branch. Stage the rebase on `main-next`,
   review it from a compare link (`upstream_base..main-next`) on the Marin PR, and point
