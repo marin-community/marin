@@ -193,6 +193,24 @@ def test_memory_store_orders_worker_handles_by_reported_actor_index():
     assert ordered == (handles[1], handles[2], handles[0])
 
 
+def test_memory_store_spreads_adjacent_shards_across_workers(local_client, tmp_path):
+    partitions = [[((partition, "key"), str(partition))] for partition in range(8)]
+    dataset = Dataset.from_list(partitions).flat_map(_partition_rows)
+
+    with memory_store_context(local_client, tmp_path, max_workers=2) as context:
+        store = _load_store(context, dataset, shards_per_worker=2)
+
+        assert store.get_many([(partition, "key") for partition in range(8)]) == [
+            str(partition) for partition in range(8)
+        ]
+        assert [(stat.actor_index, stat.store_shard_index, stat.source_partitions) for stat in store.stats()] == [
+            (0, 0, (0, 4)),
+            (0, 1, (2, 6)),
+            (1, 0, (1, 5)),
+            (1, 1, (3, 7)),
+        ]
+
+
 def test_memory_store_computes_on_owning_workers_and_preserves_order(local_client, tmp_path):
     partitions = [
         [((0, "a"), "zero-a"), ((0, "b"), "zero-b")],
