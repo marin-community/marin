@@ -36,16 +36,17 @@ HERO_EP_BATCH_SIZE = 1024
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
-# One JAX process per GPU. The old one-process-per-node layout has two reproducible
-# failure modes on this stack, both from auto-PGLE (which only engages per-node):
-# a profiling-session collision that kills the gang during early dispatch
-# (ALREADY_EXISTS: Another profiling session active), and a silent wedge at the
-# FDO-recompile clique re-initialization (#7344). Per-GPU also matches the FSDP
-# hero (#8040) and is required by the ragged EP backend (#8081).
-HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
+HERO_PROCESSES_PER_TASK = 1
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
-# The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
-# of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
+HERO_SELECTED_MIXED_PRECISION = "params=bfloat16,compute=bfloat16,output=bfloat16"
+HERO_SELECTED_FLAVOR = "ep-pooled-wave"
+HERO_SELECTED_NUM_EXPERTS = 384
+HERO_SELECTED_NUM_EXPERTS_PER_TOKEN = 8
+HERO_SELECTED_INTERMEDIATE_DIM = 3072
+HERO_SELECTED_CAPACITY_FACTOR = 1.33
+HERO_SELECTED_TRANSPORT_CAPACITY_FACTOR = 1.05
+HERO_SELECTED_MAX_EXPERTS_PER_WAVE = 2
+# Keep MuonH state on pinned host memory to leave room for the pooled all-to-all buffers.
 HERO_OFFLOAD_OPT_STATE = True
 HERO_WATCH_INTERVAL = 0
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
@@ -56,6 +57,7 @@ _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, p
 
 FLAVORS: dict[str, str] = {
     "ep": "fixed_all_to_all",
+    HERO_SELECTED_FLAVOR: "fixed_pooled_wave_all_to_all",
     # The upstream transport. Its capacity factor scales one pooled receiver buffer per device
     # rather than a per-(sender, expert) cell, so at the same factor it buys the same bytes and
     # drops far less -- every expert on a device draws from one pool. `fixed_all_to_all` exists
@@ -103,12 +105,12 @@ def build_hero_run(
     schedule_steps: int | None = None,
     seed: int = 0,
     batch_size: int = HERO_EP_BATCH_SIZE,
-    num_experts: int | None = None,
-    num_experts_per_token: int | None = None,
-    intermediate_dim: int | None = None,
-    capacity_factor: float | None = None,
+    num_experts: int | None = HERO_SELECTED_NUM_EXPERTS,
+    num_experts_per_token: int | None = HERO_SELECTED_NUM_EXPERTS_PER_TOKEN,
+    intermediate_dim: int | None = HERO_SELECTED_INTERMEDIATE_DIM,
+    capacity_factor: float | None = HERO_SELECTED_CAPACITY_FACTOR,
     latent_dim: int | None = None,
-    flavor: str = "ep",
+    flavor: str = HERO_SELECTED_FLAVOR,
     eval_every: int = 0,
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
@@ -178,6 +180,10 @@ def build_hero_run(
         model,
         moe_implementation=moe_implementation,
         expert_chunks=1,
+        pooled_transport_capacity_factor=(
+            HERO_SELECTED_TRANSPORT_CAPACITY_FACTOR if flavor == HERO_SELECTED_FLAVOR else None
+        ),
+        max_experts_per_wave=HERO_SELECTED_MAX_EXPERTS_PER_WAVE,
     )
     # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
     # already allocated and the workspace is built. Reject it here instead.
@@ -185,6 +191,11 @@ def build_hero_run(
         raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {HERO_EP_EXPERT_AXIS_SIZE}")
     backend_tag = moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
+    transport_capacity_tag = (
+        None
+        if model.pooled_transport_capacity_factor is None
+        else f"transport-capacity-{model.pooled_transport_capacity_factor:g}"
+    )
     size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
@@ -228,7 +239,7 @@ def build_hero_run(
                 process_index=0,
                 profile_options=ProfileOptionsConfig(enable_hlo_proto=True),
             ),
-            mp=jmp.get_policy(HERO_MIXED_PRECISION),
+            mp=jmp.get_policy(HERO_SELECTED_MIXED_PRECISION if flavor == HERO_SELECTED_FLAVOR else HERO_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
@@ -240,6 +251,7 @@ def build_hero_run(
                     backend_tag,
                     f"flavor-{flavor}",
                     capacity_tag,
+                    *(() if transport_capacity_tag is None else (transport_capacity_tag,)),
                     size_tag,
                     "gb200",
                     "MHEP",
@@ -295,7 +307,8 @@ def build_hero_run(
 @click.option(
     "--dp-racks",
     type=click.IntRange(min=1),
-    required=True,
+    default=1,
+    show_default=True,
     help="Data-parallel NVL72 rack count. --batch-size stays global across all racks.",
 )
 @click.option(
@@ -324,19 +337,22 @@ def build_hero_run(
 @click.option(
     "--num-experts",
     type=click.IntRange(min=1),
-    default=None,
+    default=HERO_SELECTED_NUM_EXPERTS,
+    show_default=True,
     help=f"Override the routed expert count. Must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}.",
 )
 @click.option(
     "--num-experts-per-token",
     type=click.IntRange(min=1),
-    default=None,
+    default=HERO_SELECTED_NUM_EXPERTS_PER_TOKEN,
+    show_default=True,
     help="Override the routed top-k. Scales both active parameters and the EP dispatch buffers.",
 )
 @click.option(
     "--intermediate-dim",
     type=click.IntRange(min=1),
-    default=None,
+    default=HERO_SELECTED_INTERMEDIATE_DIM,
+    show_default=True,
     help="Override the routed expert width.",
 )
 @click.option(
@@ -355,7 +371,7 @@ def build_hero_run(
 @click.option(
     "--flavor",
     type=click.Choice(sorted(FLAVORS)),
-    default="ep",
+    default=HERO_SELECTED_FLAVOR,
     show_default=True,
     help="Expert-parallel MoE implementation.",
 )
@@ -415,7 +431,8 @@ def build_hero_run(
 @click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
-    default=None,
+    default=HERO_SELECTED_CAPACITY_FACTOR,
+    show_default=True,
     help="Override the fixed all-to-all capacity factor.",
 )
 @build_options

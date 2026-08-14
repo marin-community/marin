@@ -178,6 +178,8 @@ class GrugModelConfig:
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
+    pooled_transport_capacity_factor: float | None = None
+    max_experts_per_wave: int = 2
     report_capacity_overflow: bool = False
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
@@ -224,6 +226,13 @@ class GrugModelConfig:
             raise ValueError("capacity_factor must be positive")
         if self.expert_chunks <= 0:
             raise ValueError("expert_chunks must be positive")
+        if self.pooled_transport_capacity_factor is not None and self.pooled_transport_capacity_factor <= 0:
+            raise ValueError("pooled_transport_capacity_factor must be positive")
+        if self.moe_implementation == "fixed_pooled_wave_all_to_all":
+            if self.pooled_transport_capacity_factor is None:
+                raise ValueError("fixed_pooled_wave_all_to_all requires pooled_transport_capacity_factor")
+        if self.max_experts_per_wave <= 0:
+            raise ValueError("max_experts_per_wave must be positive")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
         resolve_moe_implementation(self.moe_implementation)
@@ -857,7 +866,9 @@ class MoEMLP(eqx.Module):
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=cfg.capacity_factor,
+                pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 expert_chunks=cfg.expert_chunks,
+                max_experts_per_wave=cfg.max_experts_per_wave,
             ),
             cfg=cfg,
         )

@@ -38,9 +38,31 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         config.model.num_experts_per_token,
         config.model.latent_dim,
         config.model.capacity_factor,
+        config.model.pooled_transport_capacity_factor,
+        config.model.max_experts_per_wave,
+        config.model.moe_implementation,
         config.trainer.trainer.train_batch_size,
         config.model.max_seq_len,
-    ) == (6144, 48, 192, 6144, 4, 3072, 1.33, 1024, 4096)
+        config.processes_per_task,
+        config.trainer.trainer.mp.param_dtype,
+        config.trainer.trainer.mp.compute_dtype,
+    ) == (
+        6144,
+        48,
+        384,
+        3072,
+        8,
+        3072,
+        1.33,
+        1.05,
+        2,
+        "fixed_pooled_wave_all_to_all",
+        1024,
+        4096,
+        1,
+        jnp.bfloat16,
+        jnp.bfloat16,
+    )
 
 
 def test_full_bank_top_k_is_rejected_before_launch():
@@ -160,9 +182,8 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert explicit_overlap in flags
     assert "--xla_gpu_experimental_parallel_collective_overlap_limit=4" not in flags
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
-    assert train.XLA_COMMAND_BUFFER_FLAG in flags
-    assert "COLLECTIVES" not in train.XLA_COMMAND_BUFFER_FLAG
-    assert os.environ["JAX_ENABLE_PGLE"] == "true"
+    assert train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG in flags
+    assert os.environ["JAX_ENABLE_PGLE"] == "false"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
 
 

@@ -45,6 +45,7 @@ from levanter.grug._moe.ep_common import (
 )
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
+from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
@@ -70,7 +71,9 @@ class MoEExpertMlp(eqx.Module):
     implementation: MoeImplementation = eqx.field(static=True)
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
+    pooled_transport_capacity_factor: float | None = eqx.field(static=True, default=None)
     expert_chunks: int = eqx.field(static=True, default=1)
+    max_experts_per_wave: int = eqx.field(static=True, default=2)
 
     @staticmethod
     def init(
@@ -84,7 +87,9 @@ class MoEExpertMlp(eqx.Module):
         implementation: MoeImplementation | str | None = None,
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+        pooled_transport_capacity_factor: float | None = None,
         expert_chunks: int = 1,
+        max_experts_per_wave: int = 2,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -105,7 +110,9 @@ class MoEExpertMlp(eqx.Module):
             implementation=resolved_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
+            pooled_transport_capacity_factor=pooled_transport_capacity_factor,
             expert_chunks=expert_chunks,
+            max_experts_per_wave=max_experts_per_wave,
         )
 
     @named_call
@@ -129,8 +136,10 @@ class MoEExpertMlp(eqx.Module):
             implementation=self.implementation,
             mesh=mesh,
             capacity_factor=self.capacity_factor,
+            pooled_transport_capacity_factor=self.pooled_transport_capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
+            max_experts_per_wave=self.max_experts_per_wave,
         )
 
 
@@ -146,8 +155,10 @@ def moe_mlp(
     implementation: MoeImplementation | str | None = None,
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+    pooled_transport_capacity_factor: float | None = None,
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
+    max_experts_per_wave: int = 2,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -160,6 +171,10 @@ def moe_mlp(
 
     `expert_chunks` applies only to the local `sonic_cute` FSDP path. Values
     greater than one split the expert bank into equal, statically sized chunks.
+
+    `pooled_transport_capacity_factor` sets the sender capacity for each
+    destination pool. `max_experts_per_wave` bounds the receiver-buffer memory
+    for the fixed pooled-wave implementation.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
 
@@ -231,6 +246,14 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
+        elif resolved_implementation == "fixed_pooled_wave_all_to_all":
+            if pooled_transport_capacity_factor is None:
+                raise ValueError("fixed_pooled_wave_all_to_all requires pooled_transport_capacity_factor")
+            shard_local_fn = partial(
+                _moe_mlp_ep_fixed_pooled_wave_a2a_local,
+                transport_capacity_factor=pooled_transport_capacity_factor,
+                max_experts_per_wave=max_experts_per_wave,
+            )
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
         else:
