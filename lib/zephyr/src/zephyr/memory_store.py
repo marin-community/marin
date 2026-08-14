@@ -398,7 +398,7 @@ class _MemoryStoreShardService:
         )
 
     def stats(self, table_id: str) -> MemoryTableStatsResult:
-        """Return table state or immutable load statistics."""
+        """Return table state and current process memory statistics."""
         with self._tables_lock:
             if table_id in self._destroyed:
                 return MemoryTableStatsResult(MemoryTableStatus.DESTROYED)
@@ -408,7 +408,15 @@ class _MemoryStoreShardService:
             stats = state.stats
         if stats is None:
             return MemoryTableStatsResult(MemoryTableStatus.NOT_LOADED)
-        return MemoryTableStatsResult(MemoryTableStatus.READY, stats)
+        process = psutil.Process()
+        return MemoryTableStatsResult(
+            MemoryTableStatus.READY,
+            replace(
+                stats,
+                resident_bytes=process.memory_info().rss,
+                peak_resident_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1_024,
+            ),
+        )
 
     def destroy(self, table_id: str) -> None:
         """Tombstone one table and release its values."""

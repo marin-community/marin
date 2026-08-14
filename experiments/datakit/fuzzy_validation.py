@@ -19,6 +19,7 @@ Submit the target in the CoreWeave data region::
             --worker-ram 864GB --worker-disk 16g \
             --task-cpu 1 --task-ram 2GB --task-disk 1g \
             --coordinator-cpu 2 --coordinator-ram 8GB \
+            --pipeline-shards-per-worker 8 \
             --recovery-timeout 1800 --ready-timeout 28800
 
 Run the cached 99.9M-document loading and verification benchmark with a native
@@ -61,6 +62,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import MinHashA
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.repack_fuzzy_dups import repack_fuzzy_dups_source
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
     FuzzyVerificationStoreConfig,
     verify_fuzzy_dups_step,
@@ -126,6 +128,7 @@ def build_fuzzy_validation_step(
     coordinator_resources: ResourceConfig | None = None,
     task_resources: ResourceConfig | None = None,
     actor_environment: EnvironmentConfig | None = None,
+    pipeline_shards_per_worker: int = DEFAULT_PIPELINE_SHARDS_PER_WORKER,
 ) -> StepSpec:
     """Build the fuzzy-validation terminal and its Datakit dependencies."""
     if store_config is None:
@@ -144,6 +147,7 @@ def build_fuzzy_validation_step(
         verification_params=FuzzyVerificationParams(),
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
         store_config=store_config,
+        pipeline_shards_per_worker=pipeline_shards_per_worker,
         max_workers=scale.pool.n_workers,
         worker_resources=scale.pool.worker,
         coordinator_resources=coordinator_resources,
@@ -168,6 +172,7 @@ def build_repacked_fuzzy_validation_step(
     coordinator_resources: ResourceConfig,
     task_resources: ResourceConfig,
     actor_environment: EnvironmentConfig | None = None,
+    pipeline_shards_per_worker: int = DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     repack_max_workers: int = DEFAULT_REPACK_MAX_WORKERS,
     repack_worker_resources: ResourceConfig | None = None,
 ) -> StepSpec:
@@ -210,6 +215,7 @@ def build_repacked_fuzzy_validation_step(
         verification_params=FuzzyVerificationParams(),
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
         store_config=store_config,
+        pipeline_shards_per_worker=pipeline_shards_per_worker,
         max_workers=validation_scale.pool.n_workers,
         worker_resources=validation_scale.pool.worker,
         coordinator_resources=coordinator_resources,
@@ -230,6 +236,7 @@ def build_pinned_fuzzy_validation_step(
     coordinator_resources: ResourceConfig,
     task_resources: ResourceConfig,
     actor_environment: EnvironmentConfig | None = None,
+    pipeline_shards_per_worker: int = DEFAULT_PIPELINE_SHARDS_PER_WORKER,
 ) -> StepSpec:
     """Build validation for sources already present in a candidate artifact."""
     if not benchmark_sources:
@@ -272,6 +279,7 @@ def build_pinned_fuzzy_validation_step(
         verification_params=FuzzyVerificationParams(),
         local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
         store_config=store_config,
+        pipeline_shards_per_worker=pipeline_shards_per_worker,
         max_workers=validation_scale.pool.n_workers,
         worker_resources=validation_scale.pool.worker,
         coordinator_resources=coordinator_resources,
@@ -410,6 +418,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lookup-batch-size", type=int, default=DEFAULT_LOOKUP_BATCH_SIZE)
     parser.add_argument("--store-shards-per-worker", type=int, default=DEFAULT_STORE_SHARDS_PER_WORKER)
     parser.add_argument("--load-concurrency", type=int, default=DEFAULT_LOAD_CONCURRENCY)
+    parser.add_argument("--pipeline-shards-per-worker", type=int, default=DEFAULT_PIPELINE_SHARDS_PER_WORKER)
     parser.add_argument("--max-concurrent", type=int, default=8)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--reuse-legacy-focus-candidates", action="store_true")
@@ -508,6 +517,7 @@ def main(argv: list[str] | None = None) -> None:
             coordinator_resources=coordinator_resources,
             task_resources=task_resources,
             actor_environment=actor_environment,
+            pipeline_shards_per_worker=args.pipeline_shards_per_worker,
         )
         logger.info(
             "Benchmark selected %d source(s) and %d documents for target %d",
@@ -557,6 +567,7 @@ def main(argv: list[str] | None = None) -> None:
             coordinator_resources=coordinator_resources,
             task_resources=task_resources,
             actor_environment=actor_environment,
+            pipeline_shards_per_worker=args.pipeline_shards_per_worker,
             repack_worker_resources=replace(DEFAULT_REPACK_WORKER, image=args.task_image),
         )
         logger.info("Repack output prefix: %s", repack_output_path_prefix)
@@ -569,6 +580,7 @@ def main(argv: list[str] | None = None) -> None:
             coordinator_resources=coordinator_resources,
             task_resources=task_resources,
             actor_environment=actor_environment,
+            pipeline_shards_per_worker=args.pipeline_shards_per_worker,
         )
     logger.info("Fuzzy-validation target: %s", target.output_path)
     StepRunner().run([target], dry_run=args.dry_run, max_concurrent=args.max_concurrent)

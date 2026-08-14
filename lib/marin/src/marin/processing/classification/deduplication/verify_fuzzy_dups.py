@@ -66,6 +66,7 @@ ANCHOR_SCAN_RECORDS = 64
 ANCHOR_SCAN_CHARS = 2_000_000
 DOCUMENT_TEXT_COMPRESSION_LEVEL = 1
 PARQUET_READ_BATCH_SIZE = 4_096
+DEFAULT_PIPELINE_SHARDS_PER_WORKER = 8
 _DOCUMENT_TEXT_CODECS = threading.local()
 
 
@@ -1154,6 +1155,7 @@ def verify_fuzzy_dups(
     local_representative_params: LocalRepresentativeParams,
     store_config: FuzzyVerificationStoreConfig,
     max_workers: int | None = None,
+    pipeline_shards_per_worker: int = DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
@@ -1166,6 +1168,10 @@ def verify_fuzzy_dups(
     ``shard_basenames`` verifies a prepared subset of the co-partitioned
     shards. Every cluster it covers must be complete inside that subset, since
     a cluster missing members verifies against the wrong representative.
+
+    ``pipeline_shards_per_worker`` controls map and reduce parallelism without
+    changing document-store partitioning. Each map task streams one or more
+    source shards.
     """
     verification_started = time.monotonic()
     if not normalized_sources:
@@ -1188,6 +1194,15 @@ def verify_fuzzy_dups(
         max_workers = min(len(shards), MAX_IRIS_WORKER_REPLICAS)
     if max_workers < 1:
         raise ValueError("max_workers must be at least 1")
+    if pipeline_shards_per_worker < 1:
+        raise ValueError("pipeline_shards_per_worker must be at least 1")
+    num_pipeline_shards = min(len(shards), max_workers * pipeline_shards_per_worker)
+    pipeline_shard_groups = [shards[index::num_pipeline_shards] for index in range(num_pipeline_shards)]
+    logger.info(
+        "Grouped %d source shards into %d fuzzy-verification pipeline shards",
+        len(shards),
+        num_pipeline_shards,
+    )
     ctx_kwargs: dict[str, Any] = {
         "name": "verify-fuzzy-dups",
         "resources": resources,
@@ -1216,7 +1231,7 @@ def verify_fuzzy_dups(
             load_concurrency=store_config.load_concurrency,
         )
         pipeline = (
-            Dataset.from_list(shard_groups)
+            Dataset.from_list(pipeline_shard_groups)
             .flat_map(_joined_cluster_members)
             .group_by(
                 key=_cluster_key,
@@ -1227,11 +1242,13 @@ def verify_fuzzy_dups(
                     document_store,
                     store_config.lookup_batch_size,
                 ),
+                num_output_shards=num_pipeline_shards,
             )
             .group_by(
                 key=lambda record: record["file_idx"],
                 sort_by=lambda record: record["id"],
                 reducer=_write_verified_shard,
+                num_output_shards=num_pipeline_shards,
             )
         )
         pipeline_started = time.monotonic()
@@ -1270,6 +1287,8 @@ def verify_fuzzy_dups(
     output_counters[f"{_COUNTER_PREFIX}/memory_store/max_shard_load_elapsed"] = max(
         stat.load_elapsed for stat in store_stats
     )
+    output_counters[f"{_COUNTER_PREFIX}/pipeline/shards"] = num_pipeline_shards
+    output_counters[f"{_COUNTER_PREFIX}/pipeline/source_shards"] = len(shards)
     output_counters[f"{_COUNTER_PREFIX}/timing/pool_start_elapsed"] = pool_start_elapsed
     output_counters[f"{_COUNTER_PREFIX}/timing/pipeline_elapsed"] = pipeline_elapsed
     output_counters[f"{_COUNTER_PREFIX}/timing/pool_shutdown_elapsed"] = shutdown_elapsed
@@ -1312,6 +1331,7 @@ def verify_fuzzy_dups_step(
     verification_params: FuzzyVerificationParams,
     local_representative_params: LocalRepresentativeParams,
     store_config: FuzzyVerificationStoreConfig,
+    pipeline_shards_per_worker: int = DEFAULT_PIPELINE_SHARDS_PER_WORKER,
     max_workers: int | None = None,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
@@ -1342,6 +1362,7 @@ def verify_fuzzy_dups_step(
             verification_params=verification_params,
             local_representative_params=local_representative_params,
             store_config=store_config,
+            pipeline_shards_per_worker=pipeline_shards_per_worker,
             max_workers=max_workers,
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
@@ -1353,6 +1374,7 @@ def verify_fuzzy_dups_step(
             "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
             "verification": verification_params.model_dump(mode="json"),
             "local_representatives": local_representative_params.model_dump(mode="json"),
+            "pipeline_shards_per_worker": pipeline_shards_per_worker,
         },
         override_output_path=override_output_path,
     )
