@@ -231,7 +231,7 @@ def test_ls_glob_renders_matches_with_listing_metadata(monkeypatch):
                 "bucket/second/foo": {"name": "bucket/second/foo", "size": 5, "type": "file"},
             }
 
-    monkeypatch.setattr(listing, "filesystem_for", lambda _url, **_kwargs: (GlobFileSystem(), "bucket/*/foo"))
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (GlobFileSystem(), "bucket/*/foo"))
 
     result = CliRunner().invoke(cli, ["ls", "s3://bucket/*/foo"])
 
@@ -272,7 +272,7 @@ def test_du_scans_directories_in_parallel_using_listing_metadata(monkeypatch):
                 "bucket/root/recon/a/nested": [{"name": "bucket/root/recon/a/nested/three", "size": 13, "type": "file"}],
             }[path]
 
-    monkeypatch.setattr(listing, "filesystem_for", lambda _url, **_kwargs: (ParallelListingFileSystem(), "bucket/root"))
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (ParallelListingFileSystem(), "bucket/root"))
 
     assert listing.total_size("gs://bucket/root") == (36, 4)
 
@@ -308,7 +308,7 @@ def test_usage_scan_descends_to_exact_prefixes_below_threshold_and_orders_by_siz
             assert detail is True
             return listings[path]
 
-    monkeypatch.setattr(listing, "filesystem_for", lambda _url, **_kwargs: (UsageFileSystem(), "bucket"))
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (UsageFileSystem(), "bucket"))
 
     scan = scan_usage("s3://bucket", workers=4)
     groups = threshold_prefix_groups(scan, threshold_bytes=100)
@@ -332,6 +332,7 @@ def test_usage_scan_adaptively_splits_and_merges_s3_listing_pages(monkeypatch):
         protocol = "s3"
 
         def __init__(self):
+            self.config_kwargs = {}
             self.requested_prefixes = []
 
         def split_path(self, path):
@@ -389,7 +390,7 @@ def test_usage_scan_adaptively_splits_and_merges_s3_listing_pages(monkeypatch):
             return {"Contents": [{"Key": "scratch//data", "Size": 40, "LastModified": modified}]}
 
     fs = PagedS3FileSystem()
-    monkeypatch.setattr(listing, "filesystem_for", lambda _url, **_kwargs: (fs, "bucket"))
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket"))
 
     progress = []
     scan = scan_usage("s3://bucket", workers=3, progress=progress.append)
