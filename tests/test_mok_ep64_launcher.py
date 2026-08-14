@@ -62,10 +62,37 @@ def test_ep64_launcher_names_strict_capacity_contract():
     assert "mok-like-schedule-capacity-64" in tags
 
 
+def test_ep64_launcher_clamps_optimizer_learning_rates():
+    step = build_mok_ep64_run(
+        run_id="ep64-low-lr-test",
+        num_steps=3,
+        num_layers=1,
+        schedule_capacity_factor=4,
+        max_learning_rate=1e-6,
+        version="2026.08.14",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args.keys(), step.deps))
+
+    assert config.optimizer.learning_rate == 1e-6
+    assert config.optimizer.adam_lr == 1e-6
+    assert "max-learning-rate-1e-06" in config.trainer.trainer.tracker.tags
+
+
 def test_ep64_cli_accepts_shared_version_option():
     result = CliRunner().invoke(
         main,
-        ["--run-id", "mok-ep64-cli", "--num-steps", "2", "--num-layers", "2", "--version", "dev"],
+        [
+            "--run-id",
+            "mok-ep64-cli",
+            "--num-steps",
+            "2",
+            "--num-layers",
+            "2",
+            "--max-learning-rate",
+            "1e-6",
+            "--version",
+            "dev",
+        ],
     )
 
     assert result.exit_code == 0, result.output

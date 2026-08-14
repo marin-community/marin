@@ -47,6 +47,7 @@ from experiments.grug.moe_hero_ep.train import (
 
 DEFAULT_STEPS = 25
 DEFAULT_SCHEDULE_CAPACITY_FACTOR = 4.0
+DEFAULT_MAX_LEARNING_RATE = 0.05
 STRICT_DROPLESS_SCHEDULE_CAPACITY_FACTOR = 64.0
 EP64_NODES = 16
 GPUS_PER_NODE = 4
@@ -66,6 +67,7 @@ def build_mok_ep64_run(
     num_steps: int,
     num_layers: int | None = None,
     schedule_capacity_factor: float = DEFAULT_SCHEDULE_CAPACITY_FACTOR,
+    max_learning_rate: float = DEFAULT_MAX_LEARNING_RATE,
     version: str | None = None,
 ) -> ArtifactStep[MokEp64Result]:
     """Build the one-rack, one-JAX-process-per-GPU MoK EP64 arm."""
@@ -76,8 +78,15 @@ def build_mok_ep64_run(
         raise ValueError(f"num_steps must be positive, got {num_steps}")
     if schedule_capacity_factor < 1:
         raise ValueError("schedule_capacity_factor must be at least one")
+    if max_learning_rate <= 0:
+        raise ValueError("max_learning_rate must be positive")
 
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=GLOBAL_BATCH_SIZE)
+    optimizer = dataclasses.replace(
+        optimizer,
+        learning_rate=min(optimizer.learning_rate, max_learning_rate),
+        adam_lr=min(optimizer.adam_lr, max_learning_rate),
+    )
     model = dataclasses.replace(
         model,
         **({"num_layers": num_layers} if num_layers is not None else {}),
@@ -158,6 +167,7 @@ def build_mok_ep64_run(
                     "symmetric-runtime-staging",
                     "mok-like-workspace-slots-1",
                     f"mok-like-schedule-capacity-{schedule_capacity_factor:g}",
+                    f"max-learning-rate-{max_learning_rate:g}",
                     capacity_policy,
                     "allocator-cuda-async",
                     "device-memory-0.8",
@@ -222,18 +232,27 @@ def build_mok_ep64_run(
     show_default=True,
     help="Factor 64 is strict all-to-one dropless; smaller values are capacity-limited.",
 )
+@click.option(
+    "--max-learning-rate",
+    type=click.FloatRange(min=0, min_open=True),
+    default=DEFAULT_MAX_LEARNING_RATE,
+    show_default=True,
+    help="Clamp both MuonH and Adam peak learning rates.",
+)
 @build_options
 def main(
     run_id: str,
     num_steps: int,
     num_layers: int | None,
     schedule_capacity_factor: float,
+    max_learning_rate: float,
 ) -> ArtifactStep[MokEp64Result]:
     return build_mok_ep64_run(
         run_id=run_id,
         num_steps=num_steps,
         num_layers=num_layers,
         schedule_capacity_factor=schedule_capacity_factor,
+        max_learning_rate=max_learning_rate,
     )
 
 
