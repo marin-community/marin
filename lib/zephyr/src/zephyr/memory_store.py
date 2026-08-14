@@ -40,6 +40,7 @@ A = TypeVar("A")
 R = TypeVar("R")
 CallKey = TypeVar("CallKey", bound=Hashable)
 MEMORY_STORE_LOAD_MAX_ATTEMPTS = 4
+MEMORY_STORE_SUBPROCESS_STOP_TIMEOUT = 10.0
 
 
 class MemoryStorePartitionError(ValueError):
@@ -59,7 +60,7 @@ class MemoryStoreDestroyed(RuntimeError):
 
 
 @dataclass(frozen=True)
-class MemoryStoreActorStats:
+class MemoryStoreShardStats:
     """Load statistics for one subprocess shard of a memory table."""
 
     actor_index: int
@@ -153,13 +154,13 @@ class MemoryTableCompute:
 @dataclass(frozen=True)
 class MemoryTableStatsResult:
     status: MemoryTableStatus
-    stats: MemoryStoreActorStats | None = None
+    stats: MemoryStoreShardStats | None = None
 
 
 @dataclass(frozen=True)
 class MemoryTableStatsBatch:
     status: MemoryTableStatus
-    stats: tuple[MemoryStoreActorStats, ...] = ()
+    stats: tuple[MemoryStoreShardStats, ...] = ()
 
 
 type _MemoryTableResult = MemoryTableLookup | MemoryTableCompute | MemoryTableStatsResult | MemoryTableStatsBatch
@@ -170,7 +171,7 @@ class _MemoryTableState:
     registration: MemoryTableRegistration
     load_lock: threading.Lock = field(default_factory=threading.Lock)
     values: dict[Hashable, Any] | None = None
-    stats: MemoryStoreActorStats | None = None
+    stats: MemoryStoreShardStats | None = None
 
 
 def _load_partition_once(
@@ -311,7 +312,7 @@ class _MemoryStoreShardService:
                     submit_next()
                     yield result
 
-    def load(self, registration: MemoryTableRegistration) -> MemoryStoreActorStats:
+    def load(self, registration: MemoryTableRegistration) -> MemoryStoreShardStats:
         """Load one table, or return its existing load statistics."""
         state = self._install(registration)
         with state.load_lock:
@@ -322,7 +323,7 @@ class _MemoryStoreShardService:
             load_started = time.monotonic()
             load_cpu_started = time.process_time()
             values, partitions = self._load_values(registration)
-            stats = MemoryStoreActorStats(
+            stats = MemoryStoreShardStats(
                 actor_index=self._actor_index,
                 store_shard_index=self._local_shard_index,
                 process_id=os.getpid(),
@@ -553,7 +554,7 @@ class _MemoryStoreSubprocess:
         ready, _, _ = select.select([self._process.stdout], [], [], self.STARTUP_TIMEOUT)
         if not ready:
             self._process.terminate()
-            self._process.wait(timeout=10)
+            self._process.wait(timeout=MEMORY_STORE_SUBPROCESS_STOP_TIMEOUT)
             raise TimeoutError(
                 f"memory-store subprocess {actor_index}/{local_shard_index} did not open its actor port "
                 f"within {self.STARTUP_TIMEOUT:g} seconds"
@@ -584,7 +585,7 @@ class _MemoryStoreSubprocess:
             raise _MemoryStoreSubprocessDied(
                 f"memory-store subprocess {self.actor_index}/{self.local_shard_index} stopped responding"
             ) from error
-        if isinstance(result, MemoryStoreActorStats):
+        if isinstance(result, MemoryStoreShardStats):
             return replace(
                 result,
                 endpoint_name=self.endpoint_name,
@@ -600,10 +601,10 @@ class _MemoryStoreSubprocess:
         if self._process.poll() is None:
             self._process.terminate()
             try:
-                self._process.wait(timeout=10)
+                self._process.wait(timeout=MEMORY_STORE_SUBPROCESS_STOP_TIMEOUT)
             except subprocess.TimeoutExpired:
                 self._process.kill()
-                self._process.wait(timeout=10)
+                self._process.wait(timeout=MEMORY_STORE_SUBPROCESS_STOP_TIMEOUT)
 
 
 class MemoryStoreService:
@@ -655,7 +656,7 @@ class MemoryStoreService:
                 if registration.table_id not in self._destroyed:
                     self._registrations[registration.table_id] = registration
 
-    def load(self, registration: MemoryTableRegistration) -> tuple[MemoryStoreActorStats, ...]:
+    def load(self, registration: MemoryTableRegistration) -> tuple[MemoryStoreShardStats, ...]:
         """Load every local subprocess shard concurrently."""
         with self._lock:
             if registration.table_id in self._destroyed:
@@ -733,7 +734,7 @@ class MemoryStoreService:
             return MemoryTableStatsBatch(next(iter(statuses)))
         return MemoryTableStatsBatch(
             MemoryTableStatus.READY,
-            tuple(cast(MemoryStoreActorStats, result.stats) for result in results),
+            tuple(cast(MemoryStoreShardStats, result.stats) for result in results),
         )
 
     def destroy(self, table_id: str) -> None:
@@ -970,7 +971,7 @@ class MemoryStore(Generic[K, V]):
                 results[position] = value
         return cast(list[R], results)
 
-    def stats(self) -> tuple[MemoryStoreActorStats, ...]:
+    def stats(self) -> tuple[MemoryStoreShardStats, ...]:
         """Return load statistics ordered by worker index."""
         calls = {
             actor_index: lambda actor=actor: actor.memory_table_stats.remote(self.table_id)
@@ -978,7 +979,7 @@ class MemoryStore(Generic[K, V]):
         }
         deadline = time.monotonic() + self.recovery_timeout
         futures = start_actor_calls(calls)
-        stats: list[MemoryStoreActorStats] = []
+        stats: list[MemoryStoreShardStats] = []
         for actor_index in range(len(self.actors)):
             result = self._ready_result(actor_index, calls[actor_index], futures[actor_index], deadline)
             assert isinstance(result, MemoryTableStatsBatch)

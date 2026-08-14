@@ -21,9 +21,9 @@ from zephyr.execution import ZephyrContext, _order_memory_store_handles, _requir
 from zephyr.memory_store import (
     DuplicateMemoryStoreKey,
     MemoryStore,
-    MemoryStoreActorStats,
     MemoryStoreDestroyed,
     MemoryStorePartitionError,
+    MemoryStoreShardStats,
     MemoryStoreUnavailable,
     MemoryTableLookup,
     MemoryTableStatus,
@@ -138,9 +138,9 @@ def _fake_store(actor: _SequencedActor, recovery_timeout: float = 1) -> MemorySt
     )
 
 
-def _actor_stats(actor_index: int) -> tuple[MemoryStoreActorStats, ...]:
+def _actor_stats(actor_index: int) -> tuple[MemoryStoreShardStats, ...]:
     return (
-        MemoryStoreActorStats(
+        MemoryStoreShardStats(
             actor_index=actor_index,
             store_shard_index=0,
             process_id=actor_index,
