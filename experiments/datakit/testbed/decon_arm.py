@@ -60,6 +60,7 @@ ESTIMATED_DOC_COUNT = 50_000_000
 FALSE_POSITIVE_RATE = 1e-9
 NGRAM_LENGTH = 13
 OVERLAP_THRESHOLD = 0.5
+MIN_MATCHED_FEATURES = 2
 # True-paragraph split (blank-line-delimited) rather than per-line: dilutes
 # isolated-line coincidences (fewer FPs) and lets short-line / inline-embedded
 # eval text be matched (higher recall). See marin#6852.
@@ -158,6 +159,7 @@ def build_testbed_decon_steps(
                 drop_set_source=name,
                 ngram_length=NGRAM_LENGTH,
                 overlap_threshold=OVERLAP_THRESHOLD,
+                min_matched_features=MIN_MATCHED_FEATURES,
                 paragraph_delimiter=PARAGRAPH_DELIMITER,
                 flagged_sample_size=FLAGGED_SAMPLE_SIZE,
                 estimated_doc_count=ESTIMATED_DOC_COUNT,

@@ -12,9 +12,9 @@ consumable by :func:`marin.processing.classification.consolidate.consolidate`):
 
     id                       : string         — matches source document id
     partition_id             : int            — source partition index (from sorted file order)
-    contaminated             : bool           — max paragraph overlap meets the threshold
+    contaminated             : bool           — one paragraph meets the overlap and evidence thresholds
     max_overlap              : float          — highest paragraph overlap fraction in [0, 1]
-    matched_hashes           : list[uint64]   — bloom-hit ngram hashes from this record
+    matched_hashes           : list[uint64]   — bloom-hit hashes that caused the mark
 
 Build also emits ``<output>/_bloom/eval_hash_index.parquet`` with columns
 ``hash: uint64, eval_id: string`` (flattened, one row per (hash, eval_id) pair).
@@ -74,7 +74,7 @@ logger = logging.getLogger(__name__)
 # tokens. This keeps required eval records matchable without restoring the
 # one-token punctuation and label collisions removed in v2.
 FEATURE_FILTER_VERSION = 3
-DECON_ATTRIBUTES_VERSION = 4
+DECON_ATTRIBUTES_VERSION = 5
 BLOOM_BUILD_VERSION = 2
 # v3 increases sampling fan-out so large sources do not hold the pipeline on a
 # small number of long-running shards.
@@ -93,6 +93,9 @@ class NGramConfig:
         stride: Step between successive ngrams. 0 = contiguous (every position).
         overlap_threshold: Minimum fraction of paragraph ngrams that must hit
             the filter for the paragraph to count as contaminated.
+        min_matched_features: Minimum number of distinct matched features that
+            a paragraph must contain. A complete document with exactly one
+            feature can still match.
         paragraph_delimiter: String the text is split on to form paragraphs (the
             unit the overlap fraction is computed over). Defaults to ``"\n\n"``, a
             blank-line-delimited block, so ngrams span single line breaks — this
@@ -104,7 +107,12 @@ class NGramConfig:
     ngram_length: int = 13
     stride: int = 0
     overlap_threshold: float = 0.5
+    min_matched_features: int = 2
     paragraph_delimiter: str = "\n\n"
+
+    def __post_init__(self) -> None:
+        if self.min_matched_features < 1:
+            raise ValueError("min_matched_features must be at least 1")
 
 
 class DeconAttributes(BaseModel):
@@ -120,8 +128,8 @@ class DeconAttributes(BaseModel):
             (``<output>/outputs/flagged_sample``); empty when no sample was taken.
         num_partitions: Number of output partitions; matches the source.
         eval_hash_index_path: Path to the ``hash → eval_id`` sidecar Parquet.
-            Join the per-record ``matched_hashes`` column against
-            this to attribute contamination to specific eval records.
+            Join the causal per-record ``matched_hashes`` column against this
+            to attribute contamination to specific eval records.
         counters: Aggregated zephyr counters from the marking pipeline.
     """
 
@@ -281,19 +289,21 @@ def _paragraph_overlap_and_matches(
     tokens use one exact feature. Shorter and non-alphabetic paragraphs return
     ``(0.0, [])``.
     """
-    score, matched, _has_features = _paragraph_overlap_matches_and_presence(paragraph, bf, ngram, drop_hashes)
+    score, matched, _has_features, _feature_count = _paragraph_overlap_matches_and_presence(
+        paragraph, bf, ngram, drop_hashes
+    )
     return score, matched
 
 
 def _paragraph_overlap_matches_and_presence(
     paragraph: str, bf: dupekit.Bloom, ngram: NGramConfig | None, drop_hashes: frozenset[int] = frozenset()
-) -> tuple[float, list[int], bool]:
-    """Return overlap details and whether the paragraph has matchable features."""
+) -> tuple[float, list[int], bool, int]:
+    """Return overlap details, feature presence, and the usable feature count."""
     if ngram is None:
         h = _bloom_hash(paragraph)
         if h in drop_hashes:
-            return 0.0, [], True
-        return (1.0, [h], True) if h in bf else (0.0, [], True)
+            return 0.0, [], True, 0
+        return (1.0, [h], True, 1) if h in bf else (0.0, [], True, 1)
 
     has_features = False
     feature_count = 0
@@ -307,8 +317,69 @@ def _paragraph_overlap_matches_and_presence(
         if hash_value in bf:
             matched.append(hash_value)
     if feature_count == 0:
-        return 0.0, [], has_features
-    return len(matched) / feature_count, matched, has_features
+        return 0.0, [], has_features, feature_count
+    return len(matched) / feature_count, matched, has_features, feature_count
+
+
+def _document_overlap_and_matches(
+    text: str,
+    bf: dupekit.Bloom,
+    ngram: NGramConfig | None,
+    drop_hashes: frozenset[int] = frozenset(),
+) -> tuple[float, list[int]]:
+    """Return the highest overlap and the hashes that cause a document mark."""
+    minimum = ngram.min_matched_features if ngram is not None else 1
+    max_score, matches = _document_overlap_matches_by_minimum(text, bf, ngram, (minimum,), drop_hashes)
+    return max_score, matches[minimum]
+
+
+def _document_overlap_matches_by_minimum(
+    text: str,
+    bf: dupekit.Bloom,
+    ngram: NGramConfig | None,
+    minimums: tuple[int, ...],
+    drop_hashes: frozenset[int] = frozenset(),
+) -> tuple[float, dict[int, list[int]]]:
+    """Score a document once and return causal hashes for each evidence minimum."""
+    if not minimums or any(minimum < 1 for minimum in minimums):
+        raise ValueError("minimums must contain positive integers")
+    threshold = ngram.overlap_threshold if ngram is not None else 0.0
+    delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
+    paragraphs = [paragraph for paragraph in text.split(delimiter) if paragraph]
+    max_score = 0.0
+    matched = {minimum: set() for minimum in minimums}
+    has_paragraph_features = False
+
+    for paragraph in paragraphs:
+        score, hits, paragraph_has_features, feature_count = _paragraph_overlap_matches_and_presence(
+            paragraph, bf, ngram, drop_hashes
+        )
+        if ngram is not None and paragraph_has_features:
+            has_paragraph_features = True
+        max_score = max(max_score, score)
+        if not hits:
+            continue
+        if ngram is None:
+            for hashes in matched.values():
+                hashes.update(hits)
+            continue
+
+        complete_single_feature_document = len(paragraphs) == 1 and feature_count == 1 and score == 1.0
+        distinct_hits = len(set(hits))
+        for minimum, hashes in matched.items():
+            if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
+                hashes.update(hits)
+
+    if ngram is not None and not has_paragraph_features:
+        short_exact = _short_exact_feature(text, ngram.ngram_length)
+        if short_exact is not None:
+            short_hash = _bloom_hash(short_exact)
+            if short_hash not in drop_hashes and short_hash in bf:
+                max_score = 1.0
+                for hashes in matched.values():
+                    hashes.add(short_hash)
+
+    return max_score, {minimum: sorted(hashes) for minimum, hashes in matched.items()}
 
 
 def _is_hidden_dir(root: str, resolved: str) -> bool:
@@ -577,11 +648,6 @@ def _make_marker(
     small sidecar rather than rescanning the full attributes to find flags.
     """
 
-    # Threshold is only meaningful for n-gram mode; in exact-paragraph mode score is 0 or 1
-    # so any non-zero match is always recorded.
-    threshold = ngram.overlap_threshold if ngram is not None else 0.0
-    delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
-
     def mark_shard(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict[str, Any]]:
         # Load bloom once per shard.
         bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
@@ -595,28 +661,8 @@ def _make_marker(
                 nonlocal n_flagged
                 for record in load_file(p):
                     text = str(record.get(text_field, "") or "")
-                    max_score = 0.0
-                    matched: set[int] = set()
-                    has_paragraph_features = False
-                    for para in text.split(delimiter):
-                        if not para:
-                            continue
-                        score, hits, para_has_features = _paragraph_overlap_matches_and_presence(
-                            para, bf, ngram, drop_hashes
-                        )
-                        if ngram is not None and para_has_features:
-                            has_paragraph_features = True
-                        if score > max_score:
-                            max_score = score
-                        matched.update(hits)
-                    if ngram is not None and not has_paragraph_features:
-                        short_exact = _short_exact_feature(text, ngram.ngram_length)
-                        if short_exact is not None:
-                            short_hash = _bloom_hash(short_exact)
-                            if short_hash not in drop_hashes and short_hash in bf:
-                                max_score = 1.0
-                                matched.add(short_hash)
-                    contaminated = max_score > 0 and max_score >= threshold
+                    max_score, matched = _document_overlap_and_matches(text, bf, ngram, drop_hashes)
+                    contaminated = bool(matched)
                     counters.pipeline.update_counter("decon/contaminated" if contaminated else "decon/clean", 1)
                     if contaminated and flagged_sample_size:
                         n_flagged += 1
@@ -624,7 +670,7 @@ def _make_marker(
                             "id": record["id"],
                             "text": text,
                             "max_overlap": max_score,
-                            "matched_hashes": list(matched),
+                            "matched_hashes": matched,
                         }
                         if len(reservoir) < flagged_sample_size:
                             reservoir.append(row)
@@ -637,7 +683,7 @@ def _make_marker(
                         "partition_id": shard.shard_idx,
                         "contaminated": contaminated,
                         "max_overlap": max_score,
-                        "matched_hashes": list(matched),
+                        "matched_hashes": matched,
                     }
 
             # Follow the normalize job's output layout: main attributes under
@@ -708,7 +754,9 @@ def decon_to_parquet(
         text_field: Text column name in both input and eval records.
         ngram: Word-ngram matching config. ``None`` = exact whole-paragraph match.
             ``ngram.overlap_threshold`` gates which paragraphs are marked
-            contaminated; exact-paragraph mode records any non-zero match.
+            contaminated, and ``ngram.min_matched_features`` rejects marks with
+            too little distinct evidence. Exact-paragraph mode records any
+            non-zero match.
         drop_set_dirs: Optional directories of corpus-common ngram hashes.
             Ngrams from every directory are excluded from each paragraph
             overlap. :func:`decon_step` passes the source-local and global
@@ -948,8 +996,7 @@ def _validate_required_eval_manifest(
         raise ValueError(f"required eval manifest must be an object: {manifest_path}")
     if manifest.get("corpus_version") != expected_corpus_version:
         raise ValueError(
-            f"required eval manifest version is {manifest.get('corpus_version')!r}, "
-            f"expected {expected_corpus_version!r}"
+            f"required eval manifest version is {manifest.get('corpus_version')!r}, expected {expected_corpus_version!r}"
         )
     if manifest.get("required") is not True:
         raise ValueError("required eval manifest does not mark the suite as required")
@@ -1051,8 +1098,7 @@ def _validate_best_effort_eval_manifest(
             actual_records = pq.ParquetFile(source).metadata.num_rows
         if actual_records != expected_records:
             raise ValueError(
-                f"{task}: best-effort manifest expects {expected_records} records, "
-                f"artifact contains {actual_records}"
+                f"{task}: best-effort manifest expects {expected_records} records, artifact contains {actual_records}"
             )
         artifact_tasks.append(task)
         paths.append(artifact_path)
@@ -1825,6 +1871,7 @@ def decon_step(
     text_field: str = "text",
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
+    min_matched_features: int = 2,
     paragraph_delimiter: str = "\n\n",
     flagged_sample_size: int = 0,
     estimated_doc_count: int = 1_000_000,
@@ -1867,6 +1914,9 @@ def decon_step(
         ngram_length: Word ngram length. ``None`` = exact whole-paragraph match.
         overlap_threshold: Per-paragraph overlap fraction needed to mark a record
             contaminated. Ignored in exact-paragraph mode.
+        min_matched_features: Minimum distinct matches in one paragraph. A
+            complete document with one feature can still match. Ignored in
+            exact-paragraph mode.
         paragraph_delimiter: Paragraph split string (see :class:`NGramConfig`).
             When reusing a ``prebuilt_bloom``, MUST match the delimiter the bloom
             was built with, or the two feature sets won't line up.
@@ -1882,7 +1932,10 @@ def decon_step(
 
     ngram: NGramConfig | None = (
         NGramConfig(
-            ngram_length=ngram_length, overlap_threshold=overlap_threshold, paragraph_delimiter=paragraph_delimiter
+            ngram_length=ngram_length,
+            overlap_threshold=overlap_threshold,
+            min_matched_features=min_matched_features,
+            paragraph_delimiter=paragraph_delimiter,
         )
         if ngram_length is not None
         else None
@@ -1896,6 +1949,7 @@ def decon_step(
         "text_field": text_field,
         "ngram_length": ngram_length,
         "overlap_threshold": overlap_threshold,
+        "min_matched_features": min_matched_features,
         "paragraph_delimiter": paragraph_delimiter,
         "feature_filter_version": FEATURE_FILTER_VERSION,
         "attribute_schema_version": DECON_ATTRIBUTES_VERSION,
