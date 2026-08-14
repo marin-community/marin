@@ -375,11 +375,12 @@ class FederationManager:
 
     def _sync_peer_once(self, peer: FederationPeer) -> None:
         assert self._store is not None
-        handoffs = [spec for spec in self._store.pending_handoffs() if spec.peer_id == peer.peer_id]
+        handoffs = [spec for spec in self._store.pending_handoffs() if spec.peer_id == peer.peer_id][
+            : self._max_handoffs_per_cycle
+        ]
         if handoffs:
-            max_workers = max(1, min(len(handoffs), self._max_handoffs_per_cycle))
             with ThreadPoolExecutor(
-                max_workers=max_workers,
+                max_workers=len(handoffs),
                 thread_name_prefix=f"federation-handoff-{peer.peer_id}",
             ) as executor:
                 futures = [executor.submit(self._deliver_handoff, spec) for spec in handoffs]

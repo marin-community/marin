@@ -87,7 +87,7 @@ class BundleStore:
                 if state.users == 0:
                     del self._content_locks[cid]
 
-    def _cached(self, cid: str) -> bytes | None:
+    def _cache_get(self, cid: str) -> bytes | None:
         with self._cache_lock:
             data = self._cache.get(cid)
             if data is not None:
@@ -127,11 +127,11 @@ class BundleStore:
     def get(self, cid: str) -> bytes:
         """Read bytes by content id. Falls back to controller on workers."""
         path = self._path_for(cid)
-        cached = self._cached(cid)
+        cached = self._cache_get(cid)
         if cached is not None:
             return cached
         with self._content_lock(cid):
-            cached = self._cached(cid)
+            cached = self._cache_get(cid)
             if cached is not None:
                 return cached
             if self._fs.exists(path):
