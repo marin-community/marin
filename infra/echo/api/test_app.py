@@ -459,6 +459,29 @@ def test_search_feedback_rejects_out_of_range_grade(client_with):
     assert harness.engine.executions == []
 
 
+def test_search_feedback_rejects_result_id_outside_bigint_range(client_with):
+    row = make_row(
+        id=19,
+        created_at=datetime(2026, 8, 14, tzinfo=UTC),
+        author="unknown",
+        query="scheduler",
+        note="The result looked relevant.",
+    )
+    harness = client_with([row])
+
+    response = harness.client.post(
+        "/api/feedback",
+        json={
+            "query": "scheduler",
+            "grades": [{"result_id": "wiki:9223372036854775808", "grade": 5}],
+            "note": "The result looked relevant.",
+        },
+    )
+
+    assert response.status_code == 422
+    assert harness.engine.executions == []
+
+
 def test_search_feedback_requires_overall_explanation(client_with):
     harness = client_with([])
     response = harness.client.post(

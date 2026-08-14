@@ -752,7 +752,12 @@ def current_feedback_result_metadata(
     conn: sqlalchemy.Connection, result_ids: set[str], config: EchoConfig
 ) -> dict[str, FeedbackResultMetadata]:
     metadata = {result_id: default_feedback_result_metadata(result_id, config) for result_id in result_ids}
-    wiki_ids = [int(result_id.removeprefix("wiki:")) for result_id in result_ids if result_id.startswith("wiki:")]
+    wiki_ids = [
+        int(value)
+        for result_id in result_ids
+        for domain, _, value in [result_id.partition(":")]
+        if domain == "wiki" and int(value) <= search_feedback.MAX_NUMERIC_RESULT_ID
+    ]
     if wiki_ids:
         for row in conn.execute(
             sqlalchemy.select(schema.wiki_entries.c.id, schema.wiki_entries.c.title).where(
@@ -766,7 +771,7 @@ def current_feedback_result_metadata(
         int(value): result_id
         for result_id in result_ids
         for domain, _, value in [result_id.partition(":")]
-        if domain in {"discord", "pr", "issue"}
+        if domain in {"discord", "pr", "issue"} and int(value) <= search_feedback.MAX_NUMERIC_RESULT_ID
     }
     if activity_result_ids:
         for row in conn.execute(
