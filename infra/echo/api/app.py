@@ -265,6 +265,21 @@ class SearchFeedbackEntry(SearchFeedbackCreate):
     author: str
 
 
+class SearchFeedbackResultGrade(SearchFeedbackGrade):
+    title: str
+    url: str
+
+
+class SearchFeedbackListEntry(BaseModel):
+    id: int
+    created_at: datetime
+    author: str
+    query: str
+    note: str
+    execution_id: int | None
+    grades: list[SearchFeedbackResultGrade]
+
+
 class SearchExecutionResultEntry(BaseModel):
     rank: int
     result_id: str
@@ -375,6 +390,12 @@ class RepositoryIndexState:
 class SearchCandidate:
     result: SearchResult
     text: str
+
+
+@dataclass(frozen=True)
+class FeedbackResultMetadata:
+    title: str
+    url: str
 
 
 class RerankerModel(Protocol):
@@ -693,6 +714,71 @@ def repository_freshness(state: RepositoryIndexState) -> str:
 
 def repository_blob_url(config: EchoConfig, commit_sha: str, path: str) -> str:
     return f"https://github.com/{config.github_repository}/blob/{commit_sha}/{quote(path, safe='/')}"
+
+
+def default_feedback_result_metadata(result_id: str, config: EchoConfig) -> FeedbackResultMetadata:
+    domain, _, value = result_id.partition(":")
+    if domain == "wiki":
+        return FeedbackResultMetadata(title=f"Wiki note #{value}", url=f"{config.public_url}/wiki/{value}")
+    if domain == "file":
+        return FeedbackResultMetadata(
+            title=PurePosixPath(value).name,
+            url=f"https://github.com/{config.github_repository}/blob/{config.github_branch}/{quote(value, safe='/')}",
+        )
+    labels = {"discord": "Discord message", "pr": "Pull request result", "issue": "Issue result"}
+    return FeedbackResultMetadata(
+        title=f"{labels[domain]} #{value}",
+        url=f"{config.public_url}/chunk/{value}",
+    )
+
+
+def recorded_feedback_result_metadata(
+    conn: sqlalchemy.Connection, execution_ids: set[int]
+) -> dict[tuple[int, str], FeedbackResultMetadata]:
+    if not execution_ids:
+        return {}
+    rows = conn.execute(
+        sqlalchemy.select(
+            schema.search_execution_results.c.execution_id,
+            schema.search_execution_results.c.result_id,
+            schema.search_execution_results.c.title,
+            schema.search_execution_results.c.url,
+        ).where(schema.search_execution_results.c.execution_id.in_(execution_ids))
+    )
+    return {(row.execution_id, row.result_id): FeedbackResultMetadata(row.title or "", row.url) for row in rows}
+
+
+def current_feedback_result_metadata(
+    conn: sqlalchemy.Connection, result_ids: set[str], config: EchoConfig
+) -> dict[str, FeedbackResultMetadata]:
+    metadata = {result_id: default_feedback_result_metadata(result_id, config) for result_id in result_ids}
+    wiki_ids = [int(result_id.removeprefix("wiki:")) for result_id in result_ids if result_id.startswith("wiki:")]
+    if wiki_ids:
+        for row in conn.execute(
+            sqlalchemy.select(schema.wiki_entries.c.id, schema.wiki_entries.c.title).where(
+                schema.wiki_entries.c.id.in_(wiki_ids)
+            )
+        ):
+            result_id = f"wiki:{row.id}"
+            metadata[result_id] = FeedbackResultMetadata(row.title, f"{config.public_url}/wiki/{row.id}")
+
+    activity_result_ids = {
+        int(value): result_id
+        for result_id in result_ids
+        for domain, _, value in [result_id.partition(":")]
+        if domain in {"discord", "pr", "issue"}
+    }
+    if activity_result_ids:
+        for row in conn.execute(
+            sqlalchemy.select(schema.chunks.c.id, schema.chunks.c.title, schema.chunks.c.url, schema.chunks.c.text)
+            .where(schema.chunks.c.id.in_(activity_result_ids))
+            .order_by(schema.chunks.c.id)
+        ):
+            result_id = activity_result_ids[row.id]
+            fallback = metadata[result_id]
+            title = row.title or " ".join((row.text or "").split())[: search_config.FEDERATED_SUMMARY_CHARACTERS]
+            metadata[result_id] = FeedbackResultMetadata(title or fallback.title, row.url)
+    return metadata
 
 
 def repository_file_search_result(
@@ -1206,6 +1292,74 @@ def search_executions(
             results=results_by_execution.get(row.id, []),
         )
         for row in execution_rows
+    ]
+
+
+@api.get("/feedback", response_model=list[SearchFeedbackListEntry])
+def list_search_feedback(
+    engine: Engine,
+    config: Config,
+    days: int = Query(30, ge=1, description="Look back this many days."),
+    limit: int = Query(200, ge=1, le=500),
+) -> list[SearchFeedbackListEntry]:
+    """Return recent feedback with browseable metadata for each graded result."""
+    cutoff = sqlalchemy.func.now() - sqlalchemy.func.make_interval(0, 0, 0, days)
+    statement = (
+        sqlalchemy.select(schema.search_feedback)
+        .where(schema.search_feedback.c.created_at > cutoff)
+        .order_by(schema.search_feedback.c.created_at.desc(), schema.search_feedback.c.id.desc())
+        .limit(limit)
+    )
+    with engine.connect() as conn:
+        feedback_rows = list(conn.execute(statement))
+        if not feedback_rows:
+            return []
+
+        feedback_ids = [row.id for row in feedback_rows]
+        grade_rows = list(
+            conn.execute(
+                sqlalchemy.select(schema.search_feedback_grades)
+                .where(schema.search_feedback_grades.c.feedback_id.in_(feedback_ids))
+                .order_by(
+                    schema.search_feedback_grades.c.feedback_id,
+                    schema.search_feedback_grades.c.grade.desc(),
+                    schema.search_feedback_grades.c.result_id,
+                )
+            )
+        )
+
+        execution_ids = {row.execution_id for row in feedback_rows if row.execution_id is not None}
+        exact_metadata = recorded_feedback_result_metadata(conn, execution_ids)
+        feedback_by_id = {row.id: row for row in feedback_rows}
+        missing_result_ids = set()
+        for grade in grade_rows:
+            feedback = feedback_by_id[grade.feedback_id]
+            exact = exact_metadata.get((feedback.execution_id, grade.result_id))
+            if exact is None or not exact.title:
+                missing_result_ids.add(grade.result_id)
+        current_metadata = current_feedback_result_metadata(conn, missing_result_ids, config)
+
+    grades_by_feedback: dict[int, list[SearchFeedbackResultGrade]] = {}
+    for grade in grade_rows:
+        feedback = feedback_by_id[grade.feedback_id]
+        current = current_metadata.get(grade.result_id) or default_feedback_result_metadata(grade.result_id, config)
+        exact = exact_metadata.get((feedback.execution_id, grade.result_id))
+        metadata = FeedbackResultMetadata(exact.title or current.title, exact.url) if exact else current
+        grades_by_feedback.setdefault(grade.feedback_id, []).append(
+            SearchFeedbackResultGrade(
+                result_id=grade.result_id,
+                grade=grade.grade,
+                title=metadata.title,
+                url=metadata.url,
+            )
+        )
+
+    return [
+        SearchFeedbackListEntry(
+            **{field: getattr(row, field) for field in SearchFeedbackListEntry.model_fields if field != "grades"},
+            grades=grades_by_feedback.get(row.id, []),
+        )
+        for row in feedback_rows
     ]
 
 

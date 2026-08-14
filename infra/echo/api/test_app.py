@@ -297,6 +297,78 @@ def test_search_feedback_links_matching_execution(client_with):
     assert feedback_insert.compile().params["execution_id"] == 991
 
 
+def test_search_feedback_list_includes_linked_results_and_explanation_only_entries(client_with):
+    feedback_rows = [
+        make_row(
+            id=18,
+            created_at=datetime(2026, 8, 12, tzinfo=UTC),
+            author="reviewer@openathena.ai",
+            query="missing scheduler detail",
+            note="No result answered the question.",
+            execution_id=None,
+        ),
+        make_row(
+            id=17,
+            created_at=datetime(2026, 8, 11, tzinfo=UTC),
+            author="agent@openathena.ai",
+            query="how do I deploy Iris?",
+            note="The operations guide answered the question; the wiki result was unrelated.",
+            execution_id=991,
+        ),
+    ]
+    grade_rows = [
+        make_row(feedback_id=17, result_id="file:lib/iris/OPS.md", grade=10),
+        make_row(feedback_id=17, result_id="wiki:123", grade=0),
+    ]
+    execution_result_rows = [
+        make_row(
+            execution_id=991,
+            result_id="file:lib/iris/OPS.md",
+            title="Iris Operations",
+            url="https://github.com/marin-community/marin/blob/abc/lib/iris/OPS.md",
+        )
+    ]
+    wiki_rows = [make_row(id=123, title="Stale Iris deployment notes")]
+    harness = client_with([], responses=[feedback_rows, grade_rows, execution_result_rows, wiki_rows])
+
+    response = harness.client.get("/api/feedback", params={"days": 30, "limit": 20})
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "id": 18,
+            "created_at": "2026-08-12T00:00:00Z",
+            "author": "reviewer@openathena.ai",
+            "query": "missing scheduler detail",
+            "note": "No result answered the question.",
+            "execution_id": None,
+            "grades": [],
+        },
+        {
+            "id": 17,
+            "created_at": "2026-08-11T00:00:00Z",
+            "author": "agent@openathena.ai",
+            "query": "how do I deploy Iris?",
+            "note": "The operations guide answered the question; the wiki result was unrelated.",
+            "execution_id": 991,
+            "grades": [
+                {
+                    "result_id": "file:lib/iris/OPS.md",
+                    "grade": 10,
+                    "title": "Iris Operations",
+                    "url": "https://github.com/marin-community/marin/blob/abc/lib/iris/OPS.md",
+                },
+                {
+                    "result_id": "wiki:123",
+                    "grade": 0,
+                    "title": "Stale Iris deployment notes",
+                    "url": "https://echo.oa.dev/wiki/123",
+                },
+            ],
+        },
+    ]
+
+
 def test_search_feedback_rejects_grade_absent_from_linked_execution(client_with):
     execution = make_row(author="agent@openathena.ai", query="how do I deploy Iris?")
     harness = client_with([], responses=[[execution], [["file:lib/iris/OPS.md"]]])
