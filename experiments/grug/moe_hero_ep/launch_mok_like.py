@@ -10,6 +10,7 @@ from enum import StrEnum
 import click
 import jmp
 from fray.cluster import ResourceConfig
+from iris.hooks.multigpu import IRIS_MULTIGPU_CHILD_WRAPPER_ENV
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.data.text.datasets import BlockShuffleConfig
@@ -70,6 +71,19 @@ MOK_LIKE_BUILD_PACKAGES = (
     "nvidia-cuda-runtime==13.0.88",
     "nvidia-nvvm==13.0.88",
 )
+# The image carries CUDA as wheels rather than a toolkit, so compute-sanitizer is absent unless
+# asked for. Install it only when a run is actually wrapping its ranks in it, since it is a large
+# download that every ordinary run would otherwise pay for.
+MOK_LIKE_SANITIZER_PACKAGES = ("nvidia-cuda-sanitizer-api==13.0.85",)
+
+
+def _mok_like_build_packages() -> tuple[str, ...]:
+    wrapper = os.environ.get(IRIS_MULTIGPU_CHILD_WRAPPER_ENV, "")
+    if "compute-sanitizer" in wrapper:
+        return MOK_LIKE_BUILD_PACKAGES + MOK_LIKE_SANITIZER_PACKAGES
+    return MOK_LIKE_BUILD_PACKAGES
+
+
 MOK_LIKE_SOURCE_ROOT = "/tmp/marin-mok-like/source"
 MOK_LIKE_BUILD_ROOT = "/tmp/marin-mok-like/build"
 
@@ -504,7 +518,7 @@ def build_backend_comparison_run(
                 is MokLikeWorkspaceTransport.FABRIC_SYMMETRIC
                 else 1
             ),
-            pip_packages=MOK_LIKE_BUILD_PACKAGES if backend is MoeBackend.MOK_LIKE else (),
+            pip_packages=_mok_like_build_packages() if backend is MoeBackend.MOK_LIKE else (),
             max_retries_failure=preset.max_retries_failure,
             max_retries_preemption=preset.max_retries_preemption,
             max_task_failures=preset.max_task_failures,
