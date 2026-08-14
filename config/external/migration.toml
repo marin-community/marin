@@ -30,11 +30,11 @@
 #                    uv.lock, follows the fork's main branch), "descriptor:<path>#<section>" (a SHA in a
 #                    vllm/*.toml section), or "release:<path>" (a prebuilt-wheel release: a release tag +
 #                    source commit + per-arch wheels, for a pin too expensive to build at job time).
-#   branch           The fork branch this pin tracks. A single-pin fork tracks "main". A fork with more
-#                    than one pin (vllm: a GPU wheel and a TPU source pin) cannot share one main, so it
-#                    blanks main (a README pointing at the pin branches) and gives each pin its own
-#                    branch. The refresh stages on "<branch>-next"; an admin promotes it onto
-#                    "<branch>" after reviewing the draft Marin PR.
+#   branch           The fork branch this pin tracks. A single-pin fork tracks "main". The vllm fork
+#                    carries two pins on different upstream bases, so it splits them across two stable
+#                    branches: the GPU wheel builds from "main" and the TPU source pin lives on "tpu".
+#                    The refresh stages on "<branch>-next"; an admin promotes it onto "<branch>" after
+#                    reviewing the draft Marin PR.
 #   base_select      Which upstream base to rebase onto: "upstream_main" (upstream default branch),
 #                    "latest_release" (newest stable GitHub release), or "derived" (a SHA read from
 #                    another fork, with `derived_from`).
@@ -49,7 +49,7 @@
 [tpu-inference]
 upstream = "https://github.com/vllm-project/tpu-inference.git"
 group = "tpu-vllm"
-pin = "descriptor:vllm/tpu-forks.toml#tpu-inference"
+pin = "descriptor:vllm/tpu.toml#tpu-inference"
 branch = "main"
 base_select = "latest_release"
 e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
@@ -61,7 +61,7 @@ nuances = [
 [vllm]
 upstream = "https://github.com/vllm-project/vllm.git"
 group = "tpu-vllm"
-pin = "descriptor:vllm/tpu-forks.toml#vllm"
+pin = "descriptor:vllm/tpu.toml#vllm"
 branch = "tpu"
 base_select = "derived"
 derived_from = "tpu-inference:.buildkite/vllm_lkg.version"
@@ -70,20 +70,20 @@ e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
 blocker_assignee = "yonromai"
 nuances = [
     "Do not advance past the vLLM known-good commit the selected tpu-inference release blessed.",
-    "The vllm fork carries a second, independent pin (vllm-gpu). Keep this one on its own `tpu` branch; the fork's `main` is blank.",
+    "The vllm fork carries a second, independent pin (vllm-gpu). Keep this one on its own `tpu` branch; the fork's `main` carries the vllm-gpu overlay.",
 ]
 
 [vllm-gpu]
 upstream = "https://github.com/vllm-project/vllm.git"
-pin = "release:vllm/gpu-release.toml"
-branch = "gpu"
+pin = "release:vllm/gpu.toml"
+branch = "main"
 base_select = "upstream_main"
 e2e = "tests/cluster/vllm/test_snowball_backend_parity.py"
 blocker_assignee = "yonromai"
 nuances = [
-    "The pin is a prebuilt wheel, not a SHA: the fork's release pipeline compiles the `gpu` branch into an immutable wheel under a release tag, and gpu-release.toml records the tag, source commit, and per-arch url+sha256. A refresh rebuilds and re-promotes the wheel; re-pinning reads the promoted manifest, not just a branch tip.",
-    "Independent of the TPU vllm pin: this tracks upstream head, while [vllm] tracks the tpu-inference-blessed base. The same fork repo therefore carries two branches (gpu, tpu) over a blank main, so it refreshes on its own (no group).",
-    "Crossing a CUDA/torch or vLLM stable-ABI boundary is a real migration, not a version bump: the wheel verifier and the fork release gate both name the extension (vllm._C_stable_libtorch on CUDA 13), so audit those when the base moves across one.",
+    "The pin is a prebuilt wheel. The fork's release pipeline compiles `main` into an immutable wheel under a release tag; gpu.toml records the tag, source commit, and per-arch url+sha256. A refresh rebuilds and re-promotes the wheel, then re-pins with `uv run config/update-external.py --promote-gpu-release <manifest>`, which reads the promoted marin-vllm-gpu-manifest.json.",
+    "This GPU pin refreshes on its own (no shared group). It tracks upstream head on `main`, which the release candidate build triggers on. The [vllm] pin tracks the tpu-inference-blessed base on the separate `tpu` branch.",
+    "A base that crosses a CUDA/torch or vLLM stable-ABI boundary is a migration. The wheel verifier and the fork release gate both name the extension (vllm._C_stable_libtorch on CUDA 13); audit them when the base moves across such a boundary.",
 ]
 
 [evalchemy]
@@ -103,7 +103,6 @@ e2e = "experiments/evaluation/configs/harbor/aime-smoke.yaml"
 blocker_assignee = "yonromai"
 nuances = [
     "Fork main is hundreds of commits behind upstream with a non-linear overlay and an upstream package refactor; auto-rebase is intractable until a one-time manual catch-up brings it close, so a refresh files a blocker until then.",
-    "The aime-smoke e2e is broken pending #8116 (the isolated driver env omits rigging), so a harbor refresh cannot be validated until that lands.",
 ]
 
 [MarinSkyRL]
