@@ -191,6 +191,7 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
     assert train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG in flags
     assert os.environ["JAX_ENABLE_PGLE"] == "false"
+    assert os.environ["XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"] == "192"
     assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
 
 

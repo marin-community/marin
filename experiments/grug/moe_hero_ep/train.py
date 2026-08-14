@@ -55,6 +55,7 @@ logger = logging.getLogger(__name__)
 
 HERO_EP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "false",
+    "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": "192",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
 _XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
