@@ -4,14 +4,17 @@
 """Score the Nemotron-tokenized corpus with the fusion quality scorer.
 
 The corpus already carries everything the fusion scorer eats: ``datakit/tokenize``
-holds Nemotron ``input_ids`` per document chunk and ``datakit/embed/harrier`` holds
-the int8[1024] document embedding. The embed side spans two stage roots -- one run
-embedded what the global fuzzy dedup kept, a second embedded what it dropped -- and
-their union is the whole normalized set. All of them are hash-partitioned from one
-normalized source and share a shard count and basename, so a shard's leaves join on
-``id`` with no shuffle. Row order within a shard is *not* guaranteed and on at least
-one source is not sorted, so the join sorts the embed side itself rather than
-reading the stored order as an invariant (see :func:`join_shard`).
+holds Nemotron ``input_ids`` per document chunk and one complete harrier leaf per
+source, named by ``hero_data.harrier``, holds the int8[1024] document embedding.
+Both are hash-partitioned from one normalized source and share a shard count and
+basename, so a shard pair joins on ``id`` with no shuffle. That co-partitioning is
+checked rather than assumed: a source whose two sides came from different normalize
+runs has no shard basenames in common, and ``manifest`` refuses to build rather than
+letting its documents fall into an unembedded counter that reads as coverage.
+
+Row order within a shard is *not* guaranteed and on at least one source is not
+sorted, so the join sorts the embed side itself rather than reading the stored order
+as an invariant (see :func:`join_shard`).
 
 Five modes:
 
@@ -21,7 +24,7 @@ Five modes:
   the mode asserts score parity on real rows before writing. Deployment reads the
   folded dir, so 48 workers do not each redo a 1.1 GB read and a fold.
 * ``manifest`` -- pair each source's Nemotron tokenize leaf with its harrier embed
-  leaves and emit one row per (source, shard_index).
+  leaf and emit one row per (source, shard_index).
 * ``score`` -- one worker, one GPU: take this worker's slice of the manifest and
   stream join -> score -> write for each shard pair it owns.
 * ``node`` -- fan out one ``score`` subprocess per visible GPU.
@@ -51,7 +54,7 @@ import json
 import logging
 import os
 import queue
-import re
+import random
 import subprocess
 import sys
 import threading
@@ -90,15 +93,14 @@ MODULE = "experiments.datakit.cluster.quality.fast_transformer.score_corpus"
 
 EMBED_DIM = 1024
 SPLIT = "train"
-# The embedded corpus is split across two stage roots, not one. The first run
-# embedded only what survived the global fuzzy dedup `dedup_709f5997`; the second
-# embedded exactly the documents that run dropped. `select_document` partitions on
-# `is_cluster_canonical`, so the two are disjoint by construction and their union
-# is the whole normalized set. Both write one output shard per *normalized* input
-# shard under the same basename, so a source's two embed leaves are co-partitioned
-# with each other and with the token side.
-EMBED_ROOT = "s3://marin-us-east-02a/marin/datakit/embed/harrier"
-EMBED_FUZZY_ROOT = "s3://marin-us-east-02a/marin/datakit/embed/harrier-fuzzy-duplicates"
+# The embed side is one complete leaf per source, named by `hero_data.harrier`.
+# It supersedes the earlier pair of leaves -- one run over what the global fuzzy
+# dedup kept, a second over what it dropped -- which had to be unioned to
+# reconstruct the corpus. Measured on five sources, the merged leaf's row count
+# equals the normalize document count exactly and its shard count equals the token
+# side's, while the old pair summed to between 2 and 432 rows *more*: the union
+# double-counted a handful of ids. The merged leaf is the corrected set, not a
+# repackaging, so nothing unions anything here any more.
 DEFAULT_MODEL_DIR = "s3://marin-us-east-02a/marin/user/muchanem/quality_exp/nemotron_donor"
 DEFAULT_FOLDED_DIR = "s3://marin-us-east-02a/marin/user/muchanem/quality_scores_run/model/nemotron_88k_folded"
 DEFAULT_MANIFEST = "s3://marin-us-east-02a/marin/user/muchanem/quality_scores_run/manifest"
@@ -106,29 +108,17 @@ DEFAULT_MANIFEST = "s3://marin-us-east-02a/marin/user/muchanem/quality_scores_ru
 # the written scores under the interior knots to report bucket shares.
 DEFAULT_CALIBRATION = f"{DEFAULT_FOLDED_DIR}/calib_bme.json"
 
-# A stage leaf is `<source>_<8 hex>`; the source part may itself hold slashes.
-LEAF_SUFFIX = re.compile(r"_[0-9a-f]{8}/?$")
-
 # Sources kept out of the manifest, mapped to why. A held source is not scored at
 # all, which is safer than scoring it against a leaf chosen by guess, and the
 # per-source output layout means adding one back later costs only its own shards.
 #
-# The focus crawl is held on *shard geometry*, not on content. Its token side is
-# the 2026-08-12 normalize rerun (333 shards) while its embed leaves are the older
-# `ed4b8bc9` normalize (4,573 shards), and this scorer pairs the two sides by shard
-# basename. The basename intersection is empty, so every token shard would resolve
-# to no embedding at all. The embeddings do carry every id that is needed -- the
-# rerun was an exact-dedup split of identical text, 36,327,068 rows collapsing to
-# 22,010,234 distinct ids -- so nothing here is stale, and nothing about it is
-# visible to a row-count or artifact check. Repairing it needs a regrouping of one
-# side onto the other's partitioning, which is being decided separately.
-HOLD_SOURCES: dict[str, str] = {
-    "common-crawl-focus-2026-22": (
-        "token side is the 2026-08-12 normalize rerun (333 shards), embed side is the "
-        "ed4b8bc9 normalize (4,573 shards); the join pairs by shard basename and the "
-        "intersection is empty, so every document would silently resolve to no embedding"
-    )
-}
+# Empty: the focus crawl's hold is discharged. It was held because its embed leaf
+# was the ed4b8bc9 normalize at 4,573 shards against a 333-shard token side with an
+# empty basename intersection. Its merged leaf `..._fc8cffa4` now lists 333 shards
+# against the token side's 333, with a measured intersection of 333 and nothing
+# unmatched on either side, and carries exactly 22,010,234 rows -- the fixed
+# normalize's document count, not the 36,327,068 of the older extraction.
+HOLD_SOURCES: dict[str, str] = {}
 
 # Rows per arrow record batch when streaming a token shard. The token side is the
 # expanded one (a long document occupies several adjacent rows), so this is rows,
@@ -138,6 +128,14 @@ HOLD_SOURCES: dict[str, str] = {
 # (`read_parquet_batched` and `LazyFrame.collect_iter` are both absent), so a polars
 # read of a token shard would have to materialize it whole.
 READ_BATCH = 4096
+# Transient-fault retry. A shard read is the retry unit: it is idempotent, and the
+# token stream cannot be resumed mid-body without double-emitting blocks that were
+# already scored, so a reset restarts the shard and the consumer drops its partial
+# state. Five attempts over a capped exponential backoff covers the observed
+# one-reset-per-minute churn many times over without masking a real fault.
+READ_ATTEMPTS = 5
+RETRY_BASE_DELAY = 1.0
+RETRY_MAX_DELAY = 30.0
 # Documents per forward. HBM never exceeded 1.2 GB at any batch size measured --
 # XLA fuses the table gather into the pooling -- so this is sized for dispatch
 # amortization rather than against a memory ceiling. Passed to `predict`
@@ -295,57 +293,19 @@ def fold_mode(args) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _stage_leaves(fs, root: str, threads: int) -> dict[str, str]:
-    """``{source_name: leaf_dir}`` for a stage root, walked to any depth.
-
-    Source names are not all one path component -- ``penfever-traces/*/*`` and
-    ``safety_pt/*/*`` sit two levels down -- and a ``{*,*/*}`` glob silently
-    dropped 150 of them on an earlier pass. Descending until the leaf pattern
-    matches finds every depth without enumerating the shard lists.
-
-    Keyed on the *name* parsed from the directory rather than on the artifact's
-    recorded ``source_key``: at least one leaf records a redirected, legacy-spelled
-    key that joins against nothing, and the fuzzy-duplicate run writes no
-    ``result`` block at all, so neither side can be paired through it.
-    """
-    base = root.removeprefix("s3://").rstrip("/")
-    leaves: dict[str, str] = {}
-    frontier = [base]
-    with ThreadPoolExecutor(max_workers=threads) as pool:
-        while frontier:
-            listings = pool.map(lambda d: fs.ls(d, detail=False), frontier)
-            frontier = []
-            for children in listings:
-                for child in children:
-                    if child.endswith(".parquet") or child.rsplit("/", 1)[-1].startswith("."):
-                        continue
-                    if LEAF_SUFFIX.search(child):
-                        leaves[child[len(base) :].strip("/").rsplit("_", 1)[0]] = f"s3://{child}"
-                    else:
-                        frontier.append(child)
-    logger.info("%s: %d leaves", root, len(leaves))
-    return leaves
-
-
 def manifest_mode(args) -> dict:
     """Pair every source's Nemotron token shards with its harrier embed shards.
 
-    Discovery runs off :mod:`hero_data`, which names the sources and resolves the
-    tokenize leaf and the score output path from step identity. The embed side is
-    still listed, because the leaves on disk were written by an older hash than
-    current code reproduces and so cannot be resolved structurally.
-
-    Emits ``embed_paths`` per shard -- one entry per stage root that carries the
-    source. A source whose fuzzy-duplicate leaf is absent or unwritten yields one
-    path and scores only its dedup-surviving documents, which is why
-    ``fuzzy_shards`` is reported: it is the coverage the run would bake in.
+    Every path comes from :mod:`hero_data`: it names the sources, resolves the
+    tokenize leaf and the score output path from step identity, and maps each
+    source to its one complete harrier leaf. Nothing is discovered by listing a
+    stage root, so a leaf whose hash no longer matches current code, or whose
+    artifact records no result at all, is still found.
     """
     fs = fsspec.filesystem("s3")
-    embed = _stage_leaves(fs, EMBED_ROOT, args.discovery_threads)
-    embed_fuzzy = _stage_leaves(fs, EMBED_FUZZY_ROOT, args.discovery_threads)
     registered = hero_data.source_names()
     sources = [s for s in registered if s not in HOLD_SOURCES]
-    missing_embed = sorted(set(sources) - set(embed))
+    missing_embed = sorted(s for s in sources if s not in hero_data.harrier_paths())
 
     # Held sources are named and counted, never merely absent: a source that
     # silently drops out of the manifest reads downstream as a corpus that never
@@ -358,44 +318,37 @@ def manifest_mode(args) -> dict:
         held[source] = {"reason": reason, "counters": counters}
         logger.warning("HELD OUT of the score manifest: %s -- %s; normalize counters %s", source, reason, counters)
     logger.info(
-        "sources=%d of %d registered (%d held) dedup-leaves=%d fuzzy-leaves=%d no-embed=%s",
-        len(sources),
-        len(registered),
-        len(held),
-        len(embed),
-        len(embed_fuzzy),
-        missing_embed,
+        "sources=%d of %d registered (%d held) no-embed=%s", len(sources), len(registered), len(held), missing_embed
     )
+    if missing_embed:
+        raise ValueError(f"no harrier leaf mapped for {len(missing_embed)} source(s): {missing_embed}")
 
     def leaf_rows(source: str) -> list[dict]:
         tok_dir = f"{hero_data.tokenized(source, NEMOTRON_88K.tokenizer).output_path.rstrip('/')}/{SPLIT}"
         out_dir = hero_data.quality(source, NEMOTRON_88K).output_path.rstrip("/")
         tok = sorted(fs.ls(tok_dir.removeprefix("s3://"), detail=True), key=lambda e: e["name"])
         tok = [e for e in tok if e["name"].endswith(".parquet")]
-        present = {}
-        for tag, table in (("dedup", embed), ("fuzzy", embed_fuzzy)):
-            leaf = table.get(source)
-            if leaf:
-                present[tag] = {
-                    e["name"].rsplit("/", 1)[-1]: (f"s3://{e['name']}", e["size"])
-                    for e in fs.ls(leaf.removeprefix("s3://"), detail=True)
-                    if e["name"].endswith(".parquet")
-                }
+        embed_dir = hero_data.harrier(source).rstrip("/")
+        present = {
+            e["name"].rsplit("/", 1)[-1]: (f"s3://{e['name']}", e["size"])
+            for e in fs.ls(embed_dir.removeprefix("s3://"), detail=True)
+            if e["name"].endswith(".parquet")
+        }
         rows = []
         for index, entry in enumerate(tok):
             base = entry["name"].rsplit("/", 1)[-1]
-            found = [present[tag][base] for tag in ("dedup", "fuzzy") if base in present.get(tag, {})]
+            found = present.get(base)
             rows.append(
                 {
                     "source": source,
                     "shard_index": index,
                     "num_shards": len(tok),
                     "tokens_path": f"s3://{entry['name']}",
-                    "embed_paths": [path for path, _ in found],
+                    "embed_path": found[0] if found else "",
                     "output_path": f"{out_dir}/{base}",
-                    "embed_leaves": len(found),
+                    "embed_leaves": 1 if found else 0,
                     "tokens_bytes": entry["size"],
-                    "embed_bytes": sum(size for _, size in found),
+                    "embed_bytes": found[1] if found else 0,
                 }
             )
         return rows
@@ -415,7 +368,7 @@ def manifest_mode(args) -> dict:
     matched_by_source: dict[str, int] = {}
     for row in rows:
         matched_by_source[row["source"]] = matched_by_source.get(row["source"], 0) + row["embed_leaves"]
-    unpaired = sorted(s for s, matched in matched_by_source.items() if not matched and s in embed)
+    unpaired = sorted(s for s, matched in matched_by_source.items() if not matched)
     if unpaired:
         raise ValueError(
             f"{len(unpaired)} source(s) have an embed leaf but no shard basename in common with their "
@@ -427,11 +380,10 @@ def manifest_mode(args) -> dict:
     # score count against, and computing it at verify time would reread the embed
     # side of a leaf that has already been scored. Two range GETs per shard.
     def embed_rows(row: dict) -> int:
-        total = 0
-        for path in row["embed_paths"]:
-            with fs.open(path, "rb", cache_type="none") as raw:
-                total += pq.ParquetFile(raw).metadata.num_rows
-        return total
+        if not row["embed_path"]:
+            return 0
+        with fs.open(row["embed_path"], "rb", cache_type="none") as raw:
+            return pq.ParquetFile(raw).metadata.num_rows
 
     with ThreadPoolExecutor(max_workers=args.footer_threads) as pool:
         for row, count in zip(rows, pool.map(embed_rows, rows), strict=True):
@@ -446,9 +398,8 @@ def manifest_mode(args) -> dict:
         "registered_sources": len(registered),
         "held_sources": held,
         "sources_without_embed": missing_embed,
-        "dedup_shards": sum(1 for r in rows if r["embed_leaves"] >= 1),
-        "fuzzy_shards": sum(1 for r in rows if r["embed_leaves"] == 2),
-        "unembedded_shards": sum(1 for r in rows if r["embed_leaves"] == 0),
+        "embedded_shards": sum(1 for r in rows if r["embed_leaves"]),
+        "unembedded_shards": sum(1 for r in rows if not r["embed_leaves"]),
         "embed_rows": sum(r["embed_rows"] for r in rows),
     }
     logger.info("wrote %s: %s", path, json.dumps(result, default=str))
@@ -477,9 +428,7 @@ class ShardTask:
     source: str
     shard_index: int
     tokens_path: str
-    embed_paths: tuple[str, ...]
-    """The shard's embed leaves, to be unioned. One per stage root that has this
-    source: the dedup-surviving leaf, and the fuzzy-duplicate leaf where it exists."""
+    embed_path: str
     output_path: str
     total_bytes: int
 
@@ -491,6 +440,11 @@ class Block:
     doc_ids: np.ndarray  # [n] object, the 32-char hex ids
     ids: np.ndarray  # [n, max_tokens] int32 compact ids, PAD-padded
     embedding: np.ndarray  # [n, EMBED_DIM] float32, L2-normalized
+
+
+@dataclass(frozen=True)
+class ShardRestart:
+    """A shard is being re-read from the start; drop what it already produced."""
 
 
 @dataclass(frozen=True)
@@ -550,6 +504,34 @@ def _ragged_to_padded(column: pa.ChunkedArray | pa.Array, max_tokens: int, vocab
     return np.where(mask, compact, PAD_ID).astype(np.int32)
 
 
+def with_retry(operation, what: str, attempts: int = READ_ATTEMPTS):
+    """Run ``operation``, retrying transient object-store faults with backoff.
+
+    CoreWeave severs connections mid-body at roughly one per minute against a
+    single leaf, surfacing as ``ClientPayloadError`` and friends, at request sizes
+    from 65 KB to 8.7 MB alike -- connection churn, with no size selectivity. Every
+    observed instance recovered on the first retry. Over tens of thousands of
+    shards and hours of wall clock, leaving that unretried turns a routine reset
+    into a task failure that looks exactly like a real data fault.
+
+    Deliberately broad in what it retries and strict in how often: anything raised
+    by a read is treated as possibly transient, but only a handful of times, so a
+    genuine fault still fails the task rather than spinning.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            if attempt == attempts:
+                logger.error("%s failed after %d attempts: %r", what, attempts, exc)
+                raise
+            delay = min(RETRY_BASE_DELAY * 2 ** (attempt - 1), RETRY_MAX_DELAY)
+            delay *= 1.0 + random.random()  # jitter, so parallel readers do not resynchronize
+            logger.warning("%s failed (attempt %d/%d): %r; retrying in %.1fs", what, attempt, attempts, exc, delay)
+            time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
 def read_one_embed_shard(path: str, fs) -> tuple[np.ndarray, np.ndarray]:
     """One shard's ``(ids, int8[n, 1024] embeddings)``.
 
@@ -565,22 +547,9 @@ def read_one_embed_shard(path: str, fs) -> tuple[np.ndarray, np.ndarray]:
     return frame.get_column("id").to_numpy(), frame.get_column("embedding").to_numpy()
 
 
-def read_embed_side(paths: tuple[str, ...], fs) -> tuple[np.ndarray, np.ndarray]:
-    """The union of a shard's embed leaves as one ``(ids, embeddings)`` pair.
-
-    The dedup-surviving and fuzzy-duplicate leaves partition the shard's documents,
-    so concatenating them reconstructs the normalized shard with no overlap and no
-    ordering assumption -- :func:`join_shard` sorts the result anyway. A path that
-    does not exist is skipped: the second run is per-source, so a source can have
-    one leaf while another has two, and a missing leaf means "no rows here", not a
-    corrupt shard.
-    """
-    parts = [read_one_embed_shard(path, fs) for path in paths if fs.exists(path)]
-    if not parts:
-        return np.empty(0, dtype=object), np.empty((0, EMBED_DIM), dtype=np.int8)
-    if len(parts) == 1:
-        return parts[0]
-    return np.concatenate([ids for ids, _ in parts]), np.concatenate([emb for _, emb in parts])
+def read_embed_side(path: str, fs) -> tuple[np.ndarray, np.ndarray]:
+    """A shard's ``(ids, embeddings)``, retried through transient resets."""
+    return with_retry(lambda: read_one_embed_shard(path, fs), f"embed read {path}")
 
 
 def normalize_embeddings(rows: np.ndarray) -> np.ndarray:
@@ -605,11 +574,9 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
     few of those at once exceeds the container's memory cap. Peak memory here is
     set by ``block_docs``, not by the shard.
 
-    The embed side is the union of the shard's embed leaves and the token side a
-    chunk-expanded superset, so the two are never positionally alignable and the
-    match is on the key. It is also on the key *without* assuming either side is
-    ordered -- concatenating two leaves guarantees the union is unordered even
-    where each leaf was sorted. The shard
+    The embed side is one row per document and the token side a chunk-expanded
+    superset, so the two are never positionally alignable and the match is on the
+    key. It is also on the key *without* assuming either side is ordered. The shard
     writers do not guarantee ordering, and ``common-crawl-focus-2026-22`` is a
     source where they did not deliver it -- its shard 0 carries 3,081 ``id``
     inversions in 6,096 rows. A match that read the stored order as sorted
@@ -622,7 +589,7 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
     later chunks are dropped as soon as they are decoded.
     """
     t0 = time.monotonic()
-    embed_ids, embeddings = read_embed_side(task.embed_paths, fs)
+    embed_ids, embeddings = read_embed_side(task.embed_path, fs)
     embed_rows = len(embed_ids)
     # `order` maps a rank in `lookup` back to its row in `embeddings`; the gather
     # into the embedding array therefore stays on original row positions.
@@ -737,7 +704,7 @@ def score_mode(args) -> dict:
             source=row["source"],
             shard_index=row["shard_index"],
             tokens_path=row["tokens_path"],
-            embed_paths=tuple(row["embed_paths"]),
+            embed_path=row["embed_path"],
             output_path=row["output_path"],
             total_bytes=(row.get("tokens_bytes") or 0) + (row.get("embed_bytes") or 0),
         )
@@ -788,11 +755,40 @@ def score_mode(args) -> dict:
     # regardless of how large a shard is.
     work: queue.Queue = queue.Queue(maxsize=args.prefetch)
 
+    def read_one(task: ShardTask) -> None:
+        """Stream one shard, restarting it whole on a transient fault.
+
+        The token stream cannot resume mid-body: blocks already handed to the
+        consumer have been scored, so replaying from an offset would double-count
+        and replaying from the start without warning would too. A restart therefore
+        announces itself, and the consumer drops the shard's partial state before
+        the first block of the new attempt arrives.
+        """
+        for attempt in range(1, READ_ATTEMPTS + 1):
+            try:
+                for item in join_shard(task, scorer.max_tokens, vocab_size, args.block_docs, fs):
+                    work.put((task, item))
+                return
+            except Exception as exc:
+                if attempt == READ_ATTEMPTS:
+                    raise
+                delay = min(RETRY_BASE_DELAY * 2 ** (attempt - 1), RETRY_MAX_DELAY) * (1.0 + random.random())
+                logger.warning(
+                    "%s shard %d failed mid-read (attempt %d/%d): %r; restarting shard in %.1fs",
+                    task.source,
+                    task.shard_index,
+                    attempt,
+                    READ_ATTEMPTS,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+                work.put((task, ShardRestart()))
+
     def produce() -> None:
         try:
             for task in mine:
-                for item in join_shard(task, scorer.max_tokens, vocab_size, args.block_docs, fs):
-                    work.put((task, item))
+                read_one(task)
         except Exception as exc:  # surfaced on the consumer thread
             work.put((None, exc))
         finally:
@@ -809,6 +805,12 @@ def score_mode(args) -> dict:
             if isinstance(item, BaseException):
                 raise item
             break
+        if isinstance(item, ShardRestart):
+            # The shard is being re-read from the start; everything scored from the
+            # abandoned attempt must go, or its documents are written twice.
+            logger.warning("%s shard %d: discarding %d partial blocks", task.source, task.shard_index, len(shard_ids))
+            shard_ids, shard_scores = [], []
+            continue
         if isinstance(item, Block):
             t0 = time.monotonic()
             shard_scores.append(predict(scorer.model, item.ids, batch_size=args.batch_size, doc_embed=item.embedding))

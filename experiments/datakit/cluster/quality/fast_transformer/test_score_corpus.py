@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The shard join, over an embed side that spans two leaves.
+"""The shard join, and the retry that keeps a transient reset from failing a task.
 
-The corpus embeddings live in two stage roots -- one run embedded what the global
-fuzzy dedup kept, a second embedded what it dropped -- so a shard's embed side is
-the union of two files. These tests pin the property that makes that safe: every
-embedded document is scored regardless of which leaf carries it, and regardless of
-the order the union happens to land in. A join that quietly matched only the first
-leaf would look exactly like a smaller corpus.
+Each source has one complete harrier leaf co-partitioned with its token side. What
+still has to be pinned is that the match is on the *key* rather than on stored
+order -- the row order inside a shard is not guaranteed, and on at least one source
+it is not sorted -- and that every embedded document is scored, since a join that
+quietly matched a subset looks exactly like a smaller corpus.
 """
 
 import fsspec
@@ -18,12 +17,14 @@ import pyarrow.parquet as pq
 import pytest
 
 from experiments.datakit import hero_data
+from experiments.datakit.cluster.quality.fast_transformer import score_corpus
 from experiments.datakit.cluster.quality.fast_transformer.score_corpus import (
     EMBED_DIM,
     HOLD_SOURCES,
     ShardTask,
     join_shard,
     read_embed_side,
+    with_retry,
 )
 
 VOCAB = 4096
@@ -33,6 +34,13 @@ MAX_TOKENS = 8
 @pytest.fixture
 def fs():
     return fsspec.filesystem("file")
+
+
+@pytest.fixture(autouse=True)
+def _fast_retries(monkeypatch):
+    # The retry path is under test, not the wall clock it would otherwise burn.
+    monkeypatch.setattr(score_corpus, "RETRY_BASE_DELAY", 0.0)
+    monkeypatch.setattr(score_corpus, "RETRY_MAX_DELAY", 0.0)
 
 
 def write_embed(path, ids, markers):
@@ -62,55 +70,6 @@ def write_tokens(path, records):
     pq.write_table(table, path)
 
 
-def test_the_focus_crawl_is_held_out_of_scoring():
-    """A hard exclusion, not a counter.
-
-    This source's token side (333 shards, the 2026-08-12 normalize rerun) and its
-    embed side (4,573 shards, the ed4b8bc9 normalize) share no shard basename, and
-    the join pairs by basename. Nothing about that is visible to a row count or an
-    artifact check: unheld, all 22,010,234 documents resolve to no embedding and
-    land in a counter that reads as coverage.
-    """
-    assert "common-crawl-focus-2026-22" in HOLD_SOURCES
-    assert HOLD_SOURCES["common-crawl-focus-2026-22"], "a hold must carry its reason"
-    assert "common-crawl-focus-2026-22" not in [s for s in hero_data.source_names() if s not in HOLD_SOURCES]
-
-
-def test_every_held_source_is_registered():
-    # A hold naming a source that no longer exists is a hold that silently stopped
-    # holding anything.
-    assert not set(HOLD_SOURCES) - set(hero_data.source_names())
-
-
-def test_read_embed_side_concatenates_leaves(tmp_path, fs):
-    a, b = tmp_path / "a.parquet", tmp_path / "b.parquet"
-    write_embed(a, ["id2", "id0"], [10, 20])
-    write_embed(b, ["id1"], [30])
-
-    ids, embeddings = read_embed_side((str(a), str(b)), fs)
-
-    assert list(ids) == ["id2", "id0", "id1"]
-    assert [int(row.argmax()) for row in embeddings] == [10, 20, 30]
-
-
-def test_read_embed_side_skips_a_leaf_that_does_not_exist(tmp_path, fs):
-    # The second run is per-source: a source can have one leaf while another has
-    # two, and that means "no rows here", not a corrupt shard.
-    a = tmp_path / "a.parquet"
-    write_embed(a, ["id0"], [10])
-
-    ids, embeddings = read_embed_side((str(a), str(tmp_path / "absent.parquet")), fs)
-
-    assert list(ids) == ["id0"]
-    assert embeddings.shape == (1, EMBED_DIM)
-
-
-def test_read_embed_side_with_no_surviving_leaf_is_empty(tmp_path, fs):
-    ids, embeddings = read_embed_side((str(tmp_path / "absent.parquet"),), fs)
-    assert len(ids) == 0
-    assert embeddings.shape == (0, EMBED_DIM)
-
-
 def join(task, fs, block_docs=1024):
     blocks, stats = [], None
     for item in join_shard(task, MAX_TOKENS, VOCAB, block_docs, fs):
@@ -121,66 +80,97 @@ def join(task, fs, block_docs=1024):
     return blocks, stats
 
 
-def test_join_scores_documents_from_both_leaves(tmp_path, fs):
+def test_every_held_source_is_registered():
+    # A hold naming a source that no longer exists is a hold that silently stopped
+    # holding anything. Empty is fine; stale is not.
+    assert not set(HOLD_SOURCES) - set(hero_data.source_names())
+
+
+def test_read_embed_side_reads_a_shard(tmp_path, fs):
+    path = tmp_path / "e.parquet"
+    write_embed(path, ["id2", "id0", "id1"], [10, 20, 30])
+
+    ids, embeddings = read_embed_side(str(path), fs)
+
+    assert list(ids) == ["id2", "id0", "id1"]
+    assert [int(row.argmax()) for row in embeddings] == [10, 20, 30]
+
+
+def test_with_retry_recovers_from_a_transient_fault():
+    """CoreWeave severs connections mid-body; every observed one recovered at once.
+
+    Unretried across tens of thousands of shards this surfaces as a task failure
+    indistinguishable from a real data fault, which is the actual cost.
+    """
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 3:
+            raise OSError("Response payload is not completed")
+        return "ok"
+
+    assert with_retry(flaky, "flaky read") == "ok"
+    assert len(calls) == 3
+
+
+def test_with_retry_gives_up_and_reraises():
+    # A genuine fault must still fail the task rather than spin forever.
+    def broken():
+        raise OSError("nope")
+
+    with pytest.raises(OSError, match="nope"):
+        with_retry(broken, "broken read", attempts=2)
+
+
+def test_join_matches_on_key_not_stored_order(tmp_path, fs):
     """The regression this file exists for.
 
-    The dedup-surviving and fuzzy-duplicate leaves are disjoint, so the union is
-    unordered even when each leaf is sorted. Ids here are chosen so the second
-    leaf's ids sort *before* the first's: a join that trusted the concatenated
-    order would drop them, which is the shape of the 36.3M-row loss an earlier
-    sorted-merge join produced.
+    Shard writers do not guarantee ordering and `common-crawl-focus-2026-22` did
+    not deliver it. A match that read the stored order as sorted degenerated
+    silently there, emitting 3 rows for a 6,048-document shard rather than failing,
+    and lost 36.3M documents across the leaf. The embed ids here are stored in an
+    order that is not sorted, and the token side is in a third order again.
     """
-    kept, dropped = tmp_path / "kept.parquet", tmp_path / "dropped.parquet"
-    write_embed(kept, ["d_kept", "e_kept"], [1, 2])
-    write_embed(dropped, ["a_drop", "b_drop"], [3, 4])
+    embed = tmp_path / "e.parquet"
+    write_embed(embed, ["d_doc", "a_doc", "c_doc", "b_doc"], [11, 22, 33, 44])
     tokens = tmp_path / "tok.parquet"
     write_tokens(
         tokens,
         [
-            ("e_kept", 0),
-            ("a_drop", 0),
-            ("e_kept", 1),  # a later chunk of an already-matched document
-            ("b_drop", 0),
+            ("c_doc", 0),
+            ("a_doc", 0),
+            ("c_doc", 1),  # a later chunk of an already-matched document
+            ("d_doc", 0),
             ("z_absent", 0),  # a token-side document with no embedding
-            ("d_kept", 0),
+            ("b_doc", 0),
         ],
     )
     task = ShardTask(
-        source="s",
-        shard_index=0,
-        tokens_path=str(tokens),
-        embed_paths=(str(kept), str(dropped)),
-        output_path="",
-        total_bytes=0,
+        source="s", shard_index=0, tokens_path=str(tokens), embed_path=str(embed), output_path="", total_bytes=0
     )
 
     blocks, stats = join(task, fs)
 
     assert stats.embed_rows == 4
-    assert stats.matched == 4, "every embedded document must be scored, from either leaf"
+    assert stats.matched == 4, "every embedded document must be scored"
     assert stats.unmatched_embed == 0
-    assert sorted(np.concatenate([b.doc_ids for b in blocks])) == ["a_drop", "b_drop", "d_kept", "e_kept"]
+    assert sorted(np.concatenate([b.doc_ids for b in blocks])) == ["a_doc", "b_doc", "c_doc", "d_doc"]
 
 
 def test_join_pairs_each_document_with_its_own_embedding(tmp_path, fs):
     """Matching on the key must carry the *row* through, not the rank.
 
-    The union's sort order is not its storage order, so the gather back into the
-    embedding array runs through an index map. Getting that wrong scores documents
-    against other documents' embeddings with no visible error.
+    The sort order is not the storage order, so the gather back into the embedding
+    array runs through an index map. Getting that wrong scores documents against
+    other documents' embeddings with no visible error.
     """
-    kept, dropped = tmp_path / "kept.parquet", tmp_path / "dropped.parquet"
-    write_embed(kept, ["d_kept", "b_kept"], [11, 22])
-    write_embed(dropped, ["a_drop", "c_drop"], [33, 44])
+    embed = tmp_path / "e.parquet"
+    write_embed(embed, ["d_doc", "b_doc", "a_doc", "c_doc"], [11, 22, 33, 44])
     tokens = tmp_path / "tok.parquet"
-    write_tokens(tokens, [("a_drop", 0), ("b_kept", 0), ("c_drop", 0), ("d_kept", 0)])
+    write_tokens(tokens, [("a_doc", 0), ("b_doc", 0), ("c_doc", 0), ("d_doc", 0)])
     task = ShardTask(
-        source="s",
-        shard_index=0,
-        tokens_path=str(tokens),
-        embed_paths=(str(kept), str(dropped)),
-        output_path="",
-        total_bytes=0,
+        source="s", shard_index=0, tokens_path=str(tokens), embed_path=str(embed), output_path="", total_bytes=0
     )
 
     blocks, _ = join(task, fs)
@@ -190,18 +180,18 @@ def test_join_pairs_each_document_with_its_own_embedding(tmp_path, fs):
     # so the surviving axis names the embedding the document was paired with.
     got = dict(zip(doc_ids, embeddings.argmax(axis=1), strict=True))
 
-    assert got == {"d_kept": 11, "b_kept": 22, "a_drop": 33, "c_drop": 44}
+    assert got == {"d_doc": 11, "b_doc": 22, "a_doc": 33, "c_doc": 44}
 
 
 def test_join_reports_embed_rows_the_token_side_did_not_carry(tmp_path, fs):
     # `unmatched_embed` is the containment check: every embedded document should
     # have a chunk-0 token row, so a nonzero value means co-partitioning broke.
-    kept = tmp_path / "kept.parquet"
-    write_embed(kept, ["a", "b"], [1, 2])
+    embed = tmp_path / "e.parquet"
+    write_embed(embed, ["a", "b"], [1, 2])
     tokens = tmp_path / "tok.parquet"
     write_tokens(tokens, [("a", 0)])
     task = ShardTask(
-        source="s", shard_index=0, tokens_path=str(tokens), embed_paths=(str(kept),), output_path="", total_bytes=0
+        source="s", shard_index=0, tokens_path=str(tokens), embed_path=str(embed), output_path="", total_bytes=0
     )
 
     _, stats = join(task, fs)
