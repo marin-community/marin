@@ -223,6 +223,9 @@ def _small_model(
         qb_estimator=QbEstimator.HIST if qb_use_histogram else QbEstimator.TOPK,
         qb_hist_bins=qb_hist_bins,
         report_capacity_overflow=True,
+        # autoresearch: e4m3 dispatch wire halves the dispatch a2a payload (#7665 measured
+        # the layer gain growing with EP degree, 1.144x at EP64 on H100). Rung-only.
+        fp8_dispatch_wire=True,
         rope_fused=True,
     )
 

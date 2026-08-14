@@ -71,6 +71,7 @@ class MoEExpertMlp(eqx.Module):
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
     expert_chunks: int = eqx.field(static=True, default=1)
+    fp8_dispatch_wire: bool = eqx.field(static=True, default=False)
 
     @staticmethod
     def init(
@@ -85,6 +86,7 @@ class MoEExpertMlp(eqx.Module):
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
         expert_chunks: int = 1,
+        fp8_dispatch_wire: bool = False,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -106,6 +108,7 @@ class MoEExpertMlp(eqx.Module):
             activation=activation,
             capacity_factor=capacity_factor,
             expert_chunks=expert_chunks,
+            fp8_dispatch_wire=fp8_dispatch_wire,
         )
 
     @named_call
@@ -131,6 +134,7 @@ class MoEExpertMlp(eqx.Module):
             capacity_factor=self.capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
+            fp8_dispatch_wire=self.fp8_dispatch_wire,
         )
 
 
@@ -148,6 +152,7 @@ def moe_mlp(
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
+    fp8_dispatch_wire: bool = False,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -245,12 +250,16 @@ def moe_mlp(
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
+        if fp8_dispatch_wire and resolved_implementation != "fixed_all_to_all":
+            raise ValueError(f"fp8_dispatch_wire only supports fixed_all_to_all, got {resolved_implementation!r}")
+        backend_kwargs = {"fp8_dispatch_wire": True} if fp8_dispatch_wire else {}
         shard_fn = shard_map(
             partial(
                 shard_local_fn,
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
+                **backend_kwargs,
             ),
             mesh=mesh,
             in_specs=(

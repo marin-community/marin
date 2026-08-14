@@ -74,6 +74,42 @@ def _combine_gather_bwd(residual, cotangent):
 _combine_gather.defvjp(_combine_gather_fwd, _combine_gather_bwd)
 
 
+_FP8_WIRE_MAX = 448.0  # float8_e4m3fn finite max
+
+
+def _fp8_wire_fwd_impl(x: Float[Array, "S C H"]) -> Float[Array, "S C H"]:
+    absmax = jnp.max(jnp.abs(x.astype(jnp.float32)), axis=-1, keepdims=True)
+    scale = jnp.maximum(absmax, 1e-12) / _FP8_WIRE_MAX
+    quantized = (x.astype(jnp.float32) / scale).astype(jnp.float8_e4m3fn)
+    quantized_recv = jax.lax.all_to_all(quantized, "expert", split_axis=0, concat_axis=0, tiled=True)
+    scale_recv = jax.lax.all_to_all(scale, "expert", split_axis=0, concat_axis=0, tiled=True)
+    return (quantized_recv.astype(jnp.float32) * scale_recv).astype(x.dtype)
+
+
+@jax.custom_vjp
+def _fp8_wire_all_to_all(x: Float[Array, "S C H"]) -> Float[Array, "S C H"]:
+    """Dispatch all-to-all over an fp8(e4m3) wire with per-row scales.
+
+    Forward quantizes each row for the exchange and dequantizes on the receiver,
+    halving the dispatch payload. Backward exchanges the cotangent unquantized:
+    the wire format is a forward bandwidth optimization, not a gradient change
+    (per-row scales never span tokens, so no scale is shared along the sequence).
+    """
+    return _fp8_wire_fwd_impl(x)
+
+
+def _fp8_wire_a2a_fwd(x):
+    return _fp8_wire_fwd_impl(x), None
+
+
+def _fp8_wire_a2a_bwd(_, cotangent):
+    # tiled all_to_all with split_axis == concat_axis is its own transpose.
+    return (jax.lax.all_to_all(cotangent, "expert", split_axis=0, concat_axis=0, tiled=True),)
+
+
+_fp8_wire_all_to_all.defvjp(_fp8_wire_a2a_fwd, _fp8_wire_a2a_bwd)
+
+
 def _moe_mlp_ep_fixed_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -84,6 +120,7 @@ def _moe_mlp_ep_fixed_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    fp8_dispatch_wire: bool = False,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Run fixed-capacity all-to-all dispatch, expert MLPs, and combine.
 
@@ -140,13 +177,16 @@ def _moe_mlp_ep_fixed_a2a_local(
     output_parts = []
     for local_expert_index in range(local_experts):
         with jax.named_scope("dispatch"):
-            received = jax.lax.all_to_all(
-                send_x[local_expert_index],
-                "expert",
-                split_axis=0,
-                concat_axis=0,
-                tiled=True,
-            )
+            if fp8_dispatch_wire:
+                received = _fp8_wire_all_to_all(send_x[local_expert_index])
+            else:
+                received = jax.lax.all_to_all(
+                    send_x[local_expert_index],
+                    "expert",
+                    split_axis=0,
+                    concat_axis=0,
+                    tiled=True,
+                )
             received = tree_checkpoint_name(received, _CHECKPOINT_DISPATCH_INPUT)
         with jax.named_scope("moe_up_down"):
             expert_input = received.reshape(bucket_size, hidden_dim)

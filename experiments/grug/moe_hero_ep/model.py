@@ -179,6 +179,8 @@ class GrugModelConfig:
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
     report_capacity_overflow: bool = False
+    # e4m3 wire format for the EP dispatch all-to-all (per-row scales, bf16 cotangents).
+    fp8_dispatch_wire: bool = False
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
@@ -858,6 +860,7 @@ class MoEMLP(eqx.Module):
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=cfg.capacity_factor,
                 expert_chunks=cfg.expert_chunks,
+                fp8_dispatch_wire=cfg.fp8_dispatch_wire,
             ),
             cfg=cfg,
         )
