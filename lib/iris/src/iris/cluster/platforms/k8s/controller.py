@@ -21,7 +21,7 @@ from contextlib import AbstractContextManager
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf, s3_credentials
 from rigging.secrets import ENV_SCHEME, as_secret_spec, resolve_secret_spec
-from rigging.timing import Deadline
+from rigging.timing import Deadline, Duration
 
 from iris.cluster.config import (
     ControllerVmConfig,
@@ -33,7 +33,11 @@ from iris.cluster.config import (
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
 from iris.cluster.node_agent import SERVICE_NAME as _NODE_AGENT_NAME
-from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.platforms.k8s.constants import (
+    COREWEAVE_INTERRUPTABLE_TOLERATION,
+    DEFAULT_TASK_CACHE_DIR,
+    NVIDIA_GPU_TOLERATION,
+)
 from iris.cluster.platforms.k8s.kueue_manifests import (
     IRIS_WORKLOAD_PRIORITY_CLASSES,
     build_workload_priority_class,
@@ -310,8 +314,19 @@ def _build_controller_deployment(
     }
 
 
-def _build_node_agent_daemonset(*, namespace: str, image: str) -> dict:
+def _build_node_agent_daemonset(
+    *,
+    namespace: str,
+    image: str,
+    cache_dir: str | None = None,
+    cache_max_age: Duration | None = None,
+) -> dict:
     """Run the Iris physical-node collector once on every Kubernetes node."""
+    volume_mounts = [{"name": "config", "mountPath": "/etc/iris", "readOnly": True}]
+    volumes = [{"name": "config", "configMap": {"name": "iris-cluster-config"}}]
+    if cache_dir is not None:
+        volume_mounts.append({"name": "task-cache", "mountPath": cache_dir})
+        volumes.append({"name": "task-cache", "hostPath": {"path": cache_dir, "type": "DirectoryOrCreate"}})
     return {
         "apiVersion": "apps/v1",
         "kind": "DaemonSet",
@@ -323,7 +338,14 @@ def _build_node_agent_daemonset(*, namespace: str, image: str) -> dict:
                 "rollingUpdate": {"maxUnavailable": _NODE_AGENT_MAX_UNAVAILABLE},
             },
             "template": {
-                "metadata": {"labels": {"app": _NODE_AGENT_NAME}},
+                "metadata": {
+                    "labels": {"app": _NODE_AGENT_NAME},
+                    "annotations": {
+                        "iris.marin.community/cache-max-age-ms": (
+                            str(cache_max_age.to_ms()) if cache_max_age is not None else "disabled"
+                        )
+                    },
+                },
                 "spec": {
                     "serviceAccountName": "iris-controller",
                     "priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM,
@@ -357,10 +379,10 @@ def _build_node_agent_daemonset(*, namespace: str, image: str) -> dict:
                                 "requests": {"cpu": "50m", "memory": "64Mi"},
                                 "limits": {"cpu": "1", "memory": "512Mi"},
                             },
-                            "volumeMounts": [{"name": "config", "mountPath": "/etc/iris", "readOnly": True}],
+                            "volumeMounts": volume_mounts,
                         }
                     ],
-                    "volumes": [{"name": "config", "configMap": {"name": "iris-cluster-config"}}],
+                    "volumes": volumes,
                 },
             },
         },
@@ -507,9 +529,23 @@ class K8sControllerProvider:
 
         self.ensure_kueue_queues(config)
         self.ensure_priority_classes()
-        if config.finelog.config or LOG_SERVER_ENDPOINT_NAME in config.endpoints:
+        if (
+            config.finelog.config
+            or LOG_SERVER_ENDPOINT_NAME in config.endpoints
+            or config.kubernetes_provider.cache_max_age is not None
+        ):
+            cache_dir = (
+                config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR
+                if config.kubernetes_provider.cache_max_age is not None
+                else None
+            )
             self._kubectl.apply_json(
-                _build_node_agent_daemonset(namespace=self._namespace, image=config.controller.image)
+                _build_node_agent_daemonset(
+                    namespace=self._namespace,
+                    image=config.controller.image,
+                    cache_dir=cache_dir,
+                    cache_max_age=config.kubernetes_provider.cache_max_age,
+                )
             )
             logger.info("DaemonSet %s applied", _NODE_AGENT_NAME)
         else:
