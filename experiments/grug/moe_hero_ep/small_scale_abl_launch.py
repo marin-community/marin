@@ -520,7 +520,8 @@ def build_small_run(
     # at neutral loss (1.32% -> 1.25% at capacity factor 2.0) and +0.9% median tok/s.
     default=True,
     show_default=True,
-    help="Estimate the QB quantile with the histogram estimator instead of the top-k mean (the hero default).",
+    help="Estimate the QB quantile with the histogram estimator instead of the top-k mean "
+    "(the d6144 hero template's default, unchanged by this flag).",
 )
 @click.option(
     "--qb-hist-bins",
