@@ -333,7 +333,6 @@ def build_backend_comparison_run(
     common_model = dataclasses.replace(
         model,
         num_experts=num_experts,
-        mok_like_remat_mode=mok_like_remat_mode,
         num_shared_experts=1,
         capacity_factor=MATCHED_CAPACITY_FACTOR,
         # The fused kernel runs the routed and shared experts through one megakernel at a single
@@ -820,6 +819,7 @@ def main(
         mok_like_preset=mok_like_preset,
         mok_like_num_devices=mok_like_num_devices,
         num_experts=num_experts,
+        mok_like_remat_mode=mok_like_remat_mode,
         mok_like_workspace_transport=mok_like_workspace_transport,
         num_nodes=num_nodes,
         num_layers=num_layers,
