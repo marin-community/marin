@@ -16,6 +16,7 @@ from levanter.kernels.mixture_of_kittens import (
     MokLikeBuildConfig,
     MokLikeConfig,
     MokLikeForwardXStorage,
+    MokLikeWorkspaceTransport,
     initialize_mok_like_runtime,
     mok_like_reference,
     mok_like_preflight_status,
@@ -253,6 +254,37 @@ def test_config_decodes_experimental_forward_x_storage_to_native_abi() -> None:
     )
     assert hybrid.backward_peer_storage is MokLikeBackwardPeerStorage.XLA_PEER_INPUTS_EXPERIMENTAL
     assert hybrid.backward_peer_storage.native_ffi_code == 2
+
+
+@pytest.mark.parametrize(
+    ("field", "storage"),
+    [
+        ("forward_x_storage", MokLikeForwardXStorage.XLA_PEER_EXPERIMENTAL),
+        ("backward_peer_storage", MokLikeBackwardPeerStorage.XLA_PEER_EXPERIMENTAL),
+    ],
+)
+def test_config_rejects_peer_xla_reads_on_a_cross_process_transport(field: str, storage: object) -> None:
+    """A four-rank fabric group runs one process per GPU, so a peer's XLA buffer is unreachable.
+
+    The group still fits on one node, so a check keyed on the device count passes it and the
+    megakernel dereferences peer pointers the rendezvous never filled in.
+    """
+    with pytest.raises(ValueError, match="process-local peer mappings"):
+        MokLikeConfig(
+            num_devices=4,
+            workspace_transport=MokLikeWorkspaceTransport.FABRIC_SYMMETRIC,
+            **{field: storage},
+        )
+
+
+def test_config_allows_peer_xla_reads_on_a_process_local_transport() -> None:
+    config = MokLikeConfig(
+        num_devices=4,
+        workspace_transport=MokLikeWorkspaceTransport.IN_PROCESS_PEER,
+        forward_x_storage=MokLikeForwardXStorage.XLA_PEER_EXPERIMENTAL,
+    )
+
+    assert config.forward_x_storage is MokLikeForwardXStorage.XLA_PEER_EXPERIMENTAL
 
 
 def test_config_rejects_untyped_forward_x_storage() -> None:
