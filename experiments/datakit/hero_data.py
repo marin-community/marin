@@ -6,10 +6,9 @@
 Every Datakit stage writes to a content-addressed path, so reading one back
 normally means knowing which artifact version, tokenizer pin and upstream hash
 produced it. This module holds that knowledge in one place: callers name a
-source and a stage, and get a :class:`StepSpec` pointing at the data, including
-the Harrier embeddings.
+source and a stage, and get a fixed reference to the data.
 
-Each stage accessor returns a step that points at data which already exists and
+Most accessors return a step that points at data which already exists and
 refuses to execute. Pass one to :func:`marin.execution.artifact.read_artifact`,
 or use it as a dependency of a step you do intend to run::
 
