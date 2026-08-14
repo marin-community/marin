@@ -160,6 +160,10 @@ defaults:
     runtime: kubernetes
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
+user_budget_defaults:
+  budget_limit: 400000
+  max_band: interactive
+
 scale_groups:
   cpu-genoa:
     num_vms: 1
