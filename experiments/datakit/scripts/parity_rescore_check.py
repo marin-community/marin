@@ -32,8 +32,6 @@ from io import BytesIO
 import fsspec
 import numpy as np
 import polars as pl
-import pyarrow as pa
-import pyarrow.parquet as pq
 from rigging.filesystem import open_url
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.log_setup import configure_logging
@@ -47,10 +45,31 @@ from experiments.datakit.cluster.quality.fast_transformer.score_corpus import (
 
 logger = logging.getLogger(__name__)
 
+
 SCRATCH = "s3://marin-us-east-02a/marin/user/muchanem/quality_scores_run/_parity_check"
+# The previously written dataset, keyed by tokenize leaf. The current run writes to
+# `datakit/quality/<source>_<hash>` instead, so the two must be addressed
+# differently: comparing a manifest's `output_path` against itself would pass by
+# construction and measure nothing.
+STORED_ROOT = "s3://marin-us-east-02a/marin/datakit/quality-scores"
 # Measured GPU-vs-CPU parity for this model. Not bit equality: the same graph on a
 # different device orders its reductions differently.
 TOLERANCE = 5.19e-4
+
+
+def stored_score_path(tokens_path: str, stored_root: str) -> str:
+    """Where the previous run wrote the scores for a token shard.
+
+    That dataset is keyed by the tokenize leaf: a token shard at
+    ``datakit/tokenize/<leaf>/train/<basename>`` was scored to
+    ``<stored_root>/<leaf>/<basename>``, with no ``train`` component.
+    """
+    marker = "/datakit/tokenize/"
+    index = tokens_path.find(marker)
+    if index < 0:
+        raise ValueError(f"{tokens_path!r} is not under {marker!r}")
+    leaf, basename = tokens_path[index + len(marker) :].rsplit("/", 1)
+    return f"{stored_root.rstrip('/')}/{leaf.removesuffix('/train')}/{basename}"
 
 
 def main() -> None:
@@ -58,6 +77,11 @@ def main() -> None:
     ap.add_argument("--manifest", default=DEFAULT_MANIFEST)
     ap.add_argument("--model-dir", default=DEFAULT_FOLDED_DIR)
     ap.add_argument("--scratch", default=SCRATCH)
+    ap.add_argument(
+        "--stored-root",
+        default=STORED_ROOT,
+        help="root of the previously written score dataset to compare against",
+    )
     ap.add_argument("--shards", type=int, default=4)
     ap.add_argument("--max-embed-rows", type=int, default=200_000, help="skip shards larger than this")
     args = ap.parse_args()
@@ -77,9 +101,8 @@ def main() -> None:
     ]
 
     manifest_dir = f"{scratch}/manifest"
-    table = pa.table({name: [r[name] for r in redirected] for name in redirected[0]})
     with open_url(f"{manifest_dir}/manifest.parquet", "wb") as handle:
-        pq.write_table(table, handle)
+        pl.DataFrame(redirected).write_parquet(handle)
     logger.info("staged %d shard tasks at %s", len(redirected), manifest_dir)
 
     # The production scorer, driven exactly as `node` mode drives it.
@@ -103,11 +126,15 @@ def main() -> None:
 
     deltas = []
     per_shard = []
+    missing_stored = []
     for row in redirected:
         fresh = pl.read_parquet(BytesIO(fs.cat(row["output_path"].removeprefix("s3://"))), columns=["id", "score"])
-        stored_path = next(
-            r["output_path"] for r in picked if r["shard_index"] == row["shard_index"] and r["source"] == row["source"]
-        )
+        stored_path = stored_score_path(row["tokens_path"], args.stored_root)
+        if not fs.exists(stored_path.removeprefix("s3://")):
+            # The previous run covered only the dedup-surviving subset, so a shard
+            # can legitimately have no stored counterpart. Skipped, and named.
+            missing_stored.append({"source": row["source"], "shard_index": row["shard_index"]})
+            continue
         stored = pl.read_parquet(BytesIO(fs.cat(stored_path.removeprefix("s3://"))), columns=["id", "score"])
         # Deduplicate before joining. A content-derived id repeats when a shard carries
         # the same text twice, and an unguarded inner join then fans out to more rows
@@ -141,6 +168,8 @@ def main() -> None:
         "exact_match_fraction": float((combined == 0).mean()) if len(combined) else None,
         "tolerance": TOLERANCE,
         "within_tolerance": bool(len(combined) and combined.max() <= TOLERANCE),
+        "stored_root": args.stored_root,
+        "shards_without_stored_counterpart": missing_stored,
         "per_shard": per_shard,
     }
     logger.info("PARITY result %s", json.dumps(result, indent=2))
