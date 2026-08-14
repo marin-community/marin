@@ -12,6 +12,7 @@ import argparse
 import json
 import re
 import subprocess
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -532,12 +533,23 @@ def promote_gpu_release(manifest_path: Path) -> None:
     """Re-pin gpu-release.toml from a promoted manifest and regenerate external_dependencies.py.
 
     ``manifest_path`` is a ``marin-vllm-gpu-manifest.json`` downloaded from the fork release;
-    the fork's release pipeline is the only writer of that artifact. Load the rendered pin back
-    to fail fast if the manifest does not satisfy the pin invariants.
+    the fork's release pipeline is the only writer of that artifact. The rendered pin is
+    validated on a staging file before it atomically replaces the canonical one, so a manifest
+    that renders but violates a loader invariant leaves the existing pin in place.
     """
     manifest = json.loads(manifest_path.read_text())
-    VLLM_GPU_RELEASE_CONFIG.write_text(render_gpu_release_toml(manifest))
-    load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)
+    rendered = render_gpu_release_toml(manifest)
+    directory = VLLM_GPU_RELEASE_CONFIG.parent
+    with tempfile.NamedTemporaryFile(
+        "w", dir=directory, prefix="gpu-release.", suffix=".toml.tmp", delete=False
+    ) as handle:
+        handle.write(rendered)
+        staging = Path(handle.name)
+    try:
+        load_vllm_gpu_release(staging)
+        staging.replace(VLLM_GPU_RELEASE_CONFIG)
+    finally:
+        staging.unlink(missing_ok=True)
     dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     regenerate_generated_pins(dependencies, check=False)
     print(f"re-pinned vllm GPU release {manifest['release']['tag']} from {manifest_path}")

@@ -4,6 +4,7 @@
 """Packaged external pins must match the fork descriptors they are generated from."""
 
 import importlib.util
+import json
 import tomllib
 from pathlib import Path
 
@@ -109,3 +110,24 @@ def test_render_gpu_release_toml_refuses_an_unpromoted_manifest(mutation):
     mutation(manifest)
     with pytest.raises(ValueError):
         update_external.render_gpu_release_toml(manifest)
+
+
+def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validation(tmp_path, monkeypatch):
+    # A manifest can clear the render-time status/repository gate yet still carry a wheel
+    # invariant (here a malformed SHA-256) that only the loader rejects. The existing pin
+    # must survive that failure rather than be overwritten with an invalid descriptor.
+    update_external = _update_external()
+    pin = tmp_path / "gpu-release.toml"
+    original = 'release_tag = "keep-me"\n'
+    pin.write_text(original)
+    monkeypatch.setattr(update_external, "VLLM_GPU_RELEASE_CONFIG", pin)
+
+    manifest = _promoted_manifest()
+    manifest["platforms"][0]["wheel"]["sha256"] = "not-a-sha"
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError):
+        update_external.promote_gpu_release(manifest_path)
+    assert pin.read_text() == original
+    assert not list(tmp_path.glob("gpu-release.*.toml.tmp"))
