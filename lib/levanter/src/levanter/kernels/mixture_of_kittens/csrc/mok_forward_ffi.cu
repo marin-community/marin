@@ -864,16 +864,27 @@ class RuntimeManager {
     const auto host_max_active_slots = host_max_active_slots_;
     const auto host_staging_copy_calls = host_staging_copy_calls_;
     const auto host_staging_copy_bytes = host_staging_copy_bytes_;
+    const bool arena_mode = arena_mode_;
+    const int local_rank = local_rank_;
     lock.unlock();
     try {
       int original_device = 0;
       ThrowOnCuda(cudaGetDevice(&original_device), "cudaGetDevice(read debug counters)");
+      std::fill(output, output + static_cast<int64_t>(kNumDevices) * kDebugCounterCount, 0ULL);
       for (int rank = 0; rank < kNumDevices; ++rank) {
-        const auto& rank_runtimes = runtimes_[rank];
-        ThrowOnCuda(cudaSetDevice(rank), "cudaSetDevice(read debug counters)");
+        // Under the fabric transport this process owns exactly one rank, its runtime sits at
+        // storage index 0, and the process has a single visible GPU whose ordinal is not the rank.
+        // The peers' counters live in other processes, which report their own rows. Indexing
+        // `runtimes_` by rank here walks off a one-element vector and selects an absent device.
+        if (arena_mode && rank != local_rank) {
+          continue;
+        }
+        const auto& rank_runtimes = arena_mode ? runtimes_[0] : runtimes_[rank];
+        if (!arena_mode) {
+          ThrowOnCuda(cudaSetDevice(rank), "cudaSetDevice(read debug counters)");
+        }
         ThrowOnCuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize(read debug counters)");
         auto* rank_output = output + static_cast<int64_t>(rank) * kDebugCounterCount;
-        std::fill(rank_output, rank_output + kDebugCounterCount, 0ULL);
         for (const auto& runtime : rank_runtimes) {
           if (runtime == nullptr) {
             continue;
