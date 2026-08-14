@@ -6,6 +6,7 @@ import itertools
 import logging
 import os
 import re
+import sys
 from dataclasses import dataclass
 from typing import List, Optional, Union
 
@@ -27,6 +28,13 @@ _NUM_NODES = "SLURM_STEP_NUM_NODES"
 _TASKS_PER_NODE = "SLURM_STEP_TASKS_PER_NODE"
 _VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
 _NODE_NAME = "SLURMD_NODENAME"
+
+
+def _shutdown_jax_distributed_after_clean_exit() -> None:
+    # Failed ranks must exit promptly so the Iris supervisor can terminate their peers.
+    if getattr(sys, "last_exc", None) is not None:
+        return
+    jax.distributed.shutdown()
 
 
 class LevanterSlurmCluster(clusters.SlurmCluster):
@@ -264,4 +272,4 @@ class DistributedConfig:
             return
 
         # Tracker exit hooks register later and therefore run before this shutdown barrier.
-        atexit.register(jax.distributed.shutdown)
+        atexit.register(_shutdown_jax_distributed_after_clean_exit)
