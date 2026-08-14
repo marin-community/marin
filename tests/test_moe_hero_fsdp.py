@@ -256,7 +256,12 @@ def test_delayed_forward_matches_reference(cpu_mesh, monkeypatch):
         preactivation = (jnp.einsum("td,dr->tr", x, scaled_w_down) * inverse_rms[:, None]).astype(x.dtype)
         return preactivation, jax.nn.silu(preactivation)
 
-    monkeypatch.setattr(rgn, "_forward_kernel", lambda: delayed_down)
+    def gated_output(gate_hidden, w_up, x, norm_weight, inverse_rms):
+        gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
+        normalized = (x.astype(jnp.float32) * inverse_rms[:, None] * norm_weight).astype(x.dtype)
+        return normalized * gate.astype(normalized.dtype)
+
+    monkeypatch.setattr(rgn, "_forward_kernels", lambda: (delayed_down, gated_output))
     inputs = _norm_inputs(jnp.bfloat16)
     x = reshard(inputs.x, P(_BATCH_AXES))
 

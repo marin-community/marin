@@ -320,23 +320,25 @@ def _exact_forward(x, norm_weight, w_down, w_up, eps):
     return output.reshape(x.shape), residuals
 
 
-def _forward_kernel():
-    """Return the delayed-scale RMS down-projection kernel."""
-    from levanter.grug._moe.quack_rms_cute import quack_coda_rms_down_silu  # noqa: PLC0415
+def _forward_kernels():
+    """Return the delayed-scale down-projection and fused gated-output kernels."""
+    from levanter.grug._moe.quack_rms_cute import (  # noqa: PLC0415
+        quack_coda_rms_down_silu,
+        quack_coda_rms_gate_output,
+    )
 
-    return quack_coda_rms_down_silu
+    return quack_coda_rms_down_silu, quack_coda_rms_gate_output
 
 
 def _delayed_forward(x, norm_weight, w_down, w_up, eps):
-    """Move RMS scaling into the low-rank down-projection epilogue."""
+    """Fuse both projections while delaying materialization of RMS-normalized activations."""
     x_flat = x.reshape((-1, x.shape[-1]))
     x_float = x_flat.astype(jnp.float32)
     inverse_rms = jax.lax.rsqrt(jnp.mean(jnp.square(x_float), axis=-1) + eps)
     scaled_w_down = (norm_weight[:, None] * w_down).astype(w_down.dtype)
-    gate_preactivation, gate_hidden = _forward_kernel()(x_flat, scaled_w_down, inverse_rms)
-    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
-    normalized = (x_float * inverse_rms[:, None] * norm_weight).astype(x_flat.dtype)
-    output = normalized * gate.astype(normalized.dtype)
+    down_silu, gate_output = _forward_kernels()
+    gate_preactivation, gate_hidden = down_silu(x_flat, scaled_w_down, inverse_rms)
+    output = gate_output(gate_hidden, w_up, x_flat, norm_weight, inverse_rms)
     residuals = RmsGatedNormSelectiveResiduals(
         x=x,
         norm_weight=norm_weight,
