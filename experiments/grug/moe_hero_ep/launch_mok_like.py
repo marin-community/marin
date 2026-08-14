@@ -216,6 +216,7 @@ def build_backend_comparison_run(
 ) -> ArtifactStep[MoeBackendComparisonResult]:
     """Build one arm of the weak-scaled matched MoE backend comparison."""
 
+    workspace_transport = MokLikeWorkspaceTransport(mok_like_workspace_transport)
     if backend is MoeBackend.MOK_LIKE:
         mok_like_preset = mok_like_preset or MokLikeExperimentPreset.PROMOTED_DROPLESS_V12
         preset = _MOK_LIKE_PRESETS[mok_like_preset]
@@ -235,17 +236,17 @@ def build_backend_comparison_run(
     # Under a cross-process transport that address belongs to another process and only the arena is
     # mapped across them, so the presets' choice is unavailable here. Report the substitution rather
     # than letting MokLikeConfig reject every fabric run that uses a preset.
-    if mok_like_workspace_transport.crosses_processes and forward_x_storage.reads_xla_buffers_directly:
+    if workspace_transport.crosses_processes and forward_x_storage.reads_xla_buffers_directly:
         logger.info(
             "%s cannot read peer XLA buffers; using %s for forward x",
-            mok_like_workspace_transport,
+            workspace_transport,
             MokLikeForwardXStorage.RUNTIME_STAGED,
         )
         forward_x_storage = MokLikeForwardXStorage.RUNTIME_STAGED
-    if mok_like_workspace_transport.crosses_processes and backward_peer_storage.reads_xla_buffers_directly:
+    if workspace_transport.crosses_processes and backward_peer_storage.reads_xla_buffers_directly:
         logger.info(
             "%s cannot read peer XLA buffers; using %s for backward peers",
-            mok_like_workspace_transport,
+            workspace_transport,
             MokLikeBackwardPeerStorage.RUNTIME_STAGED,
         )
         backward_peer_storage = MokLikeBackwardPeerStorage.RUNTIME_STAGED
@@ -338,7 +339,7 @@ def build_backend_comparison_run(
                 forward_x_storage=forward_x_storage,
                 backward_peer_storage=backward_peer_storage,
                 num_devices=mok_like_num_devices,
-                workspace_transport=MokLikeWorkspaceTransport(mok_like_workspace_transport),
+                workspace_transport=workspace_transport,
             ),
             expert_chunks=1,
             remat_mode="offload_moe",
@@ -534,9 +535,7 @@ def build_backend_comparison_run(
             # own process with a single visible GPU. The in-process path keeps the
             # sealed one-process-per-node layout.
             processes_per_task=(
-                GPUS_PER_NODE
-                if MokLikeWorkspaceTransport(mok_like_workspace_transport) is MokLikeWorkspaceTransport.FABRIC_SYMMETRIC
-                else 1
+                GPUS_PER_NODE if workspace_transport is MokLikeWorkspaceTransport.FABRIC_SYMMETRIC else 1
             ),
             pip_packages=_mok_like_build_packages() if backend is MoeBackend.MOK_LIKE else (),
             max_retries_failure=preset.max_retries_failure,
