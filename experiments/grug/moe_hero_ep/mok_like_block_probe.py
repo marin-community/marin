@@ -110,7 +110,7 @@ def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, scan_layers: i
                 # last structural difference between these probes and the training path.
                 def scanned(module: MoEMLP, shared_expert: DenseMLP, x: jax.Array) -> jax.Array:
                     def body(carry: jax.Array, _: None) -> tuple[jax.Array, None]:
-                        return forward(module, shared_expert, carry), None
+                        return forward(module, shared_expert, carry).astype(carry.dtype), None
 
                     final, _ = jax.lax.scan(body, x, None, length=scan_layers)
                     return final
