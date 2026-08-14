@@ -10,10 +10,29 @@ StepRunner-walkable graph. Two modes (``--mode``), same DAG:
 - ``sample``: a pre-built testbed sample registered as already-normalized
   sources (``--sample-prefix``), K=64 -- a true end-to-end run on real data.
 
-Use ``--target decontam`` to run only the shared Bloom filter, the corpus DF
-filter, each source decontamination pipeline, and the decontamination report.
-Use ``--target decon-drop`` to stop after the shared Bloom filter and corpus DF
-filter. This target is useful for a small drop-set build test.
+Decontamination has four stages that you can run separately:
+
+- ``decon-bloom`` builds the shared Bloom filter and hash index from eval v3.
+- ``decon-drop`` builds source and global corpus DF filters.
+- ``decon-mark`` marks each selected source from completed Bloom and drop-set stages.
+- ``decon-report`` reads completed marks and writes the validation report.
+
+Run preparation first. This reuses the canonical eval v3 Bloom when it is built::
+
+    python -m experiments.datakit.reference_pipeline \
+        --mode full --target decon-drop --sources all \
+        --pool-workers 60 --pool-gpu GB200
+
+After it succeeds, start the marking job. Use ``--mark-sources`` to test a
+source subset while the marks keep their full-pipeline identities::
+
+    python -m experiments.datakit.reference_pipeline \
+        --mode full --target decon-mark --sources all \
+        --mark-sources all \
+        --pool-workers 60 --pool-gpu GB200 --max-concurrent 16
+
+Use the same source selection with ``--target decon-report`` after all marks
+succeed.
 
 Per source::
 
@@ -567,6 +586,16 @@ class DatakitSteps:
 
 
 @dataclass(frozen=True)
+class DecontaminationSteps:
+    """Stages for a restartable decontamination run."""
+
+    bloom: StepSpec
+    drop_sets: StepSpec
+    marks: dict[str, StepSpec]
+    report: StepSpec
+
+
+@dataclass(frozen=True)
 class ZephyrDatakitSteps:
     """Storage-backed Datakit stages implemented as Zephyr pipelines."""
 
@@ -655,6 +684,93 @@ def zephyr_datakit_steps(
     )
 
 
+def decontamination_steps(
+    sources: dict[str, StepSpec],
+    *,
+    scale: PipelineScale = DEFAULT_SCALE,
+    zephyr_context: ZephyrContext | None = None,
+    mark_source_names: list[str] | None = None,
+) -> DecontaminationSteps:
+    """Build decontamination stages with one full-source preparation.
+
+    ``mark_source_names`` selects marks without changing the source set used to
+    build the shared drop-set step. Thus, a subset mark has the same identity as
+    its mark in the complete reference graph.
+    """
+    selected_names = set(sources if mark_source_names is None else mark_source_names)
+    unknown_names = selected_names - sources.keys()
+    if unknown_names:
+        raise ValueError(f"unknown mark sources: {sorted(unknown_names)}")
+
+    bloom = build_eval_bloom_step(
+        name="datakit/bloom/_combined_fixed",
+        eval_data_sources=[EVAL_ROOT],
+        ngram_length=NGRAM_LENGTH,
+        overlap_threshold=OVERLAP_THRESHOLD,
+        estimated_doc_count=ESTIMATED_DOC_COUNT,
+        false_positive_rate=FALSE_POSITIVE_RATE,
+        exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
+        required_eval_manifest_path=AA_MANIFEST_PATH,
+        required_eval_corpus_version=EVAL_CORPUS_VERSION,
+        required_eval_names=AA_BENCHMARK_NAMES,
+        best_effort_eval_manifest_path=LMH_MANIFEST_PATH,
+        best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
+        worker_resources=scale.pool.task,
+        max_workers=scale.pool.n_workers,
+        zephyr_context=zephyr_context,
+    )
+    drop_sets = all_source_drop_sets_step(
+        name="datakit/decon_drop/_combined",
+        sources=[
+            DropSetSource(
+                name=source_name,
+                data_path=f"{normalize_step.output_path.rstrip('/')}/outputs/main",
+                dependency=normalize_step,
+            )
+            for source_name, normalize_step in sources.items()
+        ],
+        prebuilt_bloom=bloom,
+        ngram_length=NGRAM_LENGTH,
+        sample_docs=SOURCE_DF_SAMPLE_DOCS,
+        common_frac=SOURCE_DF_COMMON_FRAC,
+        common_min_abs=SOURCE_DF_COMMON_MIN_ABS,
+        global_sample_docs=GLOBAL_DF_SAMPLE_DOCS,
+        global_common_min_abs=GLOBAL_DF_COMMON_MIN_ABS,
+        global_common_min_sources=GLOBAL_DF_COMMON_MIN_SOURCES,
+        worker_resources=scale.pool.task,
+        max_workers=scale.pool.n_workers,
+        zephyr_context=zephyr_context,
+    )
+    marks = {
+        name: decon_step(
+            name=f"datakit/decontam/{name}",
+            normalized=normalize_step,
+            prebuilt_bloom=bloom,
+            drop_sets=drop_sets,
+            drop_set_source=name,
+            ngram_length=NGRAM_LENGTH,
+            overlap_threshold=OVERLAP_THRESHOLD,
+            estimated_doc_count=ESTIMATED_DOC_COUNT,
+            false_positive_rate=FALSE_POSITIVE_RATE,
+            flagged_sample_size=FLAGGED_SAMPLE_SIZE,
+            worker_resources=scale.pool.task,
+            zephyr_context=zephyr_context,
+        )
+        for name, normalize_step in sources.items()
+        if name in selected_names
+    }
+    report = StepSpec(
+        name="datakit/report/decontam",
+        deps=list(marks.values()),
+        hash_attrs={"v": 1},
+        fn=lambda output_path: decontam_report(
+            output_path,
+            {name: read_artifact(step.output_path, DeconAttributes) for name, step in marks.items()},
+        ),
+    )
+    return DecontaminationSteps(bloom=bloom, drop_sets=drop_sets, marks=marks, report=report)
+
+
 def reference_datakit_steps(
     sources: dict[str, StepSpec],
     *,
@@ -713,51 +829,7 @@ def reference_datakit_steps(
         domain_centroids, cluster, centroids_version
     )
     quality_model_hash = _resolve_quality_model_version(quality_model, quality_model_version)
-
-    # One combined decontam bloom (no merge step); every per-source decon
-    # consumes it directly. Same name/params as the testbed decon arm, so runs
-    # sharing a prefix share the built bloom.
-    decon_bloom_step = build_eval_bloom_step(
-        name="datakit/bloom/_combined_fixed",
-        eval_data_sources=[EVAL_ROOT],
-        ngram_length=NGRAM_LENGTH,
-        overlap_threshold=OVERLAP_THRESHOLD,
-        estimated_doc_count=ESTIMATED_DOC_COUNT,
-        false_positive_rate=FALSE_POSITIVE_RATE,
-        exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
-        required_eval_manifest_path=AA_MANIFEST_PATH,
-        required_eval_corpus_version=EVAL_CORPUS_VERSION,
-        required_eval_names=AA_BENCHMARK_NAMES,
-        best_effort_eval_manifest_path=LMH_MANIFEST_PATH,
-        best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
-        worker_resources=scale.pool.task,
-        max_workers=scale.pool.n_workers,
-        zephyr_context=zephyr_context,
-    )
-    # Count eval-ngram document frequency across normalized sources before
-    # marking. Each decon consumes its source-local set and the global set.
-    decon_drop_sets = all_source_drop_sets_step(
-        name="datakit/decon_drop/_combined",
-        sources=[
-            DropSetSource(
-                name=source_name,
-                data_path=f"{normalize_step.output_path.rstrip('/')}/outputs/main",
-                dependency=normalize_step,
-            )
-            for source_name, normalize_step in sources.items()
-        ],
-        prebuilt_bloom=decon_bloom_step,
-        ngram_length=NGRAM_LENGTH,
-        sample_docs=SOURCE_DF_SAMPLE_DOCS,
-        common_frac=SOURCE_DF_COMMON_FRAC,
-        common_min_abs=SOURCE_DF_COMMON_MIN_ABS,
-        global_sample_docs=GLOBAL_DF_SAMPLE_DOCS,
-        global_common_min_abs=GLOBAL_DF_COMMON_MIN_ABS,
-        global_common_min_sources=GLOBAL_DF_COMMON_MIN_SOURCES,
-        worker_resources=scale.pool.task,
-        max_workers=scale.pool.n_workers,
-        zephyr_context=zephyr_context,
-    )
+    decontamination = decontamination_steps(sources, scale=scale, zephyr_context=zephyr_context)
 
     # ---- Per-source steps ------------------------------------------------------
     per_source: dict[str, dict[str, StepSpec]] = {}
@@ -803,20 +875,7 @@ def reference_datakit_steps(
             ),
         )
 
-        decontam = decon_step(
-            name=f"datakit/decontam/{name}",
-            normalized=normalize_step,
-            prebuilt_bloom=decon_bloom_step,
-            drop_sets=decon_drop_sets,
-            drop_set_source=name,
-            ngram_length=NGRAM_LENGTH,
-            overlap_threshold=OVERLAP_THRESHOLD,
-            estimated_doc_count=ESTIMATED_DOC_COUNT,
-            false_positive_rate=FALSE_POSITIVE_RATE,
-            flagged_sample_size=FLAGGED_SAMPLE_SIZE,
-            worker_resources=scale.pool.task,
-            zephyr_context=zephyr_context,
-        )
+        decontam = decontamination.marks[name]
 
         minhash = zephyr_steps.minhash[name]
 
@@ -909,7 +968,6 @@ def reference_datakit_steps(
     tokenize_paths = {n: s["tokenize"].output_path for n, s in per_source.items()}
     quality_paths = {n: s["quality"].output_path for n, s in per_source.items()}
     assign_paths = {n: s["assign"].output_path for n, s in per_source.items()}
-    decontam_paths = {n: s["decontam"].output_path for n, s in per_source.items()}
     reports = [
         StepSpec(
             name="datakit/report/normalize",
@@ -941,12 +999,7 @@ def reference_datakit_steps(
                 op, {n: read_artifact(p, AssignmentAttrData) for n, p in assign_paths.items()}, cluster.cluster_view
             ),
         ),
-        StepSpec(
-            name="datakit/report/decontam",
-            deps=[s["decontam"] for s in per_source.values()],
-            hash_attrs={"v": 1},
-            fn=lambda op: decontam_report(op, {n: read_artifact(p, DeconAttributes) for n, p in decontam_paths.items()}),
-        ),
+        decontamination.report,
         StepSpec(
             name="datakit/report/dedup",
             deps=[dedup, verified_dedup],
@@ -965,7 +1018,7 @@ def reference_datakit_steps(
         ),
     ]
 
-    all_steps: list[StepSpec] = [exact_dedup, decon_bloom_step, decon_drop_sets]
+    all_steps: list[StepSpec] = [exact_dedup, decontamination.bloom, decontamination.drop_sets]
     if isinstance(domain_centroids, StepSpec):
         all_steps.append(domain_centroids)
     for s in per_source.values():
@@ -1095,15 +1148,25 @@ def _require_normalized_sources(sources: dict[str, StepSpec]) -> None:
     raise RuntimeError(f"missing normalized artifacts for {len(missing)} sources: {shown}{remainder}")
 
 
-def _target_steps(result: DatakitSteps, target: str) -> list[StepSpec]:
-    """Select terminal steps for one run target."""
-    if target == "all":
-        return result.all_steps
-    if target == "decontam":
-        return [next(step for step in result.all_steps if step.name == "datakit/report/decontam")]
+def _decontamination_target_steps(result: DecontaminationSteps, target: str) -> list[StepSpec]:
+    """Select terminal steps for one decontamination stage."""
+    if target == "decon-bloom":
+        return [result.bloom]
     if target == "decon-drop":
-        return [next(step for step in result.all_steps if step.name == "datakit/decon_drop/_combined")]
-    raise ValueError(f"unknown run target: {target}")
+        return [result.drop_sets]
+    if target == "decon-mark":
+        missing = [step.name for step in (result.bloom, result.drop_sets) if not step_is_built(step)]
+        if missing:
+            raise RuntimeError(f"decontamination preparation is not complete: {', '.join(missing)}")
+        return list(result.marks.values())
+    if target == "decon-report":
+        missing = [name for name, step in result.marks.items() if not step_is_built(step)]
+        if missing:
+            shown = ", ".join(missing[:20])
+            remainder = f" and {len(missing) - 20} more" if len(missing) > 20 else ""
+            raise RuntimeError(f"missing decontamination marks for {len(missing)} sources: {shown}{remainder}")
+        return [result.report]
+    raise ValueError(f"unknown decontamination target: {target}")
 
 
 def main() -> None:
@@ -1116,11 +1179,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--target",
-        choices=("all", "decontam", "decon-drop"),
+        choices=("all", "decon-bloom", "decon-drop", "decon-mark", "decon-report"),
         default="all",
         help=(
-            "all: complete reference DAG. decontam: decontamination inputs, outputs, and report. "
-            "decon-drop: shared Bloom filter and corpus DF filter only."
+            "all: complete reference DAG. decon-bloom: eval Bloom and index. "
+            "decon-drop: source and global corpus DF filters. decon-mark: per-source marks from completed "
+            "preparation stages. decon-report: report from completed marks."
         ),
     )
     parser.add_argument("--sample-prefix", default=SAMPLE_PREFIX, help="testbed sample root (--mode sample)")
@@ -1143,16 +1207,20 @@ def main() -> None:
     )
     parser.add_argument(
         "--quality-model-version",
-        required=True,
         help=(
-            "Stable identity tag for --quality-model (e.g. 'pooled-junkgate2'). Hashed in "
-            "place of the region-specific model dir for cross-region reproducibility."
+            "Stable identity tag for --quality-model (e.g. 'pooled-junkgate2'). Required for --target all. "
+            "Hashed in place of the region-specific model dir for cross-region reproducibility."
         ),
     )
     parser.add_argument(
         "--sources",
         default=None,
         help="comma-separated source names, or 'all' for every source. Omit: full=all, sample=curated subset.",
+    )
+    parser.add_argument(
+        "--mark-sources",
+        default=None,
+        help="comma-separated sources to mark from the full --sources preparation, or 'all'; decon-mark/report only",
     )
     parser.add_argument("--pool-workers", type=int, default=None, help="Zephyr worker count (override scale)")
     parser.add_argument("--pool-cpu", type=float, default=None, help="per-worker CPUs (override scale)")
@@ -1172,10 +1240,19 @@ def main() -> None:
 
     configure_logging(logging.INFO)
 
+    if args.target == "all" and not args.quality_model_version:
+        parser.error("--quality-model-version is required with --target all")
+    if args.mark_sources is not None and args.target not in ("decon-mark", "decon-report"):
+        parser.error("--mark-sources can only be used with --target decon-mark or decon-report")
+
     scale = _apply_pool_overrides(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
     sources = _select_pipeline_sources(args)
-    if args.target in ("decontam", "decon-drop"):
+    if args.target in ("decon-drop", "decon-mark", "decon-report"):
         _require_normalized_sources(sources)
+
+    mark_source_names = None
+    if args.mark_sources not in (None, "all"):
+        mark_source_names = [name.strip() for name in args.mark_sources.split(",") if name.strip()]
 
     with ZephyrContext(
         name="datakit-reference",
@@ -1183,16 +1260,26 @@ def main() -> None:
         max_workers=scale.pool.n_workers,
         stage_runner_factory=SubprocessRunner,
     ) as zephyr_context:
-        result = reference_datakit_steps(
-            sources,
-            quality_model=args.quality_model,
-            quality_model_version=args.quality_model_version,
-            domain_centroids=args.domain_centroids,
-            centroids_version=args.domain_centroids_version,
-            scale=scale,
-            zephyr_context=zephyr_context,
-        )
-        StepRunner().run(_target_steps(result, args.target), max_concurrent=args.max_concurrent)
+        if args.target == "all":
+            result = reference_datakit_steps(
+                sources,
+                quality_model=args.quality_model,
+                quality_model_version=args.quality_model_version,
+                domain_centroids=args.domain_centroids,
+                centroids_version=args.domain_centroids_version,
+                scale=scale,
+                zephyr_context=zephyr_context,
+            )
+            target_steps = result.all_steps
+        else:
+            decontamination = decontamination_steps(
+                sources,
+                scale=scale,
+                zephyr_context=zephyr_context,
+                mark_source_names=mark_source_names,
+            )
+            target_steps = _decontamination_target_steps(decontamination, args.target)
+        StepRunner().run(target_steps, max_concurrent=args.max_concurrent)
 
 
 if __name__ == "__main__":
