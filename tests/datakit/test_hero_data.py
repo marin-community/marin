@@ -17,7 +17,7 @@ import pytest
 
 from experiments.datakit import hero_data
 
-PREFIX = hero_data.MANIFEST_PREFIX
+COREWEAVE_DATAKIT_PREFIX = "s3://marin-us-east-02a/marin"
 MANIFEST = hero_data.MANIFEST_PATH
 
 
@@ -25,11 +25,13 @@ MANIFEST = hero_data.MANIFEST_PATH
 def _marin_prefix(monkeypatch):
     # Hero data has one CoreWeave location. Pin it instead of inheriting the test
     # process's prefix because some step hashes include resolved paths.
-    monkeypatch.setenv("MARIN_PREFIX", PREFIX)
+    monkeypatch.setenv("MARIN_PREFIX", COREWEAVE_DATAKIT_PREFIX)
 
 
 def _relative_paths() -> dict[str, str]:
-    return {key: path.removeprefix(f"{PREFIX}/") for key, path in hero_data.all_paths().items()}
+    return {
+        key: path.removeprefix(f"{COREWEAVE_DATAKIT_PREFIX}/") for key, path in hero_data.all_paths().items()
+    }
 
 
 def test_paths_match_the_checked_in_manifest():
