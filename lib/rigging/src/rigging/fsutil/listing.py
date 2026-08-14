@@ -20,7 +20,6 @@ from typing import Any
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
-from rigging.filesystem.s3_compat import DEFAULT_S3_CONNECTION_POOL_SIZE
 from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.compression import compression_for
 
@@ -35,8 +34,8 @@ DIRECTORY_TYPE = "directory"
 # connection because someone pressed enter on it. `fsutil cp` fetches whole objects.
 MAX_PREVIEW_BYTES = 10 * 1024 * 1024
 
-# Bucket listings are network-bound; keep enough workers to fill the S3 pool.
-DEFAULT_LISTING_WORKERS = DEFAULT_S3_CONNECTION_POOL_SIZE
+# Bucket listings are network-bound.
+DEFAULT_LISTING_WORKERS = 128
 
 
 @dataclasses.dataclass(frozen=True)
@@ -219,7 +218,7 @@ def _read_preview(fs, path: str, *, compression: str | None, full_size: int | No
 
 def total_size(url: str) -> tuple[int, int]:
     """Return ``(bytes, object_count)`` under *url*."""
-    fs, path = filesystem_for(url)
+    fs, path = filesystem_for(url, s3_max_pool_connections=DEFAULT_LISTING_WORKERS)
     info = fs.info(path)
     if info["type"] != DIRECTORY_TYPE:
         return info.get("size", 0) or 0, 1
@@ -235,7 +234,7 @@ def total_size(url: str) -> tuple[int, int]:
 
 def metadata_listing_pages(url: str, *, workers: int = DEFAULT_LISTING_WORKERS) -> Iterator[ListingPage]:
     """Yield independent metadata pages covering every object below *url*."""
-    fs, path = filesystem_for(url)
+    fs, path = filesystem_for(url, s3_max_pool_connections=workers)
     yield from _metadata_listing_pages(fs, path, workers)
 
 

@@ -39,7 +39,7 @@ class MissingCredentials(Exception):
     """A bucket's backend has no usable credentials in the environment."""
 
 
-def filesystem_for(url: str) -> tuple[Any, str]:
+def filesystem_for(url: str, *, s3_max_pool_connections: int | None = None) -> tuple[Any, str]:
     """Return ``(fs, path)`` for *url*, routed by the bucket's declared backend.
 
     An ``s3://`` URL naming a bucket declared as R2 or CoreWeave gets a dedicated
@@ -48,6 +48,7 @@ def filesystem_for(url: str) -> tuple[Any, str]:
     kwargs-keyed cache. Everything else — GCS, local paths, ``mirror://``, and
     ``s3://`` buckets no config declares — goes through the guarded
     :func:`rigging.filesystem.url_to_fs`, which reads the ambient environment.
+    ``s3_max_pool_connections`` overrides the connection cap for routed S3 backends.
 
     Raises:
         MissingCredentials: if the routed backend has no credentials configured.
@@ -60,7 +61,7 @@ def filesystem_for(url: str) -> tuple[Any, str]:
     if spec is None or spec.store not in (StoreType.R2, StoreType.COREWEAVE):
         return url_to_fs(url)
 
-    return _s3_filesystem(spec), _s3_path(parsed)
+    return _s3_filesystem(spec, s3_max_pool_connections), _s3_path(parsed)
 
 
 def _s3_path(parsed: StoragePath) -> str:
@@ -68,7 +69,7 @@ def _s3_path(parsed: StoragePath) -> str:
     return f"{parsed.bucket}/{parsed.key}" if parsed.key else parsed.bucket
 
 
-def _s3_filesystem(spec: BucketSpec) -> s3fs.S3FileSystem:
+def _s3_filesystem(spec: BucketSpec, max_pool_connections: int | None) -> s3fs.S3FileSystem:
     """Build (or reuse) the S3 filesystem serving *spec*'s backend.
 
     The signing region is the bucket's own for CoreWeave, whose endpoint routes on it, and
@@ -81,6 +82,9 @@ def _s3_filesystem(spec: BucketSpec) -> s3fs.S3FileSystem:
 
     endpoint = s3_endpoint(spec.store)
     conf = fsspec_s3_conf(endpoint)
+    config_kwargs = {**conf["config_kwargs"], **s3_python_config_kwargs()}
+    if max_pool_connections is not None:
+        config_kwargs["max_pool_connections"] = max_pool_connections
     return s3fs.S3FileSystem(
         key=key,
         secret=secret,
@@ -88,5 +92,5 @@ def _s3_filesystem(spec: BucketSpec) -> s3fs.S3FileSystem:
         client_kwargs={"region_name": spec.signing_region or "auto"},
         # ``fsspec_s3_conf`` is the JSON-safe env shape, so it carries the
         # endpoint's addressing style but not the whole-request deadline.
-        config_kwargs={**conf["config_kwargs"], **s3_python_config_kwargs()},
+        config_kwargs=config_kwargs,
     )
