@@ -11,7 +11,10 @@ name two different backends. Bare ``fsutil`` opens the interactive browser.
 import logging
 import shutil
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime
+from pathlib import Path
 
 import click
 from fsspec import AbstractFileSystem
@@ -34,6 +37,14 @@ from rigging.fsutil.listing import (
 from rigging.fsutil.parquet import PREVIEW_ROWS, MissingParquetReader, is_parquet, parquet_lines
 from rigging.fsutil.render import aligned_lines, file_lines, format_size, format_time, table_lines
 from rigging.fsutil.tui import run as run_browser
+from rigging.fsutil.usage import (
+    DEFAULT_PREFIX_DEPTH,
+    DEFAULT_USAGE_WORKERS,
+    ScanProgress,
+    parse_byte_size,
+    render_usage_report,
+    scan_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +54,10 @@ _COPY_CHUNK = 8 * 1024 * 1024
 _RM_WORKERS = 8
 _S3_DELETE_BATCH = 1000
 _GCS_DELETE_BATCH = 20
+_INTERACTIVE_PROGRESS_INTERVAL = 0.2
+_LOG_PROGRESS_INTERVAL = 10.0
+_ACTIVITY_BAR_WIDTH = 8
+_MAX_PROGRESS_PATH_LENGTH = 60
 
 
 @click.group(invoke_without_command=True)
@@ -131,6 +146,118 @@ def du(url: str) -> None:
     """Total the bytes and objects under a prefix."""
     size, count = total_size(url)
     click.echo(f"{format_size(size)}  ({size} bytes, {count} objects)  {url}")
+
+
+@cli.command()
+@click.argument("url")
+@click.option(
+    "--prefix-threshold",
+    default="1TiB",
+    show_default=True,
+    help="Descend into prefixes at or above this size; accepts values such as 1TB or 512GiB.",
+)
+@click.option(
+    "--prefix-depth",
+    default=DEFAULT_PREFIX_DEPTH,
+    show_default=True,
+    type=click.IntRange(min=1, max=20),
+    help="Maximum path components retained for grouping.",
+)
+@click.option(
+    "--workers",
+    default=DEFAULT_USAGE_WORKERS,
+    show_default=True,
+    type=click.IntRange(min=1, max=DEFAULT_USAGE_WORKERS),
+)
+@click.option("-o", "--output", type=click.Path(dir_okay=False, path_type=Path), help="Write Markdown here.")
+def usage(url: str, prefix_threshold: str, prefix_depth: int, workers: int, output: Path | None) -> None:
+    """Scan URL metadata and rank old, large prefixes for cleanup."""
+    try:
+        threshold_bytes = parse_byte_size(prefix_threshold)
+    except ValueError as error:
+        raise click.BadParameter(str(error), param_hint="--prefix-threshold") from error
+
+    click.echo(f"Scanning object metadata under {url} ...", err=True)
+    last_update = time.monotonic()
+    rendered_width = 0
+    latest_progress: ScanProgress | None = None
+    interactive = click.get_text_stream("stderr").isatty()
+
+    def show_progress(progress: ScanProgress) -> None:
+        nonlocal last_update, latest_progress, rendered_width
+        latest_progress = progress
+        now = time.monotonic()
+        interval = _INTERACTIVE_PROGRESS_INTERVAL if interactive else _LOG_PROGRESS_INTERVAL
+        complete = progress.prefixes_completed == progress.prefixes_discovered
+        if not complete and now - last_update < interval:
+            return
+        line = _scan_progress_line(progress)
+        if interactive:
+            rendered_width = max(rendered_width, len(line))
+            click.echo(f"\r{line.ljust(rendered_width)}", nl=False, err=True)
+        else:
+            click.echo(line, err=True)
+        last_update = now
+
+    try:
+        scan = scan_usage(url, workers=workers, prefix_depth=prefix_depth, progress=show_progress)
+    except MissingCredentials as error:
+        raise click.ClickException(str(error)) from error
+    if latest_progress is not None:
+        line = _finished_scan_line(latest_progress)
+        if interactive:
+            click.echo(f"\r{line.ljust(max(rendered_width, len(line)))}", err=True)
+        else:
+            click.echo(line, err=True)
+    report = render_usage_report(scan, threshold_bytes=threshold_bytes, generated_at=datetime.now(UTC))
+    if output is None:
+        click.echo(report)
+        return
+    output.write_text(report)
+    click.echo(f"Wrote {output} ({scan.root.total.object_count:,} objects)", err=True)
+
+
+def _scan_progress_line(progress: ScanProgress) -> str:
+    object_rate = progress.stats.object_count / progress.elapsed_seconds if progress.elapsed_seconds else 0.0
+    byte_rate = progress.stats.size_bytes / progress.elapsed_seconds if progress.elapsed_seconds else 0.0
+    filled = max(1, round(_ACTIVITY_BAR_WIDTH * progress.workers_active / progress.workers_total))
+    activity = f"[{'█' * filled}{'░' * (_ACTIVITY_BAR_WIDTH - filled)}]"
+    remaining = max(0, progress.prefixes_discovered - progress.prefixes_completed)
+    return (
+        f"{activity} {progress.workers_active}/{progress.workers_total} threads | {remaining:,} open | "
+        f"{progress.listing_pages:,} pages | {progress.stats.object_count:,} objects | "
+        f"{format_size(progress.stats.size_bytes)} | {object_rate:,.0f} obj/s | "
+        f"{format_size(round(byte_rate))}/s | scanning {_cropped_progress_path(progress.current_prefix)}"
+    )
+
+
+def _cropped_progress_path(path: str) -> str:
+    if len(path) <= _MAX_PROGRESS_PATH_LENGTH:
+        return path
+    root, separator, tail = path.partition("/")
+    head = f"{root}{separator}"
+    suffix_length = _MAX_PROGRESS_PATH_LENGTH - len(head) - 1
+    if suffix_length <= 0:
+        return f"…{path[-(_MAX_PROGRESS_PATH_LENGTH - 1) :]}"
+    return f"{head}…{tail[-suffix_length:]}"
+
+
+def _finished_scan_line(progress: ScanProgress) -> str:
+    return (
+        f"Scan complete | {progress.listing_pages:,} pages | {progress.stats.object_count:,} objects | "
+        f"{format_size(progress.stats.size_bytes)} | {_format_duration(progress.elapsed_seconds)}"
+    )
+
+
+def _format_duration(seconds: float) -> str:
+    rounded = max(0, round(seconds))
+    hours, remainder = divmod(rounded, 3600)
+    minutes, remaining_seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {remaining_seconds}s"
+    return f"{remaining_seconds}s"
 
 
 @cli.command()

@@ -9,6 +9,7 @@ import gzip
 import json
 import lzma
 import threading
+from datetime import UTC, datetime
 
 import pytest
 import rigging.fsutil.cli as cli_module
@@ -17,6 +18,14 @@ from rigging.fsutil import listing
 from rigging.fsutil.cli import cli
 from rigging.fsutil.listing import MAX_PREVIEW_BYTES, read_decompressed_preview
 from rigging.fsutil.render import file_lines
+from rigging.fsutil.usage import (
+    PrefixGroup,
+    UsageStats,
+    parse_byte_size,
+    ranked_groups,
+    scan_usage,
+    threshold_prefix_groups,
+)
 
 
 @pytest.fixture
@@ -232,8 +241,14 @@ def test_ls_glob_renders_matches_with_listing_metadata(monkeypatch):
 
 def test_du_scans_directories_in_parallel_using_listing_metadata(monkeypatch):
     class ParallelListingFileSystem:
+        protocol = "gcs"
+
         def __init__(self):
             self.child_listings_started = threading.Barrier(2)
+
+        def info(self, path):
+            assert path == "bucket/root"
+            return {"name": path, "size": 0, "type": "directory"}
 
         def ls(self, path, *, detail):
             assert detail is True
@@ -259,4 +274,161 @@ def test_du_scans_directories_in_parallel_using_listing_metadata(monkeypatch):
 
     monkeypatch.setattr(listing, "filesystem_for", lambda _url: (ParallelListingFileSystem(), "bucket/root"))
 
-    assert listing.total_size("s3://bucket/root") == (36, 4)
+    assert listing.total_size("gs://bucket/root") == (36, 4)
+
+
+def test_usage_scan_descends_to_exact_prefixes_below_threshold_and_orders_by_size(monkeypatch):
+    old = datetime(2020, 1, 1, tzinfo=UTC)
+    recent = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def file(name, size, modified):
+        return {"name": name, "size": size, "type": "file", "LastModified": modified}
+
+    def directory(name):
+        return {"name": name, "size": 0, "type": "directory"}
+
+    listings = {
+        "bucket": [directory("bucket/scratch"), directory("bucket/users"), file("bucket/root.bin", 10, old)],
+        "bucket/scratch": [file("bucket/scratch/cache", 50, old)],
+        "bucket/users": [directory("bucket/users/iris")],
+        "bucket/users/iris": [
+            directory("bucket/users/iris/a"),
+            directory("bucket/users/iris/b"),
+            directory("bucket/users/iris/c"),
+            directory("bucket/users/iris/d"),
+        ],
+        "bucket/users/iris/a": [file("bucket/users/iris/a/data", 60, old)],
+        "bucket/users/iris/b": [file("bucket/users/iris/b/data", 50, old)],
+        "bucket/users/iris/c": [file("bucket/users/iris/c/data", 70, recent)],
+        "bucket/users/iris/d": [file("bucket/users/iris/d/data", 30, recent)],
+    }
+
+    class UsageFileSystem:
+        def ls(self, path, *, detail):
+            assert detail is True
+            return listings[path]
+
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (UsageFileSystem(), "bucket"))
+
+    scan = scan_usage("s3://bucket", workers=4)
+    groups = threshold_prefix_groups(scan, threshold_bytes=100)
+
+    assert scan.root.total == UsageStats(size_bytes=270, object_count=6, last_modified=recent)
+    assert [(group.label, group.stats.size_bytes) for group in groups] == [
+        ("users/iris/c/", 70),
+        ("users/iris/a/", 60),
+        ("scratch/", 50),
+        ("users/iris/b/", 50),
+        ("users/iris/d/", 30),
+        ("[root objects]", 10),
+    ]
+    assert sum(group.stats.size_bytes for group in groups) == scan.root.total.size_bytes
+
+
+def test_usage_scan_splits_large_s3_prefixes_to_bounded_depth(monkeypatch):
+    modified = datetime(2025, 1, 1, tzinfo=UTC)
+
+    class PagedS3FileSystem:
+        protocol = "s3"
+
+        def __init__(self):
+            self.config_kwargs = {}
+            self.requested_prefixes = []
+
+        def split_path(self, path):
+            bucket, _, key = path.partition("/")
+            return bucket, key, None
+
+        def info(self, path):
+            assert path == "bucket"
+            return {"name": path, "size": 0, "type": "directory"}
+
+        def call_s3(self, method, **kwargs):
+            assert method == "list_objects_v2"
+            prefix = kwargs["Prefix"]
+            token = kwargs.get("ContinuationToken")
+            delimiter = kwargs["Delimiter"]
+            self.requested_prefixes.append((prefix, delimiter, token))
+            if prefix == "" and delimiter == "":
+                return {
+                    "Contents": [{"Key": "ignored-probe", "Size": 999, "LastModified": modified}],
+                    "NextContinuationToken": "split-root",
+                }
+            if prefix == "" and token is None:
+                return {
+                    "CommonPrefixes": [{"Prefix": "users/"}],
+                    "Contents": [{"Key": "root-a", "Size": 10, "LastModified": modified}],
+                    "NextContinuationToken": "root-page-2",
+                }
+            if prefix == "" and token == "root-page-2":
+                return {
+                    "CommonPrefixes": [{"Prefix": "scratch//"}],
+                    "Contents": [{"Key": "root-b", "Size": 20, "LastModified": modified}],
+                }
+            if prefix == "users/" and delimiter == "":
+                return {
+                    "Contents": [{"Key": "users/ignored-probe", "Size": 999, "LastModified": modified}],
+                    "NextContinuationToken": "split-users",
+                }
+            if prefix == "users/":
+                return {"CommonPrefixes": [{"Prefix": "users/iris/"}]}
+            if prefix == "users/iris/" and delimiter == "":
+                return {
+                    "Contents": [{"Key": "users/iris/ignored-probe", "Size": 999, "LastModified": modified}],
+                    "NextContinuationToken": "split-iris",
+                }
+            if prefix == "users/iris/":
+                return {"CommonPrefixes": [{"Prefix": "users/iris/archive/"}]}
+            if prefix == "users/iris/archive/" and token is None:
+                return {
+                    "Contents": [{"Key": "users/iris/archive/a", "Size": 10, "LastModified": modified}],
+                    "NextContinuationToken": "archive-page-2",
+                }
+            if prefix == "users/iris/archive/":
+                return {"Contents": [{"Key": "users/iris/archive/b", "Size": 20, "LastModified": modified}]}
+            assert prefix == "scratch//"
+            return {"Contents": [{"Key": "scratch//data", "Size": 40, "LastModified": modified}]}
+
+    fs = PagedS3FileSystem()
+    monkeypatch.setattr(listing, "filesystem_for", lambda _url: (fs, "bucket"))
+
+    progress = []
+    scan = scan_usage("s3://bucket", workers=3, progress=progress.append)
+
+    assert scan.root.total == UsageStats(size_bytes=100, object_count=5, last_modified=modified)
+    assert {child.prefix: child.total.size_bytes for child in scan.root.children} == {
+        "scratch/": 40,
+        "users/": 30,
+    }
+    assert {prefix for prefix, _, _ in fs.requested_prefixes} == {
+        "",
+        "scratch//",
+        "users/",
+        "users/iris/",
+        "users/iris/archive/",
+    }
+    assert all(delimiter == "" for prefix, delimiter, _ in fs.requested_prefixes if prefix == "users/iris/archive/")
+    assert progress[-1].listing_pages == 10
+    assert progress[-1].prefixes_completed == progress[-1].prefixes_discovered == 5
+    assert listing.total_size("s3://bucket") == (100, 5)
+
+
+def test_usage_ranking_combines_reclaimable_size_with_inactivity():
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    recent_huge = PrefixGroup(
+        label="recent/",
+        stats=UsageStats(size_bytes=2 * 1024**4, object_count=1, last_modified=datetime(2025, 12, 1, tzinfo=UTC)),
+    )
+    old_large = PrefixGroup(
+        label="old/",
+        stats=UsageStats(size_bytes=1024**4, object_count=1, last_modified=datetime(2023, 1, 1, tzinfo=UTC)),
+    )
+
+    assert ranked_groups([recent_huge, old_large], now) == [old_large, recent_huge]
+
+
+def test_usage_size_parser_accepts_decimal_and_binary_units():
+    assert parse_byte_size("1TB") == 1000**4
+    assert parse_byte_size("1TiB") == 1024**4
+    with pytest.raises(ValueError):
+        parse_byte_size("1iB")

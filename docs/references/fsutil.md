@@ -11,6 +11,7 @@ uv run fsutil ls -l gs://marin-us-central2/scratch
 uv run fsutil ls 's3://marin-us-east-02a/*/config.json'
 uv run fsutil cat s3://marin-us-east-02a/iris/my-job/config.json
 uv run fsutil du s3://marin-us-east-02a/iris/my-job
+uv run fsutil usage s3://marin-us-east-02a -o usage-report.md
 uv run fsutil cp -r s3://marin-us-east-02a/iris/my-job/logs /tmp/logs
 uv run fsutil rm -R s3://marin-us-east-02a/tmp/expired-prefix
 ```
@@ -52,14 +53,33 @@ that touch its buckets; the rest keep working.
 | `head URL [-n N]` | Print the first N lines, or the first N rows of a parquet file |
 | `stat URL` | The object's metadata as the backend reports it |
 | `du URL` | Total bytes and object count beneath a prefix |
+| `usage URL [-o REPORT.md]` | Metadata-only prefix breakdown ranked by size and time since the newest write |
 | `find PATTERN` | Paths matching a glob, e.g. `gs://marin-us-central2/x/**/*.json` |
 | `cp SRC DST [-r]` | Copy between any two locations, including across backends |
 | `rm URL [-r]` | Remove an object. `-r` or `-R` recursively removes a prefix; remote prefixes show object-count progress |
 | `browse [URL]` | The interactive browser |
 
-`du` scans prefixes with up to 32 concurrent metadata-bearing listings. Recursive `rm`
-uses S3's 1,000-key bulk delete and GCS's 20-key batch delete, with up to eight batches
-in flight.
+`du` scans prefixes with up to 128 concurrent metadata-bearing listings. S3 prefixes
+that exceed one listing page are split at the next `/` through three directory levels,
+then paginated flat. Recursive `rm` uses S3's 1,000-key bulk delete and GCS's 20-key
+batch delete, with up to eight batches in flight.
+
+`usage` uses the same parallel metadata-page scanner as `du` and writes a Markdown
+report. Starting at the bucket root, it descends into every prefix at or above the
+1 TiB threshold and shows the resulting exact prefixes in descending size order.
+`--prefix-threshold` changes that threshold and accepts values such as `1TB`, `1TiB`,
+or `512GiB`. `--prefix-depth` controls how many path components the in-memory scan
+retains, with a default of three.
+
+An interactive terminal shows active listing threads, a cropped prefix currently
+returning pages, remaining open prefixes, listing pages, objects, logical bytes
+cataloged, and object and byte rates. Captured logs get the same counters every ten
+seconds without terminal control characters.
+
+Deletion candidates are ranked by stale TiB-years: prefix size in TiB multiplied by the
+years since its newest object write. This favors prefixes that are both large and
+inactive. `[objects]` labels cover objects written directly under the preceding prefix,
+and `[root objects]` covers the bucket root. All other rows are concrete prefixes.
 
 `cat`, `head`, and the browser decompress `.gz`, `.bz2`, `.xz`, and `.lzma` files by
 suffix. A `data.json.gz` preview uses the JSON table view. `cat --raw` writes the compressed
