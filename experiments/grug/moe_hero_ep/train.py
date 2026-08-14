@@ -85,10 +85,11 @@ def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
     overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    # autoresearch: command buffers re-enabled (XLA default set) to measure the CUDA
+    # graph win at the rung; #5675 is the hang this previously guarded against.
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
         *_XLA_FLAG_DEFAULTS,
-        XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
