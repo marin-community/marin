@@ -1443,3 +1443,13 @@ author: Rafal Wojdyla
 - Output prefix: `s3://marin-us-east-02a/marin/datakit/embed/harrier-all/`.
 - Issue update: None. Include this result with the final backfill completion update.
 - Next action: Continue the final East backfill sources, then verify all 292 source artifacts and 166,775 shard names.
+
+### 2026-08-14 04:47 UTC - Second partial production merge started in RNO
+
+- Selection: Chose 128 additional completed sources after excluding all 128 outputs from the first merge. The final preflight matched normalized, canonical Harrier, and fuzzy-duplicate shard names for 24,208 shards. The largest selected source has 1,787 shards.
+- Exclusion: The selector and launch guard exclude `common-crawl-focus-2026-22`. This source is not part of the job.
+- Job: `/rav/harrier-merge-next-128-complete-no-focus-20260814-production-rno-v1` targets `cw-rno2a` at production priority.
+- Pool: The job requests one shared Zephyr pool with 256 CPU workers and up to eight active source pipelines.
+- Output prefix: `s3://marin-us-east-02a/marin/datakit/embed/harrier-all/`.
+- Issue update: None. Wait for a completed and verified result.
+- Next action: Monitor the second merge and the East backfill. Verify the second merge outputs after its root succeeds.
