@@ -156,6 +156,11 @@ def _error_metrics(
     help="peer-workspace transport; fabric_symmetric runs one rank per process over imported arenas",
 )
 @click.option(
+    "--forward-chained",
+    is_flag=True,
+    help="two dependent invocations in one executable, as a scanned model issues per layer",
+)
+@click.option(
     "--forward-backward",
     is_flag=True,
     help="also run one backward pass, which the forward gate leaves entirely untested",
@@ -251,6 +256,7 @@ def _error_metrics(
     help="Scale the independent output cotangent used by gradient parity checks.",
 )
 def main(
+    forward_chained: bool,
     forward_backward: bool,
     forward_repeats: int,
     forward_only: bool,
@@ -780,6 +786,30 @@ def main(
             if difference > BF16_ATOL:
                 raise RuntimeError(f"forward output differs from the reference by {difference}")
             print("FORWARD PASS", flush=True)
+
+            if forward_chained:
+                # Two dependent invocations inside one executable, with no host synchronization
+                # between them -- which is what a scanned transformer issues per layer. The
+                # repeat loop above blocks between calls and so serializes the ranks; this does
+                # not, and it is the shape in which a premature workspace release would bite.
+                def chained(routing: jax.Array, *values: jax.Array) -> jax.Array:
+                    first, _ = mok_like_mlp(
+                        values[0], routing, *values[1:],
+                        mesh=mesh, runtime=runtime, config=config, collective_id=0,
+                    )
+                    second, _ = mok_like_mlp(
+                        first.astype(values[0].dtype), routing, *values[1:],
+                        mesh=mesh, runtime=runtime, config=config, collective_id=0,
+                    )
+                    return second
+
+                chained_output = jax.jit(chained)(selected_experts, *differentiable)
+                chained_output.block_until_ready()
+                chained_finite = bool(jnp.all(jnp.isfinite(chained_output.astype(jnp.float32))))
+                print(f"CHAINED finite={chained_finite}", flush=True)
+                if not chained_finite:
+                    raise RuntimeError("chained forward produced a non-finite output")
+                print("CHAINED PASS", flush=True)
 
             if forward_backward:
                 # The backward handler carries its own peer tables (d_y, d_x_routed, the router
