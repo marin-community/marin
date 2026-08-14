@@ -68,14 +68,20 @@ def test_backward_producer_matches_reference():
         tolerance=_FLOAT32_TOLERANCE,
         label="row dot",
     )
+    _assert_close(
+        jnp.sum(norm_weight_partial, axis=0),
+        jnp.sum(expected_norm_weight_partial, axis=0),
+        tolerance=_FLOAT32_TOLERANCE,
+        label="norm weight",
+    )
 
 
 def test_backward_fused_matches_reference():
     _require_gpu()
 
     args = _producer_inputs()
-    actual_x, actual_norm_weight = quack_rms_cute.quack_coda_rms_backward_fused(*args)
-    expected_x, expected_norm_weight = exact_rms_backward_fused_reference(*args)
+    actual_x, actual_norm_weight, actual_w_down = quack_rms_cute.quack_coda_rms_backward_fused(*args)
+    expected_x, expected_norm_weight, expected_w_down = exact_rms_backward_fused_reference(*args)
     _assert_close(actual_x, expected_x, tolerance=_BF16_TOLERANCE, label="fused RMS input")
     _assert_close(
         actual_norm_weight,
@@ -83,12 +89,7 @@ def test_backward_fused_matches_reference():
         tolerance=_FLOAT32_TOLERANCE,
         label="fused norm weight",
     )
-    _assert_close(
-        jnp.sum(norm_weight_partial, axis=0),
-        jnp.sum(expected_norm_weight_partial, axis=0),
-        tolerance=_FLOAT32_TOLERANCE,
-        label="norm weight",
-    )
+    _assert_close(actual_w_down, expected_w_down, tolerance=_BF16_TOLERANCE, label="fused w_down")
 
 
 def test_backward_producer_row_partials_have_one_column_per_tile():

@@ -176,7 +176,7 @@ def exact_rms_backward_fused_reference(
     x: jax.Array,
     norm_weight: jax.Array,
     inverse_rms: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
+) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Reference for the fused RMS row reduction and final input cotangent."""
     unweighted_cotangent, row_dot = exact_rms_backward_producer_reference(
         gate_preactivation_cotangent, w_down, direct_cotangent, x, norm_weight, inverse_rms
@@ -184,9 +184,12 @@ def exact_rms_backward_fused_reference(
     norm_weight_cotangent = jnp.sum(
         unweighted_cotangent.astype(jnp.float32) * x.astype(jnp.float32) * inverse_rms[:, None], axis=0
     )
+    normalized = (x.astype(jnp.float32) * inverse_rms[:, None] * norm_weight).astype(x.dtype)
+    w_down_cotangent = jnp.einsum("td,tr->dr", normalized, gate_preactivation_cotangent)
     return (
         exact_rms_backward_consumer(unweighted_cotangent, row_dot[:, 0], x, norm_weight, inverse_rms),
         norm_weight_cotangent,
+        w_down_cotangent,
     )
 
 
@@ -379,11 +382,7 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         silu_derivative,
         residuals.gate_hidden,
     )
-    normalized_for_w_down = (
-        x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None] * residuals.norm_weight
-    ).astype(x_flat.dtype)
-    w_down_cotangent = jnp.einsum("td,tr->dr", normalized_for_w_down, gate_preactivation_cotangent)
-    x_cotangent, norm_weight_cotangent = rms_backward_fused(
+    x_cotangent, norm_weight_cotangent, w_down_cotangent = rms_backward_fused(
         gate_preactivation_cotangent,
         residuals.w_down,
         direct_cotangent,
@@ -395,6 +394,7 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     norm_weight_cotangent = jax.lax.pmean(norm_weight_cotangent, axis_name=batch_axes).astype(
         residuals.norm_weight.dtype
     )
+    w_down_cotangent = jax.lax.pmean(w_down_cotangent, axis_name=batch_axes).astype(residuals.w_down.dtype)
     x_cotangent = x_cotangent.reshape(x.shape)
     # ``check_vma=False`` below permits the opaque Pallas dx to cross the custom-VJP boundary
     # without its varying-manual-axis annotation. All parameter gradients stay in JAX, so the

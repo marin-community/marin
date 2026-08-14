@@ -720,14 +720,16 @@ def _rms_backward_fused_kernel(
     norm_weight_ref,
     inverse_rms_ref,
     norm_weight_zero_ref,
+    w_down_zero_ref,
     x_cotangent_ref,
     norm_weight_cotangent_ref,
+    w_down_cotangent_ref,
     *,
     block_m: int,
     block_d: int,
 ):
     """Form the RMS row scalar and consume it without exposing either intermediate."""
-    del norm_weight_zero_ref
+    del norm_weight_zero_ref, w_down_zero_ref
     row_tile = pl.program_id(0)
     span_m = pl.ds(row_tile * block_m, block_m)
     rank = gate_preactivation_cotangent_ref.shape[1]
@@ -748,6 +750,12 @@ def _rms_backward_fused_kernel(
         x = plgpu.load(x_ref.at[span_m, span_d]).astype(jnp.float32)
         normalized_x = x * inverse_rms[:, None]
         norm_weight = plgpu.load(norm_weight_ref.at[span_d]).astype(jnp.float32)
+        normalized = (normalized_x * norm_weight[None, :]).astype(jnp.bfloat16)
+        plgpu.atomic_add(
+            w_down_cotangent_ref,
+            (span_d, span_r),
+            pl.dot(normalized.T, gate_preactivation_cotangent),
+        )
         weighted_cotangent = unweighted_cotangent.astype(jnp.float32) * norm_weight[None, :]
         plgpu.atomic_add(
             norm_weight_cotangent_ref,
@@ -781,19 +789,20 @@ def _rms_backward_fused_call(rows: int, hidden_dim: int, rank: int, dtype):
         out_shape=(
             jax.ShapeDtypeStruct((rows, hidden_dim), dtype),
             jax.ShapeDtypeStruct((hidden_dim,), jnp.float32),
+            jax.ShapeDtypeStruct((hidden_dim, rank), jnp.float32),
         ),
-        in_specs=(pl.no_block_spec,) * 7,
-        out_specs=(pl.no_block_spec,) * 2,
-        input_output_aliases={2: 0, 6: 1},
+        in_specs=(pl.no_block_spec,) * 8,
+        out_specs=(pl.no_block_spec,) * 3,
+        input_output_aliases={2: 0, 6: 1, 7: 2},
         grid=(pl.cdiv(rows, block_m),),
         compiler_params=plgpu.CompilerParams(num_warps=8, num_stages=2),
         cost_estimate=pl.CostEstimate(
-            flops=2 * rows * hidden_dim * rank + 18 * rows * hidden_dim,
+            flops=4 * rows * hidden_dim * rank + 18 * rows * hidden_dim,
             transcendentals=0,
             bytes_accessed=(
                 5 * _matrix_bytes((rows, hidden_dim), dtype)
                 + _matrix_bytes((rows, rank), dtype)
-                + _matrix_bytes((hidden_dim, rank), dtype)
+                + 3 * _matrix_bytes((hidden_dim, rank), dtype)
             ),
         ),
         name="rms_backward_fused",
@@ -807,8 +816,8 @@ def quack_coda_rms_backward_fused(
     x: jax.Array,
     norm_weight: jax.Array,
     inverse_rms: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
-    """Fuse the RMS producer row reduction with input-gradient emission."""
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Fuse both RMS parameter contractions, its row reduction, and input-gradient emission."""
     if gate_preactivation_cotangent.ndim != 2 or w_down.ndim != 2:
         raise ValueError("gate preactivation cotangent and w_down must be rank-2")
     rows, rank = gate_preactivation_cotangent.shape
@@ -840,6 +849,7 @@ def quack_coda_rms_backward_fused(
         norm_weight,
         inverse_rms,
         jnp.zeros(norm_weight.shape, dtype=jnp.float32),
+        jnp.zeros(w_down.shape, dtype=jnp.float32),
     )
 
 
