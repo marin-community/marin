@@ -50,6 +50,7 @@ from levanter.data.packing import (
     per_segment_correct,
     per_segment_loss,
 )
+from levanter.eval_harness_config import TaskConfig
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig
 from levanter.inference.engine import Request as GenRequest
 from levanter.inference.jit_scheduler import SeqDecodingParams
@@ -524,11 +525,6 @@ class LevanterHarnessLM(TemplateLM):
         """Return the end-of-text token ID."""
         return self.tokenizer.eos_token_id
 
-    def set_current_task(self, task_name: str):
-        self._current_task = task_name
-        if self.sample_logging_config.should_log() and task_name not in self.sample_outputs:
-            self.sample_outputs[task_name] = []
-
     def get_sample_outputs(self) -> dict[str, list[dict]]:
         """
         Get all stored sample outputs.
@@ -603,11 +599,10 @@ class LevanterHarnessLM(TemplateLM):
         """
         pad_token_id = _eval_pad_token_id(self.tokenizer)
 
-        current_task = getattr(self, "_current_task", "loglikelihood_task")
         for request in requests:
-            bucket = self._prepare_bucket(current_task)
+            bucket = self._prepare_bucket(request.task_name)
             if bucket is None:
-                break
+                continue
             prompt = request.args[0]
             continuation = request.args[1]
             bucket.append(
@@ -773,7 +768,7 @@ class LevanterHarnessLM(TemplateLM):
     def loglikelihood_rolling(self, requests) -> List[Tuple[float]]:
         raise NotImplementedError()
 
-    def generate_until(self, requests) -> List[str]:
+    def generate_until(self, requests: list[Instance]) -> List[str]:
         # Error out on multihost JAX - Engine doesn't support it yet
         if jax.process_count() > 1:
             raise NotImplementedError(
@@ -939,8 +934,7 @@ class LevanterHarnessLM(TemplateLM):
                 logger.info(f"Generation {i} - No tokens available, using empty string")
                 outputs.append(text)
 
-            current_task = getattr(self, "_current_task", "generation_task")
-            bucket = self._prepare_bucket(current_task)
+            bucket = self._prepare_bucket(requests[i].task_name)
             if bucket is not None:
                 prompt_text = self.tokenizer.decode(toks, skip_special_tokens=False)
                 bucket.append(
@@ -1002,76 +996,6 @@ class LevanterHarnessLM(TemplateLM):
         # Note: seed can remain None, which is valid
 
         return kwargs
-
-
-@dataclass(frozen=True)
-class TaskConfig:
-    """
-    This is a dataclass that represents the configuration for a task in the LM Eval Harness. It is used to specify
-    the configuration for a task in the LM Eval Harness, and is used to generate the task dictionary that the LM Eval
-    Harness expects.
-
-    nb that LM Eval Harness has its own TaskConfig, but its defaults are not the same as just passing in
-    a dict, and we want the behavior of passing in a dict.
-
-    Nones are not included in the dictionary representation, and LM Eval Harness will use its own defaults for any
-    missing values.
-
-    Docs are copied from the LM Eval Harness task guide. The LM Eval Harness task guide is the authoritative source
-    for what these fields do. They were copied as of 2024-12-03.
-
-    See Also:
-       * [LM Eval Harness TaskConfig](https://github.com/EleutherAI/lm-evaluation-harness/blob/0ef7548d7c3f01108e7c12900a5e5eb4b4a668f7/lm_eval/api/task.py#L55)
-       * [LM Eval Harness task guide](https://github.com/EleutherAI/lm-evaluation-harness/blob/main/docs/task_guide.md#parameters)
-    """
-
-    task: str
-    """ The name of the task to run."""
-    task_alias: str | None = None
-    """ An alias for the task. We log this name to wandb."""
-    num_fewshot: int | None = None
-
-    use_prompt: str | None = None
-    """ Name of prompt in promptsource to use. if defined, will overwrite doc_to_text, doc_to_target, and doc_to_choice."""
-    description: str | None = None
-    """An optional prepended Jinja2 template or string which will be prepended to the few-shot examples passed into the model, often describing the task or providing instructions to a model, such as "The following are questions (with answers) about {{subject}}.\n\n". No delimiters or spacing are inserted between the description and the first few-shot example."""
-    target_delimiter: str | None = None
-    """String to insert between input and target output for the datapoint being tested. defaults to " " """
-    fewshot_delimiter: str | None = None
-    """ String to insert between few-shot examples. defaults to "\\n\\n" """
-    doc_to_text: str | None = None
-    """Jinja2 template string to process a sample into the appropriate input for the model."""
-    doc_to_target: str | None = None
-    """Jinja2 template string to process a sample into the appropriate target for the model."""
-    doc_to_choice: str | None = None
-    """Jinja2 template string to process a sample into a list of possible string choices for multiple_choice tasks. """
-
-    # Inline task-spec fields. Set these when passing a full task definition whose `task` name is not
-    # in lm-eval's registry — lm-eval then builds the Entry straight from the dict instead of applying
-    # registered-task override semantics (which can silently drop fields like dataset_path).
-    dataset_path: str | None = None
-    dataset_name: str | None = None
-    output_type: str | None = None
-    test_split: str | None = None
-    training_split: str | None = None
-    validation_split: str | None = None
-    fewshot_split: str | None = None
-    metric_list: list[dict] | None = None
-    tag: list[str] | None = None
-    metadata: dict | None = None
-
-    # Extra Levanter-only config to control generation stops per task
-    additional_stop_strings: list[str] | None = None
-
-    def to_dict(self):
-        """
-        Convert the TaskConfig to a dictionary, excluding None values.
-
-        Returns:
-            Dictionary representation of the task configuration
-        """
-        base_dict = dataclasses.asdict(self)
-        return {k: v for k, v in base_dict.items() if v is not None}
 
 
 @dataclass(frozen=True)
@@ -1394,17 +1318,13 @@ def _actually_run_eval_harness(
         averages = _compute_averages(outputs)
         outputs["averages"] = averages
 
-        # Get the collected sample outputs and add them to the results
+        # Attach each benchmark's own samples to its results entry. Group-level entries in
+        # `results` have no requests of their own, so they have no samples to attach.
         sample_outputs = harness.get_sample_outputs()
-        if config.sample_logging.should_log() and sample_outputs:
-            # Add outputs to each benchmark in results
-            for task_name in outputs.get("results", {}):
-                # Get all sample outputs for this task (since we don't track individual tasks yet)
-                all_samples = []
-                for samples in sample_outputs.values():
-                    all_samples.extend(samples)
-                if all_samples:
-                    outputs["results"][task_name]["outputs"] = all_samples
+        for task_name, task_results in outputs.get("results", {}).items():
+            samples = sample_outputs.get(task_name)
+            if samples:
+                task_results["outputs"] = samples
 
         return outputs
     else:

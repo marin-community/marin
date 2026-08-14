@@ -46,6 +46,19 @@ provisioning:
           - id: delete-old
             action: DELETE
             older_than: 2592000s
+    # Shared external HTTPS frontend. Controller domains are read from each cluster's
+    # auth.iap.url; VM details and backend IDs come from the cluster and finelog configs.
+    # DNS and the Web OAuth client remain externally managed.
+    gclb:
+      frontend_name: marin
+      controllers:
+        - cluster: marin
+        - cluster: marin-dev
+      finelogs:
+        - cluster: marin
+          domain: finelog.oa.dev
+          # Public egress blocks of finelog forwarders; JWT auth still authenticates each push.
+          sender_source_ranges: [192.112.160.0/20, 166.19.0.0/16]
 
 platform:
   label_prefix: marin
@@ -290,9 +303,9 @@ scale_groups:
 # ---------------------------------------------------------------------------
 # User budget tiers
 #
-# This section is the source of truth for per-user budgets. It is reconciled
-# into user_budgets on every controller start (migration 0037 truncates the
-# table first so the config fully owns row contents).
+# reconcile_user_budget_tiers upserts these tiers into user_budgets on every
+# controller start. It never deletes, so a row set with `iris user budget set`
+# outlives a restart and is overwritten only when the user is listed here.
 #
 # Unlisted submitters have no row and fall through to UserBudgetDefaults at
 # read time — a small INTERACTIVE budget that silently degrades to BATCH once

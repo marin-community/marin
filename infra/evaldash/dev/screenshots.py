@@ -7,10 +7,10 @@ A single foreground process: uvicorn runs in a background thread bound to loopba
 a headless Chromium against it, and the process exits when done (no detached server to reap). Use it
 to eyeball the SPA end-to-end without a standing server.
 
-    PYTHONPATH=infra/evaldash/src:lib/marin/src:lib/rigging/src \
+    PYTHONPATH=lib/marin/src:lib/rigging/src \
     uv run --with starlette --with uvicorn --with sqlalchemy --with pyarrow --with pydantic \
       --with fsspec --with playwright \
-      python infra/evaldash/dev/screenshots.py <out_dir> [records_dir]
+      python -m infra.evaldash.dev.screenshots <out_dir> [records_dir]
 
 ``records_dir`` defaults to a freshly generated fixture set. The built SPA must exist
 (``npm --prefix infra/evaldash/dashboard run build``); its dist is read from EVALDASH_DASHBOARD_DIST
@@ -28,11 +28,11 @@ from pathlib import Path
 
 os.environ.setdefault("EVALDASH_STORE", "local")
 
-import fixtures
-import server
 import uvicorn
 from marin.evaluation.records import list_records
 from playwright.sync_api import sync_playwright
+
+from infra.evaldash.src import fixtures, server
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("EVALDASH_SCREENSHOT_PORT", "8137"))
@@ -41,13 +41,17 @@ VIEWPORT = {"width": 1480, "height": 1000}
 # (filename, path, wait-for-selector-or-text). Paths are SPA routes; the server's catch-all serves
 # index.html for each so deep links render. Selectors gate the screenshot on the view being drawn.
 SHOTS = [
-    ("01-leaderboard.png", "/", "text=Leaderboard"),
+    ("01-panel.png", "/", "text=Per-benchmark"),
     ("02-runs.png", "/runs", "text=Runs"),
     ("03-run-detail.png", "/runs/snowball-2026.07.20-mmlu", "text=Metrics"),
     ("04-sample-mcq.png", "/runs/snowball-2026.07.20-mmlu/samples?task=mmlu&i=1", "text=Choices"),
     ("05-sample-agentic.png", "/runs/snowball-2026.07.20-aime/samples?task=aime&i=0", "text=Trajectory"),
     ("06-run-failed.png", "/runs/tootsie-8b-2026.07.20-aime", "text=Error"),
     ("07-debug.png", "/debug", "text=Prefixes scanned"),
+    ("08-compare.png", "/compare?models=snowball,qwen3-8b", "text=Shared-benchmark ranking"),
+    ("09-model-detail.png", "/models/snowball", "text=Measurement profile"),
+    ("10-run-agentic.png", "/runs/snowball-2026.07.20-aime", "text=Ungraded items"),
+    ("11-run-flagged.png", "/runs/tootsie-8b-2026.07.20-humaneval", "text=Worth checking"),
 ]
 
 

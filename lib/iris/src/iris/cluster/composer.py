@@ -19,7 +19,12 @@ import logging
 from finelog.client.log_client import Table
 from rigging.timing import Duration
 
-from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, _DEFAULT_PRIORITY_CLASS_NAMES, K8sTaskProvider
+from iris.cluster.backends.k8s.tasks import (
+    _CW_DEFAULT_TOPOLOGIES,
+    _DEFAULT_PRIORITY_CLASS_NAMES,
+    K8sTaskProvider,
+    PodConfig,
+)
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.config import (
     BackendConfig,
@@ -45,9 +50,8 @@ from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-# Maps the band names used as keys in KueueConfig.priority_classes (and
-# kubernetes_provider.priority_classes) to the PriorityBand enum stamped on pods.
-_KUEUE_PRIORITY_BANDS = {
+# Maps kubernetes_provider.priority_classes keys to the PriorityBand enum stamped on Pods.
+_PRIORITY_BANDS = {
     "production": job_pb2.PRIORITY_BAND_PRODUCTION,
     "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
     "batch": job_pb2.PRIORITY_BAND_BATCH,
@@ -58,20 +62,18 @@ def make_task_backend(
     config: IrisClusterConfig,
     *,
     unreachable_grace: Duration,
-    task_stats_table: Table | None = None,
     task_event_table: Table | None = None,
     profile_table: Table | None = None,
-    worker_stats_table: Table | None = None,
     autoscaler: Autoscaler | None = None,
     transition_reader: TransitionReader | None = None,
 ) -> TaskBackend:
     """Create a TaskBackend from cluster configuration.
 
     Returns a ``K8sTaskProvider`` when ``kubernetes_provider`` is configured,
-    or an ``RpcTaskBackend`` when ``worker_provider`` is configured. The finelog
-    tables are passed to the K8s backend (which writes per-pod resource/profile
-    samples directly); the RPC backend ignores them — its worker daemons write
-    their own rows. ``unreachable_grace`` sizes the liveness tracker the
+    or an ``RpcTaskBackend`` when ``worker_provider`` is configured. Event and
+    profile tables are passed to the K8s backend; node agents write per-pod
+    resource samples, while RPC worker daemons write their own rows.
+    ``unreachable_grace`` sizes the liveness tracker the
     worker-daemon backend constructs and owns. ``transition_reader`` is the K8s
     backend's controller-DB read surface; ``autoscaler`` provisions capacity for
     the worker-daemon backend (None for clusters with no scale groups).
@@ -92,24 +94,14 @@ def make_task_backend(
         label_prefix = config.platform.label_prefix or "iris"
         managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
 
-        priority_classes: dict[int, str] = {}
-        for band_name, wpc in kp.kueue.priority_classes.items():
-            band = _KUEUE_PRIORITY_BANDS.get(band_name)
-            if band is None:
-                raise ValueError(
-                    f"Unknown Kueue priority band {band_name!r} in kueue.priority_classes; "
-                    f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
-                )
-            priority_classes[band] = wpc
-
         # Start from the iris-{band} defaults; override with any explicit config.
         pod_priority_classes: dict[int, str] = dict(_DEFAULT_PRIORITY_CLASS_NAMES)
         for band_name, pc_name in kp.priority_classes.items():
-            band = _KUEUE_PRIORITY_BANDS.get(band_name)
+            band = _PRIORITY_BANDS.get(band_name)
             if band is None:
                 raise ValueError(
                     f"Unknown priority band {band_name!r} in kubernetes_provider.priority_classes; "
-                    f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
+                    f"valid bands: {sorted(_PRIORITY_BANDS)}"
                 )
             pod_priority_classes[band] = pc_name
 
@@ -128,25 +120,24 @@ def make_task_backend(
                 kubeconfig_path=kp.kubeconfig or None,
                 context=kp.kube_context or None,
             ),
-            namespace=namespace,
-            default_image=config.defaults.worker.default_task_image,
-            logship_image=config.controller.image,
-            service_account=kp.service_account or "",
-            host_network=kp.host_network,
-            cache_dir=kp.cache_dir or "/cache",
-            controller_address=kp.controller_address or None,
-            managed_label=managed_label,
-            task_env=dict(config.defaults.task_env),
-            env_secret_name=env_secret_name,
-            local_queue=local_queue,
-            kueue_priority_classes=priority_classes,
-            kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
+            pods=PodConfig(
+                namespace=namespace,
+                default_image=config.defaults.worker.default_task_image,
+                logship_image=config.controller.image,
+                service_account=kp.service_account or "",
+                host_network=kp.host_network,
+                cache_dir=kp.cache_dir or "/cache",
+                controller_address=kp.controller_address or None,
+                managed_label=managed_label,
+                task_env=dict(config.defaults.task_env),
+                env_secret_name=env_secret_name,
+                local_queue=local_queue,
+                kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
+                priority_class_names=pod_priority_classes,
+            ),
             preempt_namespaces=list(kp.preempt_namespaces),
-            priority_class_names=pod_priority_classes,
-            task_stats_table=task_stats_table,
             task_event_table=task_event_table,
             profile_table=profile_table,
-            worker_stats_table=worker_stats_table,
             transition_reader=transition_reader,
         )
     if which == "worker_provider":
@@ -222,10 +213,8 @@ def make_backend(
         provider = make_task_backend(
             config,
             unreachable_grace=unreachable_grace,
-            task_stats_table=log_stack.task_stats_table,
             task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
-            worker_stats_table=log_stack.worker_stats_table,
             transition_reader=DbTransitionReader(db),
         )
         logger.info("Backend created: %s", type(provider).__name__)
@@ -236,7 +225,6 @@ def make_backend(
         return make_task_backend(
             config,
             unreachable_grace=unreachable_grace,
-            task_stats_table=log_stack.task_stats_table,
             task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
         )
@@ -277,7 +265,6 @@ def make_backend(
     provider = make_task_backend(
         config,
         unreachable_grace=unreachable_grace,
-        task_stats_table=log_stack.task_stats_table,
         task_event_table=log_stack.task_event_table,
         profile_table=log_stack.profile_table,
         autoscaler=autoscaler,

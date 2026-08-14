@@ -52,7 +52,8 @@ fork-strategy = "fewest"
 # marin-dupekit-native nightly (floor in lib/dupekit/pyproject.toml); the
 # omegaconf dev pin in override-dependencies
 # below; and the prerelease-only transitive deps in constraint-dependencies
-# (tfp-nightly / opentelemetry-semantic-conventions publish no stable release).
+# (tfp-nightly and the OpenTelemetry instrumentation packages publish no stable
+# release).
 prerelease = "explicit"
 constraint-dependencies = [
     # Enable pre-releases for transitive deps that publish no stable release at
@@ -60,6 +61,8 @@ constraint-dependencies = [
     # specifier, so the resolved version still follows whatever requires them;
     # the pre-release component here only flips uv's per-package opt-in.
     "tfp-nightly>=0.1.dev0",
+    "opentelemetry-instrumentation>=0.41b0",
+    "opentelemetry-instrumentation-grpc>=0.41b0",
     "opentelemetry-semantic-conventions>=0.1b0",
 ]
 override-dependencies = [
@@ -96,8 +99,8 @@ override-dependencies = [
 ]
 conflicts = [
     # GPU extras still carry CUDA/Linux-only solver constraints. Keep them out
-    # of non-GPU cross-package splits while allowing TPU and vLLM stacks to
-    # resolve together.
+    # of non-GPU cross-package splits while allowing the TPU stack to resolve
+    # together.
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-core", extra = "cpu" },
@@ -105,10 +108,6 @@ conflicts = [
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-core", extra = "tpu" },
-    ],
-    [
-        { package = "marin-levanter", extra = "gpu" },
-        { package = "marin-core", extra = "vllm" },
     ],
     [
         { package = "marin-core", extra = "gpu" },
@@ -121,6 +120,27 @@ conflicts = [
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-fray", group = "fray_tpu_test" },
+    ],
+    [
+        { package = "marin-levanter", extra = "gpu" },
+        { package = "marin-core", extra = "vllm" },
+    ],
+    [
+        { package = "marin-core", extra = "vllm" },
+        { package = "marin-levanter", extra = "tpu" },
+    ],
+    [
+        { package = "marin-core", extra = "vllm" },
+        { package = "marin-fray", group = "fray_tpu_test" },
+    ],
+    [
+        { package = "marin-core", extra = "vllm" },
+        { package = "marin-iris", group = "test" },
+    ],
+    [
+        # iris's dev group includes its test group, so the jax pin propagates.
+        { package = "marin-core", extra = "vllm" },
+        { package = "marin-iris", group = "dev" },
     ],
 ]
 
@@ -136,6 +156,7 @@ members = [
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
+    "lib/finestore",
     "infra/pulumi",
 ]
 # Native maturin packages are excluded from uv workspace discovery because each
@@ -168,6 +189,7 @@ marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
+marin-finestore = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
@@ -280,6 +302,8 @@ project-includes = [
     "lib/ducky/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
+    "lib/finestore/src/**/*.py",
+    "infra/evaldash/src/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
 ]
@@ -293,12 +317,10 @@ search-path = [
     "lib/haliax/src",
     "lib/rigging/src",
     "lib/zephyr/src",
+    "lib/finestore/src",
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
-    # benchmark_controller.py imports controller test fixtures from lib/iris/tests
-    # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
-    "lib/iris",
 ]
 disable-search-path-heuristics = true
 
@@ -321,9 +343,19 @@ tensor-shapes = true
 # and compute deps a local venv commonly skips (torch, sympy). List both `pkg` and
 # `pkg.*`.
 ignore-missing-imports = [
+    # The evaldash server's own deps: its image installs them, no lint profile does.
+    "anthropic",
+    "anthropic.*",
+    "google.cloud.compute_v1",
+    "google.cloud.compute_v1.*",
+    "google.cloud.sql.connector",
+    "google.cloud.sql.connector.*",
     # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
     "google.cloud.secretmanager",
     "google.cloud.secretmanager.*",
+    # QuACK and CUTLASS are Linux/CUDA-only optional dependencies.
+    "cutlass",
+    "cutlass.*",
     "jax_triton",
     "jax_triton.*",
     "jaxlib",
@@ -334,14 +366,12 @@ ignore-missing-imports = [
     "librosa.*",
     "lm_eval",
     "lm_eval.*",
-    "math_verify",
-    "math_verify.*",
     "memray",
     "memray.*",
     "prompt_toolkit",
     "prompt_toolkit.*",
-    "pylatexenc",
-    "pylatexenc.*",
+    "quack",
+    "quack.*",
     "resiliparse",
     "resiliparse.*",
     "sympy",
@@ -356,8 +386,6 @@ ignore-missing-imports = [
     "trackio.*",
     "triton",
     "triton.*",
-    "verifiers",
-    "verifiers.*",
     "vllm",
     "vllm.*",
     "xprof",
@@ -440,6 +468,7 @@ packages = ["experiments"]
 packages = ["experiments"]
 
 [tool.pytest.ini_options]
+# pytest-timeout uses SIGALRM on POSIX; the timeout guard hard-kills the process if a test suppresses that failure.
 timeout = 60
 filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
@@ -465,4 +494,4 @@ pythonpath = ["."]
 # All but manual are run from dedicated CI workflows. Tests that need a TPU carry
 # @skip_if_no_tpu (tests/test_utils.py) and skip themselves when none is present;
 # the Iris markers also apply when lib/iris test paths are passed from the root.
-addopts = "--session-timeout=600 -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"
+addopts = "-p marin.pytest_timeout_guard --session-timeout=600 -n auto --dist=worksteal -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"

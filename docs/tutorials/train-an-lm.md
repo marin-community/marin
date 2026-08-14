@@ -90,16 +90,16 @@ of them. The complete `build()` function for DCLM 1B/1x:
 
 ```python
 from fray.cluster import ResourceConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
-from marin.experiment.train import train_lm
+from marin.experiment.train import EvalSuite, train_lm
 from marin.training.training import LevanterCheckpoint
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.llama import llama3_tokenizer
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
-from experiments.recipes import core_tasks
+from experiments.evals.task_configs import CORE_TASKS
 
 TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-128")
 
@@ -127,7 +127,7 @@ def build(*, version: str = "2026.06.28") -> ArtifactStep[LevanterCheckpoint]:
         seq_len=SEQ_LEN,
         num_train_steps=NUM_TRAIN_STEPS,
         z_loss_weight=1e-4,
-        evals=core_tasks(every=10000),
+        evals=EvalSuite(CORE_TASKS, every=10000),
         resources=TRAIN_RESOURCES,
         tags=["DCLM_1B_1X"],
     )

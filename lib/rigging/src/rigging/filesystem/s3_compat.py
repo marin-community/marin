@@ -35,10 +35,13 @@ import os
 from typing import Any
 from urllib.parse import urlparse
 
+import aiohttp
 import fsspec
 import s3fs
+from aiobotocore.httpsession import AIOHTTPSession
 
 from rigging.filesystem.cluster_config import StoreType, store_config
+from rigging.filesystem.listing_cache import DEFAULT_LISTINGS_EXPIRY_TIME, configured_listing_cache_options
 
 # Endpoint domains that reject path-style requests outright.
 VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
@@ -46,6 +49,39 @@ VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
 _S3_CONNECT_TIMEOUT = 30
 _S3_READ_TIMEOUT = 120
 _S3_RETRY_MAX_ATTEMPTS = 5
+# Whole-request ceiling. It spans pool wait, connect, body upload, and response
+# download, so it bounds every S3 request rather than only a stalled one: a
+# genuine transfer slower than 600s now fails and is retried from byte zero, up
+# to _S3_RETRY_MAX_ATTEMPTS times. 600 leaves ample headroom for the largest
+# request we issue (a 50 MiB multipart part needs ~90 KiB/s to fit), while still
+# failing a wedged request inside a shard's useful lifetime. Single-object reads
+# of many GB through this filesystem are the case to re-check if this bites.
+_S3_TOTAL_TIMEOUT = 600
+
+
+class TotalDeadlineAIOHTTPSession(AIOHTTPSession):
+    """aiobotocore HTTP session that also bounds the request as a whole.
+
+    aiobotocore builds ``ClientTimeout(sock_connect=..., sock_read=...)`` and
+    never sets ``total``. botocore sends ``Expect: 100-continue`` on
+    ``UploadPart``, so aiohttp waits for the interim response before it writes
+    the body. None of the scalar bounds covers that wait: ``sock_read`` cannot
+    arm because no read is in flight. A peer that withholds ``100 Continue``
+    therefore leaves no timer scheduled at all -- the loop parks in
+    ``epoll_wait(timeout=-1)`` and the fsspec caller polls forever, with the
+    body still unsent (#6719). ``total`` is the only bound that ends it.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # aiobotocore annotates the ``timeout`` constructor parameter as a scalar
+        # but stores the assembled ClientTimeout in the same attribute.
+        # pyrefly: ignore[bad-assignment]
+        self._timeout = aiohttp.ClientTimeout(
+            sock_connect=self._timeout.sock_connect,
+            sock_read=self._timeout.sock_read,
+            total=_S3_TOTAL_TIMEOUT,
+        )
 
 
 def s3_request_bounds_config_kwargs() -> dict[str, Any]:
@@ -54,11 +90,27 @@ def s3_request_bounds_config_kwargs() -> dict[str, Any]:
     s3fs/aiobotocore otherwise permit upload requests to wait indefinitely when a
     connection wedges. Finite bounds turn that stall into an error handled by the
     task retry path (#6487).
+
+    JSON-safe by construction: this feeds the ``FSSPEC_S3`` environment block the
+    Iris controller exports to every task. Callers building a filesystem in
+    Python want :func:`s3_python_config_kwargs` instead.
     """
     return {
         "connect_timeout": _S3_CONNECT_TIMEOUT,
         "read_timeout": _S3_READ_TIMEOUT,
         "retries": {"max_attempts": _S3_RETRY_MAX_ATTEMPTS, "mode": "standard"},
+    }
+
+
+def s3_python_config_kwargs() -> dict[str, Any]:
+    """Return :func:`s3_request_bounds_config_kwargs` plus the whole-request deadline.
+
+    For callers that build a filesystem in Python and can therefore pass a class.
+    Not JSON-serializable, so it must not reach the ``FSSPEC_S3`` env block.
+    """
+    return {
+        **s3_request_bounds_config_kwargs(),
+        "http_session_cls": TotalDeadlineAIOHTTPSession,
     }
 
 
@@ -70,7 +122,7 @@ def needs_virtual_host_addressing(endpoint_url: str) -> bool:
 
 def fsspec_s3_conf(endpoint: str) -> dict:
     """The ``FSSPEC_S3`` config block for *endpoint*: virtual-hosted addressing where the domain
-    demands it, region-less ("auto") signing, and finite request bounds.
+    demands it, region-less ("auto") signing, finite request bounds, and fresh listings.
 
     Non-AWS S3-compatible endpoints (R2, CoreWeave Object Storage) don't honor the AWS region
     scheme; signing with the wrong region surfaces as 400 Bad Request. "auto" tells boto3 to skip
@@ -83,6 +135,7 @@ def fsspec_s3_conf(endpoint: str) -> dict:
         "endpoint_url": endpoint,
         "client_kwargs": {"region_name": "auto"},
         "config_kwargs": config_kwargs,
+        "listings_expiry_time": DEFAULT_LISTINGS_EXPIRY_TIME,
     }
 
 
@@ -102,7 +155,12 @@ def configure_fsspec_s3(endpoint: str, key: str | None = None, secret: str | Non
     os.environ.setdefault("AWS_DEFAULT_REGION", "auto")
 
     if "FSSPEC_S3" not in os.environ:
-        os.environ["FSSPEC_S3"] = json.dumps(fsspec_s3_conf(endpoint))
+        conf = fsspec_s3_conf(endpoint)
+        configured_cache = configured_listing_cache_options(("s3", "s3a"))
+        if configured_cache:
+            conf.pop("listings_expiry_time")
+            conf.update(configured_cache)
+        os.environ["FSSPEC_S3"] = json.dumps(conf)
 
     # Flush fsspec/s3fs cached instances so they pick up the new config.
     fsspec.config.set_conf_env(fsspec.config.conf)

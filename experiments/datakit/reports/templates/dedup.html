@@ -47,10 +47,22 @@ td.heat{font-family:var(--mono);font-variant-numeric:tabular-nums}
   <div class="cards" id="cards"></div>
   <h2>minhash params</h2>
   <div class="panel mono" id="params" style="font-size:12px"></div>
+  <h2>verification params</h2>
+  <div class="panel mono" id="verification-params" style="font-size:12px"></div>
+  <h2>local representative params</h2>
+  <div class="panel mono" id="local-representative-params" style="font-size:12px"></div>
+  <h2>document decisions</h2>
+  <div class="tablewrap"><table id="decisions"></table></div>
+  <h2>comparison decisions</h2>
+  <div class="tablewrap"><table id="comparison-decisions"></table></div>
+  <h2>verification histograms</h2>
+  <div class="tablewrap"><table id="scores"></table></div>
   <h2>per-source samples</h2>
   <div class="tablewrap"><table id="sources"></table></div>
-  <h2>cluster size distribution (sampled)</h2>
+  <h2>cluster size distribution</h2>
   <div class="tablewrap"><table id="hist"></table></div>
+  <h2>comparisons per candidate</h2>
+  <div class="tablewrap"><table id="comparison-hist"></table></div>
 </div>
 <script>
 const D = __DATA__;
@@ -64,19 +76,51 @@ document.getElementById("sampling").textContent = D.sampling;
 const cards = [
   ["cluster members", fmt(S.cluster_members), "non-singleton docs"],
   ["clusters", fmt(S.clusters), "one canonical each"],
-  ["duplicates to drop", fmt(S.duplicates_to_drop), "members − canonicals"],
+  ["candidate duplicates", fmt(S.candidate_duplicates), "members − representatives"],
+  ["direct comparisons", fmt(S.direct_comparisons), S.comparisons_per_candidate.toFixed(2)+" per evaluated candidate"],
+  ["delegated to exact", fmt(S.delegated_global_exact), "equal content ID"],
+  ["verified duplicates", fmt(S.verified_duplicates), "direct text match"],
+  ["canonical matches", fmt(S.canonical_verified), "anchor was the connected-components canonical"],
+  ["longest matches", fmt(S.longest_verified), "anchor was the longest document, not the canonical"],
+  ["local matches", fmt(S.local_verified), "matched a retained local representative"],
+  ["retained candidates", fmt(S.retained_candidates), "no verified text match"],
+  ["local representatives", fmt(S.local_representatives), "bounded retained comparison set"],
+  ["maximum comparisons", fmt(S.maximum_comparisons), "observed for one evaluated candidate"],
+  ["comparison limit", fmt(S.comparison_limit_reached), "documents with more nominees than the limit"],
+  ["representative count limit", fmt(S.representative_count_limit), "documents not retained after the count limit"],
+  ["representative document limit", fmt(S.representative_document_chars_limit), "documents not retained after the text limit"],
+  ["representative cluster limit", fmt(S.representative_cluster_chars_limit), "documents not retained after the cluster text limit"],
   ["singletons skipped", fmt(S.singletons_skipped), "no duplicate found"],
-  ["dup rate", pct(S.dup_rate), "drop / all docs"],
+  ["candidate acceptance", pct(S.candidate_acceptance_rate), "verified / evaluated candidates"],
+  ["dup rate", pct(S.dup_rate), "verified / all docs"],
 ];
 document.getElementById("cards").innerHTML = cards.map(([k,v,d]) =>
   `<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
 document.getElementById("params").textContent =
   Object.entries(D.params).map(([k,v]) => `${k}=${v === null ? "none" : v}`).join("  ·  ");
-let srows = `<tr><th>source</th><th>sampled members</th><th>distinct clusters</th></tr>`;
+document.getElementById("verification-params").textContent =
+  Object.entries(D.verification_params).map(([k,v]) => `${k}=${v === null ? "none" : v}`).join("  ·  ");
+document.getElementById("local-representative-params").textContent =
+  Object.entries(D.local_representative_params).map(([k,v]) => `${k}=${v === null ? "none" : v}`).join("  ·  ");
+document.getElementById("decisions").innerHTML =
+  `<tr><th>decision</th><th>documents</th></tr>` +
+  D.decisions.map(r => `<tr><td>${r.name}</td><td class="num">${r.count.toLocaleString()}</td></tr>`).join("");
+document.getElementById("comparison-decisions").innerHTML =
+  `<tr><th>decision</th><th>comparisons</th></tr>` +
+  D.comparison_decisions.map(r => `<tr><td>${r.name}</td><td class="num">${r.count.toLocaleString()}</td></tr>`).join("");
+document.getElementById("scores").innerHTML =
+  `<tr><th>metric</th><th>bin</th><th>documents</th></tr>` +
+  D.verification_histogram.map(r => `<tr><td>${r.metric}</td><td class="num">${r.bin}</td>` +
+    `<td class="num">${r.count.toLocaleString()}</td></tr>`).join("");
+let srows = `<tr><th>source</th><th>sampled members</th><th>distinct clusters</th>` +
+  `<th>verified</th><th>rejected</th><th>delegated to exact</th></tr>`;
 for (const s of D.sources) {
-  srows += `<tr><td title="${s.source_main_dir}">${s.label}</td>` +
+  srows += `<tr><td title="${s.source_key}">${s.label}</td>` +
     `<td class="num">${s.sampled_members.toLocaleString()}</td>` +
-    `<td class="num">${s.sampled_clusters.toLocaleString()}</td></tr>`;
+    `<td class="num">${s.sampled_clusters.toLocaleString()}</td>` +
+    `<td class="num">${s.verified.toLocaleString()}</td>` +
+    `<td class="num">${s.rejected.toLocaleString()}</td>` +
+    `<td class="num">${s.delegated_global_exact.toLocaleString()}</td></tr>`;
 }
 document.getElementById("sources").innerHTML = srows;
 const maxClusters = Math.max(1, ...D.cluster_size_hist.map(h => h.clusters));
@@ -87,4 +131,8 @@ for (const h of D.cluster_size_hist) {
     `<td style="text-align:left;min-width:220px"><div style="height:10px;width:${w}%;background:var(--accent);border-radius:3px"></div></td></tr>`;
 }
 document.getElementById("hist").innerHTML = hrows;
+document.getElementById("comparison-hist").innerHTML =
+  `<tr><th>comparisons</th><th>documents</th></tr>` +
+  D.comparison_count_hist.map(r => `<tr><td class="num">${r.comparisons}</td>` +
+    `<td class="num">${r.documents.toLocaleString()}</td></tr>`).join("");
 </script>

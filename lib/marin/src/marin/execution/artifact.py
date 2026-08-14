@@ -66,6 +66,7 @@ FINGERPRINT_KEY = "fingerprint"
 VERSION_KEY = "version"
 RESULT_TYPE_KEY = "result_type"
 EXPECTED_FINGERPRINT_KEY = "expected_fingerprint"
+ARTIFACT_LOAD_CONTEXT_KEY = "artifact_load"
 
 
 class FingerprintMismatchError(Exception):
@@ -306,7 +307,9 @@ def write_record(record: ArtifactRecord) -> None:
     StoragePath(prefix_join(record.output_path, RECORD_FILENAME)).write_text(record.model_dump_json(indent=2))
 
 
-def _payload_json(value: object) -> JSONValue:
+def payload_json(value: object) -> JSONValue:
+    """Canonical JSON encoding for a record payload: a ``BaseModel`` or dataclass to its dict,
+    anything already JSON-shaped straight through."""
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     if is_dataclass(value) and not isinstance(value, type):
@@ -324,13 +327,13 @@ def read_artifact(output_path: str, schema: type[M]) -> M:
     output_path = _resolved(output_path)
     record = read_record(output_path)
     if record is not None and record.result is not None:
-        return cast(M, schema.model_validate(record.result))
+        return cast(M, schema.model_validate(record.result, context={ARTIFACT_LOAD_CONTEXT_KEY: True}))
     raise FileNotFoundError(f"no artifact payload at {output_path}")
 
 
 def write_artifact(value: object, output_path: str) -> None:
     """Write a minimal record carrying ``value`` as its ``result`` — the manual save API."""
-    write_record(ArtifactRecord(output_path=output_path, result=_payload_json(value)))
+    write_record(ArtifactRecord(output_path=output_path, result=payload_json(value)))
 
 
 @dataclass(frozen=True)
@@ -365,7 +368,7 @@ def write_step_record(identity: StepRecordIdentity, *, output_path: str, result:
             deps=identity.deps,
             dep_paths=identity.dep_paths,
             config=identity.config,
-            result=_payload_json(result) if result is not None else None,
+            result=payload_json(result) if result is not None else None,
             fingerprint_payload=identity.fingerprint_payload,
             provenance=launch_provenance(),
         )

@@ -82,6 +82,67 @@ for entry in task_logs:
     print(msg)
 ```
 
+### CoreWeave Parquet HEAD Returns HTTP 400
+
+If every Parquet-shuffle reducer fails with a URL shaped like this, the client
+is using path-style S3 addressing:
+
+```text
+Generic S3 HEAD http://cwlota.com/<bucket>/...: 400 Bad Request
+```
+
+CoreWeave LOTA requires a virtual-hosted URL such as
+`http://<bucket>.cwlota.com/...`. Confirm the request in the worker logs:
+
+```bash
+uv run iris --cluster marin job logs <WORKER_JOB_ID> --level error | \
+  rg 'Generic S3 HEAD|400 Bad Request'
+```
+
+Zephyr qualifies the endpoint in `zephyr.shuffle._scan_scatter_parquet` before
+calling Polars. Check `AWS_ENDPOINT_URL_S3` and `AWS_ENDPOINT_URL` if the bad
+URL persists. `FSSPEC_S3` does not configure Polars' Rust `object_store`
+client, so changing fsspec retries, credentials, or worker RAM does not repair
+this addressing error. See the [incident record](https://echo.oa.dev/wiki/59)
+for the reproduced failure and validation.
+
+### Stale Pipeline Warning
+
+Grafana evaluates `ZephyrPipelineProgressStalled` once each minute. The rule
+becomes pending after 45 minutes without a shard completion. The warning
+becomes active after five more minutes.
+
+The coordinator publishes `progress_time_seconds` through direct `service=zephyr` telemetry. The
+metric resets at each stage start and after each shard completion. The metric
+includes the root job ID and the Zephyr execution ID. Grafana removes a
+producer when its most recent row is more than 90 seconds old.
+
+This rule is a passive warning. It does not send a notification, restart a job,
+or kick a task. A valid long shard can activate the warning. The warning means
+that no shard completed during the time limit. It does not mean that item,
+byte, CPU, or memory values stayed constant.
+
+Use `get_status` to confirm the completed, in-flight, and queued shard counts.
+Then compare the per-worker counters and collect thread profiles from the
+in-flight workers. Do not restart or kick a task before you collect this
+evidence.
+
+### Reading shard and worker counts
+
+Shard progress describes the current stage. `completed` counts finished shard tasks,
+`in-flight` counts assigned work, and `queued` counts work not yet assigned. A retry is
+another attempt at a shard, so attempt totals can exceed the stage's shard count.
+
+Only `WorkerState.ACTIVE` workers count as alive. Failed workers remain registered and
+can appear in total worker counts, but they cannot make progress. If all workers are
+failed, the coordinator waits for `no_workers_timeout` (six hours by default) and raises
+`ZephyrWorkerError` with the dead duration and registered-worker count.
+
+The first stage caps the worker group to its initial shard count and the configured
+maximum. Later stages can reshard while reusing that group. More shards than workers is
+normal because workers pull multiple tasks. Read shard progress with alive-worker state;
+the registered-worker count alone can overstate available capacity.
+
 ### Straggler Detection
 
 1. **Progress line**: `in-flight >> 0` with `queued == 0` means stragglers — no new work to assign, waiting on slow shards.

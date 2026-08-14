@@ -243,8 +243,6 @@ scale_groups:
         """Real example config from config/marin.yaml round-trips correctly."""
         iris_root = Path(__file__).parent.parent.parent.parent
         config_path = iris_root / "config" / "marin.yaml"
-        if not config_path.exists():
-            pytest.skip("Example config not found")
 
         original_config = load_config(config_path)
 
@@ -759,9 +757,6 @@ scale_groups:
         ]
 
         for config_path in example_configs:
-            if not config_path.exists():
-                pytest.skip(f"Example config not found: {config_path}")
-
             # Load the config
             config = load_config(config_path)
             assert config.platform.platform_kind() in ["gcp", "manual", "coreweave"]
@@ -780,8 +775,6 @@ scale_groups:
 
         iris_root = Path(__file__).parent.parent.parent.parent
         for config_path in [iris_root / "config" / "marin.yaml", iris_root / "config" / "marin-dev.yaml"]:
-            if not config_path.exists():
-                pytest.skip(f"Example config not found: {config_path}")
             config = load_config(config_path)
             for name, sg in config.scale_groups.items():
                 template = sg.slice_template
@@ -1937,6 +1930,7 @@ SMOKE_GCP_CONFIG = Path(__file__).resolve().parents[3] / "config" / "ci-gcp-smok
 
 
 @pytest.mark.timeout(15)
+@pytest.mark.requires_cluster
 def test_smoke_gcp_config_boots_locally():
     """Load ci-gcp-smoke.yaml, convert to local mode, verify workers join."""
     config = load_config(SMOKE_GCP_CONFIG)
@@ -2132,8 +2126,6 @@ class TestBackendsConfig:
         }
         for rel, region in expected_region.items():
             config_path = iris_root / rel
-            if not config_path.exists():
-                pytest.skip(f"Config not found: {rel}")
             config = load_config(config_path)
             resolved = resolve_backends(config)
             assert list(resolved) == [DEFAULT_BACKEND_ID]
@@ -2206,4 +2198,4 @@ def test_k8s_backend_uses_canonical_default_task_image():
     backend = make_task_backend(config, unreachable_grace=Duration.from_seconds(1))
 
     assert isinstance(backend, K8sTaskProvider)
-    assert backend.default_image == "registry.example/iris-task:abc1234"
+    assert backend.pods.default_image == "registry.example/iris-task:abc1234"

@@ -310,9 +310,10 @@ def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
 
 
 def reset_data_config_cache() -> None:
-    """Clear the cluster-config and bucket-registry caches. For tests."""
+    """Clear the cluster-config, region, and bucket-registry caches. For tests."""
     _load_cluster_config_cached.cache_clear()
     data_buckets.cache_clear()
+    _region_from_metadata.cache_clear()
     s3_data_buckets.cache_clear()
     store_configs.cache_clear()
 
@@ -322,7 +323,8 @@ def reset_data_config_cache() -> None:
 # ---------------------------------------------------------------------------
 
 
-def region_from_metadata() -> str | None:
+@functools.cache
+def _region_from_metadata() -> str | None:
     """Derive the GCP region from the instance metadata server, or ``None``."""
     try:
         req = urllib.request.Request(_GCP_METADATA_ZONE_URL, headers={"Metadata-Flavor": "Google"})
@@ -333,6 +335,11 @@ def region_from_metadata() -> str | None:
     if "-" not in zone:
         return None
     return zone.rsplit("-", 1)[0]
+
+
+def region_from_metadata() -> str | None:
+    """Derive the cached GCP region from the instance metadata server."""
+    return _region_from_metadata()
 
 
 def region_from_prefix(prefix: str) -> str | None:

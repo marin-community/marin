@@ -1,7 +1,7 @@
 {
   "uid": "marin-pipelines",
   "title": "Pipelines",
-  "description": "Zephyr pipeline throughput and shard resource usage from the zephyr.worker finelog namespace, summed or averaged across a stage's running shards.",
+  "description": "Zephyr throughput and shard memory, scoped to one execution. zephyr.worker carries a row per shard per sample interval; zephyr.stage carries one row per stage completion.",
   "tags": [
     "marin",
     "generated"
@@ -11,7 +11,7 @@
   "schemaVersion": 39,
   "refresh": "1m",
   "time": {
-    "from": "now-3h",
+    "from": "now-6h",
     "to": "now"
   },
   "templating": {
@@ -19,24 +19,216 @@
       {
         "name": "cluster",
         "label": "Cluster",
-        "type": "datasource",
-        "query": "yesoreyeram-infinity-datasource",
+        "type": "custom",
+        "description": "The clusters the bridge serves (infra/grafana/src/config.py). A custom list rather than a query so a cluster that has gone silent -- exactly when you want to select it -- is still in the dropdown.",
+        "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a,marin,marin-dev",
+        "options": [
+          {
+            "selected": false,
+            "text": "cw-rno2a",
+            "value": "cw-rno2a"
+          },
+          {
+            "selected": false,
+            "text": "cw-us-east-02a",
+            "value": "cw-us-east-02a"
+          },
+          {
+            "selected": false,
+            "text": "cw-us-east-08a",
+            "value": "cw-us-east-08a"
+          },
+          {
+            "selected": false,
+            "text": "marin",
+            "value": "marin"
+          },
+          {
+            "selected": false,
+            "text": "marin-dev",
+            "value": "marin-dev"
+          }
+        ],
         "current": {
-          "text": "finelog-marin",
-          "value": "finelog-marin"
-        }
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "includeAll": true,
+        "multi": true,
+        "hide": 0,
+        "refresh": 0
+      },
+      {
+        "name": "execution",
+        "label": "Execution",
+        "type": "query",
+        "description": "Zephyr executions with shard samples inside the dashboard window.",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "definition": "SELECT DISTINCT execution_id AS value FROM \"zephyr.worker\" WHERE COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:",
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-execution",
+          "infinityQuery": {
+            "refId": "variable-execution",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT DISTINCT execution_id AS value FROM \"zephyr.worker\" WHERE COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} ORDER BY 1"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "sort": 1,
+        "regex": "",
+        "hide": 0
       }
     ]
   },
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Home",
+      "type": "link",
+      "url": "/d/marin-home"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Accelerators",
+      "type": "link",
+      "url": "/d/marin-accel"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node details",
+      "type": "link",
+      "url": "/d/marin-nodes"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node pools",
+      "type": "link",
+      "url": "/d/marin-node-pools"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Jobs",
+      "type": "link",
+      "url": "/d/marin-jobs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Runs",
+      "type": "link",
+      "url": "/d/marin-runs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Clusters",
+      "type": "link",
+      "url": "/d/marin-clusters"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Inference",
+      "type": "link",
+      "url": "/d/marin-inference"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Infra",
+      "type": "link",
+      "url": "/d/infra"
+    }
+  ],
   "panels": [
     {
       "id": 1,
       "type": "timeseries",
       "title": "Item rate by stage",
-      "description": "Items per second summed across a stage's running shards, from zephyr.worker.item_rate.",
+      "description": "Items per second summed across the running shards of each stage. A stage flattening while others continue is the straggler.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "${cluster}"
+        "uid": "finelog-marin"
       },
       "gridPos": {
         "h": 8,
@@ -47,13 +239,28 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "min": 0,
           "custom": {
             "drawStyle": "line",
-            "showPoints": "never"
-          }
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
@@ -68,7 +275,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, stage_name AS series, SUM(item_rate) AS value FROM \"zephyr.worker\" WHERE status = 'RUNNING' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, stage_name AS series, SUM(item_rate) AS value FROM \"zephyr.worker\" WHERE status = 'RUNNING' AND execution_id IN (${execution:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -88,12 +295,12 @@
             },
             {
               "selector": "series",
-              "text": "stage",
+              "text": "series",
               "type": "string"
             },
             {
               "selector": "value",
-              "text": "items_per_s",
+              "text": "value",
               "type": "number"
             }
           ]
@@ -103,11 +310,11 @@
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Throughput by stage",
-      "description": "Bytes per second summed across a stage's running shards, from zephyr.worker.byte_rate.",
+      "title": "Byte rate by stage",
+      "description": "Bytes per second summed across running shards. Divergence from item rate means the record size changed, not the throughput.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "${cluster}"
+        "uid": "finelog-marin"
       },
       "gridPos": {
         "h": 8,
@@ -118,13 +325,28 @@
       "fieldConfig": {
         "defaults": {
           "unit": "Bps",
-          "min": 0,
           "custom": {
             "drawStyle": "line",
-            "showPoints": "never"
-          }
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
@@ -139,7 +361,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, stage_name AS series, SUM(byte_rate) AS value FROM \"zephyr.worker\" WHERE status = 'RUNNING' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, stage_name AS series, SUM(byte_rate) AS value FROM \"zephyr.worker\" WHERE status = 'RUNNING' AND execution_id IN (${execution:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -159,12 +381,12 @@
             },
             {
               "selector": "series",
-              "text": "stage",
+              "text": "series",
               "type": "string"
             },
             {
               "selector": "value",
-              "text": "bytes_per_s",
+              "text": "value",
               "type": "number"
             }
           ]
@@ -175,27 +397,42 @@
       "id": 3,
       "type": "timeseries",
       "title": "Shard memory by stage",
-      "description": "Mean resident memory across a stage's running shards, from zephyr.worker.mem_current_bytes.",
+      "description": "Mean resident memory per running shard. A stage climbing towards its limit will be OOM-killed and retried.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
-        "uid": "${cluster}"
+        "uid": "finelog-marin"
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 12,
         "x": 0,
         "y": 8
       },
       "fieldConfig": {
         "defaults": {
           "unit": "bytes",
-          "min": 0,
           "custom": {
             "drawStyle": "line",
-            "showPoints": "never"
-          }
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
         },
         "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
@@ -210,7 +447,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, stage_name AS series, AVG(mem_current_bytes) AS value FROM \"zephyr.worker\" WHERE status = 'RUNNING' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, stage_name AS series, AVG(mem_current_bytes) AS value FROM \"zephyr.worker\" WHERE status = 'RUNNING' AND execution_id IN (${execution:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -230,12 +467,290 @@
             },
             {
               "selector": "series",
-              "text": "stage",
+              "text": "series",
               "type": "string"
             },
             {
               "selector": "value",
-              "text": "mem_bytes",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Stage outcomes",
+      "description": "Stage completions and failures per bucket. Failures here are the pipeline's own retries, distinct from task retries on the Jobs dashboard.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 22,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "END"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "FAILED"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "START"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "RUNNING"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, status AS series, COUNT(*) AS value FROM \"zephyr.stage\" WHERE execution_id IN (${execution:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Completed stages",
+      "description": "One row per stage completion, newest first: elapsed time, items, bytes, rates and peak shard memory.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "time",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT ts, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, execution_id, stage_name, status, elapsed, items, bytes_processed, item_rate, byte_rate, total_shards, mem_peak_bytes_max FROM \"zephyr.stage\" WHERE execution_id IN (${execution:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} ORDER BY ts DESC LIMIT 200"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "ts",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "execution_id",
+              "text": "execution",
+              "type": "string"
+            },
+            {
+              "selector": "stage_name",
+              "text": "stage",
+              "type": "string"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            },
+            {
+              "selector": "elapsed",
+              "text": "elapsed",
+              "type": "number"
+            },
+            {
+              "selector": "items",
+              "text": "items",
+              "type": "number"
+            },
+            {
+              "selector": "bytes_processed",
+              "text": "bytes",
+              "type": "number"
+            },
+            {
+              "selector": "item_rate",
+              "text": "items/s",
+              "type": "number"
+            },
+            {
+              "selector": "byte_rate",
+              "text": "bytes/s",
+              "type": "number"
+            },
+            {
+              "selector": "total_shards",
+              "text": "shards",
+              "type": "number"
+            },
+            {
+              "selector": "mem_peak_bytes_max",
+              "text": "peak mem",
               "type": "number"
             }
           ]

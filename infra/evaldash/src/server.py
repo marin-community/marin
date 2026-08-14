@@ -3,16 +3,16 @@
 
 """Eval-results dashboard server (Starlette + uvicorn).
 
-Serves a bundled Vue SPA plus a small JSON API over the eval run records. Records are
-the canonical per-run JSON written to ``gs://marin-eval-metadata/runs/<run_id>/record.json``
-and indexed into CloudSQL Postgres.
+Serves a bundled Vue SPA plus a small JSON API over eval run records under the GCS or CoreWeave
+``evals`` output root. It also scans the former flat ``eval-metadata/runs`` roots while older CLI
+checkouts can still write there.
 
 A background task ingests the records on startup and every ``EVALDASH_INGEST_INTERVAL`` seconds
 (default 300). Reads are served through a ``RecordStore`` selected by ``EVALDASH_STORE``: the
 production ``postgres`` store upserts each record into Cloud SQL and fails fast if no DB is
 configured, while the ``local`` store serves entirely from the object-store record snapshot with
 no database (for development against a ``RECORDS_PREFIXES`` directory). Both keep an in-memory
-snapshot the matrix/meta/groups/history views read from, since ``results_db`` exposes no aggregate
+snapshot the panel/meta/groups/history views read from, since ``results_db`` exposes no aggregate
 query for them; a prefix whose listing fails keeps its last successfully-listed records in that
 snapshot rather than dropping out of it.
 
@@ -40,32 +40,20 @@ import contextlib
 import logging
 import os
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-import samples
 import sqlalchemy
 import uvicorn
+from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE, Completeness, MissingPolicy, SelectionRequest
 from marin.evaluation.records import (
-    CW_RECORDS_PREFIX,
-    DEFAULT_RECORDS_PREFIX,
+    DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
     RecordParseFailure,
-    read_records,
-)
-from metrics import build_matrix, build_meta, record_score
-from results_db import (
-    connect_engine,
-    ensure_schema,
-    eval_runs,
-    fetch_archived_models,
-    fetch_runs,
-    resolve_db_config,
-    set_model_archived,
-    upsert_record,
+    scan_records,
 )
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from sqlalchemy.engine import Engine
@@ -75,11 +63,35 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from . import review, samples
+from .metrics import (
+    RUN_FACETS,
+    build_comparison,
+    build_meta,
+    build_model_detail,
+    build_panel,
+    panel_request,
+    record_headline,
+)
+from .results_db import (
+    connect_engine,
+    ensure_schema,
+    eval_runs,
+    fetch_archived_models,
+    fetch_runs,
+    resolve_db_config,
+    set_model_archived,
+    upsert_record,
+)
+
 logger = logging.getLogger(__name__)
 
 RECORDS_PREFIXES = tuple(
     part.strip()
-    for part in os.environ.get("RECORDS_PREFIXES", f"{DEFAULT_RECORDS_PREFIX},{CW_RECORDS_PREFIX}").split(",")
+    for part in os.environ.get(
+        "RECORDS_PREFIXES",
+        ",".join(DEFAULT_SCAN_PREFIXES),
+    ).split(",")
     if part.strip()
 )
 INGEST_INTERVAL_SECONDS = int(os.environ.get("EVALDASH_INGEST_INTERVAL", "300"))
@@ -92,6 +104,11 @@ DEFAULT_LOG_TAIL = 200
 MAX_LOG_TAIL = 5000
 DEFAULT_SAMPLE_LIMIT = 50
 MAX_SAMPLE_LIMIT = 500
+DEFAULT_REVIEW_SAMPLES = 20
+MAX_REVIEW_SAMPLES = 40
+# Most models one request may compare head-to-head; mirrors the SPA's picker cap.
+MAX_COMPARE_MODELS = 4
+REVIEW_FILTERS = ("all", "correct", "incorrect", "ungraded")
 
 IAP_USER_HEADER = "x-goog-authenticated-user-email"
 IAP_USER_PREFIX = "accounts.google.com:"
@@ -109,6 +126,14 @@ class StoreInfo:
     backend: str
     instance: str | None
     database: str | None
+
+
+def _deduplicate_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
+    """Keep the first record for each run ID so prefix order defines migration precedence."""
+    by_id: dict[str, EvalRunRecord] = {}
+    for record in records:
+        by_id.setdefault(record.run_id, record)
+    return list(by_id.values())
 
 
 def record_to_row(record: EvalRunRecord) -> dict:
@@ -155,7 +180,7 @@ class RecordStore:
     """In-memory snapshot of eval records plus the read views the API serves over it.
 
     The base serves every read from the snapshot the ingest loop swaps wholesale each cycle (run
-    list, run detail, group siblings, matrix, meta, groups, history) and holds the archived-model
+    list, run detail, group siblings, panel, meta, groups, history) and holds the archived-model
     set in memory. :class:`MemoryRecordStore` uses these directly for local, offline runs;
     :class:`PgRecordStore` overrides the run list, run detail, group siblings, refresh, and archive
     state to read the durable Postgres index instead. The lock guards the snapshot swap against the
@@ -185,11 +210,12 @@ class RecordStore:
 
     def refresh(self, records: list[EvalRunRecord]) -> None:
         """Absorb a fresh record listing. The base only swaps the snapshot; Postgres also upserts."""
+        records = _deduplicate_records(records)
         self._set_snapshot(records)
         logger.info("memory store refreshed: %d records", len(records))
 
     def archived_models(self) -> set[str]:
-        """Model names hidden from the headline matrix. In-memory in the base; a table in Postgres."""
+        """Model names hidden from the headline panel. In-memory in the base; a table in Postgres."""
         with self._lock:
             return set(self._archived)
 
@@ -229,14 +255,25 @@ class RecordStore:
         rows.sort(key=lambda row: row["created_at"] or "", reverse=True)
         return rows[:limit]
 
-    def matrix(self, include_archived: bool = False) -> dict:
-        """The model x eval matrix over the snapshot. Archived models are dropped unless requested;
-        when included, their rows carry ``archived: true`` so the UI can style them apart."""
+    def panel(self, request: SelectionRequest, aggregate: MissingPolicy | None, include_archived: bool) -> dict:
+        """The model x benchmark panel the request selects, over the snapshot.
+
+        Archived models are dropped unless requested; when included, their rows carry
+        ``archived: true`` so the UI can style them apart.
+        """
         records, _by_id = self._snapshot()
         archived = self.archived_models()
         if not include_archived:
             records = [record for record in records if record.model.name not in archived]
-        return build_matrix(records, frozenset(archived))
+        return build_panel(records, request, frozenset(archived), aggregate)
+
+    def comparison(self, request: SelectionRequest, models: tuple[str, ...]) -> dict:
+        """Head-to-head difference intervals between named models, over the snapshot.
+
+        Archived models are always in scope: naming a model is an explicit request for it.
+        """
+        records, _by_id = self._snapshot()
+        return build_comparison(records, request, models)
 
     def meta(self) -> dict:
         records, _by_id = self._snapshot()
@@ -283,30 +320,28 @@ class RecordStore:
     def history(self, model: str, task: str) -> list[dict]:
         """Every run's headline score for one ``(model, eval)`` over time, oldest first.
 
-        ``task`` is a matrix column, i.e. a registry eval name. One point per run that produced a
-        primary metric -- with its stderr, status, and provenance for the score-over-time tooltip.
+        ``task`` is a panel column, i.e. a registry eval name. One point per run that produced a
+        primary metric, each carrying its interval, coverage, and provenance for the tooltip.
         """
         records, _by_id = self._snapshot()
         points = []
         for record in records:
             if record.model.name != model or record.evaluation.name != task:
                 continue
-            score = record_score(record)
-            if score is None:
+            headline = record_headline(record)
+            if headline is None:
                 continue
-            points.append(
-                {
-                    "run_id": record.run_id,
-                    "created_at": record.created_at,
-                    "value": score.value,
-                    "stderr": score.stderr,
-                    "metric": score.metric,
-                    "status": record.status.value,
-                    "git_sha": record.provenance.git_sha,
-                }
-            )
+            points.append({**headline, "status": record.status.value})
         points.sort(key=lambda point: point["created_at"] or "")
         return points
+
+    def model_detail(self, model: str) -> dict | None:
+        """One model's aggregated detail view: cohorts, per-eval history, and every run.
+
+        ``None`` when the model has no records, so the route can answer 404.
+        """
+        records, _by_id = self._snapshot()
+        return build_model_detail(records, model)
 
     def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
         records, _by_id = self._snapshot()
@@ -336,7 +371,7 @@ class PgRecordStore(RecordStore):
 
     ``get_record`` reads the durable ``record`` jsonb from Postgres -- the same table the run list
     is served from -- so a run indexed there but absent from the latest ingest snapshot (its source
-    prefix failed to list this cycle) still resolves. ``matrix``, ``meta``, ``groups``, and
+    prefix failed to list this cycle) still resolves. ``panel``, ``meta``, ``groups``, and
     ``history`` inherit the base's snapshot reads, since ``results_db`` exposes no aggregate query.
     """
 
@@ -352,6 +387,7 @@ class PgRecordStore(RecordStore):
         return StoreInfo(backend=self.backend, instance=self._instance, database=self._database)
 
     def refresh(self, records: list[EvalRunRecord]) -> None:
+        records = _deduplicate_records(records)
         self._set_snapshot(records)
         for record in records:
             upsert_record(self._engine, record)
@@ -475,12 +511,14 @@ class Ingestor:
     """
 
     def __init__(self, store: RecordStore, prefixes: tuple[str, ...], interval: float) -> None:
+        """Create an ingestor whose prefixes are ordered from highest to lowest precedence."""
         self._store = store
         self._prefixes = prefixes
         self.interval = interval
         self._lock = asyncio.Lock()
         self._probes = {prefix: PrefixProbe(prefix=prefix) for prefix in prefixes}
         self._last_good: dict[str, list[EvalRunRecord]] = {prefix: [] for prefix in prefixes}
+        self._record_cache: dict[str, dict[str, EvalRunRecord]] = {prefix: {} for prefix in prefixes}
         self.last_pass_time: str | None = None
 
     async def run_once(self) -> None:
@@ -495,7 +533,9 @@ class Ingestor:
                 probe = self._probes[prefix]
                 probe.last_probe_time = _utcnow_iso()
                 try:
-                    found, failures = await asyncio.to_thread(read_records, prefix)
+                    scan = await asyncio.to_thread(scan_records, prefix, self._record_cache[prefix])
+                    found = list(scan.records)
+                    failures = list(scan.failures)
                 except Exception as exc:
                     # One unreachable store (missing CW keys, transient outage) must not hide the
                     # rest, and must not drop this prefix's previously-ingested runs from the
@@ -510,6 +550,7 @@ class Ingestor:
                 probe.error = None
                 logger.info("ingest: %d records (%d unparseable) from %s", len(found), len(failures), prefix)
                 self._last_good[prefix] = found
+                self._record_cache[prefix] = scan.records_by_path
                 records.extend(found)
             await asyncio.to_thread(self._store.refresh, records)
             self.last_pass_time = _utcnow_iso()
@@ -549,8 +590,7 @@ _NOT_BUILT_HTML = (
 
 
 def _dashboard_dist() -> Path:
-    """Locate the built SPA: env override, the image layout (beside this file), or the repo
-    layout (``../dashboard/dist``)."""
+    """Locate the built SPA: env override, package-local dist, or repository dashboard dist."""
     override = os.environ.get("EVALDASH_DASHBOARD_DIST")
     if override:
         return Path(override)
@@ -591,6 +631,10 @@ def _current_user(request: Request) -> str | None:
     return raw.removeprefix(IAP_USER_PREFIX)
 
 
+class BadRequest(ValueError):
+    """A query parameter the server will not guess at, surfaced to the caller as a 400."""
+
+
 def _parse_limit(raw: str | None) -> int:
     return _parse_int(raw, default=DEFAULT_RUNS_LIMIT, low=1, high=MAX_RUNS_LIMIT)
 
@@ -606,6 +650,59 @@ def _parse_int(raw: str | None, *, default: int, low: int, high: int) -> int:
     return max(low, min(value, high))
 
 
+def _parse_flag(raw: str | None) -> bool:
+    return raw in ("1", "true")
+
+
+def _parse_names(raw: str | None) -> tuple[str, ...] | None:
+    """A comma-separated benchmark selection, or None for "every benchmark present"."""
+    if not raw:
+        return None
+    names = tuple(part.strip() for part in raw.split(",") if part.strip())
+    return names or None
+
+
+def _parse_coverage(raw: str | None) -> float:
+    """The coverage floor a result must clear to be displayed."""
+    if not raw:
+        return DEFAULT_MIN_COVERAGE
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise BadRequest(f"min_coverage must be a number in [0, 1], got {raw!r}") from exc
+    if not 0.0 <= value <= 1.0:
+        raise BadRequest(f"min_coverage must be in [0, 1], got {value}")
+    return value
+
+
+def _parse_aggregate(raw: str | None) -> MissingPolicy | None:
+    """The cross-benchmark aggregation policy, or None for no aggregate at all.
+
+    Absent by default: a mean across benchmarks has no interpretation without a declared panel and
+    missing-data policy, so a caller has to ask for one and say which policy it wants. An unrecognized
+    policy is an error rather than "no aggregate": the two answer different questions, and silently
+    substituting one for the other hides the typo.
+    """
+    if not raw:
+        return None
+    try:
+        return MissingPolicy(raw)
+    except ValueError as exc:
+        policies = ", ".join(policy.value for policy in MissingPolicy)
+        raise BadRequest(f"unknown aggregate policy {raw!r}; expected one of: {policies}") from exc
+
+
+def _parse_review_n(raw: object) -> int:
+    """Clamp the review sample count to ``[1, MAX_REVIEW_SAMPLES]``; the default on absent/unparseable."""
+    if raw is None:
+        return DEFAULT_REVIEW_SAMPLES
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_REVIEW_SAMPLES
+    return max(1, min(value, MAX_REVIEW_SAMPLES))
+
+
 def _collect_job_status(gateway: ClusterGatewayLike, jobs: dict[str, str]) -> list[dict]:
     """Live iris job status for each pipeline role in a record's ``jobs`` map, order preserved."""
     return [{"role": role, "job_path": path, **gateway.job_status(path)} for role, path in jobs.items()]
@@ -617,35 +714,32 @@ def _status_payload(store: RecordStore, ingestor: Ingestor) -> dict:
 
 
 def _status_rollup(statuses: set[str]) -> str:
-    """Collapse a launch's per-eval statuses into one: all-succeeded, a single shared failure, or mixed."""
+    """Collapse a launch's per-eval statuses without inventing an evaluator failure."""
     if statuses == {"succeeded"}:
         return "succeeded"
     if "succeeded" not in statuses:
-        return next(iter(statuses)) if len(statuses) == 1 else "failed"
+        if len(statuses) == 1:
+            return next(iter(statuses))
+        if "failed" in statuses:
+            return "failed"
     return "mixed"
 
 
 def _run_headline(record: dict) -> dict | None:
-    """The run's overall grade for the detail header: its rolled-up primary metric as
-    ``{value, metric, stderr}``, or None when nothing scored (an infra or eval failure that never
-    produced metrics)."""
-    score = record_score(EvalRunRecord.model_validate(record))
-    if score is None:
-        return None
-    return {"value": score.value, "metric": score.metric, "stderr": score.stderr}
+    """The run's overall grade for the detail header: its rolled-up primary metric with the interval
+    and coverage behind it, or None when nothing scored (an infra or eval failure that never produced
+    metrics)."""
+    return record_headline(EvalRunRecord.model_validate(record))
 
 
 def _group_member(record: EvalRunRecord) -> dict:
     """One eval within a launch: its identity, status, and headline score for the expanded group row."""
-    score = record_score(record)
     return {
         "run_id": record.run_id,
         "eval_name": record.evaluation.name,
         "status": record.status.value,
         "created_at": record.created_at,
-        "value": score.value if score else None,
-        "metric": score.metric if score else None,
-        "stderr": score.stderr if score else None,
+        "headline": record_headline(record),
     }
 
 
@@ -759,6 +853,7 @@ def create_app(
             offset=_parse_int(params.get("offset"), default=0, low=0, high=10_000_000),
             limit=_parse_int(params.get("limit"), default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
             correct=params.get("correct") or "all",
+            extraction_filter=params.get("extraction_filter") or None,
         )
         return JSONResponse(payload.model_dump(mode="json"))
 
@@ -771,6 +866,27 @@ def create_app(
         if not uri:
             return JSONResponse({"error": "uri is required"}, status_code=400)
         payload = await asyncio.to_thread(samples.fetch_artifact, record.get("results_path"), uri)
+        return JSONResponse(payload.model_dump(mode="json"))
+
+    async def api_run_samples_review(request: Request) -> JSONResponse:
+        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+        if record is None:
+            return JSONResponse({"error": "unknown run_id"}, status_code=404)
+        body = await request.json()
+        task = body.get("task")
+        if not task:
+            return JSONResponse({"error": "task is required"}, status_code=400)
+        sample_filter = body.get("filter", "all")
+        if sample_filter not in REVIEW_FILTERS:
+            return JSONResponse({"error": f"filter must be one of {REVIEW_FILTERS}"}, status_code=400)
+        payload = await asyncio.to_thread(
+            review.review_run_samples,
+            record.get("results_path"),
+            (record.get("model") or {}).get("name"),
+            task,
+            sample_filter,
+            _parse_review_n(body.get("n")),
+        )
         return JSONResponse(payload.model_dump(mode="json"))
 
     async def api_run_group(request: Request) -> JSONResponse:
@@ -791,9 +907,47 @@ def create_app(
         points = await asyncio.to_thread(store.history, model, task)
         return JSONResponse({"model": model, "task": task, "points": points})
 
-    async def api_matrix(request: Request) -> JSONResponse:
-        include_archived = request.query_params.get("include_archived") in ("1", "true")
-        return JSONResponse(await asyncio.to_thread(store.matrix, include_archived))
+    async def api_model_detail(request: Request) -> JSONResponse:
+        detail = await asyncio.to_thread(store.model_detail, request.path_params["model_name"])
+        if detail is None:
+            return JSONResponse({"error": "unknown model"}, status_code=404)
+        return JSONResponse(detail)
+
+    def _selection(params: Mapping[str, str]) -> SelectionRequest:
+        """The panel selection a query string asks for, shared by the panel and compare endpoints."""
+        return panel_request(
+            benchmarks=_parse_names(params.get("benchmarks")),
+            cohort_version=params.get("cohort") or None,
+            completeness=Completeness.COMPLETE_PANEL if _parse_flag(params.get("complete")) else Completeness.ANY,
+            min_coverage=_parse_coverage(params.get("min_coverage")),
+            filters={facet: value for facet in RUN_FACETS if (value := params.get(facet))},
+            model_query=params.get("model") or None,
+            include_flagged=_parse_flag(params.get("include_flagged")),
+        )
+
+    async def api_panel(request: Request) -> JSONResponse:
+        params = request.query_params
+        try:
+            selection = _selection(params)
+            aggregate = _parse_aggregate(params.get("aggregate"))
+        except BadRequest as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        payload = await asyncio.to_thread(store.panel, selection, aggregate, _parse_flag(params.get("include_archived")))
+        return JSONResponse(payload)
+
+    async def api_compare(request: Request) -> JSONResponse:
+        params = request.query_params
+        models = _parse_names(params.get("models"))
+        if models is None or len(models) < 2:
+            return JSONResponse({"error": "compare needs at least two models"}, status_code=400)
+        if len(models) > MAX_COMPARE_MODELS:
+            return JSONResponse({"error": f"compare takes at most {MAX_COMPARE_MODELS} models"}, status_code=400)
+        try:
+            selection = _selection(params)
+        except BadRequest as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        payload = await asyncio.to_thread(store.comparison, selection, models)
+        return JSONResponse(payload)
 
     async def api_groups(request: Request) -> JSONResponse:
         params = request.query_params
@@ -833,14 +987,17 @@ def create_app(
         Route("/api/runs", api_runs),
         Route("/api/groups", api_groups),
         Route("/api/models/{model_name:str}/archive", api_model_archive, methods=["POST"]),
+        Route("/api/models/{model_name:str}", api_model_detail),
         Route("/api/runs/{run_id:str}/jobs", api_run_jobs),
         Route("/api/runs/{run_id:str}/logs", api_run_logs),
         Route("/api/runs/{run_id:str}/samples/tasks", api_run_samples_tasks),
         Route("/api/runs/{run_id:str}/samples/artifact", api_run_samples_artifact),
+        Route("/api/runs/{run_id:str}/samples/review", api_run_samples_review, methods=["POST"]),
         Route("/api/runs/{run_id:str}/samples", api_run_samples),
         Route("/api/runs/{run_id:str}/group", api_run_group),
         Route("/api/runs/{run_id:str}", api_run_detail),
-        Route("/api/matrix", api_matrix),
+        Route("/api/panel", api_panel),
+        Route("/api/compare", api_compare),
         Route("/api/history", api_history),
         Route("/api/meta", api_meta),
         Route("/api/status", api_status),
@@ -864,7 +1021,7 @@ def main() -> None:
     else:
         # Production only: the live gateway pulls in the iris/finelog connect clients, which local
         # mode neither has nor needs. Import it lazily so local dev runs without those deps.
-        from cluster import ClusterGateway  # noqa: PLC0415
+        from .cluster import ClusterGateway  # noqa: PLC0415
 
         configure_coreweave_s3()
         gateway = ClusterGateway()

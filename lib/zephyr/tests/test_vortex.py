@@ -9,7 +9,8 @@ from fray.types import ResourceConfig
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.expr import col
-from zephyr.readers import InputFileSpec, load_parquet, load_vortex
+from zephyr.input_file import InputFileSpec
+from zephyr.readers import load_parquet, load_vortex
 from zephyr.writers import write_parquet_file, write_vortex_file
 
 

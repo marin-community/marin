@@ -19,6 +19,7 @@ from typing import Any
 
 import braceexpand
 import fsspec
+from fsspec.callbacks import DEFAULT_CALLBACK, Callback
 
 
 def _url_to_fs(url: str) -> tuple[Any, str]:
@@ -77,7 +78,8 @@ class StoragePath:
     resolves through the guarded :func:`url_to_fs`/:func:`open_url` factory (cross-region
     budget, ``mirror://``, finite S3 timeouts) rather than memoizing a filesystem handle
     on the frozen instance. The listing verbs (:meth:`ls`, :meth:`walk`, :meth:`glob`)
-    return reopenable :class:`StoragePath` values.
+    return reopenable :class:`StoragePath` values and do not reuse stale GCS/S3
+    directory listings unless the process explicitly configures a cache.
     """
 
     scheme: str | None
@@ -309,10 +311,17 @@ class StoragePath:
         fs, path = _url_to_fs(str(self))
         fs.mv(path, str(target))
 
-    def download_to(self, local_path: str, *, recursive: bool = False) -> None:
+    def download_to(
+        self,
+        local_path: str,
+        *,
+        recursive: bool = False,
+        callback: Callback = DEFAULT_CALLBACK,
+        batch_size: int | None = None,
+    ) -> None:
         """Copy this (remote) path down to ``local_path`` on the local disk."""
         fs, path = _url_to_fs(str(self))
-        fs.get(path, local_path, recursive=recursive)
+        fs.get(path, local_path, recursive=recursive, callback=callback, batch_size=batch_size)
 
     def upload_from(self, local_path: str, *, recursive: bool = False) -> None:
         """Copy ``local_path`` from the local disk up to this (remote) path."""

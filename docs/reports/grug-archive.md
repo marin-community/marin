@@ -43,6 +43,14 @@ goes stale on the next commit.
 - Purpose: canonical Mixture-of-Experts variant; carries its own model, optimizer, train loop, and launch wiring so it can iterate independently of the dense template.
 - Issue: https://github.com/marin-community/marin/pull/3046
 
+### grug-moe-hero-ep
+- Path: `experiments/grug/moe_hero_ep/`
+- Origin: `moe_hero_fsdp` at PR 7876
+- Introduced: b0d20062a
+- Status: active
+- Purpose: one-rack GB200 EP64 throughput and MFU baseline.
+- Issue: https://github.com/marin-community/marin/issues/7279
+
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834

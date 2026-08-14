@@ -2,7 +2,7 @@
 
 This guide will walk you through the steps to set up a local GPU environment for Marin.
 By "local", we mean a machine that you run jobs on directly, as opposed to dispatching them to a shared cluster via [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md).
-To dispatch a GPU job to Marin's shared H100 fleet instead, see [Training on Cloud GPUs](cloud-gpu.md).
+To dispatch a GPU job to Marin's shared GPU fleet instead, see [Training on Cloud GPUs](cloud-gpu.md).
 
 ## Prerequisites
 
@@ -58,7 +58,8 @@ accepts a `--device` flag that selects the accelerator:
 ```bash
 export MARIN_PREFIX=local_store
 export WANDB_ENTITY=...
-uv run python experiments/tutorials/train_tiny_model.py --device h100x8 --dataset wikitext
+uv run python experiments/tutorials/train_tiny_model.py \
+  --device h100x8 --dataset wikitext --version dev --run
 ```
 
 `MARIN_PREFIX` sets the root directory for all outputs; it can be a local path or anything
@@ -68,18 +69,22 @@ The same script runs on CPU, GPU, and TPU — only `--device` and `--dataset` ch
 device entry in `train_tiny_model.py` configures resources and batch size:
 
 ```python
-from fray.cluster import ResourceConfig
-from levanter.optim import AdamConfig
-from marin.experiment.train import train_lm
+from fray.types import ANY_REGION, ResourceConfig
 
 # "h100x8" entry in DEVICES (resources, batch_size)
-resources = ResourceConfig.with_gpu("H100", count=8, cpu=32, disk="128G", ram="128G")
+resources = ResourceConfig.with_gpu(
+    "H100", count=8, cpu=32, disk="128G", ram="128G", regions=[ANY_REGION]
+)
 batch_size = 256
 ```
+
+`regions=[ANY_REGION]` is not optional for the GPU entries: the fleets live in federated
+CoreWeave clusters that advertise no region, so an inherited region would exclude every host
+with the GPU and leave the job unschedulable.
 
 Whereas `--device cpu` uses `ResourceConfig.with_cpu()` and a batch size of 4, `--device h100x8`
 uses eight H100s with a larger batch. Adding a new device is one entry in the `DEVICES` dict —
 no separate file needed.
 
-To scale up, submit the same script to Marin's shared H100 fleet — see [Training on Cloud
+To scale up, submit the same script to Marin's shared GPU fleet — see [Training on Cloud
 GPUs](cloud-gpu.md), which covers the storage prefix, region, and cluster-pinning a GPU job needs.

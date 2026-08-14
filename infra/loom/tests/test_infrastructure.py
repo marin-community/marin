@@ -8,9 +8,11 @@ from dataclasses import replace
 
 import pulumi
 import pytest
+import yaml
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
+    ROOT,
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
@@ -62,7 +64,6 @@ def deployment_config() -> DeploymentConfig:
         vm_service_account_name="loom-vm",
         machine_type="e2-highmem-4",
         boot_disk_gb=100,
-        data_disk_gb=500,
         dotenv_secret_version=3,
         snapshot_retention_days=14,
         vm_project_roles=("roles/cloudsql.client", "roles/cloudsql.instanceUser"),
@@ -79,6 +80,7 @@ def deployment_config() -> DeploymentConfig:
                     "class": "automation",
                     "strict": True,
                     "envClear": True,
+                    "instructionsFile": "profiles/ops/AGENTS.md",
                     "env": {"KUBECONFIG": {"secretRef": "projects/example/secrets/ops-kubeconfig/versions/latest"}},
                 },
             ),
@@ -175,6 +177,20 @@ def test_profile_manifest_accepts_secret_references_but_rejects_values() -> None
         ProfileConfig.parse("ops", {"agent": "codex", "env": {"OPS_TOKEN": "plaintext"}})
 
 
+def test_profile_instructions_reject_ambiguous_or_external_sources() -> None:
+    with pytest.raises(ValueError, match="only one"):
+        ProfileConfig.parse(
+            "slack",
+            {
+                "agent": "codex",
+                "instructions": "inline",
+                "instructionsFile": "profiles/slack/AGENTS.md",
+            },
+        )
+    with pytest.raises(ValueError, match="under"):
+        ProfileConfig.parse("slack", {"agent": "codex", "instructionsFile": "../../AGENTS.md"})
+
+
 @pytest.mark.parametrize(
     "mcp_access",
     [
@@ -200,14 +216,27 @@ def test_deployment_models_durable_resources_without_secret_payloads():
 
         vm = by_name(mocks, "loom")
         attached = field(vm.inputs, "attached_disks", "attachedDisks")
-        assert attached is not None
-        assert len(attached) == 1
-        assert field(attached[0], "device_name", "deviceName") == "loom-data"
-        assert field(attached[0], "auto_delete", "autoDelete") is not True
-        assert vm.inputs["metadata"]["dotenv-secret-version"] == "3"
-        assert "startup-script" in vm.inputs["metadata"]
-        assert "loom-compose" in vm.inputs["metadata"]
-        assert "loom-caddyfile" in vm.inputs["metadata"]
+        assert not attached
+        boot_disk = field(vm.inputs, "boot_disk", "bootDisk")
+        assert boot_disk is not None
+        assert field(boot_disk, "auto_delete", "autoDelete") is False
+        root_disk = by_name(mocks, "loom-root")
+        assert root_disk.typ == "gcp:compute/disk:Disk"
+        assert root_disk.inputs["name"] == "loom"
+        assert boot_disk["source"] == "loom-root_id"
+        snapshot_attachment = by_name(mocks, "loom-snapshot-policy")
+        assert snapshot_attachment.inputs["disk"] == "loom"
+        metadata = vm.inputs["metadata"]
+        assert metadata["dotenv-secret-version"] == "3"
+        assert json.loads(metadata["docker-daemon-config"]) == {
+            "data-root": "/var/lib/docker",
+            "default-ulimits": {"core": {"Name": "core", "Hard": 0, "Soft": 0}},
+        }
+        assert yaml.safe_load(metadata["loom-compose"])["services"]["loom"]["working_dir"] == "/home/app"
+        assert "data-disk-device" not in metadata
+        assert "startup-script" in metadata
+        assert "loom-compose" in metadata
+        assert "loom-caddyfile" in metadata
         assert "metadataStartupScript" not in vm.inputs
         assert "metadata_startup_script" not in vm.inputs
         assert field(vm.inputs, "allow_stopping_for_update", "allowStoppingForUpdate") is False
@@ -227,7 +256,7 @@ def test_deployment_models_durable_resources_without_secret_payloads():
             "projects/example/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
         )
 
-    return infrastructure.instance.id.apply(check)
+    return infrastructure.activation.id.apply(check)
 
 
 @pulumi.runtime.test
@@ -282,13 +311,19 @@ def test_release_rollout_pins_metadata_to_the_built_image_digest():
 
 @pulumi.runtime.test
 def test_profiles_and_workloads_render_to_vm_metadata():
-    infrastructure, mocks = infrastructure_and_mocks()
+    mocks = RecordingMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
+    infrastructure = create_infrastructure(replace(deployment_config(), settings=(("slack.profile", "ops"),)))
 
     def check(_: object) -> None:
         assert by_name(mocks, "loom-workload-marin-ops").typ == "gcp:serviceaccount/account:Account"
         manifest = json.loads(by_name(mocks, "loom").inputs["metadata"]["loom-deployment"])
         assert manifest["prune"] is True
+        assert manifest["settings"] == {"slack.profile": "ops"}
         assert manifest["profiles"][0]["profile"]["name"] == "ops"
+        assert manifest["profiles"][0]["profile"]["instructions"] == (
+            (ROOT / "profiles/ops/AGENTS.md").read_text().strip()
+        )
         assert manifest["federations"][0]["subject"] == "11223344556677889900"
 
     return infrastructure.instance.id.apply(check)

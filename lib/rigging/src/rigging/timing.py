@@ -516,7 +516,10 @@ class ExponentialBackoff:
 
         # Beyond this attempt count the raw interval exceeds maximum, so
         # further exponentiation is pointless (and eventually overflows float64).
-        self._max_attempt = int(math.log(self._maximum / self._initial) / math.log(self._factor)) + 1
+        if self._factor == 1.0:
+            self._max_attempt = 0
+        else:
+            self._max_attempt = int(math.log(self._maximum / self._initial) / math.log(self._factor)) + 1
 
     def next_interval(self) -> float:
         effective_attempt = min(self._attempt, self._max_attempt)

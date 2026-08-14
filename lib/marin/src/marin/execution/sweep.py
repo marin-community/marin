@@ -31,6 +31,7 @@ from typing import Any
 
 from rigging.filesystem import prefix_join
 
+from marin.execution.artifact import JSONValue, StepRecordIdentity, payload_json, write_step_record
 from marin.execution.step_status import (
     STATUS_FAILED,
     STATUS_SUCCESS,
@@ -142,11 +143,39 @@ def _lead(
                 except Exception:
                     status_file.write_status(STATUS_FAILED)
                     raise
+                _write_cell_record(target_path, target)
                 status_file.write_status(STATUS_SUCCESS)
         except StepAlreadyDone:
             logger.info("Skipping %s: already completed by a peer worker", target.target_id)
     coordinator.publish(seq, None)
     coordinator.wait_for_followers(seq)
+
+
+def _write_cell_record(target_path: str, target: SweepTarget) -> None:
+    """Write the sweep cell's ``.artifact.json`` — the executor's own record, minus a dep graph.
+
+    A sweep cell is a standalone unit with no marin dependency edges, so ``deps`` is empty; the
+    record still ties the cell's identity (``target_id``), its ``config``, and launch provenance to
+    the output directory, so the run is catalogable and reproducible from disk. Written only by the
+    leader (which owns the gang's on-disk output) on success, before ``STATUS_SUCCESS``.
+    """
+    write_step_record(
+        StepRecordIdentity(name=target.target_id, deps=[], dep_paths=[], config=_config_payload(target.config)),
+        output_path=target_path,
+        result=None,
+    )
+
+
+def _config_payload(config: Any) -> dict[str, JSONValue] | None:
+    """Serialize an opaque sweep config to the record's JSON-object ``config`` field.
+
+    Sweep configs are structured (a dataclass, pydantic model, or dict), so they encode to a JSON
+    object; a config that does not is a caller error, surfaced rather than silently dropped.
+    """
+    payload = payload_json(config)
+    if payload is None or isinstance(payload, dict):
+        return payload
+    raise TypeError(f"sweep target config must serialize to a JSON object, got {type(config).__name__}")
 
 
 def _follow(

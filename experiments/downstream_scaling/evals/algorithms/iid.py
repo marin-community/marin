@@ -160,7 +160,7 @@ def make_iid_completion_step(
         fn=remote(
             run_iid_completion_chunks,
             resources=config.execution.worker_resources,
-            pip_dependency_groups=["vllm", "tpu"],
+            pip_dependency_groups=["vllm"],
             env_vars=VLLM_TPU_ENV_VARS,
         ),
         config=IIDCompletionStepConfig(

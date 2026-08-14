@@ -10,7 +10,7 @@ the built-in kinds cover common PR and Iris waits without shell parsing:
 
     poll <shell command>    fires when the command exits 0
     github.ci <PR>          fires the moment any check fails, else when all checks pass
-    github.pr <PR>          fires on terminal, conflicted, review, or ready-for-review state
+    github.pr <PR>          fires on terminal, conflict, review-decision, or ready state
     github.pr_comment <PR>  fires on a new comment that raises a real code concern
     github.review <PR>      fires on a decisive review, or one whose body raises a concern
     iris.job <job-id>       fires when an Iris job reaches a terminal state (in-task only)
@@ -21,6 +21,10 @@ decision changes, or a draft becomes ready for review. The payload names every
 reason that fired and includes the complete before/after snapshots. A PR first
 observed as terminal or conflicted fires immediately, so arming the selector
 after the state change does not lose an actionable condition.
+
+``github.pr`` does not inspect comment or review bodies. Arm
+``github.pr_comment`` and ``github.review`` alongside it to wake for actionable
+feedback; none of the three PR event kinds replaces another.
 
 ``iris.job`` runs the Iris client's blocking ``Job.wait`` in a daemon worker. Its
 state polling and controller retries use the Iris client policy; the selector
@@ -44,13 +48,15 @@ quoted token each) or stdin (one per line; ``#`` comments):
 
     uv run scripts/ci/wait_for.py --timeout 12h \\
       'poll loom session poll weaver/foo --quiet | grep -q done' \\
-      'github.ci 1234' 'github.pr 1234' 'github.pr_comment 1234'
+      'github.ci 1234' 'github.pr 1234' \\
+      'github.pr_comment 1234' 'github.review 1234'
 
     uv run scripts/ci/wait_for.py --timeout 12h <<'HERE'
     poll loom session poll weaver/foo --quiet | grep -q done
     github.ci 1234
     github.pr 1234
     github.pr_comment 1234
+    github.review 1234
     HERE
 
 Prints one JSON object naming the arm that fired and its payload. Exit ``0`` an arm
@@ -74,7 +80,7 @@ from typing import NamedTuple
 
 import click
 from connectrpc.errors import ConnectError
-from iris.client import IrisClient, Job
+from iris.client.client import IrisClient, Job
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -917,7 +923,11 @@ def main(
     comment_filter: str,
     quiet: bool,
 ) -> None:
-    """Block until the first armed event fires; print which one as JSON."""
+    """Block until the first armed event fires; print which one as JSON.
+
+    github.pr watches lifecycle and review-decision changes only. Arm
+    github.pr_comment and github.review separately to watch feedback bodies.
+    """
     parsed = read_specs(specs, use_stdin=use_stdin)
     github_kinds = (EventKind.GITHUB_CI, EventKind.GITHUB_PR, EventKind.GITHUB_PR_COMMENT, EventKind.GITHUB_REVIEW)
     needs_github = any(s.kind in github_kinds for s in parsed)

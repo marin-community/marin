@@ -19,7 +19,8 @@ use hyper_util::rt::TokioExecutor;
 use crate::proto::finelog::logging::LogServiceClient;
 use crate::proto::finelog::stats::StatsServiceClient;
 use crate::server::auth::AuthPolicy;
-use crate::server::{build_app_with_config, ServerConfig, MAX_MESSAGE_BYTES};
+use crate::server::forwarding::forward_client_config;
+use crate::server::{build_app_with_config, ServerConfig};
 use crate::store::Store;
 use crate::test_support::unique_dir;
 
@@ -37,10 +38,63 @@ pub const PRIV_UNTRUSTED: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwB
 /// transport is the same code.
 pub type TestTransport = ServiceTransport<HyperClient<HttpConnector, ClientBody>>;
 
+#[derive(Default)]
+pub struct RequestStats {
+    total: AtomicUsize,
+    zstd: AtomicUsize,
+    in_flight: AtomicUsize,
+    max_in_flight: AtomicUsize,
+}
+
+impl RequestStats {
+    /// Record a POST entering the test server. `true` means the caller must invoke
+    /// [`Self::finish`] after the response completes.
+    fn begin(&self, request: &axum::extract::Request) -> bool {
+        if request.method() != axum::http::Method::POST {
+            return false;
+        }
+        self.total.fetch_add(1, Ordering::SeqCst);
+        if request
+            .headers()
+            .get(axum::http::header::CONTENT_ENCODING)
+            .is_some_and(|encoding| encoding == "zstd")
+        {
+            self.zstd.fetch_add(1, Ordering::SeqCst);
+        }
+        let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
+        true
+    }
+
+    fn finish(&self) {
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    pub fn total(&self) -> usize {
+        self.total.load(Ordering::SeqCst)
+    }
+
+    pub fn zstd_requests(&self) -> usize {
+        self.zstd.load(Ordering::SeqCst)
+    }
+
+    pub fn max_in_flight(&self) -> usize {
+        self.max_in_flight.load(Ordering::SeqCst)
+    }
+}
+
 /// A disk-backed store with its flush/maintenance tasks running, so a push becomes
 /// query-visible exactly as it does in production.
 pub fn disk_store(tag: &str) -> Arc<Store> {
-    let store = Arc::new(Store::new(Some(unique_dir(tag)), String::new()).unwrap());
+    let store = Arc::new(
+        Store::new(
+            Some(unique_dir(tag)),
+            String::new(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Live,
+        )
+        .unwrap(),
+    );
     store.bootstrap_maintenance();
     store
 }
@@ -50,9 +104,9 @@ fn client_config(addr: SocketAddr) -> (TestTransport, ClientConfig) {
     let transport = ServiceTransport::new(
         HyperClient::builder(TokioExecutor::new()).build(HttpConnector::new()),
     );
-    let config = ClientConfig::new(uri)
-        .proto()
-        .with_default_max_message_size(MAX_MESSAGE_BYTES);
+    // Match production forwarding clients so integration tests exercise the
+    // server's level-1 zstd request path for large WriteRows payloads.
+    let config = forward_client_config(uri);
     (transport, config)
 }
 
@@ -68,18 +122,20 @@ pub fn stats_client(addr: SocketAddr) -> StatsServiceClient<TestTransport> {
 
 /// Serve `store` on an ephemeral loopback port under `policy`, counting the RPC
 /// requests that reach it. Returns the address and that counter.
-pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<AtomicUsize>) {
-    let requests = Arc::new(AtomicUsize::new(0));
+pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<RequestStats>) {
+    let requests = Arc::new(RequestStats::default());
     let counted = Arc::clone(&requests);
     let app = build_app_with_config(store, ServerConfig::default().with_auth(policy)).layer(
         axum::middleware::from_fn(
             move |req: axum::extract::Request, next: axum::middleware::Next| {
                 let counted = Arc::clone(&counted);
                 async move {
-                    if req.method() == axum::http::Method::POST {
-                        counted.fetch_add(1, Ordering::SeqCst);
+                    let observed = counted.begin(&req);
+                    let response = next.run(req).await;
+                    if observed {
+                        counted.finish();
                     }
-                    next.run(req).await
+                    response
                 }
             },
         ),
@@ -101,22 +157,30 @@ pub async fn serve(store: Arc<Store>, policy: AuthPolicy) -> (SocketAddr, Arc<At
 /// structurally malformed entry (an empty key). Retrying such a request can never
 /// succeed, so this fixture lets a test prove the forwarder skips the batch instead of
 /// livelocking on it. Returns the address and a count of the requests it served.
-pub async fn serve_rejecting() -> (SocketAddr, Arc<AtomicUsize>) {
-    let requests = Arc::new(AtomicUsize::new(0));
+pub async fn serve_rejecting() -> (SocketAddr, Arc<RequestStats>) {
+    let requests = Arc::new(RequestStats::default());
     let counted = Arc::clone(&requests);
-    let app = axum::Router::new().fallback(axum::routing::any(move || {
-        let counted = Arc::clone(&counted);
-        async move {
-            counted.fetch_add(1, Ordering::SeqCst);
-            let error =
-                connectrpc::ConnectError::new(connectrpc::ErrorCode::InvalidArgument, "empty key");
-            (
-                axum::http::StatusCode::BAD_REQUEST,
-                [(axum::http::header::CONTENT_TYPE, "application/json")],
-                error.to_json(),
-            )
-        }
-    }));
+    let app = axum::Router::new().fallback(axum::routing::any(
+        move |request: axum::extract::Request| {
+            let counted = Arc::clone(&counted);
+            async move {
+                let observed = counted.begin(&request);
+                let error = connectrpc::ConnectError::new(
+                    connectrpc::ErrorCode::InvalidArgument,
+                    "empty key",
+                );
+                let response = (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    error.to_json(),
+                );
+                if observed {
+                    counted.finish();
+                }
+                response
+            }
+        },
+    ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {

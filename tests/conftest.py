@@ -2,13 +2,29 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 import tempfile
+from pathlib import Path
 
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from levanter.testing.tokenizer import stage_gpt2_tokenizer
+from levanter.tokenizers import load_tokenizer
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
+
+
+@pytest.fixture(scope="session")
+def gpt2_tokenizer_path(tmp_path_factory) -> str:
+    source_dir = Path(__file__).resolve().parents[1] / "lib" / "levanter" / "tests"
+    output_dir = tmp_path_factory.mktemp("gpt2_tokenizer")
+    return str(stage_gpt2_tokenizer(source_dir, output_dir))
+
+
+@pytest.fixture(scope="session")
+def gpt2_tokenizer(gpt2_tokenizer_path):
+    """Load the checked-in GPT-2 tokenizer without accessing Hugging Face."""
+    return load_tokenizer(gpt2_tokenizer_path)
 
 
 @pytest.fixture(autouse=True)

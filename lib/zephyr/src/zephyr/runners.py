@@ -24,6 +24,7 @@ package initialization (which would trip a ``runpy`` re-execution warning).
 """
 
 import logging
+import math
 import os
 import re
 import signal
@@ -165,25 +166,30 @@ def _wrap_stage_stats(gen: Iterator[_T]) -> Iterator[_T]:
         yield item
 
 
-def _sample_process_stats(cpu_s_at_start: float, proc: psutil.Process) -> None:
-    """Sample the current process's resource usage into the current stage's counters.
+def _sample_process_stats(
+    cpu_s_at_start: float,
+    proc: psutil.Process,
+    ctx: _InProcessWorkerContext,
+) -> None:
+    """Sample the current process's resource usage into the shard context.
 
     Uses set_counter (not increment) because these are point-in-time metrics.
     Peak memory is tracked as a monotonically increasing max across calls.
     ``cpu_s_at_start`` is subtracted from cumulative CPU time to give per-shard delta.
     ``proc`` must be the same object across calls so cpu_percent() has a
     prior measurement to diff against; prime it once before the first sample.
+    The context is explicit because sampler threads do not inherit ContextVars.
     """
     rss = proc.memory_info().rss
     cpu_times = proc.cpu_times()
     cpu_pct = proc.cpu_percent()
-    stage_counters = counters.current_stage()
-    stage_counters.set_counter(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, cpu_pct)
-    stage_counters.update_counter(ZEPHYR_WORKER_CPU_PCT_AVERAGE_KEY, cpu_pct)
-    stage_counters.set_counter(ZEPHYR_WORKER_CPU_TIME_KEY, cpu_times.user + cpu_times.system - cpu_s_at_start)
-    stage_counters.set_counter(ZEPHYR_WORKER_MEM_CURRENT_KEY, rss)
-    stage_counters.update_counter(ZEPHYR_WORKER_MEM_AVERAGE_KEY, rss)
-    stage_counters.update_counter(ZEPHYR_WORKER_MEM_PEAK_KEY, rss)
+    stage = ctx.current_stage_name()
+    ctx.set_counter(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, cpu_pct, stage=stage)
+    ctx.update_counter(ZEPHYR_WORKER_CPU_PCT_AVERAGE_KEY, cpu_pct, stage=stage)
+    ctx.set_counter(ZEPHYR_WORKER_CPU_TIME_KEY, cpu_times.user + cpu_times.system - cpu_s_at_start, stage=stage)
+    ctx.set_counter(ZEPHYR_WORKER_MEM_CURRENT_KEY, rss, stage=stage)
+    ctx.update_counter(ZEPHYR_WORKER_MEM_AVERAGE_KEY, rss, stage=stage)
+    ctx.update_counter(ZEPHYR_WORKER_MEM_PEAK_KEY, rss, stage=stage)
 
 
 def _set_counter_aggregations() -> None:
@@ -221,7 +227,7 @@ def _periodic_sampler(
     """
     while not stop_event.wait(timeout=interval):
         try:
-            _sample_process_stats(cpu_s_at_start, proc)
+            _sample_process_stats(cpu_s_at_start, proc, ctx)
             stats_writer.emit_worker_stat(
                 task.stage_name,
                 task.shard_idx,
@@ -295,7 +301,7 @@ def _shard_stats_session(
             # than the last periodic tick. Telemetry must not fail a shard that
             # already produced its result, so a sampling error is logged only.
             try:
-                _sample_process_stats(cpu_s_at_start, proc)
+                _sample_process_stats(cpu_s_at_start, proc, ctx)
             except Exception:
                 logger.warning("Failed to take final process stats sample", exc_info=True)
         status = ZephyrWorkerStatStatus.FAILED if failed else ZephyrWorkerStatStatus.END
@@ -308,6 +314,7 @@ def _run_stage_with_ctx(
     task: ShardTask,
     chunk_prefix: str,
     execution_id: str,
+    external_sort_dir: str | None = None,
 ) -> TaskResult:
     """Run one ShardTask in the active worker context, writing stage output to disk.
 
@@ -324,7 +331,8 @@ def _run_stage_with_ctx(
     )
     output_stage_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", task.stage_name).strip("-")
     stage_dir = f"{chunk_prefix}/{execution_id}/{output_stage_name}"
-    external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
+    if external_sort_dir is None:
+        external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
     scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
     return _write_stage_output(
         _wrap_stage_stats(run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)),
@@ -418,11 +426,23 @@ class SubprocessRunner:
             # ``-u`` keeps the child's stdout/stderr unbuffered so any
             # faulthandler traceback reaches the parent's log before the
             # process dies.
-            proc = sp.run(
-                [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file],
-                stdout=sys.stdout,
-                stderr=sys.stderr,
-            )
+            child_env = os.environ.copy()
+            child_env["POLARS_MAX_THREADS"] = str(max(1, math.ceil(task.cost.cpu)))
+            with tempfile.TemporaryDirectory(prefix=f"zephyr-external-sort-{task.shard_idx:04d}-") as sort_dir:
+                proc = sp.run(
+                    [
+                        sys.executable,
+                        "-u",
+                        "-m",
+                        "zephyr.shard_subprocess",
+                        task_file,
+                        result_file,
+                        sort_dir,
+                    ],
+                    env=child_env,
+                    stdout=sys.stdout,
+                    stderr=sys.stderr,
+                )
 
             if proc.returncode != 0:
                 # Linux OOM-killer sends SIGKILL → returncode == -9. Distinguish

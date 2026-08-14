@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 # Logical registry name for the finelog log/stats server. Clients resolve this
 # via the controller's endpoint registry to the concrete finelog address.
 LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
+TELEMETRY_ENDPOINT_PATH = "/v1/telemetry"
 
 SchemeResolver = Callable[[str, dict[str, str]], str]
 
@@ -84,32 +85,8 @@ def _split_host_port(authority: str) -> tuple[str, str | None]:
     return authority, None
 
 
-def _resolve_gcp(uri: str, metadata: dict[str, str]) -> str:
-    """Resolve ``gcp://<instance>[:port]`` to ``http://<internal_ip>:<port>``."""
-    authority = uri[len("gcp://") :]
-    if not authority:
-        raise ValueError(f"gcp:// URI missing instance name: {uri!r}")
-    instance, port_from_uri = _split_host_port(authority)
-    if not instance:
-        raise ValueError(f"gcp:// URI missing instance name: {uri!r}")
-
-    port = port_from_uri or metadata.get("port")
-    if not port:
-        raise ValueError(f"gcp:// endpoint requires a port (URI suffix or metadata.port): {uri!r}")
-
-    zone = metadata.get("zone")
-    if not zone:
-        raise ValueError(f"gcp:// endpoint requires metadata.zone: {uri!r}")
-
-    project = metadata.get("project")
-    if not project:
-        try:
-            _, project = google.auth.default()
-        except Exception as exc:
-            raise RuntimeError(f"gcp:// endpoint could not resolve project via ADC: {exc}") from exc
-    if not project:
-        raise ValueError(f"gcp:// endpoint requires metadata.project (ADC default unavailable): {uri!r}")
-
+def gcp_instance_internal_ip(instance: str, *, project: str, zone: str) -> str:
+    """Return the primary internal IPv4 address of a GCE instance."""
     cmd = [
         "gcloud",
         "compute",
@@ -144,7 +121,36 @@ def _resolve_gcp(uri: str, metadata: dict[str, str]) -> str:
     ip = interfaces[0].get("networkIP")
     if not ip:
         raise RuntimeError(f"gcp:// instance {instance!r} has no networkInterfaces[0].networkIP")
+    return ip
 
+
+def _resolve_gcp(uri: str, metadata: dict[str, str]) -> str:
+    """Resolve ``gcp://<instance>[:port]`` to ``http://<internal_ip>:<port>``."""
+    authority = uri[len("gcp://") :]
+    if not authority:
+        raise ValueError(f"gcp:// URI missing instance name: {uri!r}")
+    instance, port_from_uri = _split_host_port(authority)
+    if not instance:
+        raise ValueError(f"gcp:// URI missing instance name: {uri!r}")
+
+    port = port_from_uri or metadata.get("port")
+    if not port:
+        raise ValueError(f"gcp:// endpoint requires a port (URI suffix or metadata.port): {uri!r}")
+
+    zone = metadata.get("zone")
+    if not zone:
+        raise ValueError(f"gcp:// endpoint requires metadata.zone: {uri!r}")
+
+    project = metadata.get("project")
+    if not project:
+        try:
+            _, project = google.auth.default()
+        except Exception as exc:
+            raise RuntimeError(f"gcp:// endpoint could not resolve project via ADC: {exc}") from exc
+    if not project:
+        raise ValueError(f"gcp:// endpoint requires metadata.project (ADC default unavailable): {uri!r}")
+
+    ip = gcp_instance_internal_ip(instance, project=project, zone=zone)
     return f"http://{ip}:{port}"
 
 

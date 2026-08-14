@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 IRIS_SLICE_COUNT = "IRIS_SLICE_COUNT"
 IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
+IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
+IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
 
 # Container paths shared across runtimes: the bundle unpacks into WORKDIR_PATH and
 # the setup script populates the venv at VENV_PATH (which the run phase activates).
@@ -38,6 +40,12 @@ VENV_PATH = f"{WORKDIR_PATH}/.venv"
 UV_CACHE_PATH = "/uv/cache"
 HF_HUB_CACHE_PATH = "/hf/cache"
 CARGO_HOME_PATH = "/cargo"
+# Unclaimed node-local scratch, for anything that needs a real directory on the
+# node rather than a bucket. Tasks pick their own subdirectory; nothing prunes
+# it. `iris.runtime.jax_init` puts XLA's per-fusion autotune cache under
+# `/cache/xla` because XLA opens that directory from C++ through `tsl::Env`,
+# which has no object-store filesystem.
+SCRATCH_CACHE_PATH = "/cache"
 
 # The task container filesystem, as mounted by every runtime. Each runtime binds
 # a CACHE entry to cache_host_dirname(path) under its own cache_dir, so one node
@@ -55,6 +63,7 @@ STANDARD_MOUNTS: tuple[MountSpec, ...] = (
     MountSpec("uv-cache", UV_CACHE_PATH, kind=MountKind.CACHE),
     MountSpec("hf-cache", HF_HUB_CACHE_PATH, kind=MountKind.CACHE),
     MountSpec("cargo", CARGO_HOME_PATH, kind=MountKind.CACHE),
+    MountSpec("scratch-cache", SCRATCH_CACHE_PATH, kind=MountKind.CACHE),
 )
 
 

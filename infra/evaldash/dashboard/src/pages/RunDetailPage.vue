@@ -4,15 +4,17 @@ import { RouterLink } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import {
+  formatCoverage,
   formatDuration,
+  formatInterval,
   formatScore,
-  formatStderr,
   formatTimestamp,
   githubCommitUrl,
   objectStoreUrl,
   shortSha,
 } from '@/utils/formatting'
-import type { EvalRecord } from '@/types/api'
+import { isPartialCoverage } from '@/utils/panel'
+import { FLAG_NOTES, INTERVAL_KIND, type EvalRecord } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import JobsPanel from '@/components/runs/JobsPanel.vue'
 import LogsPanel from '@/components/runs/LogsPanel.vue'
@@ -46,6 +48,34 @@ const metricRows = computed<MetricRow[]>(() => {
 })
 
 const jobRoles = computed(() => Object.keys(data.value?.jobs ?? {}))
+
+// What the grade's interval rests on: the share of attempted items this run actually graded, or a
+// statement that the mechanism reported no attempted count -- in which case completeness is unknown
+// and the interval covers sampling error alone.
+const gradedNote = computed<{ label: string; warn: boolean }>(() => {
+  const headline = data.value?.headline
+  if (!headline) return { label: '', warn: false }
+  if (headline.interval_kind !== INTERVAL_KIND.IDENTIFIED) {
+    return { label: 'attempted count unreported', warn: false }
+  }
+  if (!isPartialCoverage(headline)) return { label: 'all items graded', warn: false }
+  return { label: formatCoverage(headline.coverage), warn: true }
+})
+
+// Properties the statistics engine flagged on this grade, spelled out. A flagged run is still a real
+// measurement, so this explains what was observed and leaves the judgement to the reader.
+const flagNotes = computed<string[]>(() =>
+  (data.value?.headline?.flags ?? []).filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
+)
+
+// Per-error-type counts for the items this run attempted and never graded: an admitted batch keeps
+// its error breakdown, so a reader can tell the model's score apart from the infrastructure's.
+const attritionRows = computed<{ error: string; count: number }[]>(() => {
+  const errors = data.value?.headline?.errors ?? {}
+  return Object.entries(errors)
+    .map(([error, count]) => ({ error, count }))
+    .sort((a, b) => b.count - a.count)
+})
 
 // The eval's wall-clock duration, when the record captured a timing window. Null (rendered as "—")
 // for records without timing.
@@ -111,7 +141,10 @@ async function copyPath() {
           >{{ data.version }}</span>
         </div>
         <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-text-secondary">
-          <span class="font-mono">{{ data.model.name }}</span>
+          <RouterLink
+            :to="`/models/${encodeURIComponent(data.model.name)}`"
+            class="font-mono text-accent hover:underline"
+          >{{ data.model.name }}</RouterLink>
           <span class="text-text-muted">·</span>
           <span>{{ data.eval.name }} <span class="text-text-muted">({{ data.eval.mechanism }})</span></span>
           <span class="text-text-muted">·</span>
@@ -134,8 +167,14 @@ async function copyPath() {
             <div class="text-3xl font-semibold tabular-nums leading-none mt-1">
               {{ formatScore(data.headline.value) }}<span class="text-lg text-text-muted">%</span>
             </div>
-            <div class="text-xs font-mono text-text-muted mt-1 truncate max-w-[16rem]" :title="data.headline.metric">
-              {{ data.headline.metric }} {{ formatStderr(data.headline.value, data.headline.stderr) }}
+            <div class="text-xs font-mono text-text-muted mt-1">
+              95% {{ formatInterval(data.headline.low, data.headline.high) }}
+            </div>
+            <div class="text-xs font-mono text-text-muted truncate max-w-[16rem]" :title="data.headline.metric">
+              {{ data.headline.metric }} · {{ data.headline.n_scored }} items
+            </div>
+            <div class="text-xs font-mono mt-0.5" :class="gradedNote.warn ? 'text-status-warning' : 'text-text-muted'">
+              {{ gradedNote.label }}
             </div>
           </template>
           <div v-else class="text-3xl font-semibold text-text-muted leading-none mt-1">—</div>
@@ -147,6 +186,42 @@ async function copyPath() {
         <div>
           <div class="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Finished</div>
           <div class="text-sm font-medium mt-1.5">{{ formatTimestamp(finishedAt) }}</div>
+        </div>
+      </div>
+
+      <!-- What the engine noticed about this grade: stated as the observation, not as a verdict -->
+      <div v-if="flagNotes.length" class="rounded-lg border border-status-warning-border bg-status-warning-bg p-3">
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-status-warning mb-1">Worth checking</h3>
+        <ul class="text-sm leading-relaxed list-disc pl-5">
+          <li v-for="note in flagNotes" :key="note">{{ note }}</li>
+        </ul>
+      </div>
+
+      <!-- Attrition: the items this run attempted and never graded, by cause -->
+      <div v-if="attritionRows.length">
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
+          Ungraded items
+          <span class="font-normal normal-case text-text-muted"
+            >— attempted but never scored; the grade's interval widens to cover them</span
+          >
+        </h3>
+        <div class="overflow-x-auto rounded-lg border border-surface-border">
+          <table class="w-full border-collapse text-sm">
+            <thead>
+              <tr
+                class="border-b border-surface-border bg-surface-raised text-xs font-semibold uppercase tracking-wider text-text-secondary"
+              >
+                <th class="px-3 py-2 text-left">Cause</th>
+                <th class="px-3 py-2 text-right">Items</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in attritionRows" :key="row.error" class="border-b border-surface-border-subtle">
+                <td class="px-3 py-2 font-mono text-[13px]">{{ row.error }}</td>
+                <td class="px-3 py-2 text-right tabular-nums">{{ row.count }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 

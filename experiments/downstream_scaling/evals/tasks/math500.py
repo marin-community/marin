@@ -131,8 +131,8 @@ def write_math500_prompts(config: Math500PromptsConfig) -> None:
 def _grade_math500_shard(items, shard_info):
     # Optional deps: math_grading pulls sympy and pylatexenc, which arrive with the
     # `math` extra this step requests.
-    from marin.rl.environments.tinker_environments.math_env import safe_grade  # noqa: PLC0415
-    from marin.rl.environments.tinker_environments.math_grading import extract_boxed  # noqa: PLC0415
+    from experiments.downstream_scaling.evals.tasks.math_env import safe_grade  # noqa: PLC0415
+    from experiments.downstream_scaling.evals.tasks.math_grading import extract_boxed  # noqa: PLC0415
 
     for item in items:
         try:

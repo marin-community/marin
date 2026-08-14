@@ -176,15 +176,18 @@ def _source_rows(decon_out: str, k: int, rng: random.Random) -> tuple[int, int, 
     """
     n_docs = n_flagged = 0
     reservoir: list[dict] = []
-    for tbl in _read_parquet(f"{decon_out.rstrip('/')}/outputs/main", columns=["id", "attributes"]):
+    columns = ["id", "contaminated", "max_overlap", "matched_hashes"]
+    for tbl in _read_parquet(f"{decon_out.rstrip('/')}/outputs/main", columns=columns):
         ids = tbl.column("id").to_pylist()
-        attrs = tbl.column("attributes").to_pylist()
+        contaminated = tbl.column("contaminated").to_pylist()
+        max_overlap = tbl.column("max_overlap").to_pylist()
+        matched_hashes = tbl.column("matched_hashes").to_pylist()
         n_docs += len(ids)
-        for did, a in zip(ids, attrs, strict=True):
-            if a is None or not a.get("contaminated"):
+        for did, is_contaminated, overlap, hashes in zip(ids, contaminated, max_overlap, matched_hashes, strict=True):
+            if not is_contaminated:
                 continue
             n_flagged += 1
-            row = {"id": did, "max_overlap": a.get("max_overlap"), "matched_hashes": a.get("matched_hashes") or []}
+            row = {"id": did, "max_overlap": overlap, "matched_hashes": hashes or []}
             if len(reservoir) < k:
                 reservoir.append(row)
             else:

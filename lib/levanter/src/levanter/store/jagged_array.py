@@ -16,7 +16,6 @@ import tensorstore as ts
 from rigging.filesystem import StoragePath, is_cross_region_url, record_transfer, url_to_fs
 
 from levanter.tensorstore_serialization import build_kvstore_spec
-from levanter.utils.thread_utils import future_from_value
 
 
 CACHE_BYTES_LIMIT = int(os.getenv("LEVANTER_TS_CACHE_LIMIT", "1000000000"))
@@ -100,10 +99,6 @@ class PreparedBatch:
     data: np.ndarray
     offsets: np.ndarray
     shapes: Optional[np.ndarray]
-
-    @property
-    def byte_size(self):
-        return self.data.nbytes + self.offsets.nbytes + (self.shapes.nbytes if self.shapes is not None else 0)
 
     def astype(self, dtype):
         return PreparedBatch(self.data.astype(dtype), self.offsets, self.shapes)
@@ -420,25 +415,8 @@ class JaggedArrayStore:
             self._cached_num_rows = num_rows + num_added
             self._cached_data_size = current_data_size + len(data)
 
-    async def reload_async(self) -> "JaggedArrayStore":
-        """
-        Calls `resolve` on the underlying tensorstore objects, updating size information
-
-        @return: new JaggedArrayStore with resolved tensorstores
-        """
-        offsets = ts.open(_unshaped_spec(self.offsets, retain_context=False), **_reload_kwargs())
-        data = ts.open(_unshaped_spec(self.data, retain_context=False), **_reload_kwargs())
-        shapes = (
-            future_from_value(None)
-            if self.shapes is None
-            else ts.open(_unshaped_spec(self.shapes, retain_context=False), **_reload_kwargs())
-        )
-
-        offsets, data, shapes = await asyncio.gather(offsets, data, shapes)
-
-        return JaggedArrayStore(offsets, data, shapes, self.item_rank)
-
     def reload(self) -> "JaggedArrayStore":
+        """Re-open the underlying tensorstores so size information reflects concurrent writes."""
         offsets = ts.open(_unshaped_spec(self.offsets, retain_context=False), **_reload_kwargs())
         data = ts.open(_unshaped_spec(self.data, retain_context=False), **_reload_kwargs())
         shapes = (
@@ -634,7 +612,6 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
             pass
 
     # TODO: groups?
-    # TODO: set chunk sizes
     try:
         if spec.get("kvstore", {}).get("path", "").startswith("memory://"):
             raise ValueError("No kvstore specified in spec, cannot open TensorStore")
@@ -643,11 +620,6 @@ def _ts_open_sync(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
             dtype=jnp.dtype(dtype).name,
             shape=[2**54, *shape[1:]],
             **open_kwargs,
-            # chunk_layout=ts.ChunkLayout(
-            #     read_chunk_shape=[DEFAULT_CHUNK_SIZE, *shape[1:]],
-            #     write_chunk_shape=[DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]
-            # ),
-            # compression={"codec": "zstd", "compression_level": 5},
             **mode_config,
         ).result()
     except ValueError as e:
@@ -672,17 +644,11 @@ async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
             pass
 
     # TODO: groups?
-    # TODO: set chunk sizes
     return await ts.open(
         spec,
         dtype=jnp.dtype(dtype).name,
         shape=[2**54, *shape[1:]],
         **open_kwargs,
-        # chunk_layout=ts.ChunkLayout(
-        #     read_chunk_shape=[DEFAULT_CHUNK_SIZE, *shape[1:]],
-        #     write_chunk_shape=[DEFAULT_WRITE_CHUNK_SIZE, *shape[1:]]
-        # ),
-        # compression={"codec": "zstd", "compression_level": 5},
         **mode_config,
     )
 

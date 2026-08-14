@@ -8,7 +8,7 @@ import haliax as hax
 import numpy as np
 import jax.numpy as jnp
 from jax import random
-from test_utils import skip_if_no_torch, use_test_mesh
+from levanter.testing.helpers import skip_if_no_torch, use_test_mesh
 from transformers import Qwen2Config
 
 from levanter.inference.jit_scheduler import SequenceTable

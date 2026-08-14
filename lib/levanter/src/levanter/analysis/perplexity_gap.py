@@ -72,6 +72,21 @@ class TokenizedChunk:
 
 
 @dataclass(frozen=True)
+class ScoredSegment:
+    """A segment match clipped to the scored byte range of its document."""
+
+    byte_start: int
+    byte_end: int
+    char_start: int
+    char_end: int
+    text: str
+
+    @property
+    def num_bytes(self) -> int:
+        return self.byte_end - self.byte_start
+
+
+@dataclass(frozen=True)
 class _TokenBoundarySpans:
     byte_starts: tuple[int, ...]
     byte_ends: tuple[int, ...]
@@ -170,13 +185,6 @@ class GapReportBuilder:
     _top_segments_negative: list[tuple[float, int, dict[str, Any]]] = field(default_factory=list)
     _heap_counter: itertools.count = field(default_factory=itertools.count)
 
-    def register_dataset(self, dataset_name: str, tags: Sequence[str]) -> None:
-        self.group_to_leaves[dataset_name].add(dataset_name)
-        for tag in tags:
-            self.group_to_leaves[tag].add(dataset_name)
-            self._register_hierarchy(tag, dataset_name)
-        self._register_hierarchy(dataset_name, dataset_name)
-
     def add_document(
         self,
         *,
@@ -186,7 +194,7 @@ class GapReportBuilder:
         tokenized_a: TokenizedDocument | None = None,
         tokenized_b: TokenizedDocument | None = None,
     ) -> None:
-        self.register_dataset(document.dataset_name, document.tags)
+        register_dataset_hierarchy(self.group_to_leaves, document.dataset_name, document.tags)
 
         total_doc_bytes = len(per_byte_loss_a)
         score_start, score_end = document.score_span(total_doc_bytes)
@@ -213,36 +221,17 @@ class GapReportBuilder:
         token_boundary_index_a = _token_boundary_index(tokenized_a) if tokenized_a is not None else None
         token_boundary_index_b = _token_boundary_index(tokenized_b) if tokenized_b is not None else None
 
-        for match in _SEGMENT_RE.finditer(document.text):
-            segment = match.group(0)
-            if not segment:
-                continue
-
-            byte_start = byte_offsets[match.start()]
-            byte_end = byte_offsets[match.end()]
-            overlap_start = max(byte_start, score_start)
-            overlap_end = min(byte_end, score_end)
-            if overlap_end <= overlap_start:
-                continue
-            overlap_char_start, overlap_char_end = _byte_span_to_char_span(
-                byte_offsets,
-                overlap_start,
-                overlap_end,
-            )
-            overlap_segment = document.text[overlap_char_start:overlap_char_end]
-            if not overlap_segment:
-                continue
-
-            segment_loss_a = float(prefix_a[overlap_end] - prefix_a[overlap_start])
-            segment_loss_b = float(prefix_b[overlap_end] - prefix_b[overlap_start])
-            segment_bytes = int(overlap_end - overlap_start)
+        for segment in iter_scored_segments(document.text, byte_offsets, score_start, score_end):
+            segment_loss_a = float(prefix_a[segment.byte_end] - prefix_a[segment.byte_start])
+            segment_loss_b = float(prefix_b[segment.byte_end] - prefix_b[segment.byte_start])
+            segment_bytes = segment.num_bytes
             segment_delta_bits = (segment_loss_a - segment_loss_b) * LOG2E
-            bucket = bucket_for_segment(overlap_segment)
-            visible = render_visible(overlap_segment)
+            bucket = bucket_for_segment(segment.text)
+            visible = render_visible(segment.text)
             segment_summary = WorstSegment(
                 delta_bits=segment_delta_bits,
-                char_start=overlap_char_start,
-                char_end=overlap_char_end,
+                char_start=segment.char_start,
+                char_end=segment.char_end,
                 bytes=segment_bytes,
                 bucket=bucket,
                 text=visible,
@@ -268,11 +257,11 @@ class GapReportBuilder:
                     self._maybe_record_literal_example(
                         literal_key=literal_key,
                         document=document,
-                        segment_text=overlap_segment,
-                        segment_byte_start=overlap_start,
-                        segment_byte_end=overlap_end,
-                        segment_char_start=overlap_char_start,
-                        segment_char_end=overlap_char_end,
+                        segment_text=segment.text,
+                        segment_byte_start=segment.byte_start,
+                        segment_byte_end=segment.byte_end,
+                        segment_char_start=segment.char_start,
+                        segment_char_end=segment.char_end,
                         segment_delta_bits=segment_delta_bits,
                         token_boundary_index_a=token_boundary_index_a,
                         token_boundary_index_b=token_boundary_index_b,
@@ -288,7 +277,7 @@ class GapReportBuilder:
                 "delta_bits": segment_delta_bits,
                 "gap_bpb": segment_delta_bits / segment_bytes,
                 "text": visible,
-                "doc_preview": preview_text_window(document.text, overlap_char_start, overlap_char_end),
+                "doc_preview": preview_text_window(document.text, segment.char_start, segment.char_end),
             }
             _push_top_positive(
                 self._top_segments_positive,
@@ -395,11 +384,6 @@ class GapReportBuilder:
         summary = self.build_summary()
         write_report_files(self.output_path, summary)
         return summary
-
-    def _register_hierarchy(self, tag: str, dataset_name: str) -> None:
-        parts = tag.split("/")
-        for i in range(1, len(parts)):
-            self.group_to_leaves["/".join(parts[:i])].add(dataset_name)
 
     def _maybe_record_literal_example(
         self,
@@ -657,6 +641,61 @@ def _byte_span_to_char_span(byte_offsets: np.ndarray, byte_start: int, byte_end:
     char_start = int(np.searchsorted(byte_offsets, byte_start, side="left"))
     char_end = int(np.searchsorted(byte_offsets, byte_end, side="left"))
     return char_start, char_end
+
+
+def iter_scored_segments(
+    text: str,
+    byte_offsets: np.ndarray,
+    score_start: int,
+    score_end: int,
+) -> Iterator[ScoredSegment]:
+    """Yield the segments of ``text`` that overlap the scored byte range.
+
+    Segments come from :data:`_SEGMENT_RE` and are clipped to ``[score_start, score_end)``, so
+    per-byte losses can be attributed to a segment by indexing a cumulative-loss prefix with
+    :attr:`ScoredSegment.byte_start` and :attr:`ScoredSegment.byte_end`. Segments that fall entirely
+    outside the scored range are skipped.
+
+    Args:
+        text: The document text the segments are drawn from.
+        byte_offsets: Result of :func:`char_to_byte_offsets` for ``text``.
+        score_start: First scored byte offset.
+        score_end: One past the last scored byte offset.
+    """
+    for match in _SEGMENT_RE.finditer(text):
+        if not match.group(0):
+            continue
+
+        byte_start = max(int(byte_offsets[match.start()]), score_start)
+        byte_end = min(int(byte_offsets[match.end()]), score_end)
+        if byte_end <= byte_start:
+            continue
+
+        char_start, char_end = _byte_span_to_char_span(byte_offsets, byte_start, byte_end)
+        segment_text = text[char_start:char_end]
+        if not segment_text:
+            continue
+
+        yield ScoredSegment(
+            byte_start=byte_start,
+            byte_end=byte_end,
+            char_start=char_start,
+            char_end=char_end,
+            text=segment_text,
+        )
+
+
+def register_dataset_hierarchy(group_to_leaves: dict[str, set[str]], dataset_name: str, tags: Sequence[str]) -> None:
+    """Record ``dataset_name`` as a leaf of itself, of each tag, and of every ancestor path thereof.
+
+    Tags are slash-separated paths, so the tag ``"web/cc/2024"`` also registers the dataset under
+    ``"web"`` and ``"web/cc"``.
+    """
+    for group in (dataset_name, *tags):
+        group_to_leaves[group].add(dataset_name)
+        parts = group.split("/")
+        for i in range(1, len(parts)):
+            group_to_leaves["/".join(parts[:i])].add(dataset_name)
 
 
 def manual_special_token_policy(tokenizer: MarinTokenizer) -> tuple[bool, bool]:

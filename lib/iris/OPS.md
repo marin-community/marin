@@ -167,6 +167,62 @@ iris job stop --prefix /user/job-prefix # all jobs with this ID prefix
 iris job summary /user/job-name         # per-task state, exit, duration, peak memory
 ```
 
+The subcommands are `list` and `summary`. There is no `job ls` and no `job info`.
+
+`job logs` returns the last 1000 lines by default. A multi-rank gang emits that
+many in seconds, so a grep for anything earlier in the run comes back empty:
+
+```bash
+iris job logs /user/job/child --max-lines 400000 --no-tail | grep "Saving checkpoint"
+```
+
+### Submitting a GPU gang from a workstation
+
+`--cluster cw-*` connects the CLI to that cluster's controller, which needs a
+`kubectl port-forward` the read-only CoreWeave token cannot open. It fails after
+a 90s timeout, while plain `kubectl get` works. Submit through the hub, which
+federates the job to the peer:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
+  --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive \
+  --cpu 2 --memory 8GB --disk 32GB --timeout 7200 \
+  --job-name my-run-coord \
+  -e WANDB_API_KEY "$WANDB_API_KEY" -e IRIS_PORT_JAX 32731 \
+  -- python -m experiments.<launcher> --run-id my-run --dp-racks 1 --run
+```
+
+- **The GPU gang is not this job.** The submitted job is a small CPU coordinator
+  that runs an experiment launcher; the launcher dispatches the accelerator gang
+  via Fray as a child job at `<coord-job-id>/<gang-name>`. Pass `--cpu`/`--memory`
+  for the coordinator alone and let the launcher size the gang.
+- **The working tree ships with the job.** `job run` bundles the current
+  workspace, so uncommitted and branch-only code runs as-is. The submit log
+  prints the bundle size.
+- **`IRIS_PORT_JAX` must be unique per concurrent gang.** Rank 0 binds and
+  registers it for the JAX coordinator, and the default is shared cluster-wide.
+- **Only `task_env` reaches the container.** Each cluster config's `defaults.task_env`
+  carries `MARIN_PREFIX` and the object-store credentials, and nothing else.
+  `WANDB_API_KEY` is not among them: pass it, or set `WANDB_MODE=disabled` for a
+  run whose metrics do not matter.
+- **`SchedulingGated` on every task means the gang is queued.** Kueue admits a
+  gang all at once, so a busy cluster holds all of it. Same-band jobs queue
+  behind each other; they do not preempt.
+- **`--timeout` covers the queue wait, and killing the coordinator kills the
+  gang.** A contested fleet can hold a gang for hours before admitting it; when
+  the coordinator's deadline passes, its children are torn down mid-run (the
+  tasks report `killed` with a preemption each). Size the timeout for wait plus
+  run.
+
+Reading a job's output needs a CoreWeave object-storage key exported as
+`CW_KEY_ID`/`CW_KEY_SECRET`; without one, `s3://marin-us-east-02a` raises
+`NoCredentialsError`. `fsutil buckets` reports which backends are reachable, and
+[`fsutil`](../../docs/references/fsutil.md) reads them:
+
+```bash
+uv run fsutil ls -l s3://marin-us-east-02a/tmp/my-run/step-1
+```
+
 For machine-readable job data, use the Iris Python client (`IrisClient`) directly.
 
 ### `job run` gotchas
@@ -207,6 +263,35 @@ The exec session is non-interactive and buffers output. To run a command that su
 iris task exec /user/job/0 -- bash -c "nohup bash -c 'your-command > /tmp/out.log 2>&1' &"
 iris task exec /user/job/0 -- cat /tmp/out.log   # check later
 ```
+
+### Task with no logs or W&B progress
+
+Determine whether the task is pending, building, running, or terminal before treating
+missing logs or W&B metrics as a training stall:
+
+```bash
+iris task describe /user/job/0
+iris task events /user/job/0
+iris job logs /user/job
+```
+
+A task without a running container cannot produce task-local logs or W&B updates. For a
+running task, compare the current attempt and exit reason with driver/container logs and
+the resource request. A live process can still be compiling or blocked by host/device
+memory before its first optimizer update.
+
+Keep inspection read-only. Record the state, attempt, exit reason, and resource request
+before restarting or signalling anything.
+
+### Log filtering
+
+The Iris dashboard's full-log filter accepts a regular expression. For example,
+`rank0.*train/loss` matches log contents; an invalid expression such as an unbalanced
+`[` is rejected. Fix the expression instead of treating an empty result as evidence that
+the task produced no matching logs.
+
+The dashboard's find box searches only the lines loaded in the browser. Use the
+full-log filter when the target may be outside that segment; use find for visible lines.
 
 ### Kicking a wedged task (emergency override)
 
@@ -262,6 +347,17 @@ iris process profile cpu -t /user/job/0     # profile a running task container
 **Prefer `iris process profile` over SSH** for profiling — it uses the `/system/process` RPC and avoids direct VM access. SSH is a fallback only when the RPC doesn't cover your needs.
 
 GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
+
+GPU Levanter runs persist NCCL's job-global communicator view from JAX process 0 every two minutes. The probe is bounded and records unavailable, failed, and timed-out polls explicitly. See [`docs/ops/training-stall-alert-contract.md`](../../docs/ops/training-stall-alert-contract.md#nccl-ras-snapshots) for metric semantics and a bounded Finelog query.
+
+For a read-only one-shot check, first confirm the target task is `RUNNING`; a `BUILDING` task has no NCCL listener. Query from the task's own container and network namespace:
+
+```bash
+iris --cluster=<cluster> task exec <task-id> --timeout 15 -- \
+  python -m rigging.telemetry.probes.nccl_client --timeout 8
+```
+
+The command sends one status request, does not retry or write inside the task, and limits both socket time and response size. Exit code 3 means the task-local listener was unavailable. Do not restart, signal, or otherwise modify the task to make this check succeed.
 
 ## Scheduler & Autoscaler
 
@@ -415,7 +511,15 @@ Time-series measurements live in finelog stats namespaces, not the controller SQ
 Namespaces:
 
 - `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
-- `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
+- `iris.task` — per-attempt task resource snapshots, keyed by `ts`. Worker
+  daemons write their process readings directly. On Kubernetes, each
+  `iris-node-agent` samples the task containers on its node from kubelet
+  `/metrics/resource` every 30 seconds. CPU is derived from consecutive
+  cumulative counter samples, so the first row after an agent start reports
+  zero CPU. Memory uses the working-set gauge and an agent-local peak; an agent
+  restart resets that peak. Kubelet resource metrics do not expose container
+  filesystem usage, so Kubernetes rows report zero disk usage. The node-agent
+  service account requires `get` on `nodes/proxy`.
 - `iris.task_event` — up to seven days of deduplicated backend verdicts and
   state-changing controller actions per task attempt. Query all attempts with
   `iris task events /user/job/0`, or directly:
@@ -625,9 +729,72 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 
 ## CoreWeave (GPU) Operations
 
-Always read [`docs/coreweave.md`](docs/coreweave.md) before operating a
-GPU/CoreWeave cluster. Use `lib/iris/config/coreweave-*.yaml` for CoreWeave
-cluster configs.
+[`docs/coreweave.md`](docs/coreweave.md) describes the Kubernetes architecture.
+The named `cw-*` configs in `lib/iris/config/` are the source of truth for each
+cluster's kubeconfig, context, namespace, and accelerator groups.
+
+### Access and read-only status
+
+CoreWeave configs pin a Kubernetes context, so no `kubectl config use-context`
+step is needed. The configured kubeconfig path is used unless `KUBECONFIG` is
+set in the operator shell.
+
+```bash
+CLUSTER=cw-rno2a
+
+uv run iris cluster list
+uv run iris --cluster="$CLUSTER" cluster status                 # controller and port-forward
+uv run iris --cluster="$CLUSTER" rpc controller list-backends  # accelerators, nodes, and availability
+uv run iris --cluster="$CLUSTER" cluster dashboard              # blocks until Ctrl+C
+```
+
+CoreWeave has no Iris worker daemon or Iris autoscaler. Use `list-backends`, not
+the worker count in `cluster status`, for the Kubernetes resource view.
+
+For a pending task, inspect Kueue admission and NodePool provisioning without
+rendering Pod environment values:
+
+```bash
+CW_KUBECONFIG=~/.kube/coreweave-iris
+CW_CONTEXT=<platform.coreweave.kube_context>
+CW_NAMESPACE=<kubernetes_provider.namespace>
+
+kubectl --kubeconfig "$CW_KUBECONFIG" --context "$CW_CONTEXT" -n "$CW_NAMESPACE" \
+  get pods -l iris.task_id \
+  -o custom-columns='POD:.metadata.name,PHASE:.status.phase,SCHEDULING:.status.conditions[?(@.type=="PodScheduled")].reason,NODE:.spec.nodeName'
+kubectl --kubeconfig "$CW_KUBECONFIG" --context "$CW_CONTEXT" -n "$CW_NAMESPACE" \
+  get workloads.kueue.x-k8s.io \
+  -o custom-columns='WORKLOAD:.metadata.name,QUOTA:.status.conditions[?(@.type=="QuotaReserved")].status,ADMITTED:.status.conditions[?(@.type=="Admitted")].status,REASON:.status.conditions[?(@.type=="QuotaReserved")].reason'
+kubectl --kubeconfig "$CW_KUBECONFIG" --context "$CW_CONTEXT" \
+  get nodepools.compute.coreweave.com \
+  -o custom-columns='POOL:.metadata.name,CURRENT:.status.currentNodes,QUEUED:.status.queuedNodes,IN_PROGRESS:.status.inProgressNodes,CONDITION:.status.conditions[*].type,STATUS:.status.conditions[*].status,REASON:.status.conditions[*].reason'
+```
+
+`SchedulingGated` means Kueue still holds the Pod. `QuotaReserved=True` means
+the Workload has reserved quota; check `Admitted` if the Pod remains gated.
+NodePool conditions show provisioning failures or delays. These projections
+omit Pod environment values; do not use `kubectl describe pod` on task Pods.
+
+If Iris reports that the configured context does not exist, compare the shell
+override and the canonical CoreWeave kubeconfig before changing either config:
+
+```bash
+printf 'KUBECONFIG=%s\n' "${KUBECONFIG:-<unset>}"
+rg -n 'kubeconfig_path|kube_context|namespace' "lib/iris/config/${CLUSTER}.yaml"
+kubectl --kubeconfig ~/.kube/coreweave-iris config get-contexts -o name
+
+env -u KUBECONFIG uv run iris --cluster="$CLUSTER" cluster status
+```
+
+`cluster status`, `list-backends`, `task describe`, `task events`, logs, and
+plain Kubernetes `get` calls are read-only. `kubectl describe pod` does not
+mutate the cluster, but it can print literal environment values; avoid it on
+task Pods. Starting, stopping, or restarting a cluster or controller changes
+shared infrastructure. Run those commands only with explicit user approval;
+use the
+[`deploy-iris-controllers` skill](../../.agents/skills/deploy-iris-controllers/SKILL.md)
+for controller rollouts. Direct Kubernetes changes such as `apply`, `delete`,
+`scale`, `drain`, `cordon`, and `uncordon` also require explicit approval.
 
 ### Public LoadBalancer reachability
 
@@ -735,6 +902,14 @@ eviction protection that operators often expect from a PodDisruptionBudget, so
 treat it as an explicit outage decision. Change one owner at a time and confirm
 that `CWActive` drops the blocker before continuing. Do not delete provider
 DaemonSets or use `kubectl drain --force`.
+
+Iris coordinator task PDBs follow the job's priority band. PRODUCTION uses
+`minAvailable: 1` and intentionally blocks voluntary eviction. INTERACTIVE and
+BATCH use `maxUnavailable: 1`; CoreWeave may evict those pods during a drain,
+and Iris records the disruption as `PREEMPTED` and retries it within the job's
+preemption budget. For a PRODUCTION blocker, follow the running-task procedure
+in the table above. Do not weaken its live PDB to recover a node without the
+job owner's approval.
 
 If a replacement remains Pending because no healthy node satisfies its required
 node affinity or pod anti-affinity, stop before deleting the original pod.

@@ -8,10 +8,12 @@ controller VM management, VM operations via controller RPC, and the dashboard tu
 """
 
 import json
+import re
 import signal
 import subprocess
 import threading
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +32,7 @@ from rigging.token_authority import SigningKey, generate_ed25519_keypair, signin
 from iris.cli.build import (
     CARGO_PROFILES,
     DEFAULT_CARGO_PROFILE,
+    _image_repository,
     _versioned_tag,
     build_image,
     find_marin_root,
@@ -37,9 +40,13 @@ from iris.cli.build import (
 )
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
 from iris.cluster.composer import provider_bundle
-from iris.cluster.config import KUBERNETES_WORKER_RUNTIME, clear_remote_state, make_local_config
+from iris.cluster.config import (
+    KUBERNETES_WORKER_RUNTIME,
+    clear_remote_state,
+    make_local_config,
+    slice_template_zone,
+)
 from iris.cluster.controller.autoscaler.scaling_group import (
-    _zone_from_template,
     build_worker_config_for_group,
     prepare_slice_config,
 )
@@ -55,6 +62,7 @@ from iris.cluster.controller.rollout import (
 from iris.cluster.dashboard_common import VUE_DIST_DIR
 from iris.cluster.inject_env import with_injected_task_env
 from iris.cluster.local_cluster import LocalCluster
+from iris.cluster.platforms.factory import ProviderBundle
 from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import Labels
@@ -65,6 +73,8 @@ from iris.time_proto import timestamp_from_proto
 
 AMD64_IMAGE_PLATFORM = "linux/amd64"
 KUBERNETES_IMAGE_PLATFORMS = "linux/amd64,linux/arm64"
+DOCKER_TAG_PATTERN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}")
+DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 @dataclass(frozen=True)
@@ -314,6 +324,63 @@ def _build_and_pin_deploy_images(
             click.echo(f"  {name}: {tag}")
 
 
+def _resolve_prebuilt_image(image: str) -> str:
+    """Validate a Kubernetes image manifest and return its digest-pinned reference."""
+    result = subprocess.run(
+        ["docker", "buildx", "imagetools", "inspect", image, "--format", "{{json .Manifest}}"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "manifest inspection failed"
+        raise click.ClickException(f"Cannot inspect prebuilt image {image}: {detail}")
+    try:
+        manifest = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise click.ClickException(f"Cannot parse manifest for prebuilt image {image}: {e}") from e
+
+    platforms = {
+        f"{item.get('platform', {}).get('os')}/{item.get('platform', {}).get('architecture')}"
+        for item in manifest.get("manifests", ())
+    }
+    required_platforms = set(KUBERNETES_IMAGE_PLATFORMS.split(","))
+    missing = sorted(required_platforms - platforms)
+    if missing:
+        raise click.ClickException(f"Prebuilt image {image} is missing platforms: {', '.join(missing)}")
+
+    digest = manifest.get("digest", "")
+    if DIGEST_PATTERN.fullmatch(digest) is None:
+        raise click.ClickException(f"Prebuilt image {image} has no valid manifest digest")
+    return f"{_image_repository(image)}@{digest}"
+
+
+def _use_prebuilt_kubernetes_images(config, tag: str) -> str:
+    """Pin Kubernetes controller and task images to verified multiarch digests."""
+    if config.defaults.worker.runtime != KUBERNETES_WORKER_RUNTIME:
+        raise click.ClickException("--prebuilt-tag is only supported for Kubernetes clusters")
+    if tag == "latest" or DOCKER_TAG_PATTERN.fullmatch(tag) is None:
+        raise click.ClickException(f"Invalid immutable Docker tag for --prebuilt-tag: {tag!r}")
+
+    def _replace_tag(image: str, name: str) -> str:
+        if not image:
+            raise click.ClickException(f"{name} image is required with --prebuilt-tag")
+        return f"{_image_repository(image)}:{tag}"
+
+    controller_tag = _replace_tag(config.controller.image, "controller")
+    task_tag = _replace_tag(
+        config.defaults.worker.default_task_image,
+        "default task",
+    )
+    controller_image = _resolve_prebuilt_image(controller_tag)
+    task_image = _resolve_prebuilt_image(task_tag)
+    config.controller.image = controller_image
+    config.defaults.worker.default_task_image = task_image
+    click.echo("Using verified prebuilt Kubernetes images (Docker build skipped):")
+    click.echo(f"  controller: {controller_tag} -> {config.controller.image}")
+    click.echo(f"  task: {task_tag} -> {config.defaults.worker.default_task_image}")
+    return config.controller.image
+
+
 # =============================================================================
 # Top-level cluster group
 # =============================================================================
@@ -530,6 +597,53 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: s
     click.echo(key.public_pem.rstrip("\n"))
 
 
+# A platform's "controller is up" signal stops short of "clients can reach it".
+# On Kubernetes it is a Deployment counter, which goes green the moment the new
+# pod passes its readiness probe while the Service can still route to the pod
+# that is going away; on GCP the health check runs on the controller VM itself.
+# A client that connects in that window reaches nothing and the controller logs
+# no request at all. Probing over a tunnel spends the settling time inside
+# `cluster start` instead of failing the command after it.
+CONTROLLER_REACHABLE_TIMEOUT = 120.0
+CONTROLLER_HEALTH_REQUEST_TIMEOUT = 5.0
+
+# Controller tunnels are local forwards, so an HTTP_PROXY in the operator's
+# environment must never be consulted for them.
+_HEALTH_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _wait_controller_reachable(bundle: ProviderBundle, address: str) -> None:
+    """Poll the controller's ``/health`` over a client tunnel until it answers.
+
+    Raises:
+        click.ClickException: the controller never answered within
+            ``CONTROLLER_REACHABLE_TIMEOUT``.
+    """
+    failure = "no response"
+
+    with bundle.controller.tunnel(address) as url:
+
+        def answered() -> bool:
+            nonlocal failure
+            try:
+                with _HEALTH_OPENER.open(f"{url}/health", timeout=CONTROLLER_HEALTH_REQUEST_TIMEOUT) as response:
+                    if response.status == 200:
+                        return True
+                    failure = f"HTTP {response.status}"
+            except OSError as e:
+                failure = str(e)
+            return False
+
+        backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
+        if backoff.wait_until(answered, timeout=Duration.from_seconds(CONTROLLER_REACHABLE_TIMEOUT)):
+            return
+
+    raise click.ClickException(
+        f"Controller at {address} did not answer /health over a tunnel within "
+        f"{CONTROLLER_REACHABLE_TIMEOUT:.0f}s: {failure}"
+    )
+
+
 @cluster.command("start")
 @click.option("--local", is_flag=True, help="Create a local cluster for testing that mimics the original config")
 @click.option(
@@ -550,12 +664,15 @@ def cluster_init_keys(out_file: Path | None, gcp_secret: str | None, accessor: s
 )
 @click.pass_context
 def cluster_start(ctx, local: bool, fresh: bool, task_image_platforms: str | None, cargo_profile: str):
-    """Start controller and wait for health.
+    """Start controller and wait until it answers over a client tunnel.
 
     Each platform handles its own controller lifecycle:
     - GCP: builds images, creates GCE VM, SSHes in, bootstraps
     - CoreWeave: kubectl apply ConfigMap + NodePool + Deployment + Service
     - Local: starts in-process controller
+
+    Remote platforms then get a ``/health`` probe over a tunnel, so the command
+    only reports success once the next ``iris`` invocation can reach it.
 
     Use --local to create a local cluster for testing that mimics the original config.
     """
@@ -600,6 +717,8 @@ def cluster_start(ctx, local: bool, fresh: bool, task_image_platforms: str | Non
         else:
             bundle = provider_bundle(config)
             address = bundle.controller.start_controller(config, fresh=fresh)
+            click.echo("Waiting for the controller to answer over a client tunnel...")
+            _wait_controller_reachable(bundle, address)
             click.echo(f"Controller started at {address}")
             click.echo("\nController is running with integrated autoscaler.")
             click.echo("Use 'iris --config=... cluster status' to check cluster state.")
@@ -1005,7 +1124,11 @@ def cluster_dashboard_proxy(ctx, port: int):
     your browser.
     """
     controller_url = require_controller_url(ctx)
-    dashboard = ProxyControllerDashboard(upstream_url=controller_url, port=port)
+    dashboard = ProxyControllerDashboard(
+        upstream_url=controller_url,
+        port=port,
+        credentials=(ctx.obj or {}).get("credentials"),
+    )
     click.echo(f"Proxying to controller at {controller_url}")
 
     dashboard_dir = VUE_DIST_DIR.parent
@@ -1238,6 +1361,11 @@ def controller_checkpoint(ctx, stop: bool):
     show_default=True,
     help="Rust profile used to build native Iris components; fast skips LTO for dev rollouts.",
 )
+@click.option(
+    "--prebuilt-tag",
+    default=None,
+    help="Verify and digest-pin existing multiarch Kubernetes images with this tag; skip Docker builds.",
+)
 @click.pass_context
 def controller_restart(
     ctx,
@@ -1246,13 +1374,15 @@ def controller_restart(
     rollback: bool,
     task_image_platforms: str | None,
     cargo_profile: str,
+    prebuilt_tag: str | None,
 ):
     """Restart the controller in place, preserving state (remote platforms only).
 
-    Forward deploy: take a pre-deploy checkpoint, build fresh images from the
-    working tree, record the rollout, restart the controller, and health-check it.
-    A failed health check auto-rolls back to the previous image and its pre-deploy
-    checkpoint. Workers on separate VMs survive the restart.
+    A forward deploy takes a pre-deploy checkpoint, then either builds images
+    from the working tree or verifies requested prebuilt images. It records the
+    rollout, restarts the controller, and health-checks it. A failed health check
+    auto-rolls back to the previous image and its pre-deploy checkpoint. Workers
+    on separate VMs survive the restart.
 
     Pass ``--rollback`` to revert the last deploy — the previous image plus its
     pre-deploy checkpoint, read from the rollout record.
@@ -1278,6 +1408,8 @@ def controller_restart(
     prior_record = read_rollout_record(remote_state_dir) if remote_state_dir else None
 
     if rollback:
+        if prebuilt_tag is not None:
+            raise click.ClickException("--prebuilt-tag cannot be combined with --rollback")
         _rollback_last_deploy(ctx, bundle, config, remote_state_dir, prior_record)
         return
 
@@ -1291,6 +1423,7 @@ def controller_restart(
             config,
             task_platforms=task_image_platforms,
             cargo_profile=cargo_profile,
+            prebuilt_tag=prebuilt_tag,
         )
         try:
             address = bundle.controller.start_controller(config)
@@ -1321,6 +1454,7 @@ def controller_restart(
         config,
         task_platforms=task_image_platforms,
         cargo_profile=cargo_profile,
+        prebuilt_tag=prebuilt_tag,
     )
     previous_image = prior_record.image if prior_record else None
 
@@ -1382,8 +1516,15 @@ def _build_forward_image(
     *,
     task_platforms: str | None = None,
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
+    prebuilt_tag: str | None = None,
 ) -> str:
-    """Build deploy images from the working tree and return the controller image tag."""
+    """Resolve forward-deploy images and return the controller image reference."""
+    if prebuilt_tag is not None:
+        if task_platforms is not None:
+            raise click.ClickException("--prebuilt-tag cannot be combined with --image-platform")
+        if cargo_profile != DEFAULT_CARGO_PROFILE:
+            raise click.ClickException("--prebuilt-tag cannot be combined with a non-default --cargo-profile")
+        return _use_prebuilt_kubernetes_images(config, prebuilt_tag)
     _build_and_pin_deploy_images(
         ctx,
         config,
@@ -1682,7 +1823,7 @@ def worker_restart(
                     return wid, None, f"unknown scale group {row.scale_group!r}"
                 # TPU workers leave md_gce_zone empty; fall back to the scale
                 # group's slice-template zone.
-                zone = row.zone or _zone_from_template(sg_config.slice_template)
+                zone = row.zone or slice_template_zone(sg_config.slice_template)
                 if not zone:
                     return wid, None, "missing zone metadata"
                 wc = build_worker_config_for_group(base_worker_config, sg_config)

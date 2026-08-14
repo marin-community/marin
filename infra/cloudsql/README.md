@@ -20,7 +20,6 @@ state backend.
 uv sync --all-packages --extra deploy                     # once: iac + Pulumi providers on the venv (pulumi lives behind marin-iac[deploy])
 
 cd infra/cloudsql
-pulumi login gs://marin-iac-state
 pulumi stack select marin-cloudsql
 
 pulumi preview                                            # plan; then, once it looks right:

@@ -13,6 +13,7 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_m
 
 from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
+    BlockSizes,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
 
@@ -78,6 +79,7 @@ def fused_linear_softmax_cross_entropy_loss(
     dtype: jnp.dtype = jnp.float32,
     precision: jax.lax.PrecisionLike = None,
     implementation: str | tuple[str, ...] | None = None,
+    block_sizes: BlockSizes | None = None,
 ) -> jax.Array:
     """Compute cross-entropy loss via the fused kernel path.
 
@@ -91,6 +93,7 @@ def fused_linear_softmax_cross_entropy_loss(
         dtype: Accumulator dtype for logits/logsumexp.
         precision: Optional matmul precision override for XLA/reference paths.
         implementation: Optional fused CE backend selection override.
+        block_sizes: Optional kernel block-size override (tune v_block_size for large vocab).
 
     Returns:
         If reduction=="none": array with shape labels.shape.
@@ -137,6 +140,7 @@ def fused_linear_softmax_cross_entropy_loss(
             logit_soft_cap=None,
             precision=precision,
             implementation=implementation,
+            block_sizes=block_sizes,
         )
 
         if reduction_mode is None:

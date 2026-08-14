@@ -11,13 +11,17 @@ from typing import Literal
 
 PUBLIC_URL = "https://echo.oa.dev"
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+INFERENCE_THREADS = 1
 INDEXED_REPOSITORY = "marin-community/marin"
 INDEXED_BRANCH = "main"
 DISPLAY_SHA_CHARACTERS = 12
 FEDERATED_SUMMARY_CHARACTERS = 240
+SEARCH_EXECUTION_HEADER = "X-Echo-Search-Execution-ID"
 SearchDomain = Literal["wiki", "file", "discord", "pr", "issue"]
 SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "discord", "pr", "issue")
 DEFAULT_SEARCH_DOMAINS: tuple[SearchDomain, ...] = ("wiki", "file", "pr", "issue")
+SEARCH_FEEDBACK_MIN_GRADE = 0
+SEARCH_FEEDBACK_MAX_GRADE = 10
 SEARCH_DOMAIN_LABELS: Mapping[SearchDomain, str] = MappingProxyType(
     {
         "wiki": "Wiki",
@@ -45,6 +49,7 @@ RERANK_MODEL_SOURCE = "Xenova/ms-marco-MiniLM-L-6-v2"
 RERANK_MODEL_FILE = "onnx/model_int8.onnx"
 RERANK_MIN_RESULTS_PER_DOMAIN = 20
 RERANK_MAX_CANDIDATES = 20
+RERANK_BATCH_SIZE = 4
 RERANK_BASE_WEIGHT = 0.2
 RERANK_MODEL_WEIGHT = 0.8
 MIN_RERANK_SCORE = -2.0
@@ -68,6 +73,10 @@ class SearchWeights:
 
 QUERY_SEARCH_WEIGHTS = SearchWeights(semantic=2.0, lexical=1.0)
 IDENTIFIER_SEARCH_WEIGHTS = SearchWeights(semantic=1.0, lexical=2.0)
+
+
+def normalize_query(query: str) -> str:
+    return " ".join(query.casefold().split())
 
 
 def candidate_limit(limit: int) -> int:

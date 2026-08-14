@@ -50,17 +50,11 @@ def _write_eval_jsonl(path: Path, records: list[dict]) -> None:
 
 
 def _read_attributes(output_dir: Path) -> dict[str, dict]:
-    """Concatenate every output parquet under *output_dir* and key by id.
-
-    Flattens the on-disk ``attributes`` struct (datakit convention) back into
-    top-level keys so test assertions stay terse:
-    ``rows[doc_id]["contaminated"]`` instead of ``rows[doc_id]["attributes"]["contaminated"]``.
-    """
+    """Concatenate every flat attribute Parquet file under *output_dir* and key by ID."""
     rows: dict[str, dict] = {}
     for pf in sorted(output_dir.glob("outputs/main/part-*.parquet")):
         for row in pq.read_table(str(pf)).to_pylist():
-            attrs = row.pop("attributes", {}) or {}
-            rows[row["id"]] = {**row, **attrs}
+            rows[row["id"]] = row
     return rows
 
 
@@ -192,12 +186,7 @@ def test_decon_preserves_partition_filenames(fox_corpus):
 
 
 def test_decon_output_schema(fox_corpus):
-    """Output Parquet has exactly ``{id, partition_id, attributes: struct<contaminated, max_overlap, matched_hashes>}``.
-
-    This is the datakit attribute convention consumed by
-    :func:`marin.processing.classification.consolidate.consolidate` --
-    ``id`` joinable on top, decon facts grouped under ``attributes``.
-    """
+    """Output Parquet has flat ID, partition, and decontamination fields."""
     decon_to_parquet(
         normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
@@ -209,18 +198,13 @@ def test_decon_output_schema(fox_corpus):
     output_files = sorted(Path(fox_corpus["output_dir"]).glob("outputs/main/part-*.parquet"))
     assert output_files, "expected at least one output partition"
     schema = pq.read_schema(str(output_files[0]))
-    assert set(schema.names) == {"id", "partition_id", "attributes"}
+    assert set(schema.names) == {"id", "partition_id", "contaminated", "max_overlap", "matched_hashes"}
     assert pa.types.is_string(schema.field("id").type)
     assert pa.types.is_integer(schema.field("partition_id").type)
-
-    attrs_field = schema.field("attributes")
-    assert pa.types.is_struct(attrs_field.type)
-    attrs_fields = {f.name: f for f in attrs_field.type}
-    assert set(attrs_fields) == {"contaminated", "max_overlap", "matched_hashes"}
-    assert pa.types.is_boolean(attrs_fields["contaminated"].type)
-    assert pa.types.is_floating(attrs_fields["max_overlap"].type)
-    assert pa.types.is_list(attrs_fields["matched_hashes"].type)
-    assert attrs_fields["matched_hashes"].type.value_type == pa.uint64()
+    assert pa.types.is_boolean(schema.field("contaminated").type)
+    assert pa.types.is_floating(schema.field("max_overlap").type)
+    assert pa.types.is_list(schema.field("matched_hashes").type)
+    assert schema.field("matched_hashes").type.value_type == pa.uint64()
 
 
 def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
@@ -441,18 +425,14 @@ def test_decon_synthesizes_partition_id_from_shard_index(tmp_path: Path):
     assert rows["doc1"]["partition_id"] == 1
 
 
-def test_decon_short_paragraphs_below_ngram_length_contribute_nothing(tmp_path: Path):
-    """Paragraphs with < ngram_length tokens are silently skipped in n-gram mode.
+def test_decon_paragraphs_below_short_exact_minimum_contribute_nothing(tmp_path: Path):
+    """Paragraphs with fewer than three tokens are skipped in n-gram mode.
 
     Earlier versions (PR #5656 mid-stack) fell back to whole-paragraph hashing
     for paragraphs too short to form an n-gram. That created trivial collisions
     on common short paragraphs like ``"..."``, ``"A."``, etc., generating
-    ~18% phantom-contamination flags in the MMLU vs nemotron-math smoke run.
-    The fallback was removed; this test pins the new behavior.
-
-    Trade-off: an eval with paragraphs shorter than ``ngram_length`` won't be
-    matchable in n-gram mode. Callers who need that should either lower
-    ``ngram_length`` or use ``ngram=None`` (exact paragraph mode).
+    ~18% phantom-contamination flags in the MMLU vs nemotron-math smoke run. The
+    guarded fallback excludes these short values.
     """
     eval_dir = tmp_path / "eval"
     input_dir = tmp_path / "input"
@@ -478,6 +458,40 @@ def test_decon_short_paragraphs_below_ngram_length_contribute_nothing(tmp_path: 
     assert rows["doc_short_text"]["contaminated"] is False
     assert rows["doc_short_text"]["max_overlap"] == 0.0
     assert rows["doc_short_text"]["matched_hashes"] == []
+
+
+def test_decon_short_alphabetic_paragraph_uses_exact_feature(tmp_path: Path):
+    eval_dir = tmp_path / "eval"
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", [{"id": "short_eval", "text": "Distinctive alpha phrase"}])
+    _write_input_parquet(
+        input_dir / "part-00000-of-00001.parquet",
+        [{"id": "doc_short_text", "text": "Distinctive alpha phrase", "partition_id": 0}],
+    )
+
+    result = build_eval_bloom(
+        eval_data_sources=str(eval_dir),
+        output_path=str(output_dir / "bloom"),
+        ngram=NGramConfig(ngram_length=8, overlap_threshold=0.5),
+    )
+
+    assert result.n_eval_records == 1
+    assert {row["eval_id"] for row in pq.read_table(result.eval_hash_index_path).to_pylist()} == {"short_eval"}
+
+
+def test_decon_short_record_fallback_spans_tiny_paragraphs(tmp_path: Path):
+    text = "Alpha beta\n\ngamma"
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[{"id": "short_eval", "text": text}],
+        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
+        ngram=NGramConfig(ngram_length=8, overlap_threshold=0.5),
+    )
+
+    assert rows["doc"]["contaminated"] is True
+    assert rows["doc"]["max_overlap"] == 1.0
 
 
 def test_double_newline_delimiter_spans_single_line_breaks(tmp_path: Path):
@@ -835,6 +849,169 @@ def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
         assert sorted(pre["matched_hashes"]) == sorted(inline["matched_hashes"])
 
 
+def test_build_eval_bloom_requires_complete_eval_manifest(tmp_path: Path):
+    eval_root = tmp_path / "evals"
+    artifact_path = eval_root / "aa" / "required_eval" / "test.parquet"
+    _write_input_parquet(artifact_path, [{"id": "eval-1", "text": "alpha beta gamma"}])
+    manifest_path = eval_root / "aa" / "_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "corpus_version": "test-corpus-v1",
+                "required": True,
+                "status": "building",
+                "benchmarks": [
+                    {
+                        "name": "Required Eval",
+                        "artifact": "required_eval/test.parquet",
+                        "expected_records": 1,
+                    }
+                ],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="manifest status is 'building', expected 'complete'"):
+        build_eval_bloom(
+            eval_data_sources=str(eval_root),
+            output_path=str(tmp_path / "bloom"),
+            required_eval_manifest_path=str(manifest_path),
+            required_eval_corpus_version="test-corpus-v1",
+            required_eval_names=("Required Eval",),
+        )
+
+    assert not Path(bloom_paths(str(tmp_path / "bloom"))[0]).exists()
+
+
+def test_build_eval_bloom_checks_required_artifact_counts(tmp_path: Path):
+    eval_root = tmp_path / "evals"
+    artifact_path = eval_root / "aa" / "required_eval" / "test.parquet"
+    _write_input_parquet(artifact_path, [{"id": "eval-1", "text": "alpha beta gamma"}])
+    manifest_path = eval_root / "aa" / "_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "corpus_version": "test-corpus-v1",
+                "required": True,
+                "status": "complete",
+                "benchmarks": [
+                    {
+                        "name": "Required Eval",
+                        "artifact": "required_eval/test.parquet",
+                        "expected_records": 2,
+                    }
+                ],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="Required Eval: manifest expects 2 records, artifact contains 1"):
+        build_eval_bloom(
+            eval_data_sources=str(eval_root),
+            output_path=str(tmp_path / "bloom"),
+            required_eval_manifest_path=str(manifest_path),
+            required_eval_corpus_version="test-corpus-v1",
+            required_eval_names=("Required Eval",),
+        )
+
+
+def test_build_eval_bloom_requires_features_for_every_required_record(tmp_path: Path):
+    eval_root = tmp_path / "evals"
+    artifact_path = eval_root / "aa" / "required_eval" / "test.parquet"
+    _write_input_parquet(artifact_path, [{"id": "eval-1", "text": "Hello world"}])
+    manifest_path = eval_root / "aa" / "_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "corpus_version": "test-corpus-v1",
+                "required": True,
+                "status": "complete",
+                "benchmarks": [
+                    {
+                        "name": "Required Eval",
+                        "artifact": "required_eval/test.parquet",
+                        "expected_records": 1,
+                    }
+                ],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="1 of 1 required eval records produce no matchable features"):
+        build_eval_bloom(
+            eval_data_sources=str(eval_root),
+            output_path=str(tmp_path / "bloom"),
+            ngram=NGramConfig(ngram_length=13),
+            required_eval_manifest_path=str(manifest_path),
+            required_eval_corpus_version="test-corpus-v1",
+            required_eval_names=("Required Eval",),
+        )
+
+
+def test_build_eval_bloom_uses_only_manifested_best_effort_artifacts(tmp_path: Path):
+    required_root = tmp_path / "required"
+    required_artifact = required_root / "aa" / "required_eval" / "test.parquet"
+    stale_required_artifact = required_root / "aa" / "stale" / "test.parquet"
+    _write_input_parquet(required_artifact, [{"id": "required-1", "text": "alpha beta gamma"}])
+    _write_input_parquet(stale_required_artifact, [{"id": "stale-required-1", "text": "kappa lambda mu"}])
+    required_manifest = required_root / "aa" / "_manifest.json"
+    required_manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "corpus_version": "test-corpus-v1",
+                "required": True,
+                "status": "complete",
+                "benchmarks": [
+                    {
+                        "name": "Required Eval",
+                        "artifact": "required_eval/test.parquet",
+                        "expected_records": 1,
+                    }
+                ],
+            },
+            indent=2,
+        )
+    )
+
+    best_effort_root = required_root / "lmh"
+    included_artifact = best_effort_root / "included" / "eval.parquet"
+    stale_artifact = best_effort_root / "stale" / "eval.parquet"
+    _write_input_parquet(included_artifact, [{"id": "included-1", "text": "delta epsilon zeta"}])
+    _write_input_parquet(stale_artifact, [{"id": "stale-1", "text": "eta theta iota"}])
+    best_effort_manifest = required_root / "lmh" / "_manifest.json"
+    best_effort_manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "corpus_version": "test-corpus-v1",
+                "required": False,
+                "status": "complete_with_failures",
+                "included_leaf_tasks": ["included"],
+                "artifacts": [{"task": "included", "artifact": "included/eval.parquet", "records": 1}],
+                "failed": [{"task": "missing", "reason": "test failure"}],
+            }
+        )
+    )
+
+    result = build_eval_bloom(
+        eval_data_sources=str(required_root),
+        output_path=str(tmp_path / "bloom"),
+        required_eval_manifest_path=str(required_manifest),
+        required_eval_corpus_version="test-corpus-v1",
+        required_eval_names=("Required Eval",),
+        best_effort_eval_manifest_path=str(best_effort_manifest),
+        best_effort_eval_corpus_version="test-corpus-v1",
+    )
+
+    assert result.n_eval_records == 2
+    index = pq.read_table(result.eval_hash_index_path).to_pylist()
+    assert {row["eval_id"] for row in index} == {"required-1", "included-1"}
+
+
 def test_build_eval_bloom_excludes_named_task_dirs(tmp_path: Path):
     """``exclude_eval_dirs`` drops matching task dirs at read time.
 
@@ -883,6 +1060,20 @@ def test_build_eval_bloom_excludes_named_task_dirs(tmp_path: Path):
     rows = _read_attributes(output_dir)
     assert rows["hits-kept"]["contaminated"] is True
     assert rows["hits-excluded"]["contaminated"] is False
+
+
+def test_build_eval_bloom_excludes_direct_file_under_named_task_dir(tmp_path: Path):
+    eval_path = tmp_path / "evals" / "code2text_python" / "eval.parquet"
+    _write_input_parquet(eval_path, [{"id": "excluded-1", "text": "alpha beta gamma"}])
+
+    result = build_eval_bloom(
+        eval_data_sources=str(eval_path),
+        output_path=str(tmp_path / "bloom"),
+        exclude_eval_dirs=frozenset({"code2text_python"}),
+    )
+
+    assert result.n_eval_records == 0
+    assert pq.read_table(result.eval_hash_index_path).num_rows == 0
 
 
 def test_merge_eval_blooms_equals_single_build(tmp_path: Path):

@@ -68,7 +68,7 @@ def assign_report(output_path: str, sources: dict[str, AssignmentAttrData], clus
         "clusters_seen": len(occupancy),
         "sampled_rows": sum(s["sampled"] for s in source_rows),
     }
-    data_root = os.path.commonprefix([a.source_main_dir for a in sources.values()]).rsplit("/", 1)[0]
+    data_root = os.path.commonprefix([a.source_key for a in sources.values()]).rsplit("/", 1)[0]
     data = {
         "meta": {
             "k_train": k_train,

@@ -128,7 +128,8 @@ jobs:
         run: |
           python3 .github/actions/pulumi-preview/assemble_comment.py \
             --previews-dir iac-previews \
-            --out iac-preview-comment.md
+            --out iac-preview-comment.md \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
       - name: Upsert sticky PR comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0

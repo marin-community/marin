@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   fetchJson,
@@ -11,8 +11,6 @@ import {
 } from '../types'
 
 const PAGE_SIZE = 30
-const DEBOUNCE_MS = 250
-
 const route = useRoute()
 const router = useRouter()
 const query = ref(typeof route.query.q === 'string' ? route.query.q : '')
@@ -25,6 +23,7 @@ const index = ref<RepositoryIndexStatus | null>(null)
 const indexError = ref('')
 const loading = ref(false)
 const error = ref('')
+const searchPending = ref(false)
 let request: AbortController | null = null
 let ready = false
 
@@ -44,6 +43,8 @@ const indexPercent = computed(() => {
 const resultLabel = computed(() => {
   if (loading.value) return 'Searching…'
   if (!query.value.trim()) return 'Search files, knowledge, and conversations'
+  if (!selectedDomains.value.length) return 'Select at least one search domain'
+  if (searchPending.value) return 'Press Search to apply the query and filters'
   if (!results.value.length) return 'No matches'
   return `${results.value.length} ${results.value.length === 1 ? 'result' : 'results'}`
 })
@@ -52,6 +53,17 @@ function toggleDomain(domain: SearchDomain): void {
   selectedDomains.value = selectedDomains.value.includes(domain)
     ? selectedDomains.value.filter((candidate) => candidate !== domain)
     : [...selectedDomains.value, domain]
+  markSearchPending()
+  syncUrl()
+}
+
+function markSearchPending(): void {
+  // Browser cancellation does not stop server-side inference, so edits wait for form submission.
+  request?.abort()
+  results.value = []
+  loading.value = false
+  error.value = ''
+  searchPending.value = true
 }
 
 function wikiPath(result: FederatedResult): string {
@@ -99,6 +111,7 @@ async function search(): Promise<void> {
   request = new AbortController()
   loading.value = true
   error.value = ''
+  searchPending.value = false
   const params = new URLSearchParams({ q: text, limit: String(PAGE_SIZE) })
   for (const domain of selectedDomains.value) params.append('domain', domain)
   try {
@@ -129,25 +142,7 @@ function run(): void {
   search()
 }
 
-let debounceTimer: ReturnType<typeof setTimeout> | undefined
-function debouncedRun(): void {
-  clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(run, DEBOUNCE_MS)
-}
-
-watch(query, () => {
-  if (ready) debouncedRun()
-})
-watch(
-  selectedDomains,
-  () => {
-    if (ready) run()
-  },
-  { deep: true },
-)
-
 function submit(): void {
-  clearTimeout(debounceTimer)
   run()
 }
 
@@ -191,6 +186,7 @@ onMounted(async () => {
         class="min-w-0 flex-1 rounded-lg border border-line bg-white px-4 py-3 placeholder:text-ink/35"
         placeholder="Identifier, incident, question, or phrase…"
         type="search"
+        @input="markSearchPending"
       />
       <button
         class="rounded-lg bg-moss px-6 py-3 font-semibold text-white hover:bg-fern disabled:cursor-wait disabled:opacity-60"

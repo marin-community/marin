@@ -27,22 +27,33 @@ def load_panel_fragments(panels_dir: Path) -> dict[str, dict]:
     return {path.stem: json.loads(path.read_text()) for path in panels_dir.glob("*.json")}
 
 
+def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]:
+    """Resolve markers in one panels array, descending into collapsed rows.
+
+    Grafana nests a collapsed row's children under the row's own ``panels``, so a
+    fragment placed inside a row has to be resolved there too.
+    """
+    resolved = []
+    for panel in panels:
+        ref = panel.get(PANEL_REF_KEY)
+        if ref is None:
+            if panel.get("panels"):
+                panel = {**panel, "panels": _stitch_panels(panel["panels"], fragments)}
+            resolved.append(panel)
+            continue
+        if ref not in fragments:
+            raise KeyError(f"panel {panel.get('id')} references unknown panel fragment {ref!r}")
+        resolved.append({**fragments[ref], "id": panel["id"], "gridPos": panel["gridPos"]})
+    return resolved
+
+
 def stitch_dashboard(source: dict, fragments: dict[str, dict]) -> dict:
     """Replace every panelRef marker in source's panels with its fragment body.
 
     Raises:
         KeyError: A panel references a fragment name missing from ``fragments``.
     """
-    panels = []
-    for panel in source["panels"]:
-        ref = panel.get(PANEL_REF_KEY)
-        if ref is None:
-            panels.append(panel)
-            continue
-        if ref not in fragments:
-            raise KeyError(f"panel {panel.get('id')} references unknown panel fragment {ref!r}")
-        panels.append({**fragments[ref], "id": panel["id"], "gridPos": panel["gridPos"]})
-    return {**source, "panels": panels}
+    return {**source, "panels": _stitch_panels(source["panels"], fragments)}
 
 
 def stitch_all(src_dir: Path, panels_dir: Path) -> dict[str, dict]:

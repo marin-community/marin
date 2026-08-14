@@ -40,9 +40,6 @@ from iris.cluster.platforms.k8s.types import (
     KubectlError,
     KubectlLogLine,
     KubectlLogResult,
-    PodResourceUsage,
-    parse_k8s_cpu,
-    parse_k8s_quantity,
     parse_k8s_timestamp,
 )
 from iris.cluster.platforms.types import find_free_port
@@ -55,9 +52,21 @@ DEFAULT_TIMEOUT: float = 60.0
 # Threshold for slow-operation warnings (milliseconds)
 _SLOW_THRESHOLD_MS: int = 2000
 
+# Items requested per LIST page. An unpaginated list of a large collection
+# streams one chunked response body that no timeout bounds — the client arms a
+# per-recv socket timeout, which every arriving chunk resets — so a slow list
+# parks its caller indefinitely. Chunked lists bound both the response body and
+# the API server's etcd range read.
+_LIST_PAGE_LIMIT: int = 500
+
 # API error bodies quote the offending manifest; keep enough to identify the
 # verdict without flooding logs.
 _ERROR_BODY_MAX_LEN: int = 500
+
+# GNU timeout's conventional exit status. K8s exec consumers already model
+# process completion as an integer exit code, so preserve that contract when
+# the websocket remains open past the caller's deadline.
+_COMMAND_TIMEOUT_EXIT_CODE: int = 124
 
 
 @runtime_checkable
@@ -75,6 +84,17 @@ class K8sService(Protocol):
     def apply_json(self, manifest: dict) -> None: ...
 
     def get_json(self, resource: K8sResource, name: str) -> dict | None: ...
+
+    def iter_json(
+        self,
+        resource: K8sResource,
+        *,
+        labels: dict[str, str] | None = None,
+        field_selector: str | None = None,
+        namespace: str | None = None,
+    ) -> Iterator[dict]:
+        """Yield matching resources one page at a time."""
+        ...
 
     def list_json(
         self,
@@ -137,7 +157,7 @@ class K8sService(Protocol):
         field_selector: str | None = None,
     ) -> list[dict]: ...
 
-    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]: ...
+    def node_resource_metrics(self, node_name: str) -> str: ...
 
     def read_file(
         self,
@@ -341,6 +361,50 @@ class CloudK8sService:
 
     # -- list ----------------------------------------------------------------
 
+    def iter_json(
+        self,
+        resource: K8sResource,
+        *,
+        labels: dict[str, str] | None = None,
+        field_selector: str | None = None,
+        namespace: str | None = None,
+    ) -> Iterator[dict]:
+        """Yield matching resources one page at a time.
+
+        Each page is its own bounded request: an unpaginated list streams a single
+        chunked body that no timeout bounds, because the per-recv socket timeout the
+        client arms is reset by every arriving chunk. A caller that keeps only a few
+        fields per item, or that stops early, never holds the whole collection.
+
+        ``namespace`` overrides the service's own namespace for cross-namespace reads.
+        """
+        logger.info(
+            "k8s: LIST %s labels=%s field_selector=%s namespace=%s", resource.plural, labels, field_selector, namespace
+        )
+        kwargs = {"namespace": namespace} if namespace else self._ns_kwargs(resource)
+        if labels:
+            kwargs["label_selector"] = _label_selector(labels)
+        if field_selector:
+            kwargs["field_selector"] = field_selector
+        kwargs.update(self._request_timeout_kwargs())
+        api = self._resource_api(resource)
+        continue_token = ""
+        with slow_log(logger, f"list {resource.plural}", threshold_ms=_SLOW_THRESHOLD_MS):
+            while True:
+                page_kwargs = dict(kwargs, limit=_LIST_PAGE_LIMIT)
+                if continue_token:
+                    page_kwargs["_continue"] = continue_token
+                try:
+                    result = api.get(**page_kwargs)
+                except ApiException as e:
+                    raise KubectlError(f"list {resource.plural} failed ({e.status}): {e.reason}") from e
+                for item in result.items:
+                    yield item.to_dict()
+                meta = result.metadata
+                continue_token = (meta["continue"] if meta is not None else None) or ""
+                if not continue_token:
+                    return
+
     def list_json(
         self,
         resource: K8sResource,
@@ -349,19 +413,7 @@ class CloudK8sService:
         field_selector: str | None = None,
     ) -> list[dict]:
         """List Kubernetes resources, optionally filtered by labels and/or field selectors."""
-        logger.info("k8s: LIST %s labels=%s field_selector=%s", resource.plural, labels, field_selector)
-        kwargs = self._ns_kwargs(resource)
-        if labels:
-            kwargs["label_selector"] = _label_selector(labels)
-        if field_selector:
-            kwargs["field_selector"] = field_selector
-        kwargs.update(self._request_timeout_kwargs())
-        with slow_log(logger, f"list {resource.plural}", threshold_ms=_SLOW_THRESHOLD_MS):
-            try:
-                result = self._resource_api(resource).get(**kwargs)
-                return [item.to_dict() for item in result.items]
-            except ApiException as e:
-                raise KubectlError(f"list {resource.plural} failed ({e.status}): {e.reason}") from e
+        return list(self.iter_json(resource, labels=labels, field_selector=field_selector))
 
     # -- delete --------------------------------------------------------------
 
@@ -393,43 +445,34 @@ class CloudK8sService:
                 self.delete(resource, name, force=force, wait=wait)
 
     def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
-        """Delete all resources matching the given label selector."""
+        """Delete all resources matching the given label selector.
+
+        Lists the selector and deletes each match by name. A single DELETE on the
+        collection URL would be one request instead of N, but Kubernetes treats that as
+        the ``deletecollection`` verb, which the controller ClusterRole does not grant
+        (see CLUSTER_ROLE_RULES) — it would 403 at runtime.
+        """
         if not labels:
             return
         selector = _label_selector(labels)
-        logger.info("k8s: DELETE_COLLECTION %s labels=%s", resource.plural, labels)
-        kwargs = self._ns_kwargs(resource)
-        kwargs["label_selector"] = selector
-        if not wait:
-            kwargs["propagation_policy"] = "Background"
-        kwargs.update(self._request_timeout_kwargs())
+        logger.info("k8s: DELETE_BY_LABELS %s labels=%s", resource.plural, labels)
+        # iter_json and delete each raise KubectlError already, and delete tolerates
+        # NotFound, so there is nothing left here to translate.
         with slow_log(logger, f"delete_by_labels {resource.plural} -l {selector}", threshold_ms=_SLOW_THRESHOLD_MS):
-            try:
-                api = self._resource_api(resource)
-                items = api.get(**{k: v for k, v in kwargs.items() if k != "propagation_policy"}).items
-                for item in items:
-                    self.delete(resource, item.metadata.name, wait=wait)
-            except NotFoundError:
-                return
-            except ApiException as e:
-                raise KubectlError(
-                    f"delete_by_labels {resource.plural} -l {selector} failed ({e.status}): {e.reason}"
-                ) from e
+            for item in self.iter_json(resource, labels=labels):
+                name = item.get("metadata", {}).get("name")
+                if name:
+                    self.delete(resource, name, wait=wait)
 
     # -- cross-namespace pod operations ---------------------------------------
 
     def list_pods_in_namespace(self, namespace: str) -> list[dict]:
-        """List pods in an explicit namespace (not the service's own)."""
-        logger.info("k8s: LIST pods namespace=%s", namespace)
-        with slow_log(logger, f"list pods in {namespace}", threshold_ms=_SLOW_THRESHOLD_MS):
-            try:
-                result = self._resource_api(K8sResource.PODS).get(
-                    namespace=namespace,
-                    **self._request_timeout_kwargs(),
-                )
-                return [item.to_dict() for item in result.items]
-            except ApiException as e:
-                raise KubectlError(f"list pods in {namespace} failed ({e.status}): {e.reason}") from e
+        """List pods in an explicit namespace (not the service's own).
+
+        Chunked like every other list: this one runs on the control loop (blocker
+        eviction) against foreign tenant namespaces, which are larger than Iris's own.
+        """
+        return list(self.iter_json(K8sResource.PODS, namespace=namespace))
 
     def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
         """Delete a pod in an explicit namespace, ignoring NotFound."""
@@ -693,9 +736,23 @@ class CloudK8sService:
                 with self.create_api_client() as exec_api_client:
                     resp = kubernetes.stream.stream(
                         kubernetes.client.CoreV1Api(exec_api_client).connect_get_namespaced_pod_exec,
+                        _preload_content=False,
                         **kwargs,
                     )
-                return ExecResult(returncode=0, stdout=resp, stderr="")
+                    try:
+                        resp.run_forever(timeout=effective_timeout)
+                        stdout = resp.read_stdout(timeout=0) or ""
+                        stderr = resp.read_stderr(timeout=0) or ""
+                        if resp.is_open():
+                            timeout_error = f"Command timed out after {effective_timeout:g} seconds"
+                            return ExecResult(
+                                returncode=_COMMAND_TIMEOUT_EXIT_CODE,
+                                stdout=stdout,
+                                stderr="\n".join(part for part in (stderr, timeout_error) if part),
+                            )
+                        return ExecResult(returncode=resp.returncode, stdout=stdout, stderr=stderr)
+                    finally:
+                        resp.close()
             except ApiException as e:
                 return ExecResult(returncode=1, stdout="", stderr=str(e))
 
@@ -712,50 +769,22 @@ class CloudK8sService:
         """Remove files inside a Pod container. Ignores missing files."""
         self.exec(pod_name, ["rm", "-f", *paths], container=container, timeout=10)
 
-    # -- top_pods ------------------------------------------------------------
+    # -- node metrics ---------------------------------------------------------
 
-    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]:
-        """Return CPU/memory usage for every pod, keyed by pod name.
-
-        Lists ``PodMetrics`` for the namespace (optionally scoped by ``labels``)
-        via the metrics.k8s.io list endpoint. A 404 means the metrics API is
-        unavailable (metrics-server absent); returns an empty map rather than
-        raising so callers degrade quietly.
-        """
-        logger.info("k8s: top_pods labels=%s", labels)
-        kwargs = self._request_timeout_kwargs()
-        if labels:
-            kwargs["label_selector"] = _label_selector(labels)
-        with slow_log(logger, "top_pods", threshold_ms=_SLOW_THRESHOLD_MS):
+    def node_resource_metrics(self, node_name: str) -> str:
+        """Return kubelet ``metrics/resource`` text for one node."""
+        logger.debug("k8s: node resource metrics node=%s", node_name)
+        with slow_log(logger, "node_resource_metrics", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
-                result = self._custom.list_namespaced_custom_object(
-                    group="metrics.k8s.io",
-                    version="v1beta1",
-                    namespace=self.namespace,
-                    plural="pods",
-                    **kwargs,
+                return self._core_v1.connect_get_node_proxy_with_path(
+                    name=node_name,
+                    path="metrics/resource",
+                    **self._request_timeout_kwargs(),
                 )
-            except ApiException as e:
-                if e.status == 404:
-                    return {}
-                raise
-
-        usage_by_pod: dict[str, PodResourceUsage] = {}
-        for item in result.get("items", []):
-            name = item.get("metadata", {}).get("name", "")
-            containers = item.get("containers", [])
-            if not name or not containers:
-                continue
-            total_cpu = 0
-            total_mem = 0
-            for c in containers:
-                usage = c.get("usage", {})
-                if "cpu" in usage:
-                    total_cpu += parse_k8s_cpu(usage["cpu"])
-                if "memory" in usage:
-                    total_mem += parse_k8s_quantity(usage["memory"])
-            usage_by_pod[name] = PodResourceUsage(cpu_millicores=total_cpu, memory_bytes=total_mem)
-        return usage_by_pod
+            except ApiException as error:
+                raise KubectlError(
+                    f"get nodes/{node_name}/proxy/metrics/resource failed ({error.status}): {error.reason}"
+                ) from error
 
     # -- port_forward (subprocess-based) -------------------------------------
 

@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 import random
 import string
@@ -17,6 +18,7 @@ from marin.processing.classification.deduplication.fuzzy_dups import compute_fuz
 from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     MinHashParams,
+    _minhash_batch,
     compute_minhash_attrs,
 )
 from zephyr.writers import write_jsonl_file, write_parquet_file
@@ -55,7 +57,7 @@ def _read_cluster_attrs(attr_dir: str) -> list[dict]:
 def _write_minhash_attr_dataset(
     *,
     output_dir: str,
-    source_main_dir: str,
+    source_key: str,
     rows: list[dict],
 ) -> MinHashAttrData:
     """Write a one-shard MinHash attr dataset for focused fuzzy-dup tests."""
@@ -64,21 +66,37 @@ def _write_minhash_attr_dataset(
     write_parquet_file(rows, os.path.join(attr_dir, "part-00000.parquet"))
     return MinHashAttrData(
         params=TEST_MINHASH_PARAMS,
-        source_main_dir=source_main_dir,
+        source_key=source_key,
         attr_dir=attr_dir,
         counters={},
     )
 
 
-def test_minhash_attrs_co_partitioned_with_source(fox_corpus):
+def test_minhash_batch_preserves_arrow_and_filters_null_text():
+    batch = pa.RecordBatch.from_pydict(
+        {
+            "id": ["content", "empty"],
+            "text": ["a sufficiently long document for minhash", None],
+        }
+    )
+
+    result = _minhash_batch(batch, TEST_MINHASH_PARAMS)
+
+    assert result.schema == pa.schema([pa.field("id", pa.string()), pa.field("buckets", pa.list_(pa.string()))])
+    assert result.column("id").to_pylist() == ["content"]
+    assert len(result.column("buckets")[0].as_py()) == TEST_MINHASH_PARAMS.num_bands
+
+
+def test_minhash_attrs_co_partitioned_with_source(fox_corpus, monkeypatch):
     """Each source shard produces a same-named MinHash attr parquet with {id, buckets}."""
+    monkeypatch.setenv("MARIN_PREFIX", fox_corpus["output_dir"])
     norm_dir = os.path.join(fox_corpus["output_dir"], "normalized")
     minhash_dir = os.path.join(fox_corpus["output_dir"], "minhash")
 
     source = _normalize(fox_corpus["test_dir"], norm_dir)
     minhash = compute_minhash_attrs(source=source, output_path=minhash_dir)
 
-    assert minhash.source_main_dir == source.main_output_dir
+    assert minhash.source_key == "normalized/outputs/main"
     assert minhash.params.num_perms == 286
     assert minhash.params.num_bands == 26
 
@@ -124,7 +142,7 @@ def test_fuzzy_dups_single_source_schema_and_pair(fox_corpus):
     dups = compute_fuzzy_dups_attrs(inputs=[minhash], output_path=dups_dir, max_parallelism=4)
 
     assert dups.params == minhash.params
-    per_source = dups.sources[source.main_output_dir]
+    per_source = dups.sources[minhash.source_key]
 
     by_id = _read_main_records(source)
     rows = _read_cluster_attrs(per_source.attr_dir)
@@ -134,9 +152,9 @@ def test_fuzzy_dups_single_source_schema_and_pair(fox_corpus):
     # sharing one dup_cluster_id, with exactly one canonical.
     pair = {"test_contaminated_1", "test_high_overlap"}
     assert pair <= by_source_id.keys(), f"missing attr rows for pair: {pair - by_source_id.keys()}"
-    cluster_ids = {by_source_id[s]["attributes"]["dup_cluster_id"] for s in pair}
+    cluster_ids = {by_source_id[s]["dup_cluster_id"] for s in pair}
     assert len(cluster_ids) == 1, f"pair should share a dup_cluster_id; got {cluster_ids}"
-    canonicals = [s for s in pair if by_source_id[s]["attributes"]["is_cluster_canonical"]]
+    canonicals = [s for s in pair if by_source_id[s]["is_cluster_canonical"]]
     assert len(canonicals) == 1, f"exactly one canonical expected; got {canonicals}"
 
     # Unique docs never have attr rows (no cluster → no annotation).
@@ -161,7 +179,7 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
     test_main_dir = os.path.join(fox_corpus["output_dir"], "test_main")
     train_mh = _write_minhash_attr_dataset(
         output_dir=os.path.join(fox_corpus["output_dir"], "mh_train"),
-        source_main_dir=train_main_dir,
+        source_key=train_main_dir,
         rows=[
             {
                 "id": generate_id("Arctic predators have superior auditory capabilities for hunting beneath snow."),
@@ -179,7 +197,7 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
     )
     test_mh = _write_minhash_attr_dataset(
         output_dir=os.path.join(fox_corpus["output_dir"], "mh_test"),
-        source_main_dir=test_main_dir,
+        source_key=test_main_dir,
         rows=[
             {
                 "id": generate_id("Arctic predators have superior auditory capabilities for hunting beneath snow."),
@@ -196,9 +214,10 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
         ],
     )
 
+    output_path = os.path.join(fox_corpus["output_dir"], "fuzzy_dups")
     dups = compute_fuzzy_dups_attrs(
         inputs=[train_mh, test_mh],
-        output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups"),
+        output_path=output_path,
         max_parallelism=1,
     )
 
@@ -206,12 +225,20 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
     for per_source in dups.sources.values():
         assert per_source.attr_dir.rsplit("/", 1)[-1].startswith("source_"), per_source.attr_dir
         assert Path(per_source.attr_dir).exists()
+    assert dups.attr_dir_for_source(train_main_dir) == dups.sources[train_mh.source_key].attr_dir
+    manifest = json.loads((Path(output_path) / ".source_manifest.json").read_text())
+    assert manifest["version"] == "v1"
+    assert {source["source_key"] for source in manifest["sources"]} == set(dups.sources)
+    assert {source["attribute_dir"] for source in manifest["sources"]} == {
+        "outputs/source_000",
+        "outputs/source_001",
+    }
 
-    def rows_by_id(main_dir: str) -> dict[str, dict]:
-        return {r["id"]: r for r in _read_cluster_attrs(dups.sources[main_dir].attr_dir)}
+    def rows_by_id(source_key: str) -> dict[str, dict]:
+        return {r["id"]: r for r in _read_cluster_attrs(dups.sources[source_key].attr_dir)}
 
-    train_rows = rows_by_id(train_main_dir)
-    test_rows = rows_by_id(test_main_dir)
+    train_rows = rows_by_id(train_mh.source_key)
+    test_rows = rows_by_id(test_mh.source_key)
 
     # Each cross-source byte-identical text must appear as an attr row on both
     # sides (keyed by the same content hash), share a dup_cluster_id, and have
@@ -223,7 +250,7 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
         content_id = generate_id(shared_text)
         assert content_id in train_rows, f"missing train attr row for {shared_text!r}"
         assert content_id in test_rows, f"missing test attr row for {shared_text!r}"
-        a, b = train_rows[content_id]["attributes"], test_rows[content_id]["attributes"]
+        a, b = train_rows[content_id], test_rows[content_id]
         assert a["dup_cluster_id"] == b["dup_cluster_id"], f"{shared_text!r}: dup_cluster_id mismatch"
         assert (
             a["is_cluster_canonical"] != b["is_cluster_canonical"]
@@ -250,11 +277,11 @@ def test_fuzzy_dups_rejects_param_mismatch(fox_corpus):
 
 
 def test_fuzzy_dups_rejects_duplicate_source(fox_corpus):
-    """Two inputs pointing to the same ``source_main_dir`` must be rejected to avoid output clobbering."""
+    """Two inputs with the same source key must be rejected to avoid output clobbering."""
     source = _normalize(fox_corpus["test_dir"], os.path.join(fox_corpus["output_dir"], "norm"))
     mh = compute_minhash_attrs(source=source, output_path=os.path.join(fox_corpus["output_dir"], "mh"))
 
-    with pytest.raises(ValueError, match=r"Duplicate source_main_dir"):
+    with pytest.raises(ValueError, match=r"Duplicate source_key"):
         compute_fuzzy_dups_attrs(
             inputs=[mh, mh],
             output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups"),
@@ -266,8 +293,8 @@ def _canonical_assignment(source: NormalizedData, output_path: str) -> dict[str,
     """Run minhash + fuzzy_dups for *source* and return ``{id -> (dup_cluster_id, is_canonical)}``."""
     minhash = compute_minhash_attrs(source=source, output_path=os.path.join(output_path, "minhash"))
     dups = compute_fuzzy_dups_attrs(inputs=[minhash], output_path=os.path.join(output_path, "dups"), max_parallelism=4)
-    rows = _read_cluster_attrs(dups.sources[source.main_output_dir].attr_dir)
-    return {r["id"]: (r["attributes"]["dup_cluster_id"], r["attributes"]["is_cluster_canonical"]) for r in rows}
+    rows = _read_cluster_attrs(dups.sources[minhash.source_key].attr_dir)
+    return {r["id"]: (r["dup_cluster_id"], r["is_cluster_canonical"]) for r in rows}
 
 
 def test_fuzzy_dups_canonical_selection_is_deterministic(fox_corpus):
@@ -321,7 +348,7 @@ def test_fuzzy_dups_capped_does_not_raise_and_emits(fox_corpus):
 
     mh = _write_minhash_attr_dataset(
         output_dir=os.path.join(fox_corpus["output_dir"], "mh_path"),
-        source_main_dir=main_dir,
+        source_key=main_dir,
         rows=rows,
     )
 
@@ -331,7 +358,7 @@ def test_fuzzy_dups_capped_does_not_raise_and_emits(fox_corpus):
         cc_max_iterations=1,
         max_parallelism=4,
     )
-    attr_rows = _read_cluster_attrs(dups.sources[main_dir].attr_dir)
+    attr_rows = _read_cluster_attrs(dups.sources[mh.source_key].attr_dir)
     assert attr_rows, "capped run should still emit cluster-member rows"
 
 
@@ -400,7 +427,7 @@ def test_text_cap_chars_truncates_mega_docs_only(tmp_path):
     # Params + version metadata.
     assert cap_mh.params.text_cap_chars == cap_chars
     assert nocap_mh.params.text_cap_chars is None
-    assert cap_mh.version == "v2"
+    assert cap_mh.version == "v3"
 
 
 # ---------------------------------------------------------------------------
@@ -538,14 +565,14 @@ def _run_dedup_on_corpus(tmp_path: Path, docs: list[dict]) -> dict[str, dict]:
     dups = compute_fuzzy_dups_attrs(inputs=[minhash], output_path=str(tmp_path / "dups"), max_parallelism=1)
 
     by_id = _read_main_records(source)
-    rows = _read_cluster_attrs(dups.sources[source.main_output_dir].attr_dir)
+    rows = _read_cluster_attrs(dups.sources[minhash.source_key].attr_dir)
     return {by_id[r["id"]]["source_id"]: r for r in rows if r["id"] in by_id}
 
 
 def _cluster_id(by_source_id: dict[str, dict], source_id: str) -> str | None:
     """Return the dup_cluster_id for *source_id*, or None if it has no attr row (singleton)."""
     row = by_source_id.get(source_id)
-    return row["attributes"]["dup_cluster_id"] if row else None
+    return row["dup_cluster_id"] if row else None
 
 
 @pytest.mark.data_integration
@@ -647,7 +674,7 @@ def test_wikipedia_revisions_cluster_per_article(tmp_path: Path, wikipedia_revis
     for article in wikipedia_revisions_articles:
         variants = [sid for sid in by_source_id if sid.startswith(f"{article}__")]
         assert variants, f"no attr rows for revisions of {article!r} (unexpected singletons)"
-        clusters = {by_source_id[sid]["attributes"]["dup_cluster_id"] for sid in variants}
+        clusters = {by_source_id[sid]["dup_cluster_id"] for sid in variants}
         assert len(clusters) == 1, f"{article}: revisions split across clusters: {clusters}"
         article_to_cluster[article] = clusters.pop()
 

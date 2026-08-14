@@ -39,6 +39,16 @@ def test_build_worker_bootstrap_script_requires_controller_address() -> None:
         build_worker_bootstrap_script(cfg)
 
 
+def test_bootstrap_runs_node_agent_beside_worker() -> None:
+    script = build_worker_bootstrap_script(_worker_config())
+
+    assert "--name iris-node-agent" in script
+    assert "--network=host" in script
+    assert "--pid=host" in script
+    assert ".venv/bin/python -m iris.cluster.node_agent gcp" in script
+    assert "--worker-config /etc/iris/worker_config.json" in script
+
+
 def test_bootstrap_renders_versioned_runsc_url() -> None:
     """Every gVisor URL in the bootstrap must use the numeric release path:
     the GCS layout is releases/release/<YYYYMMDD.P>/, and a URL built from the
@@ -113,7 +123,7 @@ _MIRRORS = {
         ("localhost:5000/img:dev", "localhost:5000"),
     ],
 )
-def test_upstream_registry(image_tag: str, expected: str) -> None:
+def test_upstream_registry_with_image_reference_returns_canonical_registry(image_tag: str, expected: str) -> None:
     assert upstream_registry(image_tag) == expected
 
 
@@ -136,7 +146,7 @@ def test_upstream_registry(image_tag: str, expected: str) -> None:
         ("localhost:5000/img:dev", None),
     ],
 )
-def test_docker_hub_repo_path(image_tag: str, expected: str | None) -> None:
+def test_docker_hub_repo_path_with_image_reference_returns_normalized_path(image_tag: str, expected: str | None) -> None:
     assert docker_hub_repo_path(image_tag) == expected
 
 

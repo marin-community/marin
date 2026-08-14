@@ -21,7 +21,7 @@ inputs:
     description: "Arguments for the venv sync (stacks whose program imports more than iac widen this)."
     default: "--package marin-iac --extra deploy --frozen"
   config-map:
-    description: "Optional pulumi/actions config-map JSON applied before preview."
+    description: 'Optional config to apply before preview, as JSON: {"key": {"value": "v", "secret": false}}.'
     default: ""
 
 runs:
@@ -41,46 +41,83 @@ runs:
       shell: bash
       run: uv sync ${{ inputs.uv-sync-args }}
 
+    - name: Setup Pulumi CLI
+      uses: pulumi/setup-pulumi@v2
+
+    # Runs `pulumi preview` directly instead of through pulumi/actions: that action echoes the
+    # full resource-level diff to this step's own log unconditionally (no flag suppresses it —
+    # `suppress-outputs` only hides Pulumi *stack outputs*, a different mechanism), so every
+    # human email decrypted into the plan text was appearing in the public Action log even
+    # though the PR comment redacts it. Redirecting stdout/stderr straight to a file means the
+    # raw plan is never written to a log stream at all — and as a side effect, downstream steps
+    # no longer round-trip the (now much larger, since GcpIam landed) plan text through a GitHub
+    # Actions expression into an `env:` block, which is what was hitting the OS's combined
+    # argv/envp size limit ("Argument list too long").
     - name: Preview the stack
       id: preview
-      continue-on-error: true
-      uses: pulumi/actions@v7
+      shell: bash
       env:
         # infra/pulumi's plain `runtime: python` (no `virtualenv:` option) resolves `python3`
         # from PATH, which `uv sync` above does not add to this step's PATH — without this,
         # Pulumi runs the program under the runner's system Python and fails with
         # `ModuleNotFoundError: No module named 'pulumi'` instead of previewing.
         PULUMI_PYTHON_CMD: ${{ github.workspace }}/.venv/bin/python
-      with:
-        command: preview
-        stack-name: ${{ inputs.stack }}
-        work-dir: ${{ inputs.work-dir }}
-        cloud-url: gs://marin-iac-state
-        diff: true
-        color: never
-        comment-on-pr: false
-        config-map: ${{ inputs.config-map }}
+        WORK_DIR: ${{ inputs.work-dir }}
+        STACK: ${{ inputs.stack }}
+        CONFIG_MAP: ${{ inputs.config-map }}
+        OUT_DIR: ${{ github.workspace }}/iac-preview-out
+      run: |
+        set -uo pipefail
+        set +e
+        mkdir -p "$OUT_DIR"
+
+        # The inner `set -e` subshell aborts on the first failing command (login, select,
+        # config, or preview itself) so a broken step doesn't cascade into confusing later
+        # errors, while the outer script (no -e) always reaches the ok=true/false write below —
+        # raw.txt is created unconditionally, whatever stage failed, so the always-run "Format
+        # preview artifact" step never operates on a missing file.
+        (
+          set -e
+          pulumi login gs://marin-iac-state
+          pulumi -C "$WORK_DIR" stack select "$STACK"
+          if [[ -n "$CONFIG_MAP" ]]; then
+            # A `jq` failure inside a `< <(...)` process substitution does not propagate
+            # through `set -e` (only the `while` command's own exit status is checked, and
+            # it reads zero lines and returns success) — capturing to a variable first
+            # means malformed CONFIG_MAP JSON aborts the step instead of silently previewing
+            # with none of the requested config applied.
+            config_tsv=$(echo "$CONFIG_MAP" | jq -r 'to_entries[] | [.key, .value.value, (.value.secret // false)] | @tsv')
+            while IFS=$'\t' read -r key value secret; do
+              if [[ "$secret" == "true" ]]; then
+                pulumi -C "$WORK_DIR" config set --secret "$key" "$value"
+              else
+                pulumi -C "$WORK_DIR" config set "$key" "$value"
+              fi
+            done <<<"$config_tsv"
+          fi
+          pulumi -C "$WORK_DIR" preview --diff --color never
+        ) >"$OUT_DIR/raw.txt" 2>&1
+        preview_exit=$?
+
+        if [[ "$preview_exit" -eq 0 ]]; then
+          echo "ok=true" >>"$GITHUB_OUTPUT"
+        else
+          echo "ok=false" >>"$GITHUB_OUTPUT"
+        fi
 
     - name: Format preview artifact
       if: always()
       shell: bash
       env:
-        PREVIEW_RAW: ${{ steps.preview.outputs.output }}
-        PREVIEW_OK: ${{ steps.preview.outcome == 'success' }}
+        PREVIEW_OK: ${{ steps.preview.outputs.ok }}
         STACK: ${{ inputs.stack }}
         OUT_DIR: ${{ github.workspace }}/iac-preview-out
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        mkdir -p "$OUT_DIR"
-        printf '%s' "${PREVIEW_RAW:-}" > "$OUT_DIR/raw.txt"
-        ok=false
-        if [[ "$PREVIEW_OK" == "true" ]]; then
-          ok=true
-        fi
         python3 "$ACTION_PATH/format_preview.py" \
           --stack "$STACK" \
-          --ok "$ok" \
+          --ok "$PREVIEW_OK" \
           --input "$OUT_DIR/raw.txt" \
           --out-dir "$OUT_DIR"
 
@@ -95,7 +132,7 @@ runs:
         if-no-files-found: error
 
     - name: Fail if preview failed
-      if: steps.preview.outcome == 'failure'
+      if: steps.preview.outputs.ok == 'false'
       shell: bash
       run: |
         echo "pulumi preview failed for stack ${{ inputs.stack }}" >&2

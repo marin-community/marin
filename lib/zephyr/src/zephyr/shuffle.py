@@ -3,54 +3,56 @@
 
 """Scatter/shuffle support for Zephyr pipelines.
 
-Each source-shard's scatter output is a single binary file containing a
-sequence of zstd-compressed frames. Within one chunk's zstd frame, items
-are written in sub-batches of ``_SUB_BATCH_SIZE`` — each sub-batch is a
-single ``pickle.dump(list_of_items)`` into the zstd stream. This amortises
-per-item pickle/zstd dispatch over a sub-batch while still letting the
-reader stream sub-batches lazily without materialising the full chunk.
+Each source-shard's scatter output is a set of zstd-compressed Parquet files,
+one combined file per flush (``c{chunk:04d}.parquet``) containing all target
+shards' data sorted by ``(_SHARD_COL, _SORT_KEY_COL)``.  A msgpack sidecar
+(``metadata.msgpack``) records ``files -> [path, ...]``, a global
+``avg_item_bytes`` estimate, and exact per-target-shard payload bytes
+(``shard_bytes``) used by reducers to size the external-sort decision.
 
-A msgpack sidecar (``.scatter_meta``) maps ``target_shard -> [(offset, length)]``
-byte ranges into the data file, plus per-shard ``max_chunk_rows`` and a global
-``avg_item_bytes`` estimate. Sidecars from all source shards are aggregated
-into a single ``scatter_metadata`` manifest at the end of the scatter stage,
-which reducers consume to build :class:`ScatterReader` instances.
+On the read side, each reducer scans only its target shard via
+``pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == target).drop(_SHARD_COL)``.
+Polars predicate pushdown with row-group statistics skips non-matching row
+groups via byte-range GETs, so each reducer reads roughly 1/N of each file.
+The resulting LazyFrames are merged via ``external_sort_merge``: a fully
+streaming multi-pass merge that writes runs with ``sink_parquet`` and keeps
+every merge below ``_EXTERNAL_SORT_MAX_MERGE_FAN_IN`` inputs.
 
-On read, each chunk is fetched with a single ``cat_file`` range GET (one
-HTTP request, no per-chunk file handle), then streamed via
-``pickle.load`` on a length-bounded zstd reader. Per-iterator memory stays
-near-constant: one buffered item plus the zstd decoder state plus the
-chunk's compressed bytes (typically a few MB). This bound is essential for
-skewed shuffles where one reducer pulls disproportionate data and the
-external-sort fan-in opens hundreds of chunk iterators at once.
+Write-side memory is bounded by buffer estimated size: when the sum of
+``DataFrame.estimated_size()`` across buffered frames exceeds
+``_SCATTER_FLUSH_THRESHOLD * _ESTIMATED_SIZE_CORRECTION_FACTOR`` of available
+task memory, all buffers are flushed together into one combined file.
 
-Write-side memory is bounded by a byte budget (``_SCATTER_WRITE_BUFFER_BYTES``)
-rather than a fixed row count. When the estimated total bytes across all
-shard buffers exceeds the budget, the largest buffer is flushed. This prevents
-OOM on skewed or large-item workloads where a row-count limit provides no
-reliable bound.
+Routing columns (``__zephyr_shard__``, ``__zephyr_sort_key__``) are added
+in ``_items_to_dataframe``; ``__zephyr_shard__`` is stripped on read,
+``__zephyr_sort_key__`` is consumed by the merge and stripped after.
 """
 
 import concurrent.futures
 import functools
+import gc
 import io
 import logging
+import math
 import os
-import pickle
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import cloudpickle
+import humanfriendly
 import msgspec
-import zstandard as zstd
+import polars as pl
 from iris.env_resources import TaskResources
-from rigging.filesystem import StoragePath, is_remote_path, url_to_fs
+from rigging.filesystem import StoragePath, open_url, url_to_fs
+from rigging.filesystem.s3_compat import needs_virtual_host_addressing
 from rigging.timing import RateLimiter, log_time
 
-from zephyr.shard_keys import composite_sort_key, deterministic_hash
-from zephyr.worker_context import zephyr_worker_ctx
+from zephyr.external_sort import external_sort_merge
+from zephyr.shard_keys import encode_key, hash_encoded_key
+from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -81,65 +83,148 @@ class ListShard:
         for ref in self.refs:
             yield from ref
 
-    def get_iterators(self) -> Iterator[Iterator]:
-        for ref in self.refs:
-            yield iter(ref)
-
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-_SCATTER_META_SUFFIX = ".scatter_meta"
+_SCATTER_METADATA_FILENAME = "metadata.msgpack"
 
 # Number of parallel sidecar reads each reducer issues when building its
 # ScatterReader. Sidecars are small msgpack files (a few KB) and reads are
 # GCS GET-bound, so a modest pool keeps latency low without thrashing.
 _SIDECAR_READ_CONCURRENCY = 32
-# Items sampled on the first flush to establish an avg_item_bytes baseline.
-_SCATTER_SAMPLE_SIZE = 100
-# Items sampled on each subsequent flush to track item-size drift cheaply.
-_SCATTER_ONGOING_SAMPLE_SIZE = 10
-# How often (in items written) to re-sample one item's pickle size and update
-# the EMA estimate in write(). This is independent of flush-time sampling and
-# ensures the estimate tracks drift even when no flush has fired yet.
-_ESTIMATE_WRITE_SAMPLE_INTERVAL = 10
-# EMA weight given to each new observation. 0.3 converges to a 2x step-change
-# in item size within ~3 samples while staying stable under small fluctuations.
-_ESTIMATE_EMA_ALPHA = 0.3
+# Fraction of available memory available for merging.
+_SCATTER_READ_MEMORY_FRACTION = 0.4
 
-_ZSTD_COMPRESS_LEVEL = 3
-# Items per pickle.dump call within a chunk. Larger = faster (less per-call
-# dispatch overhead), smaller = lower per-iterator read memory.
-_SUB_BATCH_SIZE = 1024
+# Memory overhead multiple per row in Polars DataFrame.
+_SCATTER_READ_POLARS_ROW_OVERHEAD = 2
+# Memory overhead multiple per row in the Python iterator when the reducer is not Polars-based.
+_SCATTER_READ_PYTHON_ROW_OVERHEAD = 2
 
-# Fraction of cgroup memory allocated to scatter write buffers.
-_SCATTER_WRITE_BUFFER_FRACTION = 0.25
-# Static fallback used when the cgroup memory limit cannot be determined.
-_SCATTER_WRITE_BUFFER_BYTES_FALLBACK = 256 * 1024 * 1024  # 256 MB
-# Minimum wall-clock seconds between per-flush progress lines per ScatterWriter.
-# High-fanout shuffles produce many tiny chunks at sub-millisecond cadence; a
-# count-based gate (e.g. % 10) still floods logs. Time-based gating bounds
-# volume to one line/minute/worker regardless of chunk rate or size.
 _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
+# Polars streaming chunk size, important to avoid excessive memory usage during merge.
+_POLARS_STREAMING_CHUNK_SIZE = 10000
+# Maximum run files that Polars merges at one time during an external sort.
+_EXTERNAL_SORT_MAX_MERGE_FAN_IN = 32
+
+# Helper column names injected by _items_to_dataframe and stripped before
+# writing to disk.  Both are internal implementation details; user schemas must
+# not collide with these names.
+_SHARD_COL = "__zephyr_shard__"
+_SORT_KEY_COL = "__zephyr_sort_key__"
+# A cloudpickle-serialized Python object representing the item
+_PAYLOAD_COL = "__payload__"
+# Temporary flat columns folded into the _SORT_KEY_COL struct during
+# _items_to_dataframe; never present in written chunks.
+_KEY_TMP_COL = "__zephyr_key_tmp__"
+_SORT_VALUE_TMP_COL = "__zephyr_sort_value_tmp__"
+
+# Python items consumed before creating a DataFrame.
+_DATAFRAME_ROW_COUNT = 1000
+# Flush all scatter buffers when the buffer's estimated size exceeds this fraction of task memory.
+_SCATTER_FLUSH_THRESHOLD = 0.20
+# Empirically measured ratio of DataFrame.estimated_size() to actual per-shard process RSS growth,
+# across three datasets (nemotron: 0.54-0.60, skewed: 0.59-0.66, FineWeb-Edu: 0.66-0.70).
+# Applied to _SCATTER_FLUSH_THRESHOLD so the effective trigger is 12% of task memory. The 2.27x
+# flush peak was measured during the 2026-08-02 fuzzy-dedup incident: https://echo.oa.dev/wiki/68.
+_ESTIMATED_SIZE_CORRECTION_FACTOR = 0.60
+# Threshold for triggering a gc.collect() after a flush.
+_GC_FLUSH_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
 
 
-def _default_scatter_write_buffer_bytes() -> int:
-    """Return the scatter write buffer budget for this task.
+def _task_memory_bytes() -> int:
+    ctx = _worker_ctx_var.get()
+    if ctx is not None and ctx.task_memory_bytes > 0:
+        return ctx.task_memory_bytes
 
-    Prefers the per-task memory budget from the worker context (set from
-    ``ShardTask.cost.memory``, which already accounts for concurrent tasks
-    sharing the actor's RAM). Falls back to reading the full cgroup limit when
-    no per-task budget is set (e.g. in tests or when cost is zero), and to
-    256 MB when the cgroup limit cannot be read.
+    memory_bytes = TaskResources.from_environment().memory_bytes
+    if memory_bytes <= 0:
+        logger.warning("No task memory is available. Using a 1 GiB memory budget.")
+        return 1024 * 1024 * 1024
+    return memory_bytes
+
+
+def _dataframe_to_items(df: pl.DataFrame) -> Iterator[Any]:
+    """Yield Python items from a DataFrame, stripping routing columns and deserializing payloads."""
+    for p in df[_PAYLOAD_COL].to_list():
+        yield cloudpickle.loads(p)
+
+
+def _columns_to_dataframe(
+    payloads: list[bytes],
+    shards: list[int],
+    key_bytes: list[bytes],
+    sort_values: list[Any],
+) -> pl.DataFrame:
+    """Build the scatter DataFrame from pre-computed flat columns.
+
+    The sort-key struct is folded from two flat columns rather than per-row
+    Python dicts: series construction from homogeneous lists is the native
+    fast path, and ``pl.struct`` over existing columns is cheap. Field order
+    (key first) drives the (key, sort_value) sort order.
+
+    ``key_bytes`` must be pre-encoded via :func:`~zephyr.shard_keys.encode_key` so that
+    ``_KEY_TMP_COL`` is always ``Binary`` — preventing struct schema mismatches
+    when different mapper shards produce keys of different Python types.
     """
-    task_memory = zephyr_worker_ctx().task_memory_bytes
-    if task_memory > 0:
-        return int(task_memory * _SCATTER_WRITE_BUFFER_FRACTION)
-    memory = TaskResources.from_environment().memory_bytes
-    if memory > 0:
-        return int(memory * _SCATTER_WRITE_BUFFER_FRACTION)
-    return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK
+    try:
+        return pl.DataFrame(
+            {
+                _PAYLOAD_COL: pl.Series(payloads, dtype=pl.Binary),
+                _SHARD_COL: pl.Series(shards, dtype=pl.Int32),
+                _KEY_TMP_COL: pl.Series(key_bytes, dtype=pl.Binary),
+                _SORT_VALUE_TMP_COL: sort_values,
+            }
+        ).select(
+            _PAYLOAD_COL,
+            _SHARD_COL,
+            pl.struct(
+                pl.col(_KEY_TMP_COL).alias("key"),
+                pl.col(_SORT_VALUE_TMP_COL).alias("sort_value"),
+            ).alias(_SORT_KEY_COL),
+        )
+    except (TypeError, pl.exceptions.InvalidOperationError) as err:
+        # Non-serializable sort_values surface as TypeError from Series construction
+        # or InvalidOperationError ("nested objects are not allowed") when the
+        # sort_value column lands as Object dtype and pl.struct rejects it.
+        raise ValueError("sort_fn must return an Arrow-serializable object.") from err
+
+
+def _items_to_dataframe(
+    items: list[Any],
+    key_fn: Callable,
+    sort_fn: Callable | None,
+    num_output_shards: int,
+) -> pl.DataFrame:
+    """Convert a list of Python items to a DataFrame with routing columns.
+
+    Cloudpickle-serializes items into ``_PAYLOAD_COL`` and adds ``_SHARD_COL``
+    (int32 target shard index) and ``_SORT_KEY_COL``. This is the adapter
+    between Python-item pipelines and the DataFrame-based
+    :class:`ScatterWriter`; DataFrame-native pipelines can feed the writer
+    directly.
+
+    ``num_output_shards=0`` means the caller assigns ``_SHARD_COL`` itself (the
+    combiner path in :meth:`ScatterWriter._flush`, whose rows are already
+    routed); routing is then skipped rather than computed and discarded.
+    """
+    shards: list[int] = []
+    key_bytes: list[bytes] = []
+    sort_values: list[Any] = []
+    for item in items:
+        key = key_fn(item)
+        try:
+            kb = encode_key(key)
+        except TypeError as err:
+            raise ValueError(f"key_fn must return a msgpack-serializable object; got {type(key).__name__!r}.") from err
+        # Route from the bytes we just encoded: deterministic_hash(key) would
+        # msgpack-encode the same key a second time for every scattered item.
+        shards.append(hash_encoded_key(kb) % num_output_shards if num_output_shards > 0 else 0)
+        key_bytes.append(kb)
+        sort_values.append(sort_fn(item) if sort_fn is not None else None)
+    payloads = [cloudpickle.dumps(item) for item in items]
+    return _columns_to_dataframe(payloads, shards, key_bytes, sort_values)
 
 
 # ---------------------------------------------------------------------------
@@ -158,9 +243,7 @@ def _sidecar_decoder() -> msgspec.msgpack.Decoder:
 
 
 def _scatter_meta_path(data_path: str) -> str:
-    """``shard-0000.shuffle`` -> ``shard-0000.scatter_meta``."""
-    stem, _ = os.path.splitext(data_path)
-    return stem + _SCATTER_META_SUFFIX
+    return f"{data_path}{_SCATTER_METADATA_FILENAME}"
 
 
 def _write_scatter_meta(data_path: str, sidecar: dict) -> None:
@@ -172,147 +255,102 @@ def _write_scatter_meta(data_path: str, sidecar: dict) -> None:
 
 @dataclass(frozen=True)
 class _SidecarSlice:
-    """One reducer's slice of a mapper sidecar.
+    """Chunk paths and metadata from one mapper's sidecar.
 
-    A full sidecar is ~hundreds of KB and carries byte ranges for every
-    target shard (tens of thousands on large jobs). A reducer only consumes
-    its own shard's ranges plus two scalars, so the worker extracts just
-    those fields and discards the parsed dict before returning. This keeps
-    the reducer's resident memory proportional to the number of mappers
-    instead of mappers * sidecar size.
+    Each entry in ``chunk_paths`` is one combined Parquet file written during a
+    flush; the file contains data for all target shards sorted by
+    ``(_SHARD_COL, _SORT_KEY_COL)``. ``target_bytes`` is the exact payload
+    bytes this mapper wrote for the reader's target shard, summed across all
+    chunks.
     """
 
     path: str
-    ranges: tuple[tuple[int, int], ...]
-    max_chunk_rows: int
+    chunk_paths: list[str]  # GCS parquet paths, one per flush event
     avg_item_bytes: float
+    target_bytes: int
 
 
-def _read_sidecar_slice(fs: Any, fs_path: str, path: str, shard_key: str) -> _SidecarSlice | None:
-    """Read one sidecar and extract only the fields for ``shard_key``.
+def _read_sidecar_slice(path: str, target_shard: int) -> _SidecarSlice | None:
+    """Read one sidecar and return its file list plus the target shard's payload bytes.
 
-    ``fs``/``fs_path`` are the pre-resolved filesystem and native path for
-    ``path``'s sidecar, shared across workers (see the caller).
-
-    Returns ``None`` if the sidecar has no ranges for this shard. The parsed
-    dict is released when this function returns. Once we confirm this shard
-    has ranges, ``max_chunk_rows[shard_key]`` and ``avg_item_bytes`` must
-    also be present — ``ScatterWriter`` records both in the same ``_flush``
-    that appends to ``shards[shard_key]``. A missing field here means the
-    sidecar is corrupt or was written by an incompatible version, and we
-    fail rather than silently substituting zero.
+    Returns ``None`` if the sidecar has no files (empty writer).
 
     Uses ``fs.cat_file`` rather than ``open_url`` — one direct GET returning
     bytes is ~25% faster than going through ``TextIOWrapper(BufferedFile)``
     for small sidecars, and msgpack decodes bytes directly.
     """
     meta_path = _scatter_meta_path(path)
+    fs, fs_path = url_to_fs(meta_path)
     meta = _sidecar_decoder().decode(fs.cat_file(fs_path))
-    ranges_raw = meta.get("shards", {}).get(shard_key)
-    if not ranges_raw:
+    files = meta.get("files", [])
+    if not files:
         return None
-    max_rows_map = meta.get("max_chunk_rows", {})
-    if shard_key not in max_rows_map:
-        raise ValueError(f"Sidecar {meta_path} has ranges for shard {shard_key} but no max_chunk_rows entry.")
-    if "avg_item_bytes" not in meta:
-        raise ValueError(f"Sidecar {meta_path} has ranges for shard {shard_key} but no avg_item_bytes.")
-    ranges = tuple((int(off), int(length)) for off, length in ranges_raw)
     return _SidecarSlice(
         path=path,
-        ranges=ranges,
-        max_chunk_rows=int(max_rows_map[shard_key]),
-        avg_item_bytes=float(meta["avg_item_bytes"]),
+        chunk_paths=[str(f) for f in files],
+        avg_item_bytes=float(meta.get("avg_item_bytes", 0)),
+        target_bytes=int(meta.get("shard_bytes", {}).get(str(target_shard), 0)),
     )
 
 
 def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -> list[_SidecarSlice]:
-    """Read every sidecar concurrently and return per-shard slices in input order.
+    """Read every sidecar concurrently and return slices in input order.
 
-    Extraction happens inside the worker so full sidecar dicts never
-    accumulate in the reducer process. Sidecars with no ranges for
-    ``target_shard`` are dropped.
-
-    TODO(rav): each reducer subprocess re-reads every sidecar even though only
-    one shard's byte ranges are used. A worker-level sidecar cache (or a shared
-    read across colocated reducers) would avoid the redundant GCS GETs when
-    many reducers run on the same host.
+    Empty sidecars (no files written) are dropped from the result.
     """
-    shard_key = str(target_shard)
     ordered: list[_SidecarSlice | None] = [None] * len(scatter_paths)
-    # Resolve the filesystem on this thread so all workers share one instance.
-    # fsspec caches filesystem instances per thread id, so calling url_to_fs
-    # inside each worker would build a separate botocore client per thread
-    # (~12MB each, kept alive by fsspec's strong-ref cache) and log a
-    # "Found credentials" line per thread. Every sidecar shares one endpoint,
-    # so one filesystem serves them all; only the stripped path differs.
-    resolved = [url_to_fs(_scatter_meta_path(p)) for p in scatter_paths]
     with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        futures = {
-            pool.submit(_read_sidecar_slice, fs, fs_path, p, shard_key): i
-            for i, (p, (fs, fs_path)) in enumerate(zip(scatter_paths, resolved, strict=True))
-        }
+        futures = {pool.submit(_read_sidecar_slice, p, target_shard): i for i, p in enumerate(scatter_paths)}
         for fut in concurrent.futures.as_completed(futures):
             idx = futures[fut]
             ordered[idx] = fut.result()
     return [s for s in ordered if s is not None]
 
 
-# ---------------------------------------------------------------------------
-# Reader: one source-file's chunks for one target shard
-# ---------------------------------------------------------------------------
+def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
+    """Cast frames to a common supertype schema so pl.merge_sorted doesn't fail.
 
+    Different source shards may write the same column with different dtypes when
+    Polars infers from Python values — most commonly a sort_value field that is
+    Null on an all-None batch from one shard and Int64 from another.  This also
+    handles arbitrary user-column dtype drift when DataFrames are written directly.
 
-@dataclass(frozen=True)
-class ScatterFileIterator:
-    """Reads chunks for one target shard from one scatter file.
-
-    ``chunks`` is a tuple of ``(offset, length)`` byte ranges. Each chunk is
-    fetched on demand via a single ``cat_file`` and streamed item-by-item.
-    Per-iterator memory is bounded by the chunk's compressed size (typically
-    a few MB) plus tiny zstd/pickle state.
+    collect_schema() reads only parquet file-footer metadata (no row data).
+    The limit(0) concat derives the supertype schema without any I/O.  Casting
+    is applied as a lazy expression, so no data is scanned here.
     """
-
-    path: str
-    chunks: tuple[tuple[int, int], ...]
-    _fs: Any = None
-    _fs_path: str = ""
-
-    def __post_init__(self) -> None:
-        if self._fs is None:
-            fs, fs_path = url_to_fs(self.path)
-            object.__setattr__(self, "_fs", fs)
-            object.__setattr__(self, "_fs_path", fs_path)
-
-    @property
-    def chunk_count(self) -> int:
-        return len(self.chunks)
-
-    def __iter__(self) -> Iterator:
-        for chunk_iter in self.get_chunk_iterators():
-            yield from chunk_iter
-
-    def get_chunk_iterators(self) -> Iterator[Iterator]:
-        """Yield one lazy iterator per chunk, in write order."""
-        for offset, length in self.chunks:
-            yield _iter_chunk(self._fs, self._fs_path, offset, length)
+    if len(frames) <= 1:
+        return frames
+    schemas = [f.collect_schema() for f in frames]
+    if all(s == schemas[0] for s in schemas[1:]):
+        return frames
+    unified = pl.concat([f.limit(0) for f in frames], how="diagonal_relaxed").collect_schema()
+    return [f.cast(dict(unified)) for f in frames]
 
 
-def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int) -> Iterator:
-    """Fetch one chunk's compressed bytes via cat_file and stream items.
+def _scan_scatter_parquet(path: str) -> pl.LazyFrame:
+    """Scan a scatter chunk with the addressing required by CoreWeave object storage."""
+    endpoint = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL")
+    if not path.startswith("s3://") or not endpoint or not needs_virtual_host_addressing(endpoint):
+        return pl.scan_parquet(path)
 
-    Each chunk is a zstd frame containing a sequence of pickled sub-batches
-    (lists of up to ``_SUB_BATCH_SIZE`` items). The reader streams one
-    sub-batch at a time, so per-iterator memory is bounded by the
-    sub-batch size plus the chunk's compressed bytes.
-    """
-    blob = fs.cat_file(fs_path, start=offset, end=offset + length)
-    with zstd.ZstdDecompressor().stream_reader(io.BytesIO(blob)) as reader:
-        while True:
-            try:
-                sub_batch = pickle.load(reader)
-            except EOFError:
-                return
-            yield from sub_batch
+    bucket = urlparse(path).netloc
+    parsed_endpoint = urlparse(endpoint)
+    hostname = parsed_endpoint.hostname or ""
+    if not hostname.startswith(f"{bucket}."):
+        endpoint = parsed_endpoint._replace(netloc=f"{bucket}.{parsed_endpoint.netloc}").geturl()
+
+    # Polars' Rust object_store client reads credentials and region from the
+    # environment, but unlike fsspec it cannot infer CoreWeave's virtual-host
+    # requirement. In virtual-host mode object_store uses the endpoint verbatim,
+    # so the bucket must be part of the endpoint host.
+    return pl.scan_parquet(
+        path,
+        storage_options={
+            "aws_endpoint_url": endpoint,
+            "aws_virtual_hosted_style_request": "true",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -323,19 +361,25 @@ def _iter_chunk(fs: Any, fs_path: str, offset: int, length: int) -> Iterator:
 class ScatterReader:
     """All scatter chunks for one target shard, across all source files.
 
+    ``_files`` is a list of ``(source_path, chunk_paths)`` pairs — one entry
+    per source shard — where ``chunk_paths`` is the list of GCS parquet file
+    paths that source shard wrote for ``_target_shard``.
+
     Construct via :meth:`from_sidecars` for production use, or pass fields
     directly for testing.
     """
 
     def __init__(
         self,
-        iterators: list[ScatterFileIterator],
-        max_chunk_rows: int,
+        files: list[tuple[str, list[str]]],
+        target_shard: int,
         avg_item_bytes: float,
+        shard_payload_bytes: float = 0.0,
     ) -> None:
-        self.iterators = iterators
-        self.max_chunk_rows = max_chunk_rows
+        self._files = files
+        self._target_shard = target_shard
         self.avg_item_bytes = avg_item_bytes
+        self.shard_payload_bytes = shard_payload_bytes
 
     @classmethod
     def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> "ScatterReader":
@@ -346,116 +390,118 @@ class ScatterReader:
         is needed, which eliminates a serialization bottleneck when there are
         thousands of mappers.
         """
-        iterators: list[ScatterFileIterator] = []
-        max_rows = 0
+        files: list[tuple[str, list[str]]] = []
         weighted_bytes = 0.0
-        total_chunks_for_avg = 0
+        total_chunks = 0
+        shard_payload_bytes = 0.0
 
         with log_time(
             f"Building ScatterReader for target shard {target_shard} "
             f"from {len(scatter_paths)} sidecars (concurrency={_SIDECAR_READ_CONCURRENCY})"
         ):
             for slice_ in _read_sidecar_slices_parallel(scatter_paths, target_shard):
-                iterators.append(ScatterFileIterator(path=slice_.path, chunks=slice_.ranges))
-                max_rows = max(max_rows, slice_.max_chunk_rows)
-                if slice_.avg_item_bytes > 0:
-                    count = len(slice_.ranges)
-                    weighted_bytes += slice_.avg_item_bytes * count
-                    total_chunks_for_avg += count
+                files.append((slice_.path, slice_.chunk_paths))
+                weighted_bytes += slice_.avg_item_bytes * len(slice_.chunk_paths)
+                total_chunks += len(slice_.chunk_paths)
+                shard_payload_bytes += slice_.target_bytes
 
-        avg_item_bytes = weighted_bytes / total_chunks_for_avg if total_chunks_for_avg > 0 else 0.0
+        avg_item_bytes = weighted_bytes / total_chunks if total_chunks > 0 else 0.0
 
         logger.info(
-            "ScatterReader for shard %d: %d files, %d total chunks, " "max_chunk_rows=%d, avg_item_bytes=%.1f",
+            "ScatterReader for shard %d: %d source files, %d total chunks, "
+            "avg_item_bytes=%.1f, shard_payload_bytes=%.0f",
             target_shard,
-            len(iterators),
-            sum(it.chunk_count for it in iterators),
-            max_rows,
+            len(files),
+            total_chunks,
             avg_item_bytes,
+            shard_payload_bytes,
         )
-        return cls(iterators=iterators, max_chunk_rows=max_rows, avg_item_bytes=avg_item_bytes)
+        return cls(
+            files=files,
+            target_shard=target_shard,
+            avg_item_bytes=avg_item_bytes,
+            shard_payload_bytes=shard_payload_bytes,
+        )
 
-    def __iter__(self) -> Iterator:
-        for it in self.iterators:
-            yield from it
-
-    def get_iterators(self) -> Iterator[Iterator]:
-        for it in self.iterators:
-            yield from it.get_chunk_iterators()
+    def get_frames(self) -> list[pl.LazyFrame]:
+        frames = [
+            _scan_scatter_parquet(path).filter(pl.col(_SHARD_COL) == self._target_shard).drop(_SHARD_COL)
+            for _, chunk_paths in self._files
+            for path in chunk_paths
+        ]
+        return _unify_frame_schemas(frames)
 
     @property
     def total_chunks(self) -> int:
-        return sum(it.chunk_count for it in self.iterators)
+        return sum(len(chunks) for _, chunks in self._files)
 
-    @property
-    def max_compressed_chunk_bytes(self) -> int:
-        """Return the largest compressed chunk length across all files."""
-        if not self.iterators:
-            return 0
-        return max(length for file_iter in self.iterators for _, length in file_iter.chunks)
+    def merge_sorted_chunks(self, external_sort_dir: str) -> Iterator[Any]:
+        """Merge sorted chunks using k-way merge, yielding items in global sort order.
 
-    _MAX_IN_MEMORY_ITERATORS = 10_000
+        Each chunk file is assumed to be sorted by ``_SORT_KEY_COL`` (key plus optional
+        secondary sort). Performs a k-way merge across all chunks.
+        Args:
+            external_sort_dir: If set and the shard exceeds the memory budget,
+                spill intermediate runs.
 
-    def needs_external_sort(self, memory_limit: int, memory_fraction: float = 0.33) -> bool:
-        """Return True if opening all chunks at once would blow the budget."""
-        total_chunks = self.total_chunks
-        if total_chunks == 0:
-            return False
+        Yields:
+            Deserialized Python items in merged sort order.
+        """
 
-        # Too many open iterators -- force external sort regardless of memory.
-        if total_chunks > self._MAX_IN_MEMORY_ITERATORS:
-            logger.info(
-                "needs_external_sort: total_chunks=%d > %d -> forced external sort",
-                total_chunks,
-                self._MAX_IN_MEMORY_ITERATORS,
-            )
-            return True
+        with pl.Config() as polars_config:
+            polars_config.set_streaming_chunk_size(_POLARS_STREAMING_CHUNK_SIZE)
 
-        if self.avg_item_bytes <= 0:
-            raise ValueError(
-                "avg_item_bytes not available in scatter manifest. "
-                "Re-run the scatter stage with a version that records avg_item_bytes."
-            )
-        # Estimate merge memory per open iterator:
-        #
-        # 1. Compressed chunk blob: fetched via range GET, held in a BytesIO.
-        # 2. Decompressed frame: zstd stream_reader decompresses the full
-        #    frame into an internal buffer (~max_chunk_rows * avg_item_bytes).
-        # 3. One unpickled sub-batch: _SUB_BATCH_SIZE Python objects in memory.
-        #    Python object overhead is fixed per item (~500 bytes for a dict:
-        #    object header, hash table, key/value strings) so the multiplier
-        #    scales inversely with item size.
-        _FIXED_OVERHEAD_PER_ITEM = 512
-        in_memory_multiplier = (self.avg_item_bytes + _FIXED_OVERHEAD_PER_ITEM) / self.avg_item_bytes
-        total_compressed = sum(length for it in self.iterators for _, length in it.chunks)
-        avg_compressed = total_compressed / total_chunks
-        avg_decompressed = self.max_chunk_rows * self.avg_item_bytes
-        sub_batch_mem = _SUB_BATCH_SIZE * self.avg_item_bytes * in_memory_multiplier
-        per_iterator = avg_compressed + avg_decompressed + sub_batch_mem
-        estimated = total_chunks * per_iterator
-        budget = memory_limit * memory_fraction
-        triggered = estimated > budget
-        logger.info(
-            "needs_external_sort: %d chunks x %.1f MB/iter "
-            "(%.1f MB compressed + %.1f MB decompressed + %.1f MB sub-batch [%.1fx]) "
-            "= %.1f GB estimated vs %.1f GB budget (%.1f GB * %.2f) -> %s",
-            total_chunks,
-            per_iterator / 1e6,
-            avg_compressed / 1e6,
-            avg_decompressed / 1e6,
-            sub_batch_mem / 1e6,
-            in_memory_multiplier,
-            estimated / 1e9,
-            budget / 1e9,
-            memory_limit / 1e9,
-            memory_fraction,
-            triggered,
-        )
-        return triggered
+            if self.total_chunks == 0:
+                return
+
+            # Upper bound on merge memory: the target shard's entire data
+            # resident at once (the streaming merge holds strictly less in
+            # flight), using the exact per-shard payload bytes recorded in the
+            # sidecars — no row-count estimation.
+            estimated_merge_memory_bytes = self.shard_payload_bytes
+            # Overhead per row in the Polars DataFrame plus the deserialized Python object.
+            # Future Polars-only processing would remove the Python overhead.
+            overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
+            memory_bytes = _task_memory_bytes()
+
+            if estimated_merge_memory_bytes * overhead > memory_bytes * _SCATTER_READ_MEMORY_FRACTION:
+                fan_in = math.ceil(math.sqrt(self.total_chunks))
+
+                logger.info(
+                    "[shard %d] Merging %d chunks via external sort "
+                    "(%s memory needed > %s memory available); fan_in=%d",
+                    self._target_shard,
+                    self.total_chunks,
+                    humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
+                    humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
+                    fan_in,
+                )
+
+                batches = external_sort_merge(
+                    input_frames=self.get_frames(),
+                    sort_key=_SORT_KEY_COL,
+                    external_sort_dir=external_sort_dir,
+                    fan_in=fan_in,
+                    max_merge_fan_in=_EXTERNAL_SORT_MAX_MERGE_FAN_IN,
+                    shard=self._target_shard,
+                )
+
+            else:
+                logger.info(
+                    "[shard %d] Merging %d chunks in memory (%s memory needed < %s memory available)",
+                    self._target_shard,
+                    self.total_chunks,
+                    humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
+                    humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
+                )
+                batches = pl.merge_sorted(self.get_frames(), key=_SORT_KEY_COL).collect_batches()
+
+            for batch in batches:
+                yield from _dataframe_to_items(batch)
 
 
 # ---------------------------------------------------------------------------
-# Combiner / sort helper
+# Scatter writer
 # ---------------------------------------------------------------------------
 
 
@@ -471,153 +517,144 @@ def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> li
     return combined
 
 
-# ---------------------------------------------------------------------------
-# Scatter writer
-# ---------------------------------------------------------------------------
-
-
-def _write_chunk_frame(items: list) -> bytes:
-    """Encode a list of items as one zstd frame of pickled sub-batches.
-
-    Items are split into sub-batches of ``_SUB_BATCH_SIZE`` and each
-    sub-batch is written as a single ``cloudpickle.dump(sublist)`` into the
-    same zstd stream. This batches per-call dispatch overhead while
-    keeping per-iterator read memory bounded by the sub-batch size.
-    """
-    raw = io.BytesIO()
-    cctx = zstd.ZstdCompressor(level=_ZSTD_COMPRESS_LEVEL)
-    with cctx.stream_writer(raw, closefd=False) as zf:
-        for i in range(0, len(items), _SUB_BATCH_SIZE):
-            cloudpickle.dump(items[i : i + _SUB_BATCH_SIZE], zf, protocol=pickle.HIGHEST_PROTOCOL)
-    return raw.getvalue()
-
-
 class ScatterWriter:
-    """Writes items to a scatter data file with zstd-compressed chunks.
+    """Writes scatter chunk files as zstd-compressed Parquet, one combined file per flush.
 
-    Items are routed to target shards by ``key_fn``, buffered, optionally
-    combined and sorted, then flushed as zstd frames. A msgpack sidecar
-    (``.scatter_meta``) is written on close.
+    Accepts routing-column DataFrames (see ``_items_to_dataframe`` for the
+    Python-items adapter) and buffers them as a frame list — appends are free,
+    and the frames are combined with one concat per flush. Buffering frames
+    keeps the interface ready for DataFrame/RecordBatch-native pipelines.
 
-    Flushing is byte-budget-based: when the estimated total bytes across all
-    shard buffers exceeds a configurable byte budget, the largest buffer is
-    flushed. This bounds peak RSS regardless of item count or output shard count.
+    Each flush writes a single ``c{chunk:04d}.parquet`` file sorted by
+    ``[_SHARD_COL, _SORT_KEY_COL]`` with row groups sized so Polars predicate
+    pushdown skips non-target row groups on the read side.
+
+    Flushing is estimated-size-based: when the sum of ``DataFrame.estimated_size()``
+    across buffered frames exceeds ``_SCATTER_FLUSH_THRESHOLD * _ESTIMATED_SIZE_CORRECTION_FACTOR``
+    of available task memory, all buffered frames are flushed together into one combined file.
     """
 
     def __init__(
         self,
         data_path: str,
         key_fn: Callable,
-        num_output_shards: int,
-        source_shard: int = 0,
+        source_shard: int,
         sort_fn: Callable | None = None,
         combiner_fn: Callable | None = None,
     ) -> None:
-        self._data_path = data_path
+        self._data_path = data_path if data_path.endswith("/") else f"{data_path}/"
         self._key_fn = key_fn
-        self._num_output_shards = num_output_shards
+        self._sort_fn = sort_fn
+
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
-        self._buffer_limit_bytes = _default_scatter_write_buffer_bytes()
+        self._memory_available_bytes = _task_memory_bytes()
+        # estimated_size() measures only the buffer columns, not process overhead (Python runtime,
+        # Arrow allocator, Parquet scan). The correction factor maps estimated_size to estimated RSS.
+        self._flush_threshold_bytes = int(
+            self._memory_available_bytes * _SCATTER_FLUSH_THRESHOLD * _ESTIMATED_SIZE_CORRECTION_FACTOR
+        )
 
-        self._sort_key = composite_sort_key(key_fn, sort_fn)
-
-        self._buffers: dict[int, list] = defaultdict(list)
-        self._shard_ranges: dict[int, list[tuple[int, int]]] = defaultdict(list)
-        self._per_shard_max_rows: dict[int, int] = defaultdict(int)
+        # Buffered DataFrames, combined into one file per flush. Buffering
+        # frames (not Python items) keeps the writer format-agnostic: a future
+        # RecordBatch/DataFrame-native pipeline can feed frames directly.
+        self._frames: list[pl.DataFrame] = []
+        self._chunk_paths: list[str] = []
+        # Payload bytes written per target shard, recorded in the sidecar so
+        # reducers know their shard's exact data size for the external-sort
+        # decision without opening any chunk files.
+        self._shard_bytes: defaultdict[int, int] = defaultdict(int)
         self._avg_item_bytes: float = 0.0
-        self._sampled_avg = False
+        self._total_bytes_written: int = 0
+        self._total_rows_written: int = 0
         self._n_chunks_written = 0
-        # Throttles the per-flush progress log so high-fanout workloads (many
-        # tiny chunks) cannot flood the log backend. See #5678.
+        # Throttles the per-flush progress log so high-fanout workloads don't log too often
         self._progress_log_limiter = RateLimiter(interval_seconds=_PROGRESS_LOG_INTERVAL_SECONDS)
-        self._mid_write_flushes: int = 0
-        # Running total of rows across all shard buffers; used with
-        # _item_bytes_estimate to gate byte-budget flushes.
-        self._total_buffer_rows: int = 0
-        self._peak_buffer_rows: int = 0
-        # Estimate refined in two steps: (1) first-item pickle measurement in
-        # write(), (2) 100-item sample average in _flush(). Logging both lets
-        # operators see how representative the first item was.
-        self._item_bytes_estimate: float = 0.0  # set on first write()
-        self._first_item_bytes: float = 0.0  # logged at close for comparison
+        # Running estimated_size() total of unflushed frames; reset to 0 on flush.
+        self._buffer_estimated_bytes: int = 0
 
-        ensure_parent_dir(data_path)
-        self._fs, self._fs_path = url_to_fs(data_path)
-        self._out = self._fs.open(self._fs_path, "wb")
-        # Cached committed result; makes close() idempotent so the
-        # context-manager exit after an explicit close() is a no-op.
+        ensure_parent_dir(self._data_path)
         self._result: ListShard | None = None
 
-    def _flush(self, target: int, buf: list) -> None:
+    def _flush(self) -> None:
+        """Flush the accumulated buffer into one combined Parquet file sorted by [_SHARD_COL, _SORT_KEY_COL]."""
+        if not self._frames:
+            return
+
+        buffer = pl.concat(self._frames, how="vertical_relaxed", rechunk=False)
+        self._frames = []
+        self._buffer_estimated_bytes = 0
+
         if self._combiner_fn is not None:
-            buf = _apply_combiner(buf, self._key_fn, self._combiner_fn)
-        buf.sort(key=self._sort_key)
+            frames: list[pl.DataFrame] = []
+            for (shard_val,), group in buffer.partition_by(_SHARD_COL, as_dict=True).items():
+                rows = list(_dataframe_to_items(group))
+                rows = _apply_combiner(rows, self._key_fn, self._combiner_fn)
+                if not rows:
+                    continue
+                df = _items_to_dataframe(rows, self._key_fn, self._sort_fn, num_output_shards=0)
+                frames.append(df.with_columns(pl.lit(shard_val, dtype=pl.Int32).alias(_SHARD_COL)))
+            if not frames:
+                return
+            buffer = pl.concat(frames, how="vertical_relaxed", rechunk=True)
 
-        if buf:
-            # Sample a subset of the buffer to update the byte-size estimate.
-            # First flush: larger sample for a good baseline. Subsequent flushes:
-            # smaller sample to track drift cheaply via EMA. This prevents OOM
-            # when early items are small but later items are large — the estimate
-            # stays current rather than being frozen at the first-flush value.
-            n = _SCATTER_SAMPLE_SIZE if not self._sampled_avg else _SCATTER_ONGOING_SAMPLE_SIZE
-            sample = buf[: min(len(buf), n)]
-            observed = sum(len(pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)) for item in sample) / len(sample)
-            if not self._sampled_avg:
-                self._avg_item_bytes = observed
-                self._sampled_avg = True
-            else:
-                self._avg_item_bytes = (1 - _ESTIMATE_EMA_ALPHA) * self._avg_item_bytes + _ESTIMATE_EMA_ALPHA * observed
-            self._item_bytes_estimate = self._avg_item_bytes
+        buffer_sorted = buffer.sort([_SHARD_COL, _SORT_KEY_COL])
+        del buffer
 
-        frame = _write_chunk_frame(buf)
-        offset = self._out.tell()
-        self._out.write(frame)
-        self._shard_ranges[target].append((offset, len(frame)))
-        self._per_shard_max_rows[target] = max(self._per_shard_max_rows[target], len(buf))
+        flushed_bytes = int(buffer_sorted.estimated_size())
+        self._total_bytes_written += flushed_bytes
+        self._total_rows_written += len(buffer_sorted)
+        shard_sizes = buffer_sorted.group_by(_SHARD_COL).agg(pl.col(_PAYLOAD_COL).bin.size().sum().alias("bytes"))
+        for shard_val, nbytes in shard_sizes.iter_rows():
+            self._shard_bytes[shard_val] += int(nbytes)
 
+        # Size row groups so each target shard fits in roughly one row group,
+        # enabling Polars predicate pushdown to skip non-matching groups.
+        num_targets = buffer_sorted[_SHARD_COL].n_unique()
+        row_group_size = max(1, len(buffer_sorted) // num_targets)
+        chunk_path = f"{self._data_path}c{self._n_chunks_written:04d}.parquet"
+        # Ideally we'd call write_parquet directly with the GCS path, but it occationally fails with a generic error.
+        buf = io.BytesIO()
+        buffer_sorted.write_parquet(buf, compression="zstd", row_group_size=row_group_size)
+        with open_url(chunk_path, "wb") as f:
+            f.write(buf.getvalue())
+
+        self._chunk_paths.append(chunk_path)
         self._n_chunks_written += 1
+
         if self._progress_log_limiter.should_run():
             logger.info(
-                "[shard %d] Wrote %d scatter chunks so far (latest chunk size: %d items, %d bytes)",
+                "[shard %d] Wrote %d scatter chunks so far (latest chunk size: %d items, %d targets)",
                 self._source_shard,
                 self._n_chunks_written,
-                len(buf),
-                len(frame),
+                len(buffer_sorted),
+                num_targets,
             )
 
-    def write(self, item: Any) -> None:
-        """Route a single item to its target shard buffer, flushing when over budget."""
-        if self._total_buffer_rows % _ESTIMATE_WRITE_SAMPLE_INTERVAL == 0:
-            # Periodically measure a single item's serialised size and apply EMA.
-            # This runs in write() — not just in _flush() — so the estimate tracks
-            # size drift even when no flush has fired yet (the flush EMA is a
-            # closed loop: if the estimate is too low no flush fires, so it never
-            # updates). Interval-based sampling amortises the pickle.dumps cost
-            # to 1-in-10 items while still catching step-changes within a few rows.
-            observed = float(len(pickle.dumps(item, protocol=pickle.HIGHEST_PROTOCOL)))
-            if self._total_buffer_rows == 0:
-                self._item_bytes_estimate = observed
-                self._first_item_bytes = observed
-            else:
-                self._item_bytes_estimate = (
-                    1 - _ESTIMATE_EMA_ALPHA
-                ) * self._item_bytes_estimate + _ESTIMATE_EMA_ALPHA * observed
+        del buffer_sorted
+        if flushed_bytes >= _GC_FLUSH_SIZE_THRESHOLD_BYTES:
+            gc.collect()
 
-        key = self._key_fn(item)
-        target = deterministic_hash(key) % self._num_output_shards
-        self._buffers[target].append(item)
-        self._total_buffer_rows += 1
-        if self._total_buffer_rows > self._peak_buffer_rows:
-            self._peak_buffer_rows = self._total_buffer_rows
+    def write(self, df: pl.DataFrame) -> None:
+        """Buffer a DataFrame, flushing on memory pressure.
 
-        if self._total_buffer_rows * self._item_bytes_estimate > self._buffer_limit_bytes:
-            largest = max(self._buffers, key=lambda t: len(self._buffers[t]))
-            rows_flushed = len(self._buffers[largest])
-            self._flush(largest, self._buffers[largest])
-            self._buffers[largest] = []
-            self._total_buffer_rows -= rows_flushed
-            self._mid_write_flushes += 1
+        The DataFrame must contain ``_SHARD_COL`` (int32) and ``_SORT_KEY_COL``
+        columns as produced by ``_items_to_dataframe``.
+        """
+        if len(df) == 0:
+            return
+
+        self._frames.append(df)
+        self._buffer_estimated_bytes += int(df.estimated_size())
+
+        if self._buffer_estimated_bytes > self._flush_threshold_bytes:
+            logger.info(
+                "[shard %d] Buffer estimated at %s (threshold %s); flushing scatter buffers",
+                self._source_shard,
+                humanfriendly.format_size(self._buffer_estimated_bytes, binary=True),
+                humanfriendly.format_size(self._flush_threshold_bytes, binary=True),
+            )
+            self._flush()
 
     def close(self) -> ListShard:
         """Flush remaining buffers, write sidecar, return ListShard.
@@ -627,36 +664,28 @@ class ScatterWriter:
         """
         if self._result is not None:
             return self._result
-        close_flushes = 0
-        with log_time(f"Flushing remaining buffers for {self._data_path}"):
-            for target, buf in sorted(self._buffers.items()):
-                if buf:
-                    self._flush(target, buf)
-                    close_flushes += 1
-        self._out.close()
+        pre_close_flushes = self._n_chunks_written
+        with log_time(f"Flushing remaining buffer for {self._data_path}"):
+            self._flush()
 
-        measured_avg = self._avg_item_bytes if self._sampled_avg else self._item_bytes_estimate
+        self._avg_item_bytes = (
+            self._total_bytes_written / self._total_rows_written if self._total_rows_written > 0 else 0.0
+        )
+
         logger.info(
-            "[shard %d] scatter write done: %d mid-write flushes + %d at close = %d total; "
-            "first-item estimate=%.0f B, measured avg=%.0f B (%.1fx), "
-            "peak buffered=%d rows, budget=%d MB",
+            "[shard %d] scatter write done: %d pre-close flushes + %d at close = %d total; avg_item_bytes=%.0f B",
             self._source_shard,
-            self._mid_write_flushes,
-            close_flushes,
-            self._mid_write_flushes + close_flushes,
-            self._first_item_bytes,
-            measured_avg,
-            measured_avg / self._first_item_bytes if self._first_item_bytes > 0 else 0.0,
-            self._peak_buffer_rows,
-            self._buffer_limit_bytes // (1024 * 1024),
+            pre_close_flushes,
+            self._n_chunks_written - pre_close_flushes,
+            self._n_chunks_written,
+            self._avg_item_bytes,
         )
 
         sidecar: dict = {
-            "shards": {str(k): v for k, v in self._shard_ranges.items()},
-            "max_chunk_rows": {str(k): v for k, v in self._per_shard_max_rows.items() if v > 0},
+            "files": list(self._chunk_paths),
+            "avg_item_bytes": round(self._avg_item_bytes, 1),
+            "shard_bytes": {str(k): v for k, v in self._shard_bytes.items()},
         }
-        if self._avg_item_bytes > 0:
-            sidecar["avg_item_bytes"] = round(self._avg_item_bytes, 1)
 
         with log_time(f"Writing scatter meta for {self._data_path}"):
             _write_scatter_meta(self._data_path, sidecar)
@@ -665,23 +694,13 @@ class ScatterWriter:
         return self._result
 
     def cleanup(self) -> None:
-        """Discard the output instead of committing it.
-
-        A clean ``close()`` is the only thing that finalises an object-store
-        upload; on a failed or reassigned shard the upload is otherwise left
-        open and keeps billing for uploaded parts (see #6488).
-        """
-        if is_remote_path(self._data_path):
-            # discard() aborts the multipart upload. Run it even after close()
-            # failed mid-commit: fsspec flips the file to closed in its finally
-            # block, but the upload stays open until aborted (a no-op if nothing
-            # was uploaded).
-            self._out.discard()
-            return
-        if not self._out.closed:
-            self._out.close()
-        if self._fs.exists(self._fs_path):
-            self._fs.rm(self._fs_path)
+        """Discard the output instead of committing it."""
+        try:
+            path = StoragePath(self._data_path)
+            if path.exists():
+                path.rmtree()
+        except Exception as e:
+            logger.warning(f"Failed to cleanup scatter directory {self._data_path}: {e}")
 
     def __enter__(self) -> "ScatterWriter":
         return self
@@ -708,9 +727,12 @@ def _write_scatter(
     sort_fn: Callable | None = None,
     combiner_fn: Callable | None = None,
 ) -> ListShard:
-    """Route items to target shards, buffer, sort, and append zstd chunks.
+    """Route items to target shards, buffer, sort, and flush as Parquet chunk files.
 
-    Writes one binary data file plus one ``.scatter_meta`` sidecar.
+    Routing and sort keys are computed here (in Python, since ``key_fn`` and
+    ``sort_fn`` are arbitrary callables) and embedded as helper columns in the DataFrame.
+    Items are batched into DataFrames.
+    Writes Parquet chunk files plus one ``metadata.msgpack`` sidecar.
 
     Returns:
         A ListShard wrapping the data file path (as the existing scatter
@@ -719,12 +741,16 @@ def _write_scatter(
     with ScatterWriter(
         data_path=data_path,
         key_fn=key_fn,
-        num_output_shards=num_output_shards,
         source_shard=source_shard,
         sort_fn=sort_fn,
         combiner_fn=combiner_fn,
     ) as writer:
+        pending: list[Any] = []
         for item in items:
-            writer.write(item)
-        # __exit__ discards the in-flight upload if anything above raises.
+            pending.append(item)
+            if len(pending) >= _DATAFRAME_ROW_COUNT:
+                writer.write(_items_to_dataframe(pending, key_fn, sort_fn, num_output_shards))
+                pending.clear()
+        if pending:
+            writer.write(_items_to_dataframe(pending, key_fn, sort_fn, num_output_shards))
         return writer.close()

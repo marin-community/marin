@@ -9,6 +9,7 @@ import { useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import type { SamplesResponse, SampleTasksResponse } from '@/types/api'
 import { sampleFilters, sampleHint, sampleOutcome, outcomeChipClass, type SampleFilter } from '@/utils/samples'
+import ReviewPanel from '@/components/runs/ReviewPanel.vue'
 
 const props = defineProps<{ runId: string }>()
 const router = useRouter()
@@ -168,5 +169,13 @@ function openViewer(rowIndex: number) {
       </template>
       <p v-else-if="data" class="text-sm text-text-muted">{{ data.error ?? 'No samples.' }}</p>
     </div>
+
+    <ReviewPanel
+      v-if="tasksData?.available && selectedTask"
+      :run-id="runId"
+      :task="selectedTask"
+      :filter="correct"
+      class="mt-4"
+    />
   </div>
 </template>

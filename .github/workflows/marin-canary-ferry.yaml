@@ -82,6 +82,7 @@ jobs:
         id: submit
         shell: bash -l {0}
         run: |
+          set -euo pipefail
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
@@ -96,6 +97,10 @@ jobs:
             -e WANDB_API_KEY "$WANDB_API_KEY" \
             -e HF_TOKEN "$HF_TOKEN" \
             -- python -m experiments.ferries.canary_ferry)
+          if [ -z "$JOB_ID" ]; then
+            echo "iris job run produced no job id" >&2
+            exit 1
+          fi
           echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
           echo "Submitted job: $JOB_ID"
         env:
@@ -113,6 +118,7 @@ jobs:
       # this wall clock. Healthy runs finish in ~2h, so 300 leaves 60m for
       # diagnostics + triage.
       - name: Wait for canary ferry
+        id: wait
         timeout-minutes: 300
         shell: bash -l {0}
         run: |
@@ -121,9 +127,11 @@ jobs:
             --iris-config "${{ env.IRIS_CONFIG }}" \
             --poll-interval 30 \
             --child-wait-timeout "${{ env.CANARY_CHILD_WAIT_TIMEOUT }}" \
+            --resource-exhaustion-policy shutdown \
             --github-output
 
       - name: Validate canary metrics
+        if: steps.wait.outputs.resource_exhausted != 'true'
         # target_tokens / tpu_type overrides change the step's versioned config, so the
         # output path this step recomputes (with no CANARY_* env) no longer matches the
         # submitted run — tolerate the resulting read miss on a manual dispatch.
@@ -142,6 +150,7 @@ jobs:
         run: .venv/bin/python scripts/ci/validate_canary_metrics.py
 
       - name: Summarize TPU canary profile
+        if: steps.wait.outputs.resource_exhausted != 'true'
         continue-on-error: true
         shell: bash -l {0}
         run: |

@@ -4,38 +4,50 @@
 """Behavioral smoke for the Datakit clustered store.
 
 Builds tiny synthetic co-partitioned inputs (tokenize / decon / cluster /
-quality / dedup) on the local filesystem, runs ``build_clustered_store``
+quality / exact dedup / fuzzy dedup) on the local filesystem, runs ``build_clustered_store``
 through a local Zephyr context, and checks the externally observable contract:
 the right docs survive filtering, land in the right ``(cluster, quality)``
-bucket, round-trip out of the materialized caches, and hot-bucket subsharding
-splits a bucket without losing or duplicating data.
+bucket, round-trip out of the materialized caches, and task batching changes
+the leaf-cache count without losing or duplicating data.
 """
 
-import glob
+import json
 import os
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from levanter.store.cache import TreeCache
 from marin.datakit.decon import DeconAttributes
-from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
-from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams
+from marin.datakit.source_key import datakit_source_key
+from marin.execution.artifact import read_artifact
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    VerifiedFuzzyDupsAttrData,
+    VerifiedFuzzyDupsPerSource,
+)
 from marin.processing.tokenize.attributes import TokenizedAttrData
-from zephyr.shard_keys import deterministic_hash
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
-from experiments.datakit.store.datakit_store import ClusteredStoreData, build_clustered_store
+from experiments.datakit.global_exact_dedup import ExactDupsPerSource, GlobalExactDedupData
+from experiments.datakit.store.bucket_writer import BucketSpillRun, write_bucket_cache, write_bucket_cache_from_spills
+from experiments.datakit.store.datakit_store import (
+    ClusteredStoreData,
+    _iter_tokenized_documents,
+    build_clustered_store,
+)
 
 CLUSTER_VIEW = 2  # cluster column "cluster_2", clusters {0, 1}
 SPLIT = "train"
 EXEMPLAR = {"input_ids": np.array([0], dtype=np.int32)}
 
-# One doc = (id, cluster, quality_bucket, contaminated, dedup-canonical, token value, length).
+# One doc = (id, cluster, quality_bucket, contaminated, verified duplicate, token value, length).
 # ``quality_bucket`` is the precomputed calibrated bucket the scorer writes as a
 # column (consumed as-is by the store -- no score->bucket mapping).
-# ``canonical``: None -> singleton (absent from dedup, kept); True -> kept; False -> dropped.
+# ``verified duplicate``: True -> dropped; False or None -> absent from the sparse attrs.
 # Each surviving doc's tokens are a run of its unique ``token`` value so we can
 # recover identity from the cache and confirm dropped docs never appear.
 _Doc = tuple[str, int, int, bool, bool | None, int, int]
@@ -44,39 +56,73 @@ SHARD0: list[_Doc] = [
     ("d0", 0, 0, False, None, 100, 3),  # -> (0, 0)
     ("d1", 0, 4, False, None, 101, 5),  # -> (0, 4)
     ("d2", 1, 2, True, None, 902, 9),  # contaminated -> dropped
-    ("d3", 1, 2, False, True, 103, 2),  # canonical -> (1, 2)
+    ("d3", 1, 2, False, False, 103, 2),  # -> (1, 2)
+    ("d6", 1, 4, False, False, 906, 6),  # exact canonical -> (1, 4)
+    ("d8", 0, 0, False, None, 108, 3),  # exact canonical -> (0, 0)
 ]
 SHARD1: list[_Doc] = [
     ("d4", 0, 0, False, None, 104, 4),  # -> (0, 0)
-    ("d5", 1, 2, False, False, 905, 8),  # non-canonical -> dropped
-    ("d6", 1, 4, False, None, 106, 6),  # -> (1, 4)
+    ("d5", 1, 2, False, True, 905, 8),  # verified fuzzy duplicate -> dropped
+    ("d6", 1, 4, False, False, 106, 6),  # exact duplicate -> dropped
     ("d7", 0, 4, False, None, 107, 7),  # -> (0, 4)
+    ("d8", 0, 0, False, None, 908, 3),  # exact duplicate without fuzzy attrs -> dropped
 ]
 
 # Expected surviving buckets: {(cluster, quality): {token_value: length}}.
 EXPECTED: dict[tuple[int, int], dict[int, int]] = {
-    (0, 0): {100: 3, 104: 4},
+    (0, 0): {100: 3, 104: 4, 108: 3},
     (0, 4): {101: 5, 107: 7},
     (1, 2): {103: 2},
-    (1, 4): {106: 6},
+    (1, 4): {906: 6},
 }
-DROPPED_TOKEN_VALUES = {902, 905}
+EXACT_DUPLICATES = {("part-00001-of-00002.parquet", "d6"), ("part-00001-of-00002.parquet", "d8")}
+DROPPED_TOKEN_VALUES = {902, 905, 106, 908}
+
+# Documents the tokenizer split across several Parquet rows, and how many rows
+# each one occupies. The tokenize dataset is the only input with such rows: the
+# other inputs stay one row per document. The expectations above do not change,
+# because the store must join these rows back into one document -- one that
+# survives (d1) and one that a filter drops (d2, contaminated).
+CHUNKED_DOCS = {"d1": 2, "d2": 3}
 
 
 def _write_parquet(path: str, table: pa.Table) -> None:
     pq.write_table(table, path)
 
 
+def _tokenize_rows(docs: list[_Doc]) -> tuple[list[str], list[int], list[list[int]]]:
+    """Build the tokenize shard's rows, splitting the documents in ``CHUNKED_DOCS``."""
+    ids: list[str] = []
+    chunk_indices: list[int] = []
+    token_rows: list[list[int]] = []
+    for doc in docs:
+        tokens = [doc[5]] * doc[6]
+        num_chunks = CHUNKED_DOCS.get(doc[0], 1)
+        size = -(-len(tokens) // num_chunks)  # ceiling, so the last chunk is the short one
+        for chunk_index, start in enumerate(range(0, len(tokens), size)):
+            ids.append(doc[0])
+            chunk_indices.append(chunk_index)
+            token_rows.append(tokens[start : start + size])
+    return ids, chunk_indices, token_rows
+
+
 def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
-    """Write one shard's five co-partitioned parquets from a doc list (same row order)."""
+    """Write one shard's co-partitioned Parquet inputs in the same document order."""
     ids = [d[0] for d in docs]
+    tok_ids, tok_chunk_indices, tok_token_rows = _tokenize_rows(docs)
     _write_parquet(
         f"{dirs['tokenize']}/{basename}",
-        pa.table({"id": ids, "input_ids": pa.array([[d[5]] * d[6] for d in docs])}),
+        pa.table(
+            {
+                "id": tok_ids,
+                "chunk_index": pa.array(tok_chunk_indices, type=pa.int32()),
+                "input_ids": pa.array(tok_token_rows),
+            }
+        ),
     )
     _write_parquet(
         f"{dirs['decon']}/{basename}",
-        pa.table({"id": ids, "attributes": pa.array([{"contaminated": d[3]} for d in docs])}),
+        pa.table({"id": ids, "contaminated": pa.array([d[3] for d in docs])}),
     )
     _write_parquet(
         f"{dirs['cluster']}/{basename}",
@@ -94,24 +140,39 @@ def _write_shard(dirs: dict[str, str], basename: str, docs: list[_Doc]) -> None:
             }
         ),
     )
-    # Dedup is sparse: only non-singleton docs (canonical True/False) appear.
-    marked = [(d[0], d[4]) for d in docs if d[4] is not None]
+    exact_duplicates = [doc_id for doc_id in ids if (basename, doc_id) in EXACT_DUPLICATES]
+    if exact_duplicates:
+        _write_parquet(
+            f"{dirs['exact_dedup']}/{basename}",
+            pa.Table.from_pylist(
+                [{"id": doc_id, "dup_doc": True} for doc_id in exact_duplicates],
+                schema=pa.schema(
+                    [
+                        pa.field("id", pa.string(), nullable=False),
+                        pa.field("dup_doc", pa.bool_(), nullable=False),
+                    ]
+                ),
+            ),
+        )
+    # Verified dedup is sparse: only documents that must be removed appear.
+    marked = [d[0] for d in docs if d[4]]
     if marked:
         _write_parquet(
             f"{dirs['dedup']}/{basename}",
             pa.table(
                 {
-                    "id": [m[0] for m in marked],
-                    "attributes": pa.array([{"is_cluster_canonical": m[1]} for m in marked]),
+                    "id": marked,
+                    "dup_doc": pa.array([True] * len(marked)),
                 }
             ),
         )
 
 
 def _build_inputs(tmp_path):
-    """Materialize the synthetic inputs and return the five typed artifacts."""
+    """Materialize the synthetic inputs and return the typed artifacts."""
     main_dir = str(tmp_path / "src")
-    dirs = {k: str(tmp_path / k) for k in ("tokenize", "decon", "cluster", "quality", "dedup")}
+    source_key = datakit_source_key(main_dir)
+    dirs = {k: str(tmp_path / k) for k in ("tokenize", "decon", "cluster", "quality", "exact_dedup", "dedup")}
     tok_train = f"{dirs['tokenize']}/{SPLIT}"
     for d in (*dirs.values(), tok_train):
         os.makedirs(d, exist_ok=True)
@@ -123,7 +184,7 @@ def _build_inputs(tmp_path):
     tokenize = {
         "src": TokenizedAttrData(
             output_dirs={SPLIT: tok_train},
-            source_main_dirs={SPLIT: main_dir},
+            source_keys={SPLIT: source_key},
             tokenizer="dummy",
             tokenizer_backend="huggingface",
             counters={},
@@ -141,7 +202,7 @@ def _build_inputs(tmp_path):
     cluster_assign = {
         "src": AssignmentAttrData(
             output_dir=dirs["cluster"],
-            source_main_dir=main_dir,
+            source_key=source_key,
             embedding_output_dir="",
             k_train=CLUSTER_VIEW,
             k_views=[],
@@ -157,25 +218,31 @@ def _build_inputs(tmp_path):
             counters={},
         )
     }
-    dedup = FuzzyDupsAttrData(
-        params=MinHashParams(num_perms=8, num_bands=4, ngram_size=5, seed=0),
-        sources={main_dir: FuzzyDupsPerSource(attr_dir=dirs["dedup"])},
+    dedup = VerifiedFuzzyDupsAttrData(
+        verification=FuzzyVerificationParams(),
+        local_representatives=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+        sources={source_key: VerifiedFuzzyDupsPerSource(attr_dir=dirs["dedup"], source_tag="source_000")},
         counters={},
     )
-    return tokenize, decontam, cluster_assign, quality, dedup
+    exact_dedup = GlobalExactDedupData(
+        sources={
+            source_key: ExactDupsPerSource(
+                attr_dir=dirs["exact_dedup"],
+            )
+        },
+        counters={},
+    )
+    return tokenize, decontam, cluster_assign, quality, exact_dedup, dedup
 
 
 def _read_bucket_tokens(bucket_root: str) -> list[np.ndarray]:
-    """Read every doc's input_ids across all of a bucket's ``sub=*`` materialized caches."""
-    docs: list[np.ndarray] = []
-    for sub_dir in sorted(glob.glob(f"{bucket_root}/sub=*")):
-        cache = TreeCache.load(sub_dir, EXEMPLAR)
-        docs.extend(np.asarray(doc["input_ids"]) for doc in cache)
-    return docs
+    cache = TreeCache.load(bucket_root, EXEMPLAR)
+    return [np.asarray(doc["input_ids"]) for doc in cache]
 
 
-def test_store_filters_routes_and_roundtrips(tmp_path):
-    tokenize, decontam, cluster_assign, quality, dedup = _build_inputs(tmp_path)
+def test_store_filters_routes_and_roundtrips(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
     output_path = str(tmp_path / "store")
 
     artifact = build_clustered_store(
@@ -183,15 +250,13 @@ def test_store_filters_routes_and_roundtrips(tmp_path):
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
+        exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=output_path,
         cluster_view=CLUSTER_VIEW,
         split=SPLIT,
-        reduce_shards=4,
-        default_subshards=1,
     )
 
-    assert isinstance(artifact, ClusteredStoreData)
     by_key = {(b.cluster_id, b.quality_bucket): b for b in artifact.buckets}
     assert set(by_key) == set(EXPECTED), "exactly the surviving buckets, nothing for the dropped docs"
 
@@ -210,52 +275,229 @@ def test_store_filters_routes_and_roundtrips(tmp_path):
             assert len(set(arr.tolist())) == 1  # each doc is a run of its unique token value
             all_tokens.extend(arr.tolist())
 
-    assert DROPPED_TOKEN_VALUES.isdisjoint(all_tokens), "contaminated + non-canonical docs must be absent"
+    assert DROPPED_TOKEN_VALUES.isdisjoint(all_tokens), "filtered docs must be absent"
     assert artifact.counters["datakit_store/records_in"] == len(SHARD0) + len(SHARD1)
     assert artifact.counters["datakit_store/contaminated_dropped"] == 1
-    assert artifact.counters["datakit_store/dedup_noncanonical_dropped"] == 1
+    assert artifact.counters["datakit_store/exact_duplicate_dropped"] == 2
+    assert artifact.counters["datakit_store/fuzzy_duplicate_dropped"] == 1
     assert artifact.counters["datakit_store/records_out"] == sum(len(docs) for docs in EXPECTED.values())
     assert artifact.counters["datakit_store/tokens_out"] == sum(
         length for docs in EXPECTED.values() for length in docs.values()
     )
+    record = json.loads((tmp_path / "store" / ".artifact.json").read_text())
+    assert record["result"]["cache_path"] == "store"
+    assert all(bucket["path"].startswith("store/") for bucket in record["result"]["buckets"])
+    loaded = read_artifact(output_path, ClusteredStoreData)
+    assert loaded.cache_path == output_path
+    assert [bucket.path for bucket in loaded.buckets] == [bucket.path for bucket in artifact.buckets]
 
 
-def test_store_subshards_hot_bucket_without_data_loss(tmp_path):
-    tokenize, decontam, cluster_assign, quality, dedup = _build_inputs(tmp_path)
-    output_path = str(tmp_path / "store_split")
-
-    # Force bucket (0, 4) to split 4 ways; every other bucket stays at 1 sub.
-    split_key = (0, 4)
-    subshards = 4
-    hint = {split_key: subshards * 1_000_000}
-    expected_subs = {deterministic_hash(doc_id) % subshards for doc_id in ("d1", "d7")}
-    assert len(expected_subs) >= 2, "pick doc ids that hash to different subshards so the split is exercised"
+def test_store_batches_input_shards_into_one_leaf_per_bucket(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
+    output_path = str(tmp_path / "store_batched")
 
     artifact = build_clustered_store(
         tokenize=tokenize,
         decontam=decontam,
         cluster_assign=cluster_assign,
         quality=quality,
+        exact_dedup=exact_dedup,
         dedup=dedup,
         output_path=output_path,
         cluster_view=CLUSTER_VIEW,
         split=SPLIT,
-        reduce_shards=4,
-        bucket_token_hint=hint,
-        target_tokens_per_subshard=1_000_000,
-        max_subshards=subshards,
-        default_subshards=1,
+        task_count=1,
+        partition_processes=2,
     )
 
     by_key = {(b.cluster_id, b.quality_bucket): b for b in artifact.buckets}
-    split_bucket = by_key[split_key]
-    # The bucket fans out to one cache per distinct hashed subshard...
-    assert split_bucket.n_shards == len(expected_subs)
-    # ...while still carrying exactly its docs (no loss / no duplication across subs).
-    assert split_bucket.total_elements == len(EXPECTED[split_key])
-    assert split_bucket.total_tokens == sum(EXPECTED[split_key].values())
-    recovered = {int(arr[0]): len(arr) for arr in _read_bucket_tokens(split_bucket.path)}
-    assert recovered == EXPECTED[split_key]
+    assert all(bucket.n_shards == 1 for bucket in artifact.buckets)
+    for key, expected_docs in EXPECTED.items():
+        recovered = {int(arr[0]): len(arr) for arr in _read_bucket_tokens(by_key[key].path)}
+        assert recovered == expected_docs
 
-    # A non-split bucket is unaffected.
-    assert by_key[(0, 0)].n_shards == 1
+
+def test_bucket_writer_roundtrips_aligned_chunks(tmp_path):
+    cache_path = str(tmp_path / "leaf")
+    documents = [np.arange(3, dtype=np.int32), np.arange(3, 9, dtype=np.int32), np.array([9], dtype=np.int32)]
+
+    ledger = write_bucket_cache(
+        cache_path,
+        documents,
+        [len(document) for document in documents],
+        write_chunk_elements=4,
+        max_pending_commits=2,
+    )
+
+    assert ledger.total_num_rows == 3
+    assert ledger.field_counts == {"input_ids": 10}
+    recovered = [np.asarray(row["input_ids"]) for row in TreeCache.load(cache_path, EXEMPLAR)]
+    assert [row.tolist() for row in recovered] == [row.tolist() for row in documents]
+
+
+def test_bucket_writer_roundtrips_local_spill_runs(tmp_path):
+    documents = [np.arange(3, dtype=np.int32), np.arange(3, 9, dtype=np.int32), np.array([9], dtype=np.int32)]
+    runs = []
+    for index, group in enumerate((documents[:2], documents[2:])):
+        data_path = tmp_path / f"run-{index}.tokens"
+        lengths_path = tmp_path / f"run-{index}.lengths"
+        np.concatenate(group).tofile(data_path)
+        np.asarray([len(document) for document in group], dtype=np.int64).tofile(lengths_path)
+        runs.append(
+            BucketSpillRun(
+                data_path=str(data_path),
+                lengths_path=str(lengths_path),
+                rows=len(group),
+                tokens=sum(len(document) for document in group),
+            )
+        )
+
+    cache_path = str(tmp_path / "leaf")
+    ledger = write_bucket_cache_from_spills(cache_path, runs, write_chunk_elements=4, max_pending_commits=2)
+
+    assert ledger.total_num_rows == 3
+    assert ledger.field_counts == {"input_ids": 10}
+    recovered = [np.asarray(row["input_ids"]) for row in TreeCache.load(cache_path, EXEMPLAR)]
+    assert [row.tolist() for row in recovered] == [row.tolist() for row in documents]
+
+
+def test_store_ignores_orphans_and_resumes_completed_tasks(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
+    output_path = str(tmp_path / "store_resumed")
+    orphan_path = f"{output_path}/cluster=0/quality=0/part-orphan"
+    write_bucket_cache(orphan_path, [np.array([999], dtype=np.int32)], [1], write_chunk_elements=4)
+
+    arguments = dict(
+        tokenize=tokenize,
+        decontam=decontam,
+        cluster_assign=cluster_assign,
+        quality=quality,
+        exact_dedup=exact_dedup,
+        dedup=dedup,
+        output_path=output_path,
+        cluster_view=CLUSTER_VIEW,
+        split=SPLIT,
+        task_count=1,
+    )
+    first = build_clustered_store(**arguments)
+    second = build_clustered_store(**arguments)
+
+    bucket = next(bucket for bucket in second.buckets if (bucket.cluster_id, bucket.quality_bucket) == (0, 0))
+    recovered = {int(tokens[0]) for tokens in _read_bucket_tokens(bucket.path)}
+    assert recovered == set(EXPECTED[(0, 0)])
+    assert first.counters["datakit_store/tokens_out"] == second.counters["datakit_store/tokens_out"]
+    assert second.counters["datakit_store/tasks_resumed"] == 1
+
+
+@pytest.mark.parametrize("label", ["exact_dedup", "dedup"])
+def test_store_rejects_dedup_source_set_mismatch(tmp_path, monkeypatch, label):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
+    if label == "exact_dedup":
+        exact_dedup.sources["extra/source"] = ExactDupsPerSource(attr_dir=str(tmp_path / "extra"))
+    else:
+        dedup.sources["extra/source"] = VerifiedFuzzyDupsPerSource(
+            attr_dir=str(tmp_path / "extra"),
+            source_tag="source_001",
+        )
+
+    with pytest.raises(ValueError, match=rf"{label} source set must equal tokenize source keys"):
+        build_clustered_store(
+            tokenize=tokenize,
+            decontam=decontam,
+            cluster_assign=cluster_assign,
+            quality=quality,
+            exact_dedup=exact_dedup,
+            dedup=dedup,
+            output_path=str(tmp_path / "store"),
+            cluster_view=CLUSTER_VIEW,
+            split=SPLIT,
+        )
+
+
+def test_store_rejects_reordered_tokenize_documents(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    tokenize, decontam, cluster_assign, quality, exact_dedup, dedup = _build_inputs(tmp_path)
+    tokenized_path = tmp_path / "tokenize" / SPLIT / "part-00000-of-00002.parquet"
+    table = pq.read_table(tokenized_path)
+    ids = table.column("id").to_pylist()
+    ids[0] = "wrong-id"
+    _write_parquet(str(tokenized_path), table.set_column(0, "id", pa.array(ids)))
+
+    with pytest.raises(RuntimeError, match="tokenize/decon id mismatch"):
+        build_clustered_store(
+            tokenize=tokenize,
+            decontam=decontam,
+            cluster_assign=cluster_assign,
+            quality=quality,
+            exact_dedup=exact_dedup,
+            dedup=dedup,
+            output_path=str(tmp_path / "store"),
+            cluster_view=CLUSTER_VIEW,
+            split=SPLIT,
+        )
+
+
+def test_tokenized_documents_regroup_chunks_and_reject_an_orphan(tmp_path):
+    """Chunked rows rejoin into one document, and a chunk without its chunk 0 is an error.
+
+    Two adjacent documents that share an id stay two documents: the boundary comes
+    from ``chunk_index == 0``, not from a change of id.
+    """
+    path = str(tmp_path / "tokenize.parquet")
+    _write_parquet(
+        path,
+        pa.table(
+            {
+                "id": ["a", "a", "b", "b"],
+                "chunk_index": pa.array([0, 1, 0, 0], type=pa.int32()),
+                "input_ids": pa.array([[1, 2], [3], [4], [5, 6]]),
+            }
+        ),
+    )
+
+    documents = [(doc_id, list(tokens)) for doc_id, tokens in _iter_tokenized_documents(path)]
+    assert documents == [("a", [1, 2, 3]), ("b", [4]), ("b", [5, 6])]
+
+    orphan_path = str(tmp_path / "orphan.parquet")
+    _write_parquet(
+        orphan_path,
+        pa.table(
+            {
+                "id": ["a", "b"],
+                "chunk_index": pa.array([0, 1], type=pa.int32()),
+                "input_ids": pa.array([[1], [2]]),
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="chunk 1 of b, but chunk 1 of a must come next"):
+        list(_iter_tokenized_documents(orphan_path))
+
+    # Out of order within one id: concatenating in file order would silently
+    # reverse a document's tokens.
+    shuffled_path = str(tmp_path / "shuffled.parquet")
+    _write_parquet(
+        shuffled_path,
+        pa.table(
+            {
+                "id": ["a", "a", "a"],
+                "chunk_index": pa.array([0, 2, 1], type=pa.int32()),
+                "input_ids": pa.array([[1], [3], [2]]),
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="chunk 2 of a, but chunk 1 of a must come next"):
+        list(_iter_tokenized_documents(shuffled_path))
+
+
+def test_tokenized_shard_without_chunk_index_is_rejected(tmp_path):
+    """A shard written before the column existed fails legibly, not with a KeyError."""
+    path = str(tmp_path / "old.parquet")
+    _write_parquet(path, pa.table({"id": ["a"], "input_ids": pa.array([[1, 2]])}))
+
+    with pytest.raises(RuntimeError, match="no chunk_index column"):
+        list(_iter_tokenized_documents(path))

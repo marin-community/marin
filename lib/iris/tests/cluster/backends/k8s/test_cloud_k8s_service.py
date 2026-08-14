@@ -3,10 +3,74 @@
 
 """Tests for CloudK8sService helpers and K8sResource enum path construction."""
 
+from contextlib import nullcontext
+from types import SimpleNamespace
+
 import pytest
 from iris.cluster.platforms.k8s import service as k8s_service
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
+
+
+class _FakeExecStream:
+    def __init__(self, *, returncode: int, stdout: str = "", stderr: str = "", stream_open: bool = False):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.open = stream_open
+        self.closed = False
+
+    def run_forever(self, timeout: float | None = None) -> None:
+        pass
+
+    def is_open(self) -> bool:
+        return self.open
+
+    def read_stdout(self, timeout: float | None = None) -> str:
+        if self.open and timeout != 0:
+            raise AssertionError("blocking stdout read on an open exec stream")
+        return self.stdout
+
+    def read_stderr(self, timeout: float | None = None) -> str:
+        if self.open and timeout != 0:
+            raise AssertionError("blocking stderr read on an open exec stream")
+        return self.stderr
+
+    def close(self) -> None:
+        self.open = False
+        self.closed = True
+
+
+def _service_with_exec_stream(monkeypatch, stream: _FakeExecStream) -> CloudK8sService:
+    monkeypatch.setattr(k8s_service.kubernetes.stream, "stream", lambda *_args, **_kwargs: stream)
+    core_api = SimpleNamespace(connect_get_namespaced_pod_exec=object())
+    monkeypatch.setattr(k8s_service.kubernetes.client, "CoreV1Api", lambda _client: core_api)
+    svc = CloudK8sService(namespace="iris")
+    monkeypatch.setattr(svc, "create_api_client", lambda: nullcontext(object()))
+    return svc
+
+
+def test_exec_reports_command_exit_status(monkeypatch):
+    """A command error inside a reachable pod must not look successful."""
+    stream = _FakeExecStream(returncode=1, stderr="cat: profile.json: No such file")
+    svc = _service_with_exec_stream(monkeypatch, stream)
+
+    result = svc.exec("task-pod", ["cat", "profile.json"], container="task")
+
+    assert result.returncode == 1
+    assert result.stderr == "cat: profile.json: No such file"
+    assert stream.closed
+
+
+def test_exec_timeout_reads_open_stream_without_blocking(monkeypatch):
+    stream = _FakeExecStream(returncode=0, stream_open=True)
+    svc = _service_with_exec_stream(monkeypatch, stream)
+
+    result = svc.exec("task-pod", ["sleep", "infinity"], container="task", timeout=1)
+
+    assert result.returncode == 124
+    assert result.stderr == "Command timed out after 1 seconds"
+    assert stream.closed
 
 
 def test_construct_without_kubernetes_client(monkeypatch):
@@ -36,6 +100,87 @@ def test_crud_client_requires_kubernetes(monkeypatch, client_attr: str):
         getattr(svc, client_attr)
 
 
+class _FakeApiServer:
+    """Paginating stand-in for one DynamicClient resource handle.
+
+    Serves `pages` of item names, obeying the `continue` query param the way the API
+    server does, and records every request it received.
+    """
+
+    def __init__(self, pages: list[list[str]]):
+        self._pages = pages
+        self.requests: list[dict] = []
+        self.deletes: list[dict] = []
+
+    def get(self, **kwargs):
+        self.requests.append(kwargs)
+        index = int(kwargs["_continue"]) if kwargs.get("_continue") else 0
+        names = self._pages[index]
+        more = index + 1 < len(self._pages)
+        return _FakeListResponse(names, str(index + 1) if more else "")
+
+    def delete(self, **kwargs) -> None:
+        self.deletes.append(kwargs)
+
+
+class _FakeListResponse:
+    def __init__(self, names: list[str], continue_token: str):
+        self.items = [_FakeItem({"metadata": {"name": n}}) for n in names]
+        self.metadata = {"continue": continue_token}
+
+
+class _FakeItem:
+    def __init__(self, body: dict):
+        self._body = body
+
+    def to_dict(self) -> dict:
+        return self._body
+
+
+def _service_with_api(pages: list[list[str]]) -> tuple[CloudK8sService, _FakeApiServer]:
+    """A CloudK8sService whose every resource handle is one fake API server."""
+    svc = CloudK8sService(namespace="iris")
+    api = _FakeApiServer(pages)
+    # Seed the cached_property so no real kubernetes client is built.
+    svc.__dict__["_dyn"] = SimpleNamespace(resources=SimpleNamespace(get=lambda **kwargs: api))
+    return svc, api
+
+
+def test_list_json_walks_all_pages():
+    """A list must be chunked: an unpaginated response body has no read bound (#7881)."""
+    svc, api = _service_with_api([["a", "b"], ["c", "d"], ["e"]])
+
+    names = [pod["metadata"]["name"] for pod in svc.list_json(K8sResource.PODS)]
+
+    assert names == ["a", "b", "c", "d", "e"]
+    # Every request carries a page limit: an unpaginated one is the wedge itself.
+    assert [req.get("limit") for req in api.requests] == [k8s_service._LIST_PAGE_LIMIT] * 3
+
+
+def test_iter_json_stops_fetching_when_abandoned():
+    """A caller that stops early stops paying: the later pages are never requested."""
+    svc, api = _service_with_api([["a", "b"], ["c", "d"], ["e"]])
+
+    first = next(iter(svc.iter_json(K8sResource.PODS)))
+
+    assert first["metadata"]["name"] == "a"
+    assert len(api.requests) == 1
+
+
+def test_delete_by_labels_deletes_each_match_by_name():
+    """Deletes go by name, never as a DELETE on the collection URL.
+
+    Kubernetes treats a collection DELETE as the `deletecollection` verb, which the
+    controller ClusterRole does not grant, so it would 403 at runtime.
+    """
+    svc, api = _service_with_api([["a", "b"], ["c"]])
+
+    svc.delete_by_labels(K8sResource.CONFIGMAPS, {"iris.task-hash": "abc"})
+
+    assert [d.get("name") for d in api.deletes] == ["a", "b", "c"]
+    assert all(d.get("label_selector") is None for d in api.deletes)
+
+
 # Test item_path construction for namespaced resources
 @pytest.mark.parametrize(
     "resource,name,namespace,expected",
@@ -46,6 +191,7 @@ def test_crud_client_requires_kubernetes(monkeypatch, client_attr: str):
         (K8sResource.SECRETS, "sec1", "ns", "/api/v1/namespaces/ns/secrets/sec1"),
         (K8sResource.SERVICE_ACCOUNTS, "sa1", "ns", "/api/v1/namespaces/ns/serviceaccounts/sa1"),
         (K8sResource.DEPLOYMENTS, "d1", "ns", "/apis/apps/v1/namespaces/ns/deployments/d1"),
+        (K8sResource.DAEMONSETS, "ds1", "ns", "/apis/apps/v1/namespaces/ns/daemonsets/ds1"),
         (K8sResource.STATEFULSETS, "ss1", "ns", "/apis/apps/v1/namespaces/ns/statefulsets/ss1"),
         (K8sResource.PDBS, "pdb1", "ns", "/apis/policy/v1/namespaces/ns/poddisruptionbudgets/pdb1"),
     ],
@@ -76,6 +222,7 @@ def test_item_path_cluster_scoped(resource: K8sResource, name: str, expected: st
         (K8sResource.PODS, "ns", "/api/v1/namespaces/ns/pods"),
         (K8sResource.CONFIGMAPS, "ns", "/api/v1/namespaces/ns/configmaps"),
         (K8sResource.DEPLOYMENTS, "ns", "/apis/apps/v1/namespaces/ns/deployments"),
+        (K8sResource.DAEMONSETS, "ns", "/apis/apps/v1/namespaces/ns/daemonsets"),
         (K8sResource.PDBS, "ns", "/apis/policy/v1/namespaces/ns/poddisruptionbudgets"),
     ],
 )
@@ -110,6 +257,7 @@ def test_collection_path_cluster_scoped(resource: K8sResource, expected: str):
         ("Namespace", K8sResource.NAMESPACES),
         ("Node", K8sResource.NODES),
         ("Deployment", K8sResource.DEPLOYMENTS),
+        ("DaemonSet", K8sResource.DAEMONSETS),
         ("StatefulSet", K8sResource.STATEFULSETS),
         ("PodDisruptionBudget", K8sResource.PDBS),
         ("ClusterRole", K8sResource.CLUSTER_ROLES),
@@ -124,26 +272,6 @@ def test_from_kind_valid(kind: str, expected_resource: K8sResource):
 def test_from_kind_invalid():
     with pytest.raises(ValueError, match="Unknown kind: 'Bogus'"):
         K8sResource.from_kind("Bogus")
-
-
-def test_all_required_kinds_are_enum_members():
-    """Every kind that callers pass to apply_json must be in the enum."""
-    required_kinds = {
-        "Pod",
-        "ConfigMap",
-        "Service",
-        "Secret",
-        "ServiceAccount",
-        "Namespace",
-        "Deployment",
-        "PodDisruptionBudget",
-        "ClusterRole",
-        "ClusterRoleBinding",
-        "NodePool",
-    }
-    enum_kinds = {member.kind for member in K8sResource}
-    missing = required_kinds - enum_kinds
-    assert not missing, f"Missing kinds in K8sResource: {missing}"
 
 
 def test_api_base_paths():

@@ -18,17 +18,17 @@ sync will write and pin the boundary now.
 
 from iris.cluster.controller import reads
 from iris.cluster.controller.reads import TaskScope
-from iris.cluster.controller.reconcile import dispatch, loader
+from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
 from iris.rpc import job_pb2
+from iris.testing.controller import make_worker_metadata, query_tasks_for_job, register_worker, submit_direct_job
 from rigging.timing import Timestamp
 from sqlalchemy import insert as sa_insert
 from sqlalchemy import update as sa_update
-
-from .conftest import make_worker_metadata, query_tasks_for_job, register_worker, submit_direct_job
 
 PEER = "peer-west"
 
@@ -256,5 +256,5 @@ def test_reconcile_snapshot_loader_excludes_federated_tasks(state):
     )
 
     with state._db.read_snapshot() as tx:
-        by_job = loader._load_all_tasks_for_jobs(tx, [fed_job])
-    assert by_job[fed_job] == ()
+        snapshot = load_closed_snapshot(tx, now=Timestamp.now(), seed_job_ids=[fed_job])
+    assert snapshot.all_tasks_by_job[fed_job] == ()

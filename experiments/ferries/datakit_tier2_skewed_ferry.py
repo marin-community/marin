@@ -12,10 +12,8 @@ smoke ferry doesn't cover.
 
 The download step uses ``download_hf_step`` so it cache-hits on a region-local
 staged copy when one exists at ``$MARIN_PREFIX/raw/<...>``, and falls back to a
-fresh HuggingFace download otherwise. We default ``MARIN_PREFIX`` to the
-region-local stable marin bucket (e.g. ``gs://marin-us-central1``); pipeline
-outputs go to absolute TTL paths under ``marin_temp_bucket(ttl_days=1)`` to
-avoid polluting stable storage with per-run CI data.
+fresh HuggingFace download otherwise. Iris supplies the region-local stable
+prefix; pipeline outputs use absolute one-day TTL paths.
 """
 
 import json
@@ -33,6 +31,7 @@ from marin.processing.classification.consolidate import (
     consolidate,
 )
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
@@ -40,8 +39,16 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    FuzzyVerificationStoreConfig,
+    VerifiedFuzzyDupsAttrData,
+    verify_fuzzy_dups,
+)
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
-from rigging.filesystem import StoragePath, marin_prefix, marin_temp_bucket
+from rigging.filesystem import StoragePath, marin_prefix, marin_temp_bucket, prefix_join
 from rigging.log_setup import configure_logging
 from rigging.timing import log_time
 
@@ -52,6 +59,11 @@ HF_REVISION = "de656ef7cc7c84ceb9892c75a77347d9003c1273"
 # Short prefix used in the cache directory so a revision bump produces a fresh
 # cache key without invalidating prior versions.
 HF_REVISION_SHORT = HF_REVISION[:7]
+FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
+    recovery_timeout=1_800,
+    ready_timeout=1_800,
+    lookup_batch_size=64,
+)
 
 
 def build_steps(run_id: str) -> list[StepSpec]:
@@ -86,10 +98,10 @@ def build_steps(run_id: str) -> list[StepSpec]:
     )
 
     # ~98 source shards / ~46 GiB; modest fan-out for fuzzy_dups CC.
-    deduped = StepSpec(
+    candidates = StepSpec(
         name="datakit-tier2-skewed-smoke/fuzzy_dups",
         deps=[minhash],
-        hash_attrs={"cc_max_iterations": 3},
+        hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": 3},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=output_path,
@@ -99,20 +111,41 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{ttl_base}/fuzzy_dups",
     )
 
+    verification_params = FuzzyVerificationParams()
+    verified = StepSpec(
+        name="datakit-tier2-skewed-smoke/verify_fuzzy_dups",
+        deps=[normalized, minhash, candidates],
+        hash_attrs={
+            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+            "verification": verification_params.model_dump(mode="json"),
+            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+        },
+        fn=lambda output_path: verify_fuzzy_dups(
+            normalized_sources={"source": read_artifact(normalized.output_path, NormalizedData)},
+            minhash_sources={"source": read_artifact(minhash.output_path, MinHashAttrData)},
+            candidates=read_artifact(candidates.output_path, FuzzyDupsAttrData),
+            output_path=output_path,
+            verification_params=verification_params,
+            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+            store_config=FUZZY_VERIFICATION_STORE_CONFIG,
+        ),
+        override_output_path=prefix_join(ttl_base, "verify_fuzzy_dups"),
+    )
+
     consolidated = StepSpec(
         name="datakit-tier2-skewed-smoke/consolidate",
-        deps=[normalized, deduped],
+        deps=[normalized, verified],
         fn=lambda output_path: consolidate(
             input_path=read_artifact(normalized.output_path, NormalizedData).main_output_dir,
             output_path=output_path,
             filetype="parquet",
             filters=[
                 FilterConfig(
-                    type=FilterType.KEEP_DOC,
-                    attribute_path=read_artifact(deduped.output_path, FuzzyDupsAttrData)
-                    .sources[read_artifact(normalized.output_path, NormalizedData).main_output_dir]
-                    .attr_dir,
-                    name="is_cluster_canonical",
+                    type=FilterType.REMOVE_DOC,
+                    attribute_path=read_artifact(verified.output_path, VerifiedFuzzyDupsAttrData).attr_dir_for_source(
+                        read_artifact(normalized.output_path, NormalizedData).main_output_dir
+                    ),
+                    name="dup_doc",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
                 ),
@@ -136,7 +169,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{ttl_base}/tokens",
     )
 
-    return [download, normalized, minhash, deduped, consolidated, tokenized]
+    return [download, normalized, minhash, candidates, verified, consolidated, tokenized]
 
 
 def _write_status(status: str, prefix: str) -> None:
@@ -151,14 +184,7 @@ def _write_status(status: str, prefix: str) -> None:
 
 def main() -> None:
     configure_logging()
-    # Pin MARIN_PREFIX to the region-local stable marin bucket so the download
-    # step's relative override_output_path cache-hits on the staged copy when
-    # one exists for the iris-picked region. Pipeline outputs are routed to
-    # absolute TTL paths in build_steps().
-    if not os.environ.get("MARIN_PREFIX"):
-        os.environ["MARIN_PREFIX"] = marin_prefix()
-
-    prefix = os.environ["MARIN_PREFIX"]
+    prefix = marin_prefix()
     logger.info("MARIN_PREFIX=%s", prefix)
     logger.info("HF source: %s @ %s", HF_DATASET_ID, HF_REVISION)
     run_id = os.environ["SMOKE_RUN_ID"]

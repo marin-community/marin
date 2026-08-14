@@ -7,14 +7,13 @@ Time-series measurements live in these namespaces rather than the controller
 SQLite DB (see AGENTS.md "Decisions vs measurements"). This module is the single
 home for the wire contract — namespace names, row dataclasses, storage policies —
 that dashboards, Grafana alert rules, and the federation hub key on. Producers
-live next to their mechanism (the worker daemon, the k8s backend's collectors,
+live next to their mechanism (the worker daemon, the k8s backend's task collectors,
 the autoscaler, the controller's task-state emitter) and import their row types
 from here; ``LogStack`` resolves every table from this catalog.
 
-- ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt resource
-  rows. On Kubernetes clusters, which have no per-node worker daemon, the cluster
-  backend emits one ``iris.worker`` row per node (host utilization + GPU
-  hardware), so nodes surface as workers in the same dashboards.
+- ``iris.worker`` / ``iris.task`` — host and per-attempt resource rows. Worker
+  daemons emit both on VM/TPU backends; Kubernetes node agents derive task rows
+  from kubelet resource metrics and publish hardware through normalized telemetry.
 - ``iris.task_status`` — markdown status text pushed from inside a running task
   via ``RemoteClusterClient.report_task_status_text``.
 - ``iris.task_event`` — backend events and controller actions per task attempt.
@@ -132,8 +131,8 @@ class IrisWorkerStat:
     # (HBM, power) or reduced (mean utilization, hottest temperature) across the
     # devices. None on a host with no accelerator or whose device exporter did
     # not answer. Populated for k8s nodes from the cluster's dcgm-exporter (a
-    # worker daemon leaves these unset — its accelerators report per-process
-    # usage through the in-task telltale exporter instead).
+    # worker daemon leaves these unset — its accelerators are reported through
+    # process telemetry instead).
     gpu_count: int | None = None
     hbm_used_bytes: int | None = None
     hbm_total_bytes: int | None = None

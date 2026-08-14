@@ -17,8 +17,9 @@ dependencies = [
     "draccus>=0.11.6",
     "fasttext-wheel>=0.9.2",
     "marin-fray",
+    "marin-finestore",
     "marin-iris",
-    "marin-rigging",
+    "marin-rigging[prometheus]",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
@@ -31,6 +32,7 @@ dependencies = [
     "transformers>=5.5.3,<6.0",
     "markdownify>=0.14.1",
     "mcp>=1.28.1",
+    "msgspec>=0.18.0",
     "numpy",
     "openai",
     "pandas>=2.0",
@@ -83,13 +85,10 @@ docs = [
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
-math = ["pylatexenc", "sympy>=1.12.1,<1.14"]
-
 dev = [
     { include-group = "test" },
     { include-group = "lint" },
     { include-group = "docs" },
-    { include-group = "math" },
 ]
 
 [tool.uv]
@@ -108,6 +107,14 @@ conflicts = [
         { extra = "vllm" },
         { extra = "gpu" },
     ],
+    [
+        { extra = "vllm" },
+        { extra = "tpu" },
+    ],
+    [
+        { extra = "vllm" },
+        { extra = "cpu" },
+    ],
 ]
 
 
@@ -118,7 +125,8 @@ gpu = [
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
-  "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
+  # 2.29.3 carries the upstream aarch64 proxy freeOps CAS leak fix, which a Grace host needs.
+  "nvidia-nccl-cu13>=2.29.3; sys_platform == 'linux'",
   # FA4 CuTe/THD attention backends.
   "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
   "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
@@ -132,9 +140,9 @@ gpu = [
   "torchvision==0.26.0",
 ]
 tpu = [
-  "jax==0.10.1",
-  "jaxlib==0.10.1",
-  "libtpu==0.0.41",
+  "jax==0.11.0",
+  "jaxlib==0.11.0",
+  "libtpu==0.0.44.*",
   "torch==2.11.0",
   # Linux x86_64
   "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -145,7 +153,7 @@ tpu = [
 ]
 
 cpu = [
-  "jax==0.10.1",
+  "jax==0.11.0",
   "torch==2.11.0",
   # Linux x86_64
   "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -153,14 +161,6 @@ cpu = [
   "torchvision==0.26.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
   # Linux aarch64, macOS arm64: PyPI default wheel
   "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
-]
-
-rl = [
-    # Provides the Prime Intellect CLI invoked via subprocess in
-    # prime_intellect_env.py (`prime env install ...`); not a Python import.
-    "prime",
-    "sympy>=1.12.1,<1.14",
-    "verifiers==0.1.5",
 ]
 
 # Evalchemy runs from a commit-pinned uvx environment against a served OpenAI URL, so lm-eval does

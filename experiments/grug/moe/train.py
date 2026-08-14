@@ -38,7 +38,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
@@ -83,6 +83,7 @@ class GrugEvalConfig:
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
+    shuffle: bool = True  # Mix eval domains within batches to reduce expert-capacity drops.
 
 
 @dataclass(frozen=True)
@@ -182,7 +183,7 @@ def build_tagged_evaluator(
         )
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
-        per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+        per_pos_token_id = jnp.pad(batch.tokens[:, 1:], ((0, 0), (0, 1)))
         return per_pos_loss, per_pos_weight, per_pos_token_id
 
     return TaggedEvaluator(
@@ -193,6 +194,7 @@ def build_tagged_evaluator(
         device_mesh=mesh,
         axis_mapping=eval_axis_mapping,
         max_examples_per_dataset=max_examples_per_dataset,
+        shuffle=eval_cfg.shuffle,
     )
 
 
@@ -439,6 +441,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        if trainer.initialize_from is not None:
+            state = init_weights_only_from_checkpoint(
+                state,
+                trainer.initialize_from,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+                additional_weight_fields=("pending_qb_betas",),
+            )
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,

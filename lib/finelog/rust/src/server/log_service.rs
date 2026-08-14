@@ -219,6 +219,7 @@ impl LogService for LogServiceImpl {
         let until_cursor = request.until_cursor.unwrap_or(0);
         let since_ms = request.since_ms.unwrap_or(0);
         let substring = request.substring.unwrap_or("");
+        let regex = request.regex.unwrap_or("");
         let tail = request.tail.unwrap_or(false);
         let min_level: LogLevel = str_to_log_level(request.min_level.unwrap_or(""));
         // max_lines <= 0 -> server default 1000.
@@ -235,7 +236,13 @@ impl LogService for LogServiceImpl {
         // Bracket the scope's `seq > cursor` from above so a reader can page
         // backwards from a row it names (`until_cursor` + `tail`).
         add_seq_upper_bound(&mut predicates.where_parts, until_cursor);
-        add_common_filters(&mut predicates.where_parts, since_ms, substring, min_level);
+        add_common_filters(
+            &mut predicates.where_parts,
+            since_ms,
+            substring,
+            regex,
+            min_level,
+        );
         // Restrict to one origin cluster when the caller asks (the federated read
         // path filters `cluster = <peer>`); empty = unfiltered, so a local
         // single-cluster read behaves exactly as before.
@@ -251,8 +258,9 @@ impl LogService for LogServiceImpl {
         // blocking pool, then build the provider over them.
         let store = Arc::clone(&self.store);
         let snapshot = run_blocking(move || store.query_snapshot(LOG_NAMESPACE_NAME)).await?;
-        let provider = NamespaceProvider::build(snapshot.schema, &snapshot.paths)
-            .map_err(|e| ConnectError::internal(format!("build log provider: {e}")))?;
+        let provider =
+            NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.index_cache)
+                .map_err(|e| ConnectError::internal(format!("build log provider: {e}")))?;
 
         // Run the read (DataFusion schedules its own CPU tasks; await directly).
         let ctx = make_ctx();
