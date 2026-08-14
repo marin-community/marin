@@ -117,7 +117,7 @@ from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
     tokenize_attributes_step,
 )
-from rigging.filesystem import StoragePath, marin_prefix
+from rigging.filesystem import StoragePath, marin_prefix, prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.execution import ZephyrContext
 from zephyr.runners import SubprocessRunner
@@ -683,10 +683,10 @@ def reference_datakit_steps(
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
         exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
-        required_eval_manifest_path=f"{eval_root}/{AA_MANIFEST_RELATIVE}",
+        required_eval_manifest_path=prefix_join(eval_root, AA_MANIFEST_RELATIVE),
         required_eval_corpus_version=EVAL_CORPUS_VERSION,
         required_eval_names=AA_BENCHMARK_NAMES,
-        best_effort_eval_manifest_path=f"{eval_root}/{LMH_MANIFEST_RELATIVE}",
+        best_effort_eval_manifest_path=prefix_join(eval_root, LMH_MANIFEST_RELATIVE),
         best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
     )
     # Count eval-ngram document frequency across normalized sources before

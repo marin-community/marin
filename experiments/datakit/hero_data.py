@@ -51,9 +51,7 @@ _MARIN_PREFIX_ENV = "MARIN_PREFIX"
 
 MANIFEST_PATH = pathlib.Path(__file__).with_name("hero_data_paths.json")
 
-# The manifest records paths below the prefix that currently holds the hero data.
-# Keep its GHALogs entries on the previous identities until the replacement paths
-# have been populated and verified under this prefix.
+# The manifest records paths below the prefix that holds the hero data.
 MANIFEST_PREFIX = "s3://marin-us-east-02a/marin"
 
 

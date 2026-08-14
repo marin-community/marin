@@ -41,6 +41,7 @@ from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
 from marin.execution.lazy import materialized_config
 from marin.execution.step_runner import StepRunner
+from rigging.filesystem import prefix_join
 
 from experiments.datasets.diagnostic_logs import _ghalogs_normalized, ghalogs_dataset
 
@@ -629,10 +630,10 @@ def test_ghalogs_public_normalize_steps_read_where_download_wrote(tmp_path, monk
 def test_ghalogs_public_normalize_steps_have_region_independent_identities(monkeypatch):
     def identities(prefix: str) -> tuple[str, ...]:
         monkeypatch.setenv("MARIN_PREFIX", prefix)
-        source_path = f"{prefix}/{GHALOGS_STAGED_PREFIX}"
+        source_path = prefix_join(prefix, GHALOGS_STAGED_PREFIX)
         return tuple(step.name_with_hash for step in ghalogs_public_normalize_steps(source_path=source_path))
 
-    assert identities("gs://marin-us-central1") == identities("s3://marin-us-east-02a/marin")
+    assert identities("gs://marin-us-central1/") == identities("s3://marin-us-east-02a/marin")
 
 
 class _FakeStreamResponse:
