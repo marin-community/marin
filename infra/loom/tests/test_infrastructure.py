@@ -17,6 +17,7 @@ from infra.loom.infrastructure import (
     GitHubFederationConfig,
     ProfileConfig,
     WorkloadIdentityConfig,
+    _deployment_manifest,
     _deployment_profiles,
     _validated_image_reference,
     create_infrastructure,
@@ -180,6 +181,15 @@ def test_profile_manifest_renders_github_repositories_and_secret_references() ->
     assert references == [("example", "ops-token")]
     with pytest.raises(ValueError, match="full secretRef"):
         ProfileConfig.parse("ops", {"agent": "codex", "env": {"OPS_TOKEN": "plaintext"}})
+
+
+def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
+    profile = ProfileConfig.parse("github", {"agent": "codex", "instructions": "Prefix comments with 🤖"})
+    config = replace(deployment_config(), profiles=(profile,), workloads=(), github_federations=())
+    profiles, _ = _deployment_profiles(config.profiles)
+    manifest = _deployment_manifest(config, profiles, [])
+    assert "🤖" in manifest
+    assert json.loads(manifest)["profiles"][0]["profile"]["instructions"] == "Prefix comments with 🤖"
 
 
 def test_profile_instructions_reject_ambiguous_or_external_sources() -> None:

@@ -735,6 +735,26 @@ def _workload_service_account(
     )
 
 
+def _deployment_manifest(
+    config: DeploymentConfig,
+    profiles: list[dict[str, Any]],
+    workload_values: list[dict[str, Any]],
+) -> str:
+    return json.dumps(
+        {
+            "settings": dict(config.settings),
+            "profiles": profiles,
+            "federations": (
+                [mapping.manifest(config.public_url) for mapping in config.github_federations] + workload_values
+            ),
+            "prune": config.prune_deployment,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _create_runtime_policy(
     config: DeploymentConfig,
     api_options: pulumi.ResourceOptions,
@@ -762,25 +782,13 @@ def _create_runtime_policy(
                 }
             )
         )
-    github_mappings = [mapping.manifest(audience) for mapping in config.github_federations]
-
-    def render(workload_values: list[dict[str, Any]]) -> str:
-        return json.dumps(
-            {
-                "settings": dict(config.settings),
-                "profiles": profiles,
-                "federations": github_mappings + workload_values,
-                "prune": config.prune_deployment,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-
     manifest: pulumi.Input[str]
     if workload_mappings:
-        manifest = pulumi.Output.all(*workload_mappings).apply(lambda values: render(list(values)))
+        manifest = pulumi.Output.all(*workload_mappings).apply(
+            lambda values: _deployment_manifest(config, profiles, list(values))
+        )
     else:
-        manifest = render([])
+        manifest = _deployment_manifest(config, profiles, [])
     return RuntimePolicyResources(audience, manifest, workload_clients, profile_secret_refs)
 
 
