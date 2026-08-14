@@ -13,9 +13,9 @@ from finestore.reader import ReadView
 
 _CACHE_PROCESS = textwrap.dedent(
     """
+    import atexit
     import sys
     import threading
-    import time
 
     import finestore.cache as cache_module
     from finestore.cache import PersistentKvCache
@@ -27,19 +27,22 @@ _CACHE_PROCESS = textwrap.dedent(
     cache_module._EXIT_FLUSH_TIMEOUT = 0.05 if mode == "stall" else 1.0
     real_commit = DataStore._commit_transaction
     commit_started = threading.Event()
+    release_commit = threading.Event()
 
     def commit(store, rows):
         commit_started.set()
         if mode == "stall":
             threading.Event().wait()
         else:
-            time.sleep(0.2)
+            release_commit.wait()
         return real_commit(store, rows)
 
     DataStore._commit_transaction = commit
     PersistentKvCache.at(root).store("kernel", b"object-code")
     if not commit_started.wait(timeout=3):
         raise RuntimeError("cache commit did not start")
+    if mode != "stall":
+        atexit.register(release_commit.set)
     """
 )
 

@@ -38,6 +38,7 @@ _LEGACY_SEALED_FILE = "SEALED"
 _WRITER_SEGMENT = re.compile(r"^w=(.+)$")
 _GENERATION_SEGMENT = re.compile(r"^g=(\d+)$")
 
+
 class _LegacyArchiveMetadata(BaseModel):
     format_version: int
 
@@ -128,9 +129,7 @@ def _v2_token(layout: FineStoreLayout) -> CommitToken | None:
         raise ValueError(f"HEAD at {layout.root!r} is format v{head.format_version}; expected v{TO_VERSION}")
     manifest = Manifest.model_validate_json(StoragePath(head.manifest_path).read_bytes())
     if manifest.format_version != TO_VERSION:
-        raise ValueError(
-            f"manifest {head.manifest_path!r} is format v{manifest.format_version}; expected v{TO_VERSION}"
-        )
+        raise ValueError(f"manifest {head.manifest_path!r} is format v{manifest.format_version}; expected v{TO_VERSION}")
     if (manifest.commit_id, manifest.sequence) != (head.commit_id, head.sequence):
         raise ValueError(f"HEAD at {layout.root!r} does not match manifest {head.manifest_path!r}")
     return CommitToken(
@@ -181,9 +180,7 @@ def migrate(root: str) -> CommitToken:
         manifest = Manifest(format_version=TO_VERSION, commit_id=commit_id, sequence=1, tables=tables, sealed=seal)
         manifest_path = layout.manifest_path(commit_id)
         StoragePath(manifest_path).write_text(manifest.model_dump_json(indent=2))
-        head = HeadMetadata(
-            format_version=TO_VERSION, commit_id=commit_id, sequence=1, manifest_path=manifest_path
-        )
+        head = HeadMetadata(format_version=TO_VERSION, commit_id=commit_id, sequence=1, manifest_path=manifest_path)
         try:
             head_object.write(head.model_dump_json().encode(), expected_version=None)
         except ConditionalWriteError:
@@ -199,10 +196,7 @@ def migrate(root: str) -> CommitToken:
         )
     except ConditionalWriteError as exc:
         current = archive_object.read()
-        if (
-            current is not None
-            and _LegacyArchiveMetadata.model_validate_json(current.data).format_version == TO_VERSION
-        ):
+        if current is not None and _LegacyArchiveMetadata.model_validate_json(current.data).format_version == TO_VERSION:
             token = _v2_token(layout)
             assert token is not None
             return token

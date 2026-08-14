@@ -431,15 +431,6 @@ def test_read_view_refuses_an_older_format_with_migration_instructions(tmp_path)
         ReadView(str(root))
 
 
-def test_write_open_requires_legacy_archive_to_be_sealed(tmp_path):
-    root = tmp_path / "run"
-    root.mkdir()
-    (root / "_archive.json").write_text('{"format_version": 1}')
-
-    with pytest.raises(ValueError, match="not sealed"):
-        DataStore.open(str(root))
-
-
 def test_seal_marker(tmp_path):
     root = str(tmp_path / "run")
     reader = ReadView(root)
@@ -722,10 +713,11 @@ def test_write_open_migrates_a_sealed_legacy_archive(tmp_path):
     assert archive.format_version == FORMAT_VERSION
 
 
-def test_manifest_migration_requires_a_sealed_archive(tmp_path):
+@pytest.mark.parametrize("open_archive", [migrate, DataStore.open], ids=["explicit", "write-open"])
+def test_manifest_migration_requires_a_sealed_archive(tmp_path, open_archive):
     root = tmp_path / "run"
     root.mkdir()
     (root / "_archive.json").write_text('{"format_version": 1}')
 
     with pytest.raises(ValueError, match="not sealed"):
-        migrate(str(root))
+        open_archive(str(root))
