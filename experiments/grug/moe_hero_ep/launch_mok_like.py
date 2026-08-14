@@ -66,6 +66,10 @@ RAGGED_EP_XLA_FLAGS = (
     "--xla_gpu_enable_latency_hiding_scheduler=false",
     "--xla_gpu_experimental_parallel_collective_overlap_limit=1",
 )
+# Sharded autotuning splits the search across processes and exchanges results through the
+# coordination service. Under the fabric transport every rank is its own process and all four
+# park in backend_compile_and_load at zero CPU, so the step never compiles.
+CROSS_PROCESS_XLA_FLAGS = ("--xla_gpu_shard_autotuning=false",)
 MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 MOK_LIKE_BUILD_PACKAGES = (
     "nvidia-cuda-cccl==13.0.85",
@@ -175,6 +179,13 @@ _NON_MOK_LIKE_DEFAULTS = MokLikeExperimentConfig(
     max_retries_preemption=0,
     max_task_failures=0,
 )
+
+
+def _xla_flag_overrides(backend: MoeBackend, workspace_transport: MokLikeWorkspaceTransport) -> tuple[str, ...]:
+    overrides = RAGGED_EP_XLA_FLAGS if backend is MoeBackend.EP else ()
+    if workspace_transport.crosses_processes:
+        overrides += CROSS_PROCESS_XLA_FLAGS
+    return overrides
 
 
 class MoeBackendComparisonResult(Artifact):
@@ -529,7 +540,7 @@ def build_backend_comparison_run(
             gpu_default_pool_trim_interval_updates=gpu_default_pool_trim_interval_updates,
             xla_autotune_cache_mode=xla_autotune_cache_mode,
             gpu_device_memory_fraction=device_memory_fraction,
-            xla_flag_overrides=RAGGED_EP_XLA_FLAGS if backend is MoeBackend.EP else (),
+            xla_flag_overrides=_xla_flag_overrides(backend, workspace_transport),
             # Fabric transport builds its peer table from imported handles rather
             # than by switching devices inside one process, so each rank must be its
             # own process with a single visible GPU. The in-process path keeps the

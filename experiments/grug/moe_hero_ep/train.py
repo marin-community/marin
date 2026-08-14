@@ -8,8 +8,8 @@ import dataclasses
 import functools
 import logging
 import os
-import traceback
 import time
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -29,7 +29,6 @@ from haliax.partitioning import set_mesh
 from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from iris.runtime.jax_init import XLA_AUTOTUNE_CACHE_MODE_ENV, XlaAutotuneCacheMode
 from jax._src import config as jax_config
-from rigging.filesystem.cluster_config import marin_prefix
 from jax.experimental import multihost_utils
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -60,6 +59,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
+from rigging.filesystem.cluster_config import marin_prefix
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -1378,7 +1378,10 @@ def _run_grug_local_inner(config: GrugRunConfig) -> None:
                 else:
                     watch_stats = None
                 step_start = time.perf_counter()
-                state, metrics, inline_watch_stats = train_step(state, batch)
+                # Keep the whole result: the trim below waits on it before releasing pool memory,
+                # which is only safe once every output of the step has landed.
+                train_step_result = train_step(state, batch)
+                state, metrics, inline_watch_stats = train_step_result
                 if inline_watch_stats is not None and watch_due:
                     watch_stats = inline_watch_stats
                 step = int(state.step) - 1
