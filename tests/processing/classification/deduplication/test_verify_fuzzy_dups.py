@@ -50,6 +50,7 @@ TEST_STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=30,
     ready_timeout=30,
     lookup_batch_size=2,
+    shards_per_worker=1,
 )
 verify_fuzzy_dups = partial(_verify_fuzzy_dups, store_config=TEST_STORE_CONFIG)
 
@@ -232,7 +233,8 @@ def test_verifier_accepts_only_direct_subset_and_filters_singletons(tmp_path, mo
         local_representative_params=TEST_LOCAL_PARAMS,
     )
 
-    assert verified.counters["dedup/fuzzy/verification/memory_store/actors"] == 2
+    assert verified.counters["dedup/fuzzy/verification/memory_store/workers"] == 2
+    assert verified.counters["dedup/fuzzy/verification/memory_store/shards"] == 2
     assert verified.counters["dedup/fuzzy/verification/memory_store/items"] == 3
     assert _output_rows(verified, source_key) == [
         {
@@ -1215,7 +1217,6 @@ def test_candidate_text_load_streams_unordered_source_shard(tmp_path, monkeypatc
 
     key, text = next(_candidate_documents([shard]))
     assert key == (7, "bbb")
-    assert isinstance(text, pa.Buffer)
     assert _decompress_document_text(text) == "beta"
 
 

@@ -43,7 +43,13 @@ def test_memory_store_invalid_input_does_not_restart_workers(iris_integration_cl
         attempts_before = [iris_integration_client._iris.task_status(task_id).current_attempt_id for task_id in task_ids]
 
         with pytest.raises(MemoryStorePartitionError):
-            context.load_memory_store(dataset, name="invalid-partition", hash_key=_wrong_key_partition)
+            context.load_memory_store(
+                dataset,
+                name="invalid-partition",
+                hash_key=_wrong_key_partition,
+                recovery_timeout=10,
+                shards_per_worker=1,
+            )
 
         attempts_after = [iris_integration_client._iris.task_status(task_id).current_attempt_id for task_id in task_ids]
         assert attempts_after == attempts_before
@@ -53,7 +59,13 @@ def test_memory_store_loads_and_serves_through_iris_actor_backend(iris_integrati
     dataset = Dataset.from_list([((0, "a"), "zero"), ((1, "a"), "one")])
 
     with memory_store_context(iris_integration_client, tmp_path) as context:
-        store = context.load_memory_store(dataset, name="documents", hash_key=lambda key: key[0])
+        store = context.load_memory_store(
+            dataset,
+            name="documents",
+            hash_key=lambda key: key[0],
+            recovery_timeout=10,
+            shards_per_worker=1,
+        )
         restored = cloudpickle.loads(cloudpickle.dumps(store))
         first = context.execute(Dataset.from_list([(1, "a"), (0, "a")]).map(restored.get))
         second = context.execute(Dataset.from_list([(0, "a"), (1, "a")]).map(restored.get))
@@ -81,6 +93,7 @@ def test_memory_store_recovers_partition_after_iris_preemption(iris_integration_
             name="documents",
             hash_key=lambda key: key[0],
             recovery_timeout=15,
+            shards_per_worker=1,
         )
         task_id = _worker_task_id(context, 0)
         initial_attempt = iris_integration_client._iris.task_status(task_id).current_attempt_id

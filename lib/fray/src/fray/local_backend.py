@@ -25,6 +25,7 @@ from fray.types import (
     ActorConfig,
     BinaryEntrypoint,
     CallableEntrypoint,
+    EnvironmentConfig,
     JobRequest,
     JobStatus,
     ResourceConfig,
@@ -174,11 +175,21 @@ class LocalClient:
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        environment: EnvironmentConfig | None = None,
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> "LocalActorHandle":
         """Create an in-process actor, returning a handle immediately."""
-        group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
+        group = self.create_actor_group(
+            actor_class,
+            *args,
+            name=name,
+            count=1,
+            resources=resources,
+            environment=environment,
+            actor_config=actor_config,
+            **kwargs,
+        )
         return group.wait_ready()[0]  # type: ignore[return-value]
 
     def create_actor_group(
@@ -188,10 +199,15 @@ class LocalClient:
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        environment: EnvironmentConfig | None = None,
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorGroup:
-        """Create N in-process actor instances, returning a group handle."""
+        """Create N in-process actor instances, returning a group handle.
+
+        Local actors share the caller's process, so ``environment`` has no setup
+        work to perform.
+        """
         handles: list[LocalActorHandle] = []
         jobs: list[LocalJobHandle] = []
         try:
