@@ -338,7 +338,7 @@ def main(
         jax.device_put(jnp.asarray(shared_down, dtype=jnp.bfloat16), shared_sharding),
     )
     process_routes = _routes(num_tokens, scenario)
-    routes = np.tile(process_routes, (process_count, 1, 1))
+    routes = np.tile(process_routes, (replicas, 1, 1))
     selected_experts = jax.device_put(
         jnp.asarray(routes.reshape(-1, TOP_K)),
         batch_sharding,
