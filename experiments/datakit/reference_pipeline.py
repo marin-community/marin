@@ -10,6 +10,9 @@ StepRunner-walkable graph. Two modes (``--mode``), same DAG:
 - ``sample``: a pre-built testbed sample registered as already-normalized
   sources (``--sample-prefix``), K=64 -- a true end-to-end run on real data.
 
+Use ``--target decontam`` to run only the shared Bloom filter, the corpus DF
+filter, each source decontamination pipeline, and the decontamination report.
+
 Per source::
 
     normalize → tokenize
@@ -33,7 +36,7 @@ exact dedup, fuzzy dedup, the decontamination DF filter, and the store combine s
 Worker fleet: subprocess-compatible stages share one Zephyr coordinator and
 worker group. Steps that require process-local model caches use dedicated
 ``InlineRunner`` contexts. One :class:`PoolConfig` sets the worker count and
-worker shape. ``--max-concurrent`` limits concurrent StepRunner steps.
+worker and task shapes. ``--max-concurrent`` limits concurrent StepRunner steps.
 
 Public API: :func:`reference_datakit_steps`. Pass ``sources`` (a ``{name:
 normalize_step}`` mapping), a ``quality_model`` dir, and optionally pre-staged
@@ -97,7 +100,7 @@ from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
-from marin.execution.step_runner import StepRunner
+from marin.execution.step_runner import StepRunner, step_is_built
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import (
     FUZZY_DUPS_ATTR_DATA_VERSION,
@@ -253,13 +256,15 @@ class PoolConfig:
     """The Zephyr worker fleet for the reference pipeline.
 
     ``n_workers`` sets the shared pool size. ``worker`` sets each worker shape.
+    ``task`` sets the resource budget for each subprocess in the shared pool.
     Subprocess-compatible stages share this pool. Inline stages create a
-    dedicated pool with the same settings. The worker must fit the largest
-    task that can use the pool.
+    dedicated pool with the worker settings. The worker must fit the largest
+    task that can use the shared pool.
     """
 
     n_workers: int = 512
     worker: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="16g", disk="16g"))
+    task: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="16g", disk="16g"))
 
 
 @dataclass(frozen=True)
@@ -325,7 +330,11 @@ DEFAULT_SCALE = PipelineScale()
 
 SMOKE_SCALE = PipelineScale(
     cluster=ClusterConfig(k_train=64, k_views=(8, 16), cluster_view=8),
-    pool=PoolConfig(n_workers=16, worker=ResourceConfig(cpu=2, ram="8g", disk="8g")),
+    pool=PoolConfig(
+        n_workers=16,
+        worker=ResourceConfig(cpu=2, ram="8g", disk="8g"),
+        task=ResourceConfig(cpu=2, ram="8g", disk="8g"),
+    ),
     store=StoreConfig(
         task_count=None,
         partition_processes=DEFAULT_PARTITION_PROCESSES,
@@ -579,7 +588,7 @@ def zephyr_datakit_steps(
         fn=lambda output_path: global_exact_deduplicate(
             sources={name: read_artifact(sources[name].output_path, NormalizedData) for name in source_names},
             output_path=output_path,
-            worker_resources=scale.pool.worker,
+            worker_resources=scale.pool.task,
             max_workers=scale.pool.n_workers,
             zephyr_context=zephyr_context,
         ),
@@ -596,7 +605,7 @@ def zephyr_datakit_steps(
             tokenizer_backend=TOKENIZER_BACKEND,
             tokenizer_revision=TOKENIZER_REVISION,
             max_workers=scale.pool.n_workers,
-            worker_resources=scale.pool.worker,
+            worker_resources=scale.pool.task,
             zephyr_context=zephyr_context,
         )
         minhash_steps[name] = StepSpec(
@@ -618,7 +627,7 @@ def zephyr_datakit_steps(
                 ngram_size=mh.ngram_size,
                 text_cap_chars=mh.text_cap_chars,
                 seed=mh.seed,
-                worker_resources=scale.pool.worker,
+                worker_resources=scale.pool.task,
                 zephyr_context=zephyr_context,
             ),
         )
@@ -632,7 +641,7 @@ def zephyr_datakit_steps(
             output_path=output_path,
             max_parallelism=scale.dedup_max_parallelism,
             cc_resume=True,
-            worker_resources=scale.pool.worker,
+            worker_resources=scale.pool.task,
             zephyr_context=zephyr_context,
         ),
     )
@@ -740,7 +749,7 @@ def reference_datakit_steps(
         global_sample_docs=GLOBAL_DF_SAMPLE_DOCS,
         global_common_min_abs=GLOBAL_DF_COMMON_MIN_ABS,
         global_common_min_sources=GLOBAL_DF_COMMON_MIN_SOURCES,
-        worker_resources=scale.pool.worker,
+        worker_resources=scale.pool.task,
         max_workers=scale.pool.n_workers,
         zephyr_context=zephyr_context,
     )
@@ -800,7 +809,7 @@ def reference_datakit_steps(
             estimated_doc_count=ESTIMATED_DOC_COUNT,
             false_positive_rate=FALSE_POSITIVE_RATE,
             flagged_sample_size=FLAGGED_SAMPLE_SIZE,
-            worker_resources=scale.pool.worker,
+            worker_resources=scale.pool.task,
             zephyr_context=zephyr_context,
         )
 
@@ -1049,8 +1058,39 @@ def _apply_pool_overrides(scale: PipelineScale, args: argparse.Namespace) -> Pip
         scale.pool.worker,
         **{k: v for k, v in (("cpu", args.pool_cpu), ("ram", args.pool_ram), ("disk", args.pool_disk)) if v is not None},
     )
+    task = replace(
+        scale.pool.task,
+        **{
+            k: v
+            for k, v in (
+                ("cpu", args.pool_task_cpu),
+                ("ram", args.pool_task_ram),
+                ("disk", args.pool_task_disk),
+            )
+            if v is not None
+        },
+    )
     n_workers = args.pool_workers if args.pool_workers is not None else scale.pool.n_workers
-    return replace(scale, pool=PoolConfig(n_workers=n_workers, worker=worker))
+    return replace(scale, pool=replace(scale.pool, n_workers=n_workers, worker=worker, task=task))
+
+
+def _require_normalized_sources(sources: dict[str, StepSpec]) -> None:
+    """Fail before pool creation when a decontamination input is not built."""
+    missing = [name for name, step in sources.items() if not step_is_built(step)]
+    if not missing:
+        return
+    shown = ", ".join(missing[:20])
+    remainder = f" and {len(missing) - 20} more" if len(missing) > 20 else ""
+    raise RuntimeError(f"missing normalized artifacts for {len(missing)} sources: {shown}{remainder}")
+
+
+def _target_steps(result: DatakitSteps, target: str) -> list[StepSpec]:
+    """Select terminal steps for one run target."""
+    if target == "all":
+        return result.all_steps
+    if target == "decontam":
+        return [next(step for step in result.all_steps if step.name == "datakit/report/decontam")]
+    raise ValueError(f"unknown run target: {target}")
 
 
 def main() -> None:
@@ -1060,6 +1100,12 @@ def main() -> None:
         choices=("full", "sample"),
         default="full",
         help="full: registry sources, K=5000. sample: a pre-built testbed sample (see --sample-prefix), K=64.",
+    )
+    parser.add_argument(
+        "--target",
+        choices=("all", "decontam"),
+        default="all",
+        help="all: complete reference DAG. decontam: decontamination inputs, outputs, and report only.",
     )
     parser.add_argument("--sample-prefix", default=SAMPLE_PREFIX, help="testbed sample root (--mode sample)")
     parser.add_argument(
@@ -1096,6 +1142,9 @@ def main() -> None:
     parser.add_argument("--pool-cpu", type=float, default=None, help="per-worker CPUs (override scale)")
     parser.add_argument("--pool-ram", default=None, help="per-worker RAM, e.g. 16g (override scale)")
     parser.add_argument("--pool-disk", default=None, help="per-worker disk, e.g. 16g (override scale)")
+    parser.add_argument("--pool-task-cpu", type=float, default=None, help="CPUs for each shared-pool task")
+    parser.add_argument("--pool-task-ram", default=None, help="RAM for each shared-pool task, e.g. 32g")
+    parser.add_argument("--pool-task-disk", default=None, help="disk for each shared-pool task, e.g. 16g")
     parser.add_argument("--max-concurrent", type=int, default=8, metavar="N", help="max steps StepRunner runs at once")
     parser.add_argument(
         "--run-tag",
@@ -1108,6 +1157,8 @@ def main() -> None:
 
     scale = _apply_pool_overrides(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
     sources = _select_pipeline_sources(args)
+    if args.target == "decontam":
+        _require_normalized_sources(sources)
 
     with ZephyrContext(
         name="datakit-reference",
@@ -1124,7 +1175,7 @@ def main() -> None:
             scale=scale,
             zephyr_context=zephyr_context,
         )
-        StepRunner().run(result.all_steps, max_concurrent=args.max_concurrent)
+        StepRunner().run(_target_steps(result, args.target), max_concurrent=args.max_concurrent)
 
 
 if __name__ == "__main__":
