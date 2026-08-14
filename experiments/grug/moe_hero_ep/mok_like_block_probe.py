@@ -62,6 +62,7 @@ def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, backward: bool
         num_experts_per_token=4,
         num_shared_experts=1,
         num_layers=1,
+        vocab_size=1024,
         mok_like=mok_like,
     )
 
