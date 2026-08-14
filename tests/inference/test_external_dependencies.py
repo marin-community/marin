@@ -21,7 +21,7 @@ def _workspace_root() -> Path:
 
 
 def _descriptor_requirement(name: str) -> str:
-    config = tomllib.loads((_workspace_root() / "config" / "external" / "vllm" / "tpu-forks.toml").read_text())
+    config = tomllib.loads((_workspace_root() / "config" / "external" / "vllm" / "tpu.toml").read_text())
     entry = config[name]
     return f"{name} @ git+{entry['repository']}@{entry['commit']}"
 
@@ -86,7 +86,7 @@ def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_pat
     assert "%2Bmarin.abcdef012345-" in rendered
     assert "+marin.abcdef012345-" not in rendered
 
-    path = tmp_path / "gpu-release.toml"
+    path = tmp_path / "gpu.toml"
     path.write_text(rendered)
     release = update_external.load_vllm_gpu_release(path)
     assert release.release_tag == "marin-vllm-gpu-20260101-abcdef012345"
@@ -117,7 +117,7 @@ def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validat
     # invariant (here a malformed SHA-256) that only the loader rejects. The existing pin
     # must survive that failure rather than be overwritten with an invalid descriptor.
     update_external = _update_external()
-    pin = tmp_path / "gpu-release.toml"
+    pin = tmp_path / "gpu.toml"
     original = 'release_tag = "keep-me"\n'
     pin.write_text(original)
     monkeypatch.setattr(update_external, "VLLM_GPU_RELEASE_CONFIG", pin)
@@ -130,4 +130,4 @@ def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validat
     with pytest.raises(ValueError):
         update_external.promote_gpu_release(manifest_path)
     assert pin.read_text() == original
-    assert not list(tmp_path.glob("gpu-release.*.toml.tmp"))
+    assert not list(tmp_path.glob("gpu.*.toml.tmp"))

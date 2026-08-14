@@ -77,8 +77,8 @@ revision.
   `${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}` in Actions, else a UTC timestamp plus a
   short label).
 - Clone the fork and add its `upstream` remote. The fork URL is `repository` in the
-  pin source (`vllm/tpu-forks.toml` for descriptor pins, the `[tool.uv.sources]` git
-  entry for isolated projects, the release-asset host in `vllm/gpu-release.toml` for the
+  pin source (`vllm/tpu.toml` for descriptor pins, the `[tool.uv.sources]` git
+  entry for isolated projects, the release-asset host in `vllm/gpu.toml` for the
   `vllm-gpu` release pin — the same `marin-community/vllm` repo); `<upstream>` is this
   section's `upstream`.
 
@@ -133,7 +133,7 @@ Find the base our commits currently sit on: `old_base` is the descriptor's
 (isolated and release pins, where it is not recorded). `old_tip` is the head of our
 patches: the fork's `main` for isolated pins (Marin's recorded pin may lag `main`, so
 rebase from `main` to cover the full patch set), or the pin's stable `<branch>` tip for
-descriptor and release pins (the descriptor's `commit`, or `gpu-release.toml`'s
+descriptor and release pins (the descriptor's `commit`, or `gpu.toml`'s
 `source_commit`). Then, onto `new_base`:
 
 1. Inventory our commits in order: `git log --reverse --no-merges old_base..old_tip`.
@@ -200,7 +200,7 @@ the pin set here needs no change after that promotion.
 
 - `pin = descriptor:<path>#<section>` (`vllm`, `tpu-inference`): push `<branch>-next` to
   the fork. Set the section's `commit` to its tip and `upstream_base` to the selected
-  base in `vllm/tpu-forks.toml`. This stack resolves entirely inside the `uvx` env from
+  base in `vllm/tpu.toml`. This stack resolves entirely inside the `uvx` env from
   the two forks, so there are no `uv.lock` changes and `jax`/`jaxlib`/`libtpu`/`torch`
   come from the forks' own dependencies — do not touch `marin-core`, `marin-levanter`,
   or `marin-fray`.
@@ -217,10 +217,10 @@ the pin set here needs no change after that promotion.
      `gh workflow run marin-gpu-release.yaml --repo marin-community/vllm --ref main-next -f candidate_tag=<tag>`.
      The release job validates the exact wheel bytes on real GPUs and publishes an immutable
      release carrying `marin-vllm-gpu-manifest.json`.
-  4. Download that manifest and re-pin without hand-editing `gpu-release.toml`:
+  4. Download that manifest and re-pin without hand-editing `gpu.toml`:
      `gh release download <release_tag> --repo marin-community/vllm --pattern marin-vllm-gpu-manifest.json`,
      then `uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.json`.
-     The helper writes `gpu-release.toml` (release tag, source commit, version, torch backend,
+     The helper writes `gpu.toml` (release tag, source commit, version, torch backend,
      per-arch url+sha256) and regenerates `external_dependencies.py`; it re-encodes the wheel
      URLs the way the pin loader validates, which a hand copy gets wrong.
 

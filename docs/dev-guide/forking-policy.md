@@ -17,10 +17,10 @@ revision directly. There are three pin kinds:
   dependency in `config/external/<fork>/uv.lock`. `uv run
   config/update-external.py <fork>` advances the lock and regenerates the pins.
 - Descriptor SHA (`vllm` TPU stack, `tpu-inference`): the fork tips live in
-  `config/external/vllm/tpu-forks.toml`. This stack runs from an isolated `uvx`
+  `config/external/vllm/tpu.toml`. This stack runs from an isolated `uvx`
   environment, so its `jax`/`jaxlib`/`libtpu`/`torch` come from the forks' own
   dependencies and there is no workspace lock change.
-- Release wheel (`vllm` GPU): `config/external/vllm/gpu-release.toml` records a
+- Release wheel (`vllm` GPU): `config/external/vllm/gpu.toml` records a
   promoted, immutable wheel per architecture. See the GPU release pipeline below.
 
 ## The weekly refresh
@@ -80,9 +80,9 @@ for the promoted release, downloads the manifest, and re-pins with:
 uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.json
 ```
 
-That command writes `gpu-release.toml` (release tag, source commit, version, torch
+That command writes `gpu.toml` (release tag, source commit, version, torch
 backend, and each arch's wheel URL and SHA-256) and regenerates the pins. Do not
-hand-edit `gpu-release.toml`; the helper re-encodes the wheel URLs the way the pin
+hand-edit `gpu.toml`; the helper re-encodes the wheel URLs the way the pin
 loader validates.
 
 ## Promotion
@@ -97,9 +97,9 @@ change after promotion.
 
 | Fork | Repository | Tracks upstream | Pin |
 |------|-----------|-----------------|-----|
-| vllm (TPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | descriptor SHA on the `tpu` branch (`tpu-forks.toml`) |
-| vllm (GPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | release wheel from `main` (`gpu-release.toml`) |
-| tpu-inference | [`marin-community/tpu-inference`](https://github.com/marin-community/tpu-inference) | [`vllm-project/tpu-inference`](https://github.com/vllm-project/tpu-inference) | descriptor SHA (`tpu-forks.toml`) |
+| vllm (TPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | descriptor SHA on the `tpu` branch (`tpu.toml`) |
+| vllm (GPU) | [`marin-community/vllm`](https://github.com/marin-community/vllm) | [`vllm-project/vllm`](https://github.com/vllm-project/vllm) | release wheel from `main` (`gpu.toml`) |
+| tpu-inference | [`marin-community/tpu-inference`](https://github.com/marin-community/tpu-inference) | [`vllm-project/tpu-inference`](https://github.com/vllm-project/tpu-inference) | descriptor SHA (`tpu.toml`) |
 | evalchemy | [`marin-community/evalchemy`](https://github.com/marin-community/evalchemy) | [`mlfoundations/evalchemy`](https://github.com/mlfoundations/evalchemy) | isolated uv lock |
 | harbor | [`marin-community/harbor`](https://github.com/marin-community/harbor) | [`harbor-framework/harbor`](https://github.com/harbor-framework/harbor) | isolated uv lock |
 | MarinSkyRL | [`marin-community/MarinSkyRL`](https://github.com/marin-community/MarinSkyRL) | [`NovaSky-AI/SkyRL`](https://github.com/NovaSky-AI/SkyRL) | isolated uv lock |
