@@ -35,7 +35,9 @@ gpulog=$(mktemp)
         tests/test_moe_hero_ep.py" >"$gpulog" 2>&1 || true
 cat "$gpulog" >&2
 grep -qE "[0-9]+ passed" "$gpulog" || { echo "guard: GPU pytest never reported results" >&2; exit 1; }
-new_failures=$(grep "^FAILED" "$gpulog" | sed 's/^FAILED //; s/ - .*//' | sort -u \
+# Task-log lines may carry an "...| " stream prefix; strip it before matching, and
+# tolerate zero FAILED lines under set -e.
+new_failures=$( { sed 's/.*| //' "$gpulog" | grep "^FAILED" || true; } | sed 's/^FAILED //; s/ - .*//' | sort -u \
   | comm -13 <(grep -v '^#' "$(dirname "$0")/guard_allowlist.txt" | sort -u) -)
 if [[ -n "$new_failures" ]]; then
   echo "guard: NEW GPU test failures (not in allowlist):" >&2
