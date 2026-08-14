@@ -21,6 +21,7 @@ Submit in the staging region:
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Sequence
 
 from fray.types import ResourceConfig
@@ -57,7 +58,7 @@ from experiments.datakit.global_exact_dedup import (
 )
 from experiments.datakit.testbed.mixture import tokenized_bucket_weights_step
 from experiments.datakit.testbed.sampler import build_testbed_steps
-from experiments.datakit.testbed.settings import TESTBED_STAGING_REGION, TESTBED_TOKENIZER
+from experiments.datakit.testbed.settings import TESTBED_STAGING_PREFIX, TESTBED_STAGING_REGION, TESTBED_TOKENIZER
 from experiments.datakit.testbed.train import run_testbed_config, testbed_tokenize
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -287,6 +288,7 @@ def dedup(
 
 def main() -> None:
     """Build the fuzzy-dedup DAG and run it."""
+    os.environ.setdefault("MARIN_PREFIX", TESTBED_STAGING_PREFIX)
     check_path_in_region("MARIN_PREFIX", marin_prefix(), TESTBED_STAGING_REGION)
 
     tokenizer = TESTBED_TOKENIZER

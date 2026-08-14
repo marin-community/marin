@@ -24,10 +24,8 @@ EMBED_MANIFEST = hero_data.harrier_paths_path()
 
 @pytest.fixture(autouse=True)
 def _marin_prefix(monkeypatch):
-    # ``StepSpec.output_path`` resolves ``marin_prefix()``; pin it so the test never
-    # depends on ambient GCS metadata. It must be the prefix the manifest was built
-    # under: ghalogs/public hashes its region-specific download path, so its entries
-    # differ per region.
+    # Hero data has one CoreWeave location. Pin it instead of inheriting the test
+    # process's prefix because some step hashes include resolved paths.
     monkeypatch.setenv("MARIN_PREFIX", PREFIX)
 
 

@@ -29,8 +29,8 @@ produced this data: each tokenizer was applied to the whole registry in a single
 fleet run, and each of those runs wrote a different version. The dedup stages
 are pinned to a specific run outright.
 
-All paths resolve against ``MARIN_PREFIX``. The hero data currently lives on
-CoreWeave, so read it with ``MARIN_PREFIX=s3://marin-us-east-02a/marin``.
+All paths resolve against ``MARIN_PREFIX``. CoreWeave Datakit has one storage
+root, ``s3://marin-us-east-02a/marin``; use it regardless of worker placement.
 """
 
 import contextlib
@@ -71,10 +71,8 @@ def harrier_paths() -> dict[str, str]:
     return json.loads(harrier_paths_path().read_text())
 
 
-# The manifest records the paths as they resolve under the prefix that holds the
-# hero data. It is not region-independent: ``materialize_ghalogs_step`` hashes the
-# absolute ``source_path`` of its download, so the whole ghalogs/public chain
-# re-keys per region and the same data sits at a different path in each one.
+# The manifest records paths relative to the sole CoreWeave Datakit root.
+# Regeneration pins this prefix because some step hashes include resolved paths.
 MANIFEST_PREFIX = "s3://marin-us-east-02a/marin"
 
 

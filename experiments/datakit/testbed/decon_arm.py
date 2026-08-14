@@ -25,6 +25,7 @@ Submit on iris (us-central1, same region as the sample — no egress):
 
 import argparse
 import logging
+import os
 
 from fray.types import ResourceConfig
 from marin.datakit.decon import DropSetSource, all_source_drop_sets_step, build_eval_bloom_step, decon_step
@@ -44,7 +45,11 @@ from experiments.datakit.decontam.config import (
 )
 from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
 from experiments.datakit.testbed.sampler import build_testbed_steps
-from experiments.datakit.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B, TESTBED_STAGING_REGION
+from experiments.datakit.testbed.settings import (
+    RAW_TARGET_TOTAL_TOKENS_B,
+    TESTBED_STAGING_PREFIX,
+    TESTBED_STAGING_REGION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +173,7 @@ def build_testbed_decon_steps(
 
 def main() -> None:
     configure_logging(logging.INFO)
+    os.environ.setdefault("MARIN_PREFIX", TESTBED_STAGING_PREFIX)
     check_path_in_region("MARIN_PREFIX", marin_prefix(), TESTBED_STAGING_REGION)
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", nargs="*", default=None, help="restrict decon to these source names (smoke)")
