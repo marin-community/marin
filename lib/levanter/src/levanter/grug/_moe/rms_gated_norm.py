@@ -372,6 +372,10 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         residuals.inverse_rms,
     )
     row_dot = jnp.sum(row_dot_partial, axis=-1)
+    # Balance while the opaque result still carries its varying batch-axis annotation. The
+    # local row-tile reduction below removes that provenance; shard_map's transpose then sums
+    # the replicated parameter cotangent back to the global value.
+    norm_weight_partial = jax.lax.pmean(norm_weight_partial, axis_name=batch_axes)
     norm_weight_cotangent = jnp.sum(norm_weight_partial, axis=0).astype(residuals.norm_weight.dtype)
     x_cotangent = rms_backward_consumer(
         gate_preactivation_cotangent,
