@@ -886,13 +886,30 @@ def score_mode(args) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def read_score_shard(path: str, fs) -> tuple[np.ndarray, set[str]] | None:
-    """A written score shard's scores and its model tags, or None if absent."""
+@dataclass(frozen=True)
+class ScoreShard:
+    """What one written score shard contributes to a source's verification."""
+
+    scores: np.ndarray
+    model_tags: set[str]
+    duplicate_ids: int
+    """Rows whose ``id`` repeats inside this shard. Counted here and discarded:
+    keeping the ids of 18.7B documents to compare globally is not affordable, and
+    within a source uniqueness is already guaranteed upstream by normalize's exact
+    dedup -- which is what ``score_rows`` against ``normalize_docs`` re-checks."""
+
+
+def read_score_shard(path: str, fs) -> ScoreShard | None:
+    """A written score shard's scores, model tags and duplicate-id count."""
     if not fs.exists(path):
         return None
     with fs.open(path, "rb", cache_type="none") as raw:
-        frame = pl.read_parquet(raw, columns=["score", "model"])
-    return frame.get_column("score").to_numpy(), set(frame.get_column("model").unique().to_list())
+        frame = pl.read_parquet(raw, columns=["id", "score", "model"])
+    return ScoreShard(
+        scores=frame.get_column("score").to_numpy(),
+        model_tags=set(frame.get_column("model").unique().to_list()),
+        duplicate_ids=frame.height - frame.get_column("id").n_unique(),
+    )
 
 
 def verify_mode(args) -> dict:
@@ -915,15 +932,27 @@ def verify_mode(args) -> dict:
         found = list(pool.map(lambda r: read_score_shard(r["output_path"], fs), rows))
 
     missing = [r["shard_index"] for r, got in zip(rows, found, strict=True) if got is None]
-    empty = [r["shard_index"] for r, got in zip(rows, found, strict=True) if got is not None and not len(got[0])]
+    empty = [r["shard_index"] for r, got in zip(rows, found, strict=True) if got is not None and not len(got.scores)]
     short = [
-        {"shard_index": r["shard_index"], "score_rows": len(got[0]), "embed_rows": r["embed_rows"]}
+        {"shard_index": r["shard_index"], "score_rows": len(got.scores), "embed_rows": r["embed_rows"]}
         for r, got in zip(rows, found, strict=True)
-        if got is not None and len(got[0]) != r["embed_rows"]
+        if got is not None and len(got.scores) != r["embed_rows"]
     ]
-    tags = sorted({tag for got in found if got for tag in got[1]})
-    scores = np.concatenate([got[0] for got in found if got]) if any(found) else np.zeros(0, dtype=np.float32)
+    duplicated = [
+        {"shard_index": r["shard_index"], "duplicate_ids": got.duplicate_ids}
+        for r, got in zip(rows, found, strict=True)
+        if got is not None and got.duplicate_ids
+    ]
+    tags = sorted({tag for got in found if got for tag in got.model_tags})
+    scores = np.concatenate([got.scores for got in found if got]) if any(found) else np.zeros(0, dtype=np.float32)
     embed_rows = sum(r["embed_rows"] for r in rows)
+    # The corpus-wide duplicate gate, done exactly and cheaply: normalize's exact
+    # dedup makes ids unique within a source, so one score row per normalized
+    # document is equivalent to no duplicates, and it needs no id set at all.
+    normalize_counters = read_artifact(hero_data.normalized(args.source).output_path, NormalizedData).counters
+    normalize_docs = normalize_counters.get("normalize/unique_records_out") or normalize_counters.get(
+        "zephyr/records_out"
+    )
 
     with open_url(args.calibration, "rb") as fh:
         knots = json.loads(fh.read())["default"]["xk"]
@@ -939,6 +968,10 @@ def verify_mode(args) -> dict:
         "score_rows": len(scores),
         "embed_rows": embed_rows,
         "shortfall": embed_rows - len(scores),
+        "normalize_docs": normalize_docs,
+        "covers_normalize": len(scores) == normalize_docs,
+        "shards_with_duplicate_ids": len(duplicated),
+        "duplicate_ids": sum(d["duplicate_ids"] for d in duplicated),
         "model_tags": tags,
         "score_mean": float(scores.mean()) if len(scores) else None,
         "score_std": float(scores.std()) if len(scores) else None,

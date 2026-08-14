@@ -104,6 +104,16 @@ def main() -> None:
         "sources_with_row_mismatch": [
             {"source": r["source"], "score_rows": r["score_rows"], "embed_rows": r["embed_rows"]} for r in mismatched
         ],
+        "normalize_docs": sum(r["normalize_docs"] or 0 for r in reports),
+        "sources_not_covering_normalize": [
+            {"source": r["source"], "score_rows": r["score_rows"], "normalize_docs": r["normalize_docs"]}
+            for r in reports
+            if not r["covers_normalize"]
+        ],
+        "duplicate_ids": sum(r["duplicate_ids"] for r in reports),
+        "sources_with_duplicate_ids": [
+            {"source": r["source"], "duplicate_ids": r["duplicate_ids"]} for r in reports if r["duplicate_ids"]
+        ],
         "shards_below_embed_rows": sum(r["shards_below_embed_rows"] for r in reports),
         "missing_score_files": sum(r["missing_score_files"] for r in reports),
         "empty_score_files": sum(r["empty_score_files"] for r in reports),
