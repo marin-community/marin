@@ -100,6 +100,8 @@ NEMOTRON_TOKENIZER = TokenizerPin(
 # source whose outputs sit at the current version, under either tokenizer.
 _ARTIFACT_VERSION_OVERRIDES = {"common-crawl-focus-2026-22": 4}
 
+DOMAIN_CLUSTER_ASSIGNMENT_PATH = "datakit/cluster/domain/v1/harrier-all-sources-10m/train_fe81b456"
+
 # Pinned dedup runs. Both cover all 292 registered sources, and both key the
 # focus crawl under its pre-#8111 extraction, so their attributes do not join
 # against today's normalize for that one source. Exported because consumers
@@ -180,10 +182,7 @@ def fuzzy_dups() -> StepSpec:
 
 def domain_cluster_assignment() -> StepSpec:
     """Return the pinned Harrier domain cluster assignment."""
-    return _frozen_step(
-        "hero/domain_cluster_assignment",
-        "datakit/cluster/domain/v1/harrier-all-sources-10m/train_fe81b456",
-    )
+    return _frozen_step("hero/domain_cluster_assignment", DOMAIN_CLUSTER_ASSIGNMENT_PATH)
 
 
 def harrier(source: str) -> str:
