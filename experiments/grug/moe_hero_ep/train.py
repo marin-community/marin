@@ -60,8 +60,10 @@ HERO_EP_RUNTIME_ENV = {
 _XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
-# Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
-INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
+# 4 measured +0.5% median tok/s over 1 on the d1024 EP64 rung (two draws) with the
+# production interval-10 watch; 8 regresses. A FULL inline norm watch once failed at
+# overlap 4 and completed at 1 -- if a full-watch gate is rerun, drop this back to 1.
+INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 4
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
