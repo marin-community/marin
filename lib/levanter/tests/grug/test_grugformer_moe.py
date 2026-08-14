@@ -502,7 +502,7 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
                 implementation=implementation,
                 mesh=mesh,
                 pooled_transport_capacity_factor=(1.05 if implementation == "fixed_pooled_wave_all_to_all" else None),
-                max_experts_per_wave=2,
+                num_expert_waves=1,
             )
 
         platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
@@ -629,7 +629,7 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
             num_experts=num_experts,
             capacity_factor=4.0,
             transport_capacity_factor=4.0,
-            max_experts_per_wave=2,
+            num_expert_waves=3,
         )[0]
 
     sharded_pooled_output = jax.shard_map(
@@ -705,7 +705,7 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
             num_experts=num_experts,
             capacity_factor=1.33,
             transport_capacity_factor=0.75,
-            max_experts_per_wave=2,
+            num_expert_waves=3,
         )
 
     sharded_pooled_output = jax.shard_map(

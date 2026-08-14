@@ -39,7 +39,7 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         config.model.latent_dim,
         config.model.capacity_factor,
         config.model.pooled_transport_capacity_factor,
-        config.model.max_experts_per_wave,
+        config.model.num_expert_waves,
         config.model.moe_implementation,
         config.trainer.trainer.train_batch_size,
         config.model.max_seq_len,
@@ -55,7 +55,7 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         3072,
         1.33,
         1.05,
-        2,
+        3,
         "fixed_pooled_wave_all_to_all",
         1024,
         4096,
@@ -154,11 +154,16 @@ def test_schedule_steps_do_not_extend_the_run():
     assert config.stop_after_steps == 5
 
 
-def test_expert_bank_override_must_divide_the_expert_axis():
+def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
-    with pytest.raises(ValueError, match="must divide the expert axis"):
+    with pytest.raises(ValueError, match="must be divisible by 64"):
         launch.build_hero_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
+
+
+def test_expert_bank_override_must_support_three_waves():
+    with pytest.raises(ValueError, match="local expert count=4 must be divisible by num_expert_waves=3"):
+        launch.build_hero_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
 
 
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):

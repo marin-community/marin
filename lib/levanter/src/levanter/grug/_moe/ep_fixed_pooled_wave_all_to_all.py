@@ -479,7 +479,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     num_experts: int,
     capacity_factor: float,
     transport_capacity_factor: float,
-    max_experts_per_wave: int,
+    num_expert_waves: int,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Stripe each destination pool over fixed waves with bounded receiver buffers."""
     local_experts = moe_w13_local.shape[0]
@@ -489,18 +489,18 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
         raise ValueError("capacity_factor must be positive")
     if transport_capacity_factor <= 0:
         raise ValueError("transport_capacity_factor must be positive")
-    if max_experts_per_wave <= 0:
-        raise ValueError(f"max_experts_per_wave must be positive, got {max_experts_per_wave}")
-
-    experts_per_wave = min(max_experts_per_wave, local_experts)
-    while local_experts % experts_per_wave != 0:
-        experts_per_wave -= 1
+    if num_expert_waves <= 0:
+        raise ValueError(f"num_expert_waves must be positive, got {num_expert_waves}")
+    if local_experts % num_expert_waves != 0:
+        raise ValueError(
+            f"local expert count={local_experts} must be divisible by num_expert_waves={num_expert_waves}"
+        )
 
     tokens_per_shard, hidden_dim = x_local.shape
     expert_shards = num_experts // local_experts
     topk = selected_experts_local.shape[1]
     assignments_per_shard = tokens_per_shard * topk
-    num_waves = local_experts // experts_per_wave
+    num_waves = num_expert_waves
     pool_capacity = max(
         math.ceil(transport_capacity_factor * assignments_per_shard / (expert_shards * num_waves)),
         1,

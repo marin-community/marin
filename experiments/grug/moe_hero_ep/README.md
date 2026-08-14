@@ -15,11 +15,12 @@ data-parallel rack uses one 64-device expert mesh.
 - Batch: 1024 global sequences. The launcher does not scale the batch with the rack count.
 - Router: top-8 quantile balancing with next-step, stop-gradient expert biases and no auxiliary
   balancing loss.
-- MoE backend: `fixed_pooled_wave_all_to_all` by default. Each sender uses one fixed pool per
+- MoE backend: `fixed_pooled_wave_all_to_all`. Each sender uses one fixed pool per
   destination and stripes it over three static waves. The receiver runs all six local experts in
   each wave and drops rows above the fixed expert capacity. Expert IDs travel in the activation
   payload, so the method does not use a metadata collective. The receiver capacity factor is 1.33,
-  the sender capacity factor is 1.05, and each wave uses at most two full expert buffers.
+  and the sender capacity factor is 1.05. Each wave has receiver capacity equal to two full expert
+  buffers.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
 - Runtime: one JAX process per four-GPU worker, BF16 parameters and compute, GPU command buffers
   off, `cuda_async`, PGLE off, and collective overlap limit 4.
@@ -67,7 +68,7 @@ compute-scaled optimizer values stay constant across a sweep.
 | `--intermediate-dim` | routed expert width |
 | `--num-experts-per-token` | routed top-k |
 | `--latent-dim` | routed input and output width |
-| `--capacity-factor` | fixed all-to-all capacity factor |
+| `--capacity-factor` | pooled receiver capacity factor |
 
 Three quantities set what a sweep can fit on one rack:
 
@@ -85,7 +86,6 @@ The selected E384 model runs at expert width 3072 and capacity factor 1.33.
 | `--dp-racks` | sets the data-parallel rack count; `--batch-size` stays global |
 | `--batch-size` | sets global sequences per step and the optimizer token budget |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
-| `--flavor` | selects `ep-pooled-wave`, `ep`, or `ep-ragged` |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
 | `--save-checkpoints` | writes checkpoints with the restore limitation above |
 | `--watch-interval`, `--watch-mode` | select inline or diagnostic norm collection |
@@ -124,10 +124,10 @@ group `moe-hero-ep` and the supplied run ID. The run output includes the durable
 artifact. Give each concurrent gang its own `IRIS_PORT_JAX`: rank 0 binds and registers that port
 for the JAX coordinator, and the default 8476 is shared by every run on the cluster.
 
-### Small-scale ablations
+### Legacy small-scale ablations
 
-`small_scale_abl_launch.py` runs a downsized hero shape (`--size` in `d768`…`d2048`) on one GB200
-rack. It fixes the batch at ~4M tokens per step to hold the fixed-all-to-all drop dynamics, and
+`small_scale_abl_launch.py` runs the earlier E192, top-4 shape (`--size` in `d768`…`d2048`) on one
+GB200 rack. It fixes the batch at ~4M tokens per step to hold the fixed-all-to-all drop dynamics, and
 sizes the step count from the model's active-parameter count: `num_steps` trains
 `--tokens-per-active-param` (default 750) tokens per active parameter. `--flavor ep` keeps the
 64-way expert axis; `--flavor fsdp-nodrop` runs the same shape dropless, and `--flavor fsdp-chunk4`
