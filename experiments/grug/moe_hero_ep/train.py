@@ -59,7 +59,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
-from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem import marin_prefix, prefix_join
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -1133,7 +1133,9 @@ def _write_fatal_traceback(config: GrugRunConfig) -> None:
     try:
         run_id = config.trainer.trainer.id
         rank = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV, "0")
-        destination = f"{marin_prefix()}marin/grug/fatal-tracebacks/{run_id}/rank-{rank}.txt"
+        # marin_prefix() has no trailing separator, so concatenating a relative path here glued the
+        # two together and wrote under a sibling of the prefix that nothing ever reads.
+        destination = prefix_join(marin_prefix(), f"grug/fatal-tracebacks/{run_id}/rank-{rank}.txt")
         with fsspec.open(destination, "w") as handle:
             handle.write(traceback.format_exc())
         logger.info("Wrote fatal traceback to %s", destination)

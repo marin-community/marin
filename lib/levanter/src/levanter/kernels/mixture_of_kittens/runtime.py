@@ -38,7 +38,12 @@ _READ_DEBUG_COUNTERS_SYMBOL = "levanter_mok_read_debug_counters"
 _TRIM_DEFAULT_MEMORY_POOLS_SYMBOL = "levanter_mok_trim_default_memory_pools"
 _NUM_DEVICES = 4
 _PEER_WAIT_PHASE_COUNT = 4
-_DEBUG_COUNTERS_PER_RANK = 59
+# Per-rank debug counters: seven scalars, then one phase-by-peer block for each of wait events,
+# wait cycles, and max wait cycles, then four staging tallies. The peer blocks scale with the
+# rank count, so this is a function of it rather than the constant it was at EP4.
+_DEBUG_COUNTER_SCALARS = 7
+_DEBUG_COUNTER_PEER_BLOCKS = 3
+_DEBUG_COUNTER_STAGING = 4
 _MEMORY_POOL_STATS_PER_RANK = 10
 _MEMORY_POOL_TRIM_TRAILER_SIZE = 3
 _ACTIVE_RUNTIME: MokLikeRuntimeHandle | None = None
@@ -117,6 +122,16 @@ def _native_last_error(library: ctypes.CDLL, default: str) -> str:
     function.restype = ctypes.c_char_p
     message = function()
     return message.decode() if message else default
+
+
+def _debug_counters_per_rank(num_devices: int) -> int:
+    """Native debug-counter stride for one rank, which grows with the peer count."""
+
+    return (
+        _DEBUG_COUNTER_SCALARS
+        + _DEBUG_COUNTER_PEER_BLOCKS * _PEER_WAIT_PHASE_COUNT * num_devices
+        + _DEBUG_COUNTER_STAGING
+    )
 
 
 def register_ffi_targets(library: ctypes.CDLL, num_devices: int = _NUM_DEVICES) -> None:
@@ -323,7 +338,9 @@ class MokLikeRuntimeHandle:
         count_function.argtypes = []
         count_function.restype = ctypes.c_int64
         count = int(count_function())
-        expected = _NUM_DEVICES * _DEBUG_COUNTERS_PER_RANK
+        num_devices = self.build_config.num_devices
+        per_rank = _debug_counters_per_rank(num_devices)
+        expected = num_devices * per_rank
         if count != expected:
             raise RuntimeError(f"mok_like native debug counter ABI returned {count} values, expected {expected}")
 
@@ -334,19 +351,22 @@ class MokLikeRuntimeHandle:
         if read_function(output, count) != 0:
             raise RuntimeError(_native_last_error(self._library, "MoK-like debug counter read failed"))
         values = tuple(int(value) for value in output)
-        ranks = tuple(
-            values[rank * _DEBUG_COUNTERS_PER_RANK : (rank + 1) * _DEBUG_COUNTERS_PER_RANK]
-            for rank in range(_NUM_DEVICES)
-        )
+        ranks = tuple(values[rank * per_rank : (rank + 1) * per_rank] for rank in range(num_devices))
+        peer_block = _PEER_WAIT_PHASE_COUNT * num_devices
 
         def phase_peer_values(offset: int) -> tuple[tuple[tuple[int, ...], ...], ...]:
             return tuple(
                 tuple(
-                    rank[offset + phase * _NUM_DEVICES : offset + (phase + 1) * _NUM_DEVICES]
+                    rank[offset + phase * num_devices : offset + (phase + 1) * num_devices]
                     for phase in range(_PEER_WAIT_PHASE_COUNT)
                 )
                 for rank in ranks
             )
+
+        events, cycles, max_cycles = (
+            _DEBUG_COUNTER_SCALARS + block * peer_block for block in range(_DEBUG_COUNTER_PEER_BLOCKS)
+        )
+        staging = _DEBUG_COUNTER_SCALARS + _DEBUG_COUNTER_PEER_BLOCKS * peer_block
 
         return MokLikeDebugCounters(
             peer_ready_waits=tuple(rank[0] for rank in ranks),
@@ -355,11 +375,11 @@ class MokLikeRuntimeHandle:
             slot_reuse_failures=tuple(rank[3] for rank in ranks),
             slot_acquisitions=tuple((rank[4], rank[5]) for rank in ranks),
             max_active_slots=tuple(rank[6] for rank in ranks),
-            peer_wait_events=phase_peer_values(7),
-            peer_wait_cycles=phase_peer_values(23),
-            peer_wait_max_cycles=phase_peer_values(39),
-            staging_copy_calls=tuple((rank[55], rank[57]) for rank in ranks),
-            staging_copy_bytes=tuple((rank[56], rank[58]) for rank in ranks),
+            peer_wait_events=phase_peer_values(events),
+            peer_wait_cycles=phase_peer_values(cycles),
+            peer_wait_max_cycles=phase_peer_values(max_cycles),
+            staging_copy_calls=tuple((rank[staging], rank[staging + 2]) for rank in ranks),
+            staging_copy_bytes=tuple((rank[staging + 1], rank[staging + 3]) for rank in ranks),
         )
 
     def trim_default_memory_pools(self) -> MokLikeMemoryPoolTrimTelemetry:
