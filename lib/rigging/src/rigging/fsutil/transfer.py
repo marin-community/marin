@@ -5,7 +5,6 @@
 
 import base64
 import binascii
-import hashlib
 import shutil
 from dataclasses import dataclass
 from glob import has_magic
@@ -14,10 +13,13 @@ from typing import Any, cast
 from fsspec import AbstractFileSystem
 
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.fsutil.hashing import HashAlgorithm, file_hashes_for_path
 
 COPY_CHUNK_BYTES = 8 * 1024 * 1024
 DIRECTORY_TYPE = "directory"
+MD5_DIGEST_BYTES = 16
+MD5_ONLY = frozenset({HashAlgorithm.MD5})
 
 
 class TransferError(ValueError):
@@ -25,21 +27,42 @@ class TransferError(ValueError):
 
 
 @dataclass(frozen=True)
-class TransferSource:
+class TransferLocation:
     url: str
     filesystem: AbstractFileSystem
     path: str
+
+    @classmethod
+    def from_path(cls, reference_url: str, filesystem: AbstractFileSystem, path: str) -> "TransferLocation":
+        scheme = StoragePath(reference_url).scheme
+        url = f"{scheme}://{path}" if scheme else path
+        return cls(url, filesystem, path)
+
+    @property
+    def name(self) -> str:
+        return StoragePath(self.url).name
+
+    def child(self, relative_path: str) -> "TransferLocation":
+        return TransferLocation(
+            prefix_join(self.url, relative_path),
+            self.filesystem,
+            prefix_join(self.path, relative_path),
+        )
+
+    def relative_to(self, root: "TransferLocation") -> str:
+        return StoragePath(self.url).relative_to(StoragePath(root.url))
+
+
+@dataclass(frozen=True)
+class TransferSource:
+    location: TransferLocation
     is_directory: bool
 
 
 @dataclass(frozen=True)
 class CopyAction:
-    source_url: str
-    source_filesystem: AbstractFileSystem
-    source_path: str
-    destination_url: str
-    destination_filesystem: AbstractFileSystem
-    destination_path: str
+    source: TransferLocation
+    destination: TransferLocation
 
 
 @dataclass(frozen=True)
@@ -51,9 +74,15 @@ class CopyPlan:
 
 @dataclass(frozen=True)
 class DeleteAction:
-    url: str
-    filesystem: AbstractFileSystem
-    path: str
+    location: TransferLocation
+
+
+@dataclass(frozen=True)
+class FileMetadata:
+    location: TransferLocation
+    size: int
+    mtime: Any | None
+    md5: bytes | None
 
 
 @dataclass(frozen=True)
@@ -72,14 +101,16 @@ def copy_plan(
     """Resolve copy destinations and validate every source before writing."""
     assert source_urls
     destination_filesystem, destination_path = filesystem_for(destination_url)
+    destination = TransferLocation(destination_url, destination_filesystem, destination_path)
     sources = _sources(source_urls)
     for source in sources:
         if source.is_directory and not recursive:
-            raise TransferError(f"{source.url} is a directory; pass -r to copy it recursively")
+            raise TransferError(f"{source.location.url} is a directory; pass -r to copy it recursively")
         if source.is_directory and (
-            StoragePath(source.url) == StoragePath(destination_url) or _strictly_contains(source.url, destination_url)
+            StoragePath(source.location.url) == StoragePath(destination_url)
+            or _strictly_contains(source.location.url, destination_url)
         ):
-            raise TransferError(f"destination {destination_url} is inside source {source.url}")
+            raise TransferError(f"destination {destination_url} is inside source {source.location.url}")
 
     destination_is_directory = (
         len(sources) > 1
@@ -96,19 +127,17 @@ def copy_plan(
     for source in sources:
         actions = _source_copy_actions(
             source,
-            destination_url,
-            destination_filesystem,
-            destination_path,
+            destination,
             destination_is_directory=destination_is_directory,
         )
         for action in actions:
-            if no_clobber and action.destination_filesystem.exists(action.destination_path):
+            if no_clobber and action.destination.filesystem.exists(action.destination.path):
                 skipped.append(action)
             else:
                 copies.append(action)
     for action in copies:
         if _same_location(action):
-            raise TransferError(f"source and destination are the same: {action.source_url}")
+            raise TransferError(f"source and destination are the same: {action.source.url}")
     return CopyPlan(sources, tuple(copies), tuple(skipped))
 
 
@@ -116,29 +145,26 @@ def execute_copies(actions: tuple[CopyAction, ...]) -> None:
     """Execute a validated sequence of copies."""
     for action in actions:
         if _same_location(action):
-            raise TransferError(f"source and destination are the same: {action.source_url}")
-        _copy_file(
-            action.source_filesystem,
-            action.source_path,
-            action.destination_filesystem,
-            action.destination_path,
-        )
+            raise TransferError(f"source and destination are the same: {action.source.url}")
+        _copy_file(action.source, action.destination)
 
 
 def remove_sources(sources: tuple[TransferSource, ...]) -> None:
     """Remove sources after every copy in a move has succeeded."""
     for source in sources:
-        source.filesystem.rm(source.path, recursive=source.is_directory)
+        source.location.filesystem.rm(source.location.path, recursive=source.is_directory)
 
 
 def sync_plan(source_url: str, destination_url: str, *, delete: bool, checksum: bool) -> SyncPlan:
     """Plan the operations needed to make a destination contain the source files.
 
-    Size, modification time, and provider MD5 metadata are compared without reading
-    object bodies. ``checksum`` forces a full MD5 read of equal-sized files.
+    Size, modification time, and provider MD5 metadata are compared first. Equal-sized
+    local files with differing times are hashed; ``checksum`` forces hashing regardless.
     """
     source_filesystem, source_path = filesystem_for(source_url)
     destination_filesystem, destination_path = filesystem_for(destination_url)
+    source = TransferLocation(source_url, source_filesystem, source_path)
+    destination = TransferLocation(destination_url, destination_filesystem, destination_path)
     if not source_filesystem.exists(source_path):
         raise TransferError(f"{source_url} does not exist")
     if not source_filesystem.isdir(source_path):
@@ -148,46 +174,26 @@ def sync_plan(source_url: str, destination_url: str, *, delete: bool, checksum: 
     if _strictly_contains(source_url, destination_url) or _strictly_contains(destination_url, source_url):
         raise TransferError("source and destination directories overlap")
 
-    source_files = _manifest(source_filesystem, source_path)
-    destination_files = (
-        _manifest(destination_filesystem, destination_path) if destination_filesystem.exists(destination_path) else {}
-    )
+    source_files = _manifest(source)
+    destination_files = _manifest(destination) if destination_filesystem.exists(destination_path) else {}
     copies = []
     for relative_path, source_info in source_files.items():
-        destination_object_path = _join(destination_path, relative_path)
         destination_info = destination_files.get(relative_path)
         if destination_info is not None and _matching_files(
-            source_filesystem,
             source_info,
-            destination_filesystem,
             destination_info,
             checksum=checksum,
         ):
             continue
-        copies.append(
-            CopyAction(
-                source_url=_qualified_url(source_url, source_info["name"]),
-                source_filesystem=source_filesystem,
-                source_path=source_info["name"],
-                destination_url=_qualified_url(destination_url, destination_object_path),
-                destination_filesystem=destination_filesystem,
-                destination_path=destination_object_path,
-            )
-        )
+        copies.append(CopyAction(source_info.location, destination.child(relative_path)))
 
     deletes = []
     if delete:
         for relative_path in destination_files.keys() - source_files.keys():
             info = destination_files[relative_path]
-            deletes.append(
-                DeleteAction(
-                    url=_qualified_url(destination_url, info["name"]),
-                    filesystem=destination_filesystem,
-                    path=info["name"],
-                )
-            )
-    copies.sort(key=lambda action: action.source_url)
-    deletes.sort(key=lambda action: action.url)
+            deletes.append(DeleteAction(info.location))
+    copies.sort(key=lambda action: action.source.url)
+    deletes.sort(key=lambda action: action.location.url)
     return SyncPlan(tuple(copies), tuple(deletes))
 
 
@@ -195,7 +201,7 @@ def execute_sync(plan: SyncPlan) -> None:
     """Execute copies before deletions so a failed copy cannot discard destination data."""
     execute_copies(plan.copies)
     for action in plan.deletes:
-        action.filesystem.rm(action.path)
+        action.location.filesystem.rm(action.location.path)
 
 
 def _sources(urls: tuple[str, ...]) -> tuple[TransferSource, ...]:
@@ -205,16 +211,15 @@ def _sources(urls: tuple[str, ...]) -> tuple[TransferSource, ...]:
         if not has_magic(path):
             if not filesystem.exists(path):
                 raise TransferError(f"{url} does not exist")
-            sources.append(TransferSource(url, filesystem, path, filesystem.isdir(path)))
+            location = TransferLocation(url, filesystem, path)
+            sources.append(TransferSource(location, filesystem.isdir(path)))
             continue
         matches = filesystem.glob(path)
         if not matches:
             raise TransferError(f"{url} matched no files")
         sources.extend(
             TransferSource(
-                _qualified_url(url, match),
-                filesystem,
-                match,
+                TransferLocation.from_path(url, filesystem, match),
                 filesystem.isdir(match),
             )
             for match in matches
@@ -224,90 +229,65 @@ def _sources(urls: tuple[str, ...]) -> tuple[TransferSource, ...]:
 
 def _source_copy_actions(
     source: TransferSource,
-    destination_url: str,
-    destination_filesystem: AbstractFileSystem,
-    destination_path: str,
+    destination: TransferLocation,
     *,
     destination_is_directory: bool,
 ) -> list[CopyAction]:
     if not source.is_directory:
-        target_path = _join(destination_path, _basename(source.path)) if destination_is_directory else destination_path
-        return [
-            CopyAction(
-                source.url,
-                source.filesystem,
-                source.path,
-                _qualified_url(destination_url, target_path),
-                destination_filesystem,
-                target_path,
-            )
-        ]
+        target = destination.child(source.location.name) if destination_is_directory else destination
+        return [CopyAction(source.location, target)]
 
-    root = _join(destination_path, _basename(source.path)) if destination_is_directory else destination_path
+    root = destination.child(source.location.name) if destination_is_directory else destination
     actions = []
-    for info in _files(source.filesystem, source.path).values():
-        relative_path = _relative_path(info["name"], source.path)
-        target_path = _join(root, relative_path)
-        actions.append(
-            CopyAction(
-                _qualified_url(source.url, info["name"]),
-                source.filesystem,
-                info["name"],
-                _qualified_url(destination_url, target_path),
-                destination_filesystem,
-                target_path,
-            )
-        )
-    actions.sort(key=lambda action: action.source_url)
+    for info in _files(source.location):
+        relative_path = info.location.relative_to(source.location)
+        actions.append(CopyAction(info.location, root.child(relative_path)))
+    actions.sort(key=lambda action: action.source.url)
     return actions
 
 
-def _manifest(filesystem: AbstractFileSystem, root: str) -> dict[str, dict[str, Any]]:
-    return {_relative_path(info["name"], root): info for info in _files(filesystem, root).values()}
+def _manifest(root: TransferLocation) -> dict[str, FileMetadata]:
+    return {info.location.relative_to(root): info for info in _files(root)}
 
 
-def _files(filesystem: AbstractFileSystem, path: str) -> dict[str, dict[str, Any]]:
-    found = cast(dict[str, dict[str, Any]] | list[str], filesystem.find(path, detail=True))
+def _files(root: TransferLocation) -> list[FileMetadata]:
+    found = cast(dict[str, dict[str, Any]] | list[str], root.filesystem.find(root.path, detail=True))
     if not isinstance(found, dict):
-        details = {name: cast(dict[str, Any], filesystem.info(name)) for name in found}
-        return {name: info for name, info in details.items() if info.get("type") != DIRECTORY_TYPE}
-    return {name: info for name, info in found.items() if info.get("type") != DIRECTORY_TYPE}
+        found = {name: cast(dict[str, Any], root.filesystem.info(name)) for name in found}
+    return [
+        FileMetadata(
+            location=TransferLocation.from_path(root.url, root.filesystem, name),
+            size=int(info.get("size") or 0),
+            mtime=_mtime(info),
+            md5=_metadata_md5(info),
+        )
+        for name, info in found.items()
+        if info.get("type") != DIRECTORY_TYPE
+    ]
 
 
 def _matching_files(
-    source_filesystem: AbstractFileSystem,
-    source_info: dict[str, Any],
-    destination_filesystem: AbstractFileSystem,
-    destination_info: dict[str, Any],
+    source: FileMetadata,
+    destination: FileMetadata,
     *,
     checksum: bool,
 ) -> bool:
-    if (source_info.get("size") or 0) != (destination_info.get("size") or 0):
+    if source.size != destination.size:
         return False
     if checksum:
-        return _md5(source_filesystem, source_info["name"]) == _md5(
-            destination_filesystem,
-            destination_info["name"],
-        )
+        return _md5(source.location) == _md5(destination.location)
 
-    source_mtime = _mtime(source_info)
-    destination_mtime = _mtime(destination_info)
-    if source_mtime is not None and destination_mtime is not None and source_mtime == destination_mtime:
+    if source.mtime is not None and destination.mtime is not None and source.mtime == destination.mtime:
         return True
 
-    source_md5 = _metadata_md5(source_info)
-    destination_md5 = _metadata_md5(destination_info)
-    if source_md5 is not None and destination_md5 is not None:
-        return source_md5 == destination_md5
-    if _is_local(source_filesystem) and _is_local(destination_filesystem):
-        return _md5(source_filesystem, source_info["name"]) == _md5(
-            destination_filesystem,
-            destination_info["name"],
-        )
+    if source.md5 is not None and destination.md5 is not None:
+        return source.md5 == destination.md5
+    if _is_local(source.location.filesystem) and _is_local(destination.location.filesystem):
+        return _md5(source.location) == _md5(destination.location)
 
     # Without two timestamps or two provider digests, size is the only metadata
     # comparison available. --checksum is the explicit full-content fallback.
-    return source_mtime is None or destination_mtime is None
+    return source.mtime is None or destination.mtime is None
 
 
 def _is_local(filesystem: AbstractFileSystem) -> bool:
@@ -325,7 +305,7 @@ def _mtime(info: dict[str, Any]) -> Any | None:
 def _metadata_md5(info: dict[str, Any]) -> bytes | None:
     value = next((info[key] for key in ("md5Hash", "md5", "ETag", "etag") if info.get(key)), None)
     if isinstance(value, bytes):
-        return value if len(value) == 16 else None
+        return value if len(value) == MD5_DIGEST_BYTES else None
     if not isinstance(value, str):
         return None
 
@@ -341,38 +321,31 @@ def _metadata_md5(info: dict[str, Any]) -> bytes | None:
         decoded = base64.b64decode(encoded, validate=True)
     except binascii.Error:
         return None
-    return decoded if len(decoded) == 16 else None
+    return decoded if len(decoded) == MD5_DIGEST_BYTES else None
 
 
-def _md5(filesystem: AbstractFileSystem, path: str) -> bytes:
-    digest = hashlib.md5(usedforsecurity=False)
-    with filesystem.open(path, "rb") as file:
-        while chunk := file.read(COPY_CHUNK_BYTES):
-            digest.update(chunk)
-    return digest.digest()
+def _md5(location: TransferLocation) -> bytes:
+    digest = file_hashes_for_path(location.filesystem, location.path, MD5_ONLY).md5
+    assert digest is not None
+    return digest
 
 
-def _copy_file(
-    source_filesystem: AbstractFileSystem,
-    source_path: str,
-    destination_filesystem: AbstractFileSystem,
-    destination_path: str,
-) -> None:
-    parent, separator, _ = destination_path.rpartition("/")
+def _copy_file(source: TransferLocation, destination: TransferLocation) -> None:
+    parent, separator, _ = destination.path.rpartition("/")
     if separator:
-        destination_filesystem.makedirs(parent, exist_ok=True)
+        destination.filesystem.makedirs(parent, exist_ok=True)
     with (
-        source_filesystem.open(source_path, "rb") as source,
-        destination_filesystem.open(destination_path, "wb") as destination,
+        source.filesystem.open(source.path, "rb") as source_file,
+        destination.filesystem.open(destination.path, "wb") as destination_file,
     ):
-        shutil.copyfileobj(source, destination, COPY_CHUNK_BYTES)
+        shutil.copyfileobj(source_file, destination_file, COPY_CHUNK_BYTES)
 
 
 def _same_location(action: CopyAction) -> bool:
-    same_filesystem_path = action.source_filesystem is action.destination_filesystem and action.source_path.rstrip(
-        "/"
-    ) == action.destination_path.rstrip("/")
-    return same_filesystem_path or StoragePath(action.source_url) == StoragePath(action.destination_url)
+    same_filesystem_path = (
+        action.source.filesystem is action.destination.filesystem and action.source.path == action.destination.path
+    )
+    return same_filesystem_path or StoragePath(action.source.url) == StoragePath(action.destination.url)
 
 
 def _strictly_contains(parent_url: str, child_url: str) -> bool:
@@ -384,20 +357,3 @@ def _strictly_contains(parent_url: str, child_url: str) -> bool:
         and len(parent.segments) < len(child.segments)
         and child.segments[: len(parent.segments)] == parent.segments
     )
-
-
-def _qualified_url(reference_url: str, path: str) -> str:
-    scheme = StoragePath(reference_url).scheme
-    return f"{scheme}://{path}" if scheme else path
-
-
-def _relative_path(path: str, root: str) -> str:
-    return path[len(root.rstrip("/")) :].lstrip("/")
-
-
-def _basename(path: str) -> str:
-    return path.rstrip("/").rsplit("/", 1)[-1]
-
-
-def _join(parent: str, child: str) -> str:
-    return f"{parent.rstrip('/')}/{child.lstrip('/')}"

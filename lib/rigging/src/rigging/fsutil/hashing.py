@@ -6,12 +6,19 @@
 import base64
 import hashlib
 from dataclasses import dataclass
+from enum import StrEnum
 
 import google_crc32c
+from fsspec import AbstractFileSystem
 
 from rigging.filesystem.buckets import filesystem_for
 
 HASH_CHUNK_BYTES = 8 * 1024 * 1024
+
+
+class HashAlgorithm(StrEnum):
+    MD5 = "md5"
+    CRC32C = "crc32c"
 
 
 @dataclass(frozen=True)
@@ -20,11 +27,20 @@ class FileHashes:
     crc32c: bytes | None
 
 
-def file_hashes(url: str, *, include_md5: bool, include_crc32c: bool) -> FileHashes:
-    """Calculate selected hashes by streaming the complete contents of ``url``."""
+def file_hashes(url: str, algorithms: frozenset[HashAlgorithm]) -> FileHashes:
+    """Calculate ``algorithms`` by streaming the complete contents of ``url``."""
     filesystem, path = filesystem_for(url)
-    md5 = hashlib.md5(usedforsecurity=False) if include_md5 else None
-    crc32c = google_crc32c.Checksum() if include_crc32c else None
+    return file_hashes_for_path(filesystem, path, algorithms)
+
+
+def file_hashes_for_path(
+    filesystem: AbstractFileSystem,
+    path: str,
+    algorithms: frozenset[HashAlgorithm],
+) -> FileHashes:
+    """Calculate ``algorithms`` for a path on an already-routed filesystem."""
+    md5 = hashlib.md5(usedforsecurity=False) if HashAlgorithm.MD5 in algorithms else None
+    crc32c = google_crc32c.Checksum() if HashAlgorithm.CRC32C in algorithms else None
     with filesystem.open(path, "rb") as file:
         while chunk := file.read(HASH_CHUNK_BYTES):
             if md5 is not None:

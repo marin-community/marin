@@ -142,13 +142,17 @@ def test_rsync_copies_changed_files_and_deletes_only_when_requested(tmp_path):
     dry_run = CliRunner().invoke(cli, ["rsync", "--delete", "--dry-run", str(source), str(destination)])
 
     assert dry_run.exit_code == 0, dry_run.output
-    assert (destination / "extra.txt").exists()
-    assert "delete" in dry_run.output
+    assert (destination / "extra.txt").read_text() == "keep unless --delete is passed"
 
     result = CliRunner().invoke(cli, ["rsync", "--delete", str(source), str(destination)])
 
     assert result.exit_code == 0, result.output
     assert not (destination / "extra.txt").exists()
+    assert {path.name: path.read_text() for path in destination.iterdir()} == {
+        "same.txt": "same",
+        "changed.txt": "new-value",
+        "new.txt": "new",
+    }
 
 
 def test_rsync_checksum_detects_equal_sized_changes(tmp_path):

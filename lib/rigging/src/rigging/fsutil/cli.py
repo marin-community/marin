@@ -11,11 +11,9 @@ name two different backends. Bare ``fsutil`` opens the interactive browser.
 import logging
 import sys
 import time
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 import click
 from fsspec import AbstractFileSystem
@@ -26,7 +24,7 @@ from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import s3_credentials, s3_endpoint
 from rigging.filesystem.storage_path import StoragePath
-from rigging.fsutil.hashing import file_hashes, format_digest
+from rigging.fsutil.hashing import HashAlgorithm, file_hashes, format_digest
 from rigging.fsutil.listing import (
     ROOT,
     Entry,
@@ -66,19 +64,6 @@ _LOG_PROGRESS_INTERVAL = 10.0
 _ACTIVITY_BAR_WIDTH = 8
 _MAX_PROGRESS_PATH_LENGTH = 60
 
-_COMMANDS: list[click.Command] = []
-
-
-def fsutil_command(name: str | None = None) -> Callable[[Callable[..., Any]], click.Command]:
-    """Declare a subcommand for registration on the root command group."""
-
-    def register(function: Callable[..., Any]) -> click.Command:
-        command = click.command(name=name)(function)
-        _COMMANDS.append(command)
-        return command
-
-    return register
-
 
 @click.group(invoke_without_command=True)
 @click.option("-v", "--verbose", is_flag=True, help="Log fsspec/botocore activity.")
@@ -93,7 +78,7 @@ def cli(ctx: click.Context, verbose: bool) -> None:
         ctx.invoke(browse)
 
 
-@fsutil_command()
+@click.command()
 def buckets() -> None:
     """List the declared buckets and whether their backend is reachable."""
     rows = []
@@ -108,10 +93,10 @@ def buckets() -> None:
         click.echo(line)
 
 
-@fsutil_command("ls")
+@click.command("ls")
 @click.argument("urls", nargs=-1)
 @click.option("-l", "--long", is_flag=True, help="Show size and modification time.")
-@click.option("-r", "-R", "--recursive", is_flag=True, help="List every descendant.")
+@click.option("-r", "-R", "--recursive", is_flag=True, help="List descendants beneath literal paths.")
 def list_command(urls: tuple[str, ...], long: bool, recursive: bool) -> None:
     """List paths, immediate children, or glob matches. With no path, list known buckets."""
     targets = urls or (ROOT,)
@@ -128,7 +113,7 @@ def list_command(urls: tuple[str, ...], long: bool, recursive: bool) -> None:
                 click.echo(f"{entry.name}/" if entry.is_dir else entry.name)
 
 
-@fsutil_command()
+@click.command()
 @click.argument("url")
 @click.option("--raw", is_flag=True, help="Write bytes to stdout without formatting.")
 def cat(url: str, raw: bool) -> None:
@@ -141,7 +126,7 @@ def cat(url: str, raw: bool) -> None:
         click.echo(line)
 
 
-@fsutil_command()
+@click.command()
 @click.argument("url")
 @click.option(
     "-n",
@@ -157,7 +142,7 @@ def head(url: str, lines: int) -> None:
         click.echo(line)
 
 
-@fsutil_command()
+@click.command()
 @click.argument("url")
 def stat(url: str) -> None:
     """Print an object's metadata as the backend reports it."""
@@ -167,7 +152,7 @@ def stat(url: str) -> None:
         click.echo(line)
 
 
-@fsutil_command()
+@click.command()
 @click.argument("url")
 def du(url: str) -> None:
     """Total the bytes and objects under a prefix."""
@@ -175,7 +160,7 @@ def du(url: str) -> None:
     click.echo(f"{format_size(size)}  ({size} bytes, {count} objects)  {url}")
 
 
-@fsutil_command()
+@click.command()
 @click.argument("url")
 @click.option(
     "--prefix-threshold",
@@ -287,7 +272,7 @@ def _format_duration(seconds: float) -> str:
     return f"{remaining_seconds}s"
 
 
-@fsutil_command()
+@click.command()
 @click.argument("pattern")
 def find(pattern: str) -> None:
     """List paths matching a glob pattern, e.g. 'gs://marin-us-central2/x/**/*.json'."""
@@ -297,7 +282,7 @@ def find(pattern: str) -> None:
         click.echo(f"{scheme}://{match}" if scheme else match)
 
 
-@fsutil_command()
+@click.command()
 @click.argument("urls", nargs=-1, required=True)
 @click.option("-r", "-R", "--recursive", is_flag=True, help="Copy a prefix and everything under it.")
 @click.option("-n", "--no-clobber", is_flag=True, help="Skip files that already exist at the destination.")
@@ -310,12 +295,12 @@ def cp(urls: tuple[str, ...], recursive: bool, no_clobber: bool) -> None:
     except TransferError as error:
         raise click.ClickException(str(error)) from error
     for action in plan.copies:
-        click.echo(f"{action.source_url} -> {action.destination_url}")
+        click.echo(f"{action.source.url} -> {action.destination.url}")
     for action in plan.skipped:
-        click.echo(f"skip {action.destination_url}")
+        click.echo(f"skip {action.destination.url}")
 
 
-@fsutil_command()
+@click.command()
 @click.argument("urls", nargs=-1, required=True)
 @click.option("-r", "-R", "--recursive", is_flag=True, help="Move a prefix and everything under it.")
 def mv(urls: tuple[str, ...], recursive: bool) -> None:
@@ -328,10 +313,10 @@ def mv(urls: tuple[str, ...], recursive: bool) -> None:
     except TransferError as error:
         raise click.ClickException(str(error)) from error
     for action in plan.copies:
-        click.echo(f"{action.source_url} -> {action.destination_url}")
+        click.echo(f"{action.source.url} -> {action.destination.url}")
 
 
-@fsutil_command()
+@click.command()
 @click.argument("source")
 @click.argument("destination")
 @click.option("--delete", is_flag=True, help="Delete destination files absent from the source.")
@@ -350,12 +335,12 @@ def rsync(source: str, destination: str, delete: bool, dry_run: bool, checksum: 
     except TransferError as error:
         raise click.ClickException(str(error)) from error
     for action in plan.copies:
-        click.echo(f"copy {action.source_url} -> {action.destination_url}")
+        click.echo(f"copy {action.source.url} -> {action.destination.url}")
     for action in plan.deletes:
-        click.echo(f"delete {action.url}")
+        click.echo(f"delete {action.location.url}")
 
 
-@fsutil_command("hash")
+@click.command("hash")
 @click.argument("urls", nargs=-1, required=True)
 @click.option("--hex", "hexadecimal", is_flag=True, help="Print hexadecimal digests instead of base64.")
 @click.option("--skip-md5", is_flag=True, help="Do not calculate MD5.")
@@ -364,9 +349,17 @@ def hash_command(urls: tuple[str, ...], hexadecimal: bool, skip_md5: bool, skip_
     """Calculate MD5 and CRC32C content hashes for complete files or objects."""
     if skip_md5 and skip_crc32c:
         raise click.UsageError("at least one hash must be enabled")
+    algorithms = frozenset(
+        algorithm
+        for algorithm, skipped in (
+            (HashAlgorithm.MD5, skip_md5),
+            (HashAlgorithm.CRC32C, skip_crc32c),
+        )
+        if not skipped
+    )
     rows = []
     for url in urls:
-        digests = file_hashes(url, include_md5=not skip_md5, include_crc32c=not skip_crc32c)
+        digests = file_hashes(url, algorithms)
         rows.append(
             [
                 url,
@@ -378,7 +371,7 @@ def hash_command(urls: tuple[str, ...], hexadecimal: bool, skip_md5: bool, skip_
         click.echo(line)
 
 
-@fsutil_command()
+@click.command()
 @click.argument("url")
 @click.option("-r", "-R", "--recursive", is_flag=True, help="Remove a prefix and everything under it.")
 def rm(url: str, recursive: bool) -> None:
@@ -455,7 +448,7 @@ def _remove_batch(fs: AbstractFileSystem, files: list[str]) -> None:
         raise RuntimeError(f"S3 bulk delete failed: {details}")
 
 
-@fsutil_command()
+@click.command()
 @click.argument("url", default=ROOT)
 def browse(url: str) -> None:
     """Open the interactive browser, starting at URL (default: the bucket list)."""
@@ -517,6 +510,8 @@ def _transfer_arguments(urls: tuple[str, ...]) -> tuple[tuple[str, ...], str]:
         raise click.UsageError("requires at least one source and one destination")
     return urls[:-1], urls[-1]
 
+
+_COMMANDS = (buckets, list_command, cat, head, stat, du, usage, find, cp, mv, rsync, hash_command, rm, browse)
 
 for _command in _COMMANDS:
     cli.add_command(_command)

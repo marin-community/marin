@@ -121,8 +121,9 @@ def list_entries(url: str, *, recursive: bool = False) -> list[Entry]:
 
     ``url`` may be :data:`ROOT`, in which case the declared buckets are the children.
     Glob matches are named relative to the non-pattern prefix, so matches remain
-    distinguishable when their basenames are the same. Recursive listings name every
-    descendant relative to ``url``.
+    distinguishable when their basenames are the same. Recursive listings of literal
+    URLs name every descendant relative to ``url``; recursive root and glob listings
+    retain their ordinary non-recursive behavior.
     """
     if url == ROOT:
         return [

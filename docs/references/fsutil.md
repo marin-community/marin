@@ -52,7 +52,7 @@ that touch its buckets; the rest keep working.
 
 | Command | What it does |
 |---------|--------------|
-| `ls [URL ...] [-lR]` | Immediate children or glob matches; with no URL, the declared buckets. `-l` adds size and modification time; `-R` lists every descendant |
+| `ls [URL ...] [-lR]` | Immediate children or glob matches; with no URL, the declared buckets. `-l` adds size and modification time; `-R` lists every descendant beneath a literal URL |
 | `cat URL [--raw]` | Print a file. Tabular JSON, JSONL, and parquet render as a table, and `--raw` writes stored bytes to stdout |
 | `head URL [-n N]` | Print the first N lines, or the first N rows of a parquet file |
 | `stat URL` | The object's metadata as the backend reports it |
@@ -67,11 +67,11 @@ that touch its buckets; the rest keep working.
 | `browse [URL]` | The interactive browser |
 
 `cp` and `mv` append each source basename when the destination is an existing directory,
-ends in `/`, or receives multiple sources. A single source copied to any other destination
-uses that destination as the exact output name. `-r` is required for a directory. Transfers
-stream through the machine running `fsutil`, including copies between two object stores.
-Quoted glob sources are expanded by the source filesystem. `mv` finishes all copies before
-removing any source.
+ends in `/`, receives multiple sources, or receives a glob expression. A single literal source
+copied to any other destination uses that destination as the exact output name. `-r` is required
+for a directory. Transfers stream through the machine running `fsutil`, including copies
+between two object stores. Quoted glob sources are expanded by the source filesystem. `mv`
+finishes all copies before removing any source.
 
 `rsync` compares size and modification time first. For equal-sized local files with different
 times it compares MD5; object stores use provider MD5 metadata when both sides supply it. When
