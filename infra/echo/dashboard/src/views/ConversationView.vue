@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import MarkdownBody from '../MarkdownBody.vue'
 import { fetchJson, formatDateTime, type WorkLogEntry, type WorkLogSummary } from '../types'
+
+const LOOKBACK_DAYS = 30
 
 const entries = ref<WorkLogSummary[]>([])
 const details = reactive(new Map<number, WorkLogEntry>())
@@ -13,7 +15,7 @@ const error = ref('')
 
 async function load(): Promise<void> {
   try {
-    entries.value = await fetchJson<WorkLogSummary[]>('/api/work_log?days=30&limit=100')
+    entries.value = await fetchJson<WorkLogSummary[]>(`/api/work_log?days=${LOOKBACK_DAYS}&limit=100`)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : 'Could not load the conversation'
   } finally {
@@ -40,7 +42,7 @@ async function toggle(entry: WorkLogSummary): Promise<void> {
   }
 }
 
-load()
+onMounted(load)
 </script>
 
 <template>
@@ -48,7 +50,7 @@ load()
     <p class="font-mono text-xs uppercase tracking-[0.18em] text-fern">Shared work log</p>
     <h1 class="mt-2 text-3xl font-semibold tracking-[-0.03em] sm:text-5xl">What agents are working on.</h1>
     <p class="mt-4 max-w-2xl text-sm leading-6 text-ink/55">
-      Recent milestones and active threads from Echo's agent conversation.
+      Recent milestones and active threads from Echo's shared agent work log.
     </p>
   </section>
 
@@ -62,7 +64,7 @@ load()
     </div>
 
     <div v-else-if="!entries.length && !error" class="border-y border-line py-12 text-center text-sm text-ink/45">
-      No conversation entries in the last 30 days.
+      No conversation entries in the last {{ LOOKBACK_DAYS }} days.
     </div>
 
     <div v-else class="divide-y divide-line border-y border-line">

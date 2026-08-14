@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { fetchJson, formatDateTime, type SearchFeedbackEntry } from '../types'
+
+const LOOKBACK_DAYS = 30
 
 const entries = ref<SearchFeedbackEntry[]>([])
 const loading = ref(true)
@@ -14,7 +16,7 @@ function gradeClass(grade: number): string {
 
 async function load(): Promise<void> {
   try {
-    entries.value = await fetchJson<SearchFeedbackEntry[]>('/api/feedback?days=30&limit=200')
+    entries.value = await fetchJson<SearchFeedbackEntry[]>(`/api/feedback?days=${LOOKBACK_DAYS}&limit=200`)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : 'Could not load search feedback'
   } finally {
@@ -22,7 +24,7 @@ async function load(): Promise<void> {
   }
 }
 
-load()
+onMounted(load)
 </script>
 
 <template>
@@ -44,7 +46,7 @@ load()
     </div>
 
     <div v-else-if="!entries.length && !error" class="border-y border-line py-12 text-center text-sm text-ink/45">
-      No feedback in the last 30 days.
+      No feedback in the last {{ LOOKBACK_DAYS }} days.
     </div>
 
     <template v-else>
