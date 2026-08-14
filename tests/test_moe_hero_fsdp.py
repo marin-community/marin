@@ -211,19 +211,27 @@ def test_fused_reverse_matches_stock_autodiff_end_to_end(cpu_mesh, monkeypatch, 
     """
     del cpu_mesh
 
-    def gate_silu_reverse(normalized, output_cotangent, gate, w_up, silu_derivative, gate_hidden):
+    def reverse(output_cotangent, x, norm_weight, w_down, w_up, inverse_rms, gate, silu_derivative, gate_hidden):
+        normalized = (x.astype(jnp.float32) * inverse_rms[:, None] * norm_weight).astype(x.dtype)
         gate_accumulator = output_cotangent * normalized * (gate * (1 - gate))
         w_up_cotangent = jnp.einsum("tr,td->rd", gate_hidden, gate_accumulator)
         gate_hidden_cotangent = jnp.einsum("td,rd->tr", gate_accumulator, w_up)
-        return output_cotangent * gate, gate_hidden_cotangent * silu_derivative, w_up_cotangent
+        gate_preactivation_cotangent = gate_hidden_cotangent * silu_derivative
+        w_down_cotangent = jnp.einsum("td,tr->dr", normalized, gate_preactivation_cotangent)
+        x_cotangent, norm_weight_cotangent = rgn.exact_rms_backward_fused_reference(
+            gate_preactivation_cotangent,
+            w_down,
+            output_cotangent * gate,
+            x,
+            norm_weight,
+            inverse_rms,
+        )
+        return x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent
 
     monkeypatch.setattr(
         rgn,
         "_backward_kernels",
-        lambda: (
-            gate_silu_reverse,
-            rgn.exact_rms_backward_fused_reference,
-        ),
+        lambda: reverse,
     )
     inputs = _norm_inputs(dtype)
     # The fused path reshards its input to the batch spec, so feed both paths an already-sharded
