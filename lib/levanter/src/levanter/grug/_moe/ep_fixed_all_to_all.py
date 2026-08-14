@@ -194,13 +194,19 @@ def _moe_mlp_ep_fixed_a2a_local(
             gate, up = jnp.split(hidden, [moe_dim], axis=-1)
             expert_output = (activation_fn(gate) * up) @ moe_w2_local[local_expert_index]
         with jax.named_scope("combine"):
-            returned = jax.lax.all_to_all(
-                expert_output.reshape(expert_shards, capacity, hidden_dim),
-                "expert",
-                split_axis=0,
-                concat_axis=0,
-                tiled=True,
-            )
+            expert_output = expert_output.reshape(expert_shards, capacity, hidden_dim)
+            if fp8_dispatch_wire:
+                # Same wire format on the return leg: expert outputs quantize per-row
+                # for the exchange; the backward (dispatch-side cotangent) stays bf16.
+                returned = _fp8_wire_all_to_all(expert_output)
+            else:
+                returned = jax.lax.all_to_all(
+                    expert_output,
+                    "expert",
+                    split_axis=0,
+                    concat_axis=0,
+                    tiled=True,
+                )
             output_parts.append(returned)
 
     with jax.named_scope("combine"):
