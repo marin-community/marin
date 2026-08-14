@@ -79,7 +79,7 @@ def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, backward: bool
         block = to_bf16(MoEMLP.init(cfg, key=random.PRNGKey(0)))
         shared = to_bf16(DenseMLP.init(hidden_dim, intermediate_dim, cfg.initializer_std, key=random.PRNGKey(1)))
         tokens = jnp.asarray(
-            np.random.default_rng(7).normal(size=(1, WORLD_SIZE * num_tokens, hidden_dim)),
+            np.random.default_rng(7).normal(size=(WORLD_SIZE, num_tokens, hidden_dim)),
             dtype=jnp.bfloat16,
         )
 
