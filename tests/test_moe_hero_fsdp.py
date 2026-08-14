@@ -211,8 +211,9 @@ def test_fused_reverse_matches_stock_autodiff_end_to_end(cpu_mesh, monkeypatch, 
     """
     del cpu_mesh
 
-    def reverse(output_cotangent, x, norm_weight, w_down, w_up, inverse_rms, gate, silu_derivative, gate_hidden):
+    def reverse(output_cotangent, x, norm_weight, w_down, w_up, inverse_rms, silu_derivative, gate_hidden):
         normalized = (x.astype(jnp.float32) * inverse_rms[:, None] * norm_weight).astype(x.dtype)
+        gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
         gate_accumulator = output_cotangent * normalized * (gate * (1 - gate))
         w_up_cotangent = jnp.einsum("tr,td->rd", gate_hidden, gate_accumulator)
         gate_hidden_cotangent = jnp.einsum("td,rd->tr", gate_accumulator, w_up)
