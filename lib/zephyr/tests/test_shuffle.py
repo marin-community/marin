@@ -181,6 +181,34 @@ def test_merge_sorted_chunks_basic(tmp_path):
     assert [item["v"] for item in merged] == [1, 3, 2, 4]
 
 
+def test_merge_sorted_chunks_retries_transient_parquet_schema_error(tmp_path, monkeypatch):
+    items = [{"k": "a", "v": 1}, {"k": "b", "v": 2}]
+    paths = []
+    for source_shard, item in enumerate(items):
+        data_path = str(tmp_path / f"shard-{source_shard:04d}/scatter/")
+        writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=source_shard)
+        writer.write(_items_to_dataframe([item], _key, None, 1))
+        paths.extend(writer.close())
+
+    collect_schema = pl.LazyFrame.collect_schema
+    calls = 0
+
+    def transient_failure(frame):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise pl.exceptions.ComputeError("parquet: File out of specification: Unexpected struct field type 15")
+        return collect_schema(frame)
+
+    monkeypatch.setattr(pl.LazyFrame, "collect_schema", transient_failure)
+    monkeypatch.setattr("zephyr.shuffle.time.sleep", lambda _: None)
+    shard = ScatterReader.from_sidecars(paths, target_shard=0)
+    merged = list(shard.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort")))
+
+    assert sorted(item["v"] for item in merged) == [1, 2]
+    assert calls > 1
+
+
 def test_merge_sorted_chunks_secondary_sort(tmp_path):
     """Secondary sort is encoded at write time; merge preserves total order."""
     items = [
