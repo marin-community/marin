@@ -439,10 +439,10 @@ def main(
                 collective_id=collective_id,
             )[0]
 
-        def fused_output_and_drops(*arguments: jax.Array) -> tuple[jax.Array, jax.Array]:
+        def fused_output_and_drops(routing: jax.Array, *arguments: jax.Array) -> tuple[jax.Array, jax.Array]:
             return mok_like_mlp(
                 arguments[0],
-                selected_experts,
+                routing,
                 *arguments[1:],
                 mesh=mesh,
                 runtime=runtime,
@@ -724,7 +724,9 @@ def main(
             arguments = (differentiable[0], combine_weights_from_router(router_matrix), *differentiable[2:])
             return reference_loss(*arguments)
 
-        actual_output, fused_dropped_assignments = jax.jit(fused_output_and_drops)(*differentiable)
+        actual_output, fused_dropped_assignments = jax.jit(fused_output_and_drops)(
+            selected_experts, *differentiable
+        )
         expected_output = jax.jit(reference_output)(*differentiable)
         actual_output.block_until_ready()
         expected_output.block_until_ready()
