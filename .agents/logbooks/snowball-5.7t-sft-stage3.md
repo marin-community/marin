@@ -40,3 +40,14 @@ uv run iris --cluster cw-rno2a job run \
     --version 2026.08.14.1 \
     --run
 ```
+
+## Launched instances
+
+### 2026-08-14 07:22 PDT
+
+- Job: `/benjaminfeuer/snowball-step105149-sft-s3-nemotron-terminal`
+- Source commit: `8274751d29`
+- Dirty tree: no
+- Source bundle: Iris workspace bundle from `8274751d29`
+- Initial state: the parent created eight H100×8 workers at interactive priority; all 64 processes joined the JAX rendezvous with zero failures and zero preemptions
+- Babysitter: 15-minute cadence; stop after the first finite training loss for this launch request, then continue campaign monitoring through completion
