@@ -20,6 +20,7 @@ from typing import Any
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
+from rigging.filesystem.s3_compat import DEFAULT_S3_CONNECTION_POOL_SIZE
 from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.compression import compression_for
 
@@ -28,20 +29,14 @@ from rigging.fsutil.compression import compression_for
 ROOT = ""
 
 _SCHEME_FOR_STORE = {StoreType.GCS: "gs", StoreType.R2: "s3", StoreType.COREWEAVE: "s3"}
-_DIRECTORY_TYPE = "directory"
+DIRECTORY_TYPE = "directory"
 
 # Preview reads are bounded: browsing should never pull a multi-gigabyte shard down a home
 # connection because someone pressed enter on it. `fsutil cp` fetches whole objects.
 MAX_PREVIEW_BYTES = 10 * 1024 * 1024
 
-# Bucket listings are network-bound, so a modest pool hides request latency without
-# creating enough concurrent requests to overwhelm an object-store endpoint.
-DEFAULT_LISTING_WORKERS = 32
-
-# Discover enough S3 directory levels to create parallel listing shards, then
-# switch to flat pagination. Deeper delimiter traversal can turn one wide key
-# namespace into millions of synthetic directory requests.
-_S3_SPLIT_DEPTH = 2
+# Bucket listings are network-bound; keep enough workers to fill the S3 pool.
+DEFAULT_LISTING_WORKERS = DEFAULT_S3_CONNECTION_POOL_SIZE
 
 
 @dataclasses.dataclass(frozen=True)
@@ -63,23 +58,17 @@ class Entry:
     is_dir: bool
 
 
-class ListingPhase(StrEnum):
-    """Stage of a recursive metadata listing."""
-
-    DISCOVERING = "discovering"
-    SCANNING = "scanning"
-
-
 @dataclasses.dataclass(frozen=True)
 class ListingPage:
     """One metadata page and aggregate progress for its listing."""
 
     path: str
     entries: list[dict[str, Any]]
-    phase: ListingPhase
     pages_completed: int
     prefixes_completed: int
     prefixes_discovered: int
+    workers_active: int
+    workers_total: int
 
 
 @dataclasses.dataclass(frozen=True)
@@ -94,6 +83,25 @@ class _ListingStats:
     size: int
     count: int
     directories: list[str]
+
+
+@dataclasses.dataclass(frozen=True)
+class _CompletedDirectoryListing:
+    path: str
+    entries: list[dict[str, Any]]
+    workers_active: int
+
+
+class _S3ListingMode(StrEnum):
+    PROBE = "probe"
+    EXPAND = "expand"
+
+
+@dataclasses.dataclass(frozen=True)
+class _S3ListingTask:
+    path: str
+    mode: _S3ListingMode
+    continuation_token: str | None = None
 
 
 def bucket_url(bucket: str) -> str:
@@ -157,7 +165,7 @@ def is_child(listed: str, name: str) -> bool:
 def _entry(parsed: StoragePath, item: dict, *, name: str | None = None, url: str | None = None) -> Entry:
     item_name = item["name"].rstrip("/")
     name = name or item_name.rsplit("/", 1)[-1]
-    is_dir = item["type"] == _DIRECTORY_TYPE
+    is_dir = item["type"] == DIRECTORY_TYPE
     return Entry(
         url=url or str(parsed / name),
         name=name,
@@ -213,7 +221,7 @@ def total_size(url: str) -> tuple[int, int]:
     """Return ``(bytes, object_count)`` under *url*."""
     fs, path = filesystem_for(url)
     info = fs.info(path)
-    if info["type"] != _DIRECTORY_TYPE:
+    if info["type"] != DIRECTORY_TYPE:
         return info.get("size", 0) or 0, 1
 
     total = 0
@@ -244,29 +252,31 @@ def _metadata_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage
     yield ListingPage(
         path=path,
         entries=root_entries,
-        phase=ListingPhase.SCANNING,
         pages_completed=1,
         prefixes_completed=1,
         prefixes_discovered=prefixes_discovered,
+        workers_active=1,
+        workers_total=workers,
     )
 
     pages_completed = 1
     prefixes_completed = 1
-    for directory, entries in _directory_listing_pages(fs, directories, workers):
+    for completed in _directory_listing_pages(fs, directories, workers):
         pages_completed += 1
         prefixes_completed += 1
-        prefixes_discovered += len(_listing_stats(directory, entries).directories)
+        prefixes_discovered += len(_listing_stats(completed.path, completed.entries).directories)
         yield ListingPage(
-            path=directory,
-            entries=entries,
-            phase=ListingPhase.SCANNING,
+            path=completed.path,
+            entries=completed.entries,
             pages_completed=pages_completed,
             prefixes_completed=prefixes_completed,
             prefixes_discovered=prefixes_discovered,
+            workers_active=completed.workers_active,
+            workers_total=workers,
         )
 
 
-def _directory_listing_pages(fs, directories: Iterable[str], workers: int) -> Iterator[tuple[str, list[dict[str, Any]]]]:
+def _directory_listing_pages(fs, directories: Iterable[str], workers: int) -> Iterator[_CompletedDirectoryListing]:
     queued = deque(directories)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         pending = {}
@@ -280,69 +290,53 @@ def _directory_listing_pages(fs, directories: Iterable[str], workers: int) -> It
                 directory = pending.pop(future)
                 entries = future.result()
                 queued.extend(_listing_stats(directory, entries).directories)
-                yield directory, entries
+                workers_active = len(pending) + 1
+                yield _CompletedDirectoryListing(directory, entries, workers_active)
 
 
 def _s3_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
-    leaf_prefixes: set[str] = set()
-    queued = deque([(path, None, 0)])
+    queued = deque([_S3ListingTask(path, _S3ListingMode.PROBE)])
     scheduled_prefixes = {path}
     pages_completed = 0
+    prefixes_completed = 0
     with ThreadPoolExecutor(max_workers=workers) as executor:
         pending = {}
         while queued or pending:
             while queued and len(pending) < workers:
-                listed, continuation_token, depth = queued.popleft()
-                future = executor.submit(_s3_listing_page, fs, listed, continuation_token, "/")
-                pending[future] = (listed, depth)
+                task = queued.popleft()
+                delimiter = "" if task.mode == _S3ListingMode.PROBE else "/"
+                future = executor.submit(_s3_listing_page, fs, task.path, task.continuation_token, delimiter)
+                pending[future] = task
 
             completed, _ = wait(pending, return_when=FIRST_COMPLETED)
             for future in completed:
-                listed, depth = pending.pop(future)
+                task = pending.pop(future)
                 entries, continuation_token = future.result()
                 pages_completed += 1
-                if continuation_token is not None:
-                    queued.appendleft((listed, continuation_token, depth))
-                for directory in _listing_stats(listed, entries).directories:
-                    if depth + 1 < _S3_SPLIT_DEPTH and directory not in scheduled_prefixes:
-                        scheduled_prefixes.add(directory)
-                        queued.append((directory, None, depth + 1))
-                    elif depth + 1 == _S3_SPLIT_DEPTH:
-                        leaf_prefixes.add(directory)
-                yield ListingPage(
-                    path=listed,
-                    entries=entries,
-                    phase=ListingPhase.DISCOVERING,
-                    pages_completed=pages_completed,
-                    prefixes_completed=0,
-                    prefixes_discovered=len(leaf_prefixes),
-                )
-
-        queued_pages = deque((prefix_path, None) for prefix_path in sorted(leaf_prefixes))
-        prefixes_completed = 0
-        pending = {}
-        while queued_pages or pending:
-            while queued_pages and len(pending) < workers:
-                listed, continuation_token = queued_pages.popleft()
-                future = executor.submit(_s3_listing_page, fs, listed, continuation_token, "")
-                pending[future] = listed
-
-            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
-            for future in completed:
-                listed = pending.pop(future)
-                entries, continuation_token = future.result()
-                pages_completed += 1
-                if continuation_token is not None:
-                    queued_pages.appendleft((listed, continuation_token))
+                if task.mode == _S3ListingMode.PROBE:
+                    if continuation_token is None:
+                        prefixes_completed += 1
+                    else:
+                        entries = []
+                        queued.appendleft(_S3ListingTask(task.path, _S3ListingMode.EXPAND))
                 else:
-                    prefixes_completed += 1
+                    if continuation_token is None:
+                        prefixes_completed += 1
+                    else:
+                        queued.appendleft(_S3ListingTask(task.path, _S3ListingMode.EXPAND, continuation_token))
+                    for directory in _listing_stats(task.path, entries).directories:
+                        if directory not in scheduled_prefixes:
+                            scheduled_prefixes.add(directory)
+                            queued.append(_S3ListingTask(directory, _S3ListingMode.PROBE))
+
                 yield ListingPage(
-                    path=listed,
+                    path=task.path,
                     entries=entries,
-                    phase=ListingPhase.SCANNING,
                     pages_completed=pages_completed,
                     prefixes_completed=prefixes_completed,
-                    prefixes_discovered=len(leaf_prefixes),
+                    prefixes_discovered=len(scheduled_prefixes),
+                    workers_active=len(pending) + 1,
+                    workers_total=workers,
                 )
 
 
@@ -356,7 +350,7 @@ def _s3_listing_page(
         kwargs["ContinuationToken"] = continuation_token
     response = fs.call_s3("list_objects_v2", **kwargs)
     entries = [
-        {"name": f"{bucket}/{item['Prefix']}", "size": 0, "type": _DIRECTORY_TYPE}
+        {"name": f"{bucket}/{item['Prefix']}", "size": 0, "type": DIRECTORY_TYPE}
         for item in response.get("CommonPrefixes", [])
     ]
     entries.extend(
@@ -379,7 +373,7 @@ def _listing_stats(listed: str, entries: list[dict[str, Any]]) -> _ListingStats:
         name = entry["name"]
         if not is_child(listed, name):
             continue
-        if entry["type"] == _DIRECTORY_TYPE:
+        if entry["type"] == DIRECTORY_TYPE:
             directories.append(name)
             continue
         total += entry.get("size", 0) or 0

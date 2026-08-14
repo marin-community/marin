@@ -325,7 +325,7 @@ def test_usage_scan_descends_to_exact_prefixes_below_threshold_and_orders_by_siz
     assert sum(group.stats.size_bytes for group in groups) == scan.root.total.size_bytes
 
 
-def test_usage_scan_streams_and_merges_s3_listing_pages(monkeypatch):
+def test_usage_scan_adaptively_splits_and_merges_s3_listing_pages(monkeypatch):
     modified = datetime(2025, 1, 1, tzinfo=UTC)
 
     class PagedS3FileSystem:
@@ -347,6 +347,12 @@ def test_usage_scan_streams_and_merges_s3_listing_pages(monkeypatch):
             prefix = kwargs["Prefix"]
             self.requested_prefixes.append(prefix)
             token = kwargs.get("ContinuationToken")
+            delimiter = kwargs["Delimiter"]
+            if prefix == "" and delimiter == "":
+                return {
+                    "Contents": [{"Key": "ignored-probe", "Size": 999, "LastModified": modified}],
+                    "NextContinuationToken": "split-root",
+                }
             if prefix == "" and token is None:
                 return {
                     "CommonPrefixes": [{"Prefix": "users/"}],
@@ -358,14 +364,25 @@ def test_usage_scan_streams_and_merges_s3_listing_pages(monkeypatch):
                     "CommonPrefixes": [{"Prefix": "scratch//"}],
                     "Contents": [{"Key": "root-b", "Size": 20, "LastModified": modified}],
                 }
+            if prefix == "users/" and delimiter == "":
+                return {
+                    "Contents": [{"Key": "users/ignored-probe", "Size": 999, "LastModified": modified}],
+                    "NextContinuationToken": "split-users",
+                }
             if prefix == "users/":
                 return {"CommonPrefixes": [{"Prefix": "users/iris/"}]}
+            if prefix == "users/iris/" and delimiter == "":
+                return {
+                    "Contents": [{"Key": "users/iris/ignored-probe", "Size": 999, "LastModified": modified}],
+                    "NextContinuationToken": "split-iris",
+                }
             if prefix == "users/iris/":
-                assert kwargs["Delimiter"] == ""
+                return {"CommonPrefixes": [{"Prefix": "users/iris/archive/"}]}
+            if prefix == "users/iris/archive/":
                 return {
                     "Contents": [
-                        {"Key": "users/iris/a/data", "Size": 10, "LastModified": modified},
-                        {"Key": "users/iris/b/data", "Size": 20, "LastModified": modified},
+                        {"Key": "users/iris/archive/a", "Size": 10, "LastModified": modified},
+                        {"Key": "users/iris/archive/b", "Size": 20, "LastModified": modified},
                     ]
                 }
             assert prefix == "scratch//"
@@ -382,10 +399,9 @@ def test_usage_scan_streams_and_merges_s3_listing_pages(monkeypatch):
         "scratch/": 40,
         "users/": 30,
     }
-    assert set(fs.requested_prefixes) == {"", "scratch//", "users/", "users/iris/"}
-    assert progress[-1].phase == listing.ListingPhase.SCANNING
-    assert progress[-1].listing_pages == 5
-    assert progress[-1].prefixes_completed == progress[-1].prefixes_discovered == 1
+    assert set(fs.requested_prefixes) == {"", "scratch//", "users/", "users/iris/", "users/iris/archive/"}
+    assert progress[-1].listing_pages == 9
+    assert progress[-1].prefixes_completed == progress[-1].prefixes_discovered == 5
     assert listing.total_size("s3://bucket") == (100, 5)
 
 

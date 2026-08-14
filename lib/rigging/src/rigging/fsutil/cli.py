@@ -28,7 +28,6 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.listing import (
     ROOT,
     Entry,
-    ListingPhase,
     Preview,
     list_entries,
     read_decompressed_preview,
@@ -57,6 +56,7 @@ _S3_DELETE_BATCH = 1000
 _GCS_DELETE_BATCH = 20
 _INTERACTIVE_PROGRESS_INTERVAL = 0.2
 _LOG_PROGRESS_INTERVAL = 10.0
+_ACTIVITY_BAR_WIDTH = 8
 
 
 @click.group(invoke_without_command=True)
@@ -162,7 +162,12 @@ def du(url: str) -> None:
     type=click.IntRange(min=1, max=20),
     help="Maximum path components retained for grouping.",
 )
-@click.option("--workers", default=DEFAULT_USAGE_WORKERS, show_default=True, type=click.IntRange(min=1, max=128))
+@click.option(
+    "--workers",
+    default=DEFAULT_USAGE_WORKERS,
+    show_default=True,
+    type=click.IntRange(min=1, max=DEFAULT_USAGE_WORKERS),
+)
 @click.option("-o", "--output", type=click.Path(dir_okay=False, path_type=Path), help="Write Markdown here.")
 def usage(url: str, prefix_threshold: str, prefix_depth: int, workers: int, output: Path | None) -> None:
     """Scan URL metadata and rank old, large prefixes for cleanup."""
@@ -182,9 +187,7 @@ def usage(url: str, prefix_threshold: str, prefix_depth: int, workers: int, outp
         latest_progress = progress
         now = time.monotonic()
         interval = _INTERACTIVE_PROGRESS_INTERVAL if interactive else _LOG_PROGRESS_INTERVAL
-        complete = progress.phase == ListingPhase.SCANNING and (
-            progress.prefixes_completed == progress.prefixes_discovered
-        )
+        complete = progress.prefixes_completed == progress.prefixes_discovered
         if not complete and now - last_update < interval:
             return
         line = _scan_progress_line(progress)
@@ -214,17 +217,17 @@ def usage(url: str, prefix_threshold: str, prefix_depth: int, workers: int, outp
 
 
 def _scan_progress_line(progress: ScanProgress) -> str:
-    rate = progress.stats.object_count / progress.elapsed_seconds if progress.elapsed_seconds else 0.0
-    details = (
-        f"{progress.listing_pages:,} pages | {progress.stats.object_count:,} objects | "
-        f"{format_size(progress.stats.size_bytes)} | {rate:,.0f} obj/s"
-    )
-    if progress.phase == ListingPhase.DISCOVERING:
-        spinner = "|/-\\"[progress.listing_pages % 4]
-        return f"{spinner} Discovering {progress.current_prefix} | {details}"
-
+    object_rate = progress.stats.object_count / progress.elapsed_seconds if progress.elapsed_seconds else 0.0
+    byte_rate = progress.stats.size_bytes / progress.elapsed_seconds if progress.elapsed_seconds else 0.0
+    filled = max(1, round(_ACTIVITY_BAR_WIDTH * progress.workers_active / progress.workers_total))
+    activity = f"[{'█' * filled}{'░' * (_ACTIVITY_BAR_WIDTH - filled)}]"
     remaining = max(0, progress.prefixes_discovered - progress.prefixes_completed)
-    return f"Scanning {progress.current_prefix} | {remaining:,} prefixes open | {details}"
+    return (
+        f"{activity} {progress.workers_active}/{progress.workers_total} threads | {remaining:,} open | "
+        f"{progress.listing_pages:,} pages | {progress.stats.object_count:,} objects | "
+        f"{format_size(progress.stats.size_bytes)} | {object_rate:,.0f} obj/s | "
+        f"{format_size(round(byte_rate))}/s | scanning {progress.current_prefix}"
+    )
 
 
 def _finished_scan_line(progress: ScanProgress) -> str:

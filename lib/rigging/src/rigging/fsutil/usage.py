@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 
 from rigging.fsutil.listing import (
     DEFAULT_LISTING_WORKERS,
-    ListingPhase,
+    DIRECTORY_TYPE,
     entry_mtime,
     is_child,
     metadata_listing_pages,
@@ -70,11 +70,12 @@ class UsageScan:
 class ScanProgress:
     """Monotonic progress observed while metadata pages complete."""
 
-    phase: ListingPhase
     current_prefix: str
     listing_pages: int
     prefixes_completed: int
     prefixes_discovered: int
+    workers_active: int
+    workers_total: int
     stats: UsageStats
     elapsed_seconds: float
 
@@ -119,7 +120,7 @@ def scan_usage(
         root_path = root_path or page.path.removesuffix("/")
         listing_pages = page.pages_completed
         for entry in page.entries:
-            if entry.get("type") == "directory":
+            if entry.get("type") == DIRECTORY_TYPE:
                 continue
             stats = _object_usage(entry)
             if stats is None or not is_child(page.path, entry["name"]):
@@ -129,11 +130,12 @@ def scan_usage(
         if progress is not None:
             progress(
                 ScanProgress(
-                    phase=page.phase,
                     current_prefix=page.path,
                     listing_pages=page.pages_completed,
                     prefixes_completed=page.prefixes_completed,
                     prefixes_discovered=page.prefixes_discovered,
+                    workers_active=page.workers_active,
+                    workers_total=page.workers_total,
                     stats=observed,
                     elapsed_seconds=now - started,
                 )
