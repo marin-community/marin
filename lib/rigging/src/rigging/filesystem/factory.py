@@ -20,6 +20,7 @@ import uuid
 from collections.abc import Generator
 from typing import Any, cast
 
+import aiohttp
 import fsspec
 from fsspec.implementations.local import LocalFileSystem
 
@@ -152,7 +153,10 @@ _TRANSIENT_S3_MESSAGE_FRAGMENTS = (
 )
 
 
-def _is_transient_s3_error(exc: BaseException) -> bool:
+def is_transient_s3_error(exc: BaseException) -> bool:
+    """Return whether an S3 operation failed before receiving a complete response."""
+    if isinstance(exc, (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, TimeoutError)):
+        return True
     response = getattr(exc, "response", None)
     if isinstance(response, dict):
         code = response.get("Error", {}).get("Code")
@@ -165,7 +169,7 @@ def _is_transient_s3_error(exc: BaseException) -> bool:
 def _mv_with_retry(fs: Any, src: str, dst: str) -> None:
     retry_with_backoff(
         lambda: fs.mv(src, dst, recursive=True),
-        retryable=_is_transient_s3_error,
+        retryable=is_transient_s3_error,
         max_attempts=4,
         backoff=ExponentialBackoff(initial=1.0, maximum=8.0, factor=2.0),
         operation=f"atomic_rename fs.mv {src} -> {dst}",

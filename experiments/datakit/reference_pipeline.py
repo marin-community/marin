@@ -806,6 +806,7 @@ def reference_datakit_steps(
         recovery_timeout=1_800,
         ready_timeout=1_800,
         lookup_batch_size=128,
+        shards_per_worker=1,
     )
     verified_dedup = verify_fuzzy_dups_step(
         name="datakit/verify_fuzzy_dups",

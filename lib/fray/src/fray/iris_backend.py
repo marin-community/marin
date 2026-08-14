@@ -743,6 +743,7 @@ class FrayIrisClient:
         *args: Any,
         name: str,
         resources: ResourceConfig = ResourceConfig(),
+        environment: EnvironmentConfig | None = None,
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorHandle:
@@ -752,6 +753,7 @@ class FrayIrisClient:
             name=name,
             count=1,
             resources=resources,
+            environment=environment,
             actor_config=actor_config,
             **kwargs,
         )
@@ -764,6 +766,7 @@ class FrayIrisClient:
         name: str,
         count: int,
         resources: ResourceConfig = ResourceConfig(),
+        environment: EnvironmentConfig | None = None,
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> IrisActorGroup:
@@ -774,7 +777,7 @@ class FrayIrisClient:
         """
         iris_resources = convert_resources(resources)
         iris_constraints = convert_constraints(resources)
-        iris_environment = convert_environment(None, device=resources.device)
+        iris_environment = convert_environment(environment, device=resources.device)
 
         # Actor group replicas are independent workers, not an NVLink collective.
         if count > 1 and isinstance(resources.device, GpuConfig):

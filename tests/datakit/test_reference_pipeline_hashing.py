@@ -31,7 +31,9 @@ from marin.processing.classification.deduplication.verify_fuzzy_dups import Fuzz
 from experiments.datakit import reference_pipeline
 from experiments.datakit.fuzzy_validation import (
     FOCUS_SOURCE_NAME,
+    BenchmarkSource,
     _legacy_candidate_input_steps,
+    _select_benchmark_sources,
     build_fuzzy_validation_step,
     build_repacked_fuzzy_validation_step,
 )
@@ -95,6 +97,31 @@ def test_benchmark_routes_every_stage_under_one_prefix():
 
     assert all(step.output_path.startswith("gs://temp/benchmark/") for step in steps)
     assert routed.fuzzy_dedup.deps == list(routed.minhash.values())
+
+
+def test_benchmark_document_target_selects_a_stable_source_prefix():
+    sizes = {
+        "too-large": 8_100_000,
+        "large": 7_807_075,
+        "medium": 192_436,
+        "small": 488,
+        "tail": 22,
+        "empty": 0,
+    }
+    sources = [
+        BenchmarkSource(
+            source_key=source_key,
+            normalized_artifact_path=f"gs://normalized/{source_key}",
+            minhash_artifact_path=f"gs://minhash/{source_key}",
+            documents=documents,
+        )
+        for source_key, documents in reversed(sizes.items())
+    ]
+
+    selected = _select_benchmark_sources(sources, 8_000_000)
+
+    assert [source.source_key for source in selected] == ["large", "medium", "small", "tail"]
+    assert sum(source.documents for source in selected) == 8_000_021
 
 
 def test_no_region_path_in_hash_attrs_except_known_bloom_gap():
@@ -265,7 +292,9 @@ def test_repacked_fuzzy_validation_uses_current_normalized_and_minhash_steps():
         validation_output_path_prefix="s3://production-bucket/marin",
         validation_step_name="datakit/verify_fuzzy_dups",
         validation_scale=SMOKE_SCALE,
-        store_config=FuzzyVerificationStoreConfig(recovery_timeout=30, ready_timeout=30, lookup_batch_size=8),
+        store_config=FuzzyVerificationStoreConfig(
+            recovery_timeout=30, ready_timeout=30, lookup_batch_size=8, shards_per_worker=1
+        ),
         coordinator_resources=ResourceConfig(cpu=1, ram="1g"),
         task_resources=ResourceConfig(cpu=1, ram="1g"),
     )
