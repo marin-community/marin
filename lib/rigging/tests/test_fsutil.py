@@ -325,7 +325,7 @@ def test_usage_scan_descends_to_exact_prefixes_below_threshold_and_orders_by_siz
     assert sum(group.stats.size_bytes for group in groups) == scan.root.total.size_bytes
 
 
-def test_usage_scan_adaptively_splits_and_merges_s3_listing_pages(monkeypatch):
+def test_usage_scan_splits_large_s3_prefixes_to_bounded_depth(monkeypatch):
     modified = datetime(2025, 1, 1, tzinfo=UTC)
 
     class PagedS3FileSystem:
@@ -346,9 +346,9 @@ def test_usage_scan_adaptively_splits_and_merges_s3_listing_pages(monkeypatch):
         def call_s3(self, method, **kwargs):
             assert method == "list_objects_v2"
             prefix = kwargs["Prefix"]
-            self.requested_prefixes.append(prefix)
             token = kwargs.get("ContinuationToken")
             delimiter = kwargs["Delimiter"]
+            self.requested_prefixes.append((prefix, delimiter, token))
             if prefix == "" and delimiter == "":
                 return {
                     "Contents": [{"Key": "ignored-probe", "Size": 999, "LastModified": modified}],
@@ -379,13 +379,13 @@ def test_usage_scan_adaptively_splits_and_merges_s3_listing_pages(monkeypatch):
                 }
             if prefix == "users/iris/":
                 return {"CommonPrefixes": [{"Prefix": "users/iris/archive/"}]}
-            if prefix == "users/iris/archive/":
+            if prefix == "users/iris/archive/" and token is None:
                 return {
-                    "Contents": [
-                        {"Key": "users/iris/archive/a", "Size": 10, "LastModified": modified},
-                        {"Key": "users/iris/archive/b", "Size": 20, "LastModified": modified},
-                    ]
+                    "Contents": [{"Key": "users/iris/archive/a", "Size": 10, "LastModified": modified}],
+                    "NextContinuationToken": "archive-page-2",
                 }
+            if prefix == "users/iris/archive/":
+                return {"Contents": [{"Key": "users/iris/archive/b", "Size": 20, "LastModified": modified}]}
             assert prefix == "scratch//"
             return {"Contents": [{"Key": "scratch//data", "Size": 40, "LastModified": modified}]}
 
@@ -400,8 +400,15 @@ def test_usage_scan_adaptively_splits_and_merges_s3_listing_pages(monkeypatch):
         "scratch/": 40,
         "users/": 30,
     }
-    assert set(fs.requested_prefixes) == {"", "scratch//", "users/", "users/iris/", "users/iris/archive/"}
-    assert progress[-1].listing_pages == 9
+    assert {prefix for prefix, _, _ in fs.requested_prefixes} == {
+        "",
+        "scratch//",
+        "users/",
+        "users/iris/",
+        "users/iris/archive/",
+    }
+    assert all(delimiter == "" for prefix, delimiter, _ in fs.requested_prefixes if prefix == "users/iris/archive/")
+    assert progress[-1].listing_pages == 10
     assert progress[-1].prefixes_completed == progress[-1].prefixes_discovered == 5
     assert listing.total_size("s3://bucket") == (100, 5)
 

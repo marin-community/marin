@@ -60,9 +60,9 @@ that touch its buckets; the rest keep working.
 | `browse [URL]` | The interactive browser |
 
 `du` scans prefixes with up to 128 concurrent metadata-bearing listings. S3 prefixes
-that exceed one listing page are split at the next `/` and returned to the same worker
-queue, so parallelism follows the shape of the bucket. Recursive `rm` uses S3's
-1,000-key bulk delete and GCS's 20-key batch delete, with up to eight batches in flight.
+that exceed one listing page are split at the next `/` through three directory levels,
+then paginated flat. Recursive `rm` uses S3's 1,000-key bulk delete and GCS's 20-key
+batch delete, with up to eight batches in flight.
 
 `usage` uses the same parallel metadata-page scanner as `du` and writes a Markdown
 report. Starting at the bucket root, it descends into every prefix at or above the
@@ -71,10 +71,10 @@ report. Starting at the bucket root, it descends into every prefix at or above t
 or `512GiB`. `--prefix-depth` controls how many path components the in-memory scan
 retains, with a default of three.
 
-An interactive terminal shows active listing threads, the prefix currently returning
-pages, remaining open prefixes, listing pages, objects, logical bytes cataloged, and
-object and byte rates. Captured logs get the same counters every ten seconds without
-terminal control characters.
+An interactive terminal shows active listing threads, a cropped prefix currently
+returning pages, remaining open prefixes, listing pages, objects, logical bytes
+cataloged, and object and byte rates. Captured logs get the same counters every ten
+seconds without terminal control characters.
 
 Deletion candidates are ranked by stale TiB-years: prefix size in TiB multiplied by the
 years since its newest object write. This favors prefixes that are both large and

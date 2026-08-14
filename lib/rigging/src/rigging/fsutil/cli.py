@@ -57,6 +57,7 @@ _GCS_DELETE_BATCH = 20
 _INTERACTIVE_PROGRESS_INTERVAL = 0.2
 _LOG_PROGRESS_INTERVAL = 10.0
 _ACTIVITY_BAR_WIDTH = 8
+_MAX_PROGRESS_PATH_LENGTH = 60
 
 
 @click.group(invoke_without_command=True)
@@ -226,8 +227,19 @@ def _scan_progress_line(progress: ScanProgress) -> str:
         f"{activity} {progress.workers_active}/{progress.workers_total} threads | {remaining:,} open | "
         f"{progress.listing_pages:,} pages | {progress.stats.object_count:,} objects | "
         f"{format_size(progress.stats.size_bytes)} | {object_rate:,.0f} obj/s | "
-        f"{format_size(round(byte_rate))}/s | scanning {progress.current_prefix}"
+        f"{format_size(round(byte_rate))}/s | scanning {_cropped_progress_path(progress.current_prefix)}"
     )
+
+
+def _cropped_progress_path(path: str) -> str:
+    if len(path) <= _MAX_PROGRESS_PATH_LENGTH:
+        return path
+    root, separator, tail = path.partition("/")
+    head = f"{root}{separator}"
+    suffix_length = _MAX_PROGRESS_PATH_LENGTH - len(head) - 1
+    if suffix_length <= 0:
+        return f"…{path[-(_MAX_PROGRESS_PATH_LENGTH - 1) :]}"
+    return f"{head}…{tail[-suffix_length:]}"
 
 
 def _finished_scan_line(progress: ScanProgress) -> str:

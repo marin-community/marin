@@ -36,6 +36,7 @@ MAX_PREVIEW_BYTES = 10 * 1024 * 1024
 
 # Bucket listings are network-bound.
 DEFAULT_LISTING_WORKERS = 128
+_S3_MAX_SPLIT_DEPTH = 3
 
 
 @dataclasses.dataclass(frozen=True)
@@ -94,12 +95,14 @@ class _CompletedDirectoryListing:
 class _S3ListingMode(StrEnum):
     PROBE = "probe"
     EXPAND = "expand"
+    FLAT = "flat"
 
 
 @dataclasses.dataclass(frozen=True)
 class _S3ListingTask:
     path: str
     mode: _S3ListingMode
+    depth: int = 0
     continuation_token: str | None = None
 
 
@@ -314,7 +317,7 @@ def _s3_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
         while queued or pending:
             while queued and len(pending) < workers:
                 task = queued.popleft()
-                delimiter = "" if task.mode == _S3ListingMode.PROBE else "/"
+                delimiter = "/" if task.mode == _S3ListingMode.EXPAND else ""
                 future = executor.submit(_s3_listing_page, fs, task.path, task.continuation_token, delimiter)
                 pending[future] = task
 
@@ -326,18 +329,35 @@ def _s3_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
                 if task.mode == _S3ListingMode.PROBE:
                     if continuation_token is None:
                         prefixes_completed += 1
-                    else:
+                    elif task.depth < _S3_MAX_SPLIT_DEPTH:
                         entries = []
-                        queued.appendleft(_S3ListingTask(task.path, _S3ListingMode.EXPAND))
+                        queued.appendleft(_S3ListingTask(task.path, _S3ListingMode.EXPAND, depth=task.depth))
+                    else:
+                        queued.appendleft(
+                            _S3ListingTask(
+                                task.path,
+                                _S3ListingMode.FLAT,
+                                depth=task.depth,
+                                continuation_token=continuation_token,
+                            )
+                        )
                 else:
                     if continuation_token is None:
                         prefixes_completed += 1
                     else:
-                        queued.appendleft(_S3ListingTask(task.path, _S3ListingMode.EXPAND, continuation_token))
-                    for directory in _listing_stats(task.path, entries).directories:
-                        if directory not in scheduled_prefixes:
-                            scheduled_prefixes.add(directory)
-                            queued.append(_S3ListingTask(directory, _S3ListingMode.PROBE))
+                        queued.appendleft(
+                            _S3ListingTask(
+                                task.path,
+                                task.mode,
+                                depth=task.depth,
+                                continuation_token=continuation_token,
+                            )
+                        )
+                    if task.mode == _S3ListingMode.EXPAND:
+                        for directory in _listing_stats(task.path, entries).directories:
+                            if directory not in scheduled_prefixes:
+                                scheduled_prefixes.add(directory)
+                                queued.append(_S3ListingTask(directory, _S3ListingMode.PROBE, depth=task.depth + 1))
 
                 yield ListingPage(
                     path=task.path,
