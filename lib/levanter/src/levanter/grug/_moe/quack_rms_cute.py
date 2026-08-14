@@ -147,6 +147,21 @@ def _max_active_clusters(cluster_mnk: tuple[int, int, int]) -> int:
 
 
 @cute_launcher_factory
+def _build_cute_gate_accumulator_launcher(*, a_dtype: type[cutlass.Numeric]):
+    @cute.jit
+    def launcher(stream, mNormalizedAndGateAccumulator, mOutputCotangent, mGate):
+        _GateAccumulatorInplace(a_dtype)(
+            mNormalizedAndGateAccumulator,
+            mOutputCotangent,
+            mGate,
+            mNormalizedAndGateAccumulator,
+            stream,
+        )
+
+    return launcher
+
+
+@cute_launcher_factory
 def _build_gate_silu_reverse_launcher(
     *,
     a_dtype: type[cutlass.Numeric],
@@ -639,6 +654,34 @@ def quack_gate_accumulator_inplace(
         output_cotangent,
         gate,
     )
+
+
+def _quack_cute_gate_accumulator_inplace(
+    normalized: jax.Array,
+    output_cotangent: jax.Array,
+    gate: jax.Array,
+) -> jax.Array:
+    """Run the CuTe gate-accumulator stage alone for accelerator parity checks."""
+    if normalized.ndim != 2 or normalized.shape != output_cotangent.shape or normalized.shape != gate.shape:
+        raise ValueError("gate accumulator inputs must be matching rank-2 arrays")
+    if (
+        normalized.dtype != jnp.bfloat16
+        or output_cotangent.dtype != normalized.dtype
+        or gate.dtype != normalized.dtype
+    ):
+        raise ValueError("gate accumulator requires matching BF16 inputs")
+    rows, hidden_dim = normalized.shape
+    launcher = _build_cute_gate_accumulator_launcher(a_dtype=_cute_dtype(normalized.dtype))
+    matrix_spec = cjax.TensorSpec(mode=_MATRIX_MODE, divisibility=_MATRIX_DIVISIBILITY, static=False)
+    call = cutlass_call(
+        launcher,
+        input_output_aliases={0: 0},
+        output_shape_dtype=jax.ShapeDtypeStruct((1, rows, hidden_dim), normalized.dtype),
+        input_spec=(matrix_spec,) * 3,
+        output_spec=(matrix_spec,),
+        use_static_tensors=False,
+    )
+    return call(normalized[None, :, :], output_cotangent[None, :, :], gate[None, :, :])[0]
 
 
 def _quack_coda_gate_silu_reverse_components(
