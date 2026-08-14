@@ -2167,8 +2167,13 @@ ffi::Error ForwardBf16(
         lease.reset();
         return ffi::Error::Success();
       } catch (const std::exception& closure_error) {
+        // Report the original failure, not just the closure's. Once a device trap poisons the
+        // context every later CUDA call returns the same sticky error, so the closure error is
+        // usually a restatement of the damage rather than its cause -- and reporting it alone
+        // discards the only description of what actually went wrong.
         TerminalCudaFailure(
-            std::string("could not close a rank-local forward failure: ") + closure_error.what());
+            std::string("could not close a rank-local forward failure: ") + exc.what() +
+            " (closure failed with: " + closure_error.what() + ")");
       }
     }
     return ffi::Error::Internal(exc.what());
@@ -2515,7 +2520,8 @@ ffi::Error BackwardBf16(
         return ffi::Error::Success();
       } catch (const std::exception& closure_error) {
         TerminalCudaFailure(
-            std::string("could not close a rank-local backward failure: ") + closure_error.what());
+            std::string("could not close a rank-local backward failure: ") + exc.what() +
+            " (closure failed with: " + closure_error.what() + ")");
       }
     }
     return ffi::Error::Internal(exc.what());
