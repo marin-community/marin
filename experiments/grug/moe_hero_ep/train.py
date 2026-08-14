@@ -90,6 +90,9 @@ def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
         *_XLA_FLAG_DEFAULTS,
+        # autoresearch: concurrent execution of independent regions inside captured
+        # CUDA graphs (command buffers are on; collectives stay eager per #5675).
+        "--xla_gpu_graph_enable_concurrent_region=true",
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
