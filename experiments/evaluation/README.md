@@ -175,6 +175,19 @@ all selected YAML and JSON files against Marin's pinned Harbor `JobConfig` befor
 File-backed launches support one agent and one dataset; multiple agents, multiple datasets, and
 explicit `tasks` are rejected.
 
+Resume an interrupted Harbor evaluation by selecting its existing results root:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --evals tb2 \
+  --resume-results-path s3://marin-us-east-02a/marin/evals/<run-id>/results
+```
+
+`--resume-results-path` requires exactly one Harbor evaluation. Marin verifies that the root belongs
+to the selected dataset before submitting; Harbor retains compatible completed trials and schedules
+the remaining trials according to its resume policy.
+
 The pinned subprocess returns deterministic policy JSON, a SHA-256 digest, and dataset/agent/environment
 metadata. Marin treats the JSON as opaque. At execution it supplies a separate overlay for `job_name`,
 `jobs_dir`, the served model, endpoint, materialized dataset path, model-catalog kwargs, and `--limit`.

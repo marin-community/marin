@@ -821,6 +821,53 @@ def test_launch_accepts_registry_ifeval_and_repeated_harbor_configs(tmp_path, mo
     assert "eval=second-policy" in result.output
 
 
+def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    policy = _write_harbor_config(tmp_path / "aime-policy.yaml")
+    output_dir = "memory://existing-harbor-results"
+    (StoragePath(output_dir) / "harbor_jobs" / "harbor_aime_0123456789ab" / "config.json").write_text("{}")
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--harbor-config",
+            str(policy),
+            "--resume-results-path",
+            output_dir,
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"results={output_dir}" in result.output
+
+
+def test_launch_rejects_resume_for_multiple_evaluations(monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--evals",
+            "aime-harbor,tb2",
+            "--resume-results-path",
+            "memory://existing-harbor-results",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "requires exactly one Harbor evaluation" in result.output
+
+
 def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
