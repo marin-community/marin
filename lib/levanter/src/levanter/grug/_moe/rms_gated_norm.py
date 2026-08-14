@@ -37,7 +37,7 @@ class RmsGatedNormResiduals(NamedTuple):
 
 
 class RmsGatedNormSelectiveResiduals(NamedTuple):
-    """Low-rank preactivation retained to avoid repeating the down projection."""
+    """Low-rank forward values retained to preserve the stock activation rounding."""
 
     x: jax.Array
     norm_weight: jax.Array
@@ -45,6 +45,7 @@ class RmsGatedNormSelectiveResiduals(NamedTuple):
     w_up: jax.Array
     inverse_rms: jax.Array
     gate_preactivation: jax.Array
+    gate_hidden: jax.Array
 
 
 class GatedNormUpCotangents(NamedTuple):
@@ -350,6 +351,7 @@ def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
         w_up=w_up,
         inverse_rms=residuals.inverse_rms,
         gate_preactivation=residuals.gate_preactivation,
+        gate_hidden=residuals.gate_hidden,
     )
 
 
@@ -363,8 +365,7 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     normalized = (x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None] * residuals.norm_weight).astype(
         x_flat.dtype
     )
-    gate_hidden = jax.nn.silu(residuals.gate_preactivation)
-    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, residuals.w_up))
+    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", residuals.gate_hidden, residuals.w_up))
     _, silu_derivative = jax.jvp(
         jax.nn.silu,
         (residuals.gate_preactivation,),
@@ -376,7 +377,7 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         gate,
         residuals.w_up,
         silu_derivative,
-        gate_hidden,
+        residuals.gate_hidden,
     )
     normalized_for_w_down = (
         x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None] * residuals.norm_weight
