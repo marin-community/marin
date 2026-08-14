@@ -16,6 +16,7 @@ from functools import partial
 from itertools import batched, chain, groupby
 from typing import Any
 
+import dupekit
 import pyarrow as pa
 import pyarrow.parquet as pq
 import zstandard as zstd
@@ -43,6 +44,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import MinHashA
 from marin.processing.classification.deduplication.fuzzy_verification import (
     FuzzyVerificationParams,
     PreparedVerificationText,
+    VerificationRejection,
     VerificationResult,
     line_count_ratio,
     prepare_verification_text,
@@ -289,7 +291,17 @@ def _copy_to_arrow_buffer(data: bytes, memory_pool: pa.MemoryPool) -> pa.Buffer:
     return buffer
 
 
-def _candidate_documents(shards: list[VerificationShard]) -> Iterator[tuple[tuple[int, str], pa.Buffer]]:
+@dataclass(frozen=True)
+class _StoredDocument:
+    compressed_text: pa.Buffer
+    chars: int
+    signature: dupekit.TokenNgramSignature
+
+
+def _candidate_documents(
+    shards: list[VerificationShard],
+    ngram_size: int,
+) -> Iterator[tuple[tuple[int, str], _StoredDocument]]:
     """Join candidate IDs to compressed text without a normalized row-order requirement."""
     value_memory_pool = pa.mimalloc_memory_pool()
     with _system_arrow_memory_pool() as memory_pool:
@@ -317,14 +329,19 @@ def _candidate_documents(shards: list[VerificationShard]) -> Iterator[tuple[tupl
                     counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/repeated_source_ids", 1)
                     continue
                 candidate_ids[source_id] = None
-                text = (source["text"] or "").encode()
-                compressed_bytes = compressor.compress(text)
+                text = source["text"] or ""
+                encoded_text = text.encode()
+                compressed_bytes = compressor.compress(encoded_text)
                 compressed_text = _copy_to_arrow_buffer(compressed_bytes, value_memory_pool)
                 loaded += 1
-                text_bytes += len(text)
+                text_bytes += len(encoded_text)
                 stored_bytes += len(compressed_bytes)
-                del text, compressed_bytes
-                yield (shard.file_idx, candidate_id), compressed_text
+                yield (shard.file_idx, candidate_id), _StoredDocument(
+                    compressed_text=compressed_text,
+                    chars=len(text),
+                    signature=dupekit.TokenNgramSignature(text, ngram_size),
+                )
+                del text, encoded_text, compressed_bytes
 
             missing_id = next(
                 (candidate_id for candidate_id in candidate_ids.values() if candidate_id is not None),
@@ -350,6 +367,10 @@ def _decompress_document_text(value: pa.Buffer) -> str:
         decompressor = zstd.ZstdDecompressor()
         _DOCUMENT_TEXT_CODECS.decompressor = decompressor
     return decompressor.decompress(value).decode()
+
+
+def _decompress_stored_documents(inputs: list[tuple[_StoredDocument, None]]) -> list[str]:
+    return [_decompress_document_text(stored.compressed_text) for stored, _ in inputs]
 
 
 def _joined_cluster_members(shards: list[VerificationShard]) -> Iterator[dict[str, Any]]:
@@ -403,7 +424,7 @@ def _document_partition(positions: Mapping[int, int], key: tuple[int, str]) -> i
 
 def _attach_document_text(
     records: Iterator[dict[str, Any]],
-    document_store: MemoryStore[tuple[int, str], pa.Buffer],
+    document_store: MemoryStore[tuple[int, str], _StoredDocument],
     lookup_batch_size: int,
     control: _TextAttachmentControl | None = None,
 ) -> Iterator[dict[str, Any]]:
@@ -412,9 +433,11 @@ def _attach_document_text(
         if control is not None and not control.enabled:
             yield from record_batch
             continue
-        compressed_texts = document_store.get_many([(record["file_idx"], record["id"]) for record in record_batch])
-        for record, compressed_text in zip(record_batch, compressed_texts, strict=True):
-            text = _decompress_document_text(compressed_text)
+        texts = document_store.compute_many(
+            [((record["file_idx"], record["id"]), None) for record in record_batch],
+            _decompress_stored_documents,
+        )
+        for record, text in zip(record_batch, texts, strict=True):
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/candidate_text_chars", len(text))
             yield {**record, "text": text}
 
@@ -465,6 +488,18 @@ class _RetainedRepresentative:
     kind: RepresentativeKind
 
 
+@dataclass(frozen=True)
+class _SignatureRejection:
+    """A definitive rejection whose exact similarity scores were not materialized."""
+
+    rejection: VerificationRejection
+    member_chars: int
+
+    @property
+    def accepted(self) -> bool:
+        return False
+
+
 def _record_document_decision(record: dict[str, Any], decision: str) -> None:
     counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/decision/{decision}", 1)
     counters.pipeline.update_counter(
@@ -474,7 +509,7 @@ def _record_document_decision(record: dict[str, Any], decision: str) -> None:
 
 
 def _record_comparison(
-    result: VerificationResult,
+    result: VerificationResult | _SignatureRejection,
     representative_kind: RepresentativeKind,
     decision: str,
     local_line_count_ratio: float | None = None,
@@ -485,6 +520,10 @@ def _record_comparison(
         f"{_COUNTER_PREFIX}/comparison_representative/{representative_kind.value}",
         1,
     )
+    if isinstance(result, _SignatureRejection):
+        if result.rejection == VerificationRejection.CONTAINMENT:
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/signature_rejections", 1)
+        return
     counters.pipeline.update_counter(
         f"{_COUNTER_PREFIX}/histogram/member_containment/{_score_bin(result.member_containment)}",
         1,
@@ -563,7 +602,7 @@ class _StoredComparisonRequest:
 @dataclass(frozen=True)
 class _StoredComparisonResult:
     text: str | None
-    comparisons: tuple[VerificationResult, ...]
+    comparisons: tuple[VerificationResult | _SignatureRejection, ...]
     local_decisions: tuple[_LocalVerificationDecision, ...]
 
 
@@ -616,14 +655,90 @@ def _compare_document_text(
 
 
 def _compare_stored_documents(
-    inputs: list[tuple[pa.Buffer, _StoredComparisonRequest]],
+    inputs: list[tuple[_StoredDocument, _StoredComparisonRequest]],
 ) -> list[_StoredComparisonResult]:
-    """Decompress and compare a worker-local document batch."""
-    representative_cache: dict[tuple[str, ...], list[PreparedVerificationText]] = {}
-    return [
-        _compare_document_text(_decompress_document_text(value), request, representative_cache)
-        for value, request in inputs
-    ]
+    """Reject from signatures when possible, then compare exact text."""
+    grouped_inputs: dict[
+        tuple[str, ...],
+        list[tuple[int, _StoredDocument, _StoredComparisonRequest]],
+    ] = defaultdict(list)
+    for index, (value, request) in enumerate(inputs):
+        grouped_inputs[request.representative_texts].append((index, value, request))
+
+    indexed_results = []
+    for group in grouped_inputs.values():
+        representative_cache: dict[tuple[str, ...], list[PreparedVerificationText]] = {}
+        indexed_results.extend(
+            (index, _compare_stored_document(value, request, representative_cache)) for index, value, request in group
+        )
+    indexed_results.sort(key=lambda item: item[0])
+    return [result for _, result in indexed_results]
+
+
+def _signature_rejection(
+    stored: _StoredDocument,
+    representative: PreparedVerificationText,
+    params: FuzzyVerificationParams,
+) -> _SignatureRejection | None:
+    if stored.chars > representative.chars:
+        return _SignatureRejection(VerificationRejection.MEMBER_LONGER, stored.chars)
+    if params.minimum_member_containment != 1.0 or params.maximum_member_unique_ngrams != 0:
+        return None
+    if not stored.signature.may_be_subset_of(representative.signature):
+        return _SignatureRejection(VerificationRejection.CONTAINMENT, stored.chars)
+    return None
+
+
+def _compare_stored_document(
+    stored: _StoredDocument,
+    request: _StoredComparisonRequest,
+    representative_cache: dict[tuple[str, ...], list[PreparedVerificationText]],
+) -> _StoredComparisonResult:
+    prepared_representatives = representative_cache.get(request.representative_texts)
+    if prepared_representatives is None:
+        prepared_representatives = [
+            prepare_verification_text(text, request.verification_params) for text in request.representative_texts
+        ]
+        representative_cache[request.representative_texts] = prepared_representatives
+
+    text: str | None = None
+    prepared_member: PreparedVerificationText | None = None
+
+    def exact_result(representative: PreparedVerificationText) -> VerificationResult:
+        nonlocal text, prepared_member
+        if text is None:
+            text = _decompress_document_text(stored.compressed_text)
+        if prepared_member is None:
+            prepared_member = prepare_verification_text(text, request.verification_params)
+        return verify_prepared_candidate(prepared_member, representative, request.verification_params)
+
+    comparisons: list[VerificationResult | _SignatureRejection] = []
+    local_decisions: list[_LocalVerificationDecision] = []
+    if prepared_representatives:
+        primary_rejection = _signature_rejection(stored, prepared_representatives[0], request.verification_params)
+        primary_result = primary_rejection or exact_result(prepared_representatives[0])
+        comparisons.append(primary_result)
+        if not primary_result.accepted:
+            for representative in prepared_representatives[1:]:
+                signature_rejection = _signature_rejection(stored, representative, request.verification_params)
+                if signature_rejection is not None:
+                    comparisons.append(signature_rejection)
+                    local_decisions.append(_LocalVerificationDecision(False, signature_rejection.rejection.value, None))
+                    continue
+                result = exact_result(representative)
+                comparisons.append(result)
+                assert prepared_member is not None
+                local_decisions.append(
+                    _local_verification_gate(prepared_member, representative, result, request.local_params)
+                )
+
+    if request.return_text and text is None:
+        text = _decompress_document_text(stored.compressed_text)
+    return _StoredComparisonResult(
+        text=text if request.return_text else None,
+        comparisons=tuple(comparisons),
+        local_decisions=tuple(local_decisions),
+    )
 
 
 def _choose_longest_representative(
@@ -672,7 +787,7 @@ def _split_record_group(records: Iterator[dict[str, Any]]) -> _SplitRecordGroup:
 def _make_cluster_verifier(
     verification_params: FuzzyVerificationParams,
     local_params: LocalRepresentativeParams,
-    document_store: MemoryStore[tuple[int, str], pa.Buffer],
+    document_store: MemoryStore[tuple[int, str], _StoredDocument],
     lookup_batch_size: int,
 ):
     """Build a reducer that uses bounded, retained local representatives."""
@@ -966,6 +1081,7 @@ def _make_cluster_verifier(
                     )
                     _record_comparison(primary_result, primary.kind, primary_decision)
                     if primary_result.accepted:
+                        assert isinstance(primary_result, VerificationResult)
                         matched_representative = primary
                         matched_result = primary_result
                     else:
@@ -995,6 +1111,7 @@ def _make_cluster_verifier(
                                 local_decision.line_count_ratio,
                             )
                             if local_decision.accepted:
+                                assert isinstance(local_result, VerificationResult)
                                 matched_representative = local
                                 matched_result = local_result
                                 matched_local_line_count_ratio = local_decision.line_count_ratio
@@ -1227,7 +1344,9 @@ def verify_fuzzy_dups(
     try:
         ctx.put(_SHARED_SHARDS_KEY, {shard.file_idx: shard for shard in shards})
         document_store = ctx.load_memory_store(
-            Dataset.from_list(shard_groups).flat_map(_candidate_documents),
+            Dataset.from_list(shard_groups).flat_map(
+                partial(_candidate_documents, ngram_size=verification_params.ngram_size)
+            ),
             name="fuzzy-verification-documents",
             hash_key=partial(_document_partition, document_partitions),
             recovery_timeout=store_config.recovery_timeout,

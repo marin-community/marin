@@ -15,6 +15,7 @@ use hashing::HashAlgorithm;
 fn dupekit_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Bloom>()?;
     m.add_class::<HashAlgorithm>()?;
+    m.add_class::<token_ngrams::TokenNgramSignature>()?;
     m.add_class::<token_ngrams::TokenNgrams>()?;
     m.add("DEFAULT_HASH_ALGORITHM", hashing::DEFAULT_HASH_ALGO)?;
 

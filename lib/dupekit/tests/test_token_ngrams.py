@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from dupekit import TokenNgrams
+from dupekit import TokenNgrams, TokenNgramSignature
 
 
 def _token_ngrams(text: str, size: int) -> frozenset[tuple[str, ...]]:
@@ -46,3 +46,36 @@ def test_token_ngrams_rejects_zero_size():
 
 def test_token_ngrams_with_different_sizes_do_not_intersect():
     assert TokenNgrams("one", 2).intersection_size(TokenNgrams("one", 3)) == 0
+
+
+@pytest.mark.parametrize(
+    ("member", "representative", "size"),
+    [
+        ("one two three", "zero one two three four", 2),
+        ("ONE\tTWO   THREE", "zero one two three four", 2),
+        ("a b a b", "zero a b a b c", 2),
+        ("", "anything", 3),
+    ],
+)
+def test_token_ngram_signature_never_rejects_an_exact_subset(member: str, representative: str, size: int):
+    member_ngrams = TokenNgrams(member, size)
+    representative_ngrams = TokenNgrams(representative, size)
+    assert member_ngrams.intersection_size(representative_ngrams) == len(member_ngrams)
+
+    direct_signature = TokenNgramSignature(member, size)
+    representative_signature = TokenNgramSignature(representative, size)
+    assert direct_signature.token_count == member_ngrams.token_count
+    assert direct_signature.may_be_subset_of(representative_signature)
+    assert member_ngrams.signature().may_be_subset_of(representative_signature)
+
+
+def test_token_ngram_signature_rejects_a_missing_ngram():
+    member = TokenNgramSignature("one two missing", 2)
+    representative = TokenNgramSignature("one two present", 2)
+
+    assert not member.may_be_subset_of(representative)
+
+
+def test_token_ngram_signature_rejects_zero_size():
+    with pytest.raises(ValueError):
+        TokenNgramSignature("token", 0)
