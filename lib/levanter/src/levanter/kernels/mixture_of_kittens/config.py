@@ -172,19 +172,23 @@ class MokLikeConfig:
                 f"{self.workspace_transport} only reaches process-local ranks"
             )
         # The direct-read modes bypass the workspace and use space-0 peer mappings,
-        # which stay process-local whatever the transport does.
-        if self.requires_cross_process_transport:
+        # which stay process-local whatever the transport does. What makes them
+        # unusable is the transport actually crossing processes, not the group
+        # outgrowing one node: a four-rank group under FABRIC_SYMMETRIC is one
+        # process per GPU, so a peer's XLA buffer is an address in another process
+        # and only the arena is mapped across them.
+        if self.workspace_transport.crosses_processes:
             if self.forward_x_storage.reads_xla_buffers_directly:
                 raise ValueError(
                     f"forward_x_storage={self.forward_x_storage} reads XLA buffers over "
-                    "process-local peer mappings and cannot serve an expert group "
-                    f"of {self.num_devices}; use {MokLikeForwardXStorage.RUNTIME_STAGED}"
+                    f"process-local peer mappings and cannot serve {self.workspace_transport}; "
+                    f"use {MokLikeForwardXStorage.RUNTIME_STAGED}"
                 )
             if self.backward_peer_storage.reads_xla_buffers_directly:
                 raise ValueError(
                     f"backward_peer_storage={self.backward_peer_storage} reads XLA buffers over "
-                    "process-local peer mappings and cannot serve an expert group "
-                    f"of {self.num_devices}; use {MokLikeBackwardPeerStorage.RUNTIME_STAGED}"
+                    f"process-local peer mappings and cannot serve {self.workspace_transport}; "
+                    f"use {MokLikeBackwardPeerStorage.RUNTIME_STAGED}"
                 )
 
 

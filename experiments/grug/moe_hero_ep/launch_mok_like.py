@@ -4,6 +4,7 @@
 """Four-GB200 matched training launcher for Grug MoE backends."""
 
 import dataclasses
+import logging
 import os
 from enum import StrEnum
 
@@ -43,6 +44,8 @@ from experiments.grug.moe_hero_ep.train import (
     run_grug,
 )
 from experiments.llama import llama3_tokenizer
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_STEPS = 25
 DEFAULT_WANDB_PROJECT = "marin_moe"
@@ -228,6 +231,24 @@ def build_backend_comparison_run(
     mok_like_workspace_slots = preset.workspace_slots if mok_like_workspace_slots is None else mok_like_workspace_slots
     forward_x_storage = preset.forward_x_storage if forward_x_storage is None else forward_x_storage
     backward_peer_storage = preset.backward_peer_storage if backward_peer_storage is None else backward_peer_storage
+    # The direct-read storage modes reach a peer's XLA buffer through a process-local peer mapping.
+    # Under a cross-process transport that address belongs to another process and only the arena is
+    # mapped across them, so the presets' choice is unavailable here. Report the substitution rather
+    # than letting MokLikeConfig reject every fabric run that uses a preset.
+    if mok_like_workspace_transport.crosses_processes and forward_x_storage.reads_xla_buffers_directly:
+        logger.info(
+            "%s cannot read peer XLA buffers; using %s for forward x",
+            mok_like_workspace_transport,
+            MokLikeForwardXStorage.RUNTIME_STAGED,
+        )
+        forward_x_storage = MokLikeForwardXStorage.RUNTIME_STAGED
+    if mok_like_workspace_transport.crosses_processes and backward_peer_storage.reads_xla_buffers_directly:
+        logger.info(
+            "%s cannot read peer XLA buffers; using %s for backward peers",
+            mok_like_workspace_transport,
+            MokLikeBackwardPeerStorage.RUNTIME_STAGED,
+        )
+        backward_peer_storage = MokLikeBackwardPeerStorage.RUNTIME_STAGED
     gpu_allocator = preset.gpu_allocator if gpu_allocator is None else gpu_allocator
     gpu_temp_buffer_pool = preset.gpu_temp_buffer_pool if gpu_temp_buffer_pool is None else gpu_temp_buffer_pool
     gpu_default_pool_preallocation = (
@@ -514,8 +535,7 @@ def build_backend_comparison_run(
             # sealed one-process-per-node layout.
             processes_per_task=(
                 GPUS_PER_NODE
-                if MokLikeWorkspaceTransport(mok_like_workspace_transport)
-                is MokLikeWorkspaceTransport.FABRIC_SYMMETRIC
+                if MokLikeWorkspaceTransport(mok_like_workspace_transport) is MokLikeWorkspaceTransport.FABRIC_SYMMETRIC
                 else 1
             ),
             pip_packages=_mok_like_build_packages() if backend is MoeBackend.MOK_LIKE else (),
