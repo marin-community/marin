@@ -429,21 +429,14 @@ def _gate_accumulator_inplace_kernel(
     output_cotangent_ref,
     gate_ref,
     gate_accumulator_ref,
-    *,
-    block_m: int,
-    block_d: int,
 ):
-    span_m = pl.ds(pl.program_id(0) * block_m, block_m)
-    span_d = pl.ds(pl.program_id(1) * block_d, block_d)
-    normalized = plgpu.load(normalized_ref.at[span_m, span_d])
-    output_cotangent = plgpu.load(output_cotangent_ref.at[span_m, span_d])
-    gate = plgpu.load(gate_ref.at[span_m, span_d])
+    # BlockSpec has already sliced every ref to this program's tile.
+    normalized = plgpu.load(normalized_ref)
+    output_cotangent = plgpu.load(output_cotangent_ref)
+    gate = plgpu.load(gate_ref)
     gate_cotangent = (output_cotangent * normalized).astype(jnp.bfloat16)
     sigmoid_cotangent = (gate * (jnp.array(1, gate.dtype) - gate)).astype(jnp.bfloat16)
-    plgpu.store(
-        gate_accumulator_ref.at[span_m, span_d],
-        (gate_cotangent * sigmoid_cotangent).astype(gate_accumulator_ref.dtype),
-    )
+    plgpu.store(gate_accumulator_ref, (gate_cotangent * sigmoid_cotangent).astype(gate_accumulator_ref.dtype))
 
 
 @functools.lru_cache(maxsize=None)
@@ -453,7 +446,7 @@ def _gate_accumulator_inplace_call(rows: int, hidden_dim: int, dtype):
     shape = jax.ShapeDtypeStruct((rows, hidden_dim), dtype)
     block_spec = pl.BlockSpec((block_m, block_d), lambda i, j: (i, j))
     return pl.pallas_call(
-        functools.partial(_gate_accumulator_inplace_kernel, block_m=block_m, block_d=block_d),
+        _gate_accumulator_inplace_kernel,
         out_shape=shape,
         in_specs=(block_spec, block_spec, block_spec),
         out_specs=block_spec,
