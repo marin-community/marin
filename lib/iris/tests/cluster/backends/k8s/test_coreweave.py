@@ -381,13 +381,6 @@ def test_start_controller_mounts_task_cache_in_node_agent_when_reclaim_enabled()
     provider.shutdown()
 
 
-def test_node_agent_role_can_taint_nodes_for_cache_reclamation():
-    role = cluster_role_manifest("iris-controller-iris")
-
-    node_rule = next(rule for rule in role["rules"] if rule["resources"] == ["nodes"])
-    assert node_rule["verbs"] == ["get", "list", "watch", "patch"]
-
-
 def test_start_controller_leaves_node_agent_absent_without_external_finelog():
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()

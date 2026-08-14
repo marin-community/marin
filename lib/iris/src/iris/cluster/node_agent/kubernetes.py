@@ -89,6 +89,7 @@ _MAX_SCRAPE_BYTES = 16 << 20
 _MAX_DCGM_SAMPLES = 32_768
 _MAX_DCGM_DEVICES = 256
 _MAX_DCGM_EXPORTERS = 512
+
 # One injectable seam so tests exercise the parsing/aggregation without a network.
 Fetch = Callable[[str], str | None]
 
@@ -804,7 +805,7 @@ def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event
         cache_dir = Path(config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR)
         cache_reclaimer = threading.Thread(
             target=run_cache_reclaimer,
-            args=(cache_dir, config.kubernetes_provider.cache_max_age, k8s, node_name, stop),
+            args=(cache_dir, config.kubernetes_provider.cache_max_age, stop),
             name="cache-reclaimer",
             daemon=True,
         )

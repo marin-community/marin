@@ -13,7 +13,6 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import StrEnum
 from functools import cached_property
 from typing import Protocol, runtime_checkable
 
@@ -70,11 +69,6 @@ _ERROR_BODY_MAX_LEN: int = 500
 _COMMAND_TIMEOUT_EXIT_CODE: int = 124
 
 
-class _NodeTaintAction(StrEnum):
-    ADD = "add"
-    REMOVE = "remove"
-
-
 @runtime_checkable
 class K8sService(Protocol):
     """Protocol for Kubernetes operations.
@@ -109,10 +103,6 @@ class K8sService(Protocol):
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
     ) -> list[dict]: ...
-
-    def add_node_taint(self, node_name: str, *, key: str, value: str, effect: str) -> None: ...
-
-    def remove_node_taint(self, node_name: str, *, key: str, value: str, effect: str) -> None: ...
 
     def delete(self, resource: K8sResource, name: str, *, force: bool = False, wait: bool = True) -> None: ...
 
@@ -325,37 +315,6 @@ class CloudK8sService:
                 raise KubectlError(
                     f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:_ERROR_BODY_MAX_LEN]}"
                 ) from e
-
-    def add_node_taint(self, node_name: str, *, key: str, value: str, effect: str) -> None:
-        """Add one scheduler taint without replacing other node taints."""
-        self._patch_node_taint(node_name, key=key, value=value, effect=effect, action=_NodeTaintAction.ADD)
-
-    def remove_node_taint(self, node_name: str, *, key: str, value: str, effect: str) -> None:
-        """Remove one scheduler taint without replacing other node taints."""
-        self._patch_node_taint(node_name, key=key, value=value, effect=effect, action=_NodeTaintAction.REMOVE)
-
-    def _patch_node_taint(
-        self,
-        node_name: str,
-        *,
-        key: str,
-        value: str,
-        effect: str,
-        action: _NodeTaintAction,
-    ) -> None:
-        taint = {"key": key, "value": value, "effect": effect}
-        if action is _NodeTaintAction.REMOVE:
-            taint["$patch"] = "delete"
-        logger.info("k8s: PATCH %s taint %s on node/%s", action, key, node_name)
-        try:
-            self._resource_api(K8sResource.NODES).patch(
-                body={"spec": {"taints": [taint]}},
-                name=node_name,
-                content_type="application/strategic-merge-patch+json",
-                **self._request_timeout_kwargs(),
-            )
-        except ApiException as e:
-            raise KubectlError(f"{action} taint {key} on node/{node_name} failed ({e.status}): {e.reason}") from e
 
     def _apply_pod(self, res: K8sResource, name: str, ns: str | None, manifest: dict) -> None:
         """Create the Pod if it is not already present (create-if-absent).

@@ -17,7 +17,7 @@ CLUSTER_ROLE_RULES = [
         "resources": ["pods", "pods/exec", "pods/log"],
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
-    {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch", "patch"]},
+    {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
     {"apiGroups": [""], "resources": ["nodes/proxy"], "verbs": ["get"]},
     {
         "apiGroups": [""],

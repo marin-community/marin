@@ -629,7 +629,7 @@ class KubernetesProviderConfig(_Config):
     service_account: str = ""
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
-    cache_max_age: DurationField | None = None  # enables idle-node cache reclamation
+    cache_max_age: DurationField | None = None  # enables cache reclamation
     controller_address: str = ""  # injected into task pods
     kueue: KueueConfig = Field(default_factory=KueueConfig)
     preempt_namespaces: list[str] = Field(default_factory=list)
