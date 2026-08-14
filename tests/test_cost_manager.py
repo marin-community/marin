@@ -13,11 +13,9 @@ import pytest
 
 from scripts.cost_manager import run as cost_manager_run
 from scripts.cost_manager.backends import coreweave
-from scripts.cost_manager.cost_event import CostEvent, CostFetchError, DateWindow, cost_event
-from scripts.cost_manager.slack_alert import AlertMetric, evaluate_alerts, parse_alert_rules
+from scripts.cost_manager.cost_event import CostEvent, CostFetchError, DateWindow
 
 GIB = 1024**3
-TIB = 1024**4
 HOT_STORAGE_GIB_HOUR_RATE = 0.06 / 730
 
 
@@ -129,76 +127,3 @@ def test_coreweave_storage_fetch_fails_when_the_metric_has_no_series(monkeypatch
                 },
                 DateWindow(day, day),
             )
-
-
-def test_storage_alert_uses_current_day_and_bucket_filter() -> None:
-    today = dt.date(2026, 8, 13)
-    rules = parse_alert_rules(
-        [
-            {
-                "name": "coreweave-east-storage",
-                "metric": "usage_amount",
-                "threshold": 80 * TIB,
-                "provider": "coreweave",
-                "category": "storage",
-                "detail": "marin-us-east-02a",
-                "window": "current_day",
-            }
-        ]
-    )
-    events = [
-        cost_event(
-            provider="coreweave",
-            day=today,
-            category="storage",
-            detail="marin-us-east-02a",
-            cost=1.0,
-            usage_amount=81 * TIB,
-            usage_unit="bytes",
-        ),
-        cost_event(
-            provider="coreweave",
-            day=today - dt.timedelta(days=1),
-            category="storage",
-            detail="marin-us-east-02a",
-            cost=1.0,
-            usage_amount=10 * TIB,
-            usage_unit="bytes",
-        ),
-        cost_event(
-            provider="coreweave",
-            day=today,
-            category="storage",
-            detail="marin-us-west-04a",
-            cost=1.0,
-            usage_amount=90 * TIB,
-            usage_unit="bytes",
-        ),
-    ]
-
-    (breach,) = evaluate_alerts(events, rules, window=DateWindow.trailing(3, today=today), today=today)
-
-    assert breach.metric is AlertMetric.USAGE_AMOUNT
-    assert breach.observed_value == 81 * TIB
-    assert breach.threshold_value == 80 * TIB
-    assert breach.unit == "bytes"
-    assert breach.scope == "coreweave / storage / marin-us-east-02a"
-
-
-def test_cost_alert_sums_the_configured_window() -> None:
-    today = dt.date(2026, 8, 13)
-    rules = parse_alert_rules(
-        [{"name": "openai-window", "metric": "cost", "threshold": 5, "provider": "openai", "window": "window_total"}]
-    )
-    events = [
-        cost_event(provider="openai", day=today - dt.timedelta(days=1), category="api", detail="tokens", cost=3),
-        cost_event(provider="openai", day=today, category="api", detail="tokens", cost=4),
-        cost_event(provider="anthropic", day=today, category="api", detail="tokens", cost=20),
-    ]
-
-    (breach,) = evaluate_alerts(events, rules, window=DateWindow.trailing(2, today=today), today=today)
-
-    assert breach.metric is AlertMetric.COST
-    assert breach.observed_value == 7
-    assert breach.threshold_value == 5
-    assert breach.unit == "USD"

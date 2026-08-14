@@ -56,7 +56,7 @@ def _load_config(path: Path) -> dict[str, Any]:
 def _handle_alerts(
     config: dict[str, Any], events: list[CostEvent], window: DateWindow, today: dt.date, *, dry_run: bool
 ) -> None:
-    """Evaluate threshold rules and ping Slack on each breach (best-effort).
+    """Evaluate threshold rules and ping Slack on any breach (best-effort).
 
     No-op when no ``alerts.rules`` are configured. A breach is always logged at
     WARNING so it shows in CI even without a webhook; the Slack POST is skipped
@@ -70,18 +70,16 @@ def _handle_alerts(
 
     breaches = evaluate_alerts(events, rules, window=window, today=today)
     if not breaches:
-        logger.info("Threshold alerts: %d rule(s) checked, none exceeded", len(rules))
+        logger.info("Cost alerts: %d rule(s) checked, none exceeded", len(rules))
         return
     for breach in breaches:
         logger.warning(
-            "Threshold exceeded [%s]: %s (%s) %.2f %s > %.2f %s",
+            "Cost threshold exceeded [%s]: %s (%s) $%.2f > $%.2f",
             breach.rule_name,
             breach.scope,
             breach.window_label,
-            breach.observed_value,
-            breach.unit,
-            breach.threshold_value,
-            breach.unit,
+            breach.observed_usd,
+            breach.threshold_usd,
         )
 
     message = format_slack_message(breaches)
@@ -93,7 +91,7 @@ def _handle_alerts(
     webhook_env = alerts_cfg.get("webhook_url_env", "SLACK_WEBHOOK_URL")
     webhook_url = os.environ.get(webhook_env)
     if not webhook_url:
-        logger.warning("Threshold exceeded but %s is unset — not posting to Slack", webhook_env)
+        logger.warning("Cost threshold exceeded but %s is unset — not posting to Slack", webhook_env)
         return
     try:
         post_slack_message(webhook_url, message)

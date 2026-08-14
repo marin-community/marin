@@ -55,12 +55,10 @@ all hourly samples for the day.
 
 ## Slack threshold alerts (optional)
 
-The `alerts` block in `config.yaml` defines cost or usage ceilings. Each rule
-selects `cost` or `usage_amount` and filters a CostEvent slice. Rules can filter
-`provider`, `category`, and `detail`.
-
-Cost rules can use `latest_day` or `window_total`. Usage rules use `current_day`
-or `latest_day` because usage gauges do not add across days.
+The `alerts` block in `config.yaml` defines spend ceilings. Each rule sums a
+cost slice — an optional `provider`/`category` filter — over a `window`
+(`latest_day`, the most recent complete UTC day, or `window_total`, the whole
+fetch window) and fires when that sum exceeds `max_usd`:
 
 ```yaml
 alerts:
@@ -68,20 +66,11 @@ alerts:
   rules:
     - name: total-daily          # no provider -> all providers combined
       window: latest_day
-      metric: cost
-      threshold: 500
+      max_usd: 500
     - name: openai-daily
       provider: openai
       window: latest_day
-      metric: cost
-      threshold: 200
-    - name: coreweave-us-east-storage
-      provider: coreweave
-      category: storage
-      detail: marin-us-east-02a
-      window: current_day
-      metric: usage_amount
-      threshold: 87960930222080  # 80 TiB
+      max_usd: 200
 ```
 
 Alerting is best-effort and fully optional: a breach is always logged at
@@ -136,12 +125,18 @@ Grafana provisions the `Storage` dashboard from
 `infra/grafana/dashboards/storage.json`. The dashboard shows the latest daily
 byte value for each CoreWeave bucket.
 
+Grafana also provisions the `CoreWeaveStorageCapacity` alert. The rule reads
+the newest Finelog gauge for each bucket and sends a Slack warning above 80 TiB.
+The value must stay above the limit for five minutes. A 36-hour freshness limit
+prevents an alert from an expired value. The alert stays normal until the first
+CoreWeave row exists.
+
 The collector uses the public hot-storage rate of $0.06/GiB-month. Divide this
 rate by 730 hours for the `unit_rate` value in `config.yaml`. Replace the value
 when the contracted rate is available.
 
-The two storage alerts use an 80 TiB ceiling. This is 80 percent of CoreWeave's
-default 100 TiB capacity quota for each availability zone.
+The 80 TiB ceiling is 80 percent of CoreWeave's default 100 TiB capacity quota
+for each availability zone.
 
 `COREWEAVE_API_TOKEN` controls provider activation. If it is unset, the runner
 skips CoreWeave and completes the other providers. Use a token with the

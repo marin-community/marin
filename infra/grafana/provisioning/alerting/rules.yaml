@@ -386,6 +386,72 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
+  # The daily cost job stores the latest CoreWeave byte gauge in Finelog.
+  # The freshness limit prevents an alert from an expired gauge.
+  - orgId: 1
+    name: coreweave-storage
+    folder: Alerts
+    interval: 5m
+    rules:
+      - uid: coreweave-storage-capacity
+        title: CoreWeaveStorageCapacity
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "{{ $labels.bucket }}: CoreWeave storage exceeds 80 TiB"
+          runbook_url: https://github.com/marin-community/marin/blob/main/scripts/cost_manager/README.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 129600, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: >-
+                      WITH latest AS (
+                        SELECT detail AS bucket, region, usage_amount AS value, collected_ts,
+                               ROW_NUMBER() OVER (
+                                 PARTITION BY provider, category, region, detail
+                                 ORDER BY usage_date DESC, seq DESC
+                               ) AS row_num
+                        FROM "cost.events"
+                        WHERE provider = 'coreweave'
+                          AND category = 'storage'
+                          AND usage_unit = 'bytes'
+                          AND usage_amount IS NOT NULL
+                      )
+                      SELECT bucket, region, value
+                      FROM latest
+                      WHERE row_num = 1
+                        AND collected_ts >= CURRENT_TIMESTAMP - INTERVAL '36 hours'
+              columns:
+                - { selector: bucket, text: bucket, type: string }
+                - { selector: region, text: region, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [87960930222080] }
+
   # The canary writes one probe_up row per check and target. Read the newest row
   # from the last two cadences. NoData covers a stopped probe daemon or a broken
   # metrics path; a zero covers a completed check that failed.

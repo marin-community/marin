@@ -1,13 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Threshold alerts: ping Slack when a CostEvent slice exceeds a configured limit.
+"""Threshold alerts: ping Slack when a cost slice exceeds a configured limit.
 
 A run evaluates a list of :class:`AlertRule`s against the fetched
-:class:`~scripts.cost_manager.cost_event.CostEvent`s. A rule selects the cost or
-the provider usage gauge. Cost rules can use the most recent completed UTC day
-or the complete fetch window. Usage rules can use the current or most recent
-completed day. The rule can filter the provider, category, and detail.
+:class:`~scripts.cost_manager.cost_event.CostEvent`s. Each rule sums the cost of
+a slice (an optional provider/category filter) over either the most recent
+complete UTC day or the whole fetch window, and fires an :class:`AlertBreach`
+when that sum exceeds ``max_usd``. Breaches are formatted into one message and
+POSTed to a Slack incoming webhook — the same ``{"text": ...}`` contract as the
+repo's ``notify-slack`` GitHub action.
 
 Computation (:func:`evaluate_alerts`, :func:`format_slack_message`) is separate
 from I/O (:func:`post_slack_message`) so the threshold logic is testable without
@@ -35,47 +37,34 @@ class AlertWindow(StrEnum):
 
     # The most recent fully-elapsed UTC day (today is always partial).
     LATEST_DAY = "latest_day"
-    # The current partial UTC day. Usage gauges use this for early alerts.
-    CURRENT_DAY = "current_day"
     # The entire trailing fetch window.
     WINDOW_TOTAL = "window_total"
 
 
-class AlertMetric(StrEnum):
-    """The numeric CostEvent field that an alert rule measures."""
-
-    COST = "cost"
-    USAGE_AMOUNT = "usage_amount"
-
-
 @dataclass(frozen=True)
 class AlertRule:
-    """A ceiling over a CostEvent slice.
+    """A spend ceiling over a cost slice.
 
-    ``provider``, ``category``, and ``detail`` are optional filters. ``None``
-    matches each value in that field.
+    ``provider``/``category`` are optional filters; ``None`` matches every value
+    for that field, so a rule with neither set covers total spend.
     """
 
     name: str
-    metric: AlertMetric
-    threshold: float
+    max_usd: float
     provider: str | None = None
     category: str | None = None
-    detail: str | None = None
     window: AlertWindow = AlertWindow.LATEST_DAY
 
 
 @dataclass(frozen=True)
 class AlertBreach:
-    """A rule whose measured value exceeded its threshold."""
+    """A rule whose measured spend exceeded its threshold."""
 
     rule_name: str
     scope: str
     window_label: str
-    metric: AlertMetric
-    observed_value: float
-    threshold_value: float
-    unit: str
+    observed_usd: float
+    threshold_usd: float
 
 
 def parse_alert_rules(raw_rules: Iterable[dict[str, Any]]) -> list[AlertRule]:
@@ -85,22 +74,15 @@ def parse_alert_rules(raw_rules: Iterable[dict[str, Any]]) -> list[AlertRule]:
         name = raw.get("name")
         if not name:
             raise ValueError(f"alert rule is missing 'name': {raw!r}")
-        if "metric" not in raw:
-            raise ValueError(f"alert rule {name!r} is missing 'metric'")
-        if "threshold" not in raw:
-            raise ValueError(f"alert rule {name!r} is missing 'threshold'")
-        metric = AlertMetric(raw["metric"])
+        if "max_usd" not in raw:
+            raise ValueError(f"alert rule {name!r} is missing 'max_usd'")
         window = AlertWindow(raw.get("window", AlertWindow.LATEST_DAY))
-        if metric is AlertMetric.USAGE_AMOUNT and window is AlertWindow.WINDOW_TOTAL:
-            raise ValueError(f"alert rule {name!r}: usage_amount cannot use window_total")
         rules.append(
             AlertRule(
                 name=str(name),
-                metric=metric,
-                threshold=float(raw["threshold"]),
+                max_usd=float(raw["max_usd"]),
                 provider=raw.get("provider"),
                 category=raw.get("category"),
-                detail=raw.get("detail"),
                 window=window,
             )
         )
@@ -111,31 +93,13 @@ def _scope_label(rule: AlertRule) -> str:
     parts = [rule.provider or "all providers"]
     if rule.category is not None:
         parts.append(rule.category)
-    if rule.detail is not None:
-        parts.append(rule.detail)
     return " / ".join(parts)
 
 
 def _matches(event: CostEvent, rule: AlertRule) -> bool:
     if rule.provider is not None and event.provider != rule.provider:
         return False
-    if rule.category is not None and event.category != rule.category:
-        return False
-    return rule.detail is None or event.detail == rule.detail
-
-
-def _value_and_unit(events: list[CostEvent], metric: AlertMetric) -> tuple[float, str]:
-    if metric is AlertMetric.COST:
-        return sum(event.cost for event in events), "USD"
-    with_usage = [event for event in events if event.usage_amount is not None]
-    units = {event.usage_unit for event in with_usage}
-    if None in units:
-        raise ValueError("usage alert matched an event without usage_unit")
-    if len(units) > 1:
-        raise ValueError(f"usage alert matched different units: {sorted(units)}")
-    unit = next(iter(units), "value")
-    assert unit is not None
-    return sum(event.usage_amount for event in with_usage if event.usage_amount is not None), unit
+    return rule.category is None or event.category == rule.category
 
 
 def evaluate_alerts(
@@ -149,27 +113,20 @@ def evaluate_alerts(
     for rule in rules:
         if rule.window is AlertWindow.LATEST_DAY:
             target = latest_complete_day.isoformat()
-            matched = [e for e in events if _matches(e, rule) and e.usage_date == target]
-            window_label = target
-        elif rule.window is AlertWindow.CURRENT_DAY:
-            target = today.isoformat()
-            matched = [e for e in events if _matches(e, rule) and e.usage_date == target]
+            observed = sum(e.cost for e in events if _matches(e, rule) and e.usage_date == target)
             window_label = target
         else:
-            matched = [e for e in events if _matches(e, rule)]
+            observed = sum(e.cost for e in events if _matches(e, rule))
             window_label = window_label_total
 
-        observed, unit = _value_and_unit(matched, rule.metric)
-        if observed > rule.threshold:
+        if observed > rule.max_usd:
             breaches.append(
                 AlertBreach(
                     rule_name=rule.name,
                     scope=_scope_label(rule),
                     window_label=window_label,
-                    metric=rule.metric,
-                    observed_value=observed,
-                    threshold_value=rule.threshold,
-                    unit=unit,
+                    observed_usd=observed,
+                    threshold_usd=rule.max_usd,
                 )
             )
     return breaches
@@ -177,18 +134,11 @@ def evaluate_alerts(
 
 def format_slack_message(breaches: list[AlertBreach]) -> str:
     """Render breaches as a Slack mrkdwn message body."""
-    lines = [":rotating_light: *Threshold alert* — a measured value exceeded its configured ceiling"]
-    for breach in breaches:
-        if breach.unit == "USD":
-            observed = f"${breach.observed_value:,.2f}"
-            threshold = f"${breach.threshold_value:,.2f}"
-        elif breach.unit == "bytes":
-            observed = f"{breach.observed_value / 1024**4:,.2f} TiB"
-            threshold = f"{breach.threshold_value / 1024**4:,.2f} TiB"
-        else:
-            observed = f"{breach.observed_value:,.2f} {breach.unit}"
-            threshold = f"{breach.threshold_value:,.2f} {breach.unit}"
-        lines.append(f"• {breach.scope} ({breach.window_label}): {observed} > {threshold} [`{breach.rule_name}`]")
+    lines = [":rotating_light: *Cost alert* — spend exceeded a configured threshold"]
+    for b in breaches:
+        lines.append(
+            f"• {b.scope} ({b.window_label}): ${b.observed_usd:,.2f} > ${b.threshold_usd:,.2f} [`{b.rule_name}`]"
+        )
     lines.append("Source: finelog `cost.events` (scripts/cost_manager).")
     return "\n".join(lines)
 

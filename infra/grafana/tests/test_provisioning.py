@@ -29,6 +29,7 @@ DASHBOARDS = ROOT / "dashboards"
 
 EXPRESSION_UID = "__expr__"
 VALID_SEVERITIES = {"critical", "warning"}
+STORAGE_ALERT_BYTES = 80 * 1024**4
 
 
 def _stitched_dashboards() -> dict[str, dict]:
@@ -90,11 +91,12 @@ def test_alert_rules_have_resolvable_datasources_and_refids():
             assert uid == EXPRESSION_UID or uid in datasource_uids, f"{rule['uid']}: unknown datasource {uid!r}"
 
 
-def test_every_rule_alerts_on_nodata_and_error():
-    # The alert endpoints return explicit zeros when healthy, so NoData/exec
-    # errors can only mean the pipeline itself broke — which must page too.
+def test_alert_rules_define_nodata_and_error_behavior():
+    # Most alert endpoints return explicit zeros when healthy. The storage rule
+    # stays normal until the optional CoreWeave provider writes its first row.
     for rule in _rules():
-        assert rule["noDataState"] == "Alerting", rule["uid"]
+        expected_no_data = "OK" if rule["uid"] == "coreweave-storage-capacity" else "Alerting"
+        assert rule["noDataState"] == expected_no_data, rule["uid"]
         assert rule["execErrState"] == "Alerting", rule["uid"]
         assert rule["labels"]["severity"] in VALID_SEVERITIES, rule["uid"]
 
@@ -138,6 +140,14 @@ class _FakeFinelog:
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         if '"infra.canary.metrics"' in sql:
             return pa.table({"probe": ["controller-ping"], "target": ["marin"], "value": [1]})
+        if '"cost.events"' in sql:
+            return pa.table(
+                {
+                    "bucket": ["marin-us-east-02a"],
+                    "region": ["US-EAST-02"],
+                    "value": [81 * 1024**4],
+                }
+            )
         return pa.table({})
 
 
@@ -192,7 +202,11 @@ def test_policies_reference_provisioned_contact_points():
 
 def test_warning_alerts_remain_visible_without_notifications():
     (policy,) = _load(ALERTING / "policies.yaml")["policies"]
-    routes_by_severity = {route["object_matchers"][0][2]: route for route in policy["routes"]}
+    routes_by_severity = {
+        route["object_matchers"][0][2]: route
+        for route in policy["routes"]
+        if route["object_matchers"][0][0] == "severity"
+    }
 
     assert routes_by_severity["critical"].get("mute_time_intervals") is None
     assert routes_by_severity["warning"]["mute_time_intervals"] == ["dashboard-only"]
@@ -203,6 +217,31 @@ def test_warning_alerts_remain_visible_without_notifications():
             "location": "UTC",
         }
     ]
+
+
+def test_coreweave_storage_alert_reads_latest_finelog_gauge_and_notifies_slack():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "coreweave-storage-capacity"]
+    source, threshold = rule["data"]
+    sql = next(param["value"] for param in source["model"]["url_options"]["params"] if param["key"] == "sql")
+
+    assert rule["for"] == "5m"
+    assert rule["noDataState"] == "OK"
+    assert rule["labels"] == {"severity": "warning", "notification": "slack"}
+    assert source["datasourceUid"] == "finelog-marin"
+    assert 'FROM "cost.events"' in sql
+    assert "PARTITION BY provider, category, region, detail" in sql
+    assert "ORDER BY usage_date DESC, seq DESC" in sql
+    assert "collected_ts >= CURRENT_TIMESTAMP - INTERVAL '36 hours'" in sql
+    assert {column["selector"] for column in source["model"]["columns"]} == {"bucket", "region", "value"}
+    assert threshold["model"]["conditions"][0]["evaluator"] == {"type": "gt", "params": [STORAGE_ALERT_BYTES]}
+
+    (policy,) = _load(ALERTING / "policies.yaml")["policies"]
+    routes = policy["routes"]
+    route = next(route for route in routes if route["object_matchers"] == [["notification", "=", "slack"]])
+    muted_warning = next(route for route in routes if route["object_matchers"] == [["severity", "=", "warning"]])
+    assert route["receiver"] == "ops-slack"
+    assert "mute_time_intervals" not in route
+    assert routes.index(route) < routes.index(muted_warning)
 
 
 def test_every_slack_alert_goes_through_the_bridge_and_none_through_grafana():
