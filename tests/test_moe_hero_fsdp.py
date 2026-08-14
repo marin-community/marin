@@ -222,8 +222,7 @@ def test_fused_reverse_matches_stock_autodiff_end_to_end(cpu_mesh, monkeypatch, 
         "_backward_kernels",
         lambda: (
             gate_silu_reverse,
-            rgn.exact_rms_backward_partials_reference,
-            rgn.exact_rms_backward_recompute_consumer_reference,
+            rgn.exact_rms_backward_fused_reference,
         ),
     )
     inputs = _norm_inputs(dtype)

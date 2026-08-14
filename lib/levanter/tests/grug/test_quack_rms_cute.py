@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import pytest
 from levanter.grug._moe.rms_gated_norm import (
     exact_gate_silu_reverse_reference,
+    exact_rms_backward_fused_reference,
     exact_rms_backward_partials_reference,
     exact_rms_backward_recompute_consumer_reference,
     exact_rms_gated_norm_selective_reverse_reference,
@@ -66,6 +67,21 @@ def test_backward_producer_matches_reference():
         jnp.sum(expected_row_dot_partial, axis=-1),
         tolerance=_FLOAT32_TOLERANCE,
         label="row dot",
+    )
+
+
+def test_backward_fused_matches_reference():
+    _require_gpu()
+
+    args = _producer_inputs()
+    actual_x, actual_norm_weight = quack_rms_cute.quack_coda_rms_backward_fused(*args)
+    expected_x, expected_norm_weight = exact_rms_backward_fused_reference(*args)
+    _assert_close(actual_x, expected_x, tolerance=_BF16_TOLERANCE, label="fused RMS input")
+    _assert_close(
+        actual_norm_weight,
+        expected_norm_weight,
+        tolerance=_FLOAT32_TOLERANCE,
+        label="fused norm weight",
     )
     _assert_close(
         jnp.sum(norm_weight_partial, axis=0),

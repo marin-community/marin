@@ -712,6 +712,137 @@ def _matrix_bytes(shape: tuple[int, int], dtype) -> int:
     return math.prod(shape) * jnp.dtype(dtype).itemsize
 
 
+def _rms_backward_fused_kernel(
+    gate_preactivation_cotangent_ref,
+    w_down_ref,
+    direct_cotangent_ref,
+    x_ref,
+    norm_weight_ref,
+    inverse_rms_ref,
+    norm_weight_zero_ref,
+    x_cotangent_ref,
+    norm_weight_cotangent_ref,
+    *,
+    block_m: int,
+    block_d: int,
+):
+    """Form the RMS row scalar and consume it without exposing either intermediate."""
+    del norm_weight_zero_ref
+    row_tile = pl.program_id(0)
+    span_m = pl.ds(row_tile * block_m, block_m)
+    rank = gate_preactivation_cotangent_ref.shape[1]
+    span_r = pl.ds(0, rank)
+    gate_preactivation_cotangent = plgpu.load(gate_preactivation_cotangent_ref.at[span_m, span_r])
+    inverse_rms = plgpu.load(inverse_rms_ref.at[span_m]).astype(jnp.float32)
+    hidden_tiles = pl.cdiv(x_ref.shape[1], block_d)
+    row_dot = jnp.zeros((block_m,), dtype=jnp.float32)
+
+    def producer_body(i, row_dot):
+        span_d = pl.ds(i * block_d, block_d)
+        w_down = plgpu.load(w_down_ref.at[span_d, span_r])
+        low_rank = pl.dot(gate_preactivation_cotangent, w_down.T).astype(jnp.bfloat16)
+        direct_cotangent = plgpu.load(direct_cotangent_ref.at[span_m, span_d])
+        unweighted_cotangent = (low_rank + direct_cotangent).astype(jnp.bfloat16)
+        plgpu.store(x_cotangent_ref.at[span_m, span_d], unweighted_cotangent)
+
+        x = plgpu.load(x_ref.at[span_m, span_d]).astype(jnp.float32)
+        normalized_x = x * inverse_rms[:, None]
+        norm_weight = plgpu.load(norm_weight_ref.at[span_d]).astype(jnp.float32)
+        weighted_cotangent = unweighted_cotangent.astype(jnp.float32) * norm_weight[None, :]
+        plgpu.atomic_add(
+            norm_weight_cotangent_ref,
+            span_d,
+            jnp.sum(unweighted_cotangent.astype(jnp.float32) * normalized_x, axis=0),
+        )
+        return row_dot + jnp.sum(weighted_cotangent * normalized_x, axis=1)
+
+    row_dot = jax.lax.fori_loop(0, hidden_tiles, producer_body, row_dot)
+    row_mean = row_dot / x_ref.shape[1]
+
+    def consumer_body(i, _):
+        span_d = pl.ds(i * block_d, block_d)
+        unweighted_cotangent = plgpu.load(x_cotangent_ref.at[span_m, span_d])
+        x = plgpu.load(x_ref.at[span_m, span_d]).astype(jnp.float32)
+        normalized_x = x * inverse_rms[:, None]
+        norm_weight = plgpu.load(norm_weight_ref.at[span_d]).astype(jnp.float32)
+        weighted_cotangent = unweighted_cotangent.astype(jnp.float32) * norm_weight[None, :]
+        x_cotangent = (weighted_cotangent - normalized_x * row_mean[:, None]) * inverse_rms[:, None]
+        plgpu.store(x_cotangent_ref.at[span_m, span_d], x_cotangent.astype(x_cotangent_ref.dtype))
+
+    jax.lax.fori_loop(0, hidden_tiles, consumer_body, None)
+
+
+@functools.lru_cache(maxsize=None)
+def _rms_backward_fused_call(rows: int, hidden_dim: int, rank: int, dtype):
+    block_m = _RMS_REVERSE_BLOCK_M
+    block_d = _RMS_REVERSE_BLOCK_D
+    return pl.pallas_call(
+        functools.partial(_rms_backward_fused_kernel, block_m=block_m, block_d=block_d),
+        out_shape=(
+            jax.ShapeDtypeStruct((rows, hidden_dim), dtype),
+            jax.ShapeDtypeStruct((hidden_dim,), jnp.float32),
+        ),
+        in_specs=(pl.no_block_spec,) * 7,
+        out_specs=(pl.no_block_spec,) * 2,
+        input_output_aliases={2: 0, 6: 1},
+        grid=(pl.cdiv(rows, block_m),),
+        compiler_params=plgpu.CompilerParams(num_warps=8, num_stages=2),
+        cost_estimate=pl.CostEstimate(
+            flops=2 * rows * hidden_dim * rank + 18 * rows * hidden_dim,
+            transcendentals=0,
+            bytes_accessed=(
+                5 * _matrix_bytes((rows, hidden_dim), dtype)
+                + _matrix_bytes((rows, rank), dtype)
+                + _matrix_bytes((hidden_dim, rank), dtype)
+            ),
+        ),
+        name="rms_backward_fused",
+    )
+
+
+def quack_coda_rms_backward_fused(
+    gate_preactivation_cotangent: jax.Array,
+    w_down: jax.Array,
+    direct_cotangent: jax.Array,
+    x: jax.Array,
+    norm_weight: jax.Array,
+    inverse_rms: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Fuse the RMS producer row reduction with input-gradient emission."""
+    if gate_preactivation_cotangent.ndim != 2 or w_down.ndim != 2:
+        raise ValueError("gate preactivation cotangent and w_down must be rank-2")
+    rows, rank = gate_preactivation_cotangent.shape
+    hidden_dim, w_rank = w_down.shape
+    if rank != w_rank:
+        raise ValueError("RMS backward contraction dimensions do not agree")
+    if direct_cotangent.shape != (rows, hidden_dim) or x.shape != direct_cotangent.shape:
+        raise ValueError("RMS backward full-width dimensions do not agree")
+    if norm_weight.shape != (hidden_dim,) or inverse_rms.shape != (rows,):
+        raise ValueError("RMS backward vector dimensions do not agree")
+    if not (
+        gate_preactivation_cotangent.dtype
+        == w_down.dtype
+        == direct_cotangent.dtype
+        == x.dtype
+        == norm_weight.dtype
+        == jnp.bfloat16
+    ):
+        raise ValueError("RMS backward fused kernel requires BF16 matrix inputs")
+    if inverse_rms.dtype != jnp.float32:
+        raise ValueError("inverse_rms must be float32")
+    if rows % _RMS_REVERSE_BLOCK_M or hidden_dim % _RMS_REVERSE_BLOCK_D:
+        raise ValueError("RMS backward dimensions must align with its tiles")
+    return _rms_backward_fused_call(rows, hidden_dim, rank, x.dtype)(
+        gate_preactivation_cotangent,
+        w_down,
+        direct_cotangent,
+        x,
+        norm_weight,
+        inverse_rms,
+        jnp.zeros(norm_weight.shape, dtype=jnp.float32),
+    )
+
+
 def _gate_accumulator_inplace_kernel(
     normalized_ref,
     output_cotangent_ref,

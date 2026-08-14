@@ -169,6 +169,27 @@ def exact_rms_backward_recompute_consumer_reference(
     return exact_rms_backward_consumer(unweighted_cotangent, row_dot, x, norm_weight, inverse_rms)
 
 
+def exact_rms_backward_fused_reference(
+    gate_preactivation_cotangent: jax.Array,
+    w_down: jax.Array,
+    direct_cotangent: jax.Array,
+    x: jax.Array,
+    norm_weight: jax.Array,
+    inverse_rms: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Reference for the fused RMS row reduction and final input cotangent."""
+    unweighted_cotangent, row_dot = exact_rms_backward_producer_reference(
+        gate_preactivation_cotangent, w_down, direct_cotangent, x, norm_weight, inverse_rms
+    )
+    norm_weight_cotangent = jnp.sum(
+        unweighted_cotangent.astype(jnp.float32) * x.astype(jnp.float32) * inverse_rms[:, None], axis=0
+    )
+    return (
+        exact_rms_backward_consumer(unweighted_cotangent, row_dot[:, 0], x, norm_weight, inverse_rms),
+        norm_weight_cotangent,
+    )
+
+
 def exact_rms_gated_norm_reverse_reference(
     output_cotangent: jax.Array,
     normalized: jax.Array,
@@ -308,11 +329,10 @@ def _backward_kernels():
     """
     from levanter.grug._moe.quack_rms_cute import (  # noqa: PLC0415
         quack_coda_gate_silu_reverse,
-        quack_coda_rms_backward_consumer,
-        quack_coda_rms_backward_producer,
+        quack_coda_rms_backward_fused,
     )
 
-    return quack_coda_gate_silu_reverse, quack_coda_rms_backward_producer, quack_coda_rms_backward_consumer
+    return quack_coda_gate_silu_reverse, quack_coda_rms_backward_fused
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(4, 5))
@@ -336,7 +356,7 @@ def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
 
 
 def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
-    gate_silu_reverse, rms_backward_producer, rms_backward_consumer = _backward_kernels()
+    gate_silu_reverse, rms_backward_fused = _backward_kernels()
 
     del eps
     x = residuals.x
@@ -363,7 +383,7 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None] * residuals.norm_weight
     ).astype(x_flat.dtype)
     w_down_cotangent = jnp.einsum("td,tr->dr", normalized_for_w_down, gate_preactivation_cotangent)
-    row_dot_partial, norm_weight_partial = rms_backward_producer(
+    x_cotangent, norm_weight_cotangent = rms_backward_fused(
         gate_preactivation_cotangent,
         residuals.w_down,
         direct_cotangent,
@@ -371,22 +391,12 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
         residuals.norm_weight,
         residuals.inverse_rms,
     )
-    row_dot = jnp.sum(row_dot_partial, axis=-1)
-    # Balance while the opaque result still carries its varying batch-axis annotation. The
-    # local row-tile reduction below removes that provenance; shard_map's transpose then sums
-    # the replicated parameter cotangent back to the global value.
-    norm_weight_partial = jax.lax.pmean(norm_weight_partial, axis_name=batch_axes)
-    norm_weight_cotangent = jnp.sum(norm_weight_partial, axis=0).astype(residuals.norm_weight.dtype)
-    x_cotangent = rms_backward_consumer(
-        gate_preactivation_cotangent,
-        residuals.w_down,
-        direct_cotangent,
-        row_dot,
-        x_flat,
-        residuals.norm_weight,
-        residuals.inverse_rms,
-    ).reshape(x.shape)
-    # ``check_vma=False`` below permits the opaque CuTe dx to cross the custom-VJP boundary
+    # Balance before the shard-map transpose sums the replicated parameter cotangent.
+    norm_weight_cotangent = jax.lax.pmean(norm_weight_cotangent, axis_name=batch_axes).astype(
+        residuals.norm_weight.dtype
+    )
+    x_cotangent = x_cotangent.reshape(x.shape)
+    # ``check_vma=False`` below permits the opaque Pallas dx to cross the custom-VJP boundary
     # without its varying-manual-axis annotation. All parameter gradients stay in JAX, so the
     # shard_map transpose owns their replicated-input reductions.
     return x_cotangent, norm_weight_cotangent, w_down_cotangent, w_up_cotangent
