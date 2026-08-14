@@ -1399,3 +1399,14 @@ author: Rafal Wojdyla
 - Incident record: https://echo.oa.dev/wiki/149.
 - Issue update: None. Add the incident link to the next major completion update.
 - Next action: Confirm that no setup failure repeats. Continue both roots through completion and full shard verification.
+
+### 2026-08-14 03:08 UTC - Backfill reached 99.42 percent
+
+- Root health: The East and RNO roots remain running. Neither root has a failed child job.
+- Durable output: A direct S3 object count found 165,805 of 166,775 Parquet shards. This is 99.42 percent complete, with 970 shards left.
+- Completed artifacts: An exact status check found 249 of 292 successful source artifacts. There are 43 source artifacts left.
+- East progress: `nemotron_cc_code_v1/all` reached 1,344 of 2,098 shards. The stage has 32 live workers and zero dead workers.
+- RNO progress: RNO completed `safety_pt/refuseweb/score_5_refusal` at 03:06 UTC and is moving between the remaining small sources.
+- Service recovery check: None of the earlier RNO setup failures repeated as a terminal job failure.
+- Issue update: None. Wait for full completion and verification before the next major issue update.
+- Next action: Continue both roots through completion. Then verify all 292 source artifacts and all 166,775 shard names.
