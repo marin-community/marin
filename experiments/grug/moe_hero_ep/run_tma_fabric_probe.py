@@ -40,7 +40,7 @@ def main() -> int:
             compile_command.extend(("-I", str(include_dir)))
             library_dir = include_dir.parent / "lib"
             if library_dir.is_dir():
-                compile_command.extend(("-L", str(library_dir), f"-Wl,-rpath,{library_dir}"))
+                compile_command.extend(("-L", str(library_dir), "-Xlinker", f"-rpath={library_dir}"))
         print(" ".join(compile_command), flush=True)
         compiled = subprocess.run(compile_command, check=False, capture_output=True, text=True)
         if compiled.returncode != 0:
