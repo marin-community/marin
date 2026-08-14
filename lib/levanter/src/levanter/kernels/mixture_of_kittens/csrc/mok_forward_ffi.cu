@@ -231,8 +231,12 @@ void BindRuntimeToArena(DeviceRuntime* runtime,
   runtime->backward_completions = static_cast<uint64_t*>(at(local, layout.backward_completions));
   runtime->cancellation = static_cast<uint64_t*>(at(local, layout.cancellation));
 
+  // Diagnostic bisection: point every peer at this rank's own arena. Numerically wrong by
+  // construction, but it separates a fault in the local layout from one in peer addressing --
+  // if an illegal access survives this, the offsets are wrong, not the imported bases.
+  const bool self_peers = std::getenv("MOK_ARENA_SELF_PEERS") != nullptr;
   for (int peer = 0; peer < runtime->num_devices; ++peer) {
-    const CUdeviceptr base = workspace.peer_base(peer);
+    const CUdeviceptr base = self_peers ? local : workspace.peer_base(peer);
     runtime->x_ptrs[peer] = at(base, layout.x);
     runtime->combine_ptrs[peer] = at(base, layout.combine);
     runtime->d_y_ptrs[peer] = at(base, layout.d_y);
