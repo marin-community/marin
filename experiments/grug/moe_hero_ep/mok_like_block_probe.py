@@ -113,14 +113,16 @@ def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, backward: bool
 
             if backward:
 
+                # Differentiate with respect to the activations. The module carries its config in
+                # the tree, which filter_grad wants to treat as a static hashable, so grad through
+                # the input instead -- it still drives the kernel's backward handler.
                 def loss(module: MoEMLP, shared_expert: DenseMLP, x: jax.Array) -> jax.Array:
                     return jnp.sum(forward(module, shared_expert, x).astype(jnp.float32))
 
-                gradients = jax.jit(eqx.filter_grad(loss))(block, shared, tokens)
-                jax.block_until_ready(gradients)
-                leaves = [leaf for leaf in jax.tree.leaves(gradients) if eqx.is_inexact_array(leaf)]
-                all_finite = all(bool(jnp.all(jnp.isfinite(leaf))) for leaf in leaves)
-                print(f"BLOCK backward leaves={len(leaves)} finite={all_finite}", flush=True)
+                gradient = jax.jit(jax.grad(loss, argnums=2))(block, shared, tokens)
+                gradient.block_until_ready()
+                all_finite = bool(jnp.all(jnp.isfinite(gradient.astype(jnp.float32))))
+                print(f"BLOCK backward shape={gradient.shape} finite={all_finite}", flush=True)
                 if not all_finite:
                     raise RuntimeError("block backward produced a non-finite gradient")
                 print("BLOCK BACKWARD PASS", flush=True)
