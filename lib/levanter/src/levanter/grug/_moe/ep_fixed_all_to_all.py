@@ -3,6 +3,7 @@
 
 """Fixed-capacity all-to-all expert-parallel Grug MoE backend."""
 
+import functools
 import math
 from collections.abc import Callable
 
@@ -110,6 +111,69 @@ def _fp8_wire_a2a_bwd(_, cotangent):
 _fp8_wire_all_to_all.defvjp(_fp8_wire_a2a_fwd, _fp8_wire_a2a_bwd)
 
 
+@functools.partial(jax.custom_vjp, nondiff_argnums=(4, 5, 6))
+def _fp8_source_dispatch(
+    x_local: Float[Array, "Tlocal H"],
+    token_sources: Int[Array, " send"],
+    linear_indices: Int[Array, " assignments"],
+    keep: Array,
+    local_experts: int,
+    expert_shards: int,
+    capacity: int,
+) -> tuple[Float[Array, "S C H"], ...]:
+    """Quantize-at-source e4m3 dispatch: quantize each token row once, gather fp8
+    bytes plus per-row scales into the send layout, exchange per local expert, and
+    dequantize on the receiver. Numerically identical to quantizing the gathered
+    send buffer (scales are per row and rows are duplicated verbatim), but the
+    quantization work shrinks by the top-k x capacity-padding expansion factor.
+    Backward exchanges bf16 cotangents and reduces over top-k, as in the bf16 path."""
+    return _fp8_source_dispatch_impl(
+        x_local, token_sources, local_experts=local_experts, expert_shards=expert_shards, capacity=capacity
+    )
+
+
+def _fp8_source_dispatch_impl(x_local, token_sources, *, local_experts, expert_shards, capacity):
+    hidden_dim = x_local.shape[1]
+    absmax = jnp.max(jnp.abs(x_local.astype(jnp.float32)), axis=-1, keepdims=True)
+    scale_local = jnp.maximum(absmax, 1e-12) / _FP8_WIRE_MAX
+    q_local = (x_local.astype(jnp.float32) / scale_local).astype(jnp.float8_e4m3fn)
+    padded_q = jnp.concatenate([q_local, jnp.zeros((1, hidden_dim), q_local.dtype)], axis=0)
+    padded_scale = jnp.concatenate([scale_local, jnp.ones((1, 1), scale_local.dtype)], axis=0)
+    send_q = padded_q[token_sources].reshape(local_experts, expert_shards, capacity, hidden_dim)
+    send_scale = padded_scale[token_sources].reshape(local_experts, expert_shards, capacity, 1)
+    received = []
+    for e in range(local_experts):
+        q_recv = jax.lax.all_to_all(send_q[e], "expert", split_axis=0, concat_axis=0, tiled=True)
+        s_recv = jax.lax.all_to_all(send_scale[e], "expert", split_axis=0, concat_axis=0, tiled=True)
+        received.append((q_recv.astype(jnp.float32) * s_recv).astype(x_local.dtype))
+    return tuple(received)
+
+
+def _fp8_source_dispatch_fwd(x_local, token_sources, linear_indices, keep, local_experts, expert_shards, capacity):
+    out = _fp8_source_dispatch_impl(
+        x_local, token_sources, local_experts=local_experts, expert_shards=expert_shards, capacity=capacity
+    )
+    return out, (linear_indices, keep, x_local.shape[0])
+
+
+def _fp8_source_dispatch_bwd(local_experts, expert_shards, capacity, residual, cotangents):
+    linear_indices, keep, tokens_per_shard = residual
+    hidden_dim = cotangents[0].shape[-1]
+    backed = [
+        jax.lax.all_to_all(g, "expert", split_axis=0, concat_axis=0, tiled=True) for g in cotangents
+    ]
+    send_size = local_experts * expert_shards * capacity
+    flat = jnp.stack(backed, axis=0).reshape(send_size, hidden_dim)
+    topk = linear_indices.shape[0] // tokens_per_shard
+    grad_rows = flat[jnp.minimum(linear_indices, send_size - 1)]
+    grad_rows = jnp.where(keep[:, None], grad_rows, 0).astype(jnp.float32)
+    grad_rows = grad_rows.reshape(tokens_per_shard, topk, hidden_dim)
+    return grad_rows.sum(axis=1).astype(cotangents[0].dtype), None, None, None
+
+
+_fp8_source_dispatch.defvjp(_fp8_source_dispatch_fwd, _fp8_source_dispatch_bwd)
+
+
 def _moe_mlp_ep_fixed_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -170,15 +234,20 @@ def _moe_mlp_ep_fixed_a2a_local(
             assignment_sources // topk,
             tokens_per_shard,
         )
-        send_x = _dispatch_gather(x_local, token_sources, linear_indices, keep)
-        send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
+        if fp8_dispatch_wire:
+            received_all = _fp8_source_dispatch(
+                x_local, token_sources, linear_indices, keep, local_experts, expert_shards, capacity
+            )
+        else:
+            send_x = _dispatch_gather(x_local, token_sources, linear_indices, keep)
+            send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
 
     moe_dim = moe_w2_local.shape[1]
     output_parts = []
     for local_expert_index in range(local_experts):
         with jax.named_scope("dispatch"):
             if fp8_dispatch_wire:
-                received = _fp8_wire_all_to_all(send_x[local_expert_index])
+                received = received_all[local_expert_index]
             else:
                 received = jax.lax.all_to_all(
                     send_x[local_expert_index],
