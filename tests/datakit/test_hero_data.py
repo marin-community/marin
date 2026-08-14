@@ -75,6 +75,7 @@ def test_steps_refuse_to_run():
         hero_data.minhash("stack-v3"),
         hero_data.exact_dups(),
         hero_data.fuzzy_dups(),
+        hero_data.domain_cluster_assignment(),
     ]
     for step in steps:
         with pytest.raises(AssertionError, match="must never execute"):

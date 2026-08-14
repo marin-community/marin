@@ -27,7 +27,7 @@ as the registry moves. :func:`tokenized` pins the artifact version instead,
 because the tokenize hash includes one and it has changed under the runs that
 produced this data: each tokenizer was applied to the whole registry in a single
 fleet run, and each of those runs wrote a different version. The dedup stages
-are pinned to a specific run outright.
+and domain cluster assignment are pinned to specific runs outright.
 
 All paths resolve against ``MARIN_PREFIX``. CoreWeave Datakit has one storage
 root, ``s3://marin-us-east-02a/marin``; use it regardless of worker placement.
@@ -99,6 +99,8 @@ NEMOTRON_TOKENIZER = TokenizerPin(
 # which point #8100 had bumped TOKENIZED_ATTR_DATA_VERSION to 4. It is the only
 # source whose outputs sit at the current version, under either tokenizer.
 _ARTIFACT_VERSION_OVERRIDES = {"common-crawl-focus-2026-22": 4}
+
+DOMAIN_CLUSTER_ASSIGNMENT_PATH = "datakit/cluster/domain/v1/harrier-all-sources-10m/train_fe81b456"
 
 # Pinned dedup runs. Both cover all 292 registered sources, and both key the
 # focus crawl under its pre-#8111 extraction, so their attributes do not join
@@ -178,6 +180,11 @@ def fuzzy_dups() -> StepSpec:
     return _frozen_step("hero/fuzzy_dups", f"datakit/{FUZZY_DUPS_ID}")
 
 
+def domain_cluster_assignment() -> StepSpec:
+    """Return the pinned Harrier domain cluster assignment."""
+    return _frozen_step("hero/domain_cluster_assignment", DOMAIN_CLUSTER_ASSIGNMENT_PATH)
+
+
 def harrier(source: str) -> str:
     """Return the fixed complete Harrier path for ``source``."""
     return prefix_join(marin_prefix(), harrier_paths()[source])
@@ -193,6 +200,7 @@ def all_paths() -> dict[str, str]:
     sources = select_sources(None)
     minhash_steps = zephyr_datakit_steps(sources).minhash
     paths = {
+        "domain_cluster_assignment": domain_cluster_assignment().output_path,
         "exact_dups": exact_dups().output_path,
         "fuzzy_dups": fuzzy_dups().output_path,
     }
