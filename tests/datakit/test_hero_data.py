@@ -23,9 +23,8 @@ MANIFEST = hero_data.MANIFEST_PATH
 
 @pytest.fixture(autouse=True)
 def _marin_prefix(monkeypatch):
-    # ``StepSpec.output_path`` resolves ``marin_prefix()``; pin it so the test never
-    # depends on ambient GCS metadata. This is the prefix that holds the paths in
-    # the checked-in manifest.
+    # Pin the sole CoreWeave Datakit prefix instead of reading ambient worker
+    # metadata. Placement must not change the checked hero artifact identities.
     monkeypatch.setenv("MARIN_PREFIX", PREFIX)
 
 

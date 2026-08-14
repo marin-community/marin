@@ -27,8 +27,8 @@ produced this data: each tokenizer was applied to the whole registry in a single
 fleet run, and each of those runs wrote a different version. The dedup stages
 are pinned to a specific run outright.
 
-All paths resolve against ``MARIN_PREFIX``. The hero data currently lives on
-CoreWeave, so read it with ``MARIN_PREFIX=s3://marin-us-east-02a/marin``.
+All paths resolve against ``MARIN_PREFIX``. CoreWeave Datakit has one permanent
+home, ``s3://marin-us-east-02a/marin``; use that prefix when reading hero data.
 """
 
 import contextlib
@@ -51,7 +51,8 @@ _MARIN_PREFIX_ENV = "MARIN_PREFIX"
 
 MANIFEST_PATH = pathlib.Path(__file__).with_name("hero_data_paths.json")
 
-# The manifest records paths below the prefix that holds the hero data.
+# CoreWeave Datakit has one storage root. The manifest stores hero paths
+# relative to that root and is regenerated with the prefix pinned to it.
 MANIFEST_PREFIX = "s3://marin-us-east-02a/marin"
 
 
