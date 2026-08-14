@@ -44,6 +44,25 @@
 
 constexpr size_t kCopyBytes = 4096;
 
+// Device-side atomics on the peer mapping. The megakernel signals readiness and completion with
+// atomics on peer flags, and the in-process path validates cudaDevP2PAttrNativeAtomicSupported
+// between every device pair before its first launch. Nothing establishes the equivalent for an
+// imported fabric mapping, and atomics are a distinct capability from the loads and bulk copies
+// tested above.
+__global__ void AtomicOnPeer(unsigned long long* target) {
+  atomicAdd(target, 1ull);
+}
+
+// Release/acquire across the mapping, which is how the readiness flags are actually consumed.
+__global__ void ReleaseAcquireOnPeer(unsigned long long* flag, unsigned long long* observed) {
+  if (threadIdx.x == 0) {
+    asm volatile("st.release.sys.global.u64 [%0], %1;\n" ::"l"(flag), "l"(7ull) : "memory");
+    unsigned long long value = 0;
+    asm volatile("ld.acquire.sys.global.u64 %0, [%1];\n" : "=l"(value) : "l"(flag) : "memory");
+    *observed = value;
+  }
+}
+
 // Plain vectorized loads from the peer mapping: the control path.
 __global__ void CopyWithLoads(const uint4* __restrict__ src, uint4* __restrict__ dst, int count) {
   const int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -183,6 +202,39 @@ int main() {
   CHECK_CUDA(cudaMemcpy(readback.data(), destination, kCopyBytes, cudaMemcpyDeviceToHost));
   const bool tma_match = std::memcmp(readback.data(), pattern.data(), kCopyBytes) == 0;
   std::printf("RESULT tma=%s\n", tma_match ? "PASS" : "MISMATCH");
+
+  // Atomics on the peer mapping.
+  auto* peer_counter = reinterpret_cast<unsigned long long*>(peer_base);
+  CHECK_CUDA(cudaMemset(peer_counter, 0, sizeof(unsigned long long)));
+  CHECK_CUDA(cudaDeviceSynchronize());
+  AtomicOnPeer<<<1, 128>>>(peer_counter);
+  const cudaError_t atomic_status = cudaDeviceSynchronize();
+  if (atomic_status != cudaSuccess) {
+    std::printf("RESULT atomics=FAIL(%s)\n", cudaGetErrorString(atomic_status));
+    std::printf("VERDICT: imported fabric mappings do not support device-side atomics\n");
+    return 6;
+  }
+  unsigned long long counter = 0;
+  CHECK_CUDA(cudaMemcpy(&counter, peer_counter, sizeof(counter), cudaMemcpyDeviceToHost));
+  const bool atomics_match = counter == 128ull;
+  std::printf("RESULT atomics=%s (counter=%llu, expected 128)\n",
+              atomics_match ? "PASS" : "MISMATCH", counter);
+
+  // Release/acquire, the ordering the readiness protocol depends on.
+  unsigned long long* observed = nullptr;
+  CHECK_CUDA(cudaMalloc(&observed, sizeof(unsigned long long)));
+  CHECK_CUDA(cudaMemset(observed, 0, sizeof(unsigned long long)));
+  ReleaseAcquireOnPeer<<<1, 32>>>(peer_counter, observed);
+  const cudaError_t ordering_status = cudaDeviceSynchronize();
+  if (ordering_status != cudaSuccess) {
+    std::printf("RESULT release_acquire=FAIL(%s)\n", cudaGetErrorString(ordering_status));
+    std::printf("VERDICT: imported fabric mappings do not support system-scope ordering\n");
+    return 7;
+  }
+  unsigned long long seen = 0;
+  CHECK_CUDA(cudaMemcpy(&seen, observed, sizeof(seen), cudaMemcpyDeviceToHost));
+  std::printf("RESULT release_acquire=%s (observed=%llu, expected 7)\n",
+              seen == 7ull ? "PASS" : "MISMATCH", seen);
   std::printf("VERDICT: %s\n", (loads_match && tma_match)
                                    ? "fabric mappings carry both plain loads and TMA"
                                    : "fabric mappings do not carry TMA correctly");
