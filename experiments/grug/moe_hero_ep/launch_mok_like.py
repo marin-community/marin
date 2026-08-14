@@ -57,6 +57,9 @@ MATCHED_CAPACITY_FACTOR = 1.1
 # The sealed v15 expert width (#8108). Both arms of the comparison are pinned to it because the
 # fused kernel cannot express the hero's asymmetric routed/shared widths.
 MOK_LIKE_EXPERT_INTERMEDIATE_DIM = 3072
+# The matched comparison shape from #8108. An expert group wider than this needs more experts:
+# the axis has to divide them.
+MOK_LIKE_MATCHED_NUM_EXPERTS = 8
 PRODUCTION_MOK_LIKE_WORKSPACE_SLOTS = 1
 DEFAULT_GPU_DEVICE_MEMORY_FRACTION = 0.85
 PROMOTED_MOK_LIKE_PINNED_HOST_MEMORY_LIMIT_GB = 176
@@ -213,6 +216,7 @@ def build_backend_comparison_run(
     mok_like_preset: MokLikeExperimentPreset | None = None,
     mok_like_num_devices: int = 4,
     mok_like_workspace_transport: str = MokLikeWorkspaceTransport.IN_PROCESS_PEER.value,
+    num_experts: int = MOK_LIKE_MATCHED_NUM_EXPERTS,
     mok_like_schedule_capacity_factor: float | None = None,
     mok_like_workspace_slots: int | None = None,
     forward_x_storage: MokLikeForwardXStorage | None = None,
@@ -327,7 +331,7 @@ def build_backend_comparison_run(
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=global_batch_size)
     common_model = dataclasses.replace(
         model,
-        num_experts=8,
+        num_experts=num_experts,
         num_shared_experts=1,
         capacity_factor=MATCHED_CAPACITY_FACTOR,
         # The fused kernel runs the routed and shared experts through one megakernel at a single
@@ -380,6 +384,24 @@ def build_backend_comparison_run(
         expert_axis_size = 1
         remat_tag = "recompute-all"
         device_memory_fraction = gpu_device_memory_fraction
+    replica_axis_size = num_nodes
+    # An expert group wider than a node spans hosts, so the expert axis takes those GPUs and the
+    # replica axis keeps what is left. Every other arm keeps the sealed within-node group, where
+    # this reproduces the previous `replica_axis_size=num_nodes` exactly.
+    if backend is MoeBackend.MOK_LIKE and workspace_transport.crosses_processes and mok_like_num_devices > GPUS_PER_NODE:
+        expert_axis_size = mok_like_num_devices
+        total_devices = num_nodes * GPUS_PER_NODE
+        if total_devices % expert_axis_size != 0:
+            raise ValueError(
+                f"expert group of {expert_axis_size} does not divide the {total_devices} devices "
+                f"on {num_nodes} nodes"
+            )
+        replica_axis_size = total_devices // expert_axis_size
+    if model.num_experts % expert_axis_size != 0:
+        raise ValueError(
+            f"num_experts={model.num_experts} must divide over an expert axis of {expert_axis_size}; "
+            f"pass --num-experts with a multiple of {expert_axis_size}"
+        )
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -396,7 +418,7 @@ def build_backend_comparison_run(
         z_loss_weight=1e-4,
         offload_opt_state=True,
         expert_axis_size=expert_axis_size,
-        replica_axis_size=num_nodes,
+        replica_axis_size=replica_axis_size,
         sharding_dump_path=None,
     )
     name = f"grug/moe-backend-comparison/{backend.value}/{run_id}"
@@ -529,6 +551,10 @@ def build_backend_comparison_run(
                     cache_root=MOK_LIKE_BUILD_ROOT,
                     cuda_arch="sm_100a",
                     clone_if_missing=True,
+                    # The adapter is compiled for a fixed rank count and the fabric rendezvous
+                    # checks this one, not the model config's. Leaving it at the default asked a
+                    # 64-process job to rendezvous a four-rank group.
+                    num_devices=mok_like_num_devices,
                 )
                 if backend is MoeBackend.MOK_LIKE
                 else None
@@ -574,6 +600,7 @@ def build_mok_like_run(
     watch_interval: int = 0,
     mok_like_preset: MokLikeExperimentPreset = MokLikeExperimentPreset.PROMOTED_DROPLESS_V12,
     mok_like_num_devices: int = 4,
+    num_experts: int = MOK_LIKE_MATCHED_NUM_EXPERTS,
     mok_like_workspace_transport: str = MokLikeWorkspaceTransport.IN_PROCESS_PEER.value,
     mok_like_schedule_capacity_factor: float | None = None,
     mok_like_workspace_slots: int | None = None,
@@ -594,6 +621,7 @@ def build_mok_like_run(
         backend=MoeBackend.MOK_LIKE,
         mok_like_preset=mok_like_preset,
         mok_like_num_devices=mok_like_num_devices,
+        num_experts=num_experts,
         mok_like_workspace_transport=mok_like_workspace_transport,
         num_nodes=num_nodes,
         num_layers=num_layers,
@@ -675,6 +703,14 @@ def build_mok_like_run(
     help="Expert-group size. Above four ranks the group spans processes and requires fabric transport.",
 )
 @click.option(
+    "--num-experts",
+    type=int,
+    default=MOK_LIKE_MATCHED_NUM_EXPERTS,
+    show_default=True,
+    help="Routed experts on the matched shape. Must divide over the expert axis, so an expert "
+    "group wider than this needs a larger count.",
+)
+@click.option(
     "--mok-like-workspace-transport",
     type=click.Choice([transport.value for transport in MokLikeWorkspaceTransport]),
     default=MokLikeWorkspaceTransport.IN_PROCESS_PEER.value,
@@ -751,6 +787,7 @@ def main(
     watch_interval: int,
     mok_like_preset: MokLikeExperimentPreset | None,
     mok_like_num_devices: int,
+    num_experts: int,
     mok_like_workspace_transport: str,
     mok_like_schedule_capacity_factor: float | None,
     mok_like_workspace_slots: int | None,
@@ -769,6 +806,7 @@ def main(
         backend=MoeBackend(backend),
         mok_like_preset=mok_like_preset,
         mok_like_num_devices=mok_like_num_devices,
+        num_experts=num_experts,
         mok_like_workspace_transport=mok_like_workspace_transport,
         num_nodes=num_nodes,
         num_layers=num_layers,
