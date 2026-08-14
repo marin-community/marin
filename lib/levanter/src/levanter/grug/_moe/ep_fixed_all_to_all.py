@@ -140,7 +140,7 @@ def _moe_mlp_ep_fixed_a2a_local(
     # Two capacity-chunks per local expert deepen the dispatch/GEMM/combine pipeline:
     # six half-size independent chains instead of three, giving the latency-hiding
     # scheduler finer grains to overlap collectives with expert GEMMs.
-    chunk_bounds = (0, capacity // 2, capacity)
+    chunk_bounds = (0, capacity // 2, capacity) if capacity >= 2 else (0, capacity)
     output_parts = []
     for local_expert_index in range(local_experts):
         chunk_outputs = []
