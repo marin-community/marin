@@ -44,6 +44,10 @@ from quack.rounding import RoundingMode
 _ACCUMULATOR_DTYPE = cutlass.Float32
 _DEFAULT_TILE_MN = (256, 128)
 _DEFAULT_CLUSTER_MNK = (2, 1, 1)
+_RMS_DOWN_TILE_MN = (128, 128)
+_RMS_DOWN_CLUSTER_MNK = (2, 1, 1)
+_RMS_GATE_OUTPUT_TILE_MN = (128, 256)
+_RMS_GATE_OUTPUT_CLUSTER_MNK = (1, 1, 1)
 _DEFAULT_BACKWARD_TILE_MN = (256, 128)
 _DEFAULT_BACKWARD_CLUSTER_MNK = (2, 1, 1)
 _DEFAULT_BACKWARD_PRODUCER_TILE_MN = (128, 128)
@@ -1448,8 +1452,8 @@ def quack_coda_rms_down_silu(
     scaled_w_down: jax.Array,
     inverse_rms: jax.Array,
     *,
-    tile_mn: tuple[int, int] = _DEFAULT_TILE_MN,
-    cluster_mnk: tuple[int, int, int] = _DEFAULT_CLUSTER_MNK,
+    tile_mn: tuple[int, int] = _RMS_DOWN_TILE_MN,
+    cluster_mnk: tuple[int, int, int] = _RMS_DOWN_CLUSTER_MNK,
     max_swizzle: int = _DEFAULT_MAX_SWIZZLE,
 ) -> tuple[jax.Array, jax.Array]:
     """Apply the delayed RMS row scale in the down-projection epilogue, then SiLU."""
@@ -1500,8 +1504,8 @@ def quack_coda_rms_gate_output(
     norm_weight: jax.Array,
     inverse_rms: jax.Array,
     *,
-    tile_mn: tuple[int, int] = _DEFAULT_TILE_MN,
-    cluster_mnk: tuple[int, int, int] = _DEFAULT_CLUSTER_MNK,
+    tile_mn: tuple[int, int] = _RMS_GATE_OUTPUT_TILE_MN,
+    cluster_mnk: tuple[int, int, int] = _RMS_GATE_OUTPUT_CLUSTER_MNK,
     max_swizzle: int = _DEFAULT_MAX_SWIZZLE,
 ) -> jax.Array:
     """Fuse the up projection, Sigmoid gate, and normalized output multiply."""
