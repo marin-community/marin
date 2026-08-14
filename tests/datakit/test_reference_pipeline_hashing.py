@@ -14,6 +14,7 @@ import json
 
 import pytest
 from fray.types import ResourceConfig
+from marin.datakit import decon
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
 from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
@@ -136,6 +137,13 @@ def test_decon_drop_set_tracks_normalized_source_identity():
         scale=SMOKE_SCALE,
     )
     assert _steps_by_name(changed)["datakit/decon_drop/_combined"].hash_id != base
+
+
+def test_decon_drop_set_build_version_changes_identity(monkeypatch):
+    base = _steps_by_name(_build())["datakit/decon_drop/_combined"].hash_id
+    monkeypatch.setattr(decon, "DROP_SET_BUILD_VERSION", decon.DROP_SET_BUILD_VERSION + 1)
+    changed = _steps_by_name(_build())["datakit/decon_drop/_combined"].hash_id
+    assert changed != base
 
 
 def test_centroid_seed_rekeys_training():
