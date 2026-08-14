@@ -1,0 +1,21 @@
+{
+  "version": "2.1.0",
+  "source": "loop",
+  "timestamp": "2026-08-14T15:10:00Z",
+  "status": "BOUNDED",
+  "results_tsv": "autoresearch/loop-260811-2250/results.tsv",
+  "findings": [
+    "command buffers (XLA default capture set) +2.1% two-draw confirmed; #5675 hang bisected to COLLECTIVES capture only",
+    "e4m3 dispatch wire with quantize-at-source ~+1.7% combined, loss-neutral; combine-leg wire regresses -2.1%",
+    "a2a chain granularity bracketed: 3 chains optimal (2 fused -2.8%, 6 halved -0.77%)",
+    "save_moe remat corrupts EP training silently (#8253); histogram QB +0.91% and reduces drops",
+    "iris resurrects completed gangs (#8276); harness stall-kill must be warn-only (killed healthy recovery)"
+  ],
+  "config": {
+    "goal": "maximize EP64 training throughput on the #8062 d1024 rung",
+    "scope": "lib/levanter/src/levanter/grug/_moe/** + experiments/grug/moe_hero_ep/**",
+    "metric": "median tokens/s over steps 100-949, drop gate mean last-50 <= 2%",
+    "direction": "higher_is_better",
+    "verify": "autoresearch/harness/verify_ep64.sh"
+  }
+}
