@@ -23,6 +23,9 @@ backend service, certificate, firewall rule, and URL-map route. The optional
 capability backend uses the same NEG and health check but leaves IAP disabled
 only for `/proxy/t` and `/proxy/t/*`. Each finelog contributes an IAP-free
 backend protected by Cloud Armor and its own firewall rules.
+`finelog-dev.oa.dev` remains on the shared frontend, but its CIDR-only
+application auth does not admit requests forwarded by the load balancer. It
+must gain a JWT auth layer before it can accept external pushes.
 
 ## Configuration sources
 
@@ -56,6 +59,11 @@ https://iap.googleapis.com/v1/oauth/clientIds/<CLIENT_ID>:handleRedirect
 
 The controller and finelog VMs must exist before preview because their current
 internal addresses become NEG endpoint inputs.
+
+Deletion protection is declared only on the shared static address, URL map,
+HTTPS proxy, and forwarding rule because each one serves every configured host.
+The bulk-import CLI temporarily protects every imported resource; the first
+normal update removes that metadata from leaf resources.
 
 ```bash
 cd infra/pulumi
