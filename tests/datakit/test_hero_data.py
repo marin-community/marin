@@ -18,7 +18,8 @@ import pytest
 from experiments.datakit import hero_data
 
 PREFIX = hero_data.MANIFEST_PREFIX
-MANIFEST = hero_data.MANIFEST_PATH
+MANIFEST = hero_data.manifest_path()
+EMBED_MANIFEST = hero_data.harrier_paths_path()
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +42,15 @@ def test_paths_match_the_checked_in_manifest():
     so regenerate only once the new paths are known to hold the data.
     """
     assert _relative_paths() == json.loads(MANIFEST.read_text())
+
+
+def test_harrier_paths_are_complete_relative_and_include_focus():
+    paths = json.loads(EMBED_MANIFEST.read_text())
+
+    assert set(paths) == set(hero_data.source_names())
+    assert all("://" not in path and not path.startswith("/") for path in paths.values())
+    expected = f"{PREFIX}/datakit/embed/harrier-all/common-crawl-focus-2026-22_fc8cffa4"
+    assert hero_data.harrier("common-crawl-focus-2026-22") == expected
 
 
 def test_every_registered_source_has_every_stage():

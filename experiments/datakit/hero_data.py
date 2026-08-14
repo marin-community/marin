@@ -6,10 +6,9 @@
 Every Datakit stage writes to a content-addressed path, so reading one back
 normally means knowing which artifact version, tokenizer pin and upstream hash
 produced it. This module holds that knowledge in one place: callers name a
-source and a stage, and get a :class:`StepSpec` pointing at the data, including
-the Harrier embeddings.
+source and a stage, and get a fixed reference to the data.
 
-Every accessor returns a step that points at data which already exists and
+Most accessors return a step that points at data which already exists and
 refuses to execute. Pass one to :func:`marin.execution.artifact.read_artifact`,
 or use it as a dependency of a step you do intend to run::
 
@@ -19,6 +18,9 @@ or use it as a dependency of a step you do intend to run::
 
     step = hero_data.tokenized("stack-v3", hero_data.NEMOTRON_TOKENIZER)
     data = read_artifact(step.output_path, TokenizedAttrData)
+
+:func:`harrier` returns a path string. It reads the fixed source-to-path
+map in ``hero_data_emb_paths.json`` and adds the active Marin prefix.
 
 :func:`normalized` and :func:`minhash` follow current code, so they track main
 as the registry moves. :func:`tokenized` pins the artifact version instead,
@@ -37,19 +39,37 @@ import os
 import pathlib
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
+from functools import cache
 from typing import NoReturn
 
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import tokenize_attributes_step
+from rigging.filesystem import marin_prefix, prefix_join
 
-from experiments.datakit.embeddings.harrier.pipeline import harrier_hash_attrs
 from experiments.datakit.reference_pipeline import select_sources, zephyr_datakit_steps
 
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
 
-MANIFEST_PATH = pathlib.Path(__file__).with_name("hero_data_paths.json")
+
+@cache
+def manifest_path() -> pathlib.Path:
+    """Return the path to the generated Hero Data manifest."""
+    return pathlib.Path(__file__).with_name("hero_data_paths.json")
+
+
+@cache
+def harrier_paths_path() -> pathlib.Path:
+    """Return the path to the complete Harrier path map."""
+    return pathlib.Path(__file__).with_name("hero_data_emb_paths.json")
+
+
+@cache
+def harrier_paths() -> dict[str, str]:
+    """Load the complete Harrier path map."""
+    return json.loads(harrier_paths_path().read_text())
+
 
 # The manifest records the paths as they resolve under the prefix that holds the
 # hero data. It is not region-independent: ``materialize_ghalogs_step`` hashes the
@@ -160,14 +180,9 @@ def fuzzy_dups() -> StepSpec:
     return _frozen_step("hero/fuzzy_dups", f"datakit/{FUZZY_DUPS_ID}")
 
 
-def harrier(source: str) -> StepSpec:
-    """Return the Harrier embeddings for ``source``."""
-    return StepSpec(
-        name=f"datakit/embed/harrier/{source}",
-        deps=[_normalize_step(source)],
-        hash_attrs=harrier_hash_attrs(FUZZY_DUPS_ID),
-        fn=_refuse_to_run,
-    )
+def harrier(source: str) -> str:
+    """Return the fixed complete Harrier path for ``source``."""
+    return prefix_join(marin_prefix(), harrier_paths()[source])
 
 
 def all_paths() -> dict[str, str]:
@@ -188,7 +203,7 @@ def all_paths() -> dict[str, str]:
         paths[f"minhash/{source}"] = _read_only(minhash_steps[source]).output_path
         paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
         paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
-        paths[f"harrier/{source}"] = harrier(source).output_path
+        paths[f"harrier/{source}"] = harrier(source)
     return paths
 
 
@@ -212,7 +227,7 @@ def _pinned_prefix(prefix: str) -> Iterator[None]:
 
 
 def write_manifest() -> dict[str, str]:
-    """Rewrite :data:`MANIFEST_PATH` with the paths as they resolve on CoreWeave.
+    """Rewrite :func:`manifest_path` with the paths as they resolve on CoreWeave.
 
     Pins :data:`MANIFEST_PREFIX` rather than reading the caller's, so the file is
     the same whatever the ambient config. Entries are stored relative to it.
@@ -225,10 +240,10 @@ def write_manifest() -> dict[str, str]:
     if escaped:
         raise ValueError(f"paths outside {MANIFEST_PREFIX} cannot be stored relative: {escaped}")
 
-    MANIFEST_PATH.write_text(json.dumps(relative, indent=1, sort_keys=True) + "\n")
+    manifest_path().write_text(json.dumps(relative, indent=1, sort_keys=True) + "\n")
     return relative
 
 
 if __name__ == "__main__":
     written = write_manifest()
-    print(f"wrote {len(written)} paths to {MANIFEST_PATH}")
+    print(f"wrote {len(written)} paths to {manifest_path()}")
