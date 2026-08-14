@@ -753,11 +753,21 @@ def test_fused_reverse_matches_stock_autodiff(monkeypatch, dtype, tolerance):
     The SM100 kernels are swapped for their pure-JAX references so the composition and the
     batch-axis reductions are exercised on CPU.
     """
+
+    def gate_silu_reverse(normalized, output_cotangent, w_up, gate_preactivation):
+        gate_hidden = jax.nn.silu(gate_preactivation)
+        gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
+        gate_accumulator = output_cotangent * normalized * (gate * (1 - gate))
+        gate_hidden_cotangent = jnp.einsum("td,rd->tr", gate_accumulator, w_up)
+        _, silu_pullback = jax.vjp(jax.nn.silu, gate_preactivation)
+        w_up_cotangent = jnp.einsum("tr,td->rd", gate_hidden, gate_accumulator)
+        return output_cotangent * gate, silu_pullback(gate_hidden_cotangent)[0], w_up_cotangent
+
     monkeypatch.setattr(
         rgn,
         "_backward_kernels",
         lambda: (
-            lambda normalized, output_cotangent, gate: output_cotangent * normalized * (gate * (1 - gate)),
+            gate_silu_reverse,
             rgn.exact_rms_backward_partials_reference,
             rgn.exact_rms_backward_recompute_consumer_reference,
         ),

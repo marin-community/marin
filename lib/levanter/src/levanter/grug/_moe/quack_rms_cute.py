@@ -301,8 +301,7 @@ class _GemmRmsBackwardPartialsMixin(GemmActMixin):
     _epi_ops = (  # pyrefly: ignore[bad-override-mutable-attribute]
         RowVecLoad("mNormWeight"),
         ColVecLoad("mInverseRms"),
-        TileLoad("mOutputCotangent"),
-        TileLoad("mGate"),
+        TileLoad("mDirectCotangent"),
         TileLoad("mX"),
         ColVecReduce("mRowDotPartial"),
         RowVecReduce("mNormWeightPartial"),
@@ -313,8 +312,7 @@ class _GemmRmsBackwardPartialsMixin(GemmActMixin):
     class EpilogueArguments(NamedTuple):  # pyrefly: ignore[bad-override]
         mNormWeight: cute.Tensor | None = None
         mInverseRms: cute.Tensor | None = None
-        mOutputCotangent: cute.Tensor | None = None
-        mGate: cute.Tensor | None = None
+        mDirectCotangent: cute.Tensor | None = None
         mX: cute.Tensor | None = None
         mRowDotPartial: cute.Tensor | None = None
         mNormWeightPartial: cute.Tensor | None = None
@@ -329,16 +327,13 @@ class _GemmRmsBackwardPartialsMixin(GemmActMixin):
     def epi_visit_subtile(self, params, epi_loop_tensors, tRS_rD, tRS_rC=None):
         tDrNormWeight = epi_loop_tensors.get("mNormWeight")
         tDrInverseRms = epi_loop_tensors.get("mInverseRms")
-        tRS_rOutputCotangent = epi_loop_tensors.get("mOutputCotangent")
-        tRS_rGate = epi_loop_tensors.get("mGate")
+        tRS_rDirectCotangent = epi_loop_tensors.get("mDirectCotangent")
         tRS_rX = epi_loop_tensors.get("mX")
         tDrRowDot = epi_loop_tensors.get("mRowDotPartial")
         tDrNormWeightPartial = epi_loop_tensors.get("mNormWeightPartial")
 
         tRS_rUnweightedCotangent = cute.make_rmem_tensor_like(tRS_rD, self.a_dtype)
         tRS_rUnweightedCotangent.store(tRS_rD.load().to(self.a_dtype))
-        tRS_rDirectCotangent = cute.make_rmem_tensor_like(tRS_rD, self.a_dtype)
-        tRS_rDirectCotangent.store(tRS_rOutputCotangent.load() * tRS_rGate.load())
         tRS_rUnweightedCotangent.store(tRS_rUnweightedCotangent.load() + tRS_rDirectCotangent.load())
         tRS_rD.store(tRS_rUnweightedCotangent.load().to(tRS_rD.element_type))
 
@@ -378,8 +373,7 @@ def _build_backward_producer_launcher(
         stream,
         mGatePreactivationCotangent,
         mWDown,
-        mOutputCotangent,
-        mGate,
+        mDirectCotangent,
         mX,
         mNormWeight,
         mInverseRms,
@@ -397,8 +391,7 @@ def _build_backward_producer_launcher(
         epilogue = _GemmRmsBackwardPartialsMixin.EpilogueArguments(
             mNormWeight=mNormWeight,
             mInverseRms=mInverseRms,
-            mOutputCotangent=mOutputCotangent,
-            mGate=mGate,
+            mDirectCotangent=mDirectCotangent,
             mX=mX,
             mRowDotPartial=mRowDotPartial,
             mNormWeightPartial=mNormWeightPartial,
@@ -425,8 +418,7 @@ class _GemmRmsBackwardConsumerMixin(GemmActMixin):
         RowVecLoad("mNormWeight"),
         ColVecLoad("mInverseRms"),
         ColVecLoad("mRowMean"),
-        TileLoad("mOutputCotangent"),
-        TileLoad("mGate"),
+        TileLoad("mDirectCotangent"),
         TileLoad("mX"),
     )
     _extra_param_fields = ()
@@ -436,8 +428,7 @@ class _GemmRmsBackwardConsumerMixin(GemmActMixin):
         mNormWeight: cute.Tensor | None = None
         mInverseRms: cute.Tensor | None = None
         mRowMean: cute.Tensor | None = None
-        mOutputCotangent: cute.Tensor | None = None
-        mGate: cute.Tensor | None = None
+        mDirectCotangent: cute.Tensor | None = None
         mX: cute.Tensor | None = None
         rounding_mode: cutlass.Constexpr[int] = RoundingMode.RN
 
@@ -450,14 +441,11 @@ class _GemmRmsBackwardConsumerMixin(GemmActMixin):
         tDrNormWeight = epi_loop_tensors.get("mNormWeight")
         tDrInverseRms = epi_loop_tensors.get("mInverseRms")
         tDrRowMean = epi_loop_tensors.get("mRowMean")
-        tRS_rOutputCotangent = epi_loop_tensors.get("mOutputCotangent")
-        tRS_rGate = epi_loop_tensors.get("mGate")
+        tRS_rDirectCotangent = epi_loop_tensors.get("mDirectCotangent")
         tRS_rX = epi_loop_tensors.get("mX")
 
         tRS_rUnweightedCotangent = cute.make_rmem_tensor_like(tRS_rD, self.a_dtype)
         tRS_rUnweightedCotangent.store(tRS_rD.load().to(self.a_dtype))
-        tRS_rDirectCotangent = cute.make_rmem_tensor_like(tRS_rD, self.a_dtype)
-        tRS_rDirectCotangent.store(tRS_rOutputCotangent.load() * tRS_rGate.load())
         tRS_rUnweightedCotangent.store(tRS_rUnweightedCotangent.load() + tRS_rDirectCotangent.load())
 
         for i in cutlass.range(cute.size(tRS_rD), unroll_full=True):
@@ -487,8 +475,7 @@ def _build_aliased_backward_consumer_launcher(
         stream,
         mGatePreactivationCotangent,
         mWDown,
-        mOutputCotangent,
-        mGate,
+        mDirectCotangent,
         mRowMean,
         mX,
         mNormWeight,
@@ -506,15 +493,13 @@ def _build_aliased_backward_consumer_launcher(
             mNormWeight=mNormWeight,
             mInverseRms=mInverseRms,
             mRowMean=mRowMean,
-            mOutputCotangent=mOutputCotangent,
-            mGate=mGate,
+            mDirectCotangent=mDirectCotangent,
             mX=mX,
         )
         scheduler = make_scheduler_args(max_active_clusters, max_swizzle, None)
-        # ``cutlass_call`` removes aliased outputs from the launcher ABI. Use the gate input
-        # as the GEMM destination so the epilogue can load each gate tile before replacing it
-        # with the corresponding RMS input cotangent.
-        gemm(mGatePreactivationCotangent, mWDown, mGate, None, epilogue, scheduler, None, stream)
+        # ``cutlass_call`` removes aliased outputs from the launcher ABI. The direct cotangent
+        # is dead after this call, so replace it with the corresponding RMS input cotangent.
+        gemm(mGatePreactivationCotangent, mWDown, mDirectCotangent, None, epilogue, scheduler, None, stream)
 
     return launcher
 
@@ -556,10 +541,10 @@ def _gate_accumulator_tile(output_cotangent, normalized, gate):
 def _gate_silu_reverse_kernel(
     normalized_ref,
     output_cotangent_ref,
-    gate_ref,
     w_up_ref,
     gate_preactivation_ref,
     w_up_zero_ref,
+    direct_cotangent_ref,
     gate_preactivation_cotangent_ref,
     w_up_cotangent_ref,
     *,
@@ -583,9 +568,14 @@ def _gate_silu_reverse_kernel(
         span_d = pl.ds(start_d, block_d)
         normalized = plgpu.load(normalized_ref.at[span_m, span_d])
         output_cotangent = plgpu.load(output_cotangent_ref.at[span_m, span_d])
-        gate = plgpu.load(gate_ref.at[span_m, span_d])
-        gate_accumulator = _gate_accumulator_tile(output_cotangent, normalized, gate)
         w_up = plgpu.load(w_up_ref.at[span_r, span_d])
+        gate_logits = pl.dot(gate_hidden, w_up).astype(jnp.bfloat16)
+        gate = jax.nn.sigmoid(gate_logits.astype(jnp.float32)).astype(jnp.bfloat16)
+        gate_accumulator = _gate_accumulator_tile(output_cotangent, normalized, gate)
+        plgpu.store(
+            direct_cotangent_ref.at[span_m, span_d],
+            (output_cotangent * gate).astype(direct_cotangent_ref.dtype),
+        )
         plgpu.atomic_add(w_up_cotangent_ref, (span_r, span_d), pl.dot(gate_hidden.T, gate_accumulator))
         return accumulator + pl.dot(gate_accumulator, w_up.T)
 
@@ -615,12 +605,13 @@ def _gate_silu_reverse_call(rows: int, hidden_dim: int, rank: int, dtype):
     return pl.pallas_call(
         functools.partial(_gate_silu_reverse_kernel, block_m=block_m, block_d=block_d),
         out_shape=(
+            jax.ShapeDtypeStruct((rows, hidden_dim), dtype),
             jax.ShapeDtypeStruct((rows, rank), dtype),
             jax.ShapeDtypeStruct((rank, hidden_dim), jnp.float32),
         ),
-        in_specs=(pl.no_block_spec,) * 6,
-        out_specs=(pl.no_block_spec,) * 2,
-        input_output_aliases={5: 1},
+        in_specs=(pl.no_block_spec,) * 5,
+        out_specs=(pl.no_block_spec,) * 3,
+        input_output_aliases={1: 0, 4: 2},
         grid=(pl.cdiv(rows, block_m),),
         compiler_params=plgpu.CompilerParams(num_warps=8, num_stages=2),
         cost_estimate=cost,
@@ -923,20 +914,19 @@ def _quack_coda_gate_silu_reverse_components(
 def quack_coda_gate_silu_reverse(
     normalized: jax.Array,
     output_cotangent: jax.Array,
-    gate: jax.Array,
     w_up: jax.Array,
     gate_preactivation: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
-    """Return gate-preactivation and up-weight cotangents without exposing gate dY."""
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Return direct, gate-preactivation, and up-weight cotangents without exposing gate dY."""
     if normalized.ndim != 2:
         raise ValueError(f"normalized must be rank 2, got {normalized.shape}")
     rows, hidden_dim = normalized.shape
     rank = w_up.shape[0]
-    if output_cotangent.shape != normalized.shape or gate.shape != normalized.shape:
+    if output_cotangent.shape != normalized.shape:
         raise ValueError("full-width gate reverse inputs must have matching shapes")
     if w_up.shape != (rank, hidden_dim) or gate_preactivation.shape != (rows, rank):
         raise ValueError("gate-SiLU reverse inputs have inconsistent dimensions")
-    dtypes = {value.dtype for value in (normalized, output_cotangent, gate, w_up, gate_preactivation)}
+    dtypes = {value.dtype for value in (normalized, output_cotangent, w_up, gate_preactivation)}
     if dtypes != {jnp.dtype(jnp.bfloat16)}:
         raise ValueError(f"gate-SiLU reverse requires matching BF16 inputs, got {sorted(map(str, dtypes))}")
     divisors = (_RMS_REVERSE_BLOCK_M, _RMS_REVERSE_BLOCK_D, _GATE_REVERSE_BLOCK_N)
@@ -946,15 +936,16 @@ def quack_coda_gate_silu_reverse(
             f"{divisors}, got {(rows, hidden_dim, rank)}"
         )
 
-    gate_preactivation_cotangent, w_up_cotangent = _gate_silu_reverse_call(rows, hidden_dim, rank, normalized.dtype)(
+    direct_cotangent, gate_preactivation_cotangent, w_up_cotangent = _gate_silu_reverse_call(
+        rows, hidden_dim, rank, normalized.dtype
+    )(
         normalized,
         output_cotangent,
-        gate,
         w_up,
         gate_preactivation,
         jnp.zeros(w_up.shape, dtype=jnp.float32),
     )
-    return gate_preactivation_cotangent, w_up_cotangent.astype(w_up.dtype)
+    return direct_cotangent, gate_preactivation_cotangent, w_up_cotangent.astype(w_up.dtype)
 
 
 @functools.lru_cache(maxsize=None)
@@ -1054,8 +1045,7 @@ def quack_rms_gated_norm_reverse(
 def quack_coda_rms_backward_producer(
     gate_preactivation_cotangent: jax.Array,
     w_down: jax.Array,
-    output_cotangent: jax.Array,
-    gate: jax.Array,
+    direct_cotangent: jax.Array,
     x: jax.Array,
     norm_weight: jax.Array,
     inverse_rms: jax.Array,
@@ -1080,20 +1070,16 @@ def quack_coda_rms_backward_producer(
     if w_rank != rank:
         raise ValueError(f"contracting dimensions differ: {rank} != {w_rank}")
     expected_full_shape = (rows, hidden_dim)
-    if (
-        output_cotangent.shape != expected_full_shape
-        or gate.shape != expected_full_shape
-        or x.shape != expected_full_shape
-    ):
+    if direct_cotangent.shape != expected_full_shape or x.shape != expected_full_shape:
         raise ValueError(
             f"expected full-width tensors with shape {expected_full_shape}, got "
-            f"{output_cotangent.shape}, {gate.shape}, and {x.shape}"
+            f"{direct_cotangent.shape} and {x.shape}"
         )
     if norm_weight.shape != (hidden_dim,) or inverse_rms.shape != (rows,):
         raise ValueError(
             f"expected norm_weight[{hidden_dim}] and inverse_rms[{rows}], got {norm_weight.shape} and {inverse_rms.shape}"
         )
-    if not (gate_preactivation_cotangent.dtype == w_down.dtype == output_cotangent.dtype == gate.dtype == x.dtype):
+    if not (gate_preactivation_cotangent.dtype == w_down.dtype == direct_cotangent.dtype == x.dtype):
         raise ValueError("GEMM and full-width tensor inputs must have the same dtype")
     if x.dtype != jnp.bfloat16:
         raise ValueError(f"RMS backward producer requires BF16 inputs, got {x.dtype}")
@@ -1137,15 +1123,14 @@ def quack_coda_rms_backward_producer(
     call = cutlass_call(
         launcher,
         output_shape_dtype=output_shape_dtype,
-        input_spec=(a_spec, w_down_spec, matrix_spec, matrix_spec, matrix_spec, vector_spec, vector_spec),
+        input_spec=(a_spec, w_down_spec, matrix_spec, matrix_spec, vector_spec, vector_spec),
         output_spec=(partial_spec, partial_spec),
         use_static_tensors=False,
     )
     row_dot_partial, norm_weight_partial = call(
         gate_preactivation_cotangent[None, :, :],
         w_down[None, :, :],
-        output_cotangent[None, :, :],
-        gate[None, :, :],
+        direct_cotangent[None, :, :],
         x[None, :, :],
         norm_weight[None, :],
         inverse_rms[None, :],
@@ -1156,8 +1141,7 @@ def quack_coda_rms_backward_producer(
 def quack_coda_rms_backward_consumer(
     gate_preactivation_cotangent: jax.Array,
     w_down: jax.Array,
-    output_cotangent: jax.Array,
-    gate: jax.Array,
+    direct_cotangent: jax.Array,
     row_dot: jax.Array,
     x: jax.Array,
     norm_weight: jax.Array,
@@ -1175,19 +1159,12 @@ def quack_coda_rms_backward_consumer(
     if rank != w_rank:
         raise ValueError("RMS backward consumer contracting dimensions do not agree")
     full_shape = (rows, hidden_dim)
-    if output_cotangent.shape != full_shape or gate.shape != full_shape or x.shape != full_shape:
+    if direct_cotangent.shape != full_shape or x.shape != full_shape:
         raise ValueError("RMS backward consumer full-width dimensions do not agree")
     rows, hidden_dim = x.shape
     if row_dot.shape != (rows,) or inverse_rms.shape != (rows,) or norm_weight.shape != (hidden_dim,):
         raise ValueError("RMS backward consumer vector dimensions do not agree")
-    if not (
-        gate_preactivation_cotangent.dtype
-        == w_down.dtype
-        == output_cotangent.dtype
-        == gate.dtype
-        == x.dtype
-        == jnp.bfloat16
-    ):
+    if not (gate_preactivation_cotangent.dtype == w_down.dtype == direct_cotangent.dtype == x.dtype == jnp.bfloat16):
         raise ValueError("RMS backward consumer requires matching BF16 tensors")
     if row_dot.dtype != jnp.float32 or inverse_rms.dtype != jnp.float32:
         raise ValueError("row_dot and inverse_rms must be float32")
@@ -1204,7 +1181,7 @@ def quack_coda_rms_backward_consumer(
     vector_spec = tensor_spec(divisibility=_VECTOR_DIVISIBILITY, static=False)
     call = cutlass_call(
         launcher,
-        input_output_aliases={3: 0},
+        input_output_aliases={2: 0},
         output_shape_dtype=jax.ShapeDtypeStruct(
             (1, rows, hidden_dim),
             x.dtype,
@@ -1214,7 +1191,6 @@ def quack_coda_rms_backward_consumer(
             manual_axis_type=jax.typeof(x).manual_axis_type,
         ),
         input_spec=(
-            matrix_spec,
             matrix_spec,
             matrix_spec,
             matrix_spec,
@@ -1230,8 +1206,7 @@ def quack_coda_rms_backward_consumer(
     return call(
         gate_preactivation_cotangent[None, :, :],
         w_down[None, :, :],
-        output_cotangent[None, :, :],
-        gate[None, :, :],
+        direct_cotangent[None, :, :],
         row_mean[None, :],
         x[None, :, :],
         norm_weight[None, :],

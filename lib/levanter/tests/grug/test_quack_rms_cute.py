@@ -48,10 +48,11 @@ def _producer_inputs():
     w_down = (0.1 * jax.random.normal(keys[1], (_HIDDEN_DIM, _RANK), dtype=jnp.float32)).astype(jnp.bfloat16)
     output_cotangent = jax.random.normal(keys[2], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
     gate = jax.nn.sigmoid(jax.random.normal(keys[3], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16))
+    direct_cotangent = output_cotangent * gate
     x = jax.random.normal(keys[4], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
     norm_weight = jnp.ones((_HIDDEN_DIM,), dtype=jnp.bfloat16)
     inverse_rms = jax.lax.rsqrt(jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1) + _NORM_EPS)
-    return gate_preactivation_cotangent, w_down, output_cotangent, gate, x, norm_weight, inverse_rms
+    return gate_preactivation_cotangent, w_down, direct_cotangent, x, norm_weight, inverse_rms
 
 
 def test_backward_producer_matches_reference():
@@ -92,8 +93,8 @@ def test_backward_consumer_matches_reference():
     args = _producer_inputs()
     row_dot_partial, _ = quack_rms_cute.quack_coda_rms_backward_producer(*args)
     row_dot = jnp.sum(row_dot_partial, axis=-1)
-    expected = exact_rms_backward_recompute_consumer_reference(*args[:4], row_dot, *args[4:])
-    actual = quack_rms_cute.quack_coda_rms_backward_consumer(*args[:4], row_dot, *args[4:])
+    expected = exact_rms_backward_recompute_consumer_reference(*args[:3], row_dot, *args[3:])
+    actual = quack_rms_cute.quack_coda_rms_backward_consumer(*args[:3], row_dot, *args[3:])
 
     _assert_close(actual, expected, tolerance=_BF16_TOLERANCE, label="input cotangent")
 
@@ -131,12 +132,12 @@ def test_gate_silu_reverse_matches_reference():
     keys = jax.random.split(jax.random.key(30), 5)
     normalized = jax.random.normal(keys[0], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
     output_cotangent = jax.random.normal(keys[1], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16)
-    gate = jax.nn.sigmoid(jax.random.normal(keys[2], (_ROWS, _HIDDEN_DIM), dtype=jnp.bfloat16))
     w_up = (0.1 * jax.random.normal(keys[3], (_RANK, _HIDDEN_DIM), dtype=jnp.float32)).astype(jnp.bfloat16)
     gate_preactivation = jax.random.normal(keys[4], (_ROWS, _RANK), dtype=jnp.bfloat16)
     gate_hidden = jax.nn.silu(gate_preactivation)
+    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
 
-    actual = quack_rms_cute.quack_coda_gate_silu_reverse(normalized, output_cotangent, gate, w_up, gate_preactivation)
+    actual = quack_rms_cute.quack_coda_gate_silu_reverse(normalized, output_cotangent, w_up, gate_preactivation)
     expected = exact_gate_silu_reverse_reference(
         output_cotangent,
         normalized,
@@ -145,7 +146,9 @@ def test_gate_silu_reverse_matches_reference():
         w_up,
         gate_preactivation,
     )
-    for label, actual_value, expected_value in zip(("gate preactivation", "w_up"), actual, expected, strict=True):
+    for label, actual_value, expected_value in zip(
+        ("direct cotangent", "gate preactivation", "w_up"), actual, expected, strict=True
+    ):
         _assert_close(actual_value, expected_value, tolerance=_BF16_TOLERANCE, label=label)
 
 

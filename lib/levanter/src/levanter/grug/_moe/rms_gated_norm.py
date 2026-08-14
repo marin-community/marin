@@ -90,13 +90,13 @@ def exact_gate_silu_reverse_reference(
     gate_hidden: jax.Array,
     w_up: jax.Array,
     preactivation: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
+) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Reverse the output gate and SiLU projection without exposing their full-width edge."""
     gate_cotangent = output_cotangent * normalized
     gate_accumulator = gate_cotangent * (gate * (1 - gate))
     w_up_cotangent = jnp.einsum("tr,td->rd", gate_hidden, gate_accumulator)
     preactivation_cotangent, _ = exact_silu_backward_reference(gate_accumulator, w_up, preactivation)
-    return preactivation_cotangent, w_up_cotangent
+    return output_cotangent * gate, preactivation_cotangent, w_up_cotangent
 
 
 def exact_rms_backward_producer_reference(
@@ -138,14 +138,12 @@ def exact_rms_backward_consumer(
 def exact_rms_backward_partials_reference(
     gate_preactivation_cotangent: jax.Array,
     w_down: jax.Array,
-    output_cotangent: jax.Array,
-    gate: jax.Array,
+    direct_cotangent: jax.Array,
     x: jax.Array,
     norm_weight: jax.Array,
     inverse_rms: jax.Array,
 ) -> tuple[jax.Array, jax.Array]:
     """Reference for row-dot and norm-gain partials without a full-width output."""
-    direct_cotangent = output_cotangent * gate
     unweighted_cotangent, row_dot_partial = exact_rms_backward_producer_reference(
         gate_preactivation_cotangent, w_down, direct_cotangent, x, norm_weight, inverse_rms
     )
@@ -157,15 +155,13 @@ def exact_rms_backward_partials_reference(
 def exact_rms_backward_recompute_consumer_reference(
     gate_preactivation_cotangent: jax.Array,
     w_down: jax.Array,
-    output_cotangent: jax.Array,
-    gate: jax.Array,
+    direct_cotangent: jax.Array,
     row_dot: jax.Array,
     x: jax.Array,
     norm_weight: jax.Array,
     inverse_rms: jax.Array,
 ) -> jax.Array:
     """Reference for the recomputing consumer that emits final ``dx`` directly."""
-    direct_cotangent = output_cotangent * gate
     unweighted_cotangent, _ = exact_rms_backward_producer_reference(
         gate_preactivation_cotangent, w_down, direct_cotangent, x, norm_weight, inverse_rms
     )
@@ -185,15 +181,14 @@ def exact_rms_gated_norm_reverse_reference(
     inverse_rms: jax.Array,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     """Reference for the single-boundary device-local reverse."""
-    gate_preactivation_cotangent, w_up_cotangent = exact_gate_silu_reverse_reference(
+    direct_cotangent, gate_preactivation_cotangent, w_up_cotangent = exact_gate_silu_reverse_reference(
         output_cotangent, normalized, gate, gate_hidden, w_up, preactivation
     )
     w_down_cotangent = jnp.einsum("td,tr->dr", normalized, gate_preactivation_cotangent)
     row_dot_partial, norm_weight_partial = exact_rms_backward_partials_reference(
         gate_preactivation_cotangent,
         w_down,
-        output_cotangent,
-        gate,
+        direct_cotangent,
         x,
         norm_weight,
         inverse_rms,
@@ -203,8 +198,7 @@ def exact_rms_gated_norm_reverse_reference(
     x_cotangent = exact_rms_backward_recompute_consumer_reference(
         gate_preactivation_cotangent,
         w_down,
-        output_cotangent,
-        gate,
+        direct_cotangent,
         row_dot,
         x,
         norm_weight,
@@ -349,12 +343,9 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     normalized = (x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None] * residuals.norm_weight).astype(
         x_flat.dtype
     )
-    gate_hidden = jax.nn.silu(residuals.gate_preactivation)
-    gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, residuals.w_up))
-    gate_preactivation_cotangent, w_up_cotangent = gate_silu_reverse(
+    direct_cotangent, gate_preactivation_cotangent, w_up_cotangent = gate_silu_reverse(
         normalized,
         output_cotangent,
-        gate,
         residuals.w_up,
         residuals.gate_preactivation,
     )
@@ -365,8 +356,7 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     row_dot_partial, norm_weight_partial = rms_backward_producer(
         gate_preactivation_cotangent,
         residuals.w_down,
-        output_cotangent,
-        gate,
+        direct_cotangent,
         x_flat,
         residuals.norm_weight,
         residuals.inverse_rms,
@@ -380,8 +370,7 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     x_cotangent = rms_backward_consumer(
         gate_preactivation_cotangent,
         residuals.w_down,
-        output_cotangent,
-        gate,
+        direct_cotangent,
         row_dot,
         x_flat,
         residuals.norm_weight,
