@@ -1359,3 +1359,12 @@ author: Rafal Wojdyla
 - Result: Both source jobs and the root succeeded. The root then closed the shared context and stopped its coordinator and worker group. No production merge was launched.
 - Issue update: None. This smoke result does not change backfill progress.
 - Next action: Continue both backfill roots through completion. Run the full partition verification before a production merge.
+
+### 2026-08-14 01:23 UTC - Backfill passed 98 percent
+
+- Durable output: A direct S3 object count found 164,066 of 166,775 output Parquet shards. This is 98.38 percent complete, with 2,709 shards left.
+- Rate: The output gained 240 shards after the 01:10 UTC count of 163,826 shards.
+- Active work: East continues `nemotron_cc_v2/medium_high_quality`. RNO continues `nemotron_specialized_v1_2/fact_seeking`. Both source jobs have zero failures and zero preemptions.
+- RNO service recovery: TEI service `219` failed because port `12438` was already in use. Reconstructed its exact saved batch request and replayed only that service. The job returned to the running state and entered its first build attempt with the same H100, CPU, memory, disk, image, bundle, and callable files.
+- Issue update: None. This service recovery did not stop source output and is not a major run checkpoint.
+- Next action: Continue both roots through completion. Verify all 292 source artifacts and all 166,775 shard names before the production merge.
