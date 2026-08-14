@@ -520,6 +520,7 @@ def _expert_axis_index(mesh: jax.sharding.Mesh) -> int:
 def _initialize_fabric_arena(
     library: ctypes.CDLL,
     *,
+    mesh: jax.sharding.Mesh,
     num_devices: int,
     num_tokens: int,
     hidden_dim: int,
@@ -621,6 +622,7 @@ def initialize_mok_like_runtime(
     if workspace_transport is MokLikeWorkspaceTransport.FABRIC_SYMMETRIC:
         _initialize_fabric_arena(
             library,
+            mesh=mesh,
             num_devices=build_config.num_devices,
             num_tokens=num_tokens,
             hidden_dim=hidden_dim,
