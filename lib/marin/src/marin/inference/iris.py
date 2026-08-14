@@ -16,7 +16,7 @@ import requests
 from fray.client import JobHandle
 from fray.current_client import current_client
 from fray.types import ActorConfig, CpuConfig, Entrypoint, JobRequest, JobStatus
-from iris.client import iris_ctx
+from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName, is_job_finished
 from iris.rpc import job_pb2

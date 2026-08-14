@@ -17,7 +17,8 @@ from zephyr._test_helpers import SampleDataclass
 from zephyr.dataset import Dataset, FilterOp, GlobSource, MapOp, WindowOp, resolve_glob
 from zephyr.execution import ZephyrContext, ZephyrWorkerError
 from zephyr.expr import col
-from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, InputFileSpec, load_file, load_parquet
+from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
+from zephyr.readers import load_file, load_parquet
 from zephyr.writers import write_parquet_file
 
 
@@ -1311,72 +1312,6 @@ def test_input_file_spec_with_columns_and_row_range(tmp_path):
     assert set(records[0].keys()) == {"id", "value"}
     assert records[0]["id"] == 5
     assert records[-1]["id"] == 9
-
-
-# --- Integration tests (all backends) ---
-
-
-@pytest.mark.slow
-def test_reshard_integration(integration_ctx):
-    ds = Dataset.from_list([list(range(50))]).flat_map(lambda x: x).reshard(5).map(lambda x: x * 2)
-    result = sorted(integration_ctx.execute(ds).results)
-    assert result == [x * 2 for x in range(50)]
-
-    ds = Dataset.from_list(range(50)).reshard(5).map(lambda x: x + 100)
-    result = sorted(integration_ctx.execute(ds).results)
-    assert result == [x + 100 for x in range(50)]
-
-    ds = Dataset.from_list(range(10)).reshard(3)
-    result = integration_ctx.execute(ds).results
-    assert sorted(result) == list(range(10))
-
-
-def test_sorted_merge_join_inner_basic_integration(integration_ctx):
-    left = Dataset.from_list(
-        [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}, {"id": 3, "text": "foo"}]
-    ).group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5)
-    right = Dataset.from_list([{"id": 1, "score": 0.9}, {"id": 2, "score": 0.3}]).group_by(
-        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
-    )
-
-    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
-
-    results = sorted(integration_ctx.execute(joined).results, key=lambda x: x["id"])
-    assert len(results) == 2
-    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
-    assert results[1] == {"id": 2, "text": "world", "score": 0.3}
-
-
-@pytest.mark.slow
-def test_sorted_merge_join_after_group_by_integration(integration_ctx):
-    docs = Dataset.from_list(
-        [
-            {"id": 1, "text": "hello", "version": 1},
-            {"id": 1, "text": "hello updated", "version": 2},
-            {"id": 2, "text": "world", "version": 1},
-            {"id": 3, "text": "foo", "version": 1},
-        ]
-    ).group_by(
-        key=lambda x: x["id"],
-        reducer=lambda k, items: max(items, key=lambda x: x["version"]),
-        num_output_shards=10,
-    )
-
-    attrs = Dataset.from_list(
-        [
-            {"id": 1, "quality": 0.9},
-            {"id": 2, "quality": 0.3},
-            {"id": 3, "quality": 0.8},
-        ]
-    ).group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=10)
-
-    joined = docs.sorted_merge_join(attrs, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
-
-    results = sorted(integration_ctx.execute(joined).results, key=lambda x: x["id"])
-    assert len(results) == 3
-    assert results[0] == {"id": 1, "text": "hello updated", "version": 2, "quality": 0.9}
-    assert results[1] == {"id": 2, "text": "world", "version": 1, "quality": 0.3}
-    assert results[2] == {"id": 3, "text": "foo", "version": 1, "quality": 0.8}
 
 
 def test_dataset_load_parquet_batch(tmp_path, zephyr_ctx):

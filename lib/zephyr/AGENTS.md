@@ -17,7 +17,8 @@ Lazy dataset processing library. Start with the shared instructions in `/AGENTS.
 - `src/zephyr/coordinator.py`: pipeline state, task scheduling, counters, and result storage
 - `src/zephyr/worker.py`: worker polling, task threads, and heartbeats
 - `src/zephyr/plan.py` — `compute_plan`, `PhysicalPlan`, operation fusion
-- `src/zephyr/readers.py` — `load_jsonl`, `load_parquet`, `load_vortex`, `InputFileSpec`
+- `src/zephyr/readers.py` — `load_jsonl`, `load_parquet`, `load_vortex`
+- `src/zephyr/input_file.py` — lightweight `InputFileSpec` and file-path column contract
 - `src/zephyr/writers.py` — `write_jsonl_file`, `write_parquet_file`, `write_vortex_file`, Levanter cache writer
 - `src/zephyr/shuffle.py` — scatter pipeline internals (`ScatterFileIterator`, `ScatterReader`, hash-routing, combiner, zstd-chunk file format with byte-range sidecar)
 - `src/zephyr/expr.py` — `Expr`, `col`, `lit` for filter expressions

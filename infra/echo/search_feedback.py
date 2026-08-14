@@ -11,6 +11,7 @@ MAX_QUERY_CHARACTERS = 2_000
 MAX_NOTE_CHARACTERS = 2_000
 MAX_RESULT_ID_CHARACTERS = 4_096
 MAX_GRADES = search_config.RERANK_MAX_CANDIDATES
+MAX_NUMERIC_RESULT_ID = 2**63 - 1
 MIN_GRADE = search_config.SEARCH_FEEDBACK_MIN_GRADE
 MAX_GRADE = search_config.SEARCH_FEEDBACK_MAX_GRADE
 
@@ -21,8 +22,11 @@ def checked_result_id(value: str) -> str:
         raise ValueError("must be <wiki|file|discord|pr|issue>:<id>")
     if len(value) > MAX_RESULT_ID_CHARACTERS:
         raise ValueError(f"must be at most {MAX_RESULT_ID_CHARACTERS} characters")
-    if domain != "file" and not detail.isdecimal():
-        raise ValueError(f"{domain} result IDs are numeric")
+    if domain != "file":
+        if not detail.isdecimal():
+            raise ValueError(f"{domain} result IDs are numeric")
+        if int(detail) > MAX_NUMERIC_RESULT_ID:
+            raise ValueError(f"{domain} result IDs must fit a signed 64-bit integer")
     return value
 
 

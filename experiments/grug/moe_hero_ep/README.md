@@ -19,7 +19,9 @@ data-parallel rack uses one 64-device expert mesh.
 - MoE backend: `fixed_all_to_all` by default, with `ragged_all_to_all` as the `ep-ragged` flavor.
   The default backend uses gather dispatch, structured custom VJPs, and capacity factor 1.33.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
-- Runtime: GPU command buffers off, `cuda_async`, PGLE on, and collective overlap limit 4.
+- Runtime: one JAX process per GPU, GPU command buffers at the XLA default capture set, `cuda_async`, PGLE off (the
+  per-process CUPTI sessions cannot profile concurrently; an explicit `JAX_ENABLE_PGLE` env
+  setting still wins), and collective overlap limit 4.
 - Output: Metrics only by default. `--save-checkpoints` writes checkpoints, but restore with the
   pinned-host optimizer state has a known memory-kind mismatch. Do not use these checkpoints to
   restart a run.

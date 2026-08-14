@@ -18,12 +18,12 @@ CLUSTER_ROLE_RULES = [
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
     {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
+    {"apiGroups": [""], "resources": ["nodes/proxy"], "verbs": ["get"]},
     {
         "apiGroups": [""],
         "resources": ["configmaps"],
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
-    {"apiGroups": ["metrics.k8s.io"], "resources": ["pods"], "verbs": ["get", "list"]},
     {
         "apiGroups": ["policy"],
         "resources": ["poddisruptionbudgets"],

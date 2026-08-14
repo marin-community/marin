@@ -14,6 +14,7 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
 from levanter.kernels.pallas.fused_cross_entropy_loss import xla as fused_xla
+from levanter.kernels.pallas.fused_cross_entropy_loss.config import BlockSizes
 from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
     linear_softmax_cross_entropy_loss_reference,
     linear_softmax_cross_entropy_loss_streaming,
@@ -234,6 +235,81 @@ def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff():
 
     assert jnp.allclose(gx_custom, gx_stream, atol=1e-5, rtol=1e-5)
     assert jnp.allclose(gw_custom, gw_stream, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.parametrize("activation_scale", [1.0, 30.0, 1000.0])
+def test_xla_streaming_custom_vjp_grad_matches_reference_in_bfloat16(activation_scale):
+    """Gradient parity for bfloat16 activations and a bfloat16 head, across logit magnitudes.
+
+    The streaming backward recomputes logits in float32 and forms `exp(logits - lse)`. If the
+    forward accumulates those logits in a narrower dtype, the two logit sets disagree and the
+    exponential turns that disagreement into an unbounded gradient error: at bf16 logits of
+    magnitude ~4000 the peak probability came out ~2.5e3 times too large. Float32 inputs cannot
+    see this, because there both sides accumulate in float32.
+
+    XLA:CPU folds the bfloat16 narrowing away, so the mismatch is unobservable there and this
+    test passes with or without the fix. `test_streaming_lse_is_float32_for_bfloat16_inputs`
+    is the backend-independent guard.
+    """
+    if jax.default_backend() == "cpu":
+        pytest.skip("XLA:CPU folds the bfloat16 logit narrowing; the mismatch cannot be observed")
+
+    key = jax.random.PRNGKey(11)
+    key_x, key_w, key_y, key_c = jax.random.split(key, 4)
+
+    b_dim, h_dim, v_dim, v_block = 64, 64, 1024, 128
+    x = (jax.random.normal(key_x, (b_dim, h_dim), dtype=jnp.float32) * activation_scale).astype(jnp.bfloat16)
+    w = (jax.random.normal(key_w, (h_dim, v_dim), dtype=jnp.float32) * 0.1).astype(jnp.bfloat16)
+    y = jax.random.randint(key_y, (b_dim,), 0, v_dim, dtype=jnp.int32)
+    cotangent = jax.random.normal(key_c, (b_dim,), dtype=jnp.float32)
+
+    def weighted(loss, lse):
+        return jnp.sum(loss * cotangent) + 0.3 * jnp.sum(lse * cotangent)
+
+    def loss_custom(x_raw, w_raw):
+        loss, lse = fused_xla.linear_softmax_cross_entropy_loss_xla(
+            x_raw, y, w_raw, block_sizes=BlockSizes(v_block_size=v_block), dtype=jnp.float32
+        )
+        return weighted(loss, lse)
+
+    def loss_ref(x_raw, w_raw):
+        # Independent dense oracle: exact float32 logits from the same bfloat16 inputs.
+        logits = jnp.einsum(
+            "bh,hv->bv", x_raw.astype(jnp.float32), w_raw.astype(jnp.float32), precision=jax.lax.Precision.HIGHEST
+        )
+        lse = jax.nn.logsumexp(logits, axis=-1)
+        picked = jnp.take_along_axis(logits, y[:, None], axis=-1)[:, 0]
+        return weighted(lse - picked, lse)
+
+    gx_custom, gw_custom = jax.grad(loss_custom, argnums=(0, 1))(x, w)
+    gx_ref, gw_ref = jax.grad(loss_ref, argnums=(0, 1))(x, w)
+
+    for actual, expected, name in ((gx_custom, gx_ref, "gx"), (gw_custom, gw_ref, "gw")):
+        actual = np.asarray(actual, dtype=np.float32)
+        expected = np.asarray(expected, dtype=np.float32)
+        scale = max(float(np.abs(expected).max()), 1e-30)
+        assert np.abs(actual - expected).max() <= 0.05 * scale, (
+            f"{name} at activation_scale={activation_scale}: "
+            f"max|delta|={np.abs(actual - expected).max():.4g} vs 5% of max|expected|={scale:.4g}"
+        )
+
+
+def test_streaming_lse_is_float32_for_bfloat16_inputs():
+    """The streaming forward holds logits and the logsumexp carry in float32, not the input dtype.
+
+    The backward recomputes logits in float32, so a bfloat16 carry desynchronizes the two. This
+    checks the dtype contract rather than the numerics because XLA:CPU folds the narrowing away.
+    """
+    b_dim, h_dim, v_dim = 8, 16, 256
+    key_x, key_w, key_y = jax.random.split(jax.random.PRNGKey(3), 3)
+    x = jax.random.normal(key_x, (b_dim, h_dim), dtype=jnp.float32).astype(jnp.bfloat16)
+    w = jax.random.normal(key_w, (h_dim, v_dim), dtype=jnp.float32).astype(jnp.bfloat16)
+    y = jax.random.randint(key_y, (b_dim,), 0, v_dim, dtype=jnp.int32)
+
+    loss, lse = linear_softmax_cross_entropy_loss_streaming(x, y, w, block_size=64, dtype=None)
+
+    assert loss.dtype == jnp.float32
+    assert lse.dtype == jnp.float32
 
 
 def test_xla_streaming_custom_vjp_grad_matches_streaming_autodiff_with_batch_blocking(
@@ -872,9 +948,17 @@ def test_batched_xla_full_vocab_b_tiled_forward_matches_reference():
 
 
 def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
+    """Gradient algebra of the b-tiled backward, against autodiff through the dense reference.
+
+    Both sides are pinned to HIGHEST because they contract in different orders. Under the
+    default precision, TF32 on GPU rounds the two paths apart by ~5e-4 while float32 inputs
+    imply a ~1e-7 answer, which failed this test's 1e-5 tolerance on every TF32 device. That
+    measured matmul rounding rather than the algebra under test; HIGHEST measures the algebra.
+    """
     if jax.default_backend() == "tpu":
         pytest.skip("batched_xla custom backward helper is covered by CPU/GPU precision paths")
 
+    precision = jax.lax.Precision.HIGHEST
     key = jax.random.PRNGKey(43)
     key_x, key_w, key_y, key_loss, key_lse = jax.random.split(key, 5)
     x = jax.random.normal(key_x, (7, 5), dtype=jnp.float32)
@@ -883,7 +967,9 @@ def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
     g_loss = jax.random.normal(key_loss, (7,), dtype=jnp.float32)
     g_lse = jax.random.normal(key_lse, (7,), dtype=jnp.float32)
 
-    _, lse = linear_softmax_cross_entropy_loss_reference(x, y, w, dtype=jnp.float32, logit_soft_cap=1.7)
+    _, lse = linear_softmax_cross_entropy_loss_reference(
+        x, y, w, dtype=jnp.float32, logit_soft_cap=1.7, precision=precision
+    )
 
     def reference_cotangent_loss(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
         loss, logsumexp = linear_softmax_cross_entropy_loss_reference(
@@ -892,6 +978,7 @@ def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
             w_raw,
             dtype=jnp.float32,
             logit_soft_cap=1.7,
+            precision=precision,
         )
         return jnp.sum(loss * g_loss + logsumexp * g_lse)
 
@@ -905,7 +992,7 @@ def test_batched_xla_backward_b_tiled_from_lse_matches_reference_gradients():
         g_lse,
         b_block_size=4,
         logit_soft_cap=1.7,
-        precision=None,
+        precision=precision,
     )
 
     np.testing.assert_allclose(actual_x, expected_x, rtol=1e-5, atol=1e-5)

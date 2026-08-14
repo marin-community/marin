@@ -200,6 +200,7 @@ the activity corpus and wiki notes. The same service exposes OpenAPI documentati
 - `GET /api/chunks/{id}`
 - `GET /api/wiki/search`
 - `GET /api/wiki/{id}`
+- `GET /api/feedback`
 - `POST /api/feedback`
 - `GET /api/search-executions`
 - `POST /api/wiki`
@@ -230,12 +231,18 @@ pages of at most 500 records for evaluation exports.
 10, and a required overall explanation of at most 2,000 characters. Grades may be empty
 when the search returns no useful results. The API attributes feedback to the
 IAP-authenticated caller and optionally links it to a matching search execution.
+`GET /api/feedback` returns recent submissions newest-first. Each grade includes the
+result's title and browseable URL from its recorded search snapshot or current source.
+The response also includes explanation-only submissions with an empty grade list.
 
 The dashboard is a Vue single-page app served from the same origin, with client-side
-routes at `/` (search), `/wiki` (recently updated notes), `/wiki/<id>` (a note), and
-`/chunk/<id>` (an activity chunk). The API's catch-all route serves `index.html` for
-any path that isn't `/api/...`, `/healthz`, `/static/...`, `/docs`, or `/openapi.json`,
-so vue-router's history-mode navigation and reloads resolve correctly.
+routes at `/` (search), `/wiki` (recently updated notes), `/conversation` (recent agent
+work-log entries), `/feedback` (recent result grades), `/wiki/<id>` (a note), and
+`/chunk/<id>` (an activity chunk). Conversation details load when an entry is opened.
+The feedback table links each grade to its source and keeps explanation-only submissions
+visible. The API's catch-all route serves `index.html` for any path that isn't
+`/api/...`, `/healthz`, `/static/...`, `/docs`, or `/openapi.json`, so vue-router's
+history-mode navigation and reloads resolve correctly.
 
 Dashboard search uses the federated endpoint and exposes checkboxes for files, wiki,
 Discord, pull requests, and issues. Discord starts unchecked. Header tabs provide common

@@ -430,7 +430,10 @@ class ResourceConfig:
 
     cpu: float = 1
     ram: str = "4g"
-    disk: str = "16g"
+    # Scratch budget for the task. On Kubernetes this becomes the pod's
+    # ephemeral-storage request and limit, which bills disk-backed emptyDir
+    # usage -- including /tmp -- and evicts the pod when the sum exceeds it.
+    disk: str = "64g"
     device: DeviceConfig = field(default_factory=CpuConfig)
     preemptible: bool = True
     # Region state: UNSET (None, default) inherits the parent job's region; PINNED (a

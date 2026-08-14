@@ -11,6 +11,11 @@ tokenizes the deduped output, and trains.
 
 The whole pipeline lives in one ``StepSpec`` graph that :class:`StepRunner`
 walks, scheduling each step once its dependencies are satisfied.
+
+Submit in the staging region:
+
+    uv run iris --cluster=marin job run --region us-central1 -- \\
+        python experiments/datakit/testbed/variants.py
 """
 
 from __future__ import annotations
@@ -36,13 +41,14 @@ from marin.processing.classification.deduplication.fuzzy_minhash import MinHashA
 from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
     REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    VERIFICATION_WORKER_SCRATCH,
     VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyVerificationStoreConfig,
     VerifiedFuzzyDupsAttrData,
     verify_fuzzy_dups,
 )
 from marin.processing.tokenize.tokenize import TokenizedCache
-from rigging.filesystem import prefix_join
+from rigging.filesystem import check_path_in_region, marin_prefix, prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.execution import ZephyrExecutionResult
 
@@ -53,14 +59,13 @@ from experiments.datakit.global_exact_dedup import (
 )
 from experiments.datakit.testbed.mixture import tokenized_bucket_weights_step
 from experiments.datakit.testbed.sampler import build_testbed_steps
-from experiments.datakit.testbed.settings import TESTBED_TOKENIZER
+from experiments.datakit.testbed.settings import TESTBED_STAGING_PREFIX, TESTBED_STAGING_REGION, TESTBED_TOKENIZER
 from experiments.datakit.testbed.train import run_testbed_config, testbed_tokenize
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 
 logger = logging.getLogger(__name__)
 
-STAGING_PREFIX = "gs://marin-us-central1"
 TARGET_TOTAL_TOKENS_B = 1000.0
 MAX_STEP_CONCURRENCY = 20
 
@@ -70,7 +75,7 @@ _FUZZY_DUPS_MAX_PARALLELISM = 128
 _EXACT_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
 _FUZZY_DUPS_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="5g")
-_FUZZY_VERIFICATION_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
+_FUZZY_VERIFICATION_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk=VERIFICATION_WORKER_SCRATCH)
 _FUZZY_VERIFICATION_STORE_CONFIG = FuzzyVerificationStoreConfig(
     recovery_timeout=1_800,
     ready_timeout=1_800,
@@ -284,7 +289,8 @@ def dedup(
 
 def main() -> None:
     """Build the fuzzy-dedup DAG and run it."""
-    os.environ.setdefault("MARIN_PREFIX", STAGING_PREFIX)
+    os.environ.setdefault("MARIN_PREFIX", TESTBED_STAGING_PREFIX)
+    check_path_in_region("MARIN_PREFIX", marin_prefix(), TESTBED_STAGING_REGION)
 
     tokenizer = TESTBED_TOKENIZER
     run_id = "fuzzy_dedup"

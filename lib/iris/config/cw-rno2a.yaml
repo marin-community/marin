@@ -115,6 +115,8 @@ kubernetes_provider:
   namespace: iris
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
+  cache_max_age:
+    seconds: 604800
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
   kueue:
     # Pulumi owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor;
@@ -160,6 +162,10 @@ defaults:
     cache_dir: /mnt/local/iris-cache
     runtime: kubernetes
     default_task_image: ghcr.io/marin-community/iris-task:latest
+
+user_budget_defaults:
+  budget_limit: 400000
+  max_band: interactive
 
 scale_groups:
   cpu-turin:

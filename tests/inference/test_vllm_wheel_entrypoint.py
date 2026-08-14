@@ -16,12 +16,18 @@ import threading
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
+from unittest import mock
 
 import marin.inference.vllm_server as vllm_server
 import pytest
 from marin.external_dependencies import VLLM_GPU_RELEASE, VllmGpuWheel
 from marin.inference.vllm_release import vllm_gpu_wheel_for_architecture, vllm_gpu_wheel_provenance
 from marin.inference.vllm_wheel_entrypoint import installed_wheel_url_matches
+
+# Non-core extensions a real vLLM wheel ships next to the core _C, so every fake install carries them
+# and the discovery path is exercised against real distractors: _moe_C is a compiled extension whose
+# stem is not the core, and _C.pyi is a type stub the suffix filter must skip (only .so/.pyd/.py count).
+_CORE_SIBLINGS = ("vllm/_moe_C.abi3.so", "vllm/_C.pyi")
 
 VERSION = VLLM_GPU_RELEASE.version
 H100_WHEEL = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, "x86_64")
@@ -43,14 +49,21 @@ def _provenance(wheel: VllmGpuWheel) -> dict[str, object]:
     return json.loads(json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel))))
 
 
-def _write_vllm_package(root: Path) -> None:
-    """Write an importable ``vllm`` package whose CLI records the argv it was handed."""
+def _write_vllm_package(root: Path, core_stems: tuple[str, ...] = ("_C_stable_libtorch",)) -> None:
+    """Write an importable ``vllm`` package whose CLI records the argv it was handed.
+
+    ``core_stems`` are the ``_C``-family core extensions the fake wheel ships (empty for a source
+    install, more than one for an ambiguous wheel); the non-core siblings are always present.
+    """
     package = root / "vllm"
     cli = package / "entrypoints" / "cli"
     cli.mkdir(parents=True)
     for init_file in (package / "__init__.py", package / "entrypoints" / "__init__.py", cli / "__init__.py"):
         init_file.write_text("")
-    (package / "_C.py").write_text("EXTENSION_SENTINEL = True\n")
+    for stem in core_stems:
+        (package / f"{stem}.py").write_text("EXTENSION_SENTINEL = True\n")
+    for sibling in _CORE_SIBLINGS:
+        (root / sibling).write_text("")
     (cli / "main.py").write_text(
         "import json\n"
         "import os\n"
@@ -67,15 +80,28 @@ def _write_installed_wheel(
     *,
     direct_url: dict[str, object],
     compute_capability: tuple[int, int],
+    core_stems: tuple[str, ...] = ("_C_stable_libtorch",),
 ) -> None:
     """Write what ``uvx`` leaves behind: the package, its PEP 610 record, and an importable torch."""
-    _write_vllm_package(root)
+    _write_vllm_package(root, core_stems)
     metadata = root / f"vllm-{VERSION}.dist-info"
     metadata.mkdir()
     (metadata / "METADATA").write_text(f"Metadata-Version: 2.4\nName: vllm\nVersion: {VERSION}\n")
     (metadata / "direct_url.json").write_text(json.dumps(direct_url))
+    # RECORD is where startup discovers the core extension's name, so the fake mirrors a real wheel's
+    # shape: the core stems plus the non-core siblings the discovery must ignore.
+    record_paths = (
+        "vllm/__init__.py",
+        *(f"vllm/{stem}.py" for stem in core_stems),
+        *_CORE_SIBLINGS,
+        "vllm/entrypoints/__init__.py",
+        "vllm/entrypoints/cli/__init__.py",
+        "vllm/entrypoints/cli/main.py",
+        f"vllm-{VERSION}.dist-info/RECORD",
+    )
+    (metadata / "RECORD").write_text("".join(f"{path},,\n" for path in record_paths))
     (root / "torch.py").write_text(
-        "class cuda:\n" "    @staticmethod\n" f"    def get_device_capability(): return {compute_capability!r}\n"
+        f"class cuda:\n    @staticmethod\n    def get_device_capability(): return {compute_capability!r}\n"
     )
 
 
@@ -86,6 +112,7 @@ def _run_entrypoint(
     direct_url: dict[str, object] | None = None,
     compute_capability: tuple[int, int] = (9, 0),
     python_path: tuple[Path, ...] = (),
+    core_stems: tuple[str, ...] = ("_C_stable_libtorch",),
 ):
     install_root = tmp_path / "install"
     install_root.mkdir()
@@ -93,8 +120,13 @@ def _run_entrypoint(
         install_root,
         direct_url=_uvx_direct_url(wheel.url) if direct_url is None else direct_url,
         compute_capability=compute_capability,
+        core_stems=core_stems,
     )
-    command = vllm_server.IsolatedCudaVllm(source=vllm_server.VllmType.MARIN_FORK).command()
+    # command() selects the fork wheel by platform.machine(); pin it to the architecture under test so
+    # the run does not depend on the host's (e.g. arm64 macOS, absent from the release manifest). The
+    # provenance the test passes below overrides whatever command() embeds.
+    with mock.patch("platform.machine", return_value=wheel.architecture):
+        command = vllm_server.IsolatedCudaVllm(source=vllm_server.VllmType.MARIN_FORK).command()
     bootstrap_index = command.index("-c")
     wrapped_command = command[bootstrap_index + 2 :]
     marker = tmp_path / "cli.json"
@@ -207,9 +239,45 @@ def test_wheel_entrypoint_verifies_extension_and_records_provenance(tmp_path, wh
     assert records["MARIN_VLLM_WHEEL_VERIFIED"] == {
         **_provenance(wheel),
         "compute_capability": f"{compute_capability[0]}.{compute_capability[1]}",
-        "extension_path": str(tmp_path / "install" / "vllm" / "_C.py"),
+        "extension_path": str(tmp_path / "install" / "vllm" / "_C_stable_libtorch.py"),
     }
     assert json.loads(marker.read_text()) == ["serve", "test/model"]
+
+
+@pytest.mark.parametrize("core_stem", ["_C", "_C_stable_libtorch", "_C_next_abi"])
+def test_wheel_entrypoint_discovers_the_core_extension_by_shape_not_name(tmp_path, core_stem):
+    """Whatever name a toolchain gives the core ``_C`` extension, startup finds it from the wheel's RECORD.
+
+    The fake wheel also ships the non-core siblings (``_moe_C``, ``_C.pyi``), so a green run is also
+    evidence that discovery ignores them.
+    """
+    result, marker = _run_entrypoint(tmp_path, core_stems=(core_stem,))
+
+    assert result.returncode == 0, result.stderr
+    verified = next(
+        json.loads(payload)
+        for line in result.stdout.splitlines()
+        for sentinel, _, payload in (line.partition("="),)
+        if sentinel == "MARIN_VLLM_WHEEL_VERIFIED"
+    )
+    assert verified["extension_path"] == str(tmp_path / "install" / "vllm" / f"{core_stem}.py")
+    assert json.loads(marker.read_text()) == ["serve", "test/model"]
+
+
+@pytest.mark.parametrize(
+    "core_stems",
+    [
+        (),  # a python-only/source install ships no compiled core
+        ("_C", "_C_stable_libtorch"),  # ambiguous: two cores, no way to pick
+    ],
+    ids=["missing", "ambiguous"],
+)
+def test_wheel_entrypoint_refuses_when_the_core_extension_is_missing_or_ambiguous(tmp_path, core_stems):
+    """Startup must not launch a wheel whose core extension it cannot uniquely identify."""
+    result, marker = _run_entrypoint(tmp_path, core_stems=core_stems)
+
+    _assert_refused_before_cli(result, marker)
+    assert "core" in result.stderr
 
 
 def _assert_refused_before_cli(result, marker) -> None:
@@ -244,4 +312,7 @@ def test_wheel_entrypoint_rejects_an_extension_shadowing_the_verified_wheel(tmp_
     result, marker = _run_entrypoint(tmp_path, python_path=(shadow_root,))
 
     _assert_refused_before_cli(result, marker)
-    assert f"vllm._C loaded outside the verified distribution: {shadow_root / 'vllm' / '_C.py'}" in result.stderr
+    assert (
+        f"vllm._C_stable_libtorch loaded outside the verified distribution: "
+        f"{shadow_root / 'vllm' / '_C_stable_libtorch.py'}" in result.stderr
+    )

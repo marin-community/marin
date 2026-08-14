@@ -62,9 +62,13 @@ XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overla
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
-# TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
-# command buffers after the CUDA graph failure is fixed.
-XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+# The verified-safe command-buffer capture set: jaxlib 0.11's default, pinned so a
+# jaxlib upgrade cannot silently change it. Do not add COLLECTIVES: capturing
+# collectives wedges the gang mid-run -- the #5675 hang follows that capture type
+# specifically, not command buffers in general.
+XLA_COMMAND_BUFFER_FLAG = (
+    "--xla_gpu_enable_command_buffer=" "CONDITIONAL,CUBLAS,CUBLASLT,CUDNN,CUSTOM_CALL,DYNAMIC_SLICE_FUSION,FUSION"
+)
 
 
 class WatchMode(StrEnum):
@@ -74,15 +78,21 @@ class WatchMode(StrEnum):
     DIAGNOSTIC = "diagnostic"
 
 
-def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool) -> None:
-    for name, value in HERO_EP_RUNTIME_ENV.items():
+def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per_task: int = 1) -> None:
+    env_defaults = dict(HERO_EP_RUNTIME_ENV)
+    if processes_per_task > 1:
+        # With one process per GPU, the per-process CUPTI sessions collide with each
+        # other and with CoreWeave's DCGM, so PGLE cannot profile and its recompile
+        # machinery only adds failure modes. Default it off; an explicit env wins.
+        env_defaults["JAX_ENABLE_PGLE"] = "false"
+    for name, value in env_defaults.items():
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
     overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
         *_XLA_FLAG_DEFAULTS,
-        XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
+        XLA_COMMAND_BUFFER_FLAG,
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
@@ -852,7 +862,9 @@ def run_grug(config: GrugRunConfig) -> None:
 
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
     inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
-    _apply_hero_ep_runtime_defaults(inline_watch_enabled=inline_watch_enabled)
+    _apply_hero_ep_runtime_defaults(
+        inline_watch_enabled=inline_watch_enabled, processes_per_task=config.processes_per_task
+    )
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,

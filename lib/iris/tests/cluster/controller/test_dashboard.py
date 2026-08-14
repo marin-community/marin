@@ -262,6 +262,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     _authoring_backend = _worker_backend(state, autoscaler)
     controller_mock.provider.autoscaler_status.side_effect = _authoring_backend.autoscaler_status
     controller_mock.provider.status.side_effect = _authoring_backend.status
+    controller_mock.provider.runtime_image.side_effect = _authoring_backend.runtime_image
     controller_mock.capabilities = worker_caps
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     controller_mock.backend_id_for_scale_group = Mock(return_value=DEFAULT_BACKEND_ID)
@@ -1210,6 +1211,15 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
     assert len(attempts) == 2
     proto_uids = {a["attemptId"]: a.get("attemptUid") for a in attempts}
     assert proto_uids == db_uids
+
+
+def test_get_task_status_includes_runtime_image(client, state, job_request):
+    job_request.task_image = "registry.example/task:v2"
+    job_id = submit_job(state, "runtime-image", job_request)
+
+    response = rpc_post(client, "GetTaskStatus", {"taskId": job_id.task(0).to_wire()})
+
+    assert response["task"]["buildMetrics"]["imageTag"] == "registry.example/task:v2"
 
 
 def test_get_worker_status_by_worker_id(client, state):

@@ -47,7 +47,8 @@ from rigging.filesystem import StoragePath, marin_temp_bucket
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
-from zephyr.readers import InputFileSpec, load_parquet_batch
+from zephyr.input_file import InputFileSpec
+from zephyr.readers import load_parquet_batch
 from zephyr.runners import InlineRunner
 from zephyr.worker_context import zephyr_worker_ctx
 

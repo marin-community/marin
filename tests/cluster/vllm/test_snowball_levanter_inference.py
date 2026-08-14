@@ -22,7 +22,7 @@ import pytest
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from haliax.partitioning import set_mesh
 from huggingface_hub import snapshot_download
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.rpc import job_pb2
 from jax.sharding import PartitionSpec as P
 from levanter.grug.sharding import compact_grug_mesh
@@ -43,6 +43,8 @@ from marin.testing.inference.snowball_checkpoint import (
     load_checkpoint,
     read_executor_info,
 )
+
+from tests.cluster.conftest import MARIN_GPU_CLUSTER
 
 PENDING_TIMEOUT = 5 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
@@ -150,7 +152,9 @@ def test_snowball_checkpoint_matches_levanter_inference_goldens(marin_gpu_client
                 assert_checkpoint_inference_matches_golden,
                 args=[expected_cases],
             ),
-            resources=ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="256g", disk="64g"),
+            resources=ResourceConfig.with_gpu(
+                "H100", count=8, cpu=64, ram="256g", disk="64g", target_cluster=MARIN_GPU_CLUSTER
+            ),
             environment=create_environment(
                 extras=["gpu"],
                 sync_packages=["marin-core", "marin-levanter"],

@@ -49,7 +49,7 @@ from pathlib import Path
 import click
 from fray.types import ResourceConfig
 from iris.cli.connect import open_iris_client
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.constraints import Constraint, preemptible_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem import StoragePath

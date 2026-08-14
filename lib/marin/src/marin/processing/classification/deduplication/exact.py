@@ -13,7 +13,7 @@ from rigging.filesystem import rebase_file_path
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
-from zephyr.readers import DEFAULT_FILE_PATH_COLUMN
+from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN
 from zephyr.writers import write_parquet_file
 
 from marin.processing.classification.deduplication.dedup_commons import (

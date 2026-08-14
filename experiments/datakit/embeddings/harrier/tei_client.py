@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 import numpy as np
-from iris.client import iris_ctx
+from iris.client.client import iris_ctx
 from rigging.timing import Deadline, ExponentialBackoff
 
 from experiments.datakit.embeddings.harrier.config import TEI_REQUEST_BATCH_SIZE

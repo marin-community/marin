@@ -24,7 +24,8 @@ from rigging.filesystem import StoragePath, marin_temp_bucket
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
-from zephyr.readers import InputFileSpec, load_file
+from zephyr.input_file import InputFileSpec
+from zephyr.readers import load_file
 from zephyr.runners import InlineRunner
 from zephyr.worker_context import zephyr_worker_ctx
 
@@ -46,6 +47,18 @@ DEFAULT_BATCH_SIZE = 4_096
 _MODEL_ARCHIVE_NAME = "model.tar"
 _MODEL_DIRECTORY_NAME = "model"
 _TEI_ENDPOINT_SHARED_KEY = "harrier_tei_endpoint_name"
+
+
+def harrier_hash_attrs(dedup: str) -> dict[str, str | int]:
+    """Return the artifact identity for a Harrier embedding step."""
+    return {
+        "dedup": dedup,
+        "model": HARRIER_REPO,
+        "revision": HARRIER_REVISION,
+        "batch_size": DEFAULT_BATCH_SIZE,
+        "v": EMBEDDING_ATTR_DATA_VERSION,
+    }
+
 
 # A sweep over 9,733 completed Harrier embeddings sampled across 100 shards of
 # datakit/samples/harrier-50m found mean cosine 0.99976, minimum cosine 0.99909,

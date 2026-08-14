@@ -12,10 +12,12 @@ import yaml
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
+    ROOT,
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
     WorkloadIdentityConfig,
+    _deployment_manifest,
     _deployment_profiles,
     _validated_image_reference,
     create_infrastructure,
@@ -79,6 +81,7 @@ def deployment_config() -> DeploymentConfig:
                     "class": "automation",
                     "strict": True,
                     "envClear": True,
+                    "instructionsFile": "profiles/ops/AGENTS.md",
                     "env": {"KUBECONFIG": {"secretRef": "projects/example/secrets/ops-kubeconfig/versions/latest"}},
                 },
             ),
@@ -155,24 +158,52 @@ def test_release_reference_must_be_the_expected_registry_digest() -> None:
         _validated_image_reference("us-central1-docker.pkg.dev/example/loom/loom:main", "example", "us-central1")
 
 
-def test_profile_manifest_accepts_secret_references_but_rejects_values() -> None:
+def test_profile_manifest_renders_github_repositories_and_secret_references() -> None:
     profiles, references = _deployment_profiles(
         (
             ProfileConfig.parse(
                 "ops",
                 {
                     "agent": "codex",
+                    "githubRepositories": ["marin-community/marin", "marin-community/vllm"],
                     "mcpAccess": {"mode": "all", "groups": []},
                     "env": {"OPS_TOKEN": {"secretRef": "projects/example/secrets/ops-token/versions/7"}},
                 },
             ),
         )
     )
+    assert profiles[0]["profile"]["github_repositories"] == [
+        "marin-community/marin",
+        "marin-community/vllm",
+    ]
     assert profiles[0]["profile"]["mcp_access"] == {"mode": "all", "groups": []}
     assert profiles[0]["env"] == [{"name": "OPS_TOKEN", "secret_ref": "projects/example/secrets/ops-token/versions/7"}]
     assert references == [("example", "ops-token")]
     with pytest.raises(ValueError, match="full secretRef"):
         ProfileConfig.parse("ops", {"agent": "codex", "env": {"OPS_TOKEN": "plaintext"}})
+
+
+def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
+    profile = ProfileConfig.parse("github", {"agent": "codex", "instructions": "Prefix comments with 🤖"})
+    config = replace(deployment_config(), profiles=(profile,), workloads=(), github_federations=())
+    profiles, _ = _deployment_profiles(config.profiles)
+    manifest = _deployment_manifest(config, profiles, [])
+    assert "🤖" in manifest
+    assert json.loads(manifest)["profiles"][0]["profile"]["instructions"] == "Prefix comments with 🤖"
+
+
+def test_profile_instructions_reject_ambiguous_or_external_sources() -> None:
+    with pytest.raises(ValueError, match="only one"):
+        ProfileConfig.parse(
+            "slack",
+            {
+                "agent": "codex",
+                "instructions": "inline",
+                "instructionsFile": "profiles/slack/AGENTS.md",
+            },
+        )
+    with pytest.raises(ValueError, match="under"):
+        ProfileConfig.parse("slack", {"agent": "codex", "instructionsFile": "../../AGENTS.md"})
 
 
 @pytest.mark.parametrize(
@@ -295,13 +326,19 @@ def test_release_rollout_pins_metadata_to_the_built_image_digest():
 
 @pulumi.runtime.test
 def test_profiles_and_workloads_render_to_vm_metadata():
-    infrastructure, mocks = infrastructure_and_mocks()
+    mocks = RecordingMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
+    infrastructure = create_infrastructure(replace(deployment_config(), settings=(("slack.profile", "ops"),)))
 
     def check(_: object) -> None:
         assert by_name(mocks, "loom-workload-marin-ops").typ == "gcp:serviceaccount/account:Account"
         manifest = json.loads(by_name(mocks, "loom").inputs["metadata"]["loom-deployment"])
         assert manifest["prune"] is True
+        assert manifest["settings"] == {"slack.profile": "ops"}
         assert manifest["profiles"][0]["profile"]["name"] == "ops"
+        assert manifest["profiles"][0]["profile"]["instructions"] == (
+            (ROOT / "profiles/ops/AGENTS.md").read_text().strip()
+        )
         assert manifest["federations"][0]["subject"] == "11223344556677889900"
 
     return infrastructure.instance.id.apply(check)

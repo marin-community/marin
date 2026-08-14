@@ -135,6 +135,22 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
     assert leg_paths(matrix, "marin") == ["tests/test_tokenizer_sweep.py"]
 
 
+@pytest.mark.parametrize(
+    "changed_file",
+    ["lib/iris/src/iris/client.py", "lib/ducky/src/ducky/server.py"],
+)
+def test_iris_and_ducky_changes_select_dependent_ducky_test(tmp_path: Path, changed_file: str) -> None:
+    write(tmp_path, "lib/iris/src/iris/__init__.py")
+    write(tmp_path, "lib/iris/src/iris/client.py", "class IrisClient: ...\n")
+    write(tmp_path, "lib/ducky/src/ducky/__init__.py")
+    write(tmp_path, "lib/ducky/src/ducky/server.py", "from iris.client import IrisClient\n")
+    write(tmp_path, "lib/ducky/tests/test_server.py", "from ducky.server import IrisClient\n")
+
+    matrix = select_matrix([changed_file], tmp_path)
+
+    assert leg_paths(matrix, "ducky") == ["lib/ducky/tests/test_server.py"]
+
+
 def test_test_helper_module_propagates_source_changes(tmp_path: Path) -> None:
     """A test reaching source only through a shared helper is still selected."""
     write(tmp_path, "lib/iris/src/iris/__init__.py")

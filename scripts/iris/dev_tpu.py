@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 
 import click
 import yaml
-from iris.client import IrisClient, JobAlreadyExists
+from iris.client.client import IrisClient, JobAlreadyExists
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.constraints import zone_constraint

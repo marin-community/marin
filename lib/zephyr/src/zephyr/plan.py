@@ -44,7 +44,8 @@ from zephyr.dataset import (
     resolve_glob,
 )
 from zephyr.expr import Expr, referenced_columns
-from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
+from zephyr.input_file import InputFileSpec
+from zephyr.readers import compute_parquet_splits, load_file, load_file_batch
 from zephyr.shuffle import ScatterReader
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 

@@ -14,7 +14,7 @@ import uuid
 
 import pytest
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
-from iris.client import IrisClient
+from iris.client.client import IrisClient
 from iris.cluster.setup_scripts import default_setup_script
 from iris.rpc import job_pb2
 from marin.testing.inference.snowball import RepresentativeGolden, read_representative_goldens
@@ -23,6 +23,8 @@ from marin.testing.inference.snowball_backend_parity_jobs import (
     score_levanter_against_goldens,
     score_vllm_against_goldens,
 )
+
+from tests.cluster.conftest import MARIN_GPU_CLUSTER
 
 PENDING_TIMEOUT = 30 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
@@ -34,7 +36,9 @@ def _levanter_job(goldens: tuple[RepresentativeGolden, ...]) -> JobRequest:
     return JobRequest(
         name=f"snowball-parity-levanter-{uuid.uuid4().hex[:8]}",
         entrypoint=Entrypoint.from_callable(score_levanter_against_goldens, args=[goldens]),
-        resources=ResourceConfig.with_gpu("H100", count=GPU_COUNT, cpu=64, ram="256g", disk="128g"),
+        resources=ResourceConfig.with_gpu(
+            "H100", count=GPU_COUNT, cpu=64, ram="256g", disk="128g", target_cluster=MARIN_GPU_CLUSTER
+        ),
         environment=create_environment(
             extras=["gpu"],
             sync_packages=["marin-levanter", "marin-core"],
@@ -58,7 +62,9 @@ def _vllm_job(
             score_vllm_against_goldens,
             args=[goldens, attention_backend, pipeline_parallel_size],
         ),
-        resources=ResourceConfig.with_gpu("H100", count=GPU_COUNT, cpu=64, ram="512g", disk="128g"),
+        resources=ResourceConfig.with_gpu(
+            "H100", count=GPU_COUNT, cpu=64, ram="512g", disk="128g", target_cluster=MARIN_GPU_CLUSTER
+        ),
         environment=create_environment(
             setup_scripts=[default_setup_script(packages=["marin-core"])],
             env_vars={

@@ -511,7 +511,15 @@ Time-series measurements live in finelog stats namespaces, not the controller SQ
 Namespaces:
 
 - `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
-- `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
+- `iris.task` — per-attempt task resource snapshots, keyed by `ts`. Worker
+  daemons write their process readings directly. On Kubernetes, each
+  `iris-node-agent` samples the task containers on its node from kubelet
+  `/metrics/resource` every 30 seconds. CPU is derived from consecutive
+  cumulative counter samples, so the first row after an agent start reports
+  zero CPU. Memory uses the working-set gauge and an agent-local peak; an agent
+  restart resets that peak. Kubelet resource metrics do not expose container
+  filesystem usage, so Kubernetes rows report zero disk usage. The node-agent
+  service account requires `get` on `nodes/proxy`.
 - `iris.task_event` — up to seven days of deduplicated backend verdicts and
   state-changing controller actions per task attempt. Query all attempts with
   `iris task events /user/job/0`, or directly:
