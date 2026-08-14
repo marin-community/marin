@@ -14,9 +14,10 @@ Read first:
 Every fork Marin pins under `config/external/` is a `marin-community` fork: our
 commits on top of an upstream project. Refreshing a pin means rebasing our commits
 onto a newer upstream base on a `<branch>-next` staging branch, validating with the
-fork's e2e against that branch, promoting `<branch>-next` onto the pin's stable
-`branch`, and re-pinning Marin at it — or, if a real blocker remains, filing one
-"can't migrate" issue.
+fork's e2e against that branch, re-pinning Marin at the exact staged tip, and
+preparing the stable-branch promotion with rollback and date tags. Fork stable
+branches are protected. An unattended run stops after opening the draft Marin PR
+and identifies the admin promotion it needs; it never force-moves the stable branch.
 
 Each pin refreshes independently. The one exception is a `group`, which refreshes as a
 unit: its sections refresh together on one run and re-pin in one PR (each still rebases
@@ -24,8 +25,9 @@ onto its own base). Only the vllm/tpu-inference pair is grouped, because the TPU
 launcher installs both pins at once and vllm's TPU base derives from the tpu-inference
 release; splitting them could pin a mixed, unblessed stack. The vllm fork's GPU pin is
 not in that group — it tracks upstream head on its own `gpu` branch, independent of the
-`tpu` branch. A weekly coordinator that walks the descriptor in `depends_on` order is
-planned but not yet built; today a human runs it for a single pin or group.
+`tpu` branch. The weekly `ops-fork-ferry` workflow sends Weaver one request per
+supported pin or group. That request names this skill and the forks to update; this
+file owns the migration procedure.
 
 Use the same algorithm in CI and local runs. In local/manual mode, ask before
 external mutations: pushing fork branches, opening the Marin PR, or filing a GitHub
@@ -43,7 +45,8 @@ Read the target fork's section in `config/external/migration.toml`. It gives:
   `descriptor:<path>#<section>` SHA, or `release:<path>` prebuilt wheel); drives the
   re-pin step.
 - `branch` — the fork branch this pin tracks (`main` for a single-pin fork; `gpu`/`tpu`
-  for the two-pin vllm fork). The refresh stages on `<branch>-next` and promotes onto it.
+  for the two-pin vllm fork). The refresh stages on `<branch>-next`; an admin promotes
+  that validated tip after reviewing the draft Marin PR.
 - `e2e` — the Marin end-to-end that validates the refresh.
 - `blocker_assignee` — who owns the "can't migrate" issue.
 - `nuances` — constraints a human must respect (torch pins, known-good ceilings).
@@ -55,10 +58,13 @@ revision.
 
 - If no newer base is selected and no pin metadata needs repair, exit successfully
   with a no-op summary.
-- On success, open exactly one draft PR in `marin-community/marin` for the fork or
-  group after the e2e passes — a grouped refresh re-pins every group section in that
-  single PR. Request the descriptor's `blocker_assignee` as reviewer, and monitor it
-  per `.agents/skills/commit/SKILL.md`.
+- On success, create the rollback and date tags described in
+  `docs/promotion-protocol.md`, then open exactly one draft PR in
+  `marin-community/marin` for the fork or group after the e2e passes. A grouped
+  refresh re-pins every group section at its staged tip in that single PR. State the
+  exact `<branch>-next` to `<branch>` admin promotion still required, request the
+  descriptor's `blocker_assignee` as reviewer, and monitor the PR per
+  `.agents/skills/commit/SKILL.md`.
 - On an unresolved blocker, do not open a PR. Create or update one
   `marin-community/marin` issue assigned to `blocker_assignee`, titled
   `Fork refresh blocked: <fork> — <short reason>`, with current pins, the selected
@@ -118,8 +124,8 @@ there is a newer upstream base to rebase onto.
 
 Branch from the selected base as `<branch>-next` (the pin's `branch` with a `-next`
 suffix: `gpu-next`, `tpu-next`, or `main-next` for a single-pin fork). This staging
-branch is disposable — a re-run force-updates it — and is distinct from the stable
-`<branch>`, which only the Promote step moves.
+branch is disposable — a re-run force-updates it — and is distinct from the protected
+stable `<branch>`, which the unattended refresh leaves unchanged.
 
 Find the base our commits currently sit on: `old_base` is the descriptor's
 `upstream_base` (descriptor pins) or `git merge-base <fork>/<branch> upstream/HEAD`
@@ -187,9 +193,9 @@ behind the fork is.
 Point Marin at `<branch>-next` so the e2e runs against the replayed code, then run
 `uv run config/update-external.py` to regenerate
 `lib/marin/src/marin/external_dependencies.py`; confirm only the intended pins change.
-The stable `<branch>` still holds the old tip here — the Promote step moves it after the
-e2e passes. Because `<branch>-next` and the promoted `<branch>` are the same commit, the
-pin set here needs no change after promotion.
+The stable `<branch>` remains at the old tip until an admin hard-swaps it after reviewing
+the draft PR. Because `<branch>-next` and the eventual `<branch>` are the same commit,
+the pin set here needs no change after that promotion.
 
 - `pin = descriptor:<path>#<section>` (`vllm`, `tpu-inference`): push `<branch>-next` to
   the fork. Set the section's `commit` to its tip and `upstream_base` to the selected
@@ -207,10 +213,14 @@ pin set here needs no change after promotion.
 - `pin = isolated_project` (`evalchemy`, `harbor`, `MarinSkyRL`): the uv source follows
   the fork's `main`, so `main` is the stable branch. Stage the rebase on `main-next`,
   review it from a compare link (`upstream_base..main-next`) on the Marin PR, and point
-  the uv source at `main-next` to validate. After the e2e passes, Promote advances `main`
-  and `uv run config/update-external.py <fork>` locks `config/external/<fork>/uv.lock`
-  against it — coordinate with the daily external-dependency bump, which also follows
-  `main`.
+  the uv source at `main-next` to validate. After the e2e passes, run
+  `uv run config/update-external.py <fork>` to lock `config/external/<fork>/uv.lock`
+  against that exact tip. Keep the source on `main-next` in the draft PR while `main`
+  still points at the old tip; the date tag keeps the staged SHA reachable. After an
+  admin advances `main`, restore the source to `main`, rerun
+  `uv run config/update-external.py <fork>`, and verify the lock still records the
+  validated SHA. Push that follow-up to the same PR before marking it ready or merging
+  it. Coordinate with the daily external-dependency bump, which also follows `main`.
 
 Respect the section's `nuances`. Manual fixed-base overlay changes are a separate
 workflow; see `docs/overlay-only-pr.md`.
@@ -317,16 +327,18 @@ and fail on the refreshed one. If the old stack is already broken, the fork's e2
 cannot gate this refresh: do not open a PR on an unvalidated pin — file or link a
 blocker for the broken e2e and hold the refresh until it is fixed.
 
-## Promote the staged branch
+## Prepare the protected-branch promotion
 
-Once the e2e passes on `<branch>-next`, promote it before opening the PR: hard-swap the
-pin's stable `<branch>` onto `<branch>-next` with a backup, per
-`docs/promotion-protocol.md`. The swap is a backed-up force-update, not a merge — a
-rebased refresh does not descend from the old tip, so a merge would splice two upstream
-bases and break the fork's linear history. Marin pins exact SHAs and wheels, so the
-pointer moves without changing what Marin resolves. On a multi-pin fork keep `main`
-blank (`docs/fork-main-readme.md`); never advance `main` to a pin tip. A grouped refresh
-promotes each of its pins.
+Once the e2e passes on `<branch>-next`, create the rollback tag for the current stable
+tip and the date tag for the validated staged tip per `docs/promotion-protocol.md`.
+Push and verify those tags, then leave the protected stable `<branch>` unchanged. The
+draft Marin PR must identify each `<branch>-next` to `<branch>` hard swap that an admin
+must complete before merge. On a multi-pin fork keep `main` blank
+(`docs/fork-main-readme.md`); never advance `main` to a pin tip.
+
+Keep the Marin PR draft until every required admin promotion is complete. After an
+`isolated_project` promotion, restore its uv source from `main-next` to `main`, relock,
+and confirm the resolved SHA did not change before marking the PR ready.
 
 ## Review and Open the PR
 
@@ -339,17 +351,23 @@ refresh, and no text overclaims validation evidence.
 Open one draft `marin-community/marin` PR via `.agents/skills/commit/SKILL.md`,
 request the descriptor's `blocker_assignee` as reviewer, and follow the commit
 skill's monitoring loop to an exit condition. PR body: above the fold, the fork,
-selected base, the promoted `<branch>` tip SHA (and the wheel release tag for
-`vllm-gpu`), e2e outcome, and unresolved risks; in `<details>`, the base-selection
-evidence and the carry/drop/fix table with dropped-patch reasons.
+selected base, the staged tip SHA, its rollback and date tags, the pending admin
+promotion (and the wheel release tag for `vllm-gpu`), e2e outcome, and unresolved
+risks; in `<details>`, the base-selection evidence and the carry/drop/fix table with
+dropped-patch reasons.
 
 ## Done Means
 
 - The pin source named by `pin` carries the new revision (descriptor pins also carry
   `upstream_base`); `external_dependencies.py` is regenerated.
-- The pin's stable `branch` was hard-swapped onto the validated tip with a backup
-  branch; a multi-pin fork's `main` is still blank.
+- `<branch>-next` points at the validated tip, the current stable tip has a rollback
+  tag, and the validated tip has a date tag. The stable branch is unchanged, and the
+  PR names the admin hard swap still required; a multi-pin fork's `main` is still
+  blank.
+- A draft PR that temporarily follows `main-next` stays draft. After the admin
+  promotion, its source follows `main` again and its lock still records the validated
+  SHA before the PR is marked ready or merged.
 - Retained patches explain why they exist; dropped patches are called out.
-- The fork's e2e passed before promotion and PR creation, or the blocker is in a Marin
-  issue assigned to `blocker_assignee`.
+- The fork's e2e passed before the promotion tags and PR were created, or the blocker
+  is in a Marin issue assigned to `blocker_assignee`.
 - An opened Marin PR reaches a `commit` skill monitoring exit condition.
