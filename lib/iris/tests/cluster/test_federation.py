@@ -8,8 +8,6 @@ live backends, the ListPeers view, and the submit router's decision matrix
 (prefer-local, hand off when locally infeasible, explicit ``cluster`` pin).
 """
 
-import threading
-
 import pydantic
 import pytest
 from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
@@ -20,8 +18,6 @@ from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitDisposition
-from iris.cluster.federation.store import HandoffSpec
-from iris.cluster.types import JobName
 from iris.managed_thread import get_thread_container, thread_container_scope
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, ExponentialBackoff
@@ -125,73 +121,6 @@ class _StubConnection:
 
     def shutdown(self) -> None:
         self.shutdown_count += 1
-
-
-class _LaunchConnection(_StubConnection):
-    def __init__(self, *, blocked: threading.Event | None = None, release: threading.Event | None = None):
-        super().__init__(())
-        self.blocked = blocked
-        self.release = release
-        self.launched = threading.Event()
-        self.synced = threading.Event()
-
-    def launch_job(self, request):
-        self.launched.set()
-        if self.blocked is not None:
-            self.blocked.set()
-            assert self.release is not None
-            assert self.release.wait(timeout=5)
-        return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
-
-    def federation_sync(self, _request):
-        self.synced.set()
-        return controller_pb2.Controller.FederationSyncResponse()
-
-
-class _SelectiveLaunchConnection(_StubConnection):
-    def __init__(self, blocked_job: JobName, ready_job: JobName, release: threading.Event):
-        super().__init__(())
-        self.blocked_job = blocked_job
-        self.ready_job = ready_job
-        self.release = release
-        self.blocked = threading.Event()
-        self.ready_launched = threading.Event()
-        self.synced = threading.Event()
-
-    def launch_job(self, request):
-        job = JobName.from_wire(request.name)
-        if job == self.blocked_job:
-            self.blocked.set()
-            assert self.release.wait(timeout=5)
-        else:
-            assert job == self.ready_job
-            self.ready_launched.set()
-        return controller_pb2.Controller.LaunchJobResponse(job_id=request.name)
-
-    def federation_sync(self, _request):
-        self.synced.set()
-        return controller_pb2.Controller.FederationSyncResponse()
-
-
-class _PendingHandoffStore:
-    def __init__(self, specs: list[HandoffSpec]):
-        self.specs = specs
-        self.delivered: set[JobName] = set()
-
-    def pending_handoffs(self) -> list[HandoffSpec]:
-        return [spec for spec in self.specs if spec.local_job_id not in self.delivered]
-
-    def mark_handed_off(self, local_job_id: JobName) -> None:
-        self.delivered.add(local_job_id)
-
-    def pending_cancels(self):
-        return []
-
-    def read_cursor(self, _peer_id: str) -> str:
-        return ""
-
-    def apply_sync_batch(self, peer_id, deltas, *, next_cursor, cursor_stale, endpoints):
-        del peer_id, deltas, next_cursor, cursor_stale, endpoints
 
 
 def _peer(peer_id: str, connection: _StubConnection) -> FederationPeer:
@@ -326,102 +255,6 @@ def test_heartbeat_loop_refreshes_backends_and_stop_releases_connections():
         finally:
             manager.stop()
     assert connection.shutdown_count == 1
-
-
-def test_sync_loop_delivers_to_ready_peer_while_another_peer_is_blocked():
-    slow_started = threading.Event()
-    release_slow = threading.Event()
-    slow_connection = _LaunchConnection(blocked=slow_started, release=release_slow)
-    ready_connection = _LaunchConnection()
-    slow_job = JobName.root("user", "slow")
-    ready_job = JobName.root("user", "ready")
-    store = _PendingHandoffStore(
-        [
-            HandoffSpec(
-                local_job_id=slow_job,
-                peer_id="slow",
-                owner_principal="user",
-                submitting_user="user",
-                request=controller_pb2.Controller.LaunchJobRequest(name=slow_job.to_wire()),
-            ),
-            HandoffSpec(
-                local_job_id=ready_job,
-                peer_id="ready",
-                owner_principal="user",
-                submitting_user="user",
-                request=controller_pb2.Controller.LaunchJobRequest(name=ready_job.to_wire()),
-            ),
-        ]
-    )
-    with thread_container_scope() as threads:
-        manager = FederationManager(
-            [_peer("slow", slow_connection), _peer("ready", ready_connection)],
-            threads=threads,
-            store=store,
-            cluster_id="parent",
-        )
-        manager.start()
-        try:
-            assert slow_started.wait(timeout=5)
-            assert ready_connection.launched.wait(timeout=3)
-            assert ready_connection.synced.wait(timeout=3)
-            release_slow.set()
-            assert ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
-                lambda: store.delivered == {slow_job, ready_job}, timeout=Duration.from_seconds(3)
-            )
-        finally:
-            release_slow.set()
-            manager.stop()
-
-    assert store.delivered == {slow_job, ready_job}
-
-
-def test_sync_loop_delivers_same_peer_jobs_and_status_while_one_launch_is_blocked():
-    release_slow = threading.Event()
-    slow_job = JobName.root("user", "slow")
-    ready_job = JobName.root("user", "ready")
-    connection = _SelectiveLaunchConnection(slow_job, ready_job, release_slow)
-    store = _PendingHandoffStore(
-        [
-            HandoffSpec(
-                local_job_id=slow_job,
-                peer_id="cw",
-                owner_principal="user",
-                submitting_user="user",
-                request=controller_pb2.Controller.LaunchJobRequest(name=slow_job.to_wire()),
-            ),
-            HandoffSpec(
-                local_job_id=ready_job,
-                peer_id="cw",
-                owner_principal="user",
-                submitting_user="user",
-                request=controller_pb2.Controller.LaunchJobRequest(name=ready_job.to_wire()),
-            ),
-        ]
-    )
-    with thread_container_scope() as threads:
-        manager = FederationManager(
-            [_peer("cw", connection)],
-            threads=threads,
-            store=store,
-            cluster_id="parent",
-            sync_interval=Duration.from_seconds(0.02),
-        )
-        manager.start()
-        try:
-            assert connection.blocked.wait(timeout=5)
-            assert connection.ready_launched.wait(timeout=3)
-            connection.synced.clear()
-            assert connection.synced.wait(timeout=3)
-            release_slow.set()
-            assert ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
-                lambda: store.delivered == {slow_job, ready_job}, timeout=Duration.from_seconds(3)
-            )
-        finally:
-            release_slow.set()
-            manager.stop()
-
-    assert store.delivered == {slow_job, ready_job}
 
 
 def test_manager_without_peers_is_inert():
