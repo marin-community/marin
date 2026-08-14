@@ -59,6 +59,7 @@ from marin.rl.skyrl import (
     IrisSkyRLExecution,
     SkyRLEvaluationModel,
     SkyRLModel,
+    SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
@@ -175,7 +176,6 @@ trainer:
   eval_before_train: false
   eval_interval: -1
   ckpt_interval: 2
-  hf_save_interval: 8
   resume_mode: latest
   logger: wandb
   project_name: {ICEBALL_WANDB_PROJECT}
@@ -441,6 +441,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
                 gpu_variant=ICEBALL_GPU_VARIANT,
                 role_plan=ICEBALL_RL_ROLE_PLAN,
             ),
+            retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=17,
         ),
         IrisSkyRLExecution(

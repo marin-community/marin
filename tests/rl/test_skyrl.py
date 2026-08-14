@@ -26,6 +26,7 @@ from marin.rl.skyrl import (
     SkyRLLaunchRequest,
     SkyRLModel,
     SkyRLOutputPaths,
+    SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRunConfig,
     SkyRLRuntime,
@@ -91,6 +92,7 @@ def _spec() -> SkyRLSpec:
             gpu_variant="GB200",
             role_plan=_role_plan(),
         ),
+        retention=SkyRLRetentionPolicy(),
         seed=17,
         overrides=("++trainer.max_steps=8",),
     )
@@ -147,6 +149,51 @@ def test_skyrl_step_declares_model_and_data_dependencies() -> None:
         ("tests/iceball-sft", "2026.08.01"),
         ("tests/iceball-gsm8k", "2026.08.01"),
     ]
+
+
+def test_skyrl_step_uses_user_owned_durable_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
+
+    step = skyrl_step(_spec(), _execution())
+
+    assert step.name == "users/alice/tests/iceball-rl"
+
+
+def test_skyrl_step_routes_disposable_state_to_ttl_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
+    monkeypatch.setattr(
+        "marin.rl.skyrl.marin_temp_bucket",
+        lambda ttl_days, prefix, **_kwargs: f"s3://temp/ttl={ttl_days}d/{prefix}",
+    )
+    spec = dataclasses.replace(_spec(), version="dev")
+    step = skyrl_step(spec, _execution())
+    output_path = "s3://durable/users/alice/tests/iceball-rl/dev"
+    config = step.build_config(
+        StepContext.for_run(
+            output_path=output_path,
+            prefix="s3://durable",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+    )
+
+    assert step.name == "users/alice/tests/iceball-rl"
+    assert config.request.output == SkyRLOutputPaths(
+        checkpoint_root="s3://temp/ttl=14d/skyrl/users/alice/tests/iceball-rl/dev/checkpoints",
+        export_root=f"{output_path}/exports",
+        attempts_root="s3://temp/ttl=14d/skyrl/users/alice/tests/iceball-rl/dev/attempts",
+        resolved_config_uri=f"{output_path}/resolved-skyrl.json",
+        terminal_manifest_uri=f"{output_path}/terminal.json",
+    )
+    assert config.request.overrides[-3:] == (
+        "++trainer.max_ckpts_to_keep=2",
+        "++terminal_bench_config.trials_dir="
+        "s3://temp/ttl=14d/skyrl/users/alice/tests/iceball-rl/dev/attempts/trace_jobs",
+        "++generator.trajectory_retention.output_path="
+        "s3://temp/ttl=14d/skyrl/users/alice/tests/iceball-rl/dev/attempts/trajectories",
+    )
 
 
 def test_terminal_policy_composes_into_shared_evaluation_step() -> None:

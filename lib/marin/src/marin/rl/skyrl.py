@@ -19,13 +19,15 @@ from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import sanitize_job_name
+from marin.experiment.namespacing import user_owned_name
 from marin.external_dependencies import MARIN_SKYRL
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem import prefix_join
+from rigging.filesystem import marin_temp_bucket, prefix_join
 
 _EXECUTION = "skyrl_execution"
 _LAUNCHER_PYTHON = "3.12"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
+_TEMPORARY_OUTPUT_PREFIX = "skyrl"
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
 
 
@@ -67,6 +69,24 @@ class SkyRLTopology:
     gpus_per_node: int
     gpu_variant: str
     role_plan: SkyRLRolePlan
+
+
+@dataclass(frozen=True)
+class SkyRLRetentionPolicy:
+    """Temporary storage lifetime and rolling resume depth for one SkyRL run.
+
+    Every successful run produces one durable canonical export from its terminal
+    checkpoint.
+    """
+
+    resume_checkpoint_count: int = 2
+    temporary_storage_ttl_days: int = 14
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.resume_checkpoint_count <= 2:
+            raise ValueError("SkyRL resume_checkpoint_count must be one or two")
+        if self.temporary_storage_ttl_days <= 0:
+            raise ValueError("SkyRL temporary_storage_ttl_days must be positive")
 
 
 @dataclass(frozen=True)
@@ -158,6 +178,7 @@ class SkyRLSpec:
     train_data: tuple[ArtifactDataSource, ...]
     validation_data: tuple[ArtifactDataSource, ...]
     topology: SkyRLTopology
+    retention: SkyRLRetentionPolicy
     seed: int
     overrides: tuple[str, ...] = ()
 
@@ -306,6 +327,7 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
 
 def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[SkyRLModel]:
     """Build a versioned MarinSkyRL training artifact."""
+    step_name = user_owned_name(spec.name)
     deps = tuple(
         dict.fromkeys(
             (
@@ -318,15 +340,29 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
 
     def build_config(ctx: StepContext) -> SkyRLRunConfig:
         attempt_id = "<attempt_id>" if ctx.is_fingerprint else uuid.uuid4().hex[:12]
+        if ctx.is_fingerprint:
+            temporary_root = "<temporary_output_path>"
+        else:
+            temporary_root = marin_temp_bucket(
+                ttl_days=spec.retention.temporary_storage_ttl_days,
+                prefix=prefix_join(prefix_join(_TEMPORARY_OUTPUT_PREFIX, step_name), spec.version),
+                source_prefix=ctx.output_path,
+            )
+        attempts_root = prefix_join(temporary_root, "attempts")
         output = SkyRLOutputPaths(
-            checkpoint_root=prefix_join(ctx.output_path, "checkpoints"),
+            checkpoint_root=prefix_join(temporary_root, "checkpoints"),
             export_root=prefix_join(ctx.output_path, "exports"),
-            attempts_root=prefix_join(ctx.output_path, "attempts"),
+            attempts_root=attempts_root,
             resolved_config_uri=prefix_join(ctx.output_path, "resolved-skyrl.json"),
             terminal_manifest_uri=prefix_join(ctx.output_path, "terminal.json"),
         )
+        retention_overrides = (
+            f"++trainer.max_ckpts_to_keep={spec.retention.resume_checkpoint_count}",
+            f"++terminal_bench_config.trials_dir={prefix_join(attempts_root, 'trace_jobs')}",
+            f"++generator.trajectory_retention.output_path={prefix_join(attempts_root, 'trajectories')}",
+        )
         request = SkyRLLaunchRequest(
-            run_id=f"{spec.name}-{spec.version}",
+            run_id=f"{step_name}-{spec.version}",
             attempt_id=attempt_id,
             config_yaml=spec.config_yaml,
             runtime=spec.runtime,
@@ -336,7 +372,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             topology=spec.topology,
             output=output,
             seed=spec.seed,
-            overrides=spec.overrides,
+            overrides=(*spec.overrides, *retention_overrides),
         )
         return SkyRLRunConfig(
             request=request,
@@ -345,7 +381,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         )
 
     return ArtifactStep(
-        name=spec.name,
+        name=step_name,
         version=spec.version,
         artifact_type=SkyRLModel,
         run=run_skyrl,

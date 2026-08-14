@@ -7,6 +7,8 @@ import gzip
 import json
 from pathlib import Path
 
+from marin.execution.lazy import StepContext
+
 from experiments.post_training import iceball_micro
 
 
@@ -46,3 +48,5 @@ def test_workflow_is_one_dependency_chain_through_both_evaluators() -> None:
     assert workflow.gsm8k in workflow.rl.deps
     assert workflow.evaluation.deps == (workflow.rl,)
     assert workflow.evaluation.name.endswith("gsm8k-smoke,aime-smoke")
+    rl_config = workflow.rl.build_config(StepContext.for_fingerprint(workflow.rl.runtime_args, workflow.rl.deps))
+    assert "++trainer.max_ckpts_to_keep=1" in rl_config.request.overrides

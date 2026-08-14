@@ -22,9 +22,24 @@ Before launching, print and validate:
 
 - Exact command line, with secrets scrubbed.
 - Source git SHA for this launched instance. Avoid dirty trees unless the user explicitly wants one; if dirty is approved, log the diff or patch identity.
-- Pinned output root. Hero runs must use an explicit override output path; do not rely on auto-derived or ephemeral output locations.
+- Pinned durable output root. Mutable and development runs must use a caller-owned
+  `users/<username>/...` path below `MARIN_PREFIX`; do not write run data below a cluster's
+  `iris/` prefix.
 - W&B id/name and resume policy.
-- Checkpoint retention policy. Hero runs must explicitly choose permanent retention and rollback depth before launch. Suggest permanent checkpoints on the order of every 1e5 steps and temporary checkpoints every 15 minutes, keeping the previous 10 checkpoints for recovery and rollback robustness.
+- Checkpoint retention policy. Put rolling resume checkpoints under a region-local
+  `marin_temp_bucket(ttl_days=30, ..., source_prefix=<output root>)` path. Keep one by default and at
+  most two unless the DRI approves and records a deeper rollback window. Keep one durable canonical
+  export under the user-owned output root; add sparse durable milestones only when the run contract names them.
+- Checkpoint size estimate, resume retention count, and projected resume bytes. Use the expected
+  optimizer-inclusive checkpoint size; label an estimate when no completed checkpoint exists.
+- Raw trace and session destinations. Use a lifecycle-managed temp prefix for raw trajectories,
+  failed-attempt markers, rendezvous state, and Ray session/debug uploads. Keep compact metrics,
+  references, the resolved config, and the canonical export under the durable output root.
+- Ray spill destination. Use `/tmp/skyrl-ray-spill` or another explicit node-local path. Block a
+  launch that resolves spill, rendezvous, raw traces, resume checkpoints, or session data to a
+  durable `iris/` prefix.
+- Dataset locations. Use immutable Marin artifacts or caller-owned `users/<username>/...` paths;
+  block mutable run data under a shared `iris/` prefix.
 - `initialize_from`, parsed numeric checkpoint step, and `metadata.json` presence when starting from a checkpoint.
 - Final training step resolved from the launched config/code, not from progress-bar display text.
 - Runtime package, source bundle, or container identity when it differs from the local git SHA.
@@ -40,7 +55,7 @@ Maintain research-style run records (cf the run-research skill):
 - Keep an append-only logbook at `.agents/logbooks/<run>.md` unless the user chooses another path.
 - Commit and push the logbook every time it is materially updated; git history is the durability layer, not the local Codex worktree.
 - Link the issue and logbook both ways.
-- Record every launched instance: timestamp, DRI, exact command line with secrets scrubbed, git SHA, dirty-tree status, source bundle identity, hardware/topology, W&B run id/display name, output root, `initialize_from`, final step, checkpoint policy, and babysitter state.
+- Record every launched instance: timestamp, DRI, exact command line with secrets scrubbed, git SHA, dirty-tree status, source bundle identity, hardware/topology, W&B run id/display name, durable output root, resume checkpoint root and retention count, projected checkpoint bytes, canonical export path, trace/rendezvous/spill destinations, `initialize_from`, final step, and babysitter state.
 - Post issue updates for significant milestones, failures, relaunches, rollbacks, retention changes, and escalations. Keep dense logs in the logbook and concise status in the issue.
 
 Bootstrap the issue and logbook before launch:
@@ -81,6 +96,9 @@ Use this compact logbook shape:
 - Issue:
 - W&B:
 - Output root:
+- Resume checkpoint root / retention / projected bytes:
+- Canonical export:
+- Raw trace / rendezvous / Ray spill:
 - Final step:
 
 ## Launched Instances
@@ -93,6 +111,7 @@ Use this compact logbook shape:
 - `initialize_from`:
 - Final step:
 - Checkpoint policy:
+- Storage report:
 - Babysitter/check cadence:
 
 ## Event Log
@@ -154,7 +173,10 @@ Many failures can be recoverable just by relaunching using the same id. These in
 ## Retention
 
 - Ordinary runs should use rolling temporary checkpoint behavior for preemption recovery and keep only the final checkpoint permanently.
-- Hero runs must explicitly choose retention and rollback depth before launch.
+- Hero runs must explicitly choose retention and rollback depth before launch. Keep one temporary
+  resume checkpoint by default. A count above two requires DRI approval in the run record.
+- Resume checkpoints belong in a lifecycle-managed region-local temp prefix. Canonical exports and
+  named milestones belong in the caller's durable `users/<username>/...` prefix.
 - Never rely on permanent retention alone to protect an explicit rollback source; treat launch lineage as state.
 - For any checkpoint cleanup, list deletion candidates first and get explicit user confirmation. Preserve the latest requested N, the final checkpoint, the launch checkpoint, any recovery source, and requested milestone anchors.
 
@@ -165,6 +187,8 @@ When a hero run finishes or reaches a handoff milestone:
 - Verify terminal orchestrator status is successful.
 - Verify W&B is finished or has the expected final state and metrics.
 - Verify the final checkpoint has `metadata.json`.
+- Verify terminal cleanup or lifecycle coverage for resume checkpoints, raw traces, failed-launch
+  markers, rendezvous state, and Ray session/debug uploads.
 - Capture final metrics, final step, W&B run id/display name, output root, final checkpoint path, and any caveats.
 - Stop or delete heartbeat/monitor automations that are no longer needed.
 - If approved dirty-tree changes were used, create a seal commit and tag immediately so the actual operational state is recoverable.
