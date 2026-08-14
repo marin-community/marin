@@ -525,7 +525,14 @@ def test_runtime_handle_allows_process_local_multi_process_world_and_owns_teardo
     )
     monkeypatch.setattr(runtime, "validate_mok_like_mesh_topology", topology_checks.append)
     monkeypatch.setattr(runtime, "load_native_library", lambda _: (object(), fake_library, library_path))
-    monkeypatch.setattr(runtime, "register_ffi_targets", lambda _: None)
+    # The handler symbols are rank-suffixed, so registration has to name the count the library was
+    # built for; recording it keeps a default from silently registering the wrong ones.
+    registered_rank_counts: list[int] = []
+    monkeypatch.setattr(
+        runtime,
+        "register_ffi_targets",
+        lambda _library, num_devices: registered_rank_counts.append(num_devices),
+    )
     monkeypatch.setattr(
         runtime,
         "initialize_native_runtime",
@@ -553,6 +560,7 @@ def test_runtime_handle_allows_process_local_multi_process_world_and_owns_teardo
     handle.close()
     assert topology_checks == [fake_mesh]
     assert native_signatures == [(4, 256, 256, 2, 1)]
+    assert registered_rank_counts == [4]
     assert lifecycle == ["initialize", "shutdown"]
     assert not mok_like_runtime_initialized(handle)
 

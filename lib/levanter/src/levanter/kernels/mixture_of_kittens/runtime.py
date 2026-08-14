@@ -13,6 +13,7 @@ from pathlib import Path
 
 import jax
 import numpy as np
+from jax.experimental import multihost_utils
 
 from levanter.kernels.mixture_of_kittens.availability import require_mok_like_available
 from levanter.kernels.mixture_of_kittens.build import build_native_library
@@ -193,9 +194,7 @@ def initialize_local_arena(
     ]
     function.restype = ctypes.c_int
     buffer = out.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
-    status = function(
-        rank, num_devices, num_tokens, hidden_dim, top_k, workspace_slots, device_ordinal, buffer
-    )
+    status = function(rank, num_devices, num_tokens, hidden_dim, top_k, workspace_slots, device_ordinal, buffer)
     if status != 0:
         raise RuntimeError(_native_last_error(library, "MoK-like local arena allocation failed"))
     return out
@@ -511,9 +510,7 @@ def _expert_axis_index(mesh: jax.sharding.Mesh) -> int:
     local_device = jax.local_devices()[0]
     positions = np.argwhere(np.asarray(mesh.devices, dtype=object) == local_device)
     if positions.shape[0] != 1:
-        raise RuntimeError(
-            f"expected exactly one mesh position for {local_device}, found {positions.shape[0]}"
-        )
+        raise RuntimeError(f"expected exactly one mesh position for {local_device}, found {positions.shape[0]}")
     return int(positions[0][mesh.axis_names.index(_EXPERT_AXIS)])
 
 
@@ -538,8 +535,6 @@ def _initialize_fabric_arena(
     that also replicates across racks needs a per-group gather instead; that case
     is rejected below rather than silently mixing handles from different groups.
     """
-
-    from jax.experimental import multihost_utils
 
     process_count = jax.process_count()
     if process_count != num_devices:
@@ -611,7 +606,10 @@ def initialize_mok_like_runtime(
     require_mok_like_available(build_config)
     cuda_driver, library, library_path = load_native_library(build_config)
     if _REGISTERED_LIBRARY_PATH is None:
-        register_ffi_targets(library)
+        # The adapter exports one symbol per compiled rank count, so registration has to name the
+        # count this library was built for. Taking the default asked a sixty-four-rank library for
+        # the four-rank symbols.
+        register_ffi_targets(library, build_config.num_devices)
         _REGISTERED_LIBRARY_PATH = library_path
     elif _REGISTERED_LIBRARY_PATH != library_path:
         raise RuntimeError(
