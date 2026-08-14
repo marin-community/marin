@@ -12,6 +12,8 @@ StepRunner-walkable graph. Two modes (``--mode``), same DAG:
 
 Use ``--target decontam`` to run only the shared Bloom filter, the corpus DF
 filter, each source decontamination pipeline, and the decontamination report.
+Use ``--target decon-drop`` to stop after the shared Bloom filter and corpus DF
+filter. This target is useful for a small drop-set build test.
 
 Per source::
 
@@ -1099,6 +1101,8 @@ def _target_steps(result: DatakitSteps, target: str) -> list[StepSpec]:
         return result.all_steps
     if target == "decontam":
         return [next(step for step in result.all_steps if step.name == "datakit/report/decontam")]
+    if target == "decon-drop":
+        return [next(step for step in result.all_steps if step.name == "datakit/decon_drop/_combined")]
     raise ValueError(f"unknown run target: {target}")
 
 
@@ -1112,9 +1116,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--target",
-        choices=("all", "decontam"),
+        choices=("all", "decontam", "decon-drop"),
         default="all",
-        help="all: complete reference DAG. decontam: decontamination inputs, outputs, and report only.",
+        help=(
+            "all: complete reference DAG. decontam: decontamination inputs, outputs, and report. "
+            "decon-drop: shared Bloom filter and corpus DF filter only."
+        ),
     )
     parser.add_argument("--sample-prefix", default=SAMPLE_PREFIX, help="testbed sample root (--mode sample)")
     parser.add_argument(
@@ -1167,7 +1174,7 @@ def main() -> None:
 
     scale = _apply_pool_overrides(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
     sources = _select_pipeline_sources(args)
-    if args.target == "decontam":
+    if args.target in ("decontam", "decon-drop"):
         _require_normalized_sources(sources)
 
     with ZephyrContext(

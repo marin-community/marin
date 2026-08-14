@@ -41,6 +41,7 @@ import os
 import random
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import islice
 from typing import Any
@@ -55,7 +56,8 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
-from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
+from zephyr.input_file import InputFileSpec
+from zephyr.readers import SUPPORTED_EXTENSIONS, compute_parquet_splits, load_file
 from zephyr.writers import write_parquet_file
 
 from marin.datakit.normalize import NormalizedData
@@ -75,7 +77,11 @@ logger = logging.getLogger(__name__)
 FEATURE_FILTER_VERSION = 3
 DECON_ATTRIBUTES_VERSION = 4
 BLOOM_BUILD_VERSION = 2
+DROP_SET_BUILD_VERSION = 2
 MIN_SHORT_EXACT_TOKENS = 3
+DROP_SET_SAMPLE_SHARD_BYTES = 64 * 1024 * 1024
+DROP_SET_SHARDS_PER_SOURCE = 16
+DROP_SET_PLANNING_THREADS = 32
 
 
 @dataclass(frozen=True)
@@ -1385,6 +1391,149 @@ class DropSetSource:
     dependency: StepSpec | None = None
 
 
+def _source_sample_shards(
+    source: tuple[str, str],
+    *,
+    text_field: str,
+    sample_docs: int,
+    global_sample_docs: int,
+) -> list[dict[str, Any]]:
+    """Plan balanced row-range samples for one normalized source."""
+    source_name, data_path = source
+    ranges: list[dict[str, Any]] = []
+    rows_planned = 0
+    files = sorted(str(path) for path in StoragePath(f"{data_path.rstrip('/')}/**/*.parquet").glob())
+    for path in files:
+        for row_start, row_end in compute_parquet_splits(path, DROP_SET_SAMPLE_SHARD_BYTES):
+            rows_remaining = global_sample_docs - rows_planned
+            if rows_remaining <= 0:
+                break
+            clipped_end = min(row_end, row_start + rows_remaining)
+            row_count = clipped_end - row_start
+            if row_count <= 0:
+                continue
+            local_row_count = min(row_count, max(0, sample_docs - rows_planned))
+            ranges.append(
+                {
+                    "path": path,
+                    "row_start": row_start,
+                    "row_end": clipped_end,
+                    "local_row_count": local_row_count,
+                    "row_count": row_count,
+                }
+            )
+            rows_planned += row_count
+        if rows_planned >= global_sample_docs:
+            break
+
+    num_shards = min(DROP_SET_SHARDS_PER_SOURCE, len(ranges))
+    if num_shards == 0:
+        return [{"source": source_name, "text_field": text_field, "ranges": []}]
+
+    buckets: list[list[dict[str, Any]]] = [[] for _ in range(num_shards)]
+    bucket_rows = [0] * num_shards
+    for sample_range in sorted(ranges, key=lambda item: item["row_count"], reverse=True):
+        bucket_index = min(range(num_shards), key=bucket_rows.__getitem__)
+        buckets[bucket_index].append(sample_range)
+        bucket_rows[bucket_index] += sample_range["row_count"]
+    return [{"source": source_name, "text_field": text_field, "ranges": bucket} for bucket in buckets]
+
+
+def _sample_drop_set_shard(
+    sample_shards: Iterator[dict[str, Any]],
+    _shard: ShardInfo,
+    *,
+    bloom_path: str,
+    ngram: NGramConfig | None,
+) -> Iterator[dict[str, Any]]:
+    """Count matching eval features in one group of source row ranges."""
+    bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
+    for sample_shard in sample_shards:
+        local_counts: Counter[int] = Counter()
+        global_counts: Counter[int] = Counter()
+        local_documents = 0
+        global_documents = 0
+        text_field = sample_shard["text_field"]
+        for sample_range in sample_shard["ranges"]:
+            spec = InputFileSpec(
+                path=sample_range["path"],
+                columns=[text_field],
+                row_start=sample_range["row_start"],
+                row_end=sample_range["row_end"],
+            )
+            for row_index, record in enumerate(load_file(spec)):
+                text = record.get(text_field)
+                if not text:
+                    continue
+                hashes = {h for feature in _extract_features(str(text), ngram) if (h := _bloom_hash(feature)) in bf}
+                global_counts.update(hashes)
+                global_documents += 1
+                if row_index < sample_range["local_row_count"]:
+                    local_counts.update(hashes)
+                    local_documents += 1
+
+        counters.pipeline.update_counter("decon_drop/sample_shards", 1)
+        yield {
+            "source": sample_shard["source"],
+            "hash": None,
+            "local_document_frequency": 0,
+            "global_document_frequency": 0,
+            "local_documents": local_documents,
+            "global_documents": global_documents,
+        }
+        for hash_value in local_counts.keys() | global_counts.keys():
+            yield {
+                "source": sample_shard["source"],
+                "hash": hash_value,
+                "local_document_frequency": local_counts[hash_value],
+                "global_document_frequency": global_counts[hash_value],
+                "local_documents": 0,
+                "global_documents": 0,
+            }
+
+
+def _reduce_source_drop_set(
+    source_name: str,
+    items: Iterator[dict[str, Any]],
+    *,
+    output_path: str,
+    common_frac: float,
+    common_min_abs: int,
+) -> Iterator[dict[str, int]]:
+    """Merge sample shards, write one local drop set, and emit global counts."""
+    local_counts: Counter[int] = Counter()
+    global_counts: Counter[int] = Counter()
+    local_documents = 0
+    global_documents = 0
+    for item in items:
+        local_documents += item["local_documents"]
+        global_documents += item["global_documents"]
+        hash_value = item["hash"]
+        if hash_value is None:
+            continue
+        local_counts[hash_value] += item["local_document_frequency"]
+        global_counts[hash_value] += item["global_document_frequency"]
+
+    threshold = max(common_min_abs, int(common_frac * local_documents))
+    drop = [hash_value for hash_value, count in local_counts.items() if count >= threshold]
+    _write_drop_set(f"{output_path.rstrip('/')}/{source_name}", drop)
+    counters.pipeline.update_counter("decon_drop/sources", 1)
+    counters.pipeline.update_counter("decon_drop/ngrams_dropped", len(drop))
+    counters.pipeline.update_counter("decon_drop/global_documents_sampled", global_documents)
+    counters.pipeline.update_counter("decon_drop/global_candidates", len(global_counts))
+    logger.info(
+        "decon drop-set %s: local=%d docs/%d ngrams (df>=%d), global=%d docs/%d candidates",
+        source_name,
+        local_documents,
+        len(drop),
+        threshold,
+        global_documents,
+        len(global_counts),
+    )
+    for hash_value, document_frequency in global_counts.items():
+        yield {"hash": hash_value, "document_frequency": document_frequency, "source_frequency": 1}
+
+
 def _global_drop_row(
     hash_value: int,
     items: Iterator[dict[str, int]],
@@ -1439,11 +1588,12 @@ def build_all_source_drop_sets(
 ) -> AllSourceDropSets:
     """Build per-source and cross-source common eval-ngram drop sets.
 
-    One Zephyr map shard per source writes the source-local drop set and emits
-    document frequencies for matching eval ngrams. A distributed reduce sums
-    those counts across sources. A globally common ngram must meet both the
-    corpus document-frequency threshold and the distinct-source threshold, so
-    a repeated eval item concentrated in one source remains matchable.
+    Each source sample is divided into balanced Parquet row-range shards. A
+    source reduce writes the local drop set and emits its document frequencies.
+    A second distributed reduce sums those counts across sources. A globally
+    common ngram must meet both the corpus document-frequency threshold and the
+    distinct-source threshold, so a repeated eval item concentrated in one
+    source remains matchable.
     """
     if not sources:
         raise ValueError("sources must be non-empty")
@@ -1465,35 +1615,34 @@ def build_all_source_drop_sets(
 
     bloom_path, _ = bloom_paths(prebuilt_bloom_dir)
 
-    def build_shard(items: Iterator[tuple[str, str]], _shard: ShardInfo) -> Iterator[dict[str, int]]:
-        bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
-        for source_name, df_sample_dir in items:
-            drop, n, threshold = _drop_set_for_source(
-                df_sample_dir, bf, text_field, ngram, sample_docs, common_frac, common_min_abs
-            )
-            _write_drop_set(f"{output_path.rstrip('/')}/{source_name}", drop)
-            global_counts, n_global = _document_frequency_counts(
-                df_sample_dir, bf, text_field, ngram, global_sample_docs
-            )
-            counters.pipeline.update_counter("decon_drop/sources", 1)
-            counters.pipeline.update_counter("decon_drop/ngrams_dropped", len(drop))
-            counters.pipeline.update_counter("decon_drop/global_documents_sampled", n_global)
-            counters.pipeline.update_counter("decon_drop/global_candidates", len(global_counts))
-            logger.info(
-                "decon drop-set %s: local=%d docs/%d ngrams (df>=%d), global=%d docs/%d candidates",
-                source_name,
-                n,
-                len(drop),
-                threshold,
-                n_global,
-                len(global_counts),
-            )
-            for hash_value, document_frequency in global_counts.items():
-                yield {"hash": hash_value, "document_frequency": document_frequency, "source_frequency": 1}
+    planning_threads = min(DROP_SET_PLANNING_THREADS, len(sources))
+    with ThreadPoolExecutor(max_workers=planning_threads) as executor:
+        planned = executor.map(
+            lambda source: _source_sample_shards(
+                source,
+                text_field=text_field,
+                sample_docs=sample_docs,
+                global_sample_docs=global_sample_docs,
+            ),
+            sources,
+        )
+        sample_shards = [sample_shard for source_shards in planned for sample_shard in source_shards]
+    logger.info("decon drop-set: planned %d sample shards for %d sources", len(sample_shards), len(sources))
 
     pipeline = (
-        Dataset.from_list(sources)
-        .map_shard(build_shard)
+        Dataset.from_list(sample_shards)
+        .map_shard(lambda items, shard: _sample_drop_set_shard(items, shard, bloom_path=bloom_path, ngram=ngram))
+        .group_by(
+            key=lambda row: row["source"],
+            reducer=lambda source_name, items: _reduce_source_drop_set(
+                source_name,
+                items,
+                output_path=output_path,
+                common_frac=common_frac,
+                common_min_abs=common_min_abs,
+            ),
+            num_output_shards=min(len(sources), len(sample_shards)),
+        )
         .group_by(
             key=lambda row: row["hash"],
             reducer=lambda hash_value, items: _global_drop_row(
@@ -1502,6 +1651,7 @@ def build_all_source_drop_sets(
                 common_min_abs=global_common_min_abs,
                 common_min_sources=global_common_min_sources,
             ),
+            num_output_shards=min(len(sources), len(sample_shards)),
         )
         .filter(lambda row: row is not None)
     )
@@ -1593,6 +1743,7 @@ def all_source_drop_sets_step(
         "ngram_length": ngram_length,
         "paragraph_delimiter": paragraph_delimiter,
         "feature_filter_version": FEATURE_FILTER_VERSION,
+        "drop_set_build_version": DROP_SET_BUILD_VERSION,
         "sample_docs": sample_docs,
         "common_frac": common_frac,
         "common_min_abs": common_min_abs,
