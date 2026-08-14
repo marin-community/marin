@@ -1432,3 +1432,14 @@ author: Rafal Wojdyla
 - Backfill state: The East fuzzy-duplicate root remains active. The durable backfill count reached 166,656 of 166,775 shards before this merge launch.
 - Issue update: None. Report the partial merge after it completes, or include it with the final backfill verification.
 - Next action: Monitor both jobs. Verify the 128 merged artifacts after the merge succeeds. Complete the full 292-source and 166,775-shard backfill verification after the East root succeeds.
+
+### 2026-08-14 04:36 UTC - Partial production merge completed and verified
+
+- Root result: `/rav/harrier-merge-128-complete-no-focus-20260814-batch-v1` succeeded. All 128 source steps succeeded, and no child job failed.
+- Shared pool: One Zephyr coordinator served all source steps. Its 16 workers stayed healthy and stopped after the source steps completed.
+- Read-back check: A separate verifier found 128 successful merged artifacts and 128 output shards. The outputs contain 3,455,791 rows.
+- Exact match: For every output shard, the verifier matched the normalized shard name, schema, row count, and exact ID order.
+- Exclusion: `common-crawl-focus-2026-22` is absent from the 128 outputs.
+- Output prefix: `s3://marin-us-east-02a/marin/datakit/embed/harrier-all/`.
+- Issue update: None. Include this result with the final backfill completion update.
+- Next action: Continue the final East backfill sources, then verify all 292 source artifacts and 166,775 shard names.
