@@ -28,12 +28,28 @@ PRODUCTION_PRIORITY = priority_band_value("production")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "TF_CPP_", "IRIS_JAX_", "IRIS_MULTIGPU_CHILD_", "MOK_ARENA_")
+_FORWARDED_ENV_PREFIXES = (
+    "XLA_",
+    "LIBTPU_INIT_ARGS",
+    "NCCL_",
+    "JAX_",
+    "TF_CPP_",
+    "IRIS_JAX_",
+    "IRIS_MULTIGPU_CHILD_",
+    "MOK_",
+)
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 # PYTHONUNBUFFERED/PYTHONFAULTHANDLER are listed by name rather than by a "PYTHON"
 # prefix: PYTHONPATH and PYTHONHOME describe the dispatcher's own interpreter and
-# would corrupt the train task's environment if they leaked across.
-_FORWARDED_ENV_KEYS = (XLA_AUTOTUNE_CACHE_MODE_ENV, "PYTHONUNBUFFERED", "PYTHONFAULTHANDLER")
+# would corrupt the train task's environment if they leaked across. CUDA_LAUNCH_BLOCKING
+# is named for the same reason -- a "CUDA_" prefix would drag CUDA_VISIBLE_DEVICES along,
+# and the dispatcher's device mask must not reach an accelerator task.
+_FORWARDED_ENV_KEYS = (
+    XLA_AUTOTUNE_CACHE_MODE_ENV,
+    "PYTHONUNBUFFERED",
+    "PYTHONFAULTHANDLER",
+    "CUDA_LAUNCH_BLOCKING",
+)
 
 
 def _forwarded_env_vars() -> dict[str, str]:

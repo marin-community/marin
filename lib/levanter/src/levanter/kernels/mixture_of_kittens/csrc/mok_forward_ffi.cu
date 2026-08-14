@@ -1199,6 +1199,23 @@ class RuntimeManager {
     }
     state->leased_mask |= rank_bit;
     cv_.notify_all();
+    if (trace_invocations_) {
+      // Under the fabric transport the ordinal counter is per process, so cross-rank agreement is
+      // an assumption rather than something the host can check. Printing the resolved reservation
+      // makes a divergence visible by diffing the ranks' streams, which is otherwise only
+      // observable as a downstream fault.
+      std::fprintf(
+          stderr,
+          "[mok-trace] rank=%d run=%lld collective=%lld phase=%s ordinal=%llu slot=%d generation=%llu\n",
+          rank,
+          static_cast<long long>(key.run_id),
+          static_cast<long long>(key.collective_id),
+          phase == InvocationPhase::kForward ? "forward" : "backward",
+          static_cast<unsigned long long>(key.ordinal),
+          state->slot,
+          static_cast<unsigned long long>(state->generation));
+      std::fflush(stderr);
+    }
     ++host_slot_acquisitions_[rank][state->slot];
     host_max_active_slots_[rank] = std::max(
         host_max_active_slots_[rank],
@@ -1469,6 +1486,7 @@ class RuntimeManager {
   int local_rank_ = -1;
   mok_fabric::ArenaLayout arena_layout_{};
   std::array<mok_fabric::SymmetricWorkspace, kMaxWorkspaceSlots> arenas_{};
+  const bool trace_invocations_ = std::getenv("MOK_TRACE_INVOCATIONS") != nullptr;
 };
 
 struct GenerationArgs {
