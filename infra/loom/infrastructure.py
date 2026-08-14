@@ -232,6 +232,7 @@ class ProfileConfig:
     prelude: str
     instructions: str
     restricted: bool
+    github_repositories: tuple[str, ...]
     allowed_tools: tuple[str, ...]
     mcp_access: McpAccessConfig
     env: tuple[ProfileSecretConfig, ...]
@@ -265,6 +266,7 @@ class ProfileConfig:
             prelude=str(value.get("prelude", "weaver")),
             instructions=_profile_instructions(value, name),
             restricted=bool(value.get("restricted", False)),
+            github_repositories=_string_tuple(value.get("githubRepositories", []), "githubRepositories", name),
             allowed_tools=_string_tuple(value.get("allowedTools", []), "allowedTools", name),
             mcp_access=McpAccessConfig.parse(value.get("mcpAccess", {}), name),
             env=env,
@@ -289,6 +291,7 @@ class ProfileConfig:
             "prelude": self.prelude,
             "instructions": self.instructions,
             "restricted": self.restricted,
+            "github_repositories": list(self.github_repositories),
             "allowed_tools": list(self.allowed_tools),
             "mcp_access": self.mcp_access.manifest(),
         }

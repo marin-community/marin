@@ -64,13 +64,16 @@ config:
       prelude: weaver
       instructionsFile: profiles/fork-ferry/AGENTS.md
       restricted: false
+      githubRepositories:
+        - marin-community/evalchemy
+        - marin-community/harbor
+        - marin-community/marin
+        - marin-community/tpu-inference
+        - marin-community/vllm
       allowedTools: []
       mcpAccess:
         mode: all
         groups: []
-      env:
-        GH_TOKEN:
-          secretRef: projects/hai-gcp-models/secrets/marinmirror-token/versions/1
     ops:
       agent: codex
       description: Coordinate Grafana alerts and delegate incident triage for Marin
