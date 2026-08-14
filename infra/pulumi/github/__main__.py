@@ -19,7 +19,6 @@ from iac.github.dependency_updater import (
     register_dependency_updater_environment,
 )
 from iac.github.resources import credential_resource_plans, register_credentials, repository_name
-from iac.github.stack_outputs import federation_profile
 
 LOOM_STACK = "organization/marin-loom/marin-loom"
 FORK_FERRY_FEDERATION = "fork-ferry"
@@ -44,7 +43,7 @@ def main() -> None:
     fork_ferry_repository = config.require("forkFerryRepository")
     loom = pulumi.StackReference(LOOM_STACK)
     fork_ferry_profile = loom.require_output("githubFederationProfiles").apply(
-        lambda profiles: federation_profile(profiles, FORK_FERRY_FEDERATION)
+        lambda profiles: profiles[FORK_FERRY_FEDERATION]
     )
     github.ActionsVariable(
         "fork-ferry-profile",
