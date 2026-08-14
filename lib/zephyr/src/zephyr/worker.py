@@ -15,8 +15,8 @@ from rigging.timing import ExponentialBackoff, RateLimiter
 
 from zephyr.coordinator import CoordinatorUnreachable, PullStatus, PullTask
 from zephyr.memory_store import (
-    MemoryStoreActorStats,
     MemoryStoreService,
+    MemoryStoreShardStats,
     MemoryTableRegistration,
     MemoryTableStatsBatch,
 )
@@ -254,11 +254,11 @@ class ZephyrWorker:
         if self._host_shutdown_event is not None:
             self._host_shutdown_event.set()
 
-    def load_memory_table(self, registration: MemoryTableRegistration) -> tuple[MemoryStoreActorStats, ...]:
+    def load_memory_table(self, registration: MemoryTableRegistration) -> tuple[MemoryStoreShardStats, ...]:
         """Validate and load one table from its shard-local source data."""
         return self._memory_store.load(registration)
 
-    def reload_memory_table(self, table_id: str) -> tuple[MemoryStoreActorStats, ...] | None:
+    def reload_memory_table(self, table_id: str) -> tuple[MemoryStoreShardStats, ...] | None:
         """Reload one active table, or return `None` if it was destroyed."""
         registration = self._coordinator.memory_table_registration.remote(table_id).result()
         if registration is None:

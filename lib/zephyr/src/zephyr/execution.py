@@ -43,8 +43,8 @@ from zephyr.coordinator import (
 from zephyr.dataset import Dataset
 from zephyr.memory_store import (
     MemoryStore,
-    MemoryStoreActorStats,
     MemoryStoreShardHandle,
+    MemoryStoreShardStats,
     MemoryTableRegistration,
     actor_result_with_recovery,
     memory_store_plan,
@@ -222,7 +222,7 @@ def _require_resolvable_worker_handles(client: Client) -> None:
 
 def _order_memory_store_handles(
     handles: tuple[ActorHandle, ...],
-    stats_by_handle: list[tuple[MemoryStoreActorStats, ...]],
+    stats_by_handle: list[tuple[MemoryStoreShardStats, ...]],
 ) -> tuple[ActorHandle, ...]:
     """Order asynchronously discovered worker handles by their actor index."""
     if len(handles) != len(stats_by_handle):
@@ -435,7 +435,7 @@ class ZephyrContext:
         deadline = time.monotonic() + ready_timeout
         handles = coordinator.worker_handles.remote(pool.worker_count, ready_timeout).result(timeout=ready_timeout)
 
-        def load_pass() -> list[tuple[MemoryStoreActorStats, ...]]:
+        def load_pass() -> list[tuple[MemoryStoreShardStats, ...]]:
             calls = {
                 position: lambda handle=handle: handle.load_memory_table.submit(registration)
                 for position, handle in enumerate(handles)
