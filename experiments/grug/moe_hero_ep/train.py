@@ -1452,7 +1452,12 @@ def _run_grug_local_inner(config: GrugRunConfig) -> None:
             if mok_like_runtime is not None:
                 counters = mok_like_runtime.debug_counters()
                 debug_metrics = _mok_like_debug_metrics(counters)
-                expected_handler_calls = (trainer.num_train_steps - training_start_step) * config.model.num_layers * 4
+                # One handler call per local rank: the summaries are per process, and a process
+                # owns as many ranks as it has devices. The in-process transport puts all four on
+                # one process, the fabric transport gives each rank its own.
+                expected_handler_calls = (
+                    (trainer.num_train_steps - training_start_step) * config.model.num_layers * jax.local_device_count()
+                )
                 trim_interval_updates = config.gpu_default_pool_trim_interval_updates
                 expected_trim_count = (
                     trainer.num_train_steps // trim_interval_updates - training_start_step // trim_interval_updates
