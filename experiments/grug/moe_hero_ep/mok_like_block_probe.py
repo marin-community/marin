@@ -38,8 +38,9 @@ WORLD_SIZE = 4
 @click.option("--hidden-dim", type=int, default=512, show_default=True)
 @click.option("--intermediate-dim", type=int, default=512, show_default=True)
 @click.option("--num-tokens", type=int, default=512, show_default=True, help="tokens per rank")
+@click.option("--scan-layers", type=int, default=1, show_default=True, help="run the block under lax.scan this many times")
 @click.option("--backward", is_flag=True, help="also take a gradient through the block")
-def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, backward: bool) -> None:
+def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, scan_layers: int, backward: bool) -> None:
     initialize_jax()
     devices = jax.devices()
     if jax.process_count() != WORLD_SIZE or jax.local_device_count() != 1:
@@ -102,6 +103,25 @@ def main(hidden_dim: int, intermediate_dim: int, num_tokens: int, backward: bool
             def forward(module: MoEMLP, shared_expert: DenseMLP, x: jax.Array) -> jax.Array:
                 output, _ = module(x, shared_expert=shared_expert, mok_like_runtime=runtime)
                 return output
+
+            if scan_layers > 1:
+                # The transformer runs its layers under lax.scan, so the FFI is compiled once and
+                # executed N times from inside a traced body -- not N separate calls. That is the
+                # last structural difference between these probes and the training path.
+                def scanned(module: MoEMLP, shared_expert: DenseMLP, x: jax.Array) -> jax.Array:
+                    def body(carry: jax.Array, _: None) -> tuple[jax.Array, None]:
+                        return forward(module, shared_expert, carry), None
+
+                    final, _ = jax.lax.scan(body, x, None, length=scan_layers)
+                    return final
+
+                scanned_output = jax.jit(scanned)(block, shared, tokens)
+                scanned_output.block_until_ready()
+                scanned_finite = bool(jnp.all(jnp.isfinite(scanned_output.astype(jnp.float32))))
+                print(f"SCAN layers={scan_layers} finite={scanned_finite}", flush=True)
+                if not scanned_finite:
+                    raise RuntimeError("scanned block produced a non-finite output")
+                print("SCAN PASS", flush=True)
 
             output = jax.jit(forward)(block, shared, tokens)
             output.block_until_ready()
