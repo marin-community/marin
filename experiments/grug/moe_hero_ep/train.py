@@ -62,13 +62,10 @@ XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overla
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
-# The verified-safe command-buffer capture set: jaxlib 0.11's default, pinned so a
-# jaxlib upgrade cannot silently change it. Do not add COLLECTIVES: capturing
-# collectives wedges the gang mid-run -- the #5675 hang follows that capture type
-# specifically, not command buffers in general.
-XLA_COMMAND_BUFFER_FLAG = (
-    "--xla_gpu_enable_command_buffer=" "CONDITIONAL,CUBLAS,CUBLASLT,CUDNN,CUSTOM_CALL,DYNAMIC_SLICE_FUSION,FUSION"
-)
+# TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
+# command buffers after the CUDA graph failure is fixed.
+XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+_FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
 
 
 class WatchMode(StrEnum):
@@ -76,6 +73,13 @@ class WatchMode(StrEnum):
 
     INLINE = "inline"
     DIAGNOSTIC = "diagnostic"
+
+
+class MasterParamMode(StrEnum):
+    """Storage mode for optimizer master parameters."""
+
+    DISABLED = "disabled"
+    FP32_PINNED_HOST = "fp32_pinned_host"
 
 
 def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per_task: int = 1) -> None:
@@ -92,7 +96,7 @@ def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool, processes_per
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
         *_XLA_FLAG_DEFAULTS,
-        XLA_COMMAND_BUFFER_FLAG,
+        XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
@@ -111,6 +115,7 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
+    master_param_mode: MasterParamMode = MasterParamMode.DISABLED
     # Inline watch computes statistics on every step and uses the watch interval only for logging.
     # This keeps one training executable resident. A diagnostic watch repeats forward and backward
     # in a separate executable, which costs compute but shortens gradient liveness.
@@ -372,6 +377,7 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
 class GrugTrainState:
     step: jax.Array
     params: Transformer
+    master_params: Transformer | None
     opt_state: optax.OptState
     ema_params: Transformer | None
     pending_qb_betas: jax.Array
@@ -384,8 +390,8 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
 
 
-def _optimizer_state_to_memory_kind(tree, memory_kind: str):
-    """Move named-sharded optimizer arrays to a JAX memory kind."""
+def _tree_to_memory_kind(tree, memory_kind: str):
+    """Move named-sharded arrays to a JAX memory kind."""
 
     def _move(leaf):
         if not isinstance(leaf, jax.Array):
@@ -408,15 +414,23 @@ def initial_state(
     key: PRNGKeyArray,
     ema_beta: float | None,
     offload_opt_state: bool = False,
+    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     num_moe_layers = model_config.num_layers
-    opt_state = optimizer.init(params)
+    if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
+        master_params = _FP32_POLICY.cast_to_param(params)
+        opt_state = optimizer.init(master_params)
+        master_params = _tree_to_memory_kind(master_params, "pinned_host")
+    else:
+        master_params = None
+        opt_state = optimizer.init(params)
     if offload_opt_state:
-        opt_state = _optimizer_state_to_memory_kind(opt_state, "pinned_host")
+        opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
+        master_params=master_params,
         opt_state=opt_state,
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
@@ -497,6 +511,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
+    master_param_mode: MasterParamMode = MasterParamMode.DISABLED,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -520,11 +535,21 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
         metrics = {"train/loss": loss, **summarized_metrics}
-        opt_state_in = (
-            _optimizer_state_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
-        )
-        updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
-        params = optax.apply_updates(qb_params, updates)
+        opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
+        if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
+            if state.master_params is None:
+                raise ValueError("master_params must be initialized for an FP32 pinned-host master.")
+            master_params_in = _tree_to_memory_kind(state.master_params, "device")
+            master_params_in = _apply_qb_betas(master_params_in, state.pending_qb_betas)
+            master_grads = _FP32_POLICY.cast_to_param(grads)
+            updates, opt_state = optimizer.update(master_grads, opt_state_in, master_params_in)
+            master_params = optax.apply_updates(master_params_in, updates)
+            params = mp.cast_to_param(master_params)
+            master_params = _tree_to_memory_kind(master_params, "pinned_host")
+        else:
+            updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
+            params = optax.apply_updates(qb_params, updates)
+            master_params = None
 
         if ema_beta is None:
             ema_params = None
@@ -553,12 +578,13 @@ def _make_train_step(
             )
 
         if offload_opt_state:
-            opt_state = _optimizer_state_to_memory_kind(opt_state, "pinned_host")
+            opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
 
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
             params=params,
+            master_params=master_params,
             opt_state=opt_state,
             ema_params=ema_params,
             pending_qb_betas=metrics["qb_beta_per_layer"],
@@ -597,6 +623,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         ema_beta=config.trainer.ema_beta,
         watch_config=inline_watch_config,
         offload_opt_state=config.trainer.offload_opt_state,
+        master_param_mode=config.trainer.master_param_mode,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -635,6 +662,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
                 offload_opt_state=config.trainer.offload_opt_state,
+                master_param_mode=config.trainer.master_param_mode,
             )
 
         state = _init_state(model_key)
@@ -879,6 +907,7 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "MasterParamMode",
     "initial_state",
     "run_grug",
 ]

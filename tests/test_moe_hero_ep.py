@@ -46,6 +46,7 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         config.processes_per_task,
         config.trainer.trainer.mp.param_dtype,
         config.trainer.trainer.mp.compute_dtype,
+        config.trainer.master_param_mode,
     ) == (
         6144,
         48,
@@ -62,6 +63,7 @@ def test_hero_run_without_shape_overrides_uses_the_selected_model():
         1,
         jnp.bfloat16,
         jnp.bfloat16,
+        train.MasterParamMode.FP32_PINNED_HOST,
     )
 
 
@@ -729,6 +731,7 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
     state = train.GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
+        master_params=None,
         opt_state=optimizer.init(params),
         ema_params=None,
         pending_qb_betas=jnp.zeros((1, 1)),
@@ -758,3 +761,44 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
     assert step_one_stats is not None
     np.testing.assert_allclose(step_zero_stats["grad/norm/total"], 4.0)
     np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)
+
+
+def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
+    params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.bfloat16))
+    master_params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.float32))
+    optimizer = optax.sgd(0.1)
+    state = train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=master_params,
+        opt_state=optimizer.init(master_params),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 1)),
+    )
+
+    def loss_and_grads(current_params, batch, mp, z_loss):
+        del current_params, batch, mp, z_loss
+        loss = jnp.array(0.0)
+        grads = _TinyWatchModel(weight=jnp.array(0.01, dtype=jnp.bfloat16))
+        metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
+        return (loss, metrics), grads
+
+    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
+    train_step = train._make_train_step(
+        optimizer,
+        jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"),
+        z_loss_weight=0,
+        ema_beta=None,
+        master_param_mode=train.MasterParamMode.FP32_PINNED_HOST,
+    )
+
+    for _ in range(10):
+        state, _, _ = train_step(state, jnp.array(0))
+
+    assert state.master_params is not None
+    assert state.master_params.weight.dtype == jnp.float32
+    assert state.params.weight.dtype == jnp.bfloat16
+    expected_master = 1.0 - 10 * 0.1 * float(jnp.array(0.01, dtype=jnp.bfloat16))
+    np.testing.assert_allclose(state.master_params.weight, expected_master, rtol=1e-6)
+    np.testing.assert_allclose(state.params.weight, jnp.asarray(expected_master, dtype=jnp.bfloat16))

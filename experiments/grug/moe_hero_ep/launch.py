@@ -27,7 +27,14 @@ from rigging.filesystem import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL, build_hero_configs
-from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, WatchMode, run_grug
+from experiments.grug.moe_hero_ep.train import (
+    GrugEvalConfig,
+    GrugRunConfig,
+    GrugTrainerConfig,
+    MasterParamMode,
+    WatchMode,
+    run_grug,
+)
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
@@ -178,6 +185,7 @@ def build_hero_run(
         ema_beta=None,
         z_loss_weight=1e-4,
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
+        master_param_mode=MasterParamMode.FP32_PINNED_HOST,
         watch_mode=watch_mode,
         # The default offloaded optimizer state has a known memory-kind mismatch during restore.
         save_checkpoints=save_checkpoints,
