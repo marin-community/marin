@@ -76,10 +76,12 @@ logger = logging.getLogger(__name__)
 FEATURE_FILTER_VERSION = 3
 DECON_ATTRIBUTES_VERSION = 4
 BLOOM_BUILD_VERSION = 2
-DROP_SET_BUILD_VERSION = 2
+# v3 increases sampling fan-out so large sources do not hold the pipeline on a
+# small number of long-running shards.
+DROP_SET_BUILD_VERSION = 3
 MIN_SHORT_EXACT_TOKENS = 3
 DROP_SET_SAMPLE_SHARD_BYTES = 64 * 1024 * 1024
-DROP_SET_SHARDS_PER_SOURCE = 16
+DROP_SET_SHARDS_PER_SOURCE = 128
 
 
 @dataclass(frozen=True)
