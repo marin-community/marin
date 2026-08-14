@@ -797,13 +797,34 @@ def main(
                     )
                     return jnp.sum(output.astype(jnp.float32) * gradient.astype(jnp.float32))
 
+                # The training path saves the native context under a remat policy and, in the
+                # promoted configuration, offloads it to pinned host memory. That round-trips a
+                # pointer the backward handler later reads, which is exactly the kind of thing
+                # that survives in-process and need not survive across processes.
+                gated = gated_loss
+                if offload:
+                    gated = jax.checkpoint(
+                        gated_loss,
+                        policy=jax.checkpoint_policies.save_and_offload_only_these_names(
+                            names_which_can_be_saved=(),
+                            names_which_can_be_offloaded=(MOK_CONTEXT_CHECKPOINT_NAME,),
+                            offload_src="device",
+                            offload_dst="pinned_host",
+                        ),
+                    )
+                elif remat:
+                    gated = jax.checkpoint(
+                        gated_loss,
+                        policy=jax.checkpoint_policies.save_any_names_but_these(MOK_CONTEXT_CHECKPOINT_NAME),
+                    )
                 loss_value, gradients = jax.jit(
-                    jax.value_and_grad(gated_loss, argnums=tuple(range(2, 10)))
+                    jax.value_and_grad(gated, argnums=tuple(range(2, 10)))
                 )(selected_experts, output_gradient, *differentiable)
                 jax.block_until_ready(gradients)
                 finite = all(bool(jnp.all(jnp.isfinite(gradient))) for gradient in gradients)
                 print(
-                    f"BACKWARD loss={float(loss_value):.4f} gradients={len(gradients)} finite={finite}",
+                    f"BACKWARD offload={offload} remat={remat} loss={float(loss_value):.4f} "
+                    f"gradients={len(gradients)} finite={finite}",
                     flush=True,
                 )
                 if not finite:
