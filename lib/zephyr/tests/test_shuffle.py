@@ -196,7 +196,7 @@ def test_unify_frame_schemas_retries_transient_compute_error(transient_parquet_u
     transient = pl.scan_parquet(transient_parquet_url)
     stable = pl.DataFrame({"value": [1]}).lazy()
 
-    unified = _unify_frame_schemas([(transient_parquet_url, transient), ("memory", stable)])
+    unified = _unify_frame_schemas([transient, stable])
 
     assert [frame.collect().to_dicts() for frame in unified] == [[{"value": 1}], [{"value": 1}]]
 
