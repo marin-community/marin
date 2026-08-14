@@ -31,6 +31,16 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/user/AGENTS.md
+      githubRepositories:
+        - Open-Athena/marinmirror
+        - Open-Athena/mumwelt
+        - marin-community/MarinSkyRL
+        - marin-community/evalchemy
+        - marin-community/harbor
+        - marin-community/loom
+        - marin-community/marin
+        - marin-community/marin-style
+        - marin-community/vllm
       mcpAccess:
         mode: all
         groups: []
@@ -44,6 +54,16 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/github/AGENTS.md
+      githubRepositories:
+        - Open-Athena/marinmirror
+        - Open-Athena/mumwelt
+        - marin-community/MarinSkyRL
+        - marin-community/evalchemy
+        - marin-community/harbor
+        - marin-community/loom
+        - marin-community/marin
+        - marin-community/marin-style
+        - marin-community/vllm
       mcpAccess:
         mode: all
         groups: []
@@ -105,6 +125,16 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/slack/AGENTS.md
+      githubRepositories:
+        - Open-Athena/marinmirror
+        - Open-Athena/mumwelt
+        - marin-community/MarinSkyRL
+        - marin-community/evalchemy
+        - marin-community/harbor
+        - marin-community/loom
+        - marin-community/marin
+        - marin-community/marin-style
+        - marin-community/vllm
       mcpAccess:
         mode: all
         groups: []
