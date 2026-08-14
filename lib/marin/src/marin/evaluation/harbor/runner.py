@@ -34,7 +34,7 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
     run_harbor_driver,
 )
-from marin.evaluation.records import RunStatus, TaskCoverage
+from marin.evaluation.records import RECORD_FILE, RunStatus, TaskCoverage
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
@@ -227,6 +227,21 @@ def validate_harbor_resume_root(output_dir: str, config: ValidatedHarborConfig) 
         identity = _read_resume_json(identity_path, output_dir)
         if identity != _resume_identity(config):
             _raise_resume_identity_mismatch(output_dir, config, f"declares {identity!r}")
+        return
+
+    record_path = root.parent / RECORD_FILE
+    if record_path.exists():
+        record = _read_resume_json(record_path, output_dir)
+        evaluation = record.get("eval") if isinstance(record, Mapping) else None
+        harbor = evaluation.get("harbor") if isinstance(evaluation, Mapping) else None
+        record_dataset = harbor.get("dataset") if isinstance(harbor, Mapping) else None
+        record_results_path = record.get("results_path") if isinstance(record, Mapping) else None
+        if record_dataset != config.record_dataset or record_results_path != str(root):
+            _raise_resume_identity_mismatch(
+                output_dir,
+                config,
+                f"has sibling record for dataset {record_dataset!r} and results path {record_results_path!r}",
+            )
         return
 
     result_path = root / _HARBOR_RESULT_FILE
