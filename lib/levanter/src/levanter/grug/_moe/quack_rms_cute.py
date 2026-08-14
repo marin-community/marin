@@ -428,6 +428,73 @@ def _manual_axis_identity_kernel(input_ref, output_ref, *, block_m: int, block_d
     plgpu.store(output_ref.at[span_m, span_d], plgpu.load(input_ref.at[span_m, span_d]))
 
 
+def _gate_accumulator_inplace_kernel(
+    normalized_ref,
+    output_cotangent_ref,
+    gate_ref,
+    gate_accumulator_ref,
+    *,
+    block_m: int,
+    block_d: int,
+):
+    span_m = pl.ds(pl.program_id(0) * block_m, block_m)
+    span_d = pl.ds(pl.program_id(1) * block_d, block_d)
+    normalized = plgpu.load(normalized_ref.at[span_m, span_d])
+    output_cotangent = plgpu.load(output_cotangent_ref.at[span_m, span_d])
+    gate = plgpu.load(gate_ref.at[span_m, span_d])
+    gate_cotangent = (output_cotangent * normalized).astype(jnp.bfloat16)
+    sigmoid_cotangent = (gate * (jnp.array(1, gate.dtype) - gate)).astype(jnp.bfloat16)
+    plgpu.store(
+        gate_accumulator_ref.at[span_m, span_d],
+        (gate_cotangent * sigmoid_cotangent).astype(gate_accumulator_ref.dtype),
+    )
+
+
+@functools.lru_cache(maxsize=None)
+def _gate_accumulator_inplace_call(rows: int, hidden_dim: int, dtype):
+    block_m = _RMS_REVERSE_BLOCK_M
+    block_d = _RMS_REVERSE_BLOCK_D
+    shape = jax.ShapeDtypeStruct((rows, hidden_dim), dtype)
+    block_spec = pl.BlockSpec((block_m, block_d), lambda i, j: (i, j))
+    return pl.pallas_call(
+        functools.partial(_gate_accumulator_inplace_kernel, block_m=block_m, block_d=block_d),
+        out_shape=shape,
+        in_specs=(block_spec, block_spec, block_spec),
+        out_specs=block_spec,
+        input_output_aliases={0: 0},
+        grid=(pl.cdiv(rows, block_m), pl.cdiv(hidden_dim, block_d)),
+        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=1),
+        cost_estimate=pl.CostEstimate(
+            flops=4 * rows * hidden_dim,
+            transcendentals=0,
+            bytes_accessed=4 * _matrix_bytes((rows, hidden_dim), dtype),
+        ),
+        name="gate_accumulator_inplace",
+    )
+
+
+def quack_gate_accumulator_inplace(
+    normalized: jax.Array,
+    output_cotangent: jax.Array,
+    gate: jax.Array,
+) -> jax.Array:
+    """Overwrite ``normalized`` with the exact BF16 output-gate accumulator."""
+    if normalized.shape != output_cotangent.shape or normalized.shape != gate.shape:
+        raise ValueError("gate accumulator inputs must have matching shapes")
+    if normalized.ndim != 2 or normalized.dtype != jnp.bfloat16:
+        raise ValueError("gate accumulator requires rank-2 BF16 inputs")
+    if output_cotangent.dtype != normalized.dtype or gate.dtype != normalized.dtype:
+        raise ValueError("gate accumulator inputs must have matching dtypes")
+    rows, hidden_dim = normalized.shape
+    if rows % _RMS_REVERSE_BLOCK_M or hidden_dim % _RMS_REVERSE_BLOCK_D:
+        raise ValueError("gate accumulator dimensions must align with the RMS reverse tiles")
+    return _gate_accumulator_inplace_call(rows, hidden_dim, normalized.dtype)(
+        normalized,
+        output_cotangent,
+        gate,
+    )
+
+
 @functools.lru_cache(maxsize=None)
 def _manual_axis_identity_call(rows: int, hidden_dim: int, dtype, manual_axis_type):
     block_m = _RMS_REVERSE_BLOCK_M
@@ -692,6 +759,7 @@ def quack_coda_rms_backward_consumer(
     vector_spec = tensor_spec(divisibility=_VECTOR_DIVISIBILITY, static=False)
     call = cutlass_call(
         launcher,
+        input_output_aliases={3: 0},
         output_shape_dtype=jax.ShapeDtypeStruct(
             (1, rows, hidden_dim),
             x.dtype,

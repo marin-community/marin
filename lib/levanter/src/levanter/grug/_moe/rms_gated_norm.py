@@ -314,9 +314,10 @@ def _backward_kernels():
     from levanter.grug._moe.quack_rms_cute import (  # noqa: PLC0415
         quack_coda_rms_backward_consumer,
         quack_coda_rms_backward_producer,
+        quack_gate_accumulator_inplace,
     )
 
-    return quack_coda_rms_backward_producer, quack_coda_rms_backward_consumer
+    return quack_gate_accumulator_inplace, quack_coda_rms_backward_producer, quack_coda_rms_backward_consumer
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(4, 5))
@@ -339,7 +340,7 @@ def _fused_fwd(x, norm_weight, w_down, w_up, eps, batch_axes):
 
 
 def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
-    rms_backward_producer, rms_backward_consumer = _backward_kernels()
+    gate_accumulator_inplace, rms_backward_producer, rms_backward_consumer = _backward_kernels()
 
     del eps
     x = residuals.x
@@ -350,13 +351,15 @@ def _fused_bwd(eps, batch_axes, residuals, output_cotangent):
     )
     gate_hidden = jax.nn.silu(residuals.gate_preactivation)
     gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, residuals.w_up))
-    gate_cotangent = output_cotangent * normalized
-    gate_accumulator = gate_cotangent * (gate * (1 - gate))
+    gate_accumulator = gate_accumulator_inplace(normalized, output_cotangent, gate)
     w_up_cotangent = jnp.einsum("tr,td->rd", gate_hidden, gate_accumulator)
     gate_hidden_cotangent = jnp.einsum("td,rd->tr", gate_accumulator, residuals.w_up)
     _, silu_pullback = jax.vjp(jax.nn.silu, residuals.gate_preactivation)
     gate_preactivation_cotangent = silu_pullback(gate_hidden_cotangent)[0]
-    w_down_cotangent = jnp.einsum("td,tr->dr", normalized, gate_preactivation_cotangent)
+    normalized_for_w_down = (
+        x_flat.astype(jnp.float32) * residuals.inverse_rms[:, None] * residuals.norm_weight
+    ).astype(x_flat.dtype)
+    w_down_cotangent = jnp.einsum("td,tr->dr", normalized_for_w_down, gate_preactivation_cotangent)
     row_dot_partial, _ = rms_backward_producer(
         gate_preactivation_cotangent,
         residuals.w_down,

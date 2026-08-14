@@ -757,6 +757,7 @@ def test_fused_reverse_matches_stock_autodiff(monkeypatch, dtype, tolerance):
         rgn,
         "_backward_kernels",
         lambda: (
+            lambda normalized, output_cotangent, gate: output_cotangent * normalized * (gate * (1 - gate)),
             rgn.exact_rms_backward_partials_reference,
             rgn.exact_rms_backward_recompute_consumer_reference,
         ),
