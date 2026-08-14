@@ -626,6 +626,15 @@ def test_ghalogs_public_normalize_steps_read_where_download_wrote(tmp_path, monk
     assert [row["archive_path"] for row in rows] == [f"{train_member}!0_build.txt#0"]
 
 
+def test_ghalogs_public_normalize_steps_have_region_independent_identities(monkeypatch):
+    def identities(prefix: str) -> tuple[str, ...]:
+        monkeypatch.setenv("MARIN_PREFIX", prefix)
+        source_path = f"{prefix}/{GHALOGS_STAGED_PREFIX}"
+        return tuple(step.name_with_hash for step in ghalogs_public_normalize_steps(source_path=source_path))
+
+    assert identities("gs://marin-us-central1") == identities("s3://marin-us-east-02a/marin")
+
+
 class _FakeStreamResponse:
     """Minimal stand-in for a streamed ``requests`` response."""
 

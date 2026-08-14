@@ -42,7 +42,7 @@ domain centroids (``None`` trains them inline).
 Region-agnostic: worker sizing is one :class:`PoolConfig`. ``MARIN_PREFIX`` is
 resolved by :func:`rigging.filesystem.marin_prefix` -- unset (the normal iris-
 worker case) it falls back to the in-region bucket, so source artifacts, the
-eval corpus (``EVAL_ROOT``), and every output land in-region. Override via
+eval corpus, and every output land in-region. Override via
 ``iris job run -e MARIN_PREFIX <bucket>``.
 
 Submit the sample-mode end-to-end run on iris::
@@ -72,11 +72,6 @@ data gets a different output path per region). Two consequences:
   types / thread counts) can differ bit-for-bit between regions. To reproduce a
   store exactly, replicate those bytes (pass the trained centroids as
   ``domain_centroids``) rather than recomputing inline.
-
-Known gap: ``EVAL_ROOT`` (the decontam bloom's eval corpus) is still hashed as a
-``marin_prefix()``-derived path via ``build_eval_bloom_step``, so the bloom (and
-its decontam consumers) re-key per region -- tracked as a follow-up to give the
-eval corpus a version tag.
 """
 
 import argparse
@@ -94,6 +89,7 @@ from marin.datakit.decon import (
     decon_step,
 )
 from marin.datakit.normalize import NormalizedData
+from marin.datakit.source_key import datakit_source_path
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
@@ -194,10 +190,6 @@ TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 TOKENIZER_BACKEND = TokenizerBackend.HF
 SPLIT = "train"
 
-# Decontam. Mandatory AA and best-effort lm-eval artifacts use one versioned root.
-EVAL_ROOT = f"{marin_prefix()}/{EVALS_RELATIVE}"
-AA_MANIFEST_PATH = f"{EVAL_ROOT}/{AA_MANIFEST_RELATIVE}"
-LMH_MANIFEST_PATH = f"{EVAL_ROOT}/{LMH_MANIFEST_RELATIVE}"
 # Bloom capacity -- unique ngram hashes the filter must hold: ~21.78M unique
 # hashes across the AA + LMH corpus, with 2.3x headroom. At FPR=1e-9 this is a
 # ~270 MB filter.
@@ -678,22 +670,23 @@ def reference_datakit_steps(
         domain_centroids, cluster, centroids_version
     )
     quality_model_hash = _resolve_quality_model_version(quality_model, quality_model_version)
+    eval_root = datakit_source_path(EVALS_RELATIVE)
 
     # One combined decontam bloom (no merge step); every per-source decon
     # consumes it directly. Same name/params as the testbed decon arm, so runs
     # sharing a prefix share the built bloom.
     decon_bloom_step = build_eval_bloom_step(
         name="datakit/bloom/_combined_fixed",
-        eval_data_sources=[EVAL_ROOT],
+        eval_data_sources=[eval_root],
         ngram_length=NGRAM_LENGTH,
         overlap_threshold=OVERLAP_THRESHOLD,
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
         exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
-        required_eval_manifest_path=AA_MANIFEST_PATH,
+        required_eval_manifest_path=f"{eval_root}/{AA_MANIFEST_RELATIVE}",
         required_eval_corpus_version=EVAL_CORPUS_VERSION,
         required_eval_names=AA_BENCHMARK_NAMES,
-        best_effort_eval_manifest_path=LMH_MANIFEST_PATH,
+        best_effort_eval_manifest_path=f"{eval_root}/{LMH_MANIFEST_RELATIVE}",
         best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
     )
     # Count eval-ngram document frequency across normalized sources before

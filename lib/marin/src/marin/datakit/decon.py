@@ -58,7 +58,7 @@ from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from zephyr.writers import write_parquet_file
 
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.source_key import DatakitArtifactPath
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 
@@ -999,8 +999,8 @@ def build_eval_bloom_step(
     Args:
         name: Step name (e.g. ``"datakit/bloom/mmlu"``).
         eval_data_sources: Mix of raw paths (str) and upstream StepSpecs. Raw
-            paths go into ``hash_attrs`` (so changing them invalidates the
-            cache); StepSpec entries become DAG deps.
+            paths enter ``hash_attrs`` as portable Datakit source keys;
+            StepSpec entries become DAG deps.
         text_field, ngram_length, overlap_threshold, paragraph_delimiter: ngram
             config (see :class:`NGramConfig`). ``paragraph_delimiter`` MUST match
             the consuming :func:`decon_step` for the bloom to be reusable.
@@ -1033,6 +1033,8 @@ def build_eval_bloom_step(
         if ngram_length is not None
         else None
     )
+    step_dep_paths = {dep.output_path for dep in step_deps}
+    raw_source_keys = tuple(sorted(datakit_source_key(path) for path in raw_paths if path not in step_dep_paths))
 
     hash_attrs: dict[str, Any] = {
         "text_field": text_field,
@@ -1042,9 +1044,7 @@ def build_eval_bloom_step(
         "feature_filter_version": FEATURE_FILTER_VERSION,
         "estimated_doc_count": estimated_doc_count,
         "false_positive_rate": false_positive_rate,
-        # Raw paths aren't deps — fingerprint them so swapping a path
-        # invalidates the cache.
-        "eval_data_sources": tuple(sorted(s for s in raw_paths if s not in (d.output_path for d in step_deps))),
+        "eval_data_sources": raw_source_keys,
         "exclude_eval_dirs": tuple(sorted(exclude_eval_dirs)),
         "required_eval_corpus_version": required_eval_corpus_version,
         "required_eval_names": tuple(sorted(required_eval_names)),
