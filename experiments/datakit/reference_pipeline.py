@@ -278,14 +278,17 @@ class PoolConfig:
 
     ``n_workers`` sets the shared pool size. ``worker`` sets each worker shape.
     ``task`` sets the resource budget for each subprocess in the shared pool.
-    Subprocess-compatible stages share this pool. Inline stages create a
-    dedicated pool with the worker settings. The worker must fit the largest
-    task that can use the shared pool.
+    ``coordinator`` sets the resources for the shared-pool coordinator. The
+    coordinator holds shard metadata, so large pipelines need more than the
+    Zephyr default. Subprocess-compatible stages share this pool. Inline stages
+    create a dedicated pool with the worker settings. The worker must fit the
+    largest task that can use the shared pool.
     """
 
     n_workers: int = 512
     worker: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="16g", disk="16g"))
     task: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=2, ram="16g", disk="16g"))
+    coordinator: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="8g", preemptible=False))
 
 
 @dataclass(frozen=True)
@@ -1134,8 +1137,22 @@ def _apply_pool_overrides(scale: PipelineScale, args: argparse.Namespace) -> Pip
             if v is not None
         },
     )
+    coordinator = replace(
+        scale.pool.coordinator,
+        **{
+            k: v
+            for k, v in (
+                ("cpu", args.pool_coordinator_cpu),
+                ("ram", args.pool_coordinator_ram),
+            )
+            if v is not None
+        },
+    )
     n_workers = args.pool_workers if args.pool_workers is not None else scale.pool.n_workers
-    return replace(scale, pool=replace(scale.pool, n_workers=n_workers, worker=worker, task=task))
+    return replace(
+        scale,
+        pool=replace(scale.pool, n_workers=n_workers, worker=worker, task=task, coordinator=coordinator),
+    )
 
 
 def _require_normalized_sources(sources: dict[str, StepSpec]) -> None:
@@ -1230,6 +1247,8 @@ def main() -> None:
     parser.add_argument("--pool-task-cpu", type=float, default=None, help="CPUs for each shared-pool task")
     parser.add_argument("--pool-task-ram", default=None, help="RAM for each shared-pool task, e.g. 32g")
     parser.add_argument("--pool-task-disk", default=None, help="disk for each shared-pool task, e.g. 16g")
+    parser.add_argument("--pool-coordinator-cpu", type=float, default=None, help="CPUs for the pool coordinator")
+    parser.add_argument("--pool-coordinator-ram", default=None, help="RAM for the pool coordinator, e.g. 8g")
     parser.add_argument("--max-concurrent", type=int, default=8, metavar="N", help="max steps StepRunner runs at once")
     parser.add_argument(
         "--run-tag",
@@ -1257,6 +1276,7 @@ def main() -> None:
     with ZephyrContext(
         name="datakit-reference",
         resources=scale.pool.worker,
+        coordinator_resources=scale.pool.coordinator,
         max_workers=scale.pool.n_workers,
         stage_runner_factory=SubprocessRunner,
     ) as zephyr_context:
