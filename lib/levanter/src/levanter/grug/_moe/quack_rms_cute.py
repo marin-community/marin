@@ -21,7 +21,7 @@ import cutlass.jax as cjax
 from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from levanter.grug._moe.quack_moe_cute import _cute_dtype
 import quack.copy_utils as copy_utils
-from quack.activation import act_fn_map, dact_fn_map
+from quack.activation import act_fn_map, dact_fn_map, sigmoid
 from quack.cute_dsl_utils import mlir_namedtuple
 from quack.epi_ops import (
     ColVecLoad,
@@ -563,6 +563,74 @@ def _build_rms_down_silu_launcher(
         )
         scheduler = make_scheduler_args(max_active_clusters, max_swizzle, None)
         gemm(mX, mScaledWDown, mPreactivation, None, epilogue, scheduler, None, stream)
+
+    return launcher
+
+
+class _GemmRmsGateOutputMixin(GemmDefaultEpiMixin):
+    """Apply Sigmoid and the recomputed normalized input in the up-GEMM epilogue."""
+
+    _epi_ops = (  # pyrefly: ignore[bad-override-mutable-attribute]
+        RowVecLoad("mNormWeight"),
+        ColVecLoad("mInverseRms"),
+        TileLoad("mX"),
+    )
+
+    @mlir_namedtuple
+    class EpilogueArguments(NamedTuple):  # pyrefly: ignore[bad-override]
+        mNormWeight: cute.Tensor | None = None
+        mInverseRms: cute.Tensor | None = None
+        mX: cute.Tensor | None = None
+        rounding_mode: cutlass.Constexpr[int] = RoundingMode.RN
+
+    def epi_to_underlying_arguments(self, args, *, loc=None, ip=None):
+        self.rounding_mode = args.rounding_mode
+        return self.EpilogueParams(**self._epi_ops_to_params_dict(args))
+
+    @cute.jit
+    def epi_visit_subtile(self, params, epi_loop_tensors, tRS_rD, tRS_rC=None):
+        tDrNormWeight = epi_loop_tensors.get("mNormWeight")
+        tDrInverseRms = epi_loop_tensors.get("mInverseRms")
+        tRS_rX = epi_loop_tensors.get("mX")
+
+        for i in cutlass.range(cute.size(tRS_rD), unroll_full=True):
+            gate_preactivation = tRS_rD[i].to(self.a_dtype).to(tRS_rD.element_type)
+            gate = sigmoid(gate_preactivation).to(self.a_dtype)
+            normalized = (tRS_rX[i].to(tRS_rD.element_type) * tDrInverseRms[i] * tDrNormWeight[i]).to(self.a_dtype)
+            tRS_rD[i] = (normalized * gate).to(self.a_dtype)
+        return ()
+
+
+class _GemmRmsGateOutputSm100(_GemmRmsGateOutputMixin, GemmSm100):  # pyrefly: ignore[inconsistent-inheritance]
+    pass
+
+
+@cute_launcher_factory
+def _build_rms_gate_output_launcher(
+    *,
+    a_dtype: type[cutlass.Numeric],
+    tile_mn: tuple[int, int],
+    cluster_mnk: tuple[int, int, int],
+    max_active_clusters: int,
+    max_swizzle: int,
+):
+    @cute.jit
+    def launcher(stream, mGateHidden, mWUp, mX, mNormWeight, mInverseRms, mOutput):
+        gemm = _GemmRmsGateOutputSm100(
+            _ACCUMULATOR_DTYPE,
+            a_dtype,
+            tile_mn,
+            cluster_mnk,
+            gather_A=False,
+            use_clc_persistence=False,
+        )
+        epilogue = _GemmRmsGateOutputMixin.EpilogueArguments(
+            mNormWeight=mNormWeight,
+            mInverseRms=mInverseRms,
+            mX=mX,
+        )
+        scheduler = make_scheduler_args(max_active_clusters, max_swizzle, None)
+        gemm(mGateHidden, mWUp, mOutput, None, epilogue, scheduler, None, stream)
 
     return launcher
 
@@ -1423,6 +1491,57 @@ def quack_coda_rms_down_silu(
         inverse_rms[None, :],
     )
     return preactivation[0], gate_hidden[0]
+
+
+def quack_coda_rms_gate_output(
+    gate_hidden: jax.Array,
+    w_up: jax.Array,
+    x: jax.Array,
+    norm_weight: jax.Array,
+    inverse_rms: jax.Array,
+    *,
+    tile_mn: tuple[int, int] = _DEFAULT_TILE_MN,
+    cluster_mnk: tuple[int, int, int] = _DEFAULT_CLUSTER_MNK,
+    max_swizzle: int = _DEFAULT_MAX_SWIZZLE,
+) -> jax.Array:
+    """Fuse the up projection, Sigmoid gate, and normalized output multiply."""
+    if gate_hidden.ndim != 2 or w_up.ndim != 2 or x.ndim != 2:
+        raise ValueError("gate_hidden, w_up, and x must be rank-2 arrays")
+    rows, rank = gate_hidden.shape
+    weight_rank, hidden_dim = w_up.shape
+    if weight_rank != rank or x.shape != (rows, hidden_dim):
+        raise ValueError("RMS gated-output matrix dimensions do not agree")
+    if norm_weight.shape != (hidden_dim,) or inverse_rms.shape != (rows,):
+        raise ValueError("RMS gated-output vector dimensions do not agree")
+    if not (gate_hidden.dtype == w_up.dtype == x.dtype == norm_weight.dtype == jnp.bfloat16):
+        raise ValueError("RMS gated output requires matching BF16 matrix and weight inputs")
+    if inverse_rms.dtype != jnp.float32:
+        raise ValueError("inverse_rms must be float32")
+
+    launcher = _build_rms_gate_output_launcher(
+        a_dtype=_cute_dtype(x.dtype),
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        max_active_clusters=_max_active_clusters(cluster_mnk),
+        max_swizzle=max_swizzle,
+    )
+    tensor_spec = cjax.TensorSpec
+    matrix_spec = tensor_spec(mode=_MATRIX_MODE, divisibility=_MATRIX_DIVISIBILITY, static=False)
+    vector_spec = tensor_spec(divisibility=_VECTOR_DIVISIBILITY, static=False)
+    call = cutlass_call(
+        launcher,
+        output_shape_dtype=jax.ShapeDtypeStruct((1, rows, hidden_dim), x.dtype),
+        input_spec=(matrix_spec, matrix_spec, matrix_spec, vector_spec, vector_spec),
+        output_spec=(matrix_spec,),
+        use_static_tensors=False,
+    )
+    return call(
+        gate_hidden[None, :, :],
+        w_up[None, :, :],
+        x[None, :, :],
+        norm_weight[None, :],
+        inverse_rms[None, :],
+    )[0]
 
 
 def quack_silu_backward_gemm(
