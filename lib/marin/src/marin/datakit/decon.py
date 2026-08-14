@@ -74,6 +74,7 @@ logger = logging.getLogger(__name__)
 # one-token punctuation and label collisions removed in v2.
 FEATURE_FILTER_VERSION = 3
 DECON_ATTRIBUTES_VERSION = 4
+BLOOM_BUILD_VERSION = 2
 MIN_SHORT_EXACT_TOKENS = 3
 
 
@@ -338,6 +339,44 @@ def _discover_eval_files(eval_paths: list[str], exclude_dir_names: frozenset[str
 _INDEX_SCHEMA = pa.schema([pa.field("hash", pa.uint64()), pa.field("eval_id", pa.string())])
 
 
+@dataclass
+class _EvalIndexStats:
+    n_records: int = 0
+    n_index_rows: int = 0
+
+
+@dataclass(frozen=True)
+class _EvalIndexPart:
+    shard_idx: int
+    path: str
+    n_records: int
+    n_index_rows: int
+
+
+def _emit_eval_index_rows(
+    eval_paths: list[str],
+    text_field: str,
+    ngram: NGramConfig | None,
+    stats: _EvalIndexStats,
+) -> Iterator[dict[str, Any]]:
+    for path in eval_paths:
+        for idx, record in enumerate(load_file(path)):
+            text = record.get(text_field)
+            if not text:
+                continue
+            eval_id = str(record.get("id") or f"{path}::{idx}")
+            seen_in_record: set[int] = set()
+            for feature in _extract_features(str(text), ngram):
+                hash_value = _bloom_hash(feature)
+                if hash_value in seen_in_record:
+                    continue
+                seen_in_record.add(hash_value)
+                stats.n_index_rows += 1
+                yield {"hash": hash_value, "eval_id": eval_id}
+            if seen_in_record:
+                stats.n_records += 1
+
+
 def _build_filter(
     eval_paths: list[str],
     bloom_path: str,
@@ -358,35 +397,17 @@ def _build_filter(
     ``(hash, eval_id)`` pair, with the hash deduped *within* a single eval
     record). Inter-record duplicates are allowed; joins handle them naturally.
 
-    Single-process by design: the build is never the bottleneck (~seconds for a
-    full lm-eval-style suite, vs. hours for marking over a pretraining corpus).
-    If a very large eval suite ever forces this to dominate, parallelize via
-    Zephyr: per-shard ``dupekit.Bloom`` + shared shards of the sidecar Parquet,
-    merging blooms with ``bf.update(other)``. The mark side stays as-is.
+    This local path supports inline builds in :func:`decon_to_parquet`.
+    :func:`build_eval_bloom` uses Zephyr for reusable Bloom artifacts.
     """
     bf = dupekit.Bloom(estimated_doc_count, false_positive_rate)
-    stats = {"n_records": 0, "n_index_rows": 0}
+    stats = _EvalIndexStats()
 
     def emit_index_rows() -> Iterator[dict[str, Any]]:
-        for path in _discover_eval_files(eval_paths, exclude_dir_names):
-            for idx, record in enumerate(load_file(path)):
-                text = record.get(text_field)
-                if not text:
-                    continue
-                # Use the full path (not basename) so fallback IDs stay unique across
-                # nested or multi-source eval directories that share file basenames.
-                eval_id = str(record.get("id") or f"{path}::{idx}")
-                seen_in_record: set[int] = set()
-                for feat in _extract_features(str(text), ngram):
-                    h = _bloom_hash(feat)
-                    bf.add(h)
-                    if h in seen_in_record:
-                        continue
-                    seen_in_record.add(h)
-                    stats["n_index_rows"] += 1
-                    yield {"hash": h, "eval_id": eval_id}
-                if seen_in_record:
-                    stats["n_records"] += 1
+        files = list(_discover_eval_files(eval_paths, exclude_dir_names))
+        for row in _emit_eval_index_rows(files, text_field, ngram, stats):
+            bf.add(row["hash"])
+            yield row
 
     # Stream the index parquet; this iteration also fills the bloom.
     idx_dir = os.path.dirname(index_path)
@@ -402,12 +423,90 @@ def _build_filter(
 
     logger.info(
         "decon: built bloom + index from %d eval records (%d index rows) → bloom=%s, index=%s",
-        stats["n_records"],
-        stats["n_index_rows"],
+        stats.n_records,
+        stats.n_index_rows,
         bloom_path,
         index_path,
     )
-    return stats["n_records"]
+    return stats.n_records
+
+
+def _build_eval_index_part(
+    eval_paths: Iterator[str],
+    shard: ShardInfo,
+    *,
+    parts_dir: str,
+    text_field: str,
+    ngram: NGramConfig | None,
+) -> Iterator[_EvalIndexPart]:
+    stats = _EvalIndexStats()
+    path = prefix_join(parts_dir, f"part-{shard.shard_idx:05d}-of-{shard.total_shards:05d}.parquet")
+    write_parquet_file(
+        _emit_eval_index_rows(list(eval_paths), text_field, ngram, stats),
+        output_path=path,
+        schema=_INDEX_SCHEMA,
+    )
+    yield _EvalIndexPart(
+        shard_idx=shard.shard_idx,
+        path=path,
+        n_records=stats.n_records,
+        n_index_rows=stats.n_index_rows,
+    )
+
+
+def _merge_eval_index_parts(
+    parts: list[_EvalIndexPart],
+    *,
+    bloom_path: str,
+    index_path: str,
+    estimated_doc_count: int,
+    false_positive_rate: float,
+) -> int:
+    bf = dupekit.Bloom(estimated_doc_count, false_positive_rate)
+    StoragePath(os.path.dirname(index_path)).mkdirs()
+    with StoragePath(index_path).open("wb") as destination:
+        with pq.ParquetWriter(destination, _INDEX_SCHEMA) as writer:
+            for part in sorted(parts, key=lambda item: item.shard_idx):
+                with StoragePath(part.path).open("rb") as source:
+                    for batch in pq.ParquetFile(source).iter_batches():
+                        for hash_value in batch.column("hash").to_pylist():
+                            bf.add(hash_value)
+                        writer.write_batch(batch)
+
+    StoragePath(os.path.dirname(bloom_path)).mkdirs()
+    StoragePath(bloom_path).write_bytes(bf.save_bytes())
+    n_records = sum(part.n_records for part in parts)
+    n_index_rows = sum(part.n_index_rows for part in parts)
+    logger.info(
+        "decon: merged %d index shards from %d eval records (%d index rows) → bloom=%s, index=%s",
+        len(parts),
+        n_records,
+        n_index_rows,
+        bloom_path,
+        index_path,
+    )
+    return n_records
+
+
+def _merge_eval_index_shard(
+    parts: Iterator[_EvalIndexPart],
+    _shard: ShardInfo,
+    *,
+    bloom_path: str,
+    index_path: str,
+    parts_dir: str,
+    estimated_doc_count: int,
+    false_positive_rate: float,
+) -> Iterator[int]:
+    n_records = _merge_eval_index_parts(
+        list(parts),
+        bloom_path=bloom_path,
+        index_path=index_path,
+        estimated_doc_count=estimated_doc_count,
+        false_positive_rate=false_positive_rate,
+    )
+    StoragePath(parts_dir).rmtree()
+    yield n_records
 
 
 # Flat attribute columns keep all Datakit sidecars directly selectable by name.
@@ -669,6 +768,9 @@ def build_eval_bloom(
     required_eval_names: tuple[str, ...] = (),
     best_effort_eval_manifest_path: str | None = None,
     best_effort_eval_corpus_version: str | None = None,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> EvalBloom:
     """Build a reusable bloom + hash-index sidecar from one or more eval sources.
 
@@ -708,6 +810,9 @@ def build_eval_bloom(
             manifest directory.
         best_effort_eval_corpus_version: Version that the best-effort manifest
             must report.
+        worker_resources: Resource request for each eval-file shard.
+        max_workers: Maximum Zephyr workers for the Bloom build.
+        zephyr_context: Optional shared Zephyr worker context.
 
     Returns:
         :class:`EvalBloom` artifact pointing at the produced files.
@@ -743,17 +848,54 @@ def build_eval_bloom(
             )
         )
 
+    eval_files = sorted(_discover_eval_files(eval_paths, exclude_eval_dirs))
     bloom_path, index_path = bloom_paths(output_path)
-    n_records = _build_filter(
-        eval_paths=eval_paths,
-        bloom_path=bloom_path,
-        index_path=index_path,
-        text_field=text_field,
-        ngram=ngram,
-        estimated_doc_count=estimated_doc_count,
-        false_positive_rate=false_positive_rate,
-        exclude_dir_names=exclude_eval_dirs,
-    )
+    parts_dir = prefix_join(output_path, "_bloom/_index_parts")
+    resources = worker_resources or ResourceConfig(cpu=2, ram="4g")
+    ctx_kwargs: dict[str, Any] = {"name": "decon-bloom", "resources": resources}
+    if max_workers is not None:
+        ctx_kwargs["max_workers"] = max_workers
+    ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    if eval_files:
+        pipeline = (
+            Dataset.from_list(eval_files)
+            .map_shard(
+                lambda paths, shard: _build_eval_index_part(
+                    paths,
+                    shard,
+                    parts_dir=parts_dir,
+                    text_field=text_field,
+                    ngram=ngram,
+                )
+            )
+            .reshard(1)
+            .map_shard(
+                lambda parts, shard: _merge_eval_index_shard(
+                    parts,
+                    shard,
+                    bloom_path=bloom_path,
+                    index_path=index_path,
+                    parts_dir=parts_dir,
+                    estimated_doc_count=estimated_doc_count,
+                    false_positive_rate=false_positive_rate,
+                )
+            )
+        )
+        outcome = ctx.execute(
+            pipeline,
+            map_task_resources=resources,
+        )
+        if len(outcome.results) != 1:
+            raise RuntimeError(f"Bloom build returned {len(outcome.results)} merge results, expected one")
+        n_records = outcome.results[0]
+    else:
+        n_records = _merge_eval_index_parts(
+            [],
+            bloom_path=bloom_path,
+            index_path=index_path,
+            estimated_doc_count=estimated_doc_count,
+            false_positive_rate=false_positive_rate,
+        )
     return EvalBloom(
         bloom_dir=output_path,
         bloom_path=bloom_path,
@@ -992,6 +1134,9 @@ def build_eval_bloom_step(
     required_eval_names: tuple[str, ...] = (),
     best_effort_eval_manifest_path: str | None = None,
     best_effort_eval_corpus_version: str | None = None,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
@@ -1016,6 +1161,9 @@ def build_eval_bloom_step(
         best_effort_eval_manifest_path, best_effort_eval_corpus_version:
             Optional best-effort suite. Only the exact artifacts below its
             immutable, versioned manifest directory enter the Bloom.
+        worker_resources: Resource request for each eval-file shard.
+        max_workers: Maximum Zephyr workers for the Bloom build.
+        zephyr_context: Optional shared Zephyr worker context.
         output_path_prefix, override_output_path: StepSpec routing.
     """
     raw_paths: list[str] = []
@@ -1041,6 +1189,7 @@ def build_eval_bloom_step(
         "overlap_threshold": overlap_threshold,
         "paragraph_delimiter": paragraph_delimiter,
         "feature_filter_version": FEATURE_FILTER_VERSION,
+        "bloom_build_version": BLOOM_BUILD_VERSION,
         "estimated_doc_count": estimated_doc_count,
         "false_positive_rate": false_positive_rate,
         # Raw paths aren't deps — fingerprint them so swapping a path
@@ -1067,6 +1216,9 @@ def build_eval_bloom_step(
             required_eval_names=required_eval_names,
             best_effort_eval_manifest_path=best_effort_eval_manifest_path,
             best_effort_eval_corpus_version=best_effort_eval_corpus_version,
+            worker_resources=worker_resources,
+            max_workers=max_workers,
+            zephyr_context=zephyr_context,
         ),
         deps=step_deps,
         hash_attrs=hash_attrs,

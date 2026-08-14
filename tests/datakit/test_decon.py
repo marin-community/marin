@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from fray.types import ResourceConfig
 from marin.datakit.decon import (
     EvalBloom,
     NGramConfig,
@@ -28,6 +29,7 @@ from marin.datakit.decon import (
     merge_eval_blooms,
 )
 from marin.datakit.normalize import NormalizedData
+from zephyr.execution import ZephyrContext
 
 
 @pytest.fixture(autouse=True)
@@ -847,6 +849,42 @@ def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
         assert pre["contaminated"] == inline["contaminated"]
         assert pre["max_overlap"] == inline["max_overlap"]
         assert sorted(pre["matched_hashes"]) == sorted(inline["matched_hashes"])
+
+
+def test_build_eval_bloom_uses_shared_zephyr_context(tmp_path: Path):
+    eval_root = tmp_path / "evals"
+    _write_input_parquet(
+        eval_root / "eval-a.parquet",
+        [{"id": "eval-a", "text": "alpha beta gamma delta"}],
+    )
+    _write_input_parquet(
+        eval_root / "eval-b.parquet",
+        [{"id": "eval-b", "text": "one two three four"}],
+    )
+    resources = ResourceConfig(cpu=1, ram="512m")
+
+    with ZephyrContext(
+        name="parallel-bloom-test",
+        resources=resources,
+        max_workers=2,
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+    ) as zephyr_context:
+        result = build_eval_bloom(
+            eval_data_sources=str(eval_root),
+            output_path=str(tmp_path / "bloom"),
+            ngram=NGramConfig(ngram_length=3),
+            estimated_doc_count=1_000,
+            worker_resources=resources,
+            max_workers=2,
+            zephyr_context=zephyr_context,
+        )
+
+    assert result.n_eval_records == 2
+    index_rows = pq.read_table(result.eval_hash_index_path).to_pylist()
+    assert {row["eval_id"] for row in index_rows} == {"eval-a", "eval-b"}
+    bloom = dupekit.Bloom.load_bytes(Path(result.bloom_path).read_bytes())
+    assert _bloom_hash("alpha beta gamma") in bloom
+    assert _bloom_hash("one two three") in bloom
 
 
 def test_build_eval_bloom_requires_complete_eval_manifest(tmp_path: Path):

@@ -728,6 +728,9 @@ def reference_datakit_steps(
         required_eval_names=AA_BENCHMARK_NAMES,
         best_effort_eval_manifest_path=LMH_MANIFEST_PATH,
         best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
+        worker_resources=scale.pool.task,
+        max_workers=scale.pool.n_workers,
+        zephyr_context=zephyr_context,
     )
     # Count eval-ngram document frequency across normalized sources before
     # marking. Each decon consumes its source-local set and the global set.
