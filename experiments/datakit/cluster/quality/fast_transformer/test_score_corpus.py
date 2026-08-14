@@ -183,6 +183,84 @@ def test_join_pairs_each_document_with_its_own_embedding(tmp_path, fs):
     assert got == {"d_doc": 11, "b_doc": 22, "a_doc": 33, "c_doc": 44}
 
 
+def test_join_emits_one_row_per_embed_row_when_ids_repeat_on_the_embed_side(tmp_path, fs):
+    """A duplicate id earns its own score row; it is byte-identical text.
+
+    Driven from the token side, a single token row would match one embed row and
+    the other would be silently dropped.
+    """
+    embed = tmp_path / "e.parquet"
+    write_embed(embed, ["dup", "solo", "dup"], [11, 22, 33])
+    tokens = tmp_path / "tok.parquet"
+    write_tokens(tokens, [("dup", 0), ("solo", 0)])
+    task = ShardTask(
+        source="s", shard_index=0, tokens_path=str(tokens), embed_path=str(embed), output_path="", total_bytes=0
+    )
+
+    blocks, stats = join(task, fs)
+    doc_ids = list(np.concatenate([b.doc_ids for b in blocks]))
+    embeddings = np.concatenate([b.embedding for b in blocks])
+
+    assert stats.embed_rows == 3
+    assert stats.matched == 3, "both copies of the duplicate id must be scored"
+    assert stats.unmatched_embed == 0
+    assert stats.duplicate_embed_ids == 1
+    assert sorted(doc_ids) == ["dup", "dup", "solo"]
+    # Each output row carries its own embed row, not the same one twice.
+    assert sorted(embeddings.argmax(axis=1)) == [11, 22, 33]
+
+
+def test_join_does_not_cross_product_when_ids_repeat_on_both_sides(tmp_path, fs):
+    """The regression the cardinality assert exists for.
+
+    With an id twice on each side, an id-keyed match takes their cross product:
+    2 embed rows become 4 outputs. A probe hit exactly this on the focus crawl,
+    turning 6,095 embed rows into 6,331.
+    """
+    embed = tmp_path / "e.parquet"
+    write_embed(embed, ["dup", "dup", "solo"], [11, 22, 33])
+    tokens = tmp_path / "tok.parquet"
+    # The same id on two chunk-0 token rows, as a duplicated document produces.
+    write_tokens(tokens, [("dup", 0), ("solo", 0), ("dup", 0)])
+    task = ShardTask(
+        source="s", shard_index=0, tokens_path=str(tokens), embed_path=str(embed), output_path="", total_bytes=0
+    )
+
+    blocks, stats = join(task, fs)
+    doc_ids = list(np.concatenate([b.doc_ids for b in blocks]))
+
+    assert stats.matched == 3, f"expected one row per embed row, got {stats.matched}"
+    assert stats.embed_rows == 3
+    assert sorted(doc_ids) == ["dup", "dup", "solo"]
+
+
+def test_join_holds_cardinality_across_batch_boundaries(tmp_path, fs):
+    """An id split across token batches must still claim its embed rows once.
+
+    The claim is tracked per embed row rather than per batch, so a duplicate id
+    landing in a later batch cannot re-claim a run an earlier batch already took.
+    """
+    embed = tmp_path / "e.parquet"
+    ids = ["dup"] * 3 + [f"id{i:04d}" for i in range(200)]
+    write_embed(embed, ids, list(range(len(ids))))
+    tokens = tmp_path / "tok.parquet"
+    # `dup` appears at both ends, so the two occurrences fall in different batches.
+    records = [("dup", 0)] + [(f"id{i:04d}", 0) for i in range(200)] + [("dup", 0)]
+    write_tokens(tokens, records)
+    task = ShardTask(
+        source="s", shard_index=0, tokens_path=str(tokens), embed_path=str(embed), output_path="", total_bytes=0
+    )
+
+    # A block size below the row count forces several batches through the join.
+    blocks, stats = join(task, fs, block_docs=16)
+    doc_ids = list(np.concatenate([b.doc_ids for b in blocks]))
+
+    assert stats.matched == len(ids) == 203
+    assert stats.unmatched_embed == 0
+    assert doc_ids.count("dup") == 3
+    assert stats.duplicate_embed_ids == 2
+
+
 def test_join_reports_embed_rows_the_token_side_did_not_carry(tmp_path, fs):
     # `unmatched_embed` is the containment check: every embedded document should
     # have a chunk-0 token row, so a nonzero value means co-partitioning broke.

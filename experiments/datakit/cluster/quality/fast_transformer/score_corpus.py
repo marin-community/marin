@@ -453,7 +453,8 @@ class ShardStats:
 
     token_rows: int  # rows read on the token side, before the chunk filter
     embed_rows: int  # rows on the embed side
-    matched: int  # documents that joined
+    matched: int  # output rows emitted; must equal embed_rows when containment holds
+    duplicate_embed_ids: int  # embed rows sharing an id with another embed row
     read_seconds: float
 
     @property
@@ -466,6 +467,9 @@ class ShardStats:
         this is zero unless the co-partitioning assumption fails somewhere
         unsampled. Surfacing it as a number is what keeps a violation from
         looking like a silently smaller output.
+
+        The join emits exactly one row per embed row, so this is also the whole
+        difference between ``embed_rows`` and what gets written.
         """
         return self.embed_rows - self.matched
 
@@ -574,6 +578,16 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
     few of those at once exceeds the container's memory cap. Peak memory here is
     set by ``block_docs``, not by the shard.
 
+    The join is driven from the *embed* side: it emits exactly one output row per
+    embed row, never fewer and never more. That is what makes the output joinable
+    back to the token store row for row, and it is not what an id-keyed match gives
+    by default. Ids are not unique -- a duplicate id means byte-identical text, so
+    identical tokens and an identical score -- and with duplicates on both sides a
+    naive match takes their cross product, which on one focus-crawl shard turned
+    6,095 embed rows into 6,331 outputs. Here the token side is collapsed to one row
+    per distinct id and each id claims its whole run of embed rows exactly once, so
+    neither duplication can inflate or shrink the result.
+
     The embed side is one row per document and the token side a chunk-expanded
     superset, so the two are never positionally alignable and the match is on the
     key. It is also on the key *without* assuming either side is ordered. The shard
@@ -595,6 +609,11 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
     # into the embedding array therefore stays on original row positions.
     order = np.argsort(embed_ids, kind="stable")
     lookup = embed_ids[order]
+    duplicate_embed_ids = embed_rows - len(np.unique(lookup)) if embed_rows else 0
+    # One bit per embed row, so the join can be driven from the embed side while
+    # the token side streams. An id's whole rank range is claimed at once, which
+    # is what makes a duplicate id on the token side unable to claim it twice.
+    claimed = np.zeros(embed_rows, dtype=bool)
 
     id_blocks: list[np.ndarray] = []
     token_blocks: list[np.ndarray] = []
@@ -621,30 +640,57 @@ def join_shard(task: ShardTask, max_tokens: int, vocab_size: int, block_docs: in
             first = np.flatnonzero(chunk_index == 0)
             if not len(first):
                 continue
-            doc_ids = batch.column("id").take(pa.array(first)).to_numpy(zero_copy_only=False)
-            # Inner join: keep only ids the (dedup-filtered) embed side carries.
-            rank = np.searchsorted(lookup, doc_ids)
-            rank = np.minimum(rank, max(embed_rows - 1, 0))
-            keep = np.flatnonzero(embed_rows and (lookup[rank] == doc_ids))
-            if not len(keep):
+            if not embed_rows:
                 continue
-            # Narrow to the matched rows before decoding `input_ids`. Dedup drops a
-            # large minority of chunk-0 documents (41.6% on the shards measured),
-            # and the ragged-to-dense conversion is the heaviest CPU work in the
-            # reader thread, so decoding rows the join discards is pure waste.
-            id_blocks.append(doc_ids[keep])
-            matched = batch.column("input_ids").take(pa.array(first[keep]))
-            token_blocks.append(_ragged_to_padded(matched, max_tokens, vocab_size))
+            doc_ids = batch.column("id").take(pa.array(first)).to_numpy(zero_copy_only=False)
+            # One token row per distinct id. Duplicate ids are byte-identical text,
+            # so every copy carries the same tokens and any one of them will do --
+            # and collapsing here is what stops two token rows from each claiming
+            # the same embed rows, which is the cross product.
+            unique_ids, first_of = np.unique(doc_ids, return_index=True)
+            lo = np.searchsorted(lookup, unique_ids, side="left")
+            hi = np.searchsorted(lookup, unique_ids, side="right")
+            # A range is claimed whole or not at all, so its first position settles
+            # whether an earlier batch already took it.
+            fresh = (hi > lo) & ~claimed[np.minimum(lo, embed_rows - 1)]
+            if not fresh.any():
+                continue
+            lo, hi, first_of = lo[fresh], hi[fresh], first_of[fresh]
+            counts = hi - lo
+            # Expand each id to its full run of embed rows: this is what makes the
+            # output one row per *embed* row rather than one per token row.
+            starts = np.cumsum(counts) - counts
+            ranks = np.repeat(lo, counts) + (np.arange(counts.sum()) - np.repeat(starts, counts))
+            claimed[ranks] = True
+            # Decode only the distinct matched token rows, then fan each out over
+            # its embed rows. The ragged-to-dense conversion is the heaviest CPU
+            # work in the reader thread, so it runs once per id, not once per row.
+            tokens = batch.column("input_ids").take(pa.array(first[first_of]))
+            decoded = _ragged_to_padded(tokens, max_tokens, vocab_size)
+            id_blocks.append(lookup[ranks])
+            token_blocks.append(decoded[np.repeat(np.arange(len(counts)), counts)])
             # Positions, not rows: the gather happens once per block.
-            embed_blocks.append(order[rank[keep]])
-            pending += len(keep)
-            matched_total += len(keep)
+            embed_blocks.append(order[ranks])
+            pending += len(ranks)
+            matched_total += len(ranks)
             if pending >= block_docs:
                 yield flush()
     if pending:
         yield flush()
+    # Cardinality, asserted rather than assumed: one output row per embed row, no
+    # fan-out and no drop. `claimed` makes over-emission unreachable, so this is a
+    # guard on the expansion arithmetic itself.
+    if matched_total > embed_rows:
+        raise AssertionError(
+            f"{task.source} shard {task.shard_index}: join emitted {matched_total} rows for "
+            f"{embed_rows} embed rows; the id match fanned out"
+        )
     yield ShardStats(
-        token_rows=token_rows, embed_rows=embed_rows, matched=matched_total, read_seconds=time.monotonic() - t0
+        token_rows=token_rows,
+        embed_rows=embed_rows,
+        matched=matched_total,
+        duplicate_embed_ids=duplicate_embed_ids,
+        read_seconds=time.monotonic() - t0,
     )
 
 
@@ -893,10 +939,10 @@ class ScoreShard:
     scores: np.ndarray
     model_tags: set[str]
     duplicate_ids: int
-    """Rows whose ``id`` repeats inside this shard. Counted here and discarded:
-    keeping the ids of 18.7B documents to compare globally is not affordable, and
-    within a source uniqueness is already guaranteed upstream by normalize's exact
-    dedup -- which is what ``score_rows`` against ``normalize_docs`` re-checks."""
+    """Rows whose ``id`` repeats inside this shard. Reported, never gated on: a
+    duplicate id is byte-identical text, so it earns its own score row like any
+    other embed row. The correctness properties are ``score_rows == embed_rows``
+    and one output row per embed row, not distinctness."""
 
 
 def read_score_shard(path: str, fs) -> ScoreShard | None:
@@ -917,10 +963,15 @@ def verify_mode(args) -> dict:
 
     Reads every score shard the manifest names for the source, so the row count is
     the written one rather than a footer sum over whatever happens to be in the
-    output directory. The per-shard comparison is against ``embed_rows``: the join
-    is an inner join and every embedded document has a chunk-0 token row, so a
-    shard whose score count falls short of its embed count is the signature of a
-    join that did not complete.
+    output directory. The gate is ``score_rows == embed_rows`` exactly, per shard
+    and per source: the join emits one row per embed row, and every embedded
+    document has a chunk-0 token row, so any difference in either direction is a
+    join that dropped rows or fanned out.
+
+    Duplicate ids are counted and reported, not gated. A duplicate id is
+    byte-identical text and gets its own score row like any other; a consumer that
+    wants distinct documents collapses on ``id`` downstream, while one that joins
+    back to the token store row for row needs every row present.
     """
     fs = fsspec.filesystem("s3")
     rows = [r for r in read_manifest(args.manifest).to_dicts() if r["source"] == args.source]
@@ -946,9 +997,9 @@ def verify_mode(args) -> dict:
     tags = sorted({tag for got in found if got for tag in got.model_tags})
     scores = np.concatenate([got.scores for got in found if got]) if any(found) else np.zeros(0, dtype=np.float32)
     embed_rows = sum(r["embed_rows"] for r in rows)
-    # The corpus-wide duplicate gate, done exactly and cheaply: normalize's exact
-    # dedup makes ids unique within a source, so one score row per normalized
-    # document is equivalent to no duplicates, and it needs no id set at all.
+    # Coverage, not uniqueness: how much of the normalized source ended up scored.
+    # It can differ from `embed_rows` legitimately, so it is reported rather than
+    # gated -- `score_rows == embed_rows` is the correctness statement.
     normalize_counters = read_artifact(hero_data.normalized(args.source).output_path, NormalizedData).counters
     normalize_docs = normalize_counters.get("normalize/unique_records_out") or normalize_counters.get(
         "zephyr/records_out"
