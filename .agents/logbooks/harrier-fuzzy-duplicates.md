@@ -1378,3 +1378,24 @@ author: Rafal Wojdyla
 - Verification decision: Removed the automatic post-write `verify_merged_output` reread and its helper subtree. Production output verification will run as a separate operation after the merge.
 - Checks: All 15 tests in `tests/datakit/test_harrier_pipeline.py` passed. Changed-file formatting, lint, and type checks passed. An independent review found the hot-path and dead-verifier issues that this revision removes.
 - Production state: No production merge was launched.
+
+### 2026-08-14 02:31 UTC - Backfill passed 99 percent
+
+- Root health: The East and RNO roots remain running. Neither root has a failed child job.
+- Durable output: A direct S3 object count found 165,212 of 166,775 Parquet shards. This is 99.06 percent complete, with 1,563 shards left.
+- Completed artifacts: An exact source-name check found 229 of 292 successful source artifacts. There are 63 source artifacts left.
+- East progress: `nemotron_cc_v2/medium_high_quality` reached 3,528 of 3,679 shards. The stage has 32 live workers and zero dead workers.
+- RNO progress: RNO continues through the small `penfever-traces` sources. The active source changed several times during this check.
+- Issue update: None. Wait for full completion and partition verification before the next issue update.
+- Next action: Continue both roots through completion. Then verify all 292 source artifacts and all 166,775 shard names.
+
+### 2026-08-14 02:43 UTC - Twelve RNO TEI services recovered
+
+- Detection: Twelve RNO TEI service jobs became terminal after new batch capacity was admitted. No source job failed.
+- Cause: Eleven services failed during task setup because the NVIDIA CUDA package index changed during a mirror sync. Service `440` failed during setup because the `uv` download from GitHub timed out.
+- Recovery: Reconstructed each exact saved batch request and attached its stored `_callable.pkl` and `_callable_runner.py` files. Replayed only services `355`, `356`, `360`, `361`, `363`, `375`, `376`, `380`, `388`, `392`, `398`, and `440`.
+- Validation: All 512 RNO TEI service jobs returned to the running job state. RNO has 120 running service tasks and 392 building service tasks.
+- Pipeline state: RNO continued through the small `penfever-traces` sources. A direct output count found 165,255 of 166,775 shards at 02:36 UTC.
+- Incident record: https://echo.oa.dev/wiki/149.
+- Issue update: None. Add the incident link to the next major completion update.
+- Next action: Confirm that no setup failure repeats. Continue both roots through completion and full shard verification.
