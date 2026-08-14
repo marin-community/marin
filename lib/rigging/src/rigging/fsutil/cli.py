@@ -38,7 +38,14 @@ from rigging.fsutil.listing import (
 from rigging.fsutil.parquet import PREVIEW_ROWS, MissingParquetReader, is_parquet, parquet_lines
 from rigging.fsutil.render import aligned_lines, file_lines, format_size, format_time, table_lines
 from rigging.fsutil.tui import run as run_browser
-from rigging.fsutil.usage import DEFAULT_USAGE_WORKERS, ScanProgress, parse_byte_size, render_usage_report, scan_usage
+from rigging.fsutil.usage import (
+    DEFAULT_PREFIX_DEPTH,
+    DEFAULT_USAGE_WORKERS,
+    ScanProgress,
+    parse_byte_size,
+    render_usage_report,
+    scan_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +55,6 @@ _COPY_CHUNK = 8 * 1024 * 1024
 _RM_WORKERS = 8
 _S3_DELETE_BATCH = 1000
 _GCS_DELETE_BATCH = 20
-_PROGRESS_WIDTH = 24
 _INTERACTIVE_PROGRESS_INTERVAL = 0.2
 _LOG_PROGRESS_INTERVAL = 10.0
 
@@ -151,7 +157,7 @@ def du(url: str) -> None:
 )
 @click.option(
     "--prefix-depth",
-    default=3,
+    default=DEFAULT_PREFIX_DEPTH,
     show_default=True,
     type=click.IntRange(min=1, max=20),
     help="Maximum path components retained for grouping.",
@@ -215,23 +221,10 @@ def _scan_progress_line(progress: ScanProgress) -> str:
     )
     if progress.phase == ListingPhase.DISCOVERING:
         spinner = "|/-\\"[progress.listing_pages % 4]
-        return f"{spinner} Discovering scan prefixes | {details}"
+        return f"{spinner} Discovering {progress.current_prefix} | {details}"
 
-    total = progress.prefixes_discovered
-    completed = progress.prefixes_completed
-    ratio = completed / total if total else 1.0
-    filled = min(_PROGRESS_WIDTH, int(ratio * _PROGRESS_WIDTH))
-    bar = "=" * filled + "-" * (_PROGRESS_WIDTH - filled)
-    eta = _estimated_eta(progress)
-    eta_text = "calculating" if eta is None else f"~{_format_duration(eta)}"
-    return f"[{bar}] {completed:,}/{total:,} prefixes | {details} | ETA {eta_text}"
-
-
-def _estimated_eta(progress: ScanProgress) -> float | None:
-    if progress.phase != ListingPhase.SCANNING or progress.prefixes_completed <= 0:
-        return None
-    remaining = progress.prefixes_discovered - progress.prefixes_completed
-    return max(0.0, progress.phase_elapsed_seconds / progress.prefixes_completed * remaining)
+    remaining = max(0, progress.prefixes_discovered - progress.prefixes_completed)
+    return f"Scanning {progress.current_prefix} | {remaining:,} prefixes open | {details}"
 
 
 def _finished_scan_line(progress: ScanProgress) -> str:

@@ -70,10 +70,9 @@ report. Starting at the bucket root, it descends into every prefix at or above t
 or `512GiB`. `--prefix-depth` controls how many path components the in-memory scan
 retains, with a default of three.
 
-An interactive terminal shows separate prefix-discovery and scanning phases. During
-the scan, the progress bar includes completed prefixes, listing pages, objects, bytes,
-object rate, and an approximate ETA based on completed scan prefixes. Captured logs get
-the same counters every ten seconds without terminal control characters.
+An interactive terminal shows the prefix currently returning pages, remaining open
+prefixes, listing pages, objects, bytes, and object rate. Captured logs get the same
+counters every ten seconds without terminal control characters.
 
 Deletion candidates are ranked by stale TiB-years: prefix size in TiB multiplied by the
 years since its newest object write. This favors prefixes that are both large and

@@ -19,8 +19,10 @@ from rigging.fsutil.listing import (
 from rigging.fsutil.render import format_size
 
 TIB = 1024**4
-SECONDS_PER_YEAR = 365.25 * 24 * 60 * 60
+DAYS_PER_YEAR = 365.25
+SECONDS_PER_YEAR = DAYS_PER_YEAR * 24 * 60 * 60
 DEFAULT_USAGE_WORKERS = DEFAULT_LISTING_WORKERS
+DEFAULT_PREFIX_DEPTH = 3
 
 
 @dataclasses.dataclass(frozen=True)
@@ -69,12 +71,12 @@ class ScanProgress:
     """Monotonic progress observed while metadata pages complete."""
 
     phase: ListingPhase
+    current_prefix: str
     listing_pages: int
     prefixes_completed: int
     prefixes_discovered: int
     stats: UsageStats
     elapsed_seconds: float
-    phase_elapsed_seconds: float
 
 
 @dataclasses.dataclass(frozen=True)
@@ -96,7 +98,7 @@ def scan_usage(
     url: str,
     *,
     workers: int = DEFAULT_USAGE_WORKERS,
-    prefix_depth: int = 3,
+    prefix_depth: int = DEFAULT_PREFIX_DEPTH,
     progress: Callable[[ScanProgress], None] | None = None,
 ) -> UsageScan:
     """Scan object metadata below *url* and return a prefix tree.
@@ -111,15 +113,9 @@ def scan_usage(
     root_path: str | None = None
     observed = UsageStats()
     listing_pages = 0
-    last_phase: ListingPhase | None = None
-    phase_started = started
-    last_page_at = started
 
     for page in metadata_listing_pages(url, workers=workers):
         now = time.monotonic()
-        if page.phase != last_phase:
-            last_phase = page.phase
-            phase_started = last_page_at
         root_path = root_path or page.path.removesuffix("/")
         listing_pages = page.pages_completed
         for entry in page.entries:
@@ -134,15 +130,14 @@ def scan_usage(
             progress(
                 ScanProgress(
                     phase=page.phase,
+                    current_prefix=page.path,
                     listing_pages=page.pages_completed,
                     prefixes_completed=page.prefixes_completed,
                     prefixes_discovered=page.prefixes_discovered,
                     stats=observed,
                     elapsed_seconds=now - started,
-                    phase_elapsed_seconds=now - phase_started,
                 )
             )
-        last_page_at = now
 
     return UsageScan(
         url=url,
@@ -164,7 +159,10 @@ def _object_usage(entry: dict) -> UsageStats | None:
 
 
 def _add_object(root: _MutablePrefix, root_path: str, name: str, stats: UsageStats, prefix_depth: int) -> None:
-    relative = name.removeprefix(root_path.removesuffix("/") + "/")
+    root_prefix = root_path if root_path.endswith("/") else f"{root_path}/"
+    if not name.startswith(root_prefix):
+        raise ValueError(f"object {name!r} is outside scan root {root_path!r}")
+    relative = name[len(root_prefix) :]
     directories = relative.split("/")[:-1]
     node = root
     for segment in directories[:prefix_depth]:
@@ -209,7 +207,7 @@ def _threshold_groups(node: PrefixUsage, threshold_bytes: int) -> list[PrefixGro
 
 
 def stale_tib_years(stats: UsageStats, now: datetime) -> float | None:
-    """Return TiB multiplied by years since the newest object write."""
+    """Return TiB-years since the newest write, or ``None`` when its time is unknown."""
     if stats.last_modified is None:
         return None
     current = now.replace(tzinfo=UTC) if now.tzinfo is None else now.astimezone(UTC)
@@ -298,7 +296,10 @@ def parse_byte_size(value: str) -> int:
 
 
 def _display_path(url: str, label: str) -> str:
-    return f"{url.rstrip('/')}/{label}" if label else url
+    if not label:
+        return url
+    separator = "" if url.endswith("/") else "/"
+    return f"{url}{separator}{label}"
 
 
 def _markdown_code(value: str) -> str:
@@ -321,4 +322,4 @@ def _format_age(value: datetime | None, now: datetime) -> str:
         return f"{days}d"
     if days < 730:
         return f"{days / 30.44:.1f}mo"
-    return f"{days / 365.25:.1f}y"
+    return f"{days / DAYS_PER_YEAR:.1f}y"

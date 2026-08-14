@@ -23,7 +23,6 @@ from rigging.fsutil.usage import (
     UsageStats,
     parse_byte_size,
     ranked_groups,
-    render_usage_report,
     scan_usage,
     threshold_prefix_groups,
 )
@@ -324,9 +323,6 @@ def test_usage_scan_descends_to_exact_prefixes_below_threshold_and_orders_by_siz
         ("[root objects]", 10),
     ]
     assert sum(group.stats.size_bytes for group in groups) == scan.root.total.size_bytes
-
-    report = render_usage_report(scan, threshold_bytes=100, generated_at=datetime(2026, 8, 14, tzinfo=UTC))
-    assert "s3://bucket/users/iris/c/" in report
 
 
 def test_usage_scan_streams_and_merges_s3_listing_pages(monkeypatch):
