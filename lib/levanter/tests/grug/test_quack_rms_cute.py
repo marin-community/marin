@@ -80,8 +80,8 @@ def test_backward_fused_matches_reference():
     _require_gpu()
 
     args = _producer_inputs()
-    actual_x, actual_norm_weight, actual_w_down = quack_rms_cute.quack_coda_rms_backward_fused(*args)
-    expected_x, expected_norm_weight, expected_w_down = exact_rms_backward_fused_reference(*args)
+    actual_x, actual_norm_weight = quack_rms_cute.quack_coda_rms_backward_fused(*args)
+    expected_x, expected_norm_weight = exact_rms_backward_fused_reference(*args)
     _assert_close(actual_x, expected_x, tolerance=_BF16_TOLERANCE, label="fused RMS input")
     _assert_close(
         actual_norm_weight,
@@ -89,7 +89,6 @@ def test_backward_fused_matches_reference():
         tolerance=_FLOAT32_TOLERANCE,
         label="fused norm weight",
     )
-    _assert_close(actual_w_down, expected_w_down, tolerance=_BF16_TOLERANCE, label="fused w_down")
 
 
 def test_backward_producer_row_partials_have_one_column_per_tile():
@@ -155,19 +154,16 @@ def test_gate_silu_reverse_matches_reference():
     _, silu_derivative = jax.jvp(jax.nn.silu, (gate_preactivation,), (jnp.ones_like(gate_preactivation),))
     gate = jax.nn.sigmoid(jnp.einsum("tr,rd->td", gate_hidden, w_up))
 
-    actual = quack_rms_cute.quack_coda_gate_silu_reverse(
-        normalized, output_cotangent, gate, w_up, silu_derivative, gate_hidden
-    )
+    actual = quack_rms_cute.quack_coda_gate_silu_reverse(normalized, output_cotangent, gate, w_up, silu_derivative)
     expected = exact_gate_silu_reverse_reference(
         output_cotangent,
         normalized,
         gate,
-        gate_hidden,
         w_up,
         gate_preactivation,
     )
     for label, actual_value, expected_value in zip(
-        ("direct cotangent", "gate preactivation", "w_up"), actual, expected, strict=True
+        ("direct cotangent", "gate accumulator", "gate preactivation"), actual, expected, strict=True
     ):
         _assert_close(actual_value, expected_value, tolerance=_BF16_TOLERANCE, label=label)
 
