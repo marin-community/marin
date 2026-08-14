@@ -1537,7 +1537,7 @@ def quack_coda_rms_gate_output(
     )
     return call(
         gate_hidden[None, :, :],
-        w_up[None, :, :],
+        w_up.T[None, :, :],
         x[None, :, :],
         norm_weight[None, :],
         inverse_rms[None, :],
