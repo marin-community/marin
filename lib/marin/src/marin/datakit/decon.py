@@ -41,7 +41,6 @@ import os
 import random
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import islice
 from typing import Any
@@ -81,7 +80,6 @@ DROP_SET_BUILD_VERSION = 2
 MIN_SHORT_EXACT_TOKENS = 3
 DROP_SET_SAMPLE_SHARD_BYTES = 64 * 1024 * 1024
 DROP_SET_SHARDS_PER_SOURCE = 16
-DROP_SET_PLANNING_THREADS = 32
 
 
 @dataclass(frozen=True)
@@ -1615,22 +1613,17 @@ def build_all_source_drop_sets(
 
     bloom_path, _ = bloom_paths(prebuilt_bloom_dir)
 
-    planning_threads = min(DROP_SET_PLANNING_THREADS, len(sources))
-    with ThreadPoolExecutor(max_workers=planning_threads) as executor:
-        planned = executor.map(
+    pipeline = (
+        Dataset.from_list(sources)
+        .flat_map(
             lambda source: _source_sample_shards(
                 source,
                 text_field=text_field,
                 sample_docs=sample_docs,
                 global_sample_docs=global_sample_docs,
-            ),
-            sources,
+            )
         )
-        sample_shards = [sample_shard for source_shards in planned for sample_shard in source_shards]
-    logger.info("decon drop-set: planned %d sample shards for %d sources", len(sample_shards), len(sources))
-
-    pipeline = (
-        Dataset.from_list(sample_shards)
+        .reshard(DROP_SET_SHARDS_PER_SOURCE * len(sources))
         .map_shard(lambda items, shard: _sample_drop_set_shard(items, shard, bloom_path=bloom_path, ngram=ngram))
         .group_by(
             key=lambda row: row["source"],
@@ -1641,7 +1634,7 @@ def build_all_source_drop_sets(
                 common_frac=common_frac,
                 common_min_abs=common_min_abs,
             ),
-            num_output_shards=min(len(sources), len(sample_shards)),
+            num_output_shards=len(sources),
         )
         .group_by(
             key=lambda row: row["hash"],
@@ -1651,7 +1644,7 @@ def build_all_source_drop_sets(
                 common_min_abs=global_common_min_abs,
                 common_min_sources=global_common_min_sources,
             ),
-            num_output_shards=min(len(sources), len(sample_shards)),
+            num_output_shards=len(sources),
         )
         .filter(lambda row: row is not None)
     )
