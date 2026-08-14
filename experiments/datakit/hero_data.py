@@ -20,7 +20,7 @@ or use it as a dependency of a step you do intend to run::
     step = hero_data.tokenized("stack-v3", hero_data.NEMOTRON_TOKENIZER)
     data = read_artifact(step.output_path, TokenizedAttrData)
 
-:func:`harrier_all` returns a path string. It reads the fixed source-to-path
+:func:`harrier` returns a path string. It reads the fixed source-to-path
 map in ``hero_data_emb_paths.json`` and adds the active Marin prefix.
 
 :func:`normalized` and :func:`minhash` follow current code, so they track main
@@ -48,14 +48,13 @@ from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import tokenize_attributes_step
 from rigging.filesystem import marin_prefix, prefix_join
 
-from experiments.datakit.embeddings.harrier.pipeline import harrier_hash_attrs
 from experiments.datakit.reference_pipeline import select_sources, zephyr_datakit_steps
 
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
 
 MANIFEST_PATH = pathlib.Path(__file__).with_name("hero_data_paths.json")
-HARRIER_ALL_PATHS_PATH = pathlib.Path(__file__).with_name("hero_data_emb_paths.json")
-HARRIER_ALL_PATHS: dict[str, str] = json.loads(HARRIER_ALL_PATHS_PATH.read_text())
+HARRIER_PATHS_PATH = pathlib.Path(__file__).with_name("hero_data_emb_paths.json")
+HARRIER_PATHS: dict[str, str] = json.loads(HARRIER_PATHS_PATH.read_text())
 
 # The manifest records the paths as they resolve under the prefix that holds the
 # hero data. It is not region-independent: ``materialize_ghalogs_step`` hashes the
@@ -166,19 +165,9 @@ def fuzzy_dups() -> StepSpec:
     return _frozen_step("hero/fuzzy_dups", f"datakit/{FUZZY_DUPS_ID}")
 
 
-def harrier(source: str) -> StepSpec:
-    """Return the Harrier embeddings for ``source``."""
-    return StepSpec(
-        name=f"datakit/embed/harrier/{source}",
-        deps=[_normalize_step(source)],
-        hash_attrs=harrier_hash_attrs(FUZZY_DUPS_ID),
-        fn=_refuse_to_run,
-    )
-
-
-def harrier_all(source: str) -> str:
-    """Return the fixed version-3 merged Harrier path for ``source``."""
-    return prefix_join(marin_prefix(), HARRIER_ALL_PATHS[source])
+def harrier(source: str) -> str:
+    """Return the fixed complete Harrier path for ``source``."""
+    return prefix_join(marin_prefix(), HARRIER_PATHS[source])
 
 
 def all_paths() -> dict[str, str]:
@@ -199,7 +188,7 @@ def all_paths() -> dict[str, str]:
         paths[f"minhash/{source}"] = _read_only(minhash_steps[source]).output_path
         paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
         paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
-        paths[f"harrier/{source}"] = harrier(source).output_path
+        paths[f"harrier/{source}"] = harrier(source)
     return paths
 
 

@@ -19,7 +19,7 @@ from experiments.datakit import hero_data
 
 PREFIX = hero_data.MANIFEST_PREFIX
 MANIFEST = hero_data.MANIFEST_PATH
-EMBED_MANIFEST = hero_data.HARRIER_ALL_PATHS_PATH
+EMBED_MANIFEST = hero_data.HARRIER_PATHS_PATH
 
 
 @pytest.fixture(autouse=True)
@@ -44,13 +44,13 @@ def test_paths_match_the_checked_in_manifest():
     assert _relative_paths() == json.loads(MANIFEST.read_text())
 
 
-def test_harrier_all_paths_are_complete_relative_and_include_focus():
+def test_harrier_paths_are_complete_relative_and_include_focus():
     paths = json.loads(EMBED_MANIFEST.read_text())
 
     assert set(paths) == set(hero_data.source_names())
     assert all("://" not in path and not path.startswith("/") for path in paths.values())
     expected = f"{PREFIX}/datakit/embed/harrier-all/common-crawl-focus-2026-22_fc8cffa4"
-    assert hero_data.harrier_all("common-crawl-focus-2026-22") == expected
+    assert hero_data.harrier("common-crawl-focus-2026-22") == expected
 
 
 def test_every_registered_source_has_every_stage():
