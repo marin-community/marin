@@ -5,9 +5,9 @@
 
 The controller composes one manager. It owns the peer registry, the submit-time
 :class:`~iris.cluster.federation.router.PeerRouter`, a capability heartbeat loop,
-and independent delivery and delta-sync loops per peer. Background delivery also
-runs a bounded set of handoffs to the same peer concurrently. A slow LaunchJob
-request therefore does not delay unrelated background handoffs or status updates.
+and one sync loop per peer. Each sync pass delivers pending handoffs and cancels,
+then mirrors the peer's jobs into the local projection. Handoffs to one peer run
+with bounded concurrency. A slow LaunchJob delays only that peer's sync pass.
 Every durable mutation goes through an injected
 :class:`~iris.cluster.federation.store.FederationStore`, so the manager stays a
 self-contained module.
@@ -133,13 +133,12 @@ class FederationManager:
         # successive ticks between heartbeats do not each re-spend the same number.
         self._ledger = ReservationLedger()
         self._heartbeat_thread: ManagedThread | None = None
-        self._delivery_threads: dict[str, ManagedThread] = {}
         self._sync_threads: dict[str, ManagedThread] = {}
 
     # -- lifecycle -----------------------------------------------------------
 
     def start(self) -> None:
-        """Start heartbeat and, when a store is wired, per-peer delivery and sync loops.
+        """Start heartbeat and, when a store is wired, one sync loop per peer.
 
         A no-op when no peers are configured, so a single-cluster deployment is
         unchanged.
@@ -149,11 +148,6 @@ class FederationManager:
         self._heartbeat_thread = self._threads.spawn(self._run_heartbeat_loop, name="federation-heartbeat")
         if self._store is not None:
             for peer_id, peer in self._peers.items():
-                self._delivery_threads[peer_id] = self._threads.spawn(
-                    self._run_peer_delivery_loop,
-                    name=f"federation-delivery-{peer_id}",
-                    args=(peer,),
-                )
                 self._sync_threads[peer_id] = self._threads.spawn(
                     self._run_peer_sync_loop,
                     name=f"federation-sync-{peer_id}",
@@ -162,17 +156,12 @@ class FederationManager:
 
     def stop(self) -> None:
         """Stop all loops and release peer connections. Idempotent."""
-        threads = [
-            thread
-            for thread in [self._heartbeat_thread, *self._delivery_threads.values(), *self._sync_threads.values()]
-            if thread is not None
-        ]
+        threads = [thread for thread in [self._heartbeat_thread, *self._sync_threads.values()] if thread is not None]
         for thread in threads:
             thread.stop()
         for thread in threads:
             thread.join(timeout=_JOIN_TIMEOUT)
         self._heartbeat_thread = None
-        self._delivery_threads.clear()
         self._sync_threads.clear()
         for peer in self._peers.values():
             peer.close()
@@ -216,7 +205,7 @@ class FederationManager:
         In one local transaction the store persists the ``jobs``/``job_config``/
         ``federated_jobs`` handle (no task rows, no cluster) queued on the parent. The
         control tick's federation pass later picks a peer that has room and promotes
-        the handle to ``PENDING_HANDOFF``, and the delivery loop sends it. ``pinned_peer_id``
+        the handle to ``PENDING_HANDOFF``, and the sync loop delivers it. ``pinned_peer_id``
         is "" for an unpinned candidate, or the peer a ``cluster=<peer>`` pin named (the
         tick then only ever assigns it there). An idempotent resubmit is a no-op.
 
@@ -290,8 +279,8 @@ class FederationManager:
         Bumps ``cancel_intent_version`` (so a cancelled pending handoff is never
         delivered and a retried cancel is a no-op) and routes the idempotent
         ``TerminateJob(local_job_id)`` (the peer runs the same id). A transient
-        failure is not fatal — the delivery loop re-drives the cancel until the peer
-        acks or sync observes the job terminal/pruned.
+        failure is not fatal — the sync loop re-drives the cancel until the peer acks
+        or observes the job terminal/pruned.
         """
         if self._store is None:
             raise RuntimeError("federation cancel requires a store")
@@ -304,7 +293,7 @@ class FederationManager:
 
         A peer ``NOT_FOUND`` means the job is already gone (terminal-and-pruned),
         which satisfies the cancel — terminalize the local mirror so the re-drive
-        stops. Any other RPC error is left for the next delivery pass to retry.
+        stops. Any other RPC error is left for the next sync pass to retry.
         """
         assert self._store is not None
         peer = self._peers.get(target.peer_id)
@@ -364,17 +353,10 @@ class FederationManager:
     def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
         self._run_loop(stop_event, self._probe_all_peers, self._heartbeat_interval.to_seconds())
 
-    def _run_peer_delivery_loop(self, stop_event: threading.Event, peer: FederationPeer) -> None:
-        self._run_loop(
-            stop_event,
-            lambda: self._deliver_peer_once(peer),
-            self._sync_interval.to_seconds(),
-        )
-
     def _run_peer_sync_loop(self, stop_event: threading.Event, peer: FederationPeer) -> None:
         self._run_loop(
             stop_event,
-            lambda: self._sync_peer(peer),
+            lambda: self._sync_peer_once(peer),
             self._sync_interval.to_seconds(),
         )
 
@@ -387,14 +369,11 @@ class FederationManager:
         if self._store is None or not self._peers:
             return
         with ThreadPoolExecutor(max_workers=len(self._peers), thread_name_prefix="federation-once") as executor:
-            futures = [executor.submit(self._deliver_peer_once, peer) for peer in self._peers.values()]
-            for future in futures:
-                future.result()
-            futures = [executor.submit(self._sync_peer, peer) for peer in self._peers.values()]
+            futures = [executor.submit(self._sync_peer_once, peer) for peer in self._peers.values()]
             for future in futures:
                 future.result()
 
-    def _deliver_peer_once(self, peer: FederationPeer) -> None:
+    def _sync_peer_once(self, peer: FederationPeer) -> None:
         assert self._store is not None
         handoffs = [spec for spec in self._store.pending_handoffs() if spec.peer_id == peer.peer_id]
         if handoffs:
@@ -409,6 +388,7 @@ class FederationManager:
         for target in self._store.pending_cancels():
             if target.peer_id == peer.peer_id:
                 self._deliver_cancel(target)
+        self._sync_peer(peer)
 
     def _redrive_pending_handoffs(self) -> None:
         """Re-deliver every handle still awaiting its peer (boot recovery + retry)."""
@@ -421,7 +401,7 @@ class FederationManager:
 
         A rejection marks the handle ``HANDOFF_REJECTED`` so the re-drive stops; the
         user learns the peer's verdict from the failed job. Retryable RPC failures
-        leave the handle pending for the next delivery pass.
+        leave the handle pending for the next sync pass.
         """
         assert self._store is not None
         peer = self._peers.get(spec.peer_id)
